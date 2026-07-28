@@ -1470,12 +1470,12 @@ class FlatpakSyncJob(PackageSyncJob):
         `REPO_REMOVAL_REVIEW_ACTION`), mirroring `AptSyncJob`'s, and append D-41's conflict
         screen when `_capture_remote_conflicts` found one.
 
-        The removal screen is still an unticked checkbox list; the whole difference is that
-        the never-offer-again screen never follows it, because a permanent machine-local mark
-        on a remote whose purpose is to feed refs would silently and permanently change where
-        those refs come from. The conflict screen is not a checkbox list at all — it resolves
-        one entry at a time with two answers (`REPO_CONFLICT_REVIEW_ACTION`) and records
-        nothing either way. Both trail the base groups so the user sees the bulk of the diff
+        The removal screen is the ordinary decision screen starting at skip-once; the whole
+        difference is that "always skip" is absent from it, because a permanent machine-local
+        mark on a remote whose purpose is to feed refs would silently and permanently change
+        where those refs come from. The conflict screen is the same two-answer screen
+        (`REPO_CONFLICT_REVIEW_ACTION`), preceded by both versions of every remote it lists,
+        and records nothing either way. Both trail the base groups so the user sees the diff
         first, conflicts before removals: one decides what the target's remotes become, the
         other what it loses.
         """

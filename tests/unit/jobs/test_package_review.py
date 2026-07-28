@@ -1,9 +1,9 @@
-"""Unit tests for the batched checkbox review primitive (D-24, plan 02-02).
+"""Unit tests for the batched review primitive (D-24, plan 02-02).
 
-Every real terminal rendering/keybinding/handoff question is explicitly out of scope here
-(that is Task 3's human checkpoint, RESEARCH Assumption A2) — these tests stub the
-`questionary` prompt and drive `review_items` through its interactive, non-interactive,
-abort, grouping and automation-env branches.
+The decision screen's own rendering and key handling live in `test_decision_list.py`;
+these tests stub it out and drive `review_items` through its interactive, non-interactive,
+abort, grouping and automation-env branches — what each group is ASKED, and what its
+answers become.
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ from typing import Any, ClassVar
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from prompt_toolkit.keys import Keys
 from rich.console import Console
 
 from pcswitcher.jobs.context import JobContext
@@ -62,8 +63,8 @@ def _entry(item_id: str, label: str = "pkg", action_label: str = "install") -> R
 
 
 def _fake_prompt(*, ask_return: object = None, ask_side_effect: object = None) -> MagicMock:
-    """Build a fake `questionary.checkbox/select/text(...)` return value with a stubbed
-    `.ask()` — the same shape every questionary prompt type shares.
+    """Build a fake `decision_list/questionary.select/text(...)` return value with a stubbed
+    `.ask()` — the same shape every prompt type here shares.
     """
     prompt = MagicMock()
     if ask_side_effect is not None:
@@ -73,15 +74,14 @@ def _fake_prompt(*, ask_return: object = None, ask_side_effect: object = None) -
     return prompt
 
 
-def _apply_screens(checkbox: MagicMock) -> list[Any]:
-    """The APPLY checkbox calls only — one per group, identified by the message being the
-    group's own title.
+def _screen_defaults(call: Any) -> dict[str, str]:
+    """What one built screen would answer if the user pressed Enter without touching it."""
+    return {row.row_id: row.default for row in call.kwargs["rows"]}
 
-    An actionable group that leaves anything unticked is followed by a second checkbox
-    screen offering D-07's permanent skip ("never offer again on this machine?"). Tests
-    about the apply list itself filter that screen out rather than indexing call positions.
-    """
-    return [call for call in checkbox.call_args_list if "never offer again" not in call.args[0]]
+
+def _screen_words(call: Any) -> list[str]:
+    """The decision words one built screen offers, in legend order."""
+    return [option.word for option in call.kwargs["options"]]
 
 
 def _unreproducible_group(entries: Sequence[ReviewEntry]) -> ReviewGroup:
@@ -113,11 +113,11 @@ class TestNonInteractive:
 
         with (
             patch.object(sys, "stdin", _mock_isatty(False)),
-            patch("pcswitcher.jobs.packages.review.questionary.checkbox") as checkbox,
+            patch("pcswitcher.jobs.packages.review.decision_list") as decision_list,
         ):
             outcome = await review_items(groups, console=console, ui=ui)
 
-        checkbox.assert_not_called()
+        decision_list.assert_not_called()
         assert outcome.was_interactive is False
         assert outcome.decisions == {"a": Decision.SKIP_ONCE}
         ui.pause.assert_not_called()
@@ -140,12 +140,27 @@ class TestNonInteractive:
         # The console still reports every item even though nothing was applied.
         assert "pkg" in buffer.getvalue()
 
+    async def test_the_report_panel_ends_on_its_last_item(self) -> None:
+        """A newline after the last entry renders as an empty final line inside the border."""
+        buffer = io.StringIO()
+        console = Console(file=buffer, no_color=True, width=60)
+        groups = [
+            ReviewGroup(manager="apt", action="install", title="Install packages", entries=[_entry("a"), _entry("b")])
+        ]
+
+        with patch.object(sys, "stdin", _mock_isatty(False)):
+            await review_items(groups, console=console, ui=MagicMock())
+
+        lines = [line.rstrip() for line in buffer.getvalue().splitlines()]
+        last_item = max(index for index, line in enumerate(lines) if "pkg" in line)
+        assert lines[last_item + 1].startswith("\u2570"), lines[last_item : last_item + 3]
+
 
 @pytest.mark.asyncio
 class TestInteractive:
     """Interactive runs pause/resume the live display around the blocking prompt."""
 
-    async def test_ticked_entries_map_to_apply_others_to_skip_once(self) -> None:
+    async def test_every_row_comes_back_with_the_decision_its_screen_returned(self) -> None:
         console = _interactive_console()
         ui = MagicMock()
         groups = [
@@ -156,29 +171,65 @@ class TestInteractive:
                 entries=[_entry("a"), _entry("b"), _entry("c")],
             )
         ]
-        apply_prompt = _fake_prompt(ask_return=["a", "c"])
-        # The follow-up "never offer again" screen over the unticked entry: nothing ticked,
-        # so every unticked item keeps its skip-once decision.
-        keep_for_next_run = _fake_prompt(ask_return=[])
+        screen = _fake_prompt(ask_return={"a": "apply", "b": "skip_once", "c": "skip_always"})
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
-            patch(
-                "pcswitcher.jobs.packages.review.questionary.checkbox",
-                side_effect=[apply_prompt, keep_for_next_run],
-            ) as checkbox,
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen) as decision_list,
         ):
             outcome = await review_items(groups, console=console, ui=ui)
 
-        assert len(_apply_screens(checkbox)) == 1
+        decision_list.assert_called_once()
         assert outcome.was_interactive is True
         assert outcome.decisions == {
             "a": Decision.APPLY,
             "b": Decision.SKIP_ONCE,
-            "c": Decision.APPLY,
+            "c": Decision.SKIP_ALWAYS,
         }
         ui.pause.assert_called_once()
         ui.resume.assert_called_once()
+
+    async def test_one_screen_per_group_and_no_second_pass_over_the_leftovers(self) -> None:
+        """The rebuild's whole point: a group is presented once, not once to apply and
+        again to promote what was left."""
+        console = _interactive_console()
+        ui = MagicMock()
+        groups = [ReviewGroup(manager="apt", action="install", title="Install packages", entries=[_entry("a")])]
+        screen = _fake_prompt(ask_return={"a": "skip_once"})
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen) as decision_list,
+        ):
+            outcome = await review_items(groups, console=console, ui=ui)
+
+        assert decision_list.call_count == 1
+        assert outcome.decisions == {"a": Decision.SKIP_ONCE}
+
+    async def test_an_interactive_group_prints_no_panel_above_its_screen(self) -> None:
+        """The screen lists the items itself; a panel above it said everything twice."""
+        buffer = io.StringIO()
+        console = Console(file=buffer, force_terminal=True, no_color=True, width=200)
+        ui = MagicMock()
+        groups = [
+            ReviewGroup(
+                manager="apt",
+                action="install",
+                title="Install packages",
+                entries=[_entry("a", label="cmatrix (2.0-6)")],
+            )
+        ]
+        screen = _fake_prompt(ask_return={"a": "apply"})
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen),
+        ):
+            await review_items(groups, console=console, ui=ui)
+
+        printed = buffer.getvalue()
+        assert "cmatrix (2.0-6)" not in printed
+        assert "Install packages" not in printed
 
     async def test_ui_resumed_when_prompt_raises(self) -> None:
         console = _interactive_console()
@@ -188,7 +239,7 @@ class TestInteractive:
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
-            patch("pcswitcher.jobs.packages.review.questionary.checkbox", return_value=prompt),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=prompt),
             pytest.raises(KeyboardInterrupt),
         ):
             await review_items(groups, console=console, ui=ui)
@@ -196,8 +247,8 @@ class TestInteractive:
         ui.pause.assert_called_once()
         ui.resume.assert_called_once()
 
-    async def test_checkbox_ctrl_c_aborts_the_entire_sync(self) -> None:
-        """Decision 10: Ctrl-C / EOF at a checkbox screen means the user wants to abort the
+    async def test_ctrl_c_at_a_decision_screen_aborts_the_entire_sync(self) -> None:
+        """Decision 10: Ctrl-C / EOF at a decision screen means the user wants to abort the
         whole sync, not silently skip the rest of the review."""
         console = _interactive_console()
         ui = MagicMock()
@@ -205,48 +256,44 @@ class TestInteractive:
             ReviewGroup(manager="apt", action="install", title="Install packages", entries=[_entry("a")]),
             ReviewGroup(manager="snap", action="install", title="Install snaps", entries=[_entry("b")]),
         ]
-        aborted_prompt = _fake_prompt(ask_return=None)
-        never_prompt = _fake_prompt(ask_return=["b"])
+        aborted = _fake_prompt(ask_return=None)
+        later = _fake_prompt(ask_return={"b": "apply"})
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
             patch(
-                "pcswitcher.jobs.packages.review.questionary.checkbox",
-                side_effect=[aborted_prompt, never_prompt],
-            ) as checkbox,
+                "pcswitcher.jobs.packages.review.decision_list",
+                side_effect=[aborted, later],
+            ) as decision_list,
             pytest.raises(SyncAbortedByUser),
         ):
             await review_items(groups, console=console, ui=ui)
 
-        # Only the first group's prompt is ever constructed; the second is never reached.
-        checkbox.assert_called_once()
+        # Only the first group's screen is ever constructed; the second is never reached.
+        decision_list.assert_called_once()
         # The live display is always handed back, even on abort.
         ui.resume.assert_called_once()
 
-    async def test_install_group_defaults_checked_removal_group_defaults_unchecked(self) -> None:
+    async def test_install_rows_start_applied_and_removal_rows_start_skipped(self) -> None:
         console = _interactive_console()
         ui = MagicMock()
         install_group = ReviewGroup(manager="apt", action="install", title="Install packages", entries=[_entry("a")])
         removal_group = ReviewGroup(
             manager="apt", action="remove", title="Remove packages", entries=[_entry("b", action_label="remove")]
         )
-        prompt = _fake_prompt(ask_return=[])
+        prompt = _fake_prompt(ask_side_effect=[{"a": "apply"}, {"b": "skip_once"}])
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
-            patch("pcswitcher.jobs.packages.review.questionary.checkbox", return_value=prompt) as checkbox,
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=prompt) as decision_list,
         ):
             await review_items([install_group, removal_group], console=console, ui=ui)
 
-        apply_calls = _apply_screens(checkbox)
-        assert len(apply_calls) == 2
-        install_choices = apply_calls[0].kwargs["choices"]
-        removal_choices = apply_calls[1].kwargs["choices"]
-        assert install_choices[0].checked is True
-        assert removal_choices[0].checked is False
+        assert _screen_defaults(decision_list.call_args_list[0]) == {"a": Decision.APPLY}
+        assert _screen_defaults(decision_list.call_args_list[1]) == {"b": Decision.SKIP_ONCE}
 
     async def test_no_group_mixes_install_and_removal_entries_in_one_prompt(self) -> None:
-        """Removals never share a checkbox screen with installs (D-07/D-24)."""
+        """Removals never share a screen with installs (D-07/D-24)."""
         console = _interactive_console()
         ui = MagicMock()
         install_group = ReviewGroup(
@@ -258,19 +305,23 @@ class TestInteractive:
         change_group = ReviewGroup(
             manager="snap", action="change", title="Change snap channels", entries=[_entry("d", action_label="change")]
         )
-        prompt = _fake_prompt(ask_return=[])
+        prompt = _fake_prompt(
+            ask_side_effect=[
+                {"a": "apply", "c": "apply"},
+                {"b": "skip_once"},
+                {"d": "apply"},
+            ]
+        )
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
-            patch("pcswitcher.jobs.packages.review.questionary.checkbox", return_value=prompt) as checkbox,
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=prompt) as decision_list,
         ):
             outcome = await review_items([install_group, removal_group, change_group], console=console, ui=ui)
 
-        assert len(_apply_screens(checkbox)) == 3
-        for call in checkbox.call_args_list:
-            values = {choice.value for choice in call.kwargs["choices"]}
-            # Every prompt's entries come from exactly one input group — the apply screens
-            # and the follow-up permanent-skip screens alike.
+        assert decision_list.call_count == 3
+        for call in decision_list.call_args_list:
+            values = {row.row_id for row in call.kwargs["rows"]}
             assert values in ({"a", "c"}, {"b"}, {"d"})
         assert set(outcome.decisions) == {"a", "b", "c", "d"}
 
@@ -280,22 +331,45 @@ class TestInteractive:
         )
         console = _interactive_console()
         ui = MagicMock()
-        prompt = _fake_prompt(ask_return=[])
+        prompt = _fake_prompt(ask_return={"a": "skip_once"})
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
-            patch("pcswitcher.jobs.packages.review.questionary.checkbox", return_value=prompt) as checkbox,
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=prompt) as decision_list,
         ):
             await review_items([group], console=console, ui=ui)
 
-        message = _apply_screens(checkbox)[0].args[0]
+        message = decision_list.call_args.args[0]
         assert message == "Remove packages"
         assert message != "Apply"
 
-    async def test_every_direction_that_arrives_unticked_is_still_offered_permanence(self) -> None:
-        """ "Arrives unticked" and "is offered permanence" are two independent properties of
-        a group (`_REMOVAL_ACTIONS` vs `_PROMOTABLE_ACTIONS`), and ADR-020 D-07 makes them
-        differ for the two-answer screens. Every ordinary removal direction must keep both.
+    async def test_a_row_does_not_repeat_the_verb_its_group_title_already_names(self) -> None:
+        console = _interactive_console()
+        ui = MagicMock()
+        group = ReviewGroup(
+            manager="apt",
+            action="remove",
+            title="Remove packages",
+            entries=[_entry("a", label="fortunes-min", action_label="remove")],
+        )
+        prompt = _fake_prompt(ask_return={"a": "skip_once"})
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=prompt) as decision_list,
+        ):
+            await review_items([group], console=console, ui=ui)
+
+        row = decision_list.call_args.kwargs["rows"][0]
+        assert row.label == "fortunes-min"
+        assert row.prefix is None
+        # The verb still names the act ANSWER — it is the decision column's word.
+        assert decision_list.call_args.kwargs["options"][0].word == "remove"
+
+    async def test_every_removal_direction_still_offers_the_permanent_answer(self) -> None:
+        """ "Starts at skip-once" and "is offered permanence" are two independent properties
+        of a group (`_REMOVAL_ACTIONS` vs `_PROMOTABLE_ACTIONS`), and ADR-020 D-07 makes them
+        differ for the two-answer screens. Every ordinary removal direction keeps both.
         """
         console = _interactive_console()
         ui = MagicMock()
@@ -303,31 +377,24 @@ class TestInteractive:
             ReviewGroup(manager="apt", action=action, title=f"{action} things", entries=[_entry(action)])
             for action in ("remove", "delete", "disable")
         ]
-        # Nothing ticked on the apply screen, everything ticked on the follow-up: a
-        # promotion can only be observed where the follow-up screen is offered at all.
-        asked: list[int] = []
-
-        def _ask() -> list[str]:
-            call = len(asked)
-            asked.append(call)
-            return [] if call % 2 == 0 else [groups[call // 2].entries[0].item_id]
-
-        prompt = _fake_prompt(ask_side_effect=_ask)
+        prompt = _fake_prompt(ask_side_effect=[{action: "skip_always"} for action in ("remove", "delete", "disable")])
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
-            patch("pcswitcher.jobs.packages.review.questionary.checkbox", return_value=prompt) as checkbox,
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=prompt) as decision_list,
         ):
             outcome = await review_items(groups, console=console, ui=ui)
 
-        assert len([call for call in checkbox.call_args_list if "never offer again" in call.args[0]]) == 3
+        for call in decision_list.call_args_list:
+            assert "always skip" in _screen_words(call)
+            assert _screen_defaults(call) == dict.fromkeys(_screen_defaults(call), Decision.SKIP_ONCE)
         assert outcome.decisions == dict.fromkeys(("remove", "delete", "disable"), Decision.SKIP_ALWAYS)
 
-    async def test_repo_removal_is_unticked_and_never_offered_permanence(self) -> None:
-        """The two-answer screen (ADR-020 D-07). It is a removal direction, so
-        it arrives unticked like any other; it is NOT promotable, so the "never offer again"
-        screen is never built and `SKIP_ALWAYS` is unreachable — which is what "no registry
-        entry" means at this layer.
+    async def test_repo_removal_starts_skipped_and_is_never_offered_permanence(self) -> None:
+        """The two-answer screen (ADR-020 D-07). It is a removal direction, so it starts at
+        skip-once like any other; it is NOT promotable, so "always skip" is absent from its
+        options and `SKIP_ALWAYS` is unreachable — which is what "no registry entry" means
+        at this layer.
         """
         console = _interactive_console()
         ui = MagicMock()
@@ -337,19 +404,41 @@ class TestInteractive:
             title="Delete repositories the source no longer has (apt)",
             entries=[_entry("apt:source:vendor.list", action_label="delete repository")],
         )
-        prompt = _fake_prompt(ask_return=[])
+        prompt = _fake_prompt(ask_return={"apt:source:vendor.list": "skip_once"})
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
-            patch("pcswitcher.jobs.packages.review.questionary.checkbox", return_value=prompt) as checkbox,
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=prompt) as decision_list,
         ):
             outcome = await review_items([group], console=console, ui=ui)
 
-        apply_calls = _apply_screens(checkbox)
-        assert len(apply_calls) == 1
-        assert apply_calls[0].kwargs["choices"][0].checked is False
-        assert checkbox.call_count == 1, "no never-offer-again screen may follow a two-answer group"
+        assert _screen_defaults(decision_list.call_args) == {"apt:source:vendor.list": Decision.SKIP_ONCE}
+        assert _screen_words(decision_list.call_args) == ["delete repository", "skip once"]
         assert outcome.decisions == {"apt:source:vendor.list": Decision.SKIP_ONCE}
+
+    async def test_a_report_only_group_offers_two_answers_and_starts_applied(self) -> None:
+        """D-07: report-only diffs offer apply or skip only — there is no holder machine to
+        record a permanent decision against.
+        """
+        console = _interactive_console()
+        ui = MagicMock()
+        group = ReviewGroup(
+            manager="apt",
+            action="report_only",
+            title="Report apt packages",
+            entries=[_entry("apt:package:tree", action_label="report")],
+        )
+        prompt = _fake_prompt(ask_return={"apt:package:tree": "apply"})
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=prompt) as decision_list,
+        ):
+            outcome = await review_items([group], console=console, ui=ui)
+
+        assert _screen_words(decision_list.call_args) == ["report", "skip once"]
+        assert _screen_defaults(decision_list.call_args) == {"apt:package:tree": Decision.APPLY}
+        assert outcome.decisions == {"apt:package:tree": Decision.APPLY}
 
 
 @pytest.mark.asyncio
@@ -387,7 +476,7 @@ class TestTerminalUIReviewer:
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
-            patch("pcswitcher.jobs.packages.review.questionary.checkbox", return_value=prompt),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=prompt),
             pytest.raises(KeyboardInterrupt),
         ):
             await reviewer.review(groups)
@@ -523,9 +612,9 @@ class TestBlockingPromptOffLoop:
         ui = MagicMock()
         groups = [ReviewGroup(manager="apt", action="install", title="Install packages", entries=[_entry("a")])]
 
-        def _blocking_ask() -> list[str]:
+        def _blocking_ask() -> dict[str, str]:
             time.sleep(0.2)
-            return ["a"]
+            return {"a": "apply"}
 
         prompt = MagicMock()
         prompt.ask = _blocking_ask
@@ -540,7 +629,7 @@ class TestBlockingPromptOffLoop:
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
-            patch("pcswitcher.jobs.packages.review.questionary.checkbox", return_value=prompt),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=prompt),
         ):
             ticker_task = asyncio.create_task(_ticker())
             await review_items(groups, console=console, ui=ui)
@@ -565,11 +654,11 @@ class TestAutomationEnv:
 
         with (
             patch.dict("os.environ", env),
-            patch("pcswitcher.jobs.packages.review.questionary.checkbox") as checkbox,
+            patch("pcswitcher.jobs.packages.review.decision_list") as decision_list,
         ):
             outcome = await review_items(groups, console=console, ui=ui)
 
-        checkbox.assert_not_called()
+        decision_list.assert_not_called()
         ui.pause.assert_not_called()
         assert outcome.decisions == {"a": Decision.APPLY, "b": Decision.SKIP_ONCE}
 
@@ -591,14 +680,14 @@ class TestAutomationEnv:
 
         with (
             patch.dict("os.environ", {PACKAGE_REVIEW_AUTOMATION_ENV: "{not json"}),
-            patch("pcswitcher.jobs.packages.review.questionary.checkbox") as checkbox,
+            patch("pcswitcher.jobs.packages.review.decision_list") as decision_list,
             pytest.raises(json.JSONDecodeError),
         ):
             await review_items(groups, console=console, ui=ui)
 
         # Nothing was prompted, and the live display was never touched: the automation
         # branch fails before `ui.pause()`, so there is no paused UI left behind.
-        checkbox.assert_not_called()
+        decision_list.assert_not_called()
         ui.pause.assert_not_called()
         ui.resume.assert_not_called()
 
@@ -613,12 +702,12 @@ class TestAutomationEnv:
 
         with (
             patch.dict("os.environ", {PACKAGE_REVIEW_AUTOMATION_ENV: json.dumps({"a": "apply_everything"})}),
-            patch("pcswitcher.jobs.packages.review.questionary.checkbox") as checkbox,
+            patch("pcswitcher.jobs.packages.review.decision_list") as decision_list,
             pytest.raises(ValueError, match="apply_everything"),
         ):
             await review_items(groups, console=console, ui=ui)
 
-        checkbox.assert_not_called()
+        decision_list.assert_not_called()
 
     def test_env_var_not_mentioned_in_cli_help(self) -> None:
         result = subprocess.run(
@@ -750,6 +839,68 @@ class TestUnreproducibleGroupResolution:
         assert outcome.snippets == {"u1": body}
         assert outcome.unresolved == ()
 
+    async def test_a_whitespace_only_snippet_is_not_a_resolution(self) -> None:
+        """A body of spaces and newlines replays as nothing at all, so accepting it would
+        record a "snippet" that resolves the item without installing anything."""
+        console = _interactive_console()
+        ui = MagicMock()
+        group = _unreproducible_group([_entry("u1", label="brscan3")])
+        select_prompt = _fake_prompt(ask_side_effect=["add_snippet", "skip_once"])
+        text_prompt = _fake_prompt(ask_return="   \n\t\n  ")
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.questionary.select", return_value=select_prompt),
+            patch("pcswitcher.jobs.packages.review.questionary.text", return_value=text_prompt),
+        ):
+            outcome = await review_items([group], console=console, ui=ui)
+
+        assert outcome.snippets == {}
+        assert outcome.decisions["u1"] == Decision.SKIP_ONCE
+
+    async def test_the_snippet_editor_finishes_on_ctrl_d(self) -> None:
+        """More discoverable than questionary's default "Alt+Enter or Esc then Enter". This
+        binds Ctrl-D as SUBMIT inside the editor only; Ctrl-D as an abort stays unhandled.
+        """
+        console = _interactive_console()
+        ui = MagicMock()
+        group = _unreproducible_group([_entry("u1", label="brscan3")])
+        select_prompt = _fake_prompt(ask_return="add_snippet")
+        text_prompt = _fake_prompt(ask_return="sudo dpkg --install /tmp/x.deb")
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.questionary.select", return_value=select_prompt),
+            patch("pcswitcher.jobs.packages.review.questionary.text", return_value=text_prompt) as text,
+        ):
+            await review_items([group], console=console, ui=ui)
+
+        assert "Ctrl-D" in text.call_args.kwargs["instruction"]
+        assert "Esc" not in text.call_args.kwargs["instruction"]
+        bound = {key for binding in text.call_args.kwargs["key_bindings"].bindings for key in binding.keys}
+        assert Keys.ControlD in bound
+
+    async def test_the_permanent_choice_says_what_it_means_rather_than_naming_the_concept(self) -> None:
+        """The user's correction: not "record as machine-specific", and not about being
+        offered again on this machine — what it MEANS and what will happen.
+        """
+        console = _interactive_console()
+        ui = MagicMock()
+        group = _unreproducible_group([_entry("u1", label="brscan3")])
+        select_prompt = _fake_prompt(ask_return="skip_once")
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.questionary.select", return_value=select_prompt) as select,
+        ):
+            await review_items([group], console=console, ui=ui)
+
+        titles = {choice.value: choice.title for choice in select.call_args.kwargs["choices"]}
+        assert titles["skip_always"].startswith("Always skip")
+        assert "this machine" in titles["skip_always"]
+        assert "never offer again" not in titles["skip_always"]
+        assert "next sync" in titles["skip_once"]
+
     async def test_ui_resumed_when_snippet_capture_raises(self) -> None:
         console = _interactive_console()
         ui = MagicMock()
@@ -786,7 +937,7 @@ class TestUnreproducibleGroupResolution:
         assert set(outcome.unresolved) == {"u1", "u2"}
         assert outcome.was_interactive is False
 
-    async def test_unreproducible_group_never_offered_as_a_checkbox(self) -> None:
+    async def test_unreproducible_group_never_offered_as_a_decision_screen(self) -> None:
         """The group's action is a sentinel `review_items` special-cases, not a normal
         install/remove verb — asserting the checkbox path is never taken guards against
         the sentinel silently falling through to the generic tick-list flow.
@@ -799,11 +950,11 @@ class TestUnreproducibleGroupResolution:
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
             patch("pcswitcher.jobs.packages.review.questionary.select", return_value=select_prompt),
-            patch("pcswitcher.jobs.packages.review.questionary.checkbox") as checkbox,
+            patch("pcswitcher.jobs.packages.review.decision_list") as decision_list,
         ):
             await review_items([group], console=console, ui=ui)
 
-        checkbox.assert_not_called()
+        decision_list.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -874,7 +1025,7 @@ class TestCollateralGroupResolution:
 
         assert outcome.decisions["apt:package:pkg-a"] == Decision.SKIP_ONCE
 
-    async def test_collateral_group_never_offered_as_a_checkbox(self) -> None:
+    async def test_collateral_group_never_offered_as_a_decision_screen(self) -> None:
         console = _interactive_console()
         ui = MagicMock()
         group = _collateral_group([_entry("apt:package:pkg-a", label="other-manual")])
@@ -883,11 +1034,11 @@ class TestCollateralGroupResolution:
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
             patch("pcswitcher.jobs.packages.review.questionary.select", return_value=select_prompt),
-            patch("pcswitcher.jobs.packages.review.questionary.checkbox") as checkbox,
+            patch("pcswitcher.jobs.packages.review.decision_list") as decision_list,
         ):
             await review_items([group], console=console, ui=ui)
 
-        checkbox.assert_not_called()
+        decision_list.assert_not_called()
 
     async def test_non_interactive_collateral_entries_skip_once_and_are_not_unresolved(self) -> None:
         """D-26: without a TTY a collateral entry comes back SKIP_ONCE like every other
@@ -932,37 +1083,66 @@ def _conflict_entry(
 
 @pytest.mark.asyncio
 class TestRepoConflictGroupResolution:
-    """Ruling 6: a `REPO_CONFLICT_REVIEW_ACTION` group gets a two-way per-entry flow —
-    overwrite or skip once — with both whole file versions shown, never a checkbox and
+    """Ruling 6: a `REPO_CONFLICT_REVIEW_ACTION` group is the ordinary decision screen with
+    only two answers — overwrite or skip once — preceded by both whole file versions, and
     never a third answer.
     """
 
     async def test_overwrite_records_apply(self) -> None:
         console = _interactive_console()
         ui = MagicMock()
-        select_prompt = _fake_prompt(ask_return="overwrite")
+        screen = _fake_prompt(ask_return={"apt:conflict:vendor.list": "apply"})
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
-            patch("pcswitcher.jobs.packages.review.questionary.select", return_value=select_prompt),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen),
         ):
             outcome = await review_items([_conflict_group([_conflict_entry()])], console=console, ui=ui)
 
         assert outcome.decisions == {"apt:conflict:vendor.list": Decision.APPLY}
 
-    async def test_skip_records_skip_once_and_only_two_answers_are_offered(self) -> None:
+    async def test_only_two_answers_are_offered_and_the_row_starts_skipped(self) -> None:
+        """An overwrite displaces software the target explicitly marked machine-specific,
+        so it is chosen, never defaulted — and it records nothing either way.
+        """
         console = _interactive_console()
         ui = MagicMock()
-        select_prompt = _fake_prompt(ask_return="skip_once")
+        screen = _fake_prompt(ask_return={"apt:conflict:vendor.list": "skip_once"})
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
-            patch("pcswitcher.jobs.packages.review.questionary.select", return_value=select_prompt) as select_mock,
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen) as decision_list,
         ):
             outcome = await review_items([_conflict_group([_conflict_entry()])], console=console, ui=ui)
 
         assert outcome.decisions == {"apt:conflict:vendor.list": Decision.SKIP_ONCE}
-        assert [choice.value for choice in select_mock.call_args.kwargs["choices"]] == ["overwrite", "skip_once"]
+        assert _screen_words(decision_list.call_args) == ["overwrite", "skip once"]
+        assert _screen_defaults(decision_list.call_args) == {"apt:conflict:vendor.list": Decision.SKIP_ONCE}
+
+    async def test_one_screen_answers_every_conflicting_file(self) -> None:
+        """D-24: the conflicts are a batch, not a queue of one prompt per file."""
+        console = _interactive_console()
+        ui = MagicMock()
+        first = _conflict_entry()
+        second = ReviewEntry(
+            item_id="apt:conflict:other.list",
+            label="other.list",
+            action_label="overwrite",
+            versions=("a\n", "b\n"),
+        )
+        screen = _fake_prompt(ask_return={"apt:conflict:vendor.list": "apply", "apt:conflict:other.list": "skip_once"})
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen) as decision_list,
+        ):
+            outcome = await review_items([_conflict_group([first, second])], console=console, ui=ui)
+
+        decision_list.assert_called_once()
+        assert outcome.decisions == {
+            "apt:conflict:vendor.list": Decision.APPLY,
+            "apt:conflict:other.list": Decision.SKIP_ONCE,
+        }
 
     async def test_both_whole_versions_are_shown_and_no_unified_diff(self) -> None:
         """The user's own words: a diff of two repository definitions is not readable. The
@@ -975,11 +1155,11 @@ class TestRepoConflictGroupResolution:
             target_version="deb https://old.example.com stable main\n",
             source_version="deb https://new.example.com noble main\n",
         )
-        select_prompt = _fake_prompt(ask_return="skip_once")
+        screen = _fake_prompt(ask_return={"apt:conflict:vendor.list": "skip_once"})
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
-            patch("pcswitcher.jobs.packages.review.questionary.select", return_value=select_prompt),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen),
         ):
             await review_items([_conflict_group([entry])], console=console, ui=ui)
 
@@ -988,6 +1168,26 @@ class TestRepoConflictGroupResolution:
         assert "new.example.com" in printed
         assert printed.index("old.example.com") < printed.index("new.example.com")
         assert "@@" not in printed and "\n-deb" not in printed
+
+    async def test_a_version_panel_ends_on_its_last_line_of_content(self) -> None:
+        """A file body's own trailing newline renders as an empty last line inside the
+        panel border — every other panel in the review had the same trailing gap.
+        """
+        out = io.StringIO()
+        console = Console(file=out, force_terminal=True, no_color=True, width=60)
+        ui = MagicMock()
+        entry = _conflict_entry(target_version="deb https://old.example.com stable main\n", source_version="x\n")
+        screen = _fake_prompt(ask_return={"apt:conflict:vendor.list": "skip_once"})
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen),
+        ):
+            await review_items([_conflict_group([entry])], console=console, ui=ui)
+
+        lines = [line.rstrip() for line in out.getvalue().splitlines()]
+        content = next(index for index, line in enumerate(lines) if "old.example.com" in line)
+        assert lines[content + 1].startswith("╰"), lines[content : content + 3]
 
     async def test_a_bracketed_filename_in_a_conflict_panel_renders_without_markup_error(self) -> None:
         """T-02-02: neither the filename nor either file body may reach Rich as a bare
@@ -1008,43 +1208,29 @@ class TestRepoConflictGroupResolution:
                 "Types: deb\nURIs: https://a.example.com\nSigned-By: [/etc/apt/keyrings/v.gpg]\n",
             ),
         )
-        select_prompt = _fake_prompt(ask_return="skip_once")
+        screen = _fake_prompt(ask_return={"apt:conflict:vendor[1].list": "skip_once"})
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
-            patch("pcswitcher.jobs.packages.review.questionary.select", return_value=select_prompt),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen),
         ):
             outcome = await review_items([_conflict_group([entry])], console=console, ui=ui)
 
         assert outcome.decisions == {"apt:conflict:vendor[1].list": Decision.SKIP_ONCE}
 
-    async def test_ctrl_c_aborts_the_sync_naming_the_file(self) -> None:
+    async def test_ctrl_c_aborts_the_sync_naming_the_screen(self) -> None:
         console = _interactive_console()
         ui = MagicMock()
-        select_prompt = _fake_prompt(ask_return=None)
+        screen = _fake_prompt(ask_return=None)
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
-            patch("pcswitcher.jobs.packages.review.questionary.select", return_value=select_prompt),
-            pytest.raises(SyncAbortedByUser, match=r"vendor\.list"),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen),
+            pytest.raises(SyncAbortedByUser, match="Resolve apt repository conflicts"),
         ):
             await review_items([_conflict_group([_conflict_entry()])], console=console, ui=ui)
 
         ui.resume.assert_called_once()
-
-    async def test_conflict_group_never_offered_as_a_checkbox(self) -> None:
-        console = _interactive_console()
-        ui = MagicMock()
-        select_prompt = _fake_prompt(ask_return="skip_once")
-
-        with (
-            patch.object(sys, "stdin", _mock_isatty(True)),
-            patch("pcswitcher.jobs.packages.review.questionary.select", return_value=select_prompt),
-            patch("pcswitcher.jobs.packages.review.questionary.checkbox") as checkbox,
-        ):
-            await review_items([_conflict_group([_conflict_entry()])], console=console, ui=ui)
-
-        checkbox.assert_not_called()
 
     async def test_non_interactive_conflict_entries_skip_once_and_are_not_unresolved(self) -> None:
         console = _non_interactive_console()
@@ -1052,11 +1238,11 @@ class TestRepoConflictGroupResolution:
 
         with (
             patch.object(sys, "stdin", _mock_isatty(False)),
-            patch("pcswitcher.jobs.packages.review.questionary.select") as select_mock,
+            patch("pcswitcher.jobs.packages.review.decision_list") as decision_list,
         ):
             outcome = await review_items([_conflict_group([_conflict_entry()])], console=console, ui=ui)
 
-        select_mock.assert_not_called()
+        decision_list.assert_not_called()
         assert outcome.decisions == {"apt:conflict:vendor.list": Decision.SKIP_ONCE}
         assert outcome.unresolved == ()
 

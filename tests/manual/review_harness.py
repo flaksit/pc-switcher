@@ -1,5 +1,5 @@
-"""Drive the REAL batched review — real TerminalUI, real questionary widgets — with no
-system state touched and no machine contacted.
+"""Drive the REAL batched review — real TerminalUI, real decision screens and questionary
+widgets — with no system state touched and no machine contacted.
 
 A rehearsal for UAT 02-01, not a UAT result. It renders every prompt shape the review can
 produce and prints the resulting decisions. It does NOT exercise decision-file writes or
@@ -23,12 +23,13 @@ from pcswitcher.jobs.packages.review import (
     ask_gate,
     review_items,
 )
+from pcswitcher.models import SyncAbortedByUser
 from pcswitcher.ui import TerminalUI
 
 # One group per interaction shape the review supports. The action strings are load-bearing:
-# "install" arrives ticked and "remove" unticked (_REMOVAL_ACTIONS); "install"/"remove"
-# are promotable so their unticked leftovers get the never-offer-again screen, while
-# "report_only" and REPO_REMOVAL_REVIEW_ACTION are not (_PROMOTABLE_ACTIONS).
+# "install" rows start applied and "remove" rows at skip-once (_REMOVAL_ACTIONS);
+# "install"/"remove" are promotable so their screens offer the third answer, while
+# "report_only" and REPO_REMOVAL_REVIEW_ACTION are two-answer screens (_PROMOTABLE_ACTIONS).
 GROUPS = [
     ReviewGroup(
         "apt",
@@ -74,7 +75,7 @@ GROUPS = [
     ReviewGroup(
         "apt",
         REPO_REMOVAL_REVIEW_ACTION,
-        "Delete repositorys the source no longer has (apt)",
+        "Delete repositories the source no longer has (apt)",
         [ReviewEntry("apt:source:99-pcsw-uat.list", "99-pcsw-uat.list (list)", "delete repository")],
     ),
     ReviewGroup(
@@ -111,6 +112,14 @@ GATE_MESSAGE = (
     "Skipping runs no part of apt_sync this sync and leaves the target's /etc/apt untouched."
 )
 
+# `ask_gate` answers with a bare bool (or None), which says nothing on its own in a
+# rehearsal transcript. These are what each answer MEANS to the run.
+GATE_ANSWERS = {
+    True: "continue — apt_sync runs and re-checks the attachment",
+    False: "skip apt_sync this run — other jobs continue",
+    None: "not asked — no TTY, the caller owns the fallback",
+}
+
 
 async def main() -> None:
     console = Console()
@@ -131,8 +140,8 @@ async def main() -> None:
 
     # emoji=False, markup=False: an item id like `apt:package:sl` is a Rich emoji
     # shortcode, and would print as `apt<box>sl` under the default settings.
-    console.rule("gate")
-    console.print(f"  {gate}")
+    console.rule("Ubuntu Pro attachment gate")
+    console.print(f"  {GATE_ANSWERS[gate]}")
     console.rule("decisions")
     for item_id, decision in sorted(outcome.decisions.items()):
         console.print(f"  {item_id}: {decision}", emoji=False, markup=False)
@@ -144,4 +153,9 @@ async def main() -> None:
     console.print(f"\nwas_interactive={outcome.was_interactive}")
 
 
-asyncio.run(main())
+try:
+    asyncio.run(main())
+except SyncAbortedByUser as e:
+    # What `cli.py` does with the same exception: a Ctrl-C anywhere in the review is a
+    # clean stop, and a traceback here would misrepresent the product as crashing.
+    Console().print(f"[yellow]Sync aborted:[/yellow] {e}")

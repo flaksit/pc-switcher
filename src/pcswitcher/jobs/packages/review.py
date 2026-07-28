@@ -1,21 +1,30 @@
-"""Batched checkbox review — the single interaction surface for every package diff (D-24).
+"""Batched review — the single interaction surface for every package diff (D-24).
 
 Each package job computes its own set of differences against the source's manifest and hands
-them to `review_items` as `ReviewGroup`s before applying anything. The user ticks items off a
-checkable list in one sitting rather than answering a sequence of yes/no prompts.
+them to `review_items` as `ReviewGroup`s before applying anything. The user answers one
+screen per group in one sitting rather than a sequence of yes/no prompts.
+
+An actionable group is one `decision_list` screen (`packages.decision_list`): every item on
+its own row, the decision it currently carries in a column to the right, one key per answer.
+Nothing is echoed afterwards — the answered list stays in the scrollback, and the decision
+column is the record. That also removes the Rich panel that used to precede each screen:
+the control lists the items itself, so a panel above it said everything twice. The panel
+survives only where there is nothing to answer, on the non-interactive path (D-26), where it
+IS the report.
 
 This composes with the single persistent Live display (Phase 1 plans 01-17/01-18) exactly
 as `TerminalUIConfirmer.confirm` (`pcswitcher.confirmer`) does: pause the live region before
-the prompt, run the blocking `questionary` checkbox off the event loop via
-`asyncio.to_thread` (ADR-005 — no blocking calls on the event loop), and resume it in a
-`finally` so the terminal is always handed back even if the prompt raises.
+the prompt, run the blocking prompt off the event loop via `asyncio.to_thread` (ADR-005 —
+no blocking calls on the event loop), and resume it in a `finally` so the terminal is always
+handed back even if the prompt raises.
 
-Removals get their own group, never sharing a checkbox list with installs (D-07/D-24): a
-bulk tick that also deletes software would be exactly the silent-destruction failure D-07
-exists to prevent. Which of a caller's `ReviewGroup`s are "removal-direction" is decided by
-`ReviewGroup.action`; grouping itself (turning an `ItemDiff` into `ReviewGroup`s keyed by
-manager+action) belongs to `PackageSyncJob._build_review_groups`, and this module only
-consumes already-grouped input.
+Removals get their own group, never sharing a screen with installs (D-07/D-24): a bulk
+confirm that also deleted software would be exactly the silent-destruction failure D-07
+exists to prevent, which is also why a removal-direction row starts at skip-once while an
+install-direction row starts applied. Which of a caller's `ReviewGroup`s are
+"removal-direction" is decided by `ReviewGroup.action`; grouping itself (turning an
+`ItemDiff` into `ReviewGroup`s keyed by manager+action) belongs to
+`PackageSyncJob._build_review_groups`, and this module only consumes already-grouped input.
 
 `ask_gate` is the one question here that is NOT a review item: a two-answer yes/no about the
 target's environment, asked before any group is built, whose "no" answer means there is no
@@ -24,13 +33,12 @@ module already owns pause-the-live-UI-ask-resume, interactivity detection and th
 Ctrl-C-aborts-the-sync rule; it returns `None` when nobody could be asked, and the caller
 owns what that means.
 
-D-07's three-way decision is completed by a second checkbox per actionable group (install /
-change / remove direction, which includes the block-state items): whatever the apply list
-left UNTICKED is offered once more, and a tick there records `Decision.SKIP_ALWAYS` —
-"never offer this again on this machine". Ticking nothing is the status quo (skip once).
-`REPORT_ONLY` groups never get that offer: an informational item has no machine that holds
-it, so a permanent mark would silently stop the underlying package syncing rather than stop
-reporting the condition.
+D-07's three answers are all on the one screen for an actionable group (install / change /
+remove direction, which includes the block-state items): apply, skip once, or always skip —
+treat the item as specific to this machine, which makes it inert here in both roles (D-08a).
+`REPORT_ONLY` groups offer the first two only: an informational item has no machine that
+holds it, so a permanent mark would silently stop the underlying package syncing rather than
+stop reporting the condition.
 
 `PACKAGE_REVIEW_AUTOMATION_ENV`: undocumented escape hatch for integration tests, which run
 without a TTY and cannot drive a real terminal prompt. When set, its value is trusted JSON
@@ -39,9 +47,9 @@ widens what the review offers (D-25 items are still exactly what the caller pass
 is deliberately absent from `--help`, the config schema and user docs (D-26).
 
 A `ReviewGroup` whose `action` is `UNREPRODUCIBLE_REVIEW_ACTION` gets a different
-interaction shape from every other group (D-21): instead of a checkbox tick, each entry
-is resolved one at a time with a three-way choice — add an install snippet, record it as
-machine-specific (skip always), or skip for now — because "should this apply" is not the
+interaction shape from every other group (D-21): instead of a row on a decision screen, each
+entry is resolved one at a time with a three-way choice — add an install snippet, always skip
+it as specific to this machine, or skip for now — because "should this apply" is not the
 question for an item no package manager can reproduce; "how does this get resolved" is.
 `ReviewOutcome.snippets` carries that group's authored snippets back to the caller
 (`PackageSyncJob.apply()`), which persists them. An interactive review always resolves
@@ -51,18 +59,19 @@ to an "unresolved" state, and Ctrl-C anywhere in the review aborts the whole syn
 populated only on the non-interactive path, where it reports (never fails) the items no
 one was present to resolve (D-26).
 
-A `ReviewGroup` whose `action` is `REPO_REMOVAL_REVIEW_ACTION` keeps the ordinary checkbox
-shape but takes only TWO answers (ADR-020 D-07): delete, or leave it for now.
-It arrives unticked like every other removal direction and is never offered the "never
-offer again" promotion, so `Decision.SKIP_ALWAYS` is unreachable for it and nothing about
-it is ever recorded. That is why `_REMOVAL_ACTIONS` and `_PROMOTABLE_ACTIONS` are two
-independent sets rather than one derived from the other.
+A `ReviewGroup` whose `action` is `REPO_REMOVAL_REVIEW_ACTION` uses the same screen with one
+fewer answer (ADR-020 D-07): delete, or leave it for now. It starts at skip-once like every
+other removal direction and is never offered permanence, so `Decision.SKIP_ALWAYS` is
+unreachable for it and nothing about it is ever recorded. That is why `_REMOVAL_ACTIONS` and
+`_PROMOTABLE_ACTIONS` are two independent sets rather than one derived from the other.
 
-A `ReviewGroup` whose `action` is `REPO_CONFLICT_REVIEW_ACTION` gets a per-entry two-way
-flow instead (ADR-020 D-37): something that differs on the two machines and feeds an
-item the target recorded machine-specific — a repository file for `apt_sync`, a remote for
-`flatpak_sync` — is shown as both versions, never a unified diff, and answered overwrite or
-skip-once. Nothing is recorded either way.
+A `ReviewGroup` whose `action` is `REPO_CONFLICT_REVIEW_ACTION` is the same two-answer screen
+(ADR-020 D-37) preceded by its own content: something that differs on the two machines and
+feeds an item the target recorded machine-specific — a repository file for `apt_sync`, a
+remote for `flatpak_sync` — is printed as both versions, never a unified diff, before the one
+screen that answers overwrite or skip-once for all of them. Nothing is recorded either way,
+and it starts at skip-once: an overwrite moves software the target explicitly marked
+machine-specific, so it is chosen, never defaulted.
 
 A `ReviewGroup` whose `action` is `COLLATERAL_REVIEW_ACTION` likewise gets its own
 interaction shape (D-30): each entry is a manually-installed package the pending apt
@@ -80,16 +89,20 @@ import asyncio
 import json
 import logging
 import os
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Protocol, runtime_checkable
 
 import questionary
+from prompt_toolkit.key_binding import KeyBindings, KeyPressEvent
+from prompt_toolkit.keys import Keys
 from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 
+from pcswitcher.jobs.packages.decision_list import DecisionOption, DecisionRow, decision_list
 from pcswitcher.models import SyncAbortedByUser
 from pcswitcher.terminal import is_interactive
 
@@ -118,8 +131,8 @@ PACKAGE_REVIEW_AUTOMATION_ENV = "PCSWITCHER_PACKAGE_REVIEW_AUTOMATION"
 # Sentinel `ReviewGroup.action` a caller (today, only `AptSyncJob`) uses to mark a group of
 # `/etc/apt` repository or pin DELETIONS as taking only two answers — delete, or leave it
 # for now (ADR-020 D-07). Unlike the other two sentinels this needs no
-# per-entry flow: it renders as an ordinary unticked checkbox list, and the whole difference
-# is that it is never offered the "never offer again" promotion. A permanent machine-local
+# per-entry flow: it renders as an ordinary decision screen starting at skip-once, and the
+# whole difference is that the third answer is absent from it. A permanent machine-local
 # mark on a file whose entire purpose is to feed packages would silently and permanently
 # change where those packages come from, and the user's remedy is consolidating the two
 # machines' files, not recording a preference. One sentinel, two groups: `_build_review_
@@ -128,37 +141,37 @@ PACKAGE_REVIEW_AUTOMATION_ENV = "PCSWITCHER_PACKAGE_REVIEW_AUTOMATION"
 REPO_REMOVAL_REVIEW_ACTION = "repo_removal"
 
 # Canonical removal-direction action values (D-07's "remove/delete/disable" family). Any
-# `ReviewGroup.action` outside this set is treated as install-direction (checked by
-# default) — covers "install"/"add"/"enable" as well as "change" (converging an existing
-# item to match the source is not the destructive branch a bulk tick must guard against).
+# `ReviewGroup.action` outside this set is treated as install-direction (starting applied)
+# — covers "install"/"add"/"enable" as well as "change" (converging an existing item to
+# match the source is not the destructive branch a bulk confirm must guard against).
 _REMOVAL_ACTIONS = frozenset({"remove", "delete", "disable", REPO_REMOVAL_REVIEW_ACTION})
 
 # `ReviewGroup.action` values whose items carry a converge verb AND may be recorded
-# machine-specific, and are therefore the only ones offered the "never offer again"
-# promotion below (D-07). A `REPORT_ONLY` group is excluded on purpose: a version mismatch,
+# machine-specific, and are therefore the only ones whose screen offers the third answer
+# (D-07). A `REPORT_ONLY` group is excluded on purpose: a version mismatch,
 # an unreplicable origin or a cross-vendor mismatch has no machine that HOLDS the item for D-08a to
 # record against, and recording one would stop the package syncing altogether rather than
 # stop reporting the condition. Those are resolved by fixing the underlying condition, not
 # by a machine-specific mark.
 #
-# Enumerated independently of `_REMOVAL_ACTIONS` rather than derived from it: "arrives
-# unticked" and "is offered permanence" are two different questions about a group, and
+# Enumerated independently of `_REMOVAL_ACTIONS` rather than derived from it: "starts at
+# skip-once" and "is offered permanence" are two different questions about a group, and
 # ADR-020 D-07's two-answer screens answer them differently — `REPO_REMOVAL_REVIEW_ACTION`
 # is in the first set and deliberately absent from this one.
 _PROMOTABLE_ACTIONS = frozenset({"install", "add", "enable", "change", "remove", "delete", "disable"})
 
 # Sentinel `ReviewGroup.action` a caller (today, only `AptSyncJob`) uses to mark a group
 # of unreproducible items (D-18/D-21) as needing the three-way per-entry resolution flow
-# below, rather than the ordinary checkbox tick. Not a `DiffAction` value — this is a
+# below, rather than an ordinary decision screen. Not a `DiffAction` value — this is a
 # `packages.review`-owned interaction kind, independent of the underlying diff's own
 # `action` (which stays `REPORT_ONLY`/`INSTALL` per D-25's taxonomy).
 UNREPRODUCIBLE_REVIEW_ACTION = "unreproducible"
 
 # Sentinel `ReviewGroup.action` a caller (today, only `AptSyncJob`) uses to mark a group
 # of manual-collateral items (D-30) as needing the three-way per-entry resolution flow
-# below — install-anyway / skip / abort — rather than an ordinary checkbox tick. A
+# below — install-anyway / skip / abort — rather than an ordinary decision screen. A
 # manual-collateral item is a manually-installed package the pending apt transaction would
-# remove or downgrade; whether to lose it is not a yes/no the checkbox path expresses, so
+# remove or downgrade; whether to lose it is not a question the decision screen expresses, so
 # it gets its own prompt (sibling to `UNREPRODUCIBLE_REVIEW_ACTION`). Install-anyway records
 # `Decision.APPLY` against `ReviewEntry.item_id`, skip records `Decision.SKIP_ONCE`, and
 # abort raises `SyncAbortedByUser` naming the collateral package. The caller maps that
@@ -172,10 +185,10 @@ COLLATERAL_REVIEW_ACTION = "collateral"
 # silently, because the user asked for the two machines to match; this one cannot, because
 # overwriting it moves software the user explicitly told this tool to leave alone.
 #
-# Its own per-entry flow, a two-choice sibling of `COLLATERAL_REVIEW_ACTION`: overwrite
-# records `Decision.APPLY`, skip records `Decision.SKIP_ONCE`, and there is no third answer —
-# the remedy is consolidating the two files, not recording a preference. `ReviewEntry.
-# versions` carries both file contents, shown as two panels rather than a unified diff.
+# A two-answer decision screen preceded by each entry's two versions: overwrite records
+# `Decision.APPLY`, skip records `Decision.SKIP_ONCE`, and there is no third answer — the
+# remedy is consolidating the two files, not recording a preference. `ReviewEntry.versions`
+# carries both file contents, printed as two panels rather than a unified diff.
 REPO_CONFLICT_REVIEW_ACTION = "repo_conflict"
 
 
@@ -209,7 +222,7 @@ class ReviewEntry:
 
 @dataclass(frozen=True)
 class ReviewGroup:
-    """One checkbox screen's worth of same-manager, same-direction entries.
+    """One screen's worth of same-manager, same-direction entries.
 
     `action` is shaped like the `DiffAction` enum a future plan introduces (e.g.
     "install"/"remove"/"change") but stays a plain string here so this module carries no
@@ -228,10 +241,10 @@ class Decision(StrEnum):
 
     APPLY = "apply"
     SKIP_ONCE = "skip_once"
-    # A skip is promoted to permanent by its own prompt, never by a fourth checkbox state on
-    # the apply list: the "never offer again" pass over an actionable group's UNTICKED
-    # entries (`_offer_permanent_skips`), and the unreproducible group's "record as
-    # machine-specific" choice.
+    # "Treat this item as specific to this machine": it goes inert here in BOTH roles
+    # (D-08a), so it is neither pushed from here nor converged onto here. Deliberately not
+    # worded "never offer again on this machine" — what the user records is a fact about
+    # the item, and never being asked again is the consequence, not the request.
     SKIP_ALWAYS = "skip_always"
 
 
@@ -274,6 +287,89 @@ def _is_promotable_group(action: str) -> bool:
     return action in _PROMOTABLE_ACTIONS
 
 
+# The keys that set a decision, and the words the decision column shows. `a` is deliberately
+# absent: it is conventionally Abort in a terminal prompt (`decision_list` rejects it), and
+# the answer it would most naturally name here is the only one that outlives this run.
+_APPLY_KEY = "y"
+_SKIP_ONCE_KEY = "s"
+_SKIP_ALWAYS_KEY = "n"
+SKIP_ONCE_WORD = "skip once"
+SKIP_ALWAYS_WORD = "always skip"
+
+# Filled / hollow / crossed. The glyph is what carries the row's state, so the screen stays
+# readable in a terminal whose background colours the user cannot distinguish.
+_APPLY_GLYPH = "●"
+_SKIP_ONCE_GLYPH = "○"
+_SKIP_ALWAYS_GLYPH = "⊘"
+
+
+def _group_act_word(group: ReviewGroup) -> str:
+    """The verb the group's rows share, used for the act option's legend and column word.
+
+    The commonest `action_label` rather than the first: it is the one the group title
+    already names, so it is the one a row does NOT need to repeat.
+    """
+    counts = Counter(entry.action_label for entry in group.entries)
+    return counts.most_common(1)[0][0] if counts else "apply"
+
+
+def _default_decision(action: str) -> Decision:
+    """Where a group's rows start before the user touches anything.
+
+    Install-direction rows start applied; anything that removes, deletes or disables starts
+    at skip-once — and so does the repository/remote overwrite, which moves software the
+    target explicitly marked machine-specific. Confirming a screen unread must never destroy
+    or displace something the user did not choose.
+    """
+    if _is_removal_direction(action) or _is_repo_conflict_group(action):
+        return Decision.SKIP_ONCE
+    return Decision.APPLY
+
+
+def _options_for(group: ReviewGroup) -> tuple[DecisionOption, ...]:
+    """The answers one group's screen offers — three, or two where D-07 records nothing.
+
+    The same widget either way: the user sees a missing option in the legend rather than a
+    differently-shaped prompt.
+    """
+    options = [
+        DecisionOption(
+            value=Decision.APPLY, key=_APPLY_KEY, word=_group_act_word(group), glyph=_APPLY_GLYPH, is_act=True
+        ),
+        DecisionOption(value=Decision.SKIP_ONCE, key=_SKIP_ONCE_KEY, word=SKIP_ONCE_WORD, glyph=_SKIP_ONCE_GLYPH),
+    ]
+    if _is_promotable_group(group.action):
+        options.append(
+            DecisionOption(
+                value=Decision.SKIP_ALWAYS, key=_SKIP_ALWAYS_KEY, word=SKIP_ALWAYS_WORD, glyph=_SKIP_ALWAYS_GLYPH
+            )
+        )
+    return tuple(options)
+
+
+def _rows_for(group: ReviewGroup) -> tuple[DecisionRow, ...]:
+    """One row per entry, with the group's own verb stripped off the label.
+
+    Every row of an `AptSyncJob`/`PackageSyncJob` group carries the same `action_label` as
+    its title's verb, so prefixing each row with it said the same word once per line. A row
+    whose action genuinely differs keeps it, in both places it matters: as a prefix on the
+    item, and as its own word in the decision column.
+    """
+    act_word = _group_act_word(group)
+    default = _default_decision(group.action)
+    return tuple(
+        DecisionRow(
+            row_id=entry.item_id,
+            label=entry.label,
+            default=default,
+            prefix=None if entry.action_label == act_word else entry.action_label,
+            act_word=None if entry.action_label == act_word else entry.action_label,
+            detail=entry.detail,
+        )
+        for entry in group.entries
+    )
+
+
 # Printed once before the multi-line capture, so a user does not author a snippet that
 # hangs the sync (T-02-18): the executor supplies no stdin, and a worked shape showing
 # the DEBIAN_FRONTEND=noninteractive + dependency-fix pattern is cheaper to read here
@@ -286,16 +382,47 @@ _SNIPPET_AUTHORING_NOTE = (
     "  sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes --fix-broken\n"
 )
 
+# Shown in place of questionary's own multiline instruction, which offers "Alt+Enter or Esc
+# then Enter" — two chords for one gesture, neither of which a user guesses.
+_SNIPPET_INSTRUCTION = "(Ctrl-D to finish)\n>"
+
+
+def _snippet_submit_bindings() -> KeyBindings:
+    """Ctrl-D finishes the snippet: prompt_toolkit's own end-of-input gesture, and the one a
+    user reaches for in a multi-line capture.
+
+    Scoped to this editor only. Ctrl-D as an ABORT anywhere else stays unhandled — that is a
+    separate question this does not reopen.
+    """
+    bindings = KeyBindings()
+
+    def submit(event: KeyPressEvent) -> None:
+        event.current_buffer.validate_and_handle()
+
+    bindings.add(Keys.ControlD, eager=True)(submit)
+    return bindings
+
+
+_SNIPPET_SUBMIT_BINDINGS = _snippet_submit_bindings()
+
 
 def _render_group_panel(group: ReviewGroup) -> Panel:
-    """Build a Panel for one group, wrapping every untrusted field in `Text`.
+    """Build the REPORT panel for one group — the non-interactive path only, where there is
+    nothing to answer and this is all the user gets (D-26).
+
+    An interactive run never prints it: the decision screen lists the same items, and a
+    panel above it made every group appear twice.
 
     Package names, versions and stderr fragments come from package-manager output and
     must never reach a `Panel` as a bare `str` — Rich would parse `[...]`-shaped
     substrings as console markup and raise `MarkupError` (T-02-02).
     """
     body = Text()
-    for entry in group.entries:
+    for index, entry in enumerate(group.entries):
+        if index:
+            # Separator, not terminator: a newline after the last entry renders as an empty
+            # final line inside the panel border.
+            body.append("\n")
         body.append(entry.action_label, style="bold")
         body.append(" ")
         body.append(entry.label)
@@ -303,7 +430,6 @@ def _render_group_panel(group: ReviewGroup) -> Panel:
             body.append(" (")
             body.append(entry.detail, style="dim")
             body.append(")")
-        body.append("\n")
     return Panel(body, title=Text(group.title), border_style="cyan")
 
 
@@ -324,10 +450,10 @@ async def _review_unreproducible_group(
     snippets: dict[str, str],
 ) -> None:
     """Resolve one `UNREPRODUCIBLE_REVIEW_ACTION` group's entries, one at a time, with
-    the three-way choice D-21 requires: add an install snippet, record as
-    machine-specific (skip always), or skip for now. Never a checkbox tick — a checkbox
+    the three-way choice D-21 requires: add an install snippet, always skip it as specific
+    to this machine, or skip for now. Never a row on the decision screen — that screen
     answers "should this apply", but an unreproducible item's question is "how does this
-    get resolved", which is not a yes/no.
+    get resolved", which is not the same question.
 
     All three choices are VALID resolutions (D-21): a snippet, a skip-always, and an
     explicit skip-once. There is no fourth "genuinely undecided" outcome (decision 10 —
@@ -340,9 +466,11 @@ async def _review_unreproducible_group(
       the editor) is NOT accepted and does NOT fall through: the three-way choice is
       re-prompted so the user must supply a real snippet or pick an explicit skip.
 
-    The body is stored verbatim, never stripped — D-20 forbids reasoning about it, and
-    leading whitespace/newlines are the user's own formatting choice; "empty" means only a
-    completely blank submission.
+    The body is STORED verbatim, never stripped — D-20 forbids reasoning about it, and
+    leading whitespace/newlines are the user's own formatting choice. Emptiness is decided
+    on the stripped body, though: a body of only spaces and newlines replays as nothing at
+    all, so accepting it would record a snippet that resolves the item without installing
+    anything.
     """
     for entry in group.entries:
         console.print()
@@ -357,9 +485,15 @@ async def _review_unreproducible_group(
             choice_prompt = questionary.select(
                 f"How should {entry.label} be resolved?",
                 choices=[
-                    questionary.Choice(title="Add an install snippet", value="add_snippet"),
-                    questionary.Choice(title="Record as machine-specific (skip always)", value="skip_always"),
-                    questionary.Choice(title="Skip for now", value="skip_once"),
+                    questionary.Choice(
+                        title="Add an install snippet — the machine that lacks it replays your commands",
+                        value="add_snippet",
+                    ),
+                    questionary.Choice(
+                        title="Always skip — it belongs to this machine, so neither machine ever syncs it",
+                        value="skip_always",
+                    ),
+                    questionary.Choice(title="Skip for now — you will be asked again next sync", value="skip_once"),
                 ],
             )
             selected = await asyncio.to_thread(choice_prompt.ask)
@@ -385,67 +519,42 @@ async def _review_unreproducible_group(
             # selected == "add_snippet"
             console.print(Text(_SNIPPET_AUTHORING_NOTE, style="dim"))
             body_prompt = questionary.text(
-                f"Install snippet for {entry.label} (Esc then Enter to finish):", multiline=True
+                f"Install snippet for {entry.label}:",
+                multiline=True,
+                instruction=_SNIPPET_INSTRUCTION,
+                key_bindings=_SNIPPET_SUBMIT_BINDINGS,
             )
             body = await asyncio.to_thread(body_prompt.ask)
-            if body:
+            if body and body.strip():
                 snippets[entry.item_id] = body
                 break
 
-            # Empty submission or an abandoned editor (`""`/`None`): not a resolution and
+            # Empty, whitespace-only, or an abandoned editor (`None`): not a resolution and
             # not an unresolved fall-through — re-prompt the three-way choice (decision 10).
             console.print(
                 Text("An install snippet cannot be empty — enter a real snippet or choose a skip.", style="yellow")
             )
 
 
-async def _offer_permanent_skips(
-    group: ReviewGroup,
-    unticked: Sequence[ReviewEntry],
-    *,
-    console: Console,
-    decisions: dict[str, Decision],
-) -> None:
-    """Offer D-07's third outcome over one actionable group's UNTICKED entries: a second
-    checkbox whose ticks promote a skip-once to `Decision.SKIP_ALWAYS`.
+async def _review_decision_group(group: ReviewGroup, *, decisions: dict[str, Decision]) -> None:
+    """Present one actionable group as a single screen and record every row's answer.
 
-    A second list rather than a per-item question (D-24): the user ticks items off a list,
-    and turning the apply screen into a queue of three-way prompts is exactly the shape the
-    batched review exists to avoid. It is also not a fourth state on the apply checkbox —
-    "apply" and "never offer again" are opposite answers, so one list cannot carry both
-    without an unticked item being ambiguous.
+    The whole of D-07 in one pass: each row starts at `_default_decision` and ends wherever
+    the user left it, so there is no leftover set to re-offer and no way for a screen asking
+    about permanence to echo back an item's action. Every entry gets a decision, because the
+    screen carries one per row from the moment it opens.
 
-    Everything already ticked for apply is excluded, so a fully-ticked group prompts
-    nothing. Leaving this list empty is the status quo (skip once, re-offered next run), so
-    a bare Enter keeps the pre-existing behaviour.
-
-    Ctrl-C (`ask` returns `None`) aborts the WHOLE sync like every other review
-    screen — never a silent per-item fallthrough.
+    Ctrl-C (`ask` returns `None`) aborts the WHOLE sync like every other review screen —
+    never a silent fallthrough that leaves this and every later group undecided.
     """
-    console.print(
-        Text(
-            "Tick anything that should never be offered again on this machine; Enter leaves them for next run.",
-            style="dim",
-        )
-    )
-    prompt = questionary.checkbox(
-        f"{group.title} — never offer again on this machine?",
-        choices=[
-            questionary.Choice(title=f"{entry.action_label} {entry.label}", value=entry.item_id, checked=False)
-            for entry in unticked
-        ],
-    )
-    selected = await asyncio.to_thread(prompt.ask)
+    prompt = decision_list(group.title, rows=_rows_for(group), options=_options_for(group))
+    answered: Mapping[str, str] | None = await asyncio.to_thread(prompt.ask)
 
-    if selected is None:
-        raise SyncAbortedByUser("package review aborted at a never-offer-again screen (Ctrl-C)")
+    if answered is None:
+        raise SyncAbortedByUser(f"package review aborted at {group.title!r} (Ctrl-C)")
 
-    # Scoped to the entries actually offered, so a promotion can never reach back and
-    # overwrite an APPLY decision the apply list already recorded.
-    promoted = set(selected)
-    for entry in unticked:
-        if entry.item_id in promoted:
-            decisions[entry.item_id] = Decision.SKIP_ALWAYS
+    for entry in group.entries:
+        decisions[entry.item_id] = Decision(answered[entry.item_id])
 
 
 async def _review_collateral_group(
@@ -457,8 +566,8 @@ async def _review_collateral_group(
     """Resolve one `COLLATERAL_REVIEW_ACTION` group's entries, one at a time, with the
     three-way choice D-30 requires for a manually-installed package the pending apt
     transaction would remove or downgrade: install anyway, skip, or abort. Never a
-    checkbox tick — losing a package the user chose to have is not the same yes/no as
-    ticking an install off a list.
+    row on a decision screen — losing a package the user chose to have is not the same
+    question as approving an install off a list.
 
     The decision is recorded against `entry.item_id`: install-anyway records
     `Decision.APPLY`, skip records `Decision.SKIP_ONCE`. The caller (`AptSyncJob`) maps
@@ -507,13 +616,14 @@ async def _review_repo_conflict_group(
     console: Console,
     decisions: dict[str, Decision],
 ) -> None:
-    """Resolve one `REPO_CONFLICT_REVIEW_ACTION` group's entries, one at a time, with the
-    two-way choice ADR-020 D-37 requires: overwrite the target's version with the
-    source's, or skip for now.
+    """Resolve one `REPO_CONFLICT_REVIEW_ACTION` group with the two-way choice ADR-020 D-37
+    requires: overwrite the target's version with the source's, or skip for now.
 
-    Both versions are printed, the target's first, never a unified diff — the user's own
-    position is that a diff of two repository definitions is not readable, and the question
-    is which of two configurations the machine should have, not what changed between them.
+    Both versions of every entry are printed first, the target's first, never a unified
+    diff — the user's own position is that a diff of two repository definitions is not
+    readable, and the question is which of two configurations the machine should have, not
+    what changed between them. The answer itself is then the ordinary decision screen, so
+    this stays a batch (D-24) rather than a queue of per-file prompts.
 
     Ecosystem-neutral wording throughout, because two managers raise this screen about two
     different subjects: `apt_sync` about a repository file, whose versions are the two whole
@@ -526,13 +636,15 @@ async def _review_repo_conflict_group(
 
     `Decision.APPLY` puts the file in the write set; `Decision.SKIP_ONCE` keeps it out AND
     fails every approved package whose origin depended on it (the caller's job) — a skipped
-    conflict is not the same as no conflict, because the package the user ticked cannot be
-    delivered from the origin they were promised.
+    conflict is not the same as no conflict, because the package the user approved cannot be
+    delivered from the origin they were promised. Skip-once is also where each row STARTS
+    (`_default_decision`), because an overwrite displaces software the target explicitly
+    marked machine-specific.
 
-    Ctrl-C (`select` returns `None`) aborts the whole sync naming the file, like every other
-    screen. Every untrusted string — the filename, the detail, and both file bodies — is
-    wrapped in `Text` before it reaches the console, so a bracketed line inside a repository
-    definition cannot trigger the Rich markup crash (T-02-02).
+    Every untrusted string — the filename, the detail, and both file bodies — is wrapped in
+    `Text` before it reaches the console, so a bracketed line inside a repository definition
+    cannot trigger the Rich markup crash (T-02-02). A file body's own trailing newline is
+    dropped for display: inside a panel border it renders as an empty last line.
     """
     for entry in group.entries:
         console.print()
@@ -541,21 +653,13 @@ async def _review_repo_conflict_group(
             console.print(Text(entry.detail, style="dim"))
         if entry.versions is not None:
             target_version, source_version = entry.versions
-            console.print(Panel(Text(target_version), title=Text("on the target now"), border_style="yellow"))
-            console.print(Panel(Text(source_version), title=Text("on the source"), border_style="cyan"))
+            console.print(
+                Panel(Text(target_version.rstrip("\n")), title=Text("on the target now"), border_style="yellow")
+            )
+            console.print(Panel(Text(source_version.rstrip("\n")), title=Text("on the source"), border_style="cyan"))
 
-        choice_prompt = questionary.select(
-            f"{entry.label} differs on the two machines. Proceed?",
-            choices=[
-                questionary.Choice(title="Overwrite the target's version with the source's", value="overwrite"),
-                questionary.Choice(title="Skip for now", value="skip_once"),
-            ],
-        )
-        selected = await asyncio.to_thread(choice_prompt.ask)
-
-        if selected is None:
-            raise SyncAbortedByUser(f"package review aborted while resolving the conflict on {entry.label!r} (Ctrl-C)")
-        decisions[entry.item_id] = Decision.APPLY if selected == "overwrite" else Decision.SKIP_ONCE
+    console.print()
+    await _review_decision_group(group, decisions=decisions)
 
 
 async def review_items(
@@ -565,15 +669,15 @@ async def review_items(
     ui: PausableUI,
     logger: logging.Logger | None = None,
 ) -> ReviewOutcome:
-    """Present every group as a checkable list and return the user's decisions.
+    """Present every group as one decision screen and return the user's decisions.
 
     Non-interactive runs (`is_interactive(console)` is False) prompt for nothing: every
-    item comes back `SKIP_ONCE`, nothing is recorded permanently, and a warning names how
-    many items went unresolved (D-26). Interactive runs pause `ui` around each group's
-    blocking `questionary` checkbox (dispatched via `asyncio.to_thread`) and resume it in
-    a `finally`, so the live display is always handed back even if the prompt raises. An
-    actionable group whose apply list left anything unticked then gets `_offer_permanent_skips`,
-    which turns a tick into `SKIP_ALWAYS` (D-07).
+    item comes back `SKIP_ONCE`, nothing is recorded permanently, a warning names how many
+    items went unresolved, and the group panels are printed as the report (D-26).
+    Interactive runs pause `ui` around each group's blocking prompt (dispatched via
+    `asyncio.to_thread`) and resume it in a `finally`, so the live display is always handed
+    back even if the prompt raises. They print no group panel: the screen lists the items
+    itself, and its answered form stays in the scrollback as the record.
     """
     log = logger if logger is not None else _logger
 
@@ -600,7 +704,6 @@ async def review_items(
     try:
         for group in groups:
             console.print()
-            console.print(_render_group_panel(group))
 
             if _is_unreproducible_group(group.action):
                 await _review_unreproducible_group(group, console=console, decisions=decisions, snippets=snippets)
@@ -614,39 +717,13 @@ async def review_items(
                 await _review_repo_conflict_group(group, console=console, decisions=decisions)
                 continue
 
-            removal = _is_removal_direction(group.action)
-            choices = [
-                questionary.Choice(
-                    title=f"{entry.action_label} {entry.label}",
-                    value=entry.item_id,
-                    checked=not removal,
-                )
-                for entry in group.entries
-            ]
-            prompt = questionary.checkbox(group.title, choices=choices)
-            selected = await asyncio.to_thread(prompt.ask)
-
-            if selected is None:
-                # Ctrl-C at a checkbox screen means the user wants to abort, not
-                # silently skip the rest of the review (decision 10). Raise the clean-stop
-                # control-flow exception so the whole sync stops here rather than leaving
-                # this and every later group's items undecided.
-                raise SyncAbortedByUser("package review aborted at a checkbox screen (Ctrl-C)")
-
-            selected_ids = set(selected)
-            for entry in group.entries:
-                decisions[entry.item_id] = Decision.APPLY if entry.item_id in selected_ids else Decision.SKIP_ONCE
-
-            if _is_promotable_group(group.action):
-                unticked = [entry for entry in group.entries if entry.item_id not in selected_ids]
-                if unticked:
-                    await _offer_permanent_skips(group, unticked, console=console, decisions=decisions)
+            await _review_decision_group(group, decisions=decisions)
     finally:
         ui.resume()
 
     # An interactive review can no longer leave anything unresolved (decision 10): the
-    # unreproducible flow re-prompts or aborts, and a checkbox abort raises above — so
-    # `unresolved` is always empty here. It stays populated only on the non-interactive
+    # unreproducible flow re-prompts or aborts, and a decision screen's abort raises above —
+    # so `unresolved` is always empty here. It stays populated only on the non-interactive
     # path (D-26 reporting).
     return ReviewOutcome(decisions=decisions, was_interactive=True, snippets=snippets, unresolved=())
 
@@ -675,7 +752,7 @@ async def ask_gate(
     can require the user to go and change the other machine, which no scripted value can
     stand in for.
 
-    Ctrl-C aborts the whole sync (`SyncAbortedByUser`), matching every checkbox screen.
+    Ctrl-C aborts the whole sync (`SyncAbortedByUser`), matching every decision screen.
     `title` and `message` are rendered as `Text`, never markup (T-02-02).
     """
     log = logger if logger is not None else _logger

@@ -710,7 +710,7 @@ The dividing line between the first two is what the job's inaction means. "Nothi
 
 Four situations produce SKIPPED:
 
-- A package job (`apt_sync`, `snap_sync`, `flatpak_sync`, `manual_installs_sync`) whose review had items to offer on a run with no TTY. Nobody was present to tick anything, so every item is marked skip-once and the job converges nothing.
+- A package job (`apt_sync`, `snap_sync`, `flatpak_sync`, `manual_installs_sync`) whose review had items to offer on a run with no TTY. Nobody was present to answer anything, so every item is marked skip-once and the job converges nothing.
 - `vscode_state_sync` when the source has none of the state DBs it handles.
 - `folder_sync` when every configured folder is `enabled: false`.
 - An enabled `sync_jobs` name whose module or class does not resolve. There is no job instance in this case, so the orchestrator records the result at discovery time; the job the user enabled leaves a record rather than only a warning.

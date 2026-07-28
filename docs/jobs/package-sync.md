@@ -22,7 +22,7 @@ All four ship **disabled**: enabling any of them lets pc-switcher change install
 
 ### What each job covers
 
-- **`apt_sync`** — the manually-installed apt package set (`apt-mark showmanual`, not the full dpkg selection — apt resolves dependencies on the target itself), minus the packages you installed from a hand-downloaded `.deb` (see below), plus the `/etc/apt` configuration that governs where packages come from. Only two things under `/etc/apt` are reviewed: `apt.conf.d` files, in all three directions, and the deletion of a repository or pin file the source no longer has. Repository files under `sources.list.d`, their signing keys, and pins under `preferences.d` are derived from the packages you approve and are never ticked — see [Repositories, pins and keys are derived](#repositories-pins-and-keys-are-derived).
+- **`apt_sync`** — the manually-installed apt package set (`apt-mark showmanual`, not the full dpkg selection — apt resolves dependencies on the target itself), minus the packages you installed from a hand-downloaded `.deb` (see below), plus the `/etc/apt` configuration that governs where packages come from. Only two things under `/etc/apt` are reviewed: `apt.conf.d` files, in all three directions, and the deletion of a repository or pin file the source no longer has. Repository files under `sources.list.d`, their signing keys, and pins under `preferences.d` are derived from the packages you approve and never get a review row — see [Repositories, pins and keys are derived](#repositories-pins-and-keys-are-derived).
 - **`snap_sync`** — installed snaps, converged to the source's exact revision and tracking channel.
 - **`flatpak_sync`** — installed flatpak refs, per user/system installation scope, plus the remotes those refs are derived to need.
 - **`manual_installs_sync`** — everything no package manager can reproduce: apt packages installed from no configured repository (a `.deb` you installed by hand), plus unowned files under `/usr/local` and `/opt`. It also owns the [install-snippet registry](#install-snippets).
@@ -45,7 +45,7 @@ The reason is the "defaults, then your data" layering. Installing software usual
 
 Because an enabled package job can install or remove software on the target, each one shows you a review and waits for your approval before it changes anything.
 
-The review lists every difference the job found between source and target, grouped by action, and installs are always kept separate from removals: a group that would install software is never mixed with one that would remove it, and a removal group names the removal explicitly (for example "Remove packages") rather than saying "apply". Removal groups start **unticked**, so a bulk approval can never silently delete something.
+The review lists every difference the job found between source and target, grouped by action, and installs are always kept separate from removals: a group that would install software is never mixed with one that would remove it, and a removal group names the removal explicitly (for example "Remove packages") rather than saying "apply". Removal rows start at **skip this run**, so a bulk approval can never silently delete something.
 
 Most items that would actually change something — packages, holds, masks and `apt.conf.d` files — offer the same three-way choice:
 
@@ -53,7 +53,15 @@ Most items that would actually change something — packages, holds, masks and `
 - **Skip this run** — leave it alone for now; it comes back next sync.
 - **Skip always** — mark it as belonging to this machine only, so no future sync touches it (see [Machine-specific packages](#machine-specific-packages)).
 
-You give those answers with two lists per group, not with a question per item. The first list is the apply list: ticked means apply. Whatever you leave unticked is then offered once more — "never offer again on this machine?" — and ticking it there is skip-always. Ticking nothing on that second list (just pressing Enter) is skip-this-run, so the items come back next sync. If you ticked everything for apply, the second list is not shown at all. Ctrl-C at either list aborts the whole sync.
+You give those answers on **one screen per group**, not with a question per item and not in two passes. Every item is a row; the decision it currently carries is shown in a column to the right of the longest item; the arrow keys move between rows and one key sets the focused row:
+
+- `<y>` — apply, shown in the column as the group's own verb (`install`, `remove`, `overwrite`, …)
+- `<s>` — `skip once`
+- `<n>` — `always skip`
+- `<space>` steps the focused row through the answers, and the shift of any key sets **every** row at once
+- `<enter>` confirms the whole screen; `<ctrl-c>` aborts the whole sync
+
+A screen that takes only two answers simply does not offer `<n>`. The answered list stays on screen afterwards, which is the record of what you decided — nothing is echoed back at you.
 
 Four things take **two** answers instead — act, or leave it for now, with nothing recorded either way: deleting an apt repository file, deleting an apt pin file, overwriting a repository file the two machines disagree about, and deleting or repointing a flatpak remote. See [Deletions](#deletions) and [Flatpak remotes](#flatpak-remotes).
 
@@ -69,7 +77,7 @@ A pin file says nothing about the packages it names, either. Pins travel — the
 
 ### Confirming every individual command
 
-The batched review approves *items*, not commands. One ticked line can expand into several: an apt package is an `apt-get --dry-run` simulation then an `apt-get install`; an apt repository file is a backup, an upload, a `sudo install` promotion and an `apt-get update`.
+The batched review approves *items*, not commands. One approved line can expand into several: an apt package is an `apt-get --dry-run` simulation then an `apt-get install`; an apt repository file is a backup, an upload, a `sudo install` promotion and an `apt-get update`.
 
 `pc-switcher sync <target> --confirm-each-command` inserts one prompt before every one of them, showing the exact command (or, for a file transfer, the source and destination paths) and waiting for **p** to proceed or **a** to abort the whole sync. There is no "skip this one": a single reviewed item can span several commands, so skipping one would leave that item half-applied. An unanswerable prompt (Ctrl-C, EOF) aborts.
 
@@ -85,7 +93,7 @@ One class of install cannot be classified that way and is deliberately left out 
 
 ## Repositories, pins and keys are derived
 
-You are asked about packages. The `/etc/apt` machinery a package needs to be installable — the repository file it comes from, the signing key that makes that repository trusted, the pin that makes that vendor's build win — follows from your answer and gets no review line of its own. Ticking a repository without its package does nothing; ticking a package without its repository cannot be installed; the pairing was never expressible as two checkboxes.
+You are asked about packages. The `/etc/apt` machinery a package needs to be installable — the repository file it comes from, the signing key that makes that repository trusted, the pin that makes that vendor's build win — follows from your answer and gets no review line of its own. Approving a repository without its package does nothing; approving a package without its repository cannot be installed; the pairing was never expressible as two review rows.
 
 A package is replicated as name **and** origin. If the source installed `gh` from `cli.github.com`, the target gets it from `cli.github.com` or not at all, and the review line names the vendor when it is not the distribution's own archive. Approving that line is what carries the vendor's repository file, its key and the source's pin files across. If no repository file on the source declares the origin, or every file that does names a key the source machine does not have, the package is reported instead of installed — never satisfied from a different vendor.
 
@@ -128,7 +136,7 @@ There is one thing pc-switcher will not overwrite: a keyring the target already 
 
 A repository whose `Signed-By:` carries the key **inline** — the armored block written straight into the `.sources` file, which is what `add-apt-repository` does for a PPA — needs no keyring at all. The key travels inside the file, so nothing is copied and nothing is missing.
 
-When you approve removing a repository, the keyring it was the last user of goes with it. That count is taken *after* the repository is actually gone, against the real state of the target, so it gets the awkward cases right: a repository you left unticked still counts, one you marked machine-specific still counts, and so does `/etc/apt/sources.list`, which pc-switcher never syncs at all. Nothing is deleted unless the source machine has dropped that key too. If you remove no repository in a run, nothing is collected.
+When you approve removing a repository, the keyring it was the last user of goes with it. That count is taken *after* the repository is actually gone, against the real state of the target, so it gets the awkward cases right: a repository you left skipped still counts, one you marked machine-specific still counts, and so does `/etc/apt/sources.list`, which pc-switcher never syncs at all. Nothing is deleted unless the source machine has dropped that key too. If you remove no repository in a run, nothing is collected.
 
 Only `/etc/apt/keyrings` is ever cleaned up. Keys in `/etc/apt/trusted.gpg.d` are *ambient* trust — no repository names them, so there is no way to tell which one is still doing a job — and `/usr/share/keyrings` is package territory. pc-switcher copies from both and deletes from neither; those keys are allowed to accumulate rather than be removed on a guess.
 
@@ -217,7 +225,7 @@ A flatpak app is identified by its full `<application>/<arch>/<branch>` referenc
 
 ## Flatpak remotes
 
-A flatpak remote is **derived** from the apps approved from it, exactly as an apt repository is. You never tick a remote: approving an app is what makes its remote travel, and declining the app is the only way to decline the remote. That closes the pairing the old model made expressible — an app approved with the only thing that could deliver it declined, and worse, an app approved from a same-named remote whose URL change was declined, meaning from a different vendor.
+A flatpak remote is **derived** from the apps approved from it, exactly as an apt repository is. You never approve a remote directly: approving an app is what makes its remote travel, and declining the app is the only way to decline the remote. That closes the pairing the old model made expressible — an app approved with the only thing that could deliver it declined, and worse, an app approved from a same-named remote whose URL change was declined, meaning from a different vendor.
 
 A remote the source has that feeds no app approved in this run does not travel at all. There is no flatpak equivalent of the distribution's own repositories: a fresh flatpak install configures **zero** remotes and a machine with none is a perfectly ordinary machine, so even Flathub travels only as a consequence of something needing it.
 
@@ -239,7 +247,7 @@ A remote's **filter** does not travel. `flatpak remote-modify --filter=<file>` r
 
 Beyond *what is installed*, pc-switcher also replicates the deliberate **blocks** you set to stop a package from updating: apt holds (`apt-mark hold`), per-snap refresh holds (`snap refresh --hold`), and flatpak masks (`flatpak mask`). (apt version *pins* already travel, as derived files rather than as items.)
 
-Each block is its own review item, distinct from the package it applies to. A held package and its hold are two separate lines in the review, each with the usual three-way choice — **apply** (make the target match the source), **skip this run**, or **skip always**. Adding a block (one present on the source but not the target) is checked by default. **Removing** a block — undoing one you set, present on the target but not the source — lands in its own removal group, **unticked**, so a bulk approval can never silently drop a block you meant to keep.
+Each block is its own review item, distinct from the package it applies to. A held package and its hold are two separate lines in the review, each with the usual three-way choice — **apply** (make the target match the source), **skip this run**, or **skip always**. Adding a block (one present on the source but not the target) is checked by default. **Removing** a block — undoing one you set, present on the target but not the source — lands in its own removal group starting at **skip this run**, so a bulk approval can never silently drop a block you meant to keep.
 
 Replicating the block never touches the package's version. A held apt package is still never installed or upgraded by a sync — its version is left exactly as it is — and the hold itself now travels as its own item rather than only being reported alongside the package.
 
@@ -247,15 +255,15 @@ The review verbs match the mechanism: apt and snap holds read *hold* / *unhold*,
 
 ## Deletions
 
-Removals propagate for the three package managers. A package removed from the source's `apt-mark showmanual` set, a snap uninstalled on the source, or a flatpak ref or remote removed on the source becomes a removal review item on the target — unticked by default, so you approve deletions deliberately.
+Removals propagate for the three package managers. A package removed from the source's `apt-mark showmanual` set, a snap uninstalled on the source, or a flatpak ref or remote removed on the source becomes a removal review item on the target — starting at skip-this-run, so you approve deletions deliberately.
 
-Removal is the one direction in which an apt repository file, an apt pin file and a flatpak remote are still review lines, and all three take **two** answers rather than three: delete it, or leave it for now. There is no "never offer again" — a permanent machine-local mark on a file or a remote whose whole purpose is to feed packages would silently and permanently change where those packages come from, and the remedy for two machines whose configurations have drifted is consolidating them. Nothing about the answer is recorded either way. `/etc/apt/apt.conf.d` is the counter-case: it keeps the full three-way decision and the permanent mark, because a proxy or a recommends policy is a standing preference someone genuinely holds per machine.
+Removal is the one direction in which an apt repository file, an apt pin file and a flatpak remote are still review lines, and all three take **two** answers rather than three: delete it, or leave it for now. There is no "always skip" — a permanent machine-local mark on a file or a remote whose whole purpose is to feed packages would silently and permanently change where those packages come from, and the remedy for two machines whose configurations have drifted is consolidating them. Nothing about the answer is recorded either way. `/etc/apt/apt.conf.d` is the counter-case: it keeps the full three-way decision and the permanent mark, because a proxy or a recommends policy is a standing preference someone genuinely holds per machine.
 
 The distribution's own source files are never offered for removal at all.
 
 A flatpak remote offered for removal names, in the review item's detail, the refs installed on the target that still have it as their origin in that same scope. The removal is still offered — deleting a remote whose refs are going in the same run is normal cleanup — but you see what it would orphan before approving it. Deleting a remote also drops its signing key, since flatpak stores that key with the remote.
 
-An apt repository file offered for removal does the same for **machine-specific** packages: its detail names the packages you marked skip-always on this machine that are installed from that repository. The removal is still offered and still unticked — you decide. This matters because a machine-specific package is invisible in the review by design: it is filtered out before any diff is computed, so nothing else in the run would tell you the repository feeding it is about to go.
+An apt repository file offered for removal does the same for **machine-specific** packages: its detail names the packages you marked skip-always on this machine that are installed from that repository. The removal is still offered and still starts at skip-this-run — you decide. This matters because a machine-specific package is invisible in the review by design: it is filtered out before any diff is computed, so nothing else in the run would tell you the repository feeding it is about to go.
 
 The link comes from `apt-cache policy`: pc-switcher matches the origin of each machine-specific package's installed version against the URIs in the repository files. A package installed from a bare `.deb`, or one whose repository was already gone, has no resolvable origin and is not named. Ordinary (non-machine-specific) packages are out of scope — they can still surface as removal items of their own, and naming every installed package from, say, the Ubuntu archive would list hundreds.
 

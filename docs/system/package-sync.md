@@ -39,7 +39,7 @@ In return, the base class guarantees:
 Each package job runs plan then review then apply inside its own `execute()`, and applies nothing until its own review returns:
 
 - **plan** — capture the source's manifest, query the target's own state, diff the two, build this job's own review groups. Read-only: nothing here may mutate either machine. Each manager implements this itself.
-- **review** — present this job's own batched review, grouped by action, batched per manager and never across managers. Installs and removals show as separate groups with removals labelled as removals, so a bulk tick can never silently delete.
+- **review** — present this job's own batched review, grouped by action, batched per manager and never across managers. Installs and removals show as separate groups with removals labelled as removals, and every row of a removal group starts at skip-once, so a bulk confirm can never silently delete.
 - **apply** — converge only the diffs the user approved, one item at a time, collecting per-item failures rather than stopping at the first one.
 
 ```mermaid

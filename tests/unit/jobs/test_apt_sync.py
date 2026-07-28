@@ -1921,7 +1921,7 @@ class TestCollateralAttribution:
     async def test_a_collateral_skip_does_not_discard_a_trigger_own_skip_always(self) -> None:
         """The permanent decision is the user's, not the collateral question's. Both
         candidates really do take `other-manual` with them, so both are cancelled by the
-        skip — but `pkg-y`'s "never offer again on this machine" must survive the
+        skip — but `pkg-y`'s "always skip" must survive the
         cancellation and still be recorded (D-08a: a REMOVE is target-held).
         """
         context, _source, target = make_context(
