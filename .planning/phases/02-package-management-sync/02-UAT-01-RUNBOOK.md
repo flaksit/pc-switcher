@@ -1,18 +1,39 @@
 # UAT 02-01 runbook: real-TTY interactive batched review
 
-Drives `.planning/phases/02-package-management-sync/02-UAT.md` test 1 by hand. Nothing in this file has been executed; every command below is for the user to run.
+Drives `.planning/phases/02-package-management-sync/02-UAT.md` test 1 by hand. Nothing in this file has been executed against a machine; every command below is for the user to run.
 
-The batched review is the entire interaction surface of phase 02 and no automated test has ever driven it. Unit tests inject a `FakeReviewer` (`tests/unit/jobs/test_package_sync_core.py:72`, `tests/unit/jobs/test_manual_installs_sync.py:132`); the VM suite pre-answers the review through `PCSWITCHER_PACKAGE_REVIEW_AUTOMATION` (`src/pcswitcher/jobs/packages/review.py:461-463`). Decisions are proven, prompts are not.
+The batched review is the whole interaction surface of phase 02 and no automated test drives it. Unit tests inject a `FakeReviewer`; the VM suite pre-answers every prompt through `PCSWITCHER_PACKAGE_REVIEW_AUTOMATION` (`packages/review.py`). Decisions are proven, prompts are not.
 
-## 1. Where to run it
+Each package job runs its OWN review, inside its own `execute()`, before its own first mutating command (`PackageSyncJob.execute` in `packages/sync_core.py`). There is one review per manager and none spanning managers, and a job reviews exactly once — nothing a run writes re-opens a decision it already took.
 
-Run it on the Hetzner test VMs `pc1` (source) and `pc2` (target), from a real terminal on your workstation, over `ssh -t` into pc1. Not on this dev machine: the run installs and removes apt packages, rewrites `/etc/apt` on the target, converges snaps and flatpaks, and takes btrfs snapshots under `/.snapshots/pc-switcher` (`src/pcswitcher/btrfs_snapshots.py:118`). Agents and experiments never touch the dev machine.
+## 1. Prompt inventory
 
-The reviewer is constructed unconditionally by the orchestrator (`src/pcswitcher/orchestrator.py:394`), and `--yes` only feeds the `Confirmer` (`src/pcswitcher/cli.py:278`), so a normal `pc-switcher sync` on a TTY is exactly the code path under test.
+Everything the review can put on screen, and the section that provokes it.
+
+| Prompt | Shape | Provoked by |
+| --- | --- | --- |
+| Install / change group | checkbox, pre-ticked | 4a, 4h, 4i |
+| Removal group | checkbox, unticked | 4b, 4h |
+| Never offer again on this machine | second checkbox over what the apply list left unticked | leave anything unticked in 4a |
+| Report-only group | checkbox, and NO permanence question after it | 4c |
+| Repository deletion / pin deletion | checkbox, unticked, two answers only | 4d, 4e |
+| flatpak remote deletion | checkbox, unticked, two answers only | 4f |
+| Repository conflict | per-entry select, two answers, both file bodies shown | 4g |
+| flatpak remote-repoint conflict | per-entry select, two answers, both configurations shown | 4j |
+| Manual-collateral removal | per-entry select, install-anyway / skip / abort | 4b |
+| Unreproducible resolution | per-entry select, three answers, then the multi-line snippet editor | 4k |
+| Ubuntu Pro attachment gate | select outside the item review, two answers | 6 |
+| Snippet-registry overwrite | the shared `Confirmer` panel, not a review prompt | 4l |
+
+## 2. Where to run it
+
+On the Hetzner test VMs `pc1` (source) and `pc2` (target), from a real terminal on your workstation, over `ssh -t` into pc1. Not on this dev machine: the run installs and removes apt packages, writes `/etc/apt` on the target, converges snaps and flatpaks, and takes btrfs snapshots under `/.snapshots/pc-switcher` (`btrfs_snapshots.py`).
+
+The reviewer is constructed unconditionally by the orchestrator (`Orchestrator._reviewer`, a `TerminalUIReviewer`), and `--yes` feeds only the `Confirmer`, so a plain `pc-switcher sync` on a TTY is exactly the code path under test.
 
 ### Lock — your decision
 
-Any use of pc1/pc2 must hold the Hetzner label lock. Acquire it yourself, and release it yourself when done. Never run `lock.sh clear`, even against a stale CI holder.
+Any use of pc1/pc2 needs the Hetzner label lock. Acquire it yourself and release it yourself. Never run `lock.sh clear`, even against a stale CI holder.
 
 ```bash
 cd /home/janfr/dev/pc-switcher
@@ -23,16 +44,16 @@ tests/integration/scripts/internal/lock.sh acquire "janfr-uat-02-01"
 tests/integration/scripts/internal/lock.sh release "janfr-uat-02-01"
 ```
 
-If `status` reports another holder, stop and decide manually — do not clear it.
+If `status` reports another holder, stop and decide by hand.
 
-### Option A (recommended): the VMs
+### The VMs
 
 ```bash
 export PC1="$(hcloud server ip pc1)"
 export PC2="$(hcloud server ip pc2)"
 ```
 
-Both VMs must run this branch's build. `install.sh --ref` takes a branch, and `gsd/phase-02-package-management-sync` is pushed at `702aa993`, matching local HEAD.
+Both VMs must run this branch's build:
 
 ```bash
 for h in "$PC1" "$PC2"; do
@@ -41,52 +62,121 @@ for h in "$PC1" "$PC2"; do
 done
 ```
 
-Both VMs must also carry the snap/flatpak fixtures (`tests/integration/scripts/internal/vm-test-fixtures.sh`; `--with-app` on the source only):
+Both must also carry the snap/flatpak fixtures — currently `FIXTURES_VERSION=4` in `tests/integration/scripts/internal/vm-test-fixtures.sh`; `--with-app` on the source only:
 
 ```bash
 ssh testuser@"$PC1" 'bash -s -- --with-app' < tests/integration/scripts/internal/vm-test-fixtures.sh
 ssh testuser@"$PC2" 'bash -s' < tests/integration/scripts/internal/vm-test-fixtures.sh
 ```
 
-`pc1` and `pc2` resolve each other by name via `/etc/hosts` with bidirectional SSH trust already configured (`tests/integration/scripts/internal/configure-hosts.sh:88-93,185-188`), so `pc-switcher sync pc2` from pc1 works as-is.
+The fixtures leave pc1 with the flatpak app `io.github.fragglet.sdl_sopwith` (user scope) and the `flathub-beta` remote, and both machines with the `flathub` remote, the `org.freedesktop.Platform/x86_64/25.08` runtime and the snaps `hello` and `hello-world`. Setup below builds on that.
 
-### Option B: local harness, no VMs, no system change
+`pc1` and `pc2` resolve each other by name via `/etc/hosts` with bidirectional SSH trust (`tests/integration/scripts/internal/configure-hosts.sh`), so `pc-switcher sync pc2` from pc1 works as-is.
 
-There is no offline harness for a real sync, but `review_items` can be driven directly against the real `TerminalUI` and the real `questionary` widgets from the repo venv. This changes no system state — it only renders prompts and prints the resulting `ReviewOutcome`.
+## 3. Rehearsal without VMs
 
-Write this to a scratch file (e.g. `/tmp/claude-1000/-home-janfr-dev-pc-switcher/review-harness.py`) and run `uv run python <path>` from the repo root:
+`review_items` and `ask_gate` can be driven directly against the real `TerminalUI` and the real `questionary` widgets from the repo venv. No system state changes; it only renders prompts and prints the resulting `ReviewOutcome`.
+
+The harness lives at `/tmp/claude-1000/-home-janfr-dev-pc-switcher/6f351f45-55a4-4eda-a695-eb874d952f76/scratchpad/review-harness.py` and has been run (its non-interactive path, which prints every group panel and returns all-`skip_once`). It is NOT committed: this runbook's own commit touches one file, and a rehearsal script has no home in `src/` or `tests/`. If it is wanted permanently, `tests/manual/review_harness.py` is the place, in its own commit. Otherwise recreate it from the listing below and run `uv run python <path>` from the repo root.
 
 ```python
+"""Drive the REAL batched review — real TerminalUI, real questionary widgets — with no
+system state touched and no machine contacted.
+"""
+
 import asyncio
 
 from rich.console import Console
 
 from pcswitcher.jobs.packages.review import (
     COLLATERAL_REVIEW_ACTION,
+    REPO_CONFLICT_REVIEW_ACTION,
+    REPO_REMOVAL_REVIEW_ACTION,
     UNREPRODUCIBLE_REVIEW_ACTION,
     ReviewEntry,
     ReviewGroup,
+    ask_gate,
     review_items,
 )
 from pcswitcher.ui import TerminalUI
 
 GROUPS = [
-    ReviewGroup("apt", "install", "Install apt packages", [
-        ReviewEntry("apt:package:sl", "sl 5.02-2", "install"),
-        ReviewEntry("apt:package:cowsay", "cowsay 3.03+dfsg2-8", "install"),
-    ]),
-    ReviewGroup("apt", "remove", "Remove apt packages", [
-        ReviewEntry("apt:package:libfoo1", "libfoo1 1.2-3", "remove"),
-    ]),
-    ReviewGroup("apt", COLLATERAL_REVIEW_ACTION, "Manually-installed collateral", [
-        ReviewEntry("apt:collateral:file", "file", "review",
-                    "would be removed by removing the selected packages"),
-    ]),
-    ReviewGroup("manual_installs", UNREPRODUCIBLE_REVIEW_ACTION,
-                "Resolve manual_installs items with no reproducible install", [
-        ReviewEntry("unreproducible:unowned-path:/opt/pcsw-uat-app", "/opt/pcsw-uat-app", "resolve"),
-    ]),
+    ReviewGroup(
+        "apt",
+        "install",
+        "Install apt packages",
+        [
+            ReviewEntry("apt:package:sl", "sl (5.02-1)", "install"),
+            ReviewEntry("apt:package:cmatrix", "cmatrix (2.0-6)", "install", "from a vendor repository"),
+            # Brackets in untrusted text: Rich would parse these as markup if the label
+            # were not wrapped in Text. A crash here is the bug this entry exists to catch.
+            ReviewEntry("apt:package:weird", "weird [bold red]name[/] 1.0", "install"),
+        ],
+    ),
+    ReviewGroup(
+        "apt",
+        "remove",
+        "Remove apt packages",
+        [ReviewEntry("apt:package:fortunes-min", "fortunes-min (1:1.99.1-7.3build1)", "remove")],
+    ),
+    ReviewGroup(
+        "apt",
+        "report_only",
+        "Report apt packages",
+        [ReviewEntry("apt:package:tree", "tree (2.1.1-2ubuntu3)", "report", "source has 2.1.1-2ubuntu3.24.04.2")],
+    ),
+    ReviewGroup(
+        "apt",
+        REPO_CONFLICT_REVIEW_ACTION,
+        "Resolve apt repository conflicts",
+        [
+            ReviewEntry(
+                "apt:conflict:ubuntu.sources",
+                "ubuntu.sources",
+                "overwrite",
+                "ubuntu.sources differs on the two machines and feeds machine-specific packages on the target: cowsay",
+                versions=("# pcsw-uat marker\nTypes: deb\nURIs: http://example/ubuntu\n", "Types: deb\nURIs: http://example/ubuntu\n"),
+            )
+        ],
+    ),
+    ReviewGroup(
+        "apt",
+        REPO_REMOVAL_REVIEW_ACTION,
+        "Delete repositorys the source no longer has (apt)",
+        [ReviewEntry("apt:source:99-pcsw-uat.list", "99-pcsw-uat.list (list)", "delete repository")],
+    ),
+    ReviewGroup(
+        "apt",
+        REPO_REMOVAL_REVIEW_ACTION,
+        "Delete pin files the source no longer has (apt)",
+        [ReviewEntry("apt:pin:99-pcsw-uat.pref", "99-pcsw-uat.pref", "delete pin file")],
+    ),
+    ReviewGroup(
+        "apt",
+        COLLATERAL_REVIEW_ACTION,
+        "Resolve apt manual-collateral removals",
+        [
+            ReviewEntry(
+                "apt:collateral:fortunes",
+                "fortunes",
+                "resolve",
+                "manually-installed package that apt's own simulation says would be removed by removing the selected packages",
+            )
+        ],
+    ),
+    ReviewGroup(
+        "manual",
+        UNREPRODUCIBLE_REVIEW_ACTION,
+        "Resolve manual items with no reproducible install",
+        [ReviewEntry("unreproducible:unowned-path:/opt/pcsw-uat-app", "/opt/pcsw-uat-app", "resolve")],
+    ),
 ]
+
+GATE_MESSAGE = (
+    "The source carries ubuntu-esm-apps.sources, which this sync would write to the target, "
+    "but the target reports no Ubuntu Pro attachment.\n\n"
+    "Skipping runs no part of apt_sync this sync and leaves the target's /etc/apt untouched."
+)
 
 
 async def main() -> None:
@@ -94,42 +184,83 @@ async def main() -> None:
     ui = TerminalUI(console=console, total_steps=1)
     ui.start()
     try:
+        gate = await ask_gate(
+            title="Ubuntu Pro attachment required on the target",
+            message=GATE_MESSAGE,
+            proceed_label="I have attached the target — re-check and continue",
+            stop_label="Skip apt_sync this run (other jobs continue)",
+            console=console,
+            ui=ui,
+        )
         outcome = await review_items(GROUPS, console=console, ui=ui)
     finally:
         ui.stop()
-    print(outcome.decisions)
-    print(outcome.snippets)
+
+    # emoji=False, markup=False: an item id like `apt:package:sl` is a Rich emoji
+    # shortcode, and would print as `apt<box>sl` under the default settings.
+    console.rule("gate")
+    console.print(f"  {gate}")
+    console.rule("decisions")
+    for item_id, decision in sorted(outcome.decisions.items()):
+        console.print(f"  {item_id}: {decision}", emoji=False, markup=False)
+    console.rule("snippets")
+    for item_id, snippet in sorted(outcome.snippets.items()):
+        console.print(f"  {item_id}:\n{snippet}", emoji=False, markup=False)
+    console.rule("unresolved")
+    console.print(f"  {outcome.unresolved}", emoji=False, markup=False)
+    console.print(f"\nwas_interactive={outcome.was_interactive}")
 
 
 asyncio.run(main())
 ```
 
-What Option B does exercise: questionary rendering, the pause/erase/rebuild of the Rich `Live` region around each prompt (`src/pcswitcher/ui.py:179,195`), install-vs-removal grouping and default tick state, the never-offer-again second checkbox, the multi-line snippet editor, the collateral three-way prompt, and Ctrl-C / Ctrl-D behaviour at every prompt type.
+What it exercises: questionary rendering, the pause/erase/rebuild of the Rich `Live` region, default tick state per direction, the never-offer-again screen, the two-answer screens, both conflict screens, the collateral and unreproducible flows, the multi-line editor, the gate, and Ctrl-C at every one of them.
 
-What it does NOT exercise: the decision-file writes and their source-vs-target routing, the snippet registry push to the target, `/etc/apt` convergence, the second mid-`execute()` review, and any real package-manager state. Use it as a cheap rehearsal, not as the UAT result.
+What it does not: decision-file writes and their source-vs-target routing, the snippet registry push and replay, `/etc/apt` and flatpak remote convergence, the gate's re-probe loop, and every real package-manager effect. It is a rehearsal, not the UAT result.
 
-## 2. Setup: diverge the two machines in both directions
+## 4. Setup: diverge the two machines
 
-All commands run as `testuser`, which has passwordless sudo on both VMs. Cheapest global undo is `tests/integration/scripts/reset-vm.sh pc1` / `... pc2` (it acquires the lock itself, or inherits `PCSWITCHER_LOCK_HOLDER`); per-step undos are given anyway.
+All commands run as `testuser`, which has passwordless sudo on both VMs. Global undo is `tests/integration/scripts/reset-vm.sh pc1` / `... pc2` (it acquires the lock itself, or inherits `PCSWITCHER_LOCK_HOLDER`). Per-step undos are given anyway, and each step says which prompt it buys.
 
-### 2a. apt installs (source has, target lacks)
+Run every step; the review then contains every screen in one pass.
+
+### 4a. apt installs, and the never-offer-again screen
 
 On pc1:
 
 ```bash
-apt-cache policy sl cowsay tree            # each must show a real Candidate
-sudo DEBIAN_FRONTEND=noninteractive apt-get install -y sl cowsay tree
+apt-cache policy sl cmatrix       # each must show a real Candidate
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y sl cmatrix
 ```
 
-Each becomes manual on pc1 and absent on pc2, producing `MISSING_ON_TARGET` / `INSTALL` diffs (`src/pcswitcher/jobs/apt_sync.py:363-372`).
+Two entries in "Install apt packages", both pre-ticked. Leaving one unticked at the review is what makes the never-offer-again screen appear.
 
-Undo: `sudo apt-get purge -y sl cowsay tree` on pc1, and on pc2 too if the run installed them.
+Undo: `sudo apt-get purge -y sl cmatrix` on pc1, and on pc2 for whichever the run installed.
 
-### 2b. apt removals (target has, source lacks)
+### 4b. apt removal, and the manual-collateral prompt
 
-Mirrors what the integration suite does (`tests/integration/jobs/test_package_sync.py:263-297`): promote a pc2-only auto-installed package to manual, which changes only selection state, not the disk.
+`fortunes` declares `Depends: fortunes-min` (verified against the noble archive), so one construction buys both screens.
 
-On pc2:
+On BOTH machines:
+
+```bash
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends fortunes
+```
+
+`fortunes` is then manual on both (no diff) and inside pc2's `apt-mark showmanual` set, which is what makes it protected collateral. `fortunes-min` arrives as an automatic dependency on both.
+
+On pc2 only:
+
+```bash
+sudo apt-mark manual fortunes-min
+apt-get -s remove -y fortunes-min | grep '^Remv'      # must list BOTH fortunes-min and fortunes
+```
+
+`fortunes-min` is now manual on pc2 and not on pc1, so it is an `EXTRA_ON_TARGET`/`REMOVE` item in "Remove apt packages", unticked. The plan-time batched `apt-get --dry-run remove` then reports that removing it also removes `fortunes`, which is manual on the target and not itself reviewed — that is the manual-collateral entry (`AptSyncJob._collect_plan_time_collateral`).
+
+The `grep` is the authoritative check. If it lists only `fortunes-min`, the collateral screen will not appear and there is no point going further with this pair.
+
+Add a SECOND removal candidate, so one can be ticked and the other marked never-offer-again — that second entry is what proves D-08a's routing, since a skip-always on a REMOVE item must land on pc2's file and not pc1's. Promoting an existing automatic package to manual changes selection state only, never the disk:
 
 ```bash
 ssh pc1 'apt-mark showmanual' | sort > /tmp/pc1-manual
@@ -139,84 +270,179 @@ dpkg-query -W -f='${Package}\t${Status}\n' \
 comm -23 <(comm -23 /tmp/pc2-installed /tmp/pc2-manual) /tmp/pc1-manual | head -20
 ```
 
-Pick two names from that list — call them `X` and `Y`:
+Pick one name from that list — call it `X` — whose removal drags nothing else, then promote it:
 
 ```bash
-sudo apt-mark manual X Y
+apt-get -s remove -y X | grep '^Remv'    # must list X and nothing else
+sudo apt-mark manual X
 ```
 
-`X` gives the ordinary removal group (`EXTRA_ON_TARGET` / `REMOVE`, `src/pcswitcher/jobs/apt_sync.py:385-395`). `Y` is reserved for the pin in 2c and will NOT appear in the first-pass removal group.
+Undo: `sudo apt-mark auto fortunes-min X` on pc2; `sudo apt-get install -y --no-install-recommends fortunes` on pc2 if the run removed it; `sudo apt-get purge -y fortunes fortunes-min` on both when finished.
 
-Undo: `sudo apt-mark auto X Y` on pc2. Note that ticking `X`'s removal in the review really removes it from pc2.
+Choosing "Install anyway" really removes both `fortunes-min` and `fortunes` from pc2. Choosing "Skip" removes nothing, but it writes `SKIP_ONCE` over EVERY package in the batched removal candidate set, not only the one that produced the collateral — `_classify_collateral` records the whole candidate set as the trigger — so it also cancels a never-offer-again tick made on `X` in the same review. Answer "Install anyway" in the run where you want `X`'s permanent skip recorded, and check "Skip" in a separate run; the erasure is worth recording either way.
 
-### 2c. `/etc/apt` divergence that fires the SECOND review
+### 4c. A report-only group, with no permanence question after it
 
-This is the deterministic construction and the one to rely on. A pin file on the target suppresses `Y` into `HELD_OR_PINNED` / `REPORT_ONLY` at plan time (`src/pcswitcher/jobs/apt_sync.py:347-356`); the source has no such file, so the file itself is an `EXTRA_ON_TARGET` / `REMOVE` repository-group item (`src/pcswitcher/jobs/apt_sync.py:1630-1634`). Approving that removal inserts the metadata-refresh marker (`src/pcswitcher/jobs/apt_sync.py:1834-1848`), `apply()` converges `/etc/apt` first (`src/pcswitcher/jobs/apt_sync.py:1885`), the re-diff finds `Y` now `REMOVE`, and that revealed item goes to a second review (`src/pcswitcher/jobs/apt_sync.py:1965-1967`).
-
-On pc2, with `Y` substituted:
+On BOTH machines:
 
 ```bash
-sudo tee /etc/apt/preferences.d/99-pcsw-uat.pref >/dev/null <<'EOF'
-Package: Y
-Pin: release o=Ubuntu
-Pin-Priority: 900
-EOF
-sudo find /etc/apt/preferences.d -maxdepth 1 -type f -exec awk '/^Package:/{print FILENAME "\t" $0}' {} +
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y tree
 ```
 
-The second command is the same probe the job runs (`src/pcswitcher/jobs/apt_sync.py:1197`); it must print your stanza.
-
-Undo: `sudo rm -f /etc/apt/preferences.d/99-pcsw-uat.pref` on pc2 (the run itself deletes it if you tick the removal).
-
-### 2d. Optional: a package whose install adds a repository
-
-The faithful version of the second-review trigger's other half — a repository installed this run supplying a package apt had no candidate for at plan time. Add a third-party repo on pc1 and install a package from it (e.g. GitHub CLI from `https://cli.github.com/packages`, or Tailscale), then verify on pc2 BEFORE the run:
+On pc2, read the version table and downgrade to the older entry:
 
 ```bash
-apt-cache policy <pkg>     # on pc2: must show "Candidate: (none)" or no block at all
+apt-cache policy tree                                   # note the two versions
+sudo apt-get install -y --allow-downgrades tree=<older version from that table>
 ```
 
-If pc2 already has a candidate, this construction reveals nothing and you should rely on 2c instead. I could not verify from this repository whether any specific vendor package is absent from Ubuntu 24.04's archive on these VMs — treat the choice of package as unverified until that `apt-cache policy` check passes.
+Same package, same vendor, different versions gives `VERSION_MISMATCH`/`REPORT_ONLY` (`_diff_apt_packages`), which reaches the review as "Report apt packages". That group must NOT be followed by a never-offer-again screen — a report-only item has no machine that holds it, so `SKIP_ALWAYS` is unreachable for it (`_PROMOTABLE_ACTIONS` in `packages/review.py`).
 
-Undo: remove the `.sources`/`.list` file and its keyring from pc1's `/etc/apt`, and purge the package.
+Undo: `sudo apt-get install -y --only-upgrade tree` on pc2.
 
-### 2e. Collateral (D-30), if you want it
-
-Cheapest reliable construction is the removal direction: `_collect_plan_time_collateral` simulates `apt-get remove -y <approved removals>` on the target (`src/pcswitcher/jobs/apt_sync.py:1695-1699`), and any would-be-removed package in the target's or source's manual set becomes a collateral review item (`src/pcswitcher/jobs/apt_sync.py:1723-1731`).
-
-So pick `X` in 2b such that removing it would take a manually-installed package with it. Authoritative check, on pc2, before the run:
-
-```bash
-apt-get -s remove -y X | sed -n '/REMOVED/,/^$/p'
-comm -12 <(apt-get -s remove -y X | grep -oP '^Remv \K\S+' | sort) /tmp/pc2-manual
-```
-
-If the second command prints anything, `X` yields a collateral prompt. If nothing on pc2 qualifies, say so in the UAT result rather than inventing a conflict pair — I could not confirm from this repo which packages on these VMs have manually-installed reverse dependencies.
-
-Choosing "Install anyway" at the collateral prompt really removes the collateral package from pc2. Prefer "Skip" or "Abort" unless you intend the removal (and reset the VM afterwards either way).
-
-### 2f. snap divergence
+### 4d. Repository deletion (two answers)
 
 On pc2:
 
 ```bash
-sudo snap remove hello-world        # -> MISSING_ON_TARGET / INSTALL (snap_sync.py:253-254)
-sudo snap refresh hello --channel=beta   # optional: revision/channel CHANGE (snap_sync.py:285)
+printf '# pcsw-uat placeholder, no repository declared\n' | sudo tee /etc/apt/sources.list.d/99-pcsw-uat.list
 ```
 
-Undo: `sudo snap install hello-world`; `sudo snap refresh hello --channel=stable`.
+Comment-only on purpose: the file must be a real `sources.list.d` member so it is captured and diffed, without declaring an origin `apt-get update` would try to fetch.
 
-### 2g. flatpak divergence
+pc1 has no such file, so it is an `apt:source:` REMOVE and lands in its own two-answer screen. Expect the title verbatim: `Delete repositorys the source no longer has (apt)` — the pluralisation is a real cosmetic defect (`_REPO_REMOVAL_VERBS` supplies "delete repository" and `_build_review_groups` appends "s"); record it, do not treat it as a failure of this test.
 
-Already present in the baseline: `vm-test-fixtures.sh` installs `io.github.fragglet.sdl_sopwith` on pc1 only. Confirm on both:
+Undo: `sudo rm -f /etc/apt/sources.list.d/99-pcsw-uat.list` on pc2 (the run deletes it if you tick it).
+
+### 4e. Pin deletion (two answers)
+
+On pc2:
 
 ```bash
-flatpak list --user --app --columns=application
+sudo tee /etc/apt/preferences.d/99-pcsw-uat.pref >/dev/null <<'EOF'
+Package: tree
+Pin: release o=Ubuntu
+Pin-Priority: 500
+EOF
+```
+
+The pin is only ever a FILE item now. It suppresses no package and produces no per-package echo — there is no `HELD_OR_PINNED` diff class any more (`DiffClass` in `packages/items.py`), so `tree` keeps its own report-only line from 4c.
+
+Screen title: `Delete pin files the source no longer has (apt)`, unticked, two answers.
+
+Undo: `sudo rm -f /etc/apt/preferences.d/99-pcsw-uat.pref` on pc2.
+
+### 4f. flatpak remote deletion (two answers)
+
+On pc2:
+
+```bash
+flatpak remote-add --user --if-not-exists pcsw-uat https://dl.flathub.org/beta-repo/flathub-beta.flatpakrepo
+flatpak remotes --user --columns=name,url
+```
+
+pc1 has no `pcsw-uat`, so it is the only direction a remote is still a review line: `Delete flatpak remotes the source no longer has`, unticked, two answers. Nothing is installed from it, so its `detail` names no orphaned refs.
+
+Undo: `flatpak remote-delete --user pcsw-uat` on pc2.
+
+### 4g. Repository conflict (two answers, both file bodies)
+
+Three conditions have to hold together (`AptSyncJob._capture_repo_conflicts`): a `sources.list.d` file present on BOTH machines with different bytes, at least one package recorded skip-always in pc2's apt decision file, and that package's installed origin declared by that file.
+
+On pc2:
+
+```bash
+sudo cp /etc/apt/sources.list.d/ubuntu.sources ~/ubuntu.sources.bak
+sudo sed -i '1i # pcsw-uat marker' /etc/apt/sources.list.d/ubuntu.sources
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y cowsay
+apt-cache policy cowsay          # its installed origin must be the archive ubuntu.sources declares
+```
+
+A leading `#` line is a legal deb822 comment, so apt still parses the file; only the digest changes.
+
+Then record `cowsay` machine-specific on pc2, by hand. Back up any existing file first — this is a whole-file write:
+
+```bash
+mkdir -p ~/.config/pc-switcher
+cp ~/.config/pc-switcher/apt.decisions.yaml{,.bak} 2>/dev/null || true
+cat > ~/.config/pc-switcher/apt.decisions.yaml <<'EOF'
+machine_specific:
+  "apt:package:cowsay":
+    item_class: apt_package
+    label: cowsay
+    reason: null
+    recorded_at: "2026-07-28T00:00:00+00:00"
+EOF
+```
+
+That entry makes `cowsay` structurally invisible: `filter_inert` drops it from pc2's manifest, so it produces no diff of its own, and pc1 does not have it either. It exists purely to make `ubuntu.sources` a file whose overwrite would move software the user told the tool to leave alone — which is the one repository CHANGE that is still a question.
+
+Expect: `Resolve apt repository conflicts`, one entry labelled `ubuntu.sources`, whose detail names `cowsay`, with the target's body and then the source's body in two panels — never a unified diff. Two answers.
+
+"Overwrite" writes pc1's `ubuntu.sources` onto pc2, which removes the marker line; confirm beforehand that the two files are otherwise identical so this is a restore and nothing else:
+
+```bash
+diff <(ssh pc1 sudo cat /etc/apt/sources.list.d/ubuntu.sources) <(sudo sed 1d /etc/apt/sources.list.d/ubuntu.sources)
+```
+
+"Skip for now" keeps the target's version and seeds it as a failed derived write, so any approved install whose origin depended on it fails naming your decision (`_build_derived_writes`). With `cowsay` as the only machine-specific package there is no such install, so nothing should fail.
+
+Undo: `sudo cp ~/ubuntu.sources.bak /etc/apt/sources.list.d/ubuntu.sources`; `sudo apt-get purge -y cowsay`; restore or delete `~/.config/pc-switcher/apt.decisions.yaml`.
+
+### 4h. snap divergence
+
+On pc2:
+
+```bash
+snap list hello hello-world                  # note the current channels and revisions first
+sudo snap remove hello-world                 # -> "Install snap packages"
+sudo snap refresh hello --channel=beta       # -> "Change snap packages" (revision and/or channel)
+```
+
+Undo: `sudo snap install hello-world`; `sudo snap refresh hello --channel=<noted channel> --revision=<noted revision>`.
+
+### 4i. flatpak ref divergence
+
+Already in the baseline: `io.github.fragglet.sdl_sopwith` is installed on pc1 only. Confirm:
+
+```bash
+ssh pc1 'flatpak list --user --app --columns=ref'
+flatpak list --user --app --columns=ref
 ```
 
 If pc2 has it: `flatpak uninstall --user -y io.github.fragglet.sdl_sopwith`.
 
-### 2h. Unreproducible item with no snippet
+### 4j. flatpak remote-repoint conflict (two answers, both configurations)
+
+The trigger is narrower than apt's (`FlatpakSyncJob._capture_remote_conflicts`): the remote must be one this run would provision for an approved ref install, it must differ in URL or GPG verification, and a ref the TARGET recorded skip-always must take it as its origin in the same scope.
+
+One ref satisfies both halves. On pc2:
+
+```bash
+flatpak remotes --user --columns=name,url                  # record flathub's URL first
+flatpak install --user --assumeyes flathub io.github.fragglet.sdl_sopwith
+cp ~/.config/pc-switcher/flatpak.decisions.yaml{,.bak} 2>/dev/null || true
+cat > ~/.config/pc-switcher/flatpak.decisions.yaml <<'EOF'
+machine_specific:
+  "flatpak:ref:user:io.github.fragglet.sdl_sopwith/x86_64/stable":
+    item_class: flatpak_ref
+    label: io.github.fragglet.sdl_sopwith/x86_64/stable
+    reason: null
+    recorded_at: "2026-07-28T00:00:00+00:00"
+EOF
+flatpak remote-modify --user --url=https://dl.flathub.org/beta-repo/ flathub
+flatpak remotes --user --columns=name,url                  # flathub must now differ from pc1's
+```
+
+The runtime is already on pc2 from the fixtures, so the app install is a small download. Recording it skip-always removes it from pc2's manifest, so pc1's copy is still proposed as an INSTALL — which is what makes `flathub` a derived candidate — while the installed copy still counts as a machine-specific ref depending on that remote.
+
+Expect: `Resolve flatpak remote conflicts`, one entry labelled `flathub remote (user)`, detail naming the ref, and two panels listing only the facets that differ (here `url`).
+
+Answering is where the two paths part. Untick the ref install on the earlier checkbox screen and pc2's remote is left exactly as you set it, whatever you answer here — a conflict answer only takes effect through a ref that needs the remote (`accept_review`). Tick it and answer "Overwrite" and the remote is repointed back to pc1's URL before the install runs; the install of a ref pc2 already has is unverified territory, so treat a per-item failure there as expected rather than as a finding. Tick it and answer "Skip for now" and the install must fail naming your decision.
+
+Undo: `flatpak remote-modify --user --url=<the URL you recorded> flathub`; `flatpak uninstall --user -y io.github.fragglet.sdl_sopwith`; restore or delete `~/.config/pc-switcher/flatpak.decisions.yaml`.
+
+### 4k. Unreproducible item, three-way resolution and the snippet editor
 
 On pc1:
 
@@ -226,13 +452,47 @@ echo hi | sudo tee /opt/pcsw-uat-app/README >/dev/null
 grep -c 'unowned-path:/opt/pcsw-uat-app' ~/.config/pc-switcher/package-snippets.yaml 2>/dev/null || true
 ```
 
-The scan covers the immediate children of `/usr/local`, `/opt`, `/usr/local/bin`, `/usr/local/lib` (`src/pcswitcher/jobs/manual_installs_sync.py:89,417-431`), so this becomes item id `unreproducible:unowned-path:/opt/pcsw-uat-app` (`src/pcswitcher/jobs/manual_installs_sync.py:131-133`) with no registry entry, which plans `REPORT_ONLY` and lands in the three-way resolution group (`src/pcswitcher/jobs/manual_installs_sync.py:459-495,497-527`). The grep must print `0` or fail — a pre-existing snippet would make it an ordinary install instead. The list may also contain other unowned paths that pre-exist on the VM; that is expected.
+The scan covers the immediate children of `/usr/local`, `/opt`, `/usr/local/bin` and `/usr/local/lib` (`_UNOWNED_SCAN_ROOTS`), so this becomes `unreproducible:unowned-path:/opt/pcsw-uat-app` with no registry entry. `plan()` classifies it `REPORT_ONLY` and carves it into `Resolve manual items with no reproducible install`. The grep must print `0` or fail; a pre-existing snippet would make it an ordinary install instead.
 
-Undo: `sudo rm -rf /opt/pcsw-uat-app` on pc1 and, if the snippet ran, on pc2.
+A stock VM should yield only this one entry. If the group lists other unowned paths, answer them "Skip for now" — an interactive review must resolve every entry, so there is no way past them.
 
-## 3. The run
+Author this snippet when you choose "Add an install snippet":
 
-Write the config on pc1 (source). Job order follows the key order in `sync_jobs` (`src/pcswitcher/default-config.yaml:41,52-55`), so the review screens arrive apt, snap, flatpak, manual_installs. `folder_sync` and `vscode_state_sync` are left out deliberately to keep the run short.
+```
+sudo mkdir -p /opt/pcsw-uat-app
+```
+
+It is replayed on pc2 in the SAME run (`after_review` finalizes, pushes the registry, then promotes the item to an approved INSTALL), so the directory really appears there.
+
+Undo: `sudo rm -rf /opt/pcsw-uat-app` on pc1 and on pc2; remove the entry from `~/.config/pc-switcher/package-snippets.yaml` on both.
+
+### 4l. Optional: the snippet-registry overwrite confirmation
+
+Only if you want the non-additive push gate as well. On pc2, put an entry in the registry that pc1 does not have:
+
+```bash
+cp ~/.config/pc-switcher/package-snippets.yaml{,.bak} 2>/dev/null || true
+cat > ~/.config/pc-switcher/package-snippets.yaml <<'EOF'
+snippets:
+  "unreproducible:unowned-path:/opt/pcsw-target-only":
+    label: /opt/pcsw-target-only
+    body: "true\n"
+    authored_at: "2026-07-28T00:00:00+00:00"
+    authored_on: pc2
+EOF
+```
+
+`_guard_registry_overwrite` then shows a `Confirmer` panel naming the entry the wholesale push would LOSE. Declining aborts the whole sync with `SyncAbortedByUser`; accepting overwrites pc2's registry.
+
+Undo: restore or delete `~/.config/pc-switcher/package-snippets.yaml` on pc2.
+
+### 4m. Optional: an apt hold
+
+On pc1: `sudo apt-mark hold tree`. Gives a separate `Hold apt packages` group with its own verb, distinct from the package's own item. Undo: `sudo apt-mark unhold tree`.
+
+## 5. The two runs
+
+Write the config on pc1. The orchestrator resolves `sync_jobs` in key order, so the reviews arrive apt, snap, flatpak, manual_installs. `folder_sync` and `vscode_state_sync` are left out to keep the run short.
 
 ```bash
 mkdir -p ~/.config/pc-switcher
@@ -262,76 +522,102 @@ btrfs_snapshots:
 EOF
 ```
 
-Confirm the automation escape hatch is NOT set — if it is, nothing prompts at all (`src/pcswitcher/jobs/packages/review.py:461-463`):
+The automation escape hatch must NOT be set, or nothing prompts at all:
 
 ```bash
 env | grep -i PCSWITCHER_PACKAGE_REVIEW_AUTOMATION || echo "not set — good"
 ```
 
-Confirm you are on a real TTY on both ends of the pipe; `is_interactive` requires both (`src/pcswitcher/terminal.py:21`):
+Both ends of the pipe must be a real TTY (`is_interactive` in `terminal.py` requires both):
 
 ```bash
 python3 -c 'import sys; print(sys.stdin.isatty(), sys.stdout.isatty())'   # must print True True
 ```
 
-Then, from your workstation, with a TTY forced:
+### Pass 1 — every prompt, nothing converged
 
 ```bash
 ssh -t testuser@"$PC1"
 # on pc1:
+pc-switcher sync pc2 --dry-run --yes --allow-first-sync
+```
+
+A dry run plans and reviews exactly as a real run does: every group is built, every prompt is shown, and the collateral and conflict screens are computed from read-only `apt-get --dry-run` and `apt-cache policy` calls. What it does not do is converge anything, write a decision file, persist a snippet, push the registry or write `/etc/apt` (`_record_permanent_skips` and `_finalize_unreproducible` return early under `dry_run`; `apply()` logs `[dry-run] Would ...` lines instead of issuing commands).
+
+Walk the whole review here first and check section 7 against it. A snippet authored in this pass is discarded, so you will author it again in pass 2.
+
+### Pass 2 — the real run
+
+```bash
 pc-switcher sync pc2 --yes --allow-first-sync
 ```
 
-`--yes` auto-accepts the config-sync confirmation only; `--allow-first-sync` skips the first-sync overwrite prompt. Neither touches the package review. Optionally do a rehearsal first with `--dry-run`, which still runs every first-pass review (`src/pcswitcher/jobs/packages/sync_core.py:493-497`) but records nothing (`src/pcswitcher/jobs/packages/sync_core.py:432`) and skips the second review entirely (`src/pcswitcher/jobs/apt_sync.py:1885`).
+`--yes` auto-accepts the config-sync confirmation only; `--allow-first-sync` skips the first-sync overwrite prompt. Neither touches the package review. Add `--allow-out-of-order` on repeat runs if the topology check prompts.
 
-## 4. Checklist
+Answer with a deliberate mix so every outcome is provable: tick `sl` and leave `cmatrix` unticked, then tick `cmatrix` on the never-offer-again screen; tick the `fortunes-min` removal, leave `X` unticked and tick `X` on that group's never-offer-again screen; answer the collateral prompt "Install anyway" (see 4b for why "Skip" would erase `X`'s permanent mark); answer the repository conflict "Overwrite"; tick the pin deletion and leave the repository deletion unticked; author the snippet.
 
-Answer the review with a deliberate mix so each outcome is provable: tick some installs and untick others, tick `X`'s removal, leave at least one install unticked AND tick it on the never-offer-again screen, and author a snippet for `/opt/pcsw-uat-app`.
+## 6. The Ubuntu Pro gate — its own run
 
-- The Rich `Live` region is erased before the first questionary widget draws and rebuilt after it (`src/pcswitcher/jobs/packages/review.py:478,521-522`; `src/pcswitcher/ui.py:179,195`). No duplicated panel, no stale frame, no overwritten prompt line.
-- Each group is preceded by a bordered panel listing its entries with untrusted text wrapped in `Text` (`src/pcswitcher/jobs/packages/review.py:228-245,483-484`). A package name containing brackets must not crash the run.
-- Installs and removals are separate screens, one `ReviewGroup` per `(action, item_class)` (`src/pcswitcher/jobs/packages/sync_core.py:254-285`), titled with the concrete verb ("Install apt packages", "Remove apt packages").
-- Install-direction entries arrive pre-ticked, removal-direction entries arrive unticked (`src/pcswitcher/jobs/packages/review.py:494-502` with `_REMOVAL_ACTIONS` at `:100`).
-- After a checkbox screen with anything left unticked, a second checkbox appears — `"<title> — never offer again on this machine?"` — preceded by the dim "Enter leaves them for next run" hint (`src/pcswitcher/jobs/packages/review.py:363-375`). A fully-ticked group must NOT show it (`:518-520`).
-- `REPORT_ONLY` groups (version mismatches, held/pinned echoes, repo-unavailable) get no never-offer-again screen (`src/pcswitcher/jobs/packages/review.py:108,517`).
-- Apply lands as real convergence; skip-once leaves the item untouched and re-offers next run; skip-always writes a `DecisionEntry` (`src/pcswitcher/jobs/packages/sync_core.py:414-459`).
-- Skip-always on an INSTALL or CHANGE item writes to `~/.config/pc-switcher/<manager>.decisions.yaml` on **pc1**; skip-always on a REMOVE item writes to the same path on **pc2**, over the remote executor (`src/pcswitcher/jobs/packages/sync_core.py:195-204,449-459`; path template `src/pcswitcher/jobs/packages/state.py:73`). Getting the end wrong is the D-08a failure this test exists to catch.
-- The unreproducible group is a per-entry three-way `select`, never a checkbox (`src/pcswitcher/jobs/packages/review.py:294-302`), with the non-interactive-replay warning printed before the editor (`:219-225,324`).
-- Choosing "Add an install snippet" opens a multi-line editor; questionary's own instruction says `Finish with 'Alt+Enter' or 'Esc then Enter'`, the prompt label says "Esc then Enter to finish" (`src/pcswitcher/jobs/packages/review.py:325-327`). Submitting an EMPTY body must print the yellow "cannot be empty" line and re-prompt the three-way choice, not fall through (`:329-337`).
-- The authored snippet lands verbatim (never stripped) in `~/.config/pc-switcher/package-snippets.yaml` on pc1 (`src/pcswitcher/jobs/packages/state.py:83`), is promoted to an INSTALL for this same run (`src/pcswitcher/jobs/manual_installs_sync.py:236`), is pushed to pc2 before apply (`src/pcswitcher/jobs/manual_installs_sync.py:273`), and replays there (`src/pcswitcher/jobs/manual_installs_sync.py:529-541`). A registry overwrite that would lose or change an existing snippet triggers its own confirmation prompt (`src/pcswitcher/jobs/manual_installs_sync.py:314`).
-- The collateral prompt names the package and offers install-anyway / skip / abort (`src/pcswitcher/jobs/packages/review.py:420-427`). Abort raises `SyncAbortedByUser` naming the package (`:433-435`); skip leaves the triggering install unapproved (`:436-439`).
-- After the apt repository group converges, a SECOND set of review screens appears, every title suffixed `(revealed by this run's /etc/apt changes)` (`src/pcswitcher/jobs/apt_sync.py:2038-2041`), containing `Y` as a removal. This is the screen nothing has ever exercised: confirm the Live display pauses and resumes cleanly here too, mid-`apply()`, with `/etc/apt` already written.
-- Withdrawn approvals are logged, not re-asked (`src/pcswitcher/jobs/apt_sync.py:1954-1960`).
-- Snap and flatpak each render their own review, separate from apt's — one review per manager inside that manager's own `execute()` (`src/pcswitcher/jobs/packages/sync_core.py:493-497`).
+The gate is `apt_sync`'s only question that is not about an item, it fires inside `plan()` before any review group is built, and it is skipped under `--dry-run` (which warns instead). Provoke it separately, then undo it, because its "skip" answer costs the whole apt job.
 
-## 5. Abort paths
+Both VMs are unattached and carry no ESM sources, so make pc1 carry one:
 
-Behaviour per code: Ctrl-C at any review screen aborts the WHOLE sync with `SyncAbortedByUser`, never a per-item skip. Verified call sites:
+```bash
+sudo tee /etc/apt/sources.list.d/ubuntu-esm-apps.sources >/dev/null <<'EOF'
+Enabled: no
+Types: deb
+URIs: https://esm.ubuntu.com/apps/ubuntu
+Suites: noble-apps-security noble-apps-updates
+Components: main
+Signed-By: /usr/share/keyrings/ubuntu-pro-esm-apps.gpg
+EOF
+ssh pc2 'pro status --format json' | head -c 120   # "attached": false
+```
 
-- apply checkbox: `raise SyncAbortedByUser("package review aborted at a checkbox screen (Ctrl-C/EOF)")` (`src/pcswitcher/jobs/packages/review.py:506-511`).
-- never-offer-again checkbox: `src/pcswitcher/jobs/packages/review.py:378-379`.
-- unreproducible three-way select: `src/pcswitcher/jobs/packages/review.py:305-311`.
-- collateral select: only the explicit "Abort the sync" choice raises; a cancelled select falls into the `else` branch and records `SKIP_ONCE` (`src/pcswitcher/jobs/packages/review.py:436-439`). This one is deliberately different — check it behaves that way.
+`Enabled: no` keeps pc1's own apt from ever fetching from it; the gate keys on the filename and the digest, not on the content (`_ESM_SOURCE_FILENAMES`, `_pending_esm_writes`). Do not run `apt-get update` on pc1 while it is there.
 
-The exception is caught once at WARNING and the CLI prints `Sync aborted: <msg>` and exits 1 (`src/pcswitcher/cli.py:398-403`). `ui.resume()` still runs in the `finally` (`src/pcswitcher/jobs/packages/review.py:521-522`), so the terminal must be left usable.
+Then run the real sync again and answer both ways:
 
-Ctrl-C mechanics, verified against the vendored library: questionary binds Ctrl-C and Ctrl-Q on checkbox and select to `app.exit(exception=KeyboardInterrupt)` (`.venv/lib/python3.14/site-packages/questionary/prompts/checkbox.py:229-232`, `.../select.py:209-212`), and `Question.ask()` catches `KeyboardInterrupt`, prints `Cancelled by user`, and returns `None` (`.venv/lib/python3.14/site-packages/questionary/question.py:48-65`). `None` is what the review turns into `SyncAbortedByUser`.
+- "I have attached the target — re-check and continue" without having attached anything: the gate RE-PROBES, logs `The target still reports no Ubuntu Pro attachment.` at WARNING, and asks again. The loop is unbounded by design.
+- "Skip apt_sync this run (other jobs continue)": `JobSkipped`, so `apt_sync` reports `SKIPPED` (not FAILED, not SUCCESS), `/etc/apt` on pc2 is untouched, and snap, flatpak and manual_installs still run.
+- Ctrl-C: `Sync aborted: sync aborted at a gate question (Ctrl-C): Ubuntu Pro attachment required on the target`.
 
-EOF (Ctrl-D) is NOT the same, and the code comments saying "Ctrl-C / EOF (`ask` returns `None`)" appear to be wrong for the EOF half. `Question.ask()` catches only `KeyboardInterrupt`; `EOFError` is not caught. The multi-line snippet editor is a plain prompt_toolkit `PromptSession` (`.venv/lib/python3.14/site-packages/questionary/prompts/text.py:91-99`), whose default binding raises `EOFError` on Ctrl-D at an empty buffer. Hypothesis, not measured: Ctrl-D in the snippet editor surfaces as an uncaught `EOFError` traceback rather than a clean `Sync aborted:` line. Checkbox and select bind no Ctrl-D at all, so Ctrl-D there most likely does nothing — also unmeasured.
+Undo: `sudo rm -f /etc/apt/sources.list.d/ubuntu-esm-apps.sources` on pc1.
 
-Test each of these separately, resetting pc2 between destructive attempts:
+Do not answer "continue" after actually attaching pc2 unless you intend the ESM sources to land there.
 
-1. Ctrl-C at the first apt install checkbox → expect `Cancelled by user`, then `Sync aborted: package review aborted at a checkbox screen (Ctrl-C/EOF)`, exit 1, nothing converged on pc2.
-2. Ctrl-C at the never-offer-again checkbox → `Sync aborted: package review aborted at a never-offer-again screen (Ctrl-C/EOF)`.
-3. Ctrl-C at the unreproducible three-way select → `Sync aborted: package review aborted while resolving unreproducible item '/opt/pcsw-uat-app' (Ctrl-C/EOF)`.
-4. "Abort the sync" at the collateral prompt → `Sync aborted: collateral removal of manually-installed <pkg> declined (abort chosen in review)`.
-5. Ctrl-C at the SECOND review (post-`/etc/apt`) → same clean abort, but note that `/etc/apt` is already converged on pc2; the docstring calls this a reviewed, coherent state (`src/pcswitcher/jobs/apt_sync.py:1877-1880`). Verify pc2's `/etc/apt` matches pc1's for the items you ticked.
-6. Ctrl-D at the snippet editor → record exactly what happens (clean abort vs traceback). This is the likeliest defect in the set.
-7. Ctrl-D at a checkbox and at a select → record whether the key is ignored.
+## 7. What to check on screen
 
-In every case the terminal must be usable afterwards (`reset` not required) and `pc-switcher logs --last` must contain the abort at WARNING exactly once.
+- The Rich `Live` region is erased before the first widget of a job's review and rebuilt after the last one — `review_items` pauses ONCE per job and resumes in a `finally`, not per group. The ESM gate pauses and resumes on its own, separately. No duplicated panel, no stale frame, no overwritten prompt line.
+- Each group is preceded by a bordered panel listing its entries, with every untrusted string wrapped in `Text` (`_render_group_panel`). A package name containing brackets must not crash the run.
+- Installs, changes and removals are separate screens, one group per `(action, item class)` (`_build_review_groups`), each titled with the concrete verb: "Install apt packages", "Remove apt packages", "Change snap packages", "Hold apt packages".
+- Install-direction and change-direction groups arrive pre-ticked; removal-direction groups arrive unticked (`_REMOVAL_ACTIONS`).
+- After a promotable group with anything left unticked, a second checkbox `"<title> — never offer again on this machine?"` appears, preceded by the dim "Enter leaves them for next run" hint. A fully-ticked group must NOT show it.
+- The report-only group, both repository/pin deletion groups and the flatpak remote deletion group must NOT be followed by a never-offer-again screen. That is the whole of "two answers".
+- Both conflict screens resolve one entry at a time, print the TARGET's version first and the SOURCE's second in separate panels, and offer exactly two choices.
+- The collateral screen names the package and offers install-anyway / skip / abort, and comes last in apt's review — it is the only screen that can abort.
+- The unreproducible group is a per-entry three-way select, never a checkbox, and prints the non-interactive-replay warning before opening the editor.
+- "Add an install snippet" opens a multi-line editor; questionary's own instruction reads `Finish with 'Alt+Enter' or 'Esc then Enter'` and the label says "Esc then Enter to finish". Submitting an EMPTY body must print the yellow "cannot be empty" line and re-prompt the three-way choice, not fall through.
+- Apt's review order is: installs, holds, changes, removals, report-only, repository conflicts, repository deletions, pin deletions, collateral. Flatpak's is: ref installs, ref removals, then remote conflicts, then remote deletions (mask groups, if any, sit with the refs under their own action).
+- Each manager renders its own review inside its own job step, and nothing prompts again later in that job.
 
-## 6. Verification after the run
+## 8. Abort paths
+
+Ctrl-C is the only abort key the review handles: `questionary` turns it into `KeyboardInterrupt`, `Question.ask()` catches that and returns `None`, and the review turns `None` into `SyncAbortedByUser`. Nothing catches `EOFError`, so Ctrl-D has no defined behaviour here — do not use it as an abort and do not record its outcome as a result.
+
+Test each separately, resetting pc2 between destructive attempts. The expected message after `Sync aborted:` is quoted verbatim.
+
+1. Apply checkbox → `package review aborted at a checkbox screen (Ctrl-C)`.
+2. Never-offer-again checkbox → `package review aborted at a never-offer-again screen (Ctrl-C)`.
+3. Repository-deletion or pin-deletion checkbox → same message as 1 (they are checkbox screens).
+4. Repository conflict select → `package review aborted while resolving the conflict on 'ubuntu.sources' (Ctrl-C)`. The flatpak remote conflict gives the same sentence with `'flathub remote (user)'` — the entry's own label.
+5. Unreproducible three-way select → `package review aborted while resolving unreproducible item '/opt/pcsw-uat-app' (Ctrl-C)`.
+6. ESM gate select → `sync aborted at a gate question (Ctrl-C): Ubuntu Pro attachment required on the target`.
+7. Collateral select → deliberately different: Ctrl-C is NOT an abort there, it records `SKIP_ONCE` and the review continues (`_review_collateral_group`'s `else` branch). Only the explicit "Abort the sync" choice raises, with `collateral removal of manually-installed fortunes declined (abort chosen in review)`. Check both.
+
+In every abort case: exit code 1, the CLI prints one calm `Sync aborted: <msg>` and not the red "Sync failed" path, `ui.resume()` still runs so the terminal is usable without `reset`, and `pc-switcher logs --last` contains the abort once at WARNING.
+
+## 9. Verification after the real run
 
 On pc1:
 
@@ -339,37 +625,49 @@ On pc1:
 cat ~/.config/pc-switcher/apt.decisions.yaml
 cat ~/.config/pc-switcher/snap.decisions.yaml
 cat ~/.config/pc-switcher/flatpak.decisions.yaml
-cat ~/.config/pc-switcher/manual_installs.decisions.yaml
+cat ~/.config/pc-switcher/manual.decisions.yaml
 cat ~/.config/pc-switcher/package-snippets.yaml
 pc-switcher logs --last
 ```
 
+Note the manual-installs file is `manual.decisions.yaml` — the manager id is `manual`, not the job name.
+
 On pc2:
 
 ```bash
-cat ~/.config/pc-switcher/apt.decisions.yaml         # only REMOVE-direction skip-always entries
-cat ~/.config/pc-switcher/package-snippets.yaml      # pushed copy, byte-identical to pc1's
-dpkg-query -W -f='${Package}\t${Status}\n' | grep -E '^(sl|cowsay|tree)\b'
-apt-mark showmanual | grep -E '^(X|Y)$'
-ls /etc/apt/preferences.d/
+cat ~/.config/pc-switcher/apt.decisions.yaml
+cat ~/.config/pc-switcher/package-snippets.yaml
+dpkg-query -W -f='${Package}\t${Status}\n' sl cmatrix fortunes fortunes-min tree
+apt-mark showmanual | grep -E '^(fortunes|fortunes-min)$'
+ls /etc/apt/preferences.d/ /etc/apt/sources.list.d/
 snap list
-flatpak list --user --app --columns=application
+flatpak list --user --app --columns=ref
+flatpak remotes --user --columns=name,url
 ls -l /opt/pcsw-uat-app
 ```
 
-Expected: pc1's `apt.decisions.yaml` holds only INSTALL/CHANGE-direction skip-always entries, pc2's only REMOVE-direction ones. The two `package-snippets.yaml` files must be identical (`diff <(ssh pc1 cat ~/.config/pc-switcher/package-snippets.yaml) ~/.config/pc-switcher/package-snippets.yaml`). `99-pcsw-uat.pref` is gone from pc2 if you ticked its removal.
+Expected:
 
-Log checks (`pc-switcher logs --last` on pc1): every command appears verbatim at DEBUG with job and host; the second review's group titles carry the `(revealed by this run's /etc/apt changes)` suffix; any withdrawn approval is logged as `withdrawing <label>: this run's /etc/apt changes make it ...` (`src/pcswitcher/jobs/apt_sync.py:1955-1960`).
+- pc1's `apt.decisions.yaml` holds only INSTALL/CHANGE-direction skip-always entries (`apt:package:cmatrix`); pc2's holds only REMOVE-direction ones (`apt:package:X`), plus the `cowsay` entry you wrote by hand. `cmatrix` must NOT appear on pc2 and `X` must NOT appear on pc1 — getting that end wrong is the D-08a failure this test exists to catch.
+- No `apt:source:`, `apt:pin:` or `flatpak:remote:` id appears in ANY decision file, in either direction — those classes are filtered out of the recording pass entirely (`AptSyncJob._record_permanent_skips`, `FlatpakSyncJob._record_permanent_skips`).
+- `diff <(ssh pc1 cat ~/.config/pc-switcher/package-snippets.yaml) ~/.config/pc-switcher/package-snippets.yaml` is empty: the push is a whole-file copy.
+- `/opt/pcsw-uat-app` exists on pc2 — the snippet replayed the same run it was authored.
+- `99-pcsw-uat.pref` is gone from pc2 if you ticked it; `99-pcsw-uat.list` is still there if you left it unticked.
+- `ubuntu.sources` on pc2 no longer carries the marker line if you answered "Overwrite".
 
-Btrfs snapshots, if you need to inspect or roll back:
+Log checks in `pc-switcher logs --last` on pc1: every command appears verbatim at DEBUG with its job and host; each derived `/etc/apt` write appears as `wrote <path> from the source` at FULL, since a derived write has no review line; each provisioned flatpak remote appears as `provision <scope> flatpak remote <name>`; a skipped job carries `Job apt_sync skipped: ...` at WARNING.
+
+Btrfs snapshots, to inspect or roll back:
 
 ```bash
-sudo find /.snapshots/pc-switcher -mindepth 2 -maxdepth 2   # both hosts
+sudo find /.snapshots/pc-switcher -mindepth 2 -maxdepth 2   # on both hosts
 ```
 
-Pre/post pairs per host per session (`src/pcswitcher/btrfs_snapshots.py:185`). Nothing else runs during the sync, so these are quiescent.
+Pre/post pairs per host per session. Nothing else runs during the sync, so they are quiescent.
 
-Cleanup: undo the 2a-2h steps, or reset both VMs and release the lock.
+## 10. Cleanup
+
+Undo 4a-4m and section 6, or reset both VMs, then release the lock.
 
 ```bash
 tests/integration/scripts/reset-vm.sh pc1
@@ -377,12 +675,11 @@ tests/integration/scripts/reset-vm.sh pc2
 tests/integration/scripts/internal/lock.sh release "janfr-uat-02-01"
 ```
 
-## 7. Known unknowns
+## 11. Known unknowns
 
-- Ctrl-D behaviour at every prompt type is inferred from the vendored questionary/prompt_toolkit sources, not measured. The snippet editor almost certainly raises an uncaught `EOFError`; checkbox and select bind no Ctrl-D. Both are things this run should settle.
-- Whether `sl`, `cowsay` and `tree` have candidates on these VMs is unverified — the `apt-cache policy` gate in 2a is there for that reason.
-- 2d needs a vendor package with no Ubuntu-archive candidate on pc2. I could not confirm any specific package satisfies that from this repository; the `apt-cache policy` gate decides it.
-- Whether any pc2 package has a manually-installed reverse dependency (2e's collateral) is unverified; the `apt-get -s remove` check decides it. If none qualifies, record the collateral case as not exercised rather than fabricating a conflict pair.
-- Whether the VMs currently exist, are running, hold the baseline snapshot, and carry fixtures version 3 is unverified — I ran no `hcloud` command.
-- Whether the second review can be reached with fewer moving parts than 2c is untested; the pin construction is derived from `089ea985`'s own description of the bug, not from an executed run.
-- The exact rendering of a questionary widget inside a paused Rich `Live` region — the corruption this test is looking for — cannot be predicted from the code and is the point of running it.
+- Whether the VMs currently exist, are running, hold the baseline snapshot and carry fixtures version 4 is unverified — no `hcloud` command was run.
+- `flatpak install` of a ref the target already has (4j's "Overwrite" path) has an unverified exit code. A per-item failure there is not a finding.
+- `flatpak remote-add NAME <.flatpakrepo URL>` (4f) is the exact form the fixtures script uses, but it needs network from pc2 to Flathub. If that is unavailable, this screen has no other hand trigger that does not involve a second real remote.
+- The apt-package `ORIGIN_MISMATCH` and `REPO_UNAVAILABLE` report classes have no procedure here. Both need two machines drawing one package name from two different vendors, or a source repository whose signing key is missing, which cannot be built on these VMs without adding a real third-party repository and then leaving it behind. Record them as not exercised rather than improvising.
+- The fail-fast probe rule (ADR-022) has no safe hand trigger either: it is provoked by breaking a package manager mid-plan, and its visible outcome is the run stopping with `probe on the <host> did not answer — \`<command>\` ...` and that job FAILED. Do not manufacture it during this walkthrough.
+- The exact rendering of a questionary widget inside a paused Rich `Live` region — the corruption this test looks for — cannot be predicted from the code, and is the point of running it.
