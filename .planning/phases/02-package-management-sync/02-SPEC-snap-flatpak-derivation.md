@@ -334,7 +334,7 @@ Every stage ends with `uv run ruff check . && uv run ruff format .`, `uv run bas
 
 **S6 — sideloaded snaps to `manual_installs_sync`.** A third detector on the source; the `snap_sync.py:492-507` drop keeps its target-side withholding but loses the WARNING. Depends on nothing here; may land at any point; see §9 Q4 before starting.
 
-**S7 — snap store identity.** `_store_identity` and the `validate()` comparison. Depends on nothing; may land first.
+**S7 — dropped.** Snap is treated as having one store: a brand store or a store proxy is outside ordinary snap use, so no store-identity check is built. What snap needs from D-06 — revision and channel convergence — already exists.
 
 **S8 — filtered-remote warning.** One WARNING per derived remote whose source options carry `filtered`. Trivial; depends on S3.
 
