@@ -1,0 +1,57 @@
+<task-notification>
+<task-id>a2cd979119e532023</task-id>
+<tool-use-id>toolu_01R7mZ8RGfz4JsAWZWr8BxRn</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/6fd79944-5079-446f-99f7-bbe44c27ff4e/tasks/a2cd979119e532023.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix review findings" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done. All gates clean, full suite 1401 passed, 2 commits (`e138adec`, `f66d8c12`), nothing pushed.
+
+## Per finding
+
+**1. `_read_file_content` unclassified — confirmed, fixed.** `src/pcswitcher/jobs/apt_sync.py:1103`. Three call sites, now all guarded on the exit code with an explicit `host`: `:2173`/`:2174` (the two conflict panes, target then source) and `:2210` (the removal diff's format read). Measured in `ubuntu:24.04`: `cat` on a missing path exits 1. Empty content stays data (an empty `.list` is legitimate). I confirmed the reviewer's note myself: `_stage_and_promote` is only ever called as `(dest, dest, …)` (`:3176`, `:3244`) or with a local keyring path (`:3503`), and `send_file(Path(local), …)` reads the local filesystem — no `cat` output ever reaches a write. Damage was confined to the review display. Also added `/usr/bin/cat` to both sudo hint lists (`:201`, `:202`): the source's conflict `cat` already ran under sudo and was named nowhere.
+
+**2. Two probes, two guards — confirmed, made consistent by tightening the loose one.** `manual_installs_sync.py:396` now passes `answers=len(installed_origins_by_package(...))`, matching `apt_sync.py:1638`. Key fact I verified before choosing: `installed_origins_by_package` yields a key per *block apt printed*, empty set included (`apt_policy.py:63-68`), so the count is blocks and a machine whose whole manual set is bare `.deb`s still answers — pinned by a new limit test.
+
+**The ADR sentence was also wrong, independently of this.** D-04 said `answers=` is passed "only by `apt-cache policy` reads over names that are known to be installed on the machine being asked". `_verify_approved_origins` (`apt_sync.py:2708`) already violated that: its names are approved *source* installs asked of the *target*, owed a block because plan-time classification found a candidate, not because they are installed there. D-04 now names all three sites and both justifications.
+
+**3. `test -d` unprivileged — confirmed, fixed.** Measured in docker: an unprivileged `test -d` on a directory inside a `0700` parent exits **1**, which collapses the whole `if … fi` to exit 0 with no output — exactly the reviewer's claim. Now `if sudo test -d …`; `/usr/bin/test` added to both sudo lists; the pinned test updated and its docstring now says why the `sudo` is pinned.
+
+**4. `simulate_apt_transaction` vs D-01 — reconciled toward `ConvergeItemFailed`, and the brief's steer points the wrong way.** Measured: `apt-get --dry-run install &lt;unknown&gt;` exits **100** with `E: Unable to locate package` — the same code as a lock. D-03's reshape remedy does not exist (apt has no second code). More decisively, I **verified with a scratch test** that the plan-time simulation is the *weaker* fail-fast case, not the stronger one: a class-3 package (target's apt has never heard of it, its repository only lands during converge) reaches `install_names` as `MISSING_ON_TARGET`/`INSTALL`, so `apt-get --dry-run` exits 100 in the ordinary flagship scenario. Promoting plan time to `ProbeFailed` would fail every run that carries a new vendor's package. Code unchanged; the reasoning is now in the docstring (`:1404`) and in ADR-022 D-01.
+
+**New defect found while doing this (not fixed, needs a decision I do not own):** that same plan-time `ConvergeItemFailed` is caught by no per-item loop, so it **escapes `plan()` and aborts the run** for that ordinary class-3 case. Reproduced: source has `pkg-a`, target's `apt-cache policy` prints nothing for it, target's `apt-get --dry-run install` exits 100 → `plan()` raises. Every existing fixture masks it because unmatched target commands default to exit 0. The fix is a D-30 question — what plan-time collateral protection means for a package apt cannot see yet — so I left a note at `apt_sync.py:2280` and am reporting it rather than inventing an answer.
+
+**5. `_require_apt_answer` docstring — confirmed, restored.** All four callers are `apt-cache policy` callers (`:1638`, `:1735`, `:2140`, `:2708`); two deliberately pass nothing. Now states the rule as "only where a block is genuinely owed", with both grounds.
+
+**6. `-path` reshape untested — confirmed, test added.** `test_the_source_file_scan_selects_both_locations_from_one_start_point` pins the command verbatim.
+
+**7. Stale comment — confirmed, and worse than reported.** The comment named `collect_hold_pin_facts`'s "own `-exec awk` over `preferences.d`" as what the constant distinguishes from. That method **does not exist anywhere in `src/`**, and `-exec awk` occurs exactly once in the whole package (`apt_sync.py:1183`) — so the comment argued against its constant *and* cited a referent that is gone. Rewritten, and the constant tightened to `"-path /etc/apt/sources.list -o"`, which is unique and doubles as a form pin.
+
+**Minor:** `_APT_ROOT_DIR` moved out of the "five `/etc/apt/*` directories" block into its own comment (`:215`); `_capture_dir_digests`'s docstring now opens with the full `if sudo test -d …; then …; fi` command it actually runs.
+
+## Mutation results (all real, run and restored from copies)
+
+| Mutation | Test | Result |
+|---|---|---|
+| Drop `require_answer` from `_read_file_content` | both new `*_content_read_that_did_not_answer_*` tests | **RED** |
+| `require_answer(…)` without `answers=` in `manual_installs_sync` | `test_a_policy_read_that_printed_no_block_at_all_fails_the_job` | **RED** ("DID NOT RAISE") |
+| Count packages-with-origins instead of blocks | `test_a_policy_read_over_only_bare_deb_packages_still_answers` | **RED** |
+| `sudo test -d` → `test -d` | `test_an_absent_directory_answers_nothing_rather_than_failing` | **RED** |
+| `-path` selectors → two start points | `test_the_source_file_scan_selects_both_locations_from_one_start_point` | **RED** (plus 72 more via the tightened fixture key) |
+
+No GREEN mutations. Findings 4, 5, 7 and the minor items are comment/docstring-only, so no mutation applies. I rewrote the conflict-pane test once after noticing its `assert "source" in …` was vacuous (the path contains "source"); it now asserts `"probe on the source"`, and I re-ran the M1 mutation against the rewritten version — still RED.
+
+## `docs/system/package-sync.md:71` — correction for you to dispatch
+
+Replace the second sentence's list and its final sentence. Proposed text:
+
+&gt; - **A read that did not answer is not a finding about a package** (ADR-022). Both manifests, the version lookup, the hold sets, the target policy read, the `/etc/apt` digest captures, the source-file scan, the removal-impact probe and the `sudo cat` of a file the review shows or offers for removal all fail the job once, naming the command and the tool's own stderr, rather than letting an empty result be parsed as machine state. One read is deliberately outside that rule: the single-file `sha256sum` for `/etc/apt/sources.list` exits 1 when the file is absent, and its absence IS the answer, so it returns "no digest" instead of failing. An empty *answer* is still data: no held packages, no pins and no third-party keyrings are ordinary. Only apt's answer decides a package, so a name an *answered* `apt-cache policy` printed no block for is still refused as its own item. The two `apt-cache policy` reads apt owes a block for — the source's own installed set, and the approved install set whose candidates this run already established — additionally fail when they print no block at all, which is the one place emptiness is treated as silence.
+
+Line 32's shared-core bullet is still accurate but could gain the single-file `sha256sum` alongside the glob one in its list of deliberately-unguarded reads. `manual_installs_sync`'s section has no ADR-022 bullet, so nothing is owed there for finding 2.
+
+## Notes
+
+- `docs/jobs/package-sync.md`, `docs/planning/Package sync requirements.md`, `flatpak_sync.py` and the phase SPEC untouched, per the ownership rule.
+- The flatpak agent's in-flight edits caused transient failures in `test_flatpak_sync.py` and one ruff/basedpyright error mid-session; all resolved once they committed (`4d80e0bd`). Final full run: 1401 passed, ruff/format/codespell/basedpyright clean.</result>
+<usage><subagent_tokens>204596</subagent_tokens><tool_uses>113</tool_uses><duration_ms>1076577</duration_ms></usage>
+</task-notification>
