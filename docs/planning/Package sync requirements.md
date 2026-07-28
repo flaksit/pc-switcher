@@ -114,6 +114,9 @@ flowchart TD
 - **PKG-FR-COLLATERAL-AUTO**: Collateral removals and downgrades that touch only automatically-installed packages MUST proceed without asking.
   Why: that is the target's apt resolving its own dependency graph.
 - **PKG-FR-COLLATERAL-MANUAL**: An approved change MUST NOT remove or downgrade a package that is manually installed on the target unless the user has consented to that consequence specifically. The user MUST be able to accept it, to decline it — leaving the triggering install unapplied rather than failing later — or to abort the sync.
+- **PKG-FR-COLLATERAL-ATTRIBUTION**: Declining collateral MUST cancel only the approved changes whose own transaction causes it, and MUST NOT cancel any other change under review. Where the collateral is caused by a combination of changes and by no single one of them, the whole set MUST be cancelled, and the question MUST say so.
+  Why: the review's other answers are the user's and were given about other software. A decline that reaches them is a decision the user did not make.
+- **PKG-FR-COLLATERAL-KEEPS-MARKS**: Cancelling a change on account of declined collateral MUST NOT alter a decision the user gave for that change. A change marked never-offer-again MUST still be recorded as such, and a change already declined MUST NOT be re-decided.
 - **PKG-FR-COLLATERAL-TIMING**: Collateral MUST be classified, and consented to, before anything is applied. If the real transaction has drifted by the time it runs, the system MUST refuse it rather than proceed.
   Why: the package manager states the transaction in advance when asked, so the consequence is knowable while the user is deciding about the change that causes it.
 - **PKG-FR-COLLATERAL-NEW-ORIGIN**: For an install whose origin this run must itself provision, the protection of `PKG-FR-COLLATERAL-MANUAL` MUST still hold, but consent MUST NOT be sought in advance: unapproved collateral MUST fail that one item, and the run MUST continue.

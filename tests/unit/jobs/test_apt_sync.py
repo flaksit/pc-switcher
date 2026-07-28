@@ -1861,6 +1861,206 @@ class TestCollateralFlow:
         assert not any("sudo" in cmd and "apt-get install" in cmd for cmd in commands)
 
 
+def _two_independent_removals_context() -> tuple[JobContext, MagicMock, MagicMock]:
+    """Two removal candidates whose transactions are independent: removing `pkg-x` also
+    removes the manually-installed `other-manual`, removing `pkg-y` removes nothing else.
+
+    The batched rehearsal cannot tell those two apart — it names both candidates and one
+    collateral package — so this fixture also answers the per-candidate rehearsals the
+    attribution needs. `other-manual` is manual and identical on both machines, so it is
+    collateral and never a diff of its own.
+    """
+    return make_context(
+        source_responses={
+            "apt-mark showmanual": CommandResult(0, "other-manual\n", ""),
+            "dpkg-query": CommandResult(0, "other-manual\t1.0\n", ""),
+        },
+        target_responses={
+            "apt-mark showmanual": CommandResult(0, "pkg-x\npkg-y\nother-manual\n", ""),
+            "dpkg-query": CommandResult(0, "pkg-x\t1.0\npkg-y\t1.0\nother-manual\t1.0\n", ""),
+            # Longest first: `respond_to` matches by substring, first match wins.
+            "apt-get --dry-run remove --assume-yes pkg-x pkg-y": CommandResult(
+                0, "Remv pkg-x [1.0]\nRemv pkg-y [1.0]\nRemv other-manual [1.0]\n", ""
+            ),
+            "remove --assume-yes pkg-x": CommandResult(0, "Remv pkg-x [1.0]\nRemv other-manual [1.0]\n", ""),
+            "remove --assume-yes pkg-y": CommandResult(0, "Remv pkg-y [1.0]\n", ""),
+        },
+    )
+
+
+class TestCollateralAttribution:
+    """D-30: a collateral item's triggers are the candidates whose OWN transaction causes
+    it, so declining it cancels those and nothing else.
+    """
+
+    @pytest.mark.asyncio
+    async def test_skip_cancels_only_the_candidate_whose_transaction_causes_it(self) -> None:
+        """`pkg-y` removes nothing but itself, so a skip on `other-manual` must leave it
+        approved and remove it — while `pkg-x`, which really would take `other-manual` with
+        it, is the only candidate the skip cancels.
+        """
+        context, _source, target = _two_independent_removals_context()
+        job = AptSyncJob(context)
+        _install_reviewer(
+            job,
+            {
+                "apt:package:pkg-x": Decision.APPLY,
+                "apt:package:pkg-y": Decision.APPLY,
+                "apt:collateral:other-manual": Decision.SKIP_ONCE,
+            },
+        )
+
+        await job.execute()
+
+        real_removals = [cmd for cmd in all_calls(target) if "sudo" in cmd and "apt-get remove" in cmd]
+        assert len(real_removals) == 1
+        assert "pkg-y" in real_removals[0]
+        assert "pkg-x" not in real_removals[0]
+
+    @pytest.mark.asyncio
+    async def test_a_collateral_skip_does_not_discard_a_trigger_own_skip_always(self) -> None:
+        """The permanent decision is the user's, not the collateral question's. Both
+        candidates really do take `other-manual` with them, so both are cancelled by the
+        skip — but `pkg-y`'s "never offer again on this machine" must survive the
+        cancellation and still be recorded (D-08a: a REMOVE is target-held).
+        """
+        context, _source, target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "other-manual\n", ""),
+                "dpkg-query": CommandResult(0, "other-manual\t1.0\n", ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-x\npkg-y\nother-manual\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-x\t1.0\npkg-y\t1.0\nother-manual\t1.0\n", ""),
+                "apt-get --dry-run remove --assume-yes pkg-x pkg-y": CommandResult(
+                    0, "Remv pkg-x [1.0]\nRemv pkg-y [1.0]\nRemv other-manual [1.0]\n", ""
+                ),
+                "remove --assume-yes pkg-x": CommandResult(0, "Remv pkg-x [1.0]\nRemv other-manual [1.0]\n", ""),
+                "remove --assume-yes pkg-y": CommandResult(0, "Remv pkg-y [1.0]\nRemv other-manual [1.0]\n", ""),
+            },
+        )
+        job = AptSyncJob(context)
+        _install_reviewer(
+            job,
+            {
+                "apt:package:pkg-x": Decision.APPLY,
+                "apt:package:pkg-y": Decision.SKIP_ALWAYS,
+                "apt:collateral:other-manual": Decision.SKIP_ONCE,
+            },
+        )
+
+        await job.execute()
+
+        commands = all_calls(target)
+        recorded = [cmd for cmd in commands if "mv --force" in cmd and "apt.decisions" in cmd]
+        assert len(recorded) == 1
+        assert "apt:package:pkg-y" in recorded[0]
+        assert "apt:package:pkg-x" not in recorded[0]
+        assert not any("sudo" in cmd and "apt-get remove" in cmd for cmd in commands)
+
+    @pytest.mark.asyncio
+    async def test_a_collateral_skip_does_not_discard_an_unrelated_skip_always(self) -> None:
+        """The same protection where attribution alone would also have saved it: `pkg-y` is
+        no trigger of `other-manual`, so nothing may touch its permanent decision.
+        """
+        context, _source, target = _two_independent_removals_context()
+        job = AptSyncJob(context)
+        _install_reviewer(
+            job,
+            {
+                "apt:package:pkg-x": Decision.APPLY,
+                "apt:package:pkg-y": Decision.SKIP_ALWAYS,
+                "apt:collateral:other-manual": Decision.SKIP_ONCE,
+            },
+        )
+
+        await job.execute()
+
+        commands = all_calls(target)
+        recorded = [cmd for cmd in commands if "mv --force" in cmd and "apt.decisions" in cmd]
+        assert len(recorded) == 1
+        assert "apt:package:pkg-y" in recorded[0]
+        assert not any("sudo" in cmd and "apt-get remove" in cmd for cmd in commands)
+
+    @pytest.mark.asyncio
+    async def test_the_narrowing_names_the_causing_candidate_in_the_question(self) -> None:
+        """Attribution reaches the user, not just the decision map: the detail the review
+        shows names `pkg-x` rather than "the selected packages".
+        """
+        context, _source, target = _two_independent_removals_context()
+
+        plan = await AptSyncJob(context).plan()
+
+        collateral = next(diff for diff in plan.diffs if diff.item_id == "apt:collateral:other-manual")
+        assert collateral.detail is not None
+        assert "pkg-x" in collateral.detail
+        assert "pkg-y" not in collateral.detail
+        # The cost, pinned: one batched rehearsal plus one per candidate, and only because
+        # the batch found manual collateral.
+        rehearsals = [cmd for cmd in all_calls(target) if cmd.startswith("apt-get --dry-run remove")]
+        assert len(rehearsals) == 3
+
+    @pytest.mark.asyncio
+    async def test_a_clean_batch_costs_no_extra_rehearsal(self) -> None:
+        """No manual collateral, no narrowing: the two-simulation budget is unchanged for
+        every run that has nothing to attribute.
+        """
+        context, _source, target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "", ""),
+                "dpkg-query": CommandResult(0, "", ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-x\npkg-y\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-x\t1.0\npkg-y\t1.0\n", ""),
+                "apt-get --dry-run remove --assume-yes pkg-x pkg-y": CommandResult(
+                    0, "Remv pkg-x [1.0]\nRemv pkg-y [1.0]\n", ""
+                ),
+            },
+        )
+
+        plan = await AptSyncJob(context).plan()
+
+        assert not any(diff.item_id.startswith("apt:collateral:") for diff in plan.diffs)
+        rehearsals = [cmd for cmd in all_calls(target) if cmd.startswith("apt-get --dry-run remove")]
+        assert len(rehearsals) == 1
+
+    @pytest.mark.asyncio
+    async def test_collateral_no_single_candidate_reproduces_is_blamed_on_the_whole_batch(self) -> None:
+        """Joint causation — removing either candidate alone leaves `other-manual` in place,
+        removing both takes it — is attributed to the whole batch, which is the honest
+        answer and the only conservative one.
+        """
+        context, _source, target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "other-manual\n", ""),
+                "dpkg-query": CommandResult(0, "other-manual\t1.0\n", ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-x\npkg-y\nother-manual\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-x\t1.0\npkg-y\t1.0\nother-manual\t1.0\n", ""),
+                "apt-get --dry-run remove --assume-yes pkg-x pkg-y": CommandResult(
+                    0, "Remv pkg-x [1.0]\nRemv pkg-y [1.0]\nRemv other-manual [1.0]\n", ""
+                ),
+                "remove --assume-yes pkg-x": CommandResult(0, "Remv pkg-x [1.0]\n", ""),
+                "remove --assume-yes pkg-y": CommandResult(0, "Remv pkg-y [1.0]\n", ""),
+            },
+        )
+        job = AptSyncJob(context)
+        _install_reviewer(
+            job,
+            {
+                "apt:package:pkg-x": Decision.APPLY,
+                "apt:package:pkg-y": Decision.APPLY,
+                "apt:collateral:other-manual": Decision.SKIP_ONCE,
+            },
+        )
+
+        await job.execute()
+
+        assert not any("sudo" in cmd and "apt-get remove" in cmd for cmd in all_calls(target))
+
+
 class TestValidate:
     @pytest.mark.asyncio
     async def test_all_checks_pass_returns_no_errors(self) -> None:

@@ -57,7 +57,9 @@ runs two BATCHED simulations (the whole install candidate set, the whole removal
 set — not one per-package, which would cost more than the sync itself for 150 packages) and
 classifies their collateral against the target manual set, emitting a three-way
 install-anyway / skip / abort review item for each manual-collateral package so the decision
-is made in the batched review, never as a prompt during apply.
+is made in the batched review, never as a prompt during apply. A batch that turns up manual
+collateral then rehearses each candidate alone, so `skip` cancels the packages that actually
+cause the collateral rather than everything the user was reviewing (`_collateral_for`).
 
 One install is admitted to no plan-time rehearsal at all (`_target_resolvable`, D-40): a
 D-34 class-3 package, whose repository this run derives from its own approval and writes
@@ -1437,6 +1439,27 @@ class AptTransactionPreview:
     install_versions: Mapping[str, tuple[str | None, str]] = field(default_factory=dict)
 
 
+def _install_args(names: Sequence[str]) -> str:
+    """The apt-get arguments for installing `names`, shared by the plan-time rehearsal, the
+    apply-time rehearsal and the real command, so no pair of them can drift apart and
+    rehearse a transaction other than the one that runs."""
+    return f"install --assume-yes --no-install-recommends {' '.join(shlex.quote(name) for name in names)}"
+
+
+def _remove_args(names: Sequence[str]) -> str:
+    """`_install_args`' counterpart for the removal direction."""
+    return f"remove --assume-yes {' '.join(shlex.quote(name) for name in names)}"
+
+
+def _trigger_phrase(triggers: frozenset[str], candidates: Sequence[str]) -> str:
+    """How a collateral item names what causes it: the attributed candidates, or "the
+    selected packages" when the answer really is all of them and listing them would only
+    reprint the batch."""
+    if len(candidates) > 1 and len(triggers) == len(candidates):
+        return "the selected packages"
+    return ", ".join(sorted(triggers))
+
+
 async def simulate_apt_transaction(
     executor: RemoteExecutor, apt_args: str, *, login_shell: bool | None = False
 ) -> AptTransactionPreview:
@@ -1627,11 +1650,11 @@ class AptSyncJob(PackageSyncJob):
         # collateral stays refused (D-30 — the last line of defence behind plan-time
         # classification).
         self._approved_collateral: frozenset[str] = frozenset()
-        # Each collateral item's `item_id` -> the triggering install/remove item_ids whose
-        # transaction produced it. Used in `accept_review` to translate a `skip` decision
-        # on a collateral item into `SKIP_ONCE` on the installs it gates, so a declined
-        # collateral cleanly leaves its triggering installs unapproved rather than failing
-        # them at the apply-time guard.
+        # Each collateral item's `item_id` -> the install/remove item_ids whose OWN
+        # transaction reproduces it (`_collateral_for` narrows the batch down to them).
+        # Used in `accept_review` to translate a `skip` decision on a collateral item into
+        # `SKIP_ONCE` on exactly those, so a declined collateral leaves them unapproved
+        # rather than failing them at the apply-time guard — and cancels nothing else.
         self._collateral_trigger_ids: dict[str, frozenset[str]] = {}
 
     async def capture_source_items(self) -> Sequence[AptPackageItem]:
@@ -2451,17 +2474,13 @@ class AptSyncJob(PackageSyncJob):
         return bool(self._origin_plan.get(item_id, _OriginPlan()).target_candidate_origins)
 
     async def _collect_plan_time_collateral(self, diffs: Sequence[ItemDiff]) -> list[ItemDiff]:
-        """Two BATCHED simulations — the whole install candidate set, the whole
+        """One BATCHED simulation per direction — the whole install candidate set, the whole
         removal candidate set — not one per package: a per-package simulation over a
-        150-package manual set would cost more than the sync itself (D-30 hangs its
-        classification off these two results; no third simulation is added).
+        150-package manual set would cost more than the sync itself (D-30).
 
         Each simulation's would-remove/would-downgrade collateral is split by
         `_classify_collateral` against the target's manual set: auto collateral produces
-        nothing (apt's own business, D-30), manual collateral becomes a review item whose
-        `item_id` (`apt:collateral:<name>`) is mapped back to the triggering candidate set
-        in `self._collateral_trigger_ids`, so a `skip` decision can later be translated
-        into `SKIP_ONCE` on the installs it gates.
+        nothing (apt's own business, D-30), manual collateral becomes a review item.
 
         The install rehearsal covers only the candidates the target's apt can resolve TODAY
         (`_target_resolvable`); see there for what that costs and what still covers it.
@@ -2482,58 +2501,94 @@ class AptSyncJob(PackageSyncJob):
         # resolve it and that set is never narrowed.
         collateral: list[ItemDiff] = []
         if rehearsed:
-            quoted = " ".join(shlex.quote(name) for name in rehearsed)
-            preview = await simulate_apt_transaction(
-                self.target, f"install --assume-yes --no-install-recommends {quoted}", login_shell=False
-            )
-            trigger_ids = frozenset(f"{_APT_PACKAGE_ID_PREFIX}{name}" for name in rehearsed)
-            collateral.extend(await self._classify_collateral(preview, reviewed_names, trigger_ids, verb="installing"))
+            collateral.extend(await self._collateral_for(rehearsed, reviewed_names, _install_args, verb="installing"))
         if remove_names:
-            quoted = " ".join(shlex.quote(name) for name in remove_names)
-            preview = await simulate_apt_transaction(self.target, f"remove --assume-yes {quoted}", login_shell=False)
-            trigger_ids = frozenset(f"{_APT_PACKAGE_ID_PREFIX}{name}" for name in remove_names)
-            collateral.extend(await self._classify_collateral(preview, reviewed_names, trigger_ids, verb="removing"))
+            collateral.extend(await self._collateral_for(remove_names, reviewed_names, _remove_args, verb="removing"))
         return collateral
 
-    async def _classify_collateral(
+    async def _collateral_for(
         self,
-        preview: AptTransactionPreview,
+        candidates: Sequence[str],
         reviewed_names: frozenset[str],
-        trigger_ids: frozenset[str],
+        args_for: Callable[[Sequence[str]], str],
         *,
         verb: str,
     ) -> list[ItemDiff]:
+        """One direction's collateral: the batched rehearsal, then — only if it found
+        manual collateral — the narrowing that says WHICH candidates cause each item.
+
+        Attribution matters because `skip` cancels the candidates recorded against the item
+        (`self._collateral_trigger_ids`): blaming the whole batch would make one collateral
+        question cancel every package in it, including packages whose own transaction never
+        touches the collateral. The batch alone cannot say — apt reports the transaction, not
+        its causes — so each candidate is rehearsed on its own and blamed for the collateral
+        its own transaction reproduces.
+
+        The cost is one extra `apt-get --dry-run` per candidate, paid ONLY by a run whose
+        batch found manual collateral, and never by the common clean run. A single candidate
+        is its own answer and is not rehearsed twice.
+
+        Collateral that no single candidate reproduces is jointly caused (apt removes what
+        depends on `a | b` only once BOTH go) and is attributed to the whole batch — the
+        conservative answer, and the only true one.
+        """
+        preview = await simulate_apt_transaction(self.target, args_for(candidates), login_shell=False)
+        found = await self._classify_collateral(preview, reviewed_names)
+        if not found:
+            return []
+
+        triggers = {name: frozenset(candidates) for name, _ in found}
+        if len(candidates) > 1:
+            narrowed: dict[str, set[str]] = {name: set() for name, _ in found}
+            for candidate in candidates:
+                alone = await simulate_apt_transaction(self.target, args_for([candidate]), login_shell=False)
+                for name, _ in await self._classify_collateral(alone, reviewed_names):
+                    if name in narrowed:
+                        narrowed[name].add(candidate)
+            triggers = {name: frozenset(blamed) or frozenset(candidates) for name, blamed in narrowed.items()}
+
+        return [
+            self._collateral_item(
+                name,
+                f"{effect} by {verb} {_trigger_phrase(triggers[name], candidates)}",
+                frozenset(f"{_APT_PACKAGE_ID_PREFIX}{trigger}" for trigger in triggers[name]),
+            )
+            for name, effect in found
+        ]
+
+    async def _classify_collateral(
+        self, preview: AptTransactionPreview, reviewed_names: frozenset[str]
+    ) -> list[tuple[str, str]]:
         """Partition a simulation's would-remove/would-downgrade packages by provenance
         (D-30): a package in the TARGET's manual set becomes a manual-collateral review
         item (ADR-020 D-40); one outside it is auto-installed — apt's own dependency — and
         produces nothing, not even a report line the user cannot act on.
 
         A downgrade is detected exactly as before: an `install_versions` entry with a
-        non-`None` old version and `compare_deb_versions(target, new, old) < 0`. The
-        triggering candidate set is recorded against each emitted item's id so `skip`
-        can be translated to `SKIP_ONCE` on the installs it gates (`accept_review`).
+        non-`None` old version and `compare_deb_versions(target, new, old) < 0`.
+
+        Returns `(package, effect)` pairs rather than `ItemDiff`s because the caller must
+        attribute them before the effect can be phrased — the sentence names the candidates
+        that cause it.
         """
         protected = self._protected_manual_set()
-        collateral: list[ItemDiff] = []
+        collateral: list[tuple[str, str]] = []
 
         for pkg in preview.removals:
             if pkg in reviewed_names or pkg not in protected:
                 continue
-            collateral.append(
-                self._collateral_item(pkg, f"would be removed by {verb} the selected packages", trigger_ids)
-            )
+            collateral.append((pkg, "would be removed"))
 
         for pkg, (old_version, new_version) in preview.install_versions.items():
             if pkg in reviewed_names or old_version is None or pkg not in protected:
                 continue
             if await compare_deb_versions(self.target, new_version, old_version) < 0:
-                effect = f"would be downgraded from {old_version} to {new_version} by {verb} the selected packages"
-                collateral.append(self._collateral_item(pkg, effect, trigger_ids))
+                collateral.append((pkg, f"would be downgraded from {old_version} to {new_version}"))
 
         return collateral
 
     def _collateral_item(self, name: str, effect: str, trigger_ids: frozenset[str]) -> ItemDiff:
-        """Build one manual-collateral `ItemDiff` and record its triggering candidate set."""
+        """Build one manual-collateral `ItemDiff` and record the candidates it gates."""
         diff = _collateral_diff(name, effect)
         self._collateral_trigger_ids[diff.item_id] = trigger_ids
         return diff
@@ -2563,12 +2618,19 @@ class AptSyncJob(PackageSyncJob):
 
         For each collateral item (`apt:collateral:<pkg>`): an `APPLY` (install-anyway)
         marks `<pkg>` approved, so `_converge_install`/`_converge_remove` let its removal
-        or downgrade through; a `SKIP_ONCE` (skip) is propagated to every install that
-        collateral gated (`self._collateral_trigger_ids`), so the install is cleanly left
-        unapproved rather than attempted and refused at the guard. Abort never reaches
-        here — it raised `SyncAbortedByUser` inside the review.
+        or downgrade through; a `SKIP_ONCE` (skip) is propagated to the packages whose own
+        transaction causes that collateral (`self._collateral_trigger_ids`, attributed in
+        `_collateral_for`), so each is cleanly left unapproved rather than attempted and
+        refused at the guard. Abort never reaches here — it raised `SyncAbortedByUser`
+        inside the review.
 
-        Returns the outcome with any triggering-install decisions overridden; leaves the
+        Only an `APPLY` is overridden. A trigger the user already declined needs no
+        cancelling, and overriding a `SKIP_ALWAYS` would silently discard the "never offer
+        again on this machine" mark it carries: `_record_permanent_skips` reads this same
+        decisions map, so the mark would never be written and the user would be asked again
+        next run having been told otherwise.
+
+        Returns the outcome with any triggering decisions overridden; leaves the
         decisions map untouched when there is no collateral to resolve.
         """
         approved: set[str] = set()
@@ -2581,7 +2643,8 @@ class AptSyncJob(PackageSyncJob):
                 approved.add(diff.item_id.removeprefix(_COLLATERAL_ID_PREFIX))
             elif decision == Decision.SKIP_ONCE:
                 for trigger_id in self._collateral_trigger_ids.get(diff.item_id, frozenset()):
-                    overrides[trigger_id] = Decision.SKIP_ONCE
+                    if outcome.decisions.get(trigger_id) == Decision.APPLY:
+                        overrides[trigger_id] = Decision.SKIP_ONCE
 
         self._approved_collateral = frozenset(approved)
         if not overrides:
@@ -2711,8 +2774,8 @@ class AptSyncJob(PackageSyncJob):
 
         Manual-collateral decisions (D-30) are resolved first: an install-anyway on a
         collateral item marks its package approved so the apply-time guard lets the
-        removal through, while a skip is translated into `SKIP_ONCE` on the installs that
-        collateral gated, so a declined collateral cleanly leaves its triggering installs
+        removal through, while a skip is translated into `SKIP_ONCE` on the approved
+        packages that cause that collateral, so a declined collateral cleanly leaves them
         unapproved rather than failing them at the guard.
         """
         outcome = self._resolve_collateral(plan, outcome)
@@ -2948,8 +3011,7 @@ class AptSyncJob(PackageSyncJob):
         if refusal is not None:
             raise ConvergeItemFailed(refusal)
 
-        quoted = shlex.quote(name)
-        install_args = f"install --assume-yes --no-install-recommends {quoted}"
+        install_args = _install_args([name])
 
         preview = await simulate_apt_transaction(self.target, install_args, login_shell=False)
 
@@ -2986,8 +3048,7 @@ class AptSyncJob(PackageSyncJob):
         reviewed.
         """
         name = _package_name(diff.item_id)
-        quoted = shlex.quote(name)
-        remove_args = f"remove --assume-yes {quoted}"
+        remove_args = _remove_args([name])
 
         preview = await simulate_apt_transaction(self.target, remove_args, login_shell=False)
         approved = self._approved_removal_names()
