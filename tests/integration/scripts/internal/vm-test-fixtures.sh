@@ -14,9 +14,10 @@
 #     the suite works against a VM whose baseline predates this script.
 #
 # The two machines get DIFFERENT flatpak fixtures: `--with-app` installs the test
-# application, and is passed for pc1 (the source) only, so a genuine source->target ref
-# divergence exists for `test_flatpak_installs_into_source_scope_after_remote` without
-# any test having to manufacture one. Both machines get the remote and the runtime.
+# application AND the second, deliberately unused remote, and is passed for pc1 (the
+# source) only — so a genuine source->target ref divergence, and a genuine source-only
+# remote that feeds no ref, both exist without any test having to manufacture them. Both
+# machines get the Flathub remote and the runtime.
 #
 # Idempotent and cheap on the satisfied path: every step is guarded by a presence check,
 # so a re-run over a baseline that already has everything is a handful of local queries.
@@ -28,7 +29,7 @@ set -euo pipefail
 # Bumping this forces provisioning to rebuild the baseline: provision-test-infra.sh and
 # run-integration-tests.sh compare the marker file's contents against their own copy of
 # this number (PCSWITCHER_TEST_FIXTURES_VERSION in internal/common.sh — keep in sync).
-readonly FIXTURES_VERSION=3
+readonly FIXTURES_VERSION=4
 readonly MARKER=/etc/pcswitcher-test-fixtures
 
 INSTALL_APP=false
@@ -64,6 +65,18 @@ readonly -a FIXTURE_SNAPS=(hello hello-world)
 # built, and never per test run.
 readonly FLATPAK_REMOTE=flathub
 readonly FLATHUB_REPOFILE=https://dl.flathub.org/repo/flathub.flatpakrepo
+
+# A SECOND real remote, on the source only and feeding nothing. It is what makes the
+# derivation claim falsifiable: a remote the source has and no synced ref comes from must
+# not travel, and with only one remote in the baseline "the target ends up with the
+# source's remotes" and "the target ends up with the remotes its refs need" are
+# indistinguishable. Nothing is installed from it, so it costs one `.flatpakrepo` fetch
+# and no download at all.
+#
+# Both Flathub keyrings have the same sha256 (measured), so no assertion anywhere may key
+# a remote's identity on its key digest — only on its name and URL.
+readonly FLATPAK_UNUSED_REMOTE=flathub-beta
+readonly FLATHUB_BETA_REPOFILE=https://dl.flathub.org/beta-repo/flathub-beta.flatpakrepo
 
 # The subject application, and the runtime it declares. Measured live against Flathub
 # (flatpak 1.14.6, x86_64):
@@ -143,6 +156,33 @@ add_flathub_remote() {
     flatpak remote-add --user --if-not-exists "$FLATPAK_REMOTE" "$FLATHUB_REPOFILE"
 }
 
+converge_unused_remote() {
+    local configured=false
+    if flatpak remotes --user --columns=name | grep --quiet --line-regexp "$FLATPAK_UNUSED_REMOTE"; then
+        configured=true
+    fi
+
+    if [[ "$INSTALL_APP" == "true" ]]; then
+        if [[ "$configured" == "true" ]]; then
+            log "flatpak remote $FLATPAK_UNUSED_REMOTE already configured"
+            return
+        fi
+        log "adding user-scope flatpak remote $FLATPAK_UNUSED_REMOTE from $FLATHUB_BETA_REPOFILE (feeds nothing)"
+        flatpak remote-add --user --if-not-exists "$FLATPAK_UNUSED_REMOTE" "$FLATHUB_BETA_REPOFILE"
+        return
+    fi
+
+    # No --with-app: this machine is the sync TARGET and must NOT have it, or the test
+    # that proves an unused remote does not travel proves nothing. Deleted rather than
+    # merely not added, so a test that crashed mid-run cannot leave it behind.
+    if [[ "$configured" == "true" ]]; then
+        log "removing user-scope flatpak remote $FLATPAK_UNUSED_REMOTE (this machine is the sync target)"
+        flatpak remote-delete --user --force "$FLATPAK_UNUSED_REMOTE"
+    else
+        log "flatpak remote $FLATPAK_UNUSED_REMOTE correctly absent"
+    fi
+}
+
 # Whether `ref` is installed in the user installation.
 flatpak_user_ref_installed() {
     flatpak list --user --columns=ref | grep --quiet --line-regexp "$1"
@@ -166,7 +206,7 @@ assert_app_runtime_unchanged() {
         cat >&2 <<EOF
 [vm-test-fixtures] Flathub now builds $FLATPAK_APP against $declared,
 not the $FLATPAK_RUNTIME_REF this fixture seeds. Leaving it would make
-test_flatpak_installs_into_source_scope_after_remote download a whole runtime inside the
+test_flatpak_derives_the_remote_its_ref_needs_and_carries_its_key download a whole runtime inside the
 sync it is timing. Fix, in tests/integration/scripts/internal/vm-test-fixtures.sh:
   1. set FLATPAK_RUNTIME_REF=$declared
   2. bump FIXTURES_VERSION (and PCSWITCHER_TEST_FIXTURES_VERSION in internal/common.sh)
@@ -235,6 +275,7 @@ fi
 install_snaps
 install_flatpak_packages
 add_flathub_remote
+converge_unused_remote
 assert_app_runtime_unchanged
 install_flatpak_runtime
 converge_flatpak_app

@@ -19,23 +19,41 @@ BRANCH is identity for the same reason (`FlatpakItem`): a ref is identified by i
 application id. Origin is deliberately NOT identity — see `FlatpakItem` for why the two
 go opposite ways.
 
-`flatpak install` refuses outright when the remote it names is not yet configured in
-the scope being installed into (D-14), so remotes are captured and diffed as their
-own item class (`FLATPAK_REMOTE`) and this job's own ordering stage (mirroring
-`apt_sync`'s key-before-source sort) places every remote diff ahead of every ref diff
-before the plan's `diffs` tuple ever reaches `apply()`'s per-diff loop. Before converging
-a ref, its origin remote is re-read off the TARGET and required to carry the source
+A remote is DERIVED from the refs approved from it, never ticked (ADR-021 D-37's rule for
+apt repositories, applied to a second ecosystem). `flatpak install` refuses outright when
+the remote it names is not configured in the scope being installed into (D-14), so
+"ref ticked, its remote unticked" was an unrepresentable pairing offered as two independent
+review lines — and worse, "ref ticked, its remote's URL change declined" silently installed
+another vendor's build. `accept_review()` therefore turns the approved ref installs into
+the set of remotes this run must provision (`_derive_remotes`), and `apply()` writes them
+before the base converge loop reaches the first ref. A remote the source has that feeds no
+ref approved this run does not travel; there is no flatpak counterpart to apt's
+never-removed distribution sources, because a fresh flatpak install configures ZERO remotes
+and a machine with none is a perfectly ordinary machine (measured), so even Flathub travels
+only as a consequence of something needing it. A derived write has no item of its own, so a
+failure is recorded against the remote and charged to every approved ref that depended on
+it (D-39). Only the REMOVAL direction stays a review line, and it takes two answers rather
+than three (`REPO_REMOVAL_REVIEW_ACTION`): a permanent machine-local mark on a remote whose
+whole purpose is to feed refs would silently and permanently change where those refs come
+from, and the remedy is consolidating the two configurations, not recording a preference.
+
+Before converging a ref, its origin remote is re-read off the TARGET and required to carry
+the source
 remote's URL and verification setting — not merely to exist under the same name
 (`_origin_refusal`), because a same-named remote pointing elsewhere serves a different
 vendor's build of the same ref at exit 0 with no warning; and after the install the ref's
 own reported origin is read back and resolved to a URL again (`_installed_origin_refusal`),
 so the guarantee is checked rather than inferred. Either refusal is a per-item failure
-naming both URLs, never an install issued in hope (T-02-24). The removal
-direction is disclosure rather than refusal (#214): a remote offered for deletion
-carries, in its review `detail`, the target refs that still name it as their origin in
-that same scope — deleting a remote whose refs are being removed too is legitimate
-cleanup, so the decision stays in the review where D-30 puts apt's collateral, never as
-a mid-apply refusal.
+naming both URLs, never an install issued in hope (T-02-24). That same read is what checks
+the derived writes actually landed: `flatpak remote-add --if-not-exists <name> <other url>`
+exits 0 and changes nothing (measured), so the write's exit code proves nothing and only
+the target's own answer does.
+
+The removal direction is disclosure rather than refusal (#214): a remote offered for
+deletion carries, in its review `detail`, the target refs that still name it as their
+origin in that same scope — deleting a remote whose refs are being removed too is
+legitimate cleanup, so the decision stays in the review where D-30 puts apt's collateral,
+never as a mid-apply refusal.
 
 A remote carries its TRUST as part of the item, not as a property of the machine that
 happens to hold it (#215): `FlatpakRemoteItem` records the remote's GPG-verification
@@ -98,9 +116,16 @@ from pcswitcher.jobs.packages.items import (
     build_version_mismatch_detail,
 )
 from pcswitcher.jobs.packages.probes import require_answer
+from pcswitcher.jobs.packages.review import (
+    REPO_REMOVAL_REVIEW_ACTION,
+    Decision,
+    ReviewEntry,
+    ReviewGroup,
+    ReviewOutcome,
+)
 from pcswitcher.jobs.packages.state import DecisionFile, filter_inert
 from pcswitcher.jobs.packages.sync_core import ConvergeItemFailed, PackagePlan, PackageSyncJob
-from pcswitcher.models import CommandResult, FirstSyncScope, Host, ValidationError
+from pcswitcher.models import CommandResult, FirstSyncScope, Host, LogLevel, ValidationError
 from pcswitcher.sudoers import passwordless_sudo_hint
 
 __all__ = ["FlatpakSyncJob", "flatpak_sync_exclude_paths"]
@@ -118,6 +143,18 @@ __all__ = ["FlatpakSyncJob", "flatpak_sync_exclude_paths"]
 # carries both `stable` and `beta` for `org.mozilla.firefox`). Without the branch such an
 # app fails to converge on every single run.
 _FLATPAK_LIST_CMD = "flatpak list --app --columns=application,version,origin,installation,ref"
+
+# Every installed ref on the source, runtimes included (no `--app`), for the runtime half of
+# remote derivation: an approved app pulls its runtime, and the runtime may come from a
+# remote no directly-approved ref uses. Same five columns so one parser serves both — the
+# `version` a runtime reports is unused here.
+_FLATPAK_ALL_REFS_CMD = "flatpak list --columns=application,version,origin,installation,ref"
+
+# The runtime one installed app is built against, printed as a bare `<id>/<arch>/<branch>`
+# ref with no `runtime/` prefix — i.e. byte-identical to what the `ref` column prints for
+# that runtime, so the origin lookup is a dictionary hit and needs no reformatting
+# (measured live on Flatpak 1.14.6: `org.gnome.Platform/x86_64/50`, 10 ms, no network).
+_FLATPAK_RUNTIME_CMD_TEMPLATE = "flatpak info {flag} --show-runtime {ref}"
 
 # Same reasoning for `flatpak remotes`, but flatpak tracks remotes PER INSTALLATION —
 # even a byte-identical `flathub` URL is two separate configuration entries — so this
@@ -161,6 +198,19 @@ _FLATPAK_MASK_CMD_TEMPLATE = "flatpak {flag} mask"
 
 # Both scopes this item model and flatpak's own --user/--system flags recognise.
 _SCOPES: tuple[Literal["user", "system"], ...] = ("user", "system")
+
+# Every id a remote can carry, in every direction. `_record_permanent_skips` filters on it
+# so "a remote is never recorded machine-specific" holds even for a decision that arrives
+# from the review's automation hook or a hand-built `ReviewOutcome`, not only for the one
+# screen that no longer offers the promotion.
+_REMOTE_ITEM_ID_PREFIX = "flatpak:remote:"
+
+# Why a derived remote is being provisioned, for the dry-run preview: the app's own origin
+# is obvious from the ref, its runtime's is not.
+_DERIVED_REASON_WORDS: dict[str, str] = {
+    "ref_origin": "an approved ref's origin",
+    "runtime_origin": "the runtime an approved ref needs",
+}
 
 # Binaries this job runs under sudo, quoted back to the user when the passwordless-sudo
 # check fails (ADR-013). Only needed when a system-scope item is actually in play —
@@ -561,14 +611,82 @@ def _diff_flatpak_refs(source_items: Sequence[FlatpakItem], target_items: Sequen
     return diffs
 
 
-def _install_remote_diff(item: FlatpakRemoteItem) -> ItemDiff:
-    return ItemDiff(
-        item_class=ItemClass.FLATPAK_REMOTE,
-        diff_class=DiffClass.MISSING_ON_TARGET,
-        action=DiffAction.INSTALL,
-        item_id=item.item_id,
-        label=item.label(),
-        detail=None,
+@dataclass(frozen=True)
+class _DerivedRemote:
+    """One remote this run must provision because an approved ref needs it (ADR-021 D-37).
+
+    Not an `ItemDiff` and never in a review group: the user decided about a ref, and the
+    remote is the mechanism that delivers it. `reason` is carried so a failure can say why
+    the remote was in play at all — a runtime's remote is far less obvious to the reader
+    than the app's own.
+    """
+
+    remote_id: str
+    scope: Literal["user", "system"]
+    name: str
+    reason: Literal["ref_origin", "runtime_origin"]
+
+
+def _derive_remotes(
+    approved_ref_ids: frozenset[str],
+    source_refs_by_id: Mapping[str, FlatpakItem],
+    source_ref_origins: Mapping[tuple[str, str], str],
+    source_runtime_by_ref_id: Mapping[str, str],
+) -> tuple[tuple[_DerivedRemote, ...], dict[str, frozenset[str]]]:
+    """`(remotes to provision, {approved ref item_id: the remote_ids it depends on})`.
+
+    Two sources feed the set, both computed from facts `plan()` already read off the source
+    and neither costing a command here:
+
+    - the approved ref's own origin, and
+    - the origin of the runtime that ref is built against, because `flatpak install` pulls
+      the runtime too and resolves it from whatever remotes are configured — an app on
+      remote X built against a runtime the source holds from remote Y would otherwise be
+      approved with only X provisioned.
+
+    The runtime is looked up in EITHER scope on the source (a user app against a
+    system-installed runtime is the ordinary case) but its remote is always derived in the
+    APP's scope, because that is the installation the target may have to pull the runtime
+    into. Deriving one remote too many in the rare cross-scope case costs a
+    `flatpak remote-add`; deriving one too few costs the install.
+
+    The attribution map is D-39's: a derived write has no item to fail, so it fails every
+    approved ref that named it.
+    """
+    derived: dict[str, _DerivedRemote] = {}
+    depends_on: dict[str, set[str]] = {}
+
+    def need(item_id: str, scope: Literal["user", "system"], name: str, reason: str) -> None:
+        remote_id = f"flatpak:remote:{scope}:{name}"
+        derived.setdefault(
+            remote_id,
+            _DerivedRemote(
+                remote_id=remote_id,
+                scope=scope,
+                name=name,
+                reason="ref_origin" if reason == "ref_origin" else "runtime_origin",
+            ),
+        )
+        depends_on.setdefault(item_id, set()).add(remote_id)
+
+    for item_id in sorted(approved_ref_ids):
+        item = source_refs_by_id.get(item_id)
+        if item is None:
+            continue
+        need(item_id, item.scope, item.origin, "ref_origin")
+        runtime = source_runtime_by_ref_id.get(item_id)
+        if runtime is None:
+            continue
+        other_scope = "system" if item.scope == "user" else "user"
+        runtime_origin = source_ref_origins.get((item.scope, runtime)) or source_ref_origins.get(
+            (other_scope, runtime)
+        )
+        if runtime_origin is not None:
+            need(item_id, item.scope, runtime_origin, "runtime_origin")
+
+    return (
+        tuple(derived[remote_id] for remote_id in sorted(derived)),
+        {item_id: frozenset(remote_ids) for item_id, remote_ids in depends_on.items()},
     )
 
 
@@ -647,37 +765,6 @@ def _trust_mutation_phrase(item: FlatpakRemoteItem) -> str:
     return ", importing the source's signing key"
 
 
-def _change_remote_diff(source_item: FlatpakRemoteItem, target_item: FlatpakRemoteItem) -> ItemDiff:
-    """A remote present on both sides with the same name AND scope but a DIFFERING URL,
-    GPG-verification setting or signing key: converge the target's remote to the
-    source's configuration (decision 7, #215).
-
-    A trust difference is a `CHANGE` for exactly the reason a URL difference is: the two
-    machines hold the same remote with a different value, and `flatpak remote-modify`
-    converges it in place — `--url`, `--gpg-verify`/`--no-gpg-verify` and `--gpg-import`
-    combine in ONE command (verified live), so a differing key needs no REMOVE+INSTALL
-    churn and never disturbs the refs whose origin the remote is. Tagged
-    `VERSION_MISMATCH` for the same reason apt config/source edits and snap
-    revision/channel changes are (`apt_sync`/`snap_sync`): it is the "same identity,
-    differing value" conflict class, the only `DiffClass` a CHANGE ever carries.
-
-    A key CHANGE converges by IMPORT, and ostree's import merges rather than replaces
-    (verified live): a target that already trusted a different key for this remote ends
-    up trusting both, so the digests stay unequal and the item is offered again on the
-    next run. That is reported-as-found, consistent with the rest of this job — trust the
-    user established locally is never deleted to make a digest match, and the usual
-    skip-always decision (D-08) is the way to silence it.
-    """
-    return ItemDiff(
-        item_class=ItemClass.FLATPAK_REMOTE,
-        diff_class=DiffClass.VERSION_MISMATCH,
-        action=DiffAction.CHANGE,
-        item_id=source_item.item_id,
-        label=source_item.label(),
-        detail=_remote_change_detail(source_item, target_item),
-    )
-
-
 def _target_refs_by_origin_remote(target_refs: Sequence[FlatpakItem]) -> dict[str, list[str]]:
     """Target refs keyed by the `item_id` of the remote they name as origin, IN THEIR OWN
     SCOPE (#214).
@@ -698,43 +785,30 @@ def _diff_flatpak_remotes(
     target_items: Sequence[FlatpakRemoteItem],
     target_refs: Sequence[FlatpakItem],
 ) -> list[ItemDiff]:
-    """One diff per remote `item_id` (name + scope) present on either side.
+    """One REMOVE diff per remote the target has and the source does not — the only
+    direction a remote is still a review line (ADR-021 D-37, applied to flatpak).
 
-    A remote present on both sides with the SAME name and scope but a DIFFERING URL,
-    GPG-verification setting or signing key is a `CHANGE` diff that converges the target
-    to the source's configuration (decision 7 / T-02-22, #215): a same-name remote whose
-    URL or trust was silently not propagated is exactly the gap this closes. The
-    comparison is whole-item equality — name and scope ARE the identity and are equal by
-    construction here, so every remaining field is a value the two machines can
-    legitimately disagree about, and a difference in name or scope produces two separate
-    install/remove diffs rather than a change (module docstring's scope-as-identity rule).
+    The add and change directions are gone: a remote travels because an approved ref needs
+    it (`_derive_remotes`), and a remote present on both sides whose URL or trust differs is
+    repointed as derived mechanism by the same path. Both were tickable before, which made
+    the two pairings this closes representable — a ref approved with its only possible
+    source declined, and a ref approved from a same-named remote whose URL change was
+    declined, i.e. from a different vendor.
+
+    Removal stays reviewed because the user is the only one who can say whether a
+    target-only remote is wanted; nothing about an approved ref implies it.
 
     `target_refs` is the SAME queried ref list the ref diff is built from — it is what
     lets a REMOVE diff name the refs its removal would orphan (#214) without a
     per-remote query of its own.
     """
-    source_by_id = {item.item_id: item for item in source_items}
-    target_by_id = {item.item_id: item for item in target_items}
+    source_ids = {item.item_id for item in source_items}
     dependents_by_remote_id = _target_refs_by_origin_remote(target_refs)
-
-    seen: dict[str, None] = {}
-    for item in (*source_items, *target_items):
-        seen.setdefault(item.item_id, None)
-
-    diffs: list[ItemDiff] = []
-    for item_id in seen:
-        source_item = source_by_id.get(item_id)
-        target_item = target_by_id.get(item_id)
-
-        if source_item is not None and target_item is None:
-            diffs.append(_install_remote_diff(source_item))
-        elif target_item is not None and source_item is None:
-            diffs.append(_remove_remote_diff(target_item, dependents_by_remote_id.get(item_id, [])))
-        elif source_item is not None and target_item is not None and source_item != target_item:
-            diffs.append(_change_remote_diff(source_item, target_item))
-        # else: present on both, identical url and trust -> no diff.
-
-    return diffs
+    return [
+        _remove_remote_diff(item, dependents_by_remote_id.get(item.item_id, []))
+        for item in target_items
+        if item.item_id not in source_ids
+    ]
 
 
 def _install_mask_diff(item: FlatpakMaskItem) -> ItemDiff:
@@ -832,14 +906,24 @@ class FlatpakSyncJob(PackageSyncJob):
         # ItemDiff, whose item_id carries scope + name but not the source's origin
         # remote or a remote's URL — those have to come from somewhere else.
         self._source_refs_by_id: dict[str, FlatpakItem] = {}
+        # The source's remotes as captured, with NO `filter_inert` pass: a source remote is
+        # no longer reviewable in any direction (only the target's own removals are), and a
+        # decision file must not be able to withhold the remote an approved ref needs or the
+        # URL its origin is checked against.
         self._source_remotes_by_id: dict[str, FlatpakRemoteItem] = {}
         self._target_remotes_by_id: dict[str, FlatpakRemoteItem] = {}
-        # The source's remotes BEFORE `filter_inert` — the only thing a ref's origin may be
-        # checked against. `_source_remotes_by_id` has had the source's own decision file
-        # applied to it, and a remote recorded skip-always there would drop out of it while
-        # its refs still install; the origin guarantee must not be switchable off by a
-        # machine-local preference.
-        self._source_remotes_all_by_id: dict[str, FlatpakRemoteItem] = {}
+        # `(scope, ref) -> origin` over EVERY installed source ref, runtimes included, and
+        # `ref item_id -> the runtime ref it needs`: the two inputs the runtime half of
+        # `_derive_remotes` consumes. Read in plan(), because derivation runs in the
+        # synchronous `accept_review()` and cannot issue commands of its own.
+        self._source_ref_origins: dict[tuple[str, str], str] = {}
+        self._source_runtime_by_ref_id: dict[str, str] = {}
+        # Set by `accept_review()` from the approved ref installs, consumed by `apply()`:
+        # the remotes to provision, which approved ref depended on each (D-39), and the
+        # writes that failed, keyed by remote_id.
+        self._derived_remotes: tuple[_DerivedRemote, ...] = ()
+        self._ref_derived_remote_ids: dict[str, frozenset[str]] = {}
+        self._failed_derived_remotes: dict[str, str] = {}
         # The target's remotes as they ACTUALLY are once this run's remote writes have run:
         # re-read lazily at the first ref install, discarded whenever a remote write lands.
         # Neither the plan-time query nor "this run added it" is admissible evidence —
@@ -942,22 +1026,60 @@ class FlatpakSyncJob(PackageSyncJob):
             masks.extend(await self._query_target_masks(scope))
         return masks
 
+    async def _capture_source_ref_origins(self) -> dict[tuple[str, str], str]:
+        """`(scope, ref) -> origin` over EVERY installed source ref, runtimes included.
+
+        The `--app` listing cannot serve this: a runtime is exactly what it filters out, and
+        the runtime's own origin is the second input to remote derivation. Guarded on the
+        exit code for the same measured reason `capture_source_items` is.
+        """
+        result = await self.source.run_command(_FLATPAK_ALL_REFS_CMD)
+        require_answer(_FLATPAK_ALL_REFS_CMD, result, Host.SOURCE)
+        return {(item.scope, item.ref): item.origin for item in _parse_flatpak_list(result.stdout)}
+
+    async def _capture_source_runtimes(self, source_refs: Sequence[FlatpakItem]) -> dict[str, str]:
+        """`ref item_id -> the runtime ref it is built against`, one local read per app.
+
+        Batched is not available: `flatpak info` answers about one ref. Measured at 10 ms
+        with no network, so the cost is proportional to the source's app count and nothing
+        else. Guarded on the exit code (ADR-022): the question is only ever asked about a
+        ref the source's own listing just reported, so a non-zero exit means the tool did
+        not answer, never "no such ref". An app with no runtime at all is not a state
+        flatpak has — but an empty answer is still read as "nothing to derive from" rather
+        than invented.
+        """
+        runtimes: dict[str, str] = {}
+        for item in source_refs:
+            cmd = _FLATPAK_RUNTIME_CMD_TEMPLATE.format(flag=_scope_flag(item.scope), ref=shlex.quote(item.ref))
+            result = await self.source.run_command(cmd)
+            require_answer(cmd, result, Host.SOURCE)
+            runtime = result.stdout.strip()
+            if runtime:
+                runtimes[item.item_id] = runtime
+        return runtimes
+
     @override
     async def plan(self) -> PackagePlan:
         """Load decision files -> capture -> query -> diff -> build review groups.
 
-        Read-only: only `flatpak list`/`flatpak remotes`/`flatpak mask` (both machines,
-        both scopes) and a decision-file `cat` run here — no `flatpak install`/
+        Read-only: only `flatpak list`/`flatpak remotes`/`flatpak mask`/`flatpak info` (both
+        machines, both scopes) and a decision-file `cat` run here — no `flatpak install`/
         `uninstall`/`remote-add`/`remote-delete`/`mask` mutation before this returns.
-        Caches the filtered source/target refs and remotes by id for `converge()` (see
-        `__init__`); masks need no cache (pattern is fully in the item_id).
+        Caches the source/target refs and remotes by id for `converge()` (see `__init__`);
+        masks need no cache (pattern is fully in the item_id).
 
-        Diffs are ordered remotes -> refs -> masks in the returned `diffs` tuple — this
-        job's own ordering stage, mirroring `apt_sync`'s key-before-source sort: a ref's
-        `flatpak install` fails when its remote is not yet configured in that scope
-        (D-14), and a mask applied before its refs could suppress an auto-pulled
-        dependency of a ref being installed the same run (D-08). The base `apply()` loop
-        converges `plan.diffs` in order, so this ordering is what enforces both.
+        The two derivation inputs are read here for the same reason apt reads its origin
+        state before the package diff: derivation runs in the synchronous
+        `accept_review()`, which cannot issue a command, so every fact it consumes has to
+        be in hand by then. That costs one extra source listing plus one
+        `flatpak info --show-runtime` per source app (10 ms each, no network — measured).
+
+        Diffs are ordered refs -> masks in the returned `diffs` tuple: a mask applied before
+        its refs could suppress an auto-pulled dependency of a ref being installed the same
+        run (D-08). Remotes are no longer in this ordering at all in the add direction —
+        they are derived and written by `apply()` ahead of the whole loop — and a remote
+        REMOVAL is order-independent, since the refs it could orphan are named in its own
+        review detail rather than converged around it.
         """
         source_decisions = await DecisionFile(self.manager_id, self.source).load()
         target_decisions = await DecisionFile(self.manager_id, self.target).load()
@@ -965,17 +1087,17 @@ class FlatpakSyncJob(PackageSyncJob):
         source_refs = await filter_inert(await self.capture_source_items(), source_decisions)
         installed_target_refs = await self.query_target_items()
         target_refs = await filter_inert(installed_target_refs, target_decisions)
-        captured_source_remotes = await self._capture_all_source_remotes()
-        source_remotes = await filter_inert(captured_source_remotes, source_decisions)
+        source_remotes = await self._capture_all_source_remotes()
         target_remotes = await filter_inert(await self._query_all_target_remotes(), target_decisions)
         source_masks = await filter_inert(await self._capture_all_source_masks(), source_decisions)
         target_masks = await filter_inert(await self._query_all_target_masks(), target_decisions)
 
         self._source_refs_by_id = {item.item_id: item for item in source_refs}
         self._source_remotes_by_id = {item.item_id: item for item in source_remotes}
-        self._source_remotes_all_by_id = {item.item_id: item for item in captured_source_remotes}
         self._target_remotes_by_id = {item.item_id: item for item in target_remotes}
         self._target_remotes_now_by_id = None
+        self._source_ref_origins = await self._capture_source_ref_origins()
+        self._source_runtime_by_ref_id = await self._capture_source_runtimes(source_refs)
 
         # Target refs feed the remote diff too: a remote offered for REMOVE names the
         # refs whose origin it is (#214), read off the ref query already in hand rather
@@ -989,17 +1111,193 @@ class FlatpakSyncJob(PackageSyncJob):
         remote_diffs = _diff_flatpak_remotes(source_remotes, target_remotes, installed_target_refs)
         ref_diffs = _diff_flatpak_refs(source_refs, target_refs)
         mask_diffs = _diff_flatpak_masks(source_masks, target_masks)
-        # Ordering (D-08): remotes -> refs -> masks. A mask must land AFTER the refs so
-        # it can never suppress an auto-pulled dependency of a ref being installed the
-        # same run; converge() carries the pattern fully in the item_id, so masks (unlike
-        # refs) need no source-side cache.
+        # Ordering (D-08): refs -> masks, with the remote removals trailing (their own
+        # two-answer screen, `_build_review_groups`). A mask must land AFTER the refs so it
+        # can never suppress an auto-pulled dependency of a ref being installed the same
+        # run; converge() carries the pattern fully in the item_id, so masks (unlike refs)
+        # need no source-side cache.
         # Every flatpak item class carries its own id into `filter_inert` above, so this
         # pass is a no-op backstop here — kept so all four `plan()`s end the same way and
         # the read path can never drift from `_record_permanent_skips`'s write path.
-        diffs = self._drop_inert_diffs((*remote_diffs, *ref_diffs, *mask_diffs), source_decisions, target_decisions)
+        diffs = self._drop_inert_diffs((*ref_diffs, *mask_diffs, *remote_diffs), source_decisions, target_decisions)
 
         groups = self._build_review_groups(diffs)
         return PackagePlan(manager=self.manager_id, diffs=diffs, groups=groups)
+
+    @override
+    def _build_review_groups(self, diffs: Sequence[ItemDiff]) -> tuple[ReviewGroup, ...]:
+        """Carve remote DELETIONS out into their own two-answer screen (ADR-021 D-37's
+        exception, `REPO_REMOVAL_REVIEW_ACTION`), mirroring `AptSyncJob`'s.
+
+        Still an unticked checkbox list; the whole difference is that the never-offer-again
+        screen never follows it, because a permanent machine-local mark on a remote whose
+        purpose is to feed refs would silently and permanently change where those refs come
+        from. It trails the base groups so the user sees the bulk of the diff first.
+        """
+        removals = [diff for diff in diffs if diff.item_class is ItemClass.FLATPAK_REMOTE]
+        if not removals:
+            return super()._build_review_groups(diffs)
+        removal_ids = {diff.item_id for diff in removals}
+        groups = list(super()._build_review_groups([diff for diff in diffs if diff.item_id not in removal_ids]))
+        groups.append(
+            ReviewGroup(
+                manager=self.manager_id,
+                action=REPO_REMOVAL_REVIEW_ACTION,
+                title=f"Delete {self.manager_id} remotes the source no longer has",
+                entries=tuple(
+                    ReviewEntry(item_id=diff.item_id, label=diff.label, action_label="delete", detail=diff.detail)
+                    for diff in removals
+                ),
+            )
+        )
+        return tuple(groups)
+
+    @override
+    def accept_review(self, plan: PackagePlan, outcome: ReviewOutcome) -> None:
+        """Turn the approved ref installs into the remotes this run provisions, before the
+        base stores the accepted pair.
+
+        Here rather than in `plan()` for the same reason `AptSyncJob._build_derived_writes`
+        is: the input is the set of APPROVED items, which does not exist until the review
+        returns. Every fact it reads was captured in `plan()`, so this stays synchronous.
+        """
+        self._derived_remotes, self._ref_derived_remote_ids = _derive_remotes(
+            frozenset(
+                diff.item_id
+                for diff in plan.diffs
+                if diff.item_class is ItemClass.FLATPAK_REF
+                and diff.action is DiffAction.INSTALL
+                and outcome.decisions.get(diff.item_id) == Decision.APPLY
+            ),
+            self._source_refs_by_id,
+            self._source_ref_origins,
+            self._source_runtime_by_ref_id,
+        )
+        self._failed_derived_remotes = {}
+        super().accept_review(plan, outcome)
+
+    @override
+    async def _record_permanent_skips(self, plan: PackagePlan, decisions: Mapping[str, Decision]) -> None:
+        """The base recording pass, minus every `flatpak:remote:` id (ADR-021 D-37).
+
+        The interactive flow already cannot produce a `SKIP_ALWAYS` for one — the removal
+        group is absent from `_PROMOTABLE_ACTIONS`, so the promotion screen never offers it
+        — but "no registry entry" is a property of the model, not of one prompt's wiring,
+        and a decision can also arrive from the review's automation hook or from a caller
+        assembling a `ReviewOutcome` by hand. Filtered by id prefix so it holds in EVERY
+        direction, including the two this job no longer emits.
+
+        `flatpak:mask:` is deliberately not filtered: a mask is a standing preference about
+        updating, like an apt hold, and nothing about an approved ref implies whether it
+        should travel — so it keeps the full three-way decision and the registry.
+        """
+        recordable = PackagePlan(
+            manager=plan.manager,
+            diffs=tuple(diff for diff in plan.diffs if not diff.item_id.startswith(_REMOTE_ITEM_ID_PREFIX)),
+            groups=plan.groups,
+        )
+        await super()._record_permanent_skips(recordable, decisions)
+
+    @override
+    async def apply(self) -> None:
+        """Provision the derived remotes, then the base converge loop.
+
+        The ordering `plan()` used to carry in its `diffs` tuple lives here now, and has to:
+        a derived remote is not a diff, so nothing in the base loop would reach it. It is
+        also the whole of D-14's guarantee — every remote an approved ref needs is written
+        before the loop issues its first `flatpak install`.
+
+        Dry-run (ADR-014): each intended provisioning is logged at FULL with the same
+        `[dry-run] ` prefix the base loop uses, and no command is issued. Without this a
+        rehearsal of a first sync would preview the installs and say nothing about the
+        remotes they depend on.
+        """
+        for derived in self._derived_remotes:
+            if self.context.dry_run:
+                self._log(
+                    Host.TARGET,
+                    LogLevel.FULL,
+                    f"[dry-run] Would provision {derived.scope} flatpak remote {derived.name} "
+                    f"({_DERIVED_REASON_WORDS[derived.reason]})",
+                )
+                continue
+            await self._write_derived_remote(derived)
+        await super().apply()
+
+    async def _write_derived_remote(self, derived: _DerivedRemote) -> None:
+        """Bring one derived remote's URL and trust on the target to the source's.
+
+        Nothing is written when the target's copy already matches whole-item — name and
+        scope are the identity and equal by construction, so any remaining difference is a
+        value the two machines legitimately disagree about, including the signing key: a
+        target holding the remote but not its key is configured and unusable, and refuses
+        every install with `Can't check signature: public key not found` (#215).
+
+        A failure is recorded against the remote, never raised: there is no item to fail
+        here, so it is charged to the approved refs that needed it (`_derived_remote_failure`,
+        D-39). The exit code is not treated as proof of success either — `_origin_refusal`
+        re-reads the target before each install, which is what actually catches a
+        `remote-add --if-not-exists` that exited 0 and changed nothing.
+        """
+        source_item = self._source_remotes_by_id.get(derived.remote_id)
+        if source_item is None:
+            self._failed_derived_remotes[derived.remote_id] = (
+                f"the source reports no {derived.scope}-scope remote named {derived.name!r}"
+            )
+            return
+        target_item = self._target_remotes_by_id.get(derived.remote_id)
+        if target_item == source_item:
+            return
+
+        scope_flag = _scope_flag(derived.scope)
+        sudo = _sudo_prefix(derived.scope)
+        try:
+            staged_key = await self._stage_source_key(source_item, derived.remote_id)
+        except ConvergeItemFailed as exc:
+            self._failed_derived_remotes[derived.remote_id] = str(exc)
+            return
+        try:
+            trust = _remote_trust_flags(source_item, staged_key, restore_verification=target_item is not None)
+            if target_item is None:
+                cmd = (
+                    f"{sudo}flatpak remote-add --if-not-exists {scope_flag}{trust} "
+                    f"{shlex.quote(derived.name)} {shlex.quote(source_item.url)}"
+                )
+                phrase = f"add {derived.scope} flatpak remote {derived.name} ({source_item.url})"
+            else:
+                # `remote-modify` edits the existing entry in place, preserving its other
+                # config and avoiding the ref-origin disruption a delete+re-add would cause.
+                cmd = (
+                    f"{sudo}flatpak remote-modify {scope_flag} --url={shlex.quote(source_item.url)}"
+                    f"{trust} {shlex.quote(derived.name)}"
+                )
+                phrase = f"repoint {derived.scope} flatpak remote {derived.name} at {source_item.url}"
+                # A derived write leaves no review line, so this is the only place the run
+                # says which facets of the remote were actually out of step.
+                self._log(Host.TARGET, LogLevel.FULL, _remote_change_detail(source_item, target_item))
+            result = await self.target.run_command(
+                cmd, login_shell=False, mutates=f"{phrase}{_trust_mutation_phrase(source_item)}"
+            )
+            self._target_remotes_now_by_id = None
+            if result.success:
+                # The only trace a derived write leaves in the run's own log: it has no
+                # review line and no per-item converge entry to appear in.
+                self._log(Host.TARGET, LogLevel.FULL, f"provision {derived.scope} flatpak remote {derived.name}")
+            else:
+                self._failed_derived_remotes[derived.remote_id] = result.stderr.strip() or f"`{cmd}` failed"
+        finally:
+            await self._discard_staged_key(staged_key)
+
+    def _derived_remote_failure(self, item_id: str) -> str | None:
+        """Why an approved ref cannot be installed because a remote it needed did not get
+        provisioned (D-39) — the derived write has no item of its own to carry the failure.
+        """
+        for remote_id in sorted(self._ref_derived_remote_ids.get(item_id, frozenset())):
+            reason = self._failed_derived_remotes.get(remote_id)
+            if reason is not None:
+                scope, name = _split_flatpak_item_id(remote_id, "remote")
+                return f"the {scope} remote {name!r} it needs could not be provisioned: {reason}"
+        return None
 
     @override
     async def converge(self, diff: ItemDiff) -> CommandResult:
@@ -1021,60 +1319,12 @@ class FlatpakSyncJob(PackageSyncJob):
         )
 
     async def _converge_remote(self, diff: ItemDiff) -> CommandResult:
+        """Only the REMOVAL direction reaches here: adds and URL/trust changes are derived
+        mechanism written by `apply()` (`_write_derived_remote`), never review items.
+        """
         scope, name = _split_flatpak_item_id(diff.item_id, "remote")
         scope_flag = _scope_flag(scope)
         sudo = _sudo_prefix(scope)
-
-        if diff.action in (DiffAction.INSTALL, DiffAction.CHANGE):
-            source_item = self._source_remotes_by_id.get(diff.item_id)
-            if source_item is None:
-                raise ConvergeItemFailed(
-                    f"no captured source remote for {diff.label} (item_id={diff.item_id!r}); "
-                    "was plan() run before converge()?"
-                )
-            # The source's own key bytes are staged on the target first, so ONE command
-            # (D-27) then carries url and trust together.
-            staged_key = await self._stage_source_key(source_item, diff)
-            try:
-                trust = _remote_trust_flags(
-                    source_item, staged_key, restore_verification=diff.action == DiffAction.CHANGE
-                )
-                if diff.action == DiffAction.INSTALL:
-                    cmd = (
-                        f"{sudo}flatpak remote-add --if-not-exists {scope_flag}{trust} "
-                        f"{shlex.quote(name)} {shlex.quote(source_item.url)}"
-                    )
-                    result = await self.target.run_command(
-                        cmd,
-                        login_shell=False,
-                        mutates=(
-                            f"add {scope} flatpak remote {name} ({source_item.url})"
-                            f"{_trust_mutation_phrase(source_item)}"
-                        ),
-                    )
-                    self._target_remotes_now_by_id = None
-                    return result
-
-                # `remote-modify` edits the existing entry in place (the remote is
-                # present on both sides by construction of a CHANGE diff), preserving its
-                # other config and avoiding the ref-origin disruption a delete+re-add
-                # would cause.
-                cmd = (
-                    f"{sudo}flatpak remote-modify {scope_flag} --url={shlex.quote(source_item.url)}"
-                    f"{trust} {shlex.quote(name)}"
-                )
-                result = await self.target.run_command(
-                    cmd,
-                    login_shell=False,
-                    mutates=(
-                        f"repoint {scope} flatpak remote {name} at {source_item.url}"
-                        f"{_trust_mutation_phrase(source_item)}"
-                    ),
-                )
-                self._target_remotes_now_by_id = None
-                return result
-            finally:
-                await self._discard_staged_key(staged_key)
 
         if diff.action == DiffAction.REMOVE:
             # Takes the remote's per-remote keyring with it (verified live): trust is not
@@ -1117,6 +1367,11 @@ class FlatpakSyncJob(PackageSyncJob):
                     f"no captured source ref for {diff.label} (item_id={diff.item_id!r}); "
                     "was plan() run before converge()?"
                 )
+            # D-39 first: a derived write that failed has no item of its own, and its own
+            # stderr says far more than the symptom `_origin_refusal` would report.
+            blocked = self._derived_remote_failure(diff.item_id)
+            if blocked is not None:
+                raise ConvergeItemFailed(f"install of {ref} refused: {blocked}")
             refusal = await self._origin_refusal(scope, source_item.origin)
             if refusal is not None:
                 # T-02-24: refuse rather than issue an install that would land the wrong
@@ -1171,7 +1426,7 @@ class FlatpakSyncJob(PackageSyncJob):
             f"FlatpakSyncJob.converge: unsupported action {diff.action.value!r} for a flatpak mask ({diff.label})"
         )
 
-    async def _stage_source_key(self, item: FlatpakRemoteItem, diff: ItemDiff) -> str | None:
+    async def _stage_source_key(self, item: FlatpakRemoteItem, remote_id: str) -> str | None:
         """Copy the source remote's own keyring onto the target and return its staged
         path, or `None` when the remote has no key to carry (#215).
 
@@ -1205,7 +1460,7 @@ class FlatpakSyncJob(PackageSyncJob):
         if not mkdir.success:
             raise ConvergeItemFailed(f"failed to create {staging_dir} on the target: {mkdir.stderr.strip()}")
 
-        staged = f"{staging_dir}/{diff.item_id.replace(':', '_').replace('/', '_')}.gpg"
+        staged = f"{staging_dir}/{remote_id.replace(':', '_').replace('/', '_')}.gpg"
         await self.target.send_file(
             local_path,
             staged,
@@ -1270,7 +1525,7 @@ class FlatpakSyncJob(PackageSyncJob):
         refuse every install from it for good.
         """
         remote_id = f"flatpak:remote:{scope}:{origin}"
-        source_remote = self._source_remotes_all_by_id.get(remote_id)
+        source_remote = self._source_remotes_by_id.get(remote_id)
         if source_remote is None:
             return (
                 f"the source has no {scope}-scope remote named {origin!r}, so the ref's own origin "
@@ -1316,7 +1571,7 @@ class FlatpakSyncJob(PackageSyncJob):
         )
         if landed is None:
             return f"flatpak exited 0 but the target does not list {ref} in the {scope} installation"
-        source_url = self._source_remotes_all_by_id[f"flatpak:remote:{scope}:{expected_origin}"].url
+        source_url = self._source_remotes_by_id[f"flatpak:remote:{scope}:{expected_origin}"].url
         target_remotes = await self._target_remotes_now()
         landed_remote = target_remotes.get(f"flatpak:remote:{scope}:{landed.origin}")
         if landed_remote is None:
@@ -1401,8 +1656,11 @@ class FlatpakSyncJob(PackageSyncJob):
             job_name=cls.name,
             scope_items=[
                 "installed flatpak refs (per user/system scope)",
-                "configured flatpak remotes (per scope)",
                 "flatpak mask patterns (per scope)",
+                # Named as a consequence rather than as something reviewed: remotes are
+                # derived from the approved refs, so they are never ticked, but a first
+                # sync does add and repoint them on the target.
+                "the flatpak remotes those refs come from (per scope, added or repointed without a review line)",
             ],
-            mechanism="flatpak install/uninstall/remote-add/mask per item, after review",
+            mechanism="flatpak install/uninstall/mask per item after review, with each ref's remote provisioned first",
         )

@@ -149,6 +149,10 @@ _READ_ONLY_CALLS: dict[str, int] = {
     "jobs/flatpak_sync.py::FlatpakSyncJob._target_home_dir::run_command": 1,
     "jobs/flatpak_sync.py::FlatpakSyncJob._capture_source_masks::run_command": 1,
     "jobs/flatpak_sync.py::FlatpakSyncJob._query_target_masks::run_command": 1,
+    # Remote derivation's two source-side inputs: every installed ref including runtimes,
+    # and the runtime each app is built against (one local `flatpak info` per app).
+    "jobs/flatpak_sync.py::FlatpakSyncJob._capture_source_ref_origins::run_command": 1,
+    "jobs/flatpak_sync.py::FlatpakSyncJob._capture_source_runtimes::run_command": 1,
     # The post-install origin read-back: the same `flatpak list` the capture uses, re-run on
     # the target so a ref's real provenance is checked rather than inferred (ADR-021 D-35).
     "jobs/flatpak_sync.py::FlatpakSyncJob._installed_origin_refusal::run_command": 1,

@@ -705,6 +705,12 @@ _FIXTURE_FLATPAK_SCOPE: Literal["user", "system"] = "user"
 # a test deleted it; `_flatpak_subject` reads the resulting URL off the machine itself.
 _FIXTURE_FLATPAK_REPOFILE = "https://dl.flathub.org/repo/flathub.flatpakrepo"
 
+# The second fixture remote, on pc1 only and feeding no ref: what makes "a remote no
+# approved ref needs does not travel" falsifiable. Deleted from pc2 by the fixture script
+# and by `_restore_flatpak_target_baseline`, so a run that made it travel cannot leave the
+# next run unable to detect that.
+_FIXTURE_UNUSED_FLATPAK_REMOTE = "flathub-beta"
+
 
 async def _flatpak_subject(
     executor: BashLoginRemoteExecutor,
@@ -763,6 +769,8 @@ async def _restore_flatpak_target_baseline(executor: BashLoginRemoteExecutor) ->
     sudo = "" if _FIXTURE_FLATPAK_SCOPE == "user" else "sudo "
     result = await executor.run_command(
         f"{sudo}flatpak uninstall {scope_flag} --assumeyes {shlex.quote(_FIXTURE_FLATPAK_APP)} || true; "
+        f"{sudo}flatpak remote-delete {scope_flag} --force "
+        f"{shlex.quote(_FIXTURE_UNUSED_FLATPAK_REMOTE)} || true; "
         f"{sudo}flatpak remote-add {scope_flag} --if-not-exists "
         f"{shlex.quote(_FIXTURE_FLATPAK_REMOTE)} {shlex.quote(_FIXTURE_FLATPAK_REPOFILE)}",
         login_shell=False,
@@ -821,6 +829,90 @@ async def _create_synthetic_repo_and_key(executor: BashLoginRemoteExecutor) -> t
     )
     assert result.success, f"Failed to create synthetic repo+key on source: {result.stderr}"
     return source_filename, key_filename
+
+
+async def _install_from_a_repo_the_target_lacks(executor: BashLoginRemoteExecutor) -> tuple[str, str, str]:
+    """On `executor` (the source): build a trivial `.deb`, publish it in a flat `file:` apt
+    repository, declare that repository, and install the package from it. Returns
+    `(package_name, repo_dir, list_filename)`.
+
+    The only construction that produces ADR-021 §2.3's class 3 on real machines: a package
+    the source has FROM A REPOSITORY IT DECLARES whose name the target's apt has never
+    heard. `_create_synthetic_repo_and_key`'s repository cannot do it — its host does not
+    resolve, so no package can be installed from it, and a repository feeding no package
+    does not travel at all.
+
+    A `file:` repository is used rather than a served one because the source must genuinely
+    install from it: measured in a stock `ubuntu:24.04`, a flat `deb [trusted=yes] file:...
+    ./` repository with a hand-written `Packages` index updates and installs, `apt-cache
+    policy` reports the `file:` URI as the installed version's origin, and on a machine
+    without the repository the same name gives `apt-cache policy` exit 0 with no block and
+    `apt-get --dry-run install` exit 100 `E: Unable to locate package`.
+
+    The package is empty — control metadata only, no files — so installing it changes
+    nothing about the machine beyond dpkg's own records.
+    """
+    uniq = uuid4().hex[:12]
+    name = f"pcswitcher-it-pkg-{uniq}"
+    repo_dir = f"/opt/pcswitcher-it-repo-{uniq}"
+    list_filename = f"pcswitcher-it-repo-{uniq}.list"
+    control = (
+        f"Package: {name}\nVersion: 1.0\nArchitecture: all\n"
+        "Maintainer: pc-switcher integration tests <nobody@example.invalid>\n"
+        "Description: synthetic package for pc-switcher integration tests\n"
+    )
+    # `Size`/`SHA256` are computed on the machine from the `.deb` `dpkg-deb` just produced:
+    # apt rejects an index whose digest does not match the file it points at.
+    build = "\n".join(
+        (
+            "set -eu",
+            f"build=$(mktemp --directory)/{name}",
+            'mkdir --parents "$build/DEBIAN"',
+            f'printf %s {shlex.quote(control)} > "$build/DEBIAN/control"',
+            'dpkg-deb --build "$build" "$build.deb" > /dev/null',
+            f"sudo mkdir --parents {shlex.quote(repo_dir)}",
+            f'sudo cp "$build.deb" {shlex.quote(f"{repo_dir}/{name}.deb")}',
+            'size=$(stat --format=%s "$build.deb")',
+            'digest=$(sha256sum "$build.deb" | cut --delimiter=" " --fields=1)',
+            f"{{ printf %s {shlex.quote(control)};"
+            f' printf "Filename: ./{name}.deb\\nSize: %s\\nSHA256: %s\\n\\n" "$size" "$digest"; }}'
+            f" | sudo tee {shlex.quote(f'{repo_dir}/Packages')} > /dev/null",
+            f"printf '%s\\n' {shlex.quote(f'deb [trusted=yes] file:{repo_dir} ./')}"
+            f" | sudo tee {shlex.quote(f'{_APT_SOURCES_DIR}/{list_filename}')} > /dev/null",
+        )
+    )
+    built = await executor.run_command(build, login_shell=False, timeout=60.0)
+    assert built.success, f"Failed to build the synthetic repository on the source: {built.stderr}"
+
+    updated = await _apt_get_update(executor)
+    assert updated.success, f"apt-get update failed on the source after adding {repo_dir}: {updated.stderr}"
+
+    installed = await executor.run_command(
+        f"sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes {shlex.quote(name)}",
+        login_shell=False,
+        timeout=120.0,
+    )
+    assert installed.success, f"Failed to install {name} from {repo_dir} on the source: {installed.stderr}"
+    return name, repo_dir, list_filename
+
+
+async def _remove_local_repo_package(
+    executor: BashLoginRemoteExecutor, name: str, repo_dir: str, list_filename: str
+) -> None:
+    """Undo `_install_from_a_repo_the_target_lacks`: purge the package, drop the repository
+    and its declaration, and discard the index apt cached for it.
+
+    Every step runs unconditionally (`;`, not `&&`) so a setup that failed halfway still
+    has the rest of itself removed.
+    """
+    await executor.run_command(
+        f"sudo DEBIAN_FRONTEND=noninteractive apt-get purge --assume-yes {shlex.quote(name)}; "
+        f"sudo rm --force --recursive {shlex.quote(repo_dir)} "
+        f"{shlex.quote(f'{_APT_SOURCES_DIR}/{list_filename}')}; "
+        f"sudo rm --force /var/lib/apt/lists/_opt_{repo_dir.rsplit('/', 1)[-1]}_*",
+        login_shell=False,
+        timeout=120.0,
+    )
 
 
 async def _create_synthetic_pin(executor: BashLoginRemoteExecutor) -> str:
@@ -1123,6 +1215,66 @@ class TestAptSyncEndToEnd:
                 await pc1_executor.run_command(f"sudo rm --force {cleanup_paths}", login_shell=False, timeout=15.0)
                 await pc2_executor.run_command(f"sudo rm --force {cleanup_paths}", login_shell=False, timeout=15.0)
 
+    async def test_a_package_the_targets_apt_cannot_locate_still_reaches_the_review(
+        self,
+        pc1_executor: BashLoginRemoteExecutor,
+        pc2_executor: BashLoginRemoteExecutor,
+        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
+        pc2_with_pcswitcher: BashLoginRemoteExecutor,
+        reset_pcswitcher_state: None,
+    ) -> None:
+        """ADR-021 §2.3 class 3 at VM level: the repository that supplies the package is
+        derived from the package's own approval and written during converge, so at plan time
+        the target's apt has never heard the name and refuses to rehearse any transaction
+        containing it.
+
+        The property no mocked-executor test could establish, and the one a green
+        integration run previously reported as passing: the whole run survives it. `plan()`
+        used to propagate the rehearsal's exit 100 out of the job before the review was
+        drawn, so the user saw nothing at all — not the package, not the rest of the diff.
+
+        `--dry-run`, so pc2's `/etc/apt` and package set are untouched; the subject is built
+        on pc1 and removed from pc1 in a `finally` regardless of outcome.
+        """
+        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
+
+        name = repo_dir = list_filename = ""
+        try:
+            name, repo_dir, list_filename = await _install_from_a_repo_the_target_lacks(pc1_executor)
+
+            # The precondition, asserted rather than assumed: without it the run below proves
+            # nothing, because a target that CAN resolve the name never had the defect.
+            refused = await pc2_executor.run_command(
+                f"apt-get --dry-run install --assume-yes --no-install-recommends {shlex.quote(name)}",
+                login_shell=False,
+                timeout=60.0,
+            )
+            assert not refused.success, (
+                f"pc2 resolved {name}, so this run cannot exercise the class-3 path.\n"
+                f"stdout: {refused.stdout}\nstderr: {refused.stderr}"
+            )
+
+            await _write_apt_sync_config(pc1_executor)
+
+            item_id = AptPackageItem(name=name, version="").item_id
+            sync_cmd = f"{_automation_env_assignment(item_id)} pc-switcher sync pc2 --yes --dry-run"
+            sync_result = await pc1_executor.run_command(sync_cmd, timeout=300.0, login_shell=True)
+            assert sync_result.success, (
+                f"pc-switcher sync --dry-run exited {sync_result.exit_code} for a package pc2's apt "
+                f"cannot locate yet.\nstdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
+            )
+
+            combined_output = sync_result.stdout + sync_result.stderr
+            assert name in combined_output, (
+                f"{name} reached no review line, so the run survived by dropping it.\n{combined_output}"
+            )
+            assert "Unable to locate package" not in combined_output, (
+                f"apt's plan-time refusal still surfaced as a run-level failure.\n{combined_output}"
+            )
+        finally:
+            if name:
+                await _remove_local_repo_package(pc1_executor, name, repo_dir, list_filename)
+
 
 class TestPackageSyncWholeRunContracts:
     """VM-level proof of the phase's whole-run contracts (plan 02-11): properties of an
@@ -1379,7 +1531,7 @@ class TestPackageSyncWholeRunContracts:
                 timeout=120.0,
             )
 
-    async def test_flatpak_installs_into_source_scope_after_remote(
+    async def test_flatpak_derives_the_remote_its_ref_needs_and_carries_its_key(
         self,
         pc1_executor: BashLoginRemoteExecutor,
         pc2_executor: BashLoginRemoteExecutor,
@@ -1390,6 +1542,11 @@ class TestPackageSyncWholeRunContracts:
         """flatpak convergence installs into the scope the source item carries and
         provisions the remote first (D-06, D-14): `flatpak install` refuses outright
         when its remote is not yet configured in that scope.
+
+        The remote is DERIVED (ADR-021 D-37): the review below decides the ref only, and
+        deliberately answers the remote's own id SKIP_ONCE. Under the old model that
+        declined the one thing that could deliver the ref and the install failed; the
+        remote must now be provisioned anyway, because the ref was approved.
 
         The subject is a real Flathub app, present on pc1 only (`vm-test-fixtures.sh`), and
         the real Flathub remote. Nothing on pc2 trusts Flathub once this test deletes the
@@ -1443,7 +1600,7 @@ class TestPackageSyncWholeRunContracts:
 
             await _write_package_sync_config(pc1_executor, flatpak_sync=True)
 
-            decisions = {remote_item_id: Decision.APPLY, ref_item_id: Decision.APPLY}
+            decisions = {remote_item_id: Decision.SKIP_ONCE, ref_item_id: Decision.APPLY}
             sync_cmd = f"{_automation_env_assignment_multi(decisions)} pc-switcher sync pc2 --yes --allow-first-sync"
             # Longer than the other syncs in this module: with pc2's runtime in place the
             # app install takes about a second, but if Flathub has moved the app onto a
@@ -1476,11 +1633,11 @@ class TestPackageSyncWholeRunContracts:
             # distinguish "remote added before ref" from any other order, so only the
             # run's own per-item converge log (PackageSyncJob._converge_one) proves it.
             combined_output = sync_result.stdout + sync_result.stderr
-            remote_marker = f"install {remote_name} remote ({scope}):"
-            ref_marker = f"install {application} ("
+            remote_marker = f"provision {scope} flatpak remote {remote_name}"
+            ref_marker = f"install {ref} ("
             remote_index = combined_output.find(remote_marker)
             ref_index = combined_output.find(ref_marker)
-            assert remote_index != -1, f"remote converge log line not found: {remote_marker!r}"
+            assert remote_index != -1, f"derived remote write log line not found: {remote_marker!r}"
             assert ref_index != -1, f"ref converge log line not found: {ref_marker!r}"
             assert remote_index < ref_index, "remote must be provisioned before the ref installs (D-14)"
         finally:
@@ -1488,6 +1645,76 @@ class TestPackageSyncWholeRunContracts:
             # with its real trust, the runtime kept, the app gone again. Leaving the app
             # installed would converge the pair and silently make a re-run of this test
             # prove nothing.
+            await _restore_flatpak_target_baseline(pc2_executor)
+
+    async def test_a_flatpak_remote_no_synced_ref_needs_does_not_travel(
+        self,
+        pc1_executor: BashLoginRemoteExecutor,
+        pc2_executor: BashLoginRemoteExecutor,
+        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
+        pc2_with_pcswitcher: BashLoginRemoteExecutor,
+        reset_pcswitcher_state: None,
+    ) -> None:
+        """The other half of derivation (ADR-021 D-37): a remote the source has and no
+        approved ref comes from stays where it is.
+
+        Without this, "the target ends up with the source's remotes" and "the target ends
+        up with the remotes its refs need" are indistinguishable — the baseline used to
+        carry exactly one remote, from which the subject app also came. `flathub-beta` is
+        on pc1 only and feeds nothing (`vm-test-fixtures.sh`, FIXTURES_VERSION 4).
+
+        There is no flatpak counterpart to apt's never-removed distribution sources here:
+        a fresh flatpak install configures zero remotes, so nothing is exempt from this.
+        """
+        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
+
+        application, version, scope, remote_name, _remote_url, ref = await _flatpak_subject(pc1_executor)
+        scope_flag = "--user" if scope == "user" else "--system"
+        ref_item_id = FlatpakItem(
+            application=application, version=version, origin=remote_name, scope=scope, ref=ref
+        ).item_id
+
+        source_remotes = await pc1_executor.run_command(
+            f"flatpak remotes {scope_flag} --columns=name", login_shell=False, timeout=15.0
+        )
+        assert _FIXTURE_UNUSED_FLATPAK_REMOTE in nonblank_lines(source_remotes.stdout), (
+            f"the fixture remote {_FIXTURE_UNUSED_FLATPAK_REMOTE} is not configured on pc1. It is created by "
+            f"tests/integration/scripts/internal/vm-test-fixtures.sh.\n{source_remotes.stdout}"
+        )
+        before = await pc2_executor.run_command(
+            f"flatpak remotes {scope_flag} --columns=name", login_shell=False, timeout=15.0
+        )
+        assert _FIXTURE_UNUSED_FLATPAK_REMOTE not in nonblank_lines(before.stdout), (
+            f"{_FIXTURE_UNUSED_FLATPAK_REMOTE} is already on pc2, so this run cannot show that it did not travel"
+        )
+
+        try:
+            await pc2_executor.run_command(
+                f"flatpak uninstall --assumeyes {scope_flag} {shlex.quote(ref)}", login_shell=False, timeout=60.0
+            )
+            await _write_package_sync_config(pc1_executor, flatpak_sync=True)
+
+            sync_cmd = (
+                f"{_automation_env_assignment_multi({ref_item_id: Decision.APPLY})} "
+                "pc-switcher sync pc2 --yes --allow-first-sync"
+            )
+            sync_result = await pc1_executor.run_command(sync_cmd, timeout=900.0, login_shell=True)
+            assert sync_result.success, (
+                f"pc-switcher sync exited {sync_result.exit_code}.\n"
+                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
+            )
+
+            after = await pc2_executor.run_command(
+                f"flatpak remotes {scope_flag} --columns=name", login_shell=False, timeout=15.0
+            )
+            remotes_after = nonblank_lines(after.stdout)
+            # The approved ref's own remote DID travel: without this the assertion below
+            # would pass on a run that provisioned nothing at all.
+            assert remote_name in remotes_after, f"{remote_name} not provisioned on pc2 after sync"
+            assert _FIXTURE_UNUSED_FLATPAK_REMOTE not in remotes_after, (
+                f"{_FIXTURE_UNUSED_FLATPAK_REMOTE} travelled to pc2 although no approved ref comes from it"
+            )
+        finally:
             await _restore_flatpak_target_baseline(pc2_executor)
 
     async def test_skip_always_is_inert_in_both_roles(

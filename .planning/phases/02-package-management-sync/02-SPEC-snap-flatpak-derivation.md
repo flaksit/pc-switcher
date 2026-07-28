@@ -29,7 +29,18 @@ Already correct, do not disturb:
 - The review line already names the origin: `FlatpakItem.label()` (`flatpak_sync.py:187-189`) renders `app (version, origin, scope)`. ADR-021's "each line names its origin" is satisfied with no change.
 - Keys already travel byte-for-byte and are staged, imported and discarded (#215, `flatpak_sync.py:1097-1150`). This is verified working and must not regress.
 
-The Firefox problem **does exist in the flatpak ecosystem** but flatpak refuses to guess. **Measured** in a container carrying `flathub` and `flathub-beta`: `flatpak search org.mozilla.firefox` returns the id on both remotes, and `flatpak install --assumeyes org.mozilla.firefox` with no remote named prints a numbered "Remotes found with refs similar to" menu and, when not answered, exits with `error: No remote chosen to resolve matches`. apt silently picks by priority; flatpak stops. So the *silent* wrong-vendor install that motivated ADR-021 D-34 is structurally unreachable for flatpak as long as pc-switcher keeps naming the remote — which it does.
+### 1.1.0 DISPROVEN: "flatpak refuses to guess, so no origin verification is needed"
+
+This document originally claimed that the silent wrong-vendor install motivating ADR-021 D-34 was *structurally unreachable* for flatpak, on the grounds that `flatpak install` refuses to choose between remotes. **That claim is false**, and everything derived from it — in particular §2.5's "flatpak chooses nothing, so there is no candidate to re-read" — is wrong. Replaced by the following, all **measured** in a stock `ubuntu:24.04` container on Flatpak 1.14.6 against the real Flathub and Flathub-beta:
+
+1. Flatpak refuses to guess **only when two or more registered remotes offer the ref**. With exactly one registered remote offering it, it resolves silently at exit 0, in both scopes. `--noninteractive`, bare and `--assumeyes` behave identically; `--assumeyes` does not auto-pick a remote.
+2. **The wrong-vendor install is live, and silent.** A target remote with the same NAME and a different URL installs the other vendor's binary: remote `flathub` pointed at `https://dl.flathub.org/beta-repo/`, then `flatpak install --assumeyes flathub app/org.mozilla.firefox/x86_64/stable` → **exit 0**, `Version: 148.0`, `Collection: org.flathub.Beta`, against real Flathub's `153.0` / `org.flathub.Stable`. Different commit, different binary, no warning. `flatpak list --columns=origin` reports `flathub` in BOTH cases, so a name-only origin check cannot see it.
+3. **The availability bug was live too.** `FlatpakItem` carried no branch, and Flathub-beta carries `stable` and `beta` for `org.mozilla.firefox`, so `flatpak install --assumeyes flathub-beta org.mozilla.firefox` exits 1 with `Multiple branches available for org.mozilla.firefox` — every run, for every app from a multi-branch remote. Naming the full ref (`org.mozilla.firefox/x86_64/beta`, exactly what `flatpak list --columns=ref` prints) fixes it: exit 0, correct branch.
+4. **A fully-qualified ref does not pin the origin.** It carries arch and branch, never a remote. Origin can only be pinned by remote name — and, per (2), a remote name is not enough on its own.
+5. Positional remote qualification works, and fails cleanly when that remote lacks the ref (`error: Nothing matches ... in remote ...`, exit 1). A remote name the target does not have fails loudly too (`error: No remote refs found for 'flathub'`, exit 1).
+6. `flatpak info` prints `Collection:` (`org.flathub.Stable` vs `org.flathub.Beta`) and `Commit:`, which DO distinguish the two repositories. Neither is in the columns `flatpak_sync` queries; the shipped check compares the remote's **URL** instead, because the URL is already captured on `FlatpakRemoteItem` and is the thing that actually differs.
+
+Shipped (commits on `gsd/phase-02-package-management-sync`): branch folded into `FlatpakItem.item_id` and the full ref used by both `flatpak install` and `flatpak uninstall`; `_origin_refusal` comparing the target's re-read remote URL and verification state; `_installed_origin_refusal` reading the landed origin back after the install; and the derivation itself.
 
 Three real gaps remain, and all three are in scope:
 
@@ -101,7 +112,7 @@ def _derive_remotes(
 | Mask add / remove | `FLATPAK_MASK` | three-way | yes |
 | Remote add / URL or trust change | — | **not reviewed at all** (derived) | no |
 | Remote removal | `FLATPAK_REMOTE` | **two** (delete / skip once) | **no** |
-| Remote change that re-points target-only refs | `flatpak:conflict:` | **two** (overwrite / skip once) | **no** |
+| Remote change that re-points target-only refs | `flatpak:conflict:` | **NOT SHIPPED** — the change is derived and silent; see §9 Q3 | n/a |
 
 Masks keep the three-way decision. A mask is the flatpak analogue of an apt hold — a standing user preference about updating, not mechanism serving a ref — so ADR-021's `apt.conf.d` reasoning applies: nothing about an approved ref implies whether a mask should travel, so the only honest source of the answer is the user.
 
@@ -114,6 +125,8 @@ Everything above is one review, before the job's first mutating command. ADR-021
 ### 2.3 Origin as ref identity, and the `ORIGIN_MISMATCH` diff
 
 Origin does **not** go into `item_id`. Putting it there would turn "same app, different remote" into an install plus a removal, and **measured**: `flatpak install <other remote> <ref>` on a ref already present exits with `error: <ref> is already installed from remote flathub` — so the install half could never run, and the removal half would propose deleting the app the user has. It is a divergence to report, not to converge.
+
+**BRANCH goes the other way, and does live in `item_id`** (shipped; supersedes §2.4's "field, not identity"). The argument above does not carry over: two branches of one application id coexist in one installation — that is what branches are for — so the install half of a branch change is never refused and the pair converges to exactly the source's set. Two further reasons, both decisive on their own: `(scope, application)` is not a unique key for a machine's own listing, so folding the captured items into a `{item_id: item}` map silently dropped one of two rows; and both `flatpak install` and `flatpak uninstall` need the full ref anyway (§1.1.0 item 3), so identity and command argument are one string rather than two facts that can drift.
 
 Instead, mirroring `_is_origin_mismatch`/`_diff_apt_packages` (`apt_sync.py:575,682`) exactly: when a ref is present on both machines in the same scope and the two origins differ, emit
 
@@ -134,9 +147,9 @@ and it takes precedence over the version-mismatch branch, exactly as apt's does.
 
 ### 2.4 Install by ref, not by app id
 
-`FlatpakItem` gains `ref: str` (the `flatpak list --columns=ref` value, e.g. `org.mozilla.firefox/x86_64/stable`), captured by widening `_FLATPAK_LIST_CMD` (`flatpak_sync.py:102`) to `application,version,origin,installation,ref` and widening `_parse_flatpak_list`'s field count from 4 to 5 (`flatpak_sync.py:374-397`). It is a **field, not identity** — `item_id` stays `flatpak:ref:<scope>:<application>`, because the arch and branch are not things two machines should be offered as separate items; a branch change is the same app moving, and the version already floats (D-04).
+`FlatpakItem` gains `ref: str` (the `flatpak list --columns=ref` value, e.g. `org.mozilla.firefox/x86_64/stable`), captured by widening `_FLATPAK_LIST_CMD` to `application,version,origin,installation,ref` and widening `_parse_flatpak_list`'s field count from 4 to 5. **It is identity, not merely a field** — see §2.3's branch paragraph for why this reverses the original ruling; `item_id` is `flatpak:ref:<scope>:<application>/<arch>/<branch>`.
 
-`_converge_ref`'s INSTALL command (`flatpak_sync.py:1052-1055`) interpolates `source_item.ref` in place of the bare application id. `flatpak install <remote> <full ref>` is unambiguous by construction. `_converge_ref`'s REMOVE keeps the bare application id: the removal is driven off the target's own listing and `flatpak uninstall <app>` is unambiguous within one installation (**inferred**, from measurement H showing one origin per ref per installation).
+`_converge_ref`'s INSTALL command (`flatpak_sync.py:1052-1055`) interpolates `source_item.ref` in place of the bare application id. `flatpak install <remote> <full ref>` is unambiguous by construction. `_converge_ref`'s REMOVE uses the full ref too: the original "unambiguous within one installation" reasoning was **inferred and is wrong** — `flatpak uninstall <app>` is ambiguous exactly when two branches of that id are installed, which is the same condition §1.1.0 item 3 measures on the install side. Measured: `flatpak uninstall --assumeyes --user <id>/<arch>/<branch>` parses the full ref (`error: No installed refs found for ... with arch ... with branch ...` for an absent one).
 
 ### 2.5 Ordering, failure attribution, and the enforcement point
 
@@ -144,7 +157,11 @@ and it takes precedence over the version-mismatch branch, exactly as apt's does.
 
 Failure attribution follows D-39. A derived remote-add that fails has no item of its own, so it fails **every approved ref whose `_ref_derived_remote_ids` names it**, quoting the remote, the scope and flatpak's own stderr. A conflict answered "skip once" does the same to the refs that depended on that remote's new URL. `_remote_ready_on_target` (`flatpak_sync.py:1162-1170`) survives as the last-line guard but its message changes: it no longer says "not among this run's successfully-added remotes", it says the remote this ref needs could not be provisioned.
 
-Does the apt "verify the origin against the target's real state before the first install" guarantee (D-35) have a flatpak analogue, and is it needed? **A weak one, and yes — but a different one.** apt needs a post-refresh `apt-cache policy` because apt *chooses* a candidate and the pin may lose. flatpak chooses nothing: the install names the remote, and either that remote serves the ref or the command fails. So there is no candidate to re-read. What is worth checking is that the derived write actually landed as intended, which is one batched read per scope:
+Does the apt "verify the origin against the target's real state before the first install" guarantee (D-35) have a flatpak analogue, and is it needed? **A strong one, and yes** — the "flatpak chooses nothing" reasoning this paragraph originally rested on is disproven (§1.1.0 item 2): naming the remote pins a NAME, and a same-named remote pointing elsewhere serves another vendor's build at exit 0.
+
+As shipped, the check is per ref rather than the batched per-scope read sketched below, because it has to answer a question about one item: `_origin_refusal` re-reads the target's remotes (cached per run, discarded on every remote write) and requires the ref's origin remote to carry the source remote's URL and verification setting, and `_installed_origin_refusal` re-reads `flatpak list` after the install and resolves the landed origin to a URL again. `flatpak info --show-origin` is deliberately not used for the read-back: it exits 1 both for a ref that is not installed and for an installation that cannot be opened, and ADR-022 D-03 forbids an ambiguous discriminator; the listing answers "not installed" as an absent row at exit 0.
+
+That also subsumes the sketch below, whose case **D** it covers:
 
 ```python
 async def _verify_derived_remotes(self) -> dict[str, str]:
@@ -406,7 +423,6 @@ No `pytest.skip`. A missing fixture subject is an assertion failure naming `vm-t
 ## 10. Residual risks and unverified reasoning
 
 - The **runtime hole** (§2.1) is inferred, not constructed. Every ref on this machine and every ref pulled in the container came from one remote, so a cross-remote runtime dependency was never observed. If Q2 resolves to always-sync, the hole is moot; if it resolves to derive, S3's completion pass is insurance against a case nobody has seen.
-- `flatpak uninstall <application id>` is assumed unambiguous within one installation. Supported by measurement **H** (one origin per ref per installation, enforced by flatpak) but not directly tested against an installation holding two branches of one id.
 - The snap **brand store / remodel** path (§1.2) is reasoned from the assertion chain and `snap remodel`'s existence, not exercised. The check in §3 only compares what `snap known model` and `snap get system proxy.store` report; if a third mechanism can make two machines draw from different stores, the check will not see it.
 - `flatpak remotes --columns=filter` reporting a **local path** rather than content (§2.8) was measured on flatpak 1.14.6 only. A future flatpak that inlines the filter would make S8's warning wrong rather than merely incomplete.
 - The two-remote integration fixture (§5.2) adds a network dependency on `dl.flathub.org/beta-repo/` to baseline provisioning. Flathub beta's availability is not something this project controls, and `assert_app_runtime_unchanged`'s tolerance pattern (`vm-test-fixtures.sh:151-177`) should be extended to it.

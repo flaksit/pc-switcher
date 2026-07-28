@@ -24,7 +24,7 @@ All four ship **disabled**: enabling any of them lets pc-switcher change install
 
 - **`apt_sync`** — the manually-installed apt package set (`apt-mark showmanual`, not the full dpkg selection — apt resolves dependencies on the target itself), minus the packages you installed from a hand-downloaded `.deb` (see below), plus the repository configuration that governs where packages come from: sources under `/etc/apt/sources.list.d`, pins (`/etc/apt/preferences.d`) and apt config (`/etc/apt/apt.conf.d`). Signing keys travel too, but you are never asked about them — see [Signing keys](#signing-keys).
 - **`snap_sync`** — installed snaps, converged to the source's exact revision and tracking channel.
-- **`flatpak_sync`** — installed flatpak refs and their remotes, per user/system installation scope.
+- **`flatpak_sync`** — installed flatpak refs, per user/system installation scope, plus the remotes those refs are derived to need.
 - **`manual_installs_sync`** — everything no package manager can reproduce: apt packages installed from no configured repository (a `.deb` you installed by hand), plus unowned files under `/usr/local` and `/opt`. It also owns the [install-snippet registry](#install-snippets).
 
 ### Hand-installed `.deb` packages belong to one job only
@@ -170,11 +170,19 @@ A flatpak app is identified by its full `<application>/<arch>/<branch>` referenc
 
 ## Flatpak remotes
 
-A flatpak remote is replicated as its own review item, per installation scope: `flathub` in the user installation and `flathub` in the system installation are two separate items, because flatpak configures them separately. Remotes always converge before the refs that come from them — `flatpak install` refuses outright when its remote is not configured in that scope.
+A flatpak remote is **derived** from the apps approved from it, exactly as an apt repository is. You never tick a remote: approving an app is what makes its remote travel, and declining the app is the only way to decline the remote. That closes the pairing the old model made expressible — an app approved with the only thing that could deliver it declined, and worse, an app approved from a same-named remote whose URL change was declined, meaning from a different vendor.
 
-A remote travels with its **trust**, not only its name and URL. pc-switcher captures whether the source verifies the remote's signatures and, when it does, the remote's own signing key, and re-adds the remote on the target with that key imported (`flatpak remote-add --gpg-import`). The key is copied byte-for-byte from the source machine and never fetched from a vendor — the same rule apt signing keys follow. Without it a replicated remote would be configured but unusable: every install from it fails with `Can't check signature: public key not found`. A remote the source itself does not verify is replicated unverified, stated as such in the review; a verified remote is never turned into an unverified one.
+A remote the source has that feeds no app approved in this run does not travel at all. There is no flatpak equivalent of the distribution's own repositories: a fresh flatpak install configures **zero** remotes and a machine with none is a perfectly ordinary machine, so even Flathub travels only as a consequence of something needing it.
 
-A remote that already exists on both machines but whose URL, verification setting or signing key differs is a **change** item that converges the target in place, keeping the refs that name it as their origin intact. A target that already trusted a different key for that remote ends up trusting both — flatpak merges imported keys rather than replacing them — so the difference is reported again on the next sync rather than the target's own trust being deleted.
+Derivation includes the **runtime** an approved app is built against. The app's install pulls its runtime too, and if the source holds that runtime from a different remote, the app's own remote alone would leave the install unable to resolve it — so that remote travels as well.
+
+Scope is still identity: `flathub` in the user installation and `flathub` in the system installation are provisioned separately, because flatpak configures them separately. A user-scope app derives only the user-scope remote.
+
+A remote travels with its **trust**, not only its name and URL. pc-switcher captures whether the source verifies the remote's signatures and, when it does, the remote's own signing key, and provisions the remote on the target with that key imported (`flatpak remote-add --gpg-import`). The key is copied byte-for-byte from the source machine and never fetched from a vendor — the same rule apt signing keys follow. Without it a provisioned remote would be configured but unusable: every install from it fails with `Can't check signature: public key not found`. A remote the source itself does not verify is provisioned unverified; a verified remote is never turned into an unverified one.
+
+A remote that already exists on both machines with a differing URL, verification setting or signing key is repointed in place, without a review line, keeping the apps that name it as their origin intact. A target that already trusted a different key for that remote ends up trusting both — flatpak merges imported keys rather than replacing them.
+
+A remote that cannot be provisioned has no review item of its own to fail, so the failure lands on every app that needed it, naming the remote and quoting flatpak's own error.
 
 ## Holds and masks
 
@@ -189,6 +197,8 @@ The review verbs match the mechanism: apt and snap holds read *hold* / *unhold*,
 ## Deletions
 
 Removals propagate for the three package managers. A package removed from the source's `apt-mark showmanual` set, a snap uninstalled on the source, or a flatpak ref or remote removed on the source becomes a removal review item on the target — unticked by default, so you approve deletions deliberately.
+
+Removal is the one direction in which a flatpak remote is still a review line, and it takes **two** answers rather than three: delete it, or leave it for now. There is no "never offer again" — a permanent machine-local mark on a remote whose whole purpose is to feed apps would silently and permanently change where those apps come from, and the remedy for two machines whose remotes have drifted is consolidating them. Nothing about the answer is recorded either way.
 
 A flatpak remote offered for removal names, in the review item's detail, the refs installed on the target that still have it as their origin in that same scope. The removal is still offered — deleting a remote whose refs are going in the same run is normal cleanup — but you see what it would orphan before approving it. Deleting a remote also drops its signing key, since flatpak stores that key with the remote.
 

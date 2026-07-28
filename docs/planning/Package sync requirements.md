@@ -85,7 +85,7 @@ Installed snaps, converged to the source's exact revision and tracking channel, 
 
 ### `flatpak_sync`
 
-Installed flatpak applications and the remotes they come from, per installation scope. User-scope `flathub` and system-scope `flathub` are two separate things, because flatpak configures them separately. Masks are included.
+Installed flatpak applications, per installation scope, plus the remotes they are derived to need. User-scope `flathub` and system-scope `flathub` are two separate things, because flatpak configures them separately. Masks are included.
 
 ### `manual_installs_sync`
 
@@ -105,7 +105,7 @@ Application *data* is never any of these jobs' business. `~/.var/app`, `~/snap/<
 
 Three shapes of question exist. Which one an item gets is a property of the item, not a setting.
 
-The ordinary three-way decision, for packages, holds, masks, flatpak remotes and apt config: tick to apply. Whatever you leave unticked is offered once more as "never offer again on this machine"; ticking it there is the permanent machine-specific mark, and ticking nothing means skip this run and ask again next time. If you ticked everything, the second list is not shown.
+The ordinary three-way decision, for packages, holds, masks and apt config: tick to apply. Whatever you leave unticked is offered once more as "never offer again on this machine"; ticking it there is the permanent machine-specific mark, and ticking nothing means skip this run and ask again next time. If you ticked everything, the second list is not shown.
 
 A two-way decision — act, or leave it for now — for deleting an apt repository file, deleting an apt pin file, and overwriting a repository file the two machines disagree about. There is no permanent mark for these and nothing is recorded. A permanent machine-local mark on a file whose whole job is to feed packages would silently and permanently change where those packages come from; if the two machines' files genuinely differ on purpose, the remedy is to consolidate them yourself.
 
@@ -269,7 +269,7 @@ Revision convergence is what makes snap application data syncable at all. With b
 
 ## flatpak: every case
 
-Flatpak has not had the origin treatment either. A remote is reviewed as an item in every direction, which is the opposite of how apt now treats a repository. The asymmetry is real and is flagged in the non-goals.
+Flatpak follows the same rule as apt: a remote is derived from the apps approved from it, never ticked.
 
 Scope is identity. The same application in the user installation on one machine and the system installation on the other is two items: one install and one removal, never a change. pc-switcher reports the split as found and does not normalise it.
 
@@ -277,13 +277,19 @@ So is the branch. An app is identified, installed and uninstalled by its full `<
 
 An app on the source only: installed, after its remote. On the target only: offered for removal, unticked. Same app, same branch, same scope, different version: reported only. Identical: nothing.
 
-A remote missing on the target is its own review item, ticked by default, and every remote converges before any app that depends on it — `flatpak install` refuses outright when its remote is not configured in that scope.
+A remote is not a review item in the add or the change direction. It travels because an app approved this run comes from it, and declining the app is the only way to decline the remote. Every derived remote is provisioned before the first app installs — `flatpak install` refuses outright when its remote is not configured in that scope.
+
+Derivation reaches the runtime too. An approved app's install pulls the runtime it is built against, and if the source holds that runtime from another remote, that remote travels as well; the app's own origin alone would leave the install unable to resolve it.
+
+A remote the source has that feeds no app approved this run does not travel. There is no exception for a "distribution" remote the way apt has one for the Ubuntu archive: a fresh flatpak install configures zero remotes and a machine with none is a perfectly ordinary machine, so even Flathub travels only as a consequence of something needing it.
+
+A remote that cannot be provisioned has no line of its own to fail. The failure lands on every app that needed it, naming the remote and quoting flatpak's own error.
 
 A remote travels with its trust, not only its name and URL. pc-switcher captures whether the source verifies the remote's signatures and, when it does, the remote's own signing key, and re-adds it on the target with that key imported. The key is copied byte-for-byte and never fetched from a vendor. Without it a replicated remote is configured but unusable and every install from it fails with a missing-public-key error. A remote the source itself does not verify is replicated unverified and says so in the review; a verified remote is never turned into an unverified one. A verified remote with no key of its own — trusted through a machine-level anchor — is added plainly.
 
-A remote present on both machines whose URL, verification setting or key differs is a change item that converges the target in place, keeping the apps that name it as their origin intact. A target that already trusted a different key ends up trusting both, because flatpak merges imported keys rather than replacing them — so the difference is reported again next run rather than the target's own trust being deleted.
+A remote present on both machines whose URL, verification setting or key differs is repointed in place, silently and without a review line, keeping the apps that name it as their origin intact. A target that already trusted a different key ends up trusting both, because flatpak merges imported keys rather than replacing them.
 
-A remote present only on the target is offered for removal, unticked, and its line names the apps on the target that still have it as their origin in that scope. Deleting a remote also drops its key.
+A remote present only on the target is offered for removal, unticked, and its line names the apps on the target that still have it as their origin in that scope. Deleting a remote also drops its key. That screen takes two answers, not three: delete, or leave it for now. A permanent machine-specific mark on a remote whose whole purpose is to feed apps would silently and permanently change where those apps come from, and the remedy is consolidating the two machines' configurations. Nothing is recorded either way.
 
 An app is installed from the source's remote or not at all, and "the source's remote" means the same URL, not merely the same name. Before each install pc-switcher re-reads the target's own remote list and requires the app's origin remote to carry the source remote's URL and verification setting; after the install it reads the app's landed origin back and resolves that to a URL again. Either check failing is that app's own failure, naming both URLs, and nothing is installed on the strength of a matching name.
 
@@ -367,9 +373,9 @@ A package you installed by hand on the source but which arrived on the target as
 
 Machine-specific marks are not consulted when protecting against collateral. A package you marked skip-always can still be removed as collateral of an approved install.
 
-snap and flatpak have no origin model. apt now replicates provenance; snap has one store and flatpak reviews remotes as ordinary items in all three directions. Two machines whose `flathub` points at different URLs converge to the source's URL as a change item, which is the old model, not the apt one. Whether flatpak remotes should become derived-from-approved-apps is undecided.
+snap has no origin model, and does not need one: one name resolves to one publisher, enforced store-side. flatpak now follows apt's — apps replicate as (ref, origin) and remotes are derived — but with one gap apt has closed and flatpak has not: repointing a remote the target's own apps depend on happens silently, where apt asks before overwriting a repository file that feeds machine-specific packages.
 
-Deleting a flatpak remote or an apt config file can be marked machine-specific; deleting an apt repository or pin cannot. The two are answered differently on purpose, but the inconsistency is visible.
+Deleting an apt config file can be marked machine-specific; deleting an apt repository, an apt pin or a flatpak remote cannot.
 
 Sideloaded snaps cannot be reproduced. Nothing carries the `.snap` bytes between machines.
 
@@ -397,7 +403,7 @@ A non-interactive dry run reports SKIPPED for every package job with a non-empty
 
 Genuinely undecided. An answer invented here would be worse than the question.
 
-Should `flatpak_sync` adopt the apt model — remotes derived from approved apps rather than reviewed as items? Today it does not, and the asymmetry is not the result of a decision, only of ordering. The same question applies, more weakly, to whether snap should model where a snap came from at all.
+Should repointing a flatpak remote that the target's own apps depend on ask first, the way apt's repository conflict does? Today it is silent. apt's trigger is deliberately narrow — the file feeds packages you marked machine-specific — and the flatpak equivalent has not been decided.
 
 What should a non-interactive dry run report? Raising the skip on the non-interactive path is defensible (nothing was decided), and so is exempting dry runs (a rehearsal that completes did what a rehearsal does). The code says SKIPPED; the design note says SUCCESS.
 
