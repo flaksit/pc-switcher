@@ -372,6 +372,45 @@ class TestNoCandidateDetection:
         assert "could not read the package lists" in str(excinfo.value)
 
     @pytest.mark.asyncio
+    async def test_a_policy_read_that_printed_no_block_at_all_fails_the_job(self) -> None:
+        """The `blocks` half of ADR-022 D-04, which `apt_sync._source_policy` puts on the
+        BYTE-IDENTICAL command — same names, same host, same probe. apt prints one block per
+        name it knows and every name here came from this machine's own `apt-mark showmanual`,
+        so zero blocks at exit 0 is apt not answering. The two jobs disagreeing about that
+        silence is the divergence this scan's guard exists to prevent: `apt_sync` would drop
+        the same bare-`.deb` packages from its manifest while this job reports none.
+        """
+        context, _source, _target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "code\ngh\n", ""),
+                "apt-cache policy": CommandResult(0, "", ""),
+            }
+        )
+
+        with pytest.raises(ProbeFailed) as excinfo:
+            await ManualInstallsSyncJob(context).plan()
+
+        assert "apt-cache policy code gh" in str(excinfo.value)
+        assert "printed no package block" in str(excinfo.value)
+
+    @pytest.mark.asyncio
+    async def test_a_policy_read_over_only_bare_deb_packages_still_answers(self) -> None:
+        """The limit of the rule above, and the reason the count is of BLOCKS rather than of
+        packages with an origin: a machine whose whole manual set was hand-installed from
+        `.deb` files gets one origin-less block per name, which is apt answering.
+        """
+        context, _source, _target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "code\n", ""),
+                "apt-cache policy": CommandResult(0, _POLICY_HAND_DEB, ""),
+            }
+        )
+
+        plan = await ManualInstallsSyncJob(context).plan()
+
+        assert self._unreproducible_ids(plan) == {"unreproducible:apt-no-candidate:code"}
+
+    @pytest.mark.asyncio
     async def test_a_manual_set_read_that_did_not_answer_fails_the_job(self) -> None:
         """The other end of the same detection: `apt-mark showmanual` exits non-zero, so the
         run knows nothing about the source's packages. The policy probe below it is left

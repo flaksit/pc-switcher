@@ -48,7 +48,7 @@ from rich.markup import escape
 
 from pcswitcher.config_sync import CONFIG_REMOTE_DIR
 from pcswitcher.jobs.context import JobContext
-from pcswitcher.jobs.packages.apt_policy import packages_installed_from_no_repository
+from pcswitcher.jobs.packages.apt_policy import installed_origins_by_package, packages_installed_from_no_repository
 from pcswitcher.jobs.packages.items import (
     DiffAction,
     DiffClass,
@@ -376,12 +376,16 @@ class ManualInstallsSyncJob(PackageSyncJob):
         `Candidate:` line cannot answer this, because dpkg's status entry makes apt report
         a hand-installed package's installed version as its candidate.
 
-        Guarded on the exit code (ADR-022). Its silence indicts nothing on its own — an
+        Guarded on the exit code AND on the block count (ADR-022 D-04), which is the guard
+        `apt_sync._source_policy` puts on the byte-identical command: same names, same host,
+        same probe, so the same strictness. Its silence indicts nothing on its own — an
         unanswered probe reports no unreproducible packages, which proposes nothing — but
         it does not stay harmless in a whole run: `apt_sync.capture_source_items` DROPS the
         same bare-`.deb` packages from its own manifest off its own copy of this probe, so
         one probe answering and the other not makes a package vanish from the run with
-        nothing said about it anywhere.
+        nothing said about it anywhere. Every name here came from this machine's own
+        `apt-mark showmanual`, so apt owes a block for each and no block at all is apt not
+        answering rather than a machine with unusual packages.
         """
         if not manual_names:
             return []
@@ -389,7 +393,15 @@ class ManualInstallsSyncJob(PackageSyncJob):
         quoted = " ".join(shlex.quote(name) for name in manual_names)
         command = f"apt-cache policy {quoted}"
         result = await self.source.run_command(command)
-        require_answer(command, result, Host.SOURCE)
+        # A key per block apt printed, whatever it said inside it — so this counts blocks and
+        # not packages, and a machine whose whole manual set is bare `.deb`s still answers.
+        require_answer(
+            command,
+            result,
+            Host.SOURCE,
+            answers=len(installed_origins_by_package(result.stdout)),
+            answer_noun="package block",
+        )
         no_repository = packages_installed_from_no_repository(result.stdout, manual_names)
         return [
             UnreproducibleItem(
