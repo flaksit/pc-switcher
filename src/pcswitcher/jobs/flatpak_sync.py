@@ -23,11 +23,14 @@ go opposite ways.
 the scope being installed into (D-14), so remotes are captured and diffed as their
 own item class (`FLATPAK_REMOTE`) and this job's own ordering stage (mirroring
 `apt_sync`'s key-before-source sort) places every remote diff ahead of every ref diff
-before the plan's `diffs` tuple ever reaches `apply()`'s per-diff loop. Before
-converging a ref, its origin remote is checked against what already exists on the
-target in that scope OR what this SAME run has already successfully added — a ref
-whose remote is missing from both is skipped with a per-item failure naming the
-remote, rather than issuing an install flatpak will reject (T-02-24). The removal
+before the plan's `diffs` tuple ever reaches `apply()`'s per-diff loop. Before converging
+a ref, its origin remote is re-read off the TARGET and required to carry the source
+remote's URL and verification setting — not merely to exist under the same name
+(`_origin_refusal`), because a same-named remote pointing elsewhere serves a different
+vendor's build of the same ref at exit 0 with no warning; and after the install the ref's
+own reported origin is read back and resolved to a URL again (`_installed_origin_refusal`),
+so the guarantee is checked rather than inferred. Either refusal is a per-item failure
+naming both URLs, never an install issued in hope (T-02-24). The removal
 direction is disclosure rather than refusal (#214): a remote offered for deletion
 carries, in its review `detail`, the target refs that still name it as their origin in
 that same scope — deleting a remote whose refs are being removed too is legitimate
@@ -831,12 +834,19 @@ class FlatpakSyncJob(PackageSyncJob):
         self._source_refs_by_id: dict[str, FlatpakItem] = {}
         self._source_remotes_by_id: dict[str, FlatpakRemoteItem] = {}
         self._target_remotes_by_id: dict[str, FlatpakRemoteItem] = {}
-        # (scope, name) pairs for remotes THIS RUN has already successfully added —
-        # consulted by a ref install's remote-readiness guard alongside
-        # `_target_remotes_by_id`, since a remote approved in the same run is not yet
-        # present in the plan-time target query (D-14's whole point: it converges
-        # first, in the SAME run, not in a prior one).
-        self._converged_remote_scope_names: set[tuple[str, str]] = set()
+        # The source's remotes BEFORE `filter_inert` — the only thing a ref's origin may be
+        # checked against. `_source_remotes_by_id` has had the source's own decision file
+        # applied to it, and a remote recorded skip-always there would drop out of it while
+        # its refs still install; the origin guarantee must not be switchable off by a
+        # machine-local preference.
+        self._source_remotes_all_by_id: dict[str, FlatpakRemoteItem] = {}
+        # The target's remotes as they ACTUALLY are once this run's remote writes have run:
+        # re-read lazily at the first ref install, discarded whenever a remote write lands.
+        # Neither the plan-time query nor "this run added it" is admissible evidence —
+        # `flatpak remote-add --if-not-exists <name> <different url>` exits 0 and leaves the
+        # old URL in place (measured), so a run that trusted its own exit code would install
+        # from whatever URL the target's same-named remote already had.
+        self._target_remotes_now_by_id: dict[str, FlatpakRemoteItem] | None = None
         # Resolved once by `_target_home_dir()`: where a remote's signing key is staged
         # before `flatpak remote-add --gpg-import` reads it (#215).
         self._target_home: str | None = None
@@ -955,14 +965,17 @@ class FlatpakSyncJob(PackageSyncJob):
         source_refs = await filter_inert(await self.capture_source_items(), source_decisions)
         installed_target_refs = await self.query_target_items()
         target_refs = await filter_inert(installed_target_refs, target_decisions)
-        source_remotes = await filter_inert(await self._capture_all_source_remotes(), source_decisions)
+        captured_source_remotes = await self._capture_all_source_remotes()
+        source_remotes = await filter_inert(captured_source_remotes, source_decisions)
         target_remotes = await filter_inert(await self._query_all_target_remotes(), target_decisions)
         source_masks = await filter_inert(await self._capture_all_source_masks(), source_decisions)
         target_masks = await filter_inert(await self._query_all_target_masks(), target_decisions)
 
         self._source_refs_by_id = {item.item_id: item for item in source_refs}
         self._source_remotes_by_id = {item.item_id: item for item in source_remotes}
+        self._source_remotes_all_by_id = {item.item_id: item for item in captured_source_remotes}
         self._target_remotes_by_id = {item.item_id: item for item in target_remotes}
+        self._target_remotes_now_by_id = None
 
         # Target refs feed the remote diff too: a remote offered for REMOVE names the
         # refs whose origin it is (#214), read off the ref query already in hand rather
@@ -1039,22 +1052,18 @@ class FlatpakSyncJob(PackageSyncJob):
                             f"{_trust_mutation_phrase(source_item)}"
                         ),
                     )
-                    if result.success:
-                        self._converged_remote_scope_names.add((scope, name))
+                    self._target_remotes_now_by_id = None
                     return result
 
                 # `remote-modify` edits the existing entry in place (the remote is
                 # present on both sides by construction of a CHANGE diff), preserving its
                 # other config and avoiding the ref-origin disruption a delete+re-add
-                # would cause. No need to record it in `_converged_remote_scope_names`:
-                # the remote already exists on the target, so ref-readiness
-                # (`_remote_ready_on_target`) is already satisfied via the plan-time
-                # target query.
+                # would cause.
                 cmd = (
                     f"{sudo}flatpak remote-modify {scope_flag} --url={shlex.quote(source_item.url)}"
                     f"{trust} {shlex.quote(name)}"
                 )
-                return await self.target.run_command(
+                result = await self.target.run_command(
                     cmd,
                     login_shell=False,
                     mutates=(
@@ -1062,6 +1071,8 @@ class FlatpakSyncJob(PackageSyncJob):
                         f"{_trust_mutation_phrase(source_item)}"
                     ),
                 )
+                self._target_remotes_now_by_id = None
+                return result
             finally:
                 await self._discard_staged_key(staged_key)
 
@@ -1106,19 +1117,22 @@ class FlatpakSyncJob(PackageSyncJob):
                     f"no captured source ref for {diff.label} (item_id={diff.item_id!r}); "
                     "was plan() run before converge()?"
                 )
-            if not self._remote_ready_on_target(scope, source_item.origin):
-                # T-02-24: refuse rather than issue an install flatpak will reject.
-                raise ConvergeItemFailed(
-                    f"install of {ref} refused: origin remote {source_item.origin!r} ({scope}) is "
-                    "neither already configured on the target nor among this run's successfully-added "
-                    "remotes (D-14)"
-                )
+            refusal = await self._origin_refusal(scope, source_item.origin)
+            if refusal is not None:
+                # T-02-24: refuse rather than issue an install that would land the wrong
+                # vendor's bytes, or one flatpak will reject outright.
+                raise ConvergeItemFailed(f"install of {ref} refused: {refusal}")
             cmd = (
                 f"{sudo}flatpak install --assumeyes {scope_flag} {shlex.quote(source_item.origin)} {shlex.quote(ref)}"
             )
-            return await self.target.run_command(
+            result = await self.target.run_command(
                 cmd, login_shell=False, mutates=f"install {scope} flatpak {ref} from {source_item.origin}"
             )
+            if result.success:
+                landed = await self._installed_origin_refusal(scope, ref, source_item.origin)
+                if landed is not None:
+                    raise ConvergeItemFailed(f"install of {ref} did not replicate its origin: {landed}")
+            return result
 
         raise ConvergeItemFailed(
             f"FlatpakSyncJob.converge: unsupported action {diff.action.value!r} for a flatpak ref ({diff.label}) "
@@ -1222,15 +1236,96 @@ class FlatpakSyncJob(PackageSyncJob):
             self._target_home = result.stdout.strip()
         return self._target_home
 
-    def _remote_ready_on_target(self, scope: str, origin: str) -> bool:
-        """Whether `origin` is usable as a ref's remote in `scope`: already present on
-        the target per the plan-time query, or successfully added earlier in THIS run
-        (T-02-24's guard — see `converge()`'s module docstring).
+    async def _target_remotes_now(self) -> dict[str, FlatpakRemoteItem]:
+        """The target's remotes as the TARGET reports them right now, cached until the next
+        remote write (`__init__`).
+
+        Read here rather than reused from `plan()` because every other candidate is
+        inadmissible: the plan-time query predates this run's writes, and "this run added
+        it" is not evidence at all — `flatpak remote-add --if-not-exists <name> <other url>`
+        exits 0 and leaves the existing URL untouched (measured), so a successful exit code
+        says nothing about what the name now points at.
+        """
+        if self._target_remotes_now_by_id is None:
+            self._target_remotes_now_by_id = {item.item_id: item for item in await self._query_all_target_remotes()}
+        return self._target_remotes_now_by_id
+
+    async def _origin_refusal(self, scope: str, origin: str) -> str | None:
+        """`None` if a ref may be installed from `origin` in `scope`, otherwise why not.
+
+        Name equality is NOT the test, and that is the whole point of this guard. Measured
+        against real Flathub: a target remote called `flathub` pointing at
+        `https://dl.flathub.org/beta-repo/` serves a DIFFERENT vendor's build of the same
+        ref — different commit, different collection id, different binary — and
+        `flatpak install --assumeyes flathub <ref>` installs it at exit 0 with no warning,
+        while `flatpak list --columns=origin` reports `flathub` on both machines. Only the
+        URL separates the two, so the URL is what is compared (ADR-021 D-34's rule that a
+        package replicates as name-and-origin, applied to a ref).
+
+        GPG verification is compared too: a ref the source takes from a verified remote,
+        landing on the target from an unverified one of the same name, has not replicated
+        its provenance either. The per-remote KEY DIGEST deliberately is not — ostree's
+        import merges rather than replaces, so a target that already trusted another key
+        for this remote keeps both digests unequal forever, and refusing on that would
+        refuse every install from it for good.
         """
         remote_id = f"flatpak:remote:{scope}:{origin}"
-        if remote_id in self._target_remotes_by_id:
-            return True
-        return (scope, origin) in self._converged_remote_scope_names
+        source_remote = self._source_remotes_all_by_id.get(remote_id)
+        if source_remote is None:
+            return (
+                f"the source has no {scope}-scope remote named {origin!r}, so the ref's own origin "
+                "cannot be replicated (ADR-021 D-34)"
+            )
+        target_remote = (await self._target_remotes_now()).get(remote_id)
+        if target_remote is None:
+            return f"origin remote {origin!r} ({scope}) is not configured on the target (D-14)"
+        if target_remote.url != source_remote.url:
+            return (
+                f"the target's {scope}-scope remote {origin!r} points at {target_remote.url}, "
+                f"but the source takes this ref from {source_remote.url} — same name, different "
+                "repository, so installing would replicate the name and invert the provenance"
+            )
+        if target_remote.gpg_verify != source_remote.gpg_verify:
+            return (
+                f"the target's {scope}-scope remote {origin!r} has gpg verification "
+                f"{_verification_word(target_remote)} while the source's has it "
+                f"{_verification_word(source_remote)}"
+            )
+        return None
+
+    async def _installed_origin_refusal(self, scope: str, ref: str, expected_origin: str) -> str | None:
+        """`None` if `ref` really did land in `scope` from `expected_origin`'s repository,
+        otherwise why not — read back off the target AFTER the install (ADR-021 D-35's
+        "the guarantee is checked, not inferred", applied to flatpak).
+
+        The read is `_FLATPAK_LIST_CMD`, not `flatpak info --show-origin`, because ADR-022
+        D-03 forbids an ambiguous discriminator and `flatpak info` exits 1 both for a ref
+        that is not installed (data — this function's own finding) and for an installation
+        that cannot be opened (a probe that did not answer). The listing separates them: a
+        ref that is not installed is simply an absent row at exit 0, so a non-zero exit
+        means only that the tool failed and `require_answer` fails the job once.
+
+        What is compared is the URL behind the reported origin, never the origin's name:
+        the wrong-vendor case is precisely two same-named remotes, and a name-only check
+        passes it.
+        """
+        result = await self.target.run_command(_FLATPAK_LIST_CMD, login_shell=False)
+        require_answer(_FLATPAK_LIST_CMD, result, Host.TARGET)
+        landed = next(
+            (item for item in _parse_flatpak_list(result.stdout) if item.scope == scope and item.ref == ref), None
+        )
+        if landed is None:
+            return f"flatpak exited 0 but the target does not list {ref} in the {scope} installation"
+        source_url = self._source_remotes_all_by_id[f"flatpak:remote:{scope}:{expected_origin}"].url
+        target_remotes = await self._target_remotes_now()
+        landed_remote = target_remotes.get(f"flatpak:remote:{scope}:{landed.origin}")
+        if landed_remote is None:
+            return f"{ref} reports origin {landed.origin!r}, which the target does not configure in {scope} scope"
+        if landed_remote.url != source_url:
+            return (
+                f"{ref} came from {landed.origin!r} at {landed_remote.url}, but the source takes it from {source_url}"
+            )
+        return None
 
     async def _system_scope_in_play(self) -> bool:
         """Whether ANY system-scope ref, remote or mask exists on either machine — the

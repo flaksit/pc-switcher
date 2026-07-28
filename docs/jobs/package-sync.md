@@ -164,6 +164,8 @@ To keep the revision from changing mid-sync, snapd's **automatic** refresh is br
 
 ## Flatpak refs
 
+A flatpak app comes from the source's remote or it does not arrive. Same *name* is not enough: two remotes can be called `flathub` and point at different repositories, serving different vendors' builds of the same app with nothing said about it. So before each install pc-switcher re-reads the target's remote list and requires that app's origin remote to carry the source remote's URL and verification setting, and after the install it reads back what the app's origin actually resolves to. Either check failing is that app's own failure, naming both URLs — never an install issued in hope.
+
 A flatpak app is identified by its full `<application>/<arch>/<branch>` reference, not by the bare application id, and that reference is what the install and the uninstall name. Two branches of one app can be installed side by side, and a remote can offer several — flatpak refuses to guess between them and exits with `Multiple branches available`, so an app whose remote carries more than one branch never converges when only the id is named. The review line therefore shows the branch, and the same app on `stable` on one machine and `beta` on the other reads as an install plus a removal rather than as a version difference.
 
 ## Flatpak remotes

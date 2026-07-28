@@ -285,6 +285,10 @@ A remote present on both machines whose URL, verification setting or key differs
 
 A remote present only on the target is offered for removal, unticked, and its line names the apps on the target that still have it as their origin in that scope. Deleting a remote also drops its key.
 
+An app is installed from the source's remote or not at all, and "the source's remote" means the same URL, not merely the same name. Before each install pc-switcher re-reads the target's own remote list and requires the app's origin remote to carry the source remote's URL and verification setting; after the install it reads the app's landed origin back and resolves that to a URL again. Either check failing is that app's own failure, naming both URLs, and nothing is installed on the strength of a matching name.
+
+This is not a theoretical guard. Two remotes can share a name and serve different vendors' builds of the same app — a `flathub` pointing at Flathub's beta repository hands over a different version, a different collection and a different binary, at success exit and with `flatpak list` reporting `flathub` either way. A successful `flatpak remote-add` is not evidence either: adding a name that already exists leaves the existing URL untouched and still exits successfully.
+
 An app whose origin remote exists neither on the target nor in this run's own additions is refused as its own item naming the missing remote, rather than issuing an install flatpak would reject.
 
 A third named installation, neither user nor system, is skipped.

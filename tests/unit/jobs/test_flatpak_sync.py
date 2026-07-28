@@ -7,8 +7,10 @@ All executor interactions are mocked; no real flatpak commands run.
 
 from __future__ import annotations
 
+import shlex
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any, ClassVar
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -25,7 +27,7 @@ from pcswitcher.jobs.flatpak_sync import (
     build_orphaned_refs_detail,
     flatpak_sync_exclude_paths,
 )
-from pcswitcher.jobs.packages.items import DiffAction, DiffClass, ItemClass
+from pcswitcher.jobs.packages.items import DiffAction, DiffClass, ItemClass, ItemDiff
 from pcswitcher.jobs.packages.probes import ProbeFailed
 from pcswitcher.jobs.packages.review import (
     ReviewGroup,
@@ -93,19 +95,106 @@ def respond_to(
     return _side_effect
 
 
+class FakeFlatpakTarget:
+    """A target whose `flatpak remotes` and `flatpak list` answers reflect what this run
+    has written to it.
+
+    The origin guarantee reads the target's REAL state — once before a ref install and once
+    after it — so a static command-to-result table can no longer express the cases that
+    decide it: a `remote-add` that landed, one that exited 0 and changed nothing, an install
+    whose ref came from a same-named remote pointing somewhere else. Each is one line of
+    setup here.
+
+    Only measured flatpak behaviour is modelled: `remote-add --if-not-exists` is a no-op on
+    a name that already exists (so it exits 0 and leaves the old URL), `remote-modify --url`
+    repoints it, and `flatpak install <remote> <ref>` records that remote as the ref's
+    origin. Everything else falls through to `responses`.
+    """
+
+    def __init__(
+        self,
+        *,
+        remotes: dict[str, dict[str, str]] | None = None,
+        refs: dict[tuple[str, str], str] | None = None,
+        unverified: set[tuple[str, str]] | None = None,
+        install_records_origin: str | None = None,
+        install_lands: bool = True,
+        responses: dict[str, CommandResult] | None = None,
+    ) -> None:
+        self.remotes: dict[str, dict[str, str]] = {"user": {}, "system": {}}
+        for scope, entries in (remotes or {}).items():
+            self.remotes[scope] = dict(entries)
+        # (scope, ref) -> origin remote name.
+        self.refs: dict[tuple[str, str], str] = dict(refs or {})
+        # (scope, name) pairs this target reports with the `no-gpg-verify` option.
+        self.unverified: set[tuple[str, str]] = set(unverified or ())
+        # What an `install` that exits 0 actually leaves behind. Both default to the honest
+        # case; they exist so the post-install read-back has conditions to find, since the
+        # whole point of that check is the outcomes an exit code cannot rule out.
+        self.install_records_origin = install_records_origin
+        self.install_lands = install_lands
+        self._fallback = respond_to(responses or {})
+        self.run_command = AsyncMock(side_effect=self._run)
+        self.send_file = AsyncMock()
+
+    def _run(self, cmd: str, **kwargs: object) -> CommandResult:  # noqa: PLR0911
+        words = [word for word in shlex.split(cmd) if not word.startswith("-")]
+        if words and words[0] == "sudo":
+            words = words[1:]
+        if not words or words[0] != "flatpak" or len(words) < 2:
+            return self._fallback(cmd, **kwargs)
+        verb, positional = words[1], words[2:]
+        scope = "system" if "--system" in cmd else "user"
+
+        if verb == "remotes":
+            lines = "".join(
+                f"{name}\t{url}\tno-gpg-verify\n" if (scope, name) in self.unverified else f"{name}\t{url}\n"
+                for name, url in sorted(self.remotes[scope].items())
+            )
+            return CommandResult(0, lines, "")
+        if verb == "list":
+            lines = "".join(
+                f"{ref.split('/')[0]}\t1.0\t{origin}\t{ref_scope}\t{ref}\n"
+                for (ref_scope, ref), origin in sorted(self.refs.items())
+            )
+            return CommandResult(0, lines, "")
+        if verb == "remote-add":
+            name, url = positional
+            self.remotes[scope].setdefault(name, url)
+            return CommandResult(0, "", "")
+        if verb == "remote-modify":
+            url = next(word for word in shlex.split(cmd) if word.startswith("--url=")).removeprefix("--url=")
+            self.remotes[scope][positional[0]] = url
+            return CommandResult(0, "", "")
+        if verb == "remote-delete":
+            _ = self.remotes[scope].pop(positional[0], None)
+            return CommandResult(0, "", "")
+        if verb == "install":
+            remote, ref = positional
+            if self.install_lands:
+                self.refs[(scope, ref)] = self.install_records_origin or remote
+            return CommandResult(0, "", "")
+        if verb == "uninstall":
+            _ = self.refs.pop((scope, positional[0]), None)
+            return CommandResult(0, "", "")
+        return self._fallback(cmd, **kwargs)
+
+
 def make_context(
     *,
     source_responses: dict[str, CommandResult] | None = None,
     target_responses: dict[str, CommandResult] | None = None,
+    fake_target: FakeFlatpakTarget | None = None,
     dry_run: bool = False,
-) -> tuple[JobContext, MagicMock, MagicMock]:
+) -> tuple[JobContext, MagicMock, Any]:
     source = MagicMock()
     source.run_command = AsyncMock(side_effect=respond_to(source_responses or {}))
-    target = MagicMock()
-    target.run_command = AsyncMock(side_effect=respond_to(target_responses or {}))
-    # Awaited by the signing-key staging path (#215); a bare MagicMock attribute is not
-    # awaitable, so it has to be an AsyncMock even where a test asserts it is unused.
-    target.send_file = AsyncMock()
+    target: Any = fake_target if fake_target is not None else MagicMock()
+    if fake_target is None:
+        target.run_command = AsyncMock(side_effect=respond_to(target_responses or {}))
+        # Awaited by the signing-key staging path (#215); a bare MagicMock attribute is not
+        # awaitable, so it has to be an AsyncMock even where a test asserts it is unused.
+        target.send_file = AsyncMock()
     context = JobContext(
         config={},
         source=source,
@@ -119,7 +208,7 @@ def make_context(
     return context, source, target
 
 
-def all_calls(mock: MagicMock) -> list[str]:
+def all_calls(mock: Any) -> list[str]:
     return [call.args[0] for call in mock.run_command.call_args_list]
 
 
@@ -257,9 +346,7 @@ class TestRefIdentityCarriesTheBranch:
                 "flatpak list --app": CommandResult(0, _BETA_REF_LINE, ""),
                 "flatpak remotes --user": CommandResult(0, "flathub-beta\thttps://dl.flathub.org/beta-repo/\n", ""),
             },
-            target_responses={
-                "flatpak remotes --user": CommandResult(0, "flathub-beta\thttps://dl.flathub.org/beta-repo/\n", ""),
-            },
+            fake_target=FakeFlatpakTarget(remotes={"user": {"flathub-beta": "https://dl.flathub.org/beta-repo/"}}),
         )
         job = FlatpakSyncJob(context)
         plan = await job.plan()
@@ -943,10 +1030,29 @@ class TestPlanReadOnly:
             assert "remote-delete" not in cmd
 
 
+_FLATHUB_URL = "https://dl.flathub.org/repo/"
+
+
+def converge_target() -> FakeFlatpakTarget:
+    """`TARGET_RESPONSES`' picture of the target, as a machine whose reads answer for the
+    writes this run makes — required from the moment a ref install verifies the target's
+    real remote and its own landed origin rather than trusting the plan.
+    """
+    return FakeFlatpakTarget(
+        remotes={"user": {"flathub": _FLATHUB_URL}},
+        refs={
+            ("user", "org.gnome.Podcasts/x86_64/stable"): "flathub",
+            ("user", "org.gimp.GIMP/x86_64/stable"): "flathub",
+            ("user", "com.spotify.Client/x86_64/stable"): "flathub",
+            ("system", "org.example.SplitScope/x86_64/stable"): "flathub",
+        },
+    )
+
+
 class TestConverge:
     @pytest.mark.asyncio
     async def test_remotes_converge_before_refs_that_depend_on_them(self) -> None:
-        context, _source, target = make_context(source_responses=SOURCE_RESPONSES, target_responses=TARGET_RESPONSES)
+        context, _source, target = make_context(source_responses=SOURCE_RESPONSES, fake_target=converge_target())
         job = FlatpakSyncJob(context)
         plan = await job.plan()
 
@@ -968,7 +1074,7 @@ class TestConverge:
 
     @pytest.mark.asyncio
     async def test_user_scope_ref_install_has_no_sudo_and_carries_user_flag(self) -> None:
-        context, _source, target = make_context(source_responses=SOURCE_RESPONSES, target_responses=TARGET_RESPONSES)
+        context, _source, target = make_context(source_responses=SOURCE_RESPONSES, fake_target=converge_target())
         job = FlatpakSyncJob(context)
         plan = await job.plan()
         diff = next(d for d in plan.diffs if d.item_id == "flatpak:ref:user:org.example.SplitScope/x86_64/stable")
@@ -982,7 +1088,7 @@ class TestConverge:
 
     @pytest.mark.asyncio
     async def test_system_scope_ref_install_uses_sudo_and_system_flag(self) -> None:
-        context, _source, target = make_context(source_responses=SOURCE_RESPONSES, target_responses=TARGET_RESPONSES)
+        context, _source, target = make_context(source_responses=SOURCE_RESPONSES, fake_target=converge_target())
         job = FlatpakSyncJob(context)
         plan = await job.plan()
         remote_diff = next(d for d in plan.diffs if d.item_id == "flatpak:remote:system:flathub")
@@ -998,7 +1104,7 @@ class TestConverge:
 
     @pytest.mark.asyncio
     async def test_ref_removal_never_needs_source_lookup(self) -> None:
-        context, _source, target = make_context(source_responses=SOURCE_RESPONSES, target_responses=TARGET_RESPONSES)
+        context, _source, target = make_context(source_responses=SOURCE_RESPONSES, fake_target=converge_target())
         job = FlatpakSyncJob(context)
         plan = await job.plan()
         diff = next(d for d in plan.diffs if d.item_id == "flatpak:ref:user:com.spotify.Client/x86_64/stable")
@@ -1010,7 +1116,7 @@ class TestConverge:
 
     @pytest.mark.asyncio
     async def test_ref_with_missing_origin_remote_is_skipped_with_named_failure(self) -> None:
-        context, _source, target = make_context(source_responses=SOURCE_RESPONSES, target_responses=TARGET_RESPONSES)
+        context, _source, target = make_context(source_responses=SOURCE_RESPONSES, fake_target=converge_target())
         job = FlatpakSyncJob(context)
         plan = await job.plan()
         diff = next(d for d in plan.diffs if d.item_id == "flatpak:ref:user:org.example.NeedsRemote/x86_64/stable")
@@ -1019,6 +1125,175 @@ class TestConverge:
             await job.converge(diff)
 
         assert not any("customremote" in c for c in all_calls(target) if "flatpak install" in c)
+
+
+_REAL_FLATHUB = "https://dl.flathub.org/repo/"
+_BETA_FLATHUB = "https://dl.flathub.org/beta-repo/"
+_APP_REF = "org.mozilla.firefox/x86_64/stable"
+
+
+class TestOriginIsReplicatedNotJustNamed:
+    """ADR-021 D-34/D-35 for flatpak: a ref replicates as (ref, origin), and the origin is
+    checked against the target's real state rather than inferred from a name.
+
+    Measured against real Flathub: a target remote called `flathub` pointing at
+    `https://dl.flathub.org/beta-repo/` serves a different vendor's build of
+    `org.mozilla.firefox` — 148.0 / `org.flathub.Beta` versus 153.0 / `org.flathub.Stable`,
+    a different commit and a different binary — and `flatpak install --assumeyes flathub
+    <ref>` installs it at exit 0 with nothing said. `flatpak list --columns=origin` reports
+    `flathub` in both cases, so only the URL separates them.
+    """
+
+    _SOURCE: ClassVar[dict[str, CommandResult]] = {
+        "flatpak list --app": CommandResult(0, f"org.mozilla.firefox\t153.0\tflathub\tuser\t{_APP_REF}\n", ""),
+        "flatpak remotes --user": CommandResult(0, f"flathub\t{_REAL_FLATHUB}\n", ""),
+    }
+
+    @staticmethod
+    def _ref_install(plan: PackagePlan) -> ItemDiff:
+        return next(d for d in plan.diffs if d.item_class == ItemClass.FLATPAK_REF)
+
+    @pytest.mark.asyncio
+    async def test_a_same_named_remote_pointing_elsewhere_refuses_the_install(self) -> None:
+        """The live wrong-vendor case: the remote change is declined, the ref install is
+        approved, and both remotes are called `flathub`.
+        """
+        target = FakeFlatpakTarget(remotes={"user": {"flathub": _BETA_FLATHUB}})
+        context, _source, _target = make_context(source_responses=self._SOURCE, fake_target=target)
+        job = FlatpakSyncJob(context)
+        plan = await job.plan()
+
+        with pytest.raises(ConvergeItemFailed) as excinfo:
+            await job.converge(self._ref_install(plan))
+
+        assert _BETA_FLATHUB in str(excinfo.value)
+        assert _REAL_FLATHUB in str(excinfo.value)
+        assert not any("flatpak install" in cmd for cmd in all_calls(target))
+
+    @pytest.mark.asyncio
+    async def test_converging_the_remote_first_lets_the_same_install_through(self) -> None:
+        """The other half of the fixture above, and what keeps that test from passing on
+        the strength of something unrelated: once the target's remote really carries the
+        source's URL, the very same ref installs.
+        """
+        target = FakeFlatpakTarget(remotes={"user": {"flathub": _BETA_FLATHUB}})
+        context, _source, _target = make_context(source_responses=self._SOURCE, fake_target=target)
+        job = FlatpakSyncJob(context)
+        plan = await job.plan()
+
+        await job.converge(next(d for d in plan.diffs if d.item_class == ItemClass.FLATPAK_REMOTE))
+        result = await job.converge(self._ref_install(plan))
+
+        assert result.success
+        assert target.refs[("user", _APP_REF)] == "flathub"
+
+    @pytest.mark.asyncio
+    async def test_a_remote_add_that_exited_zero_and_changed_nothing_refuses_the_install(self) -> None:
+        """`flatpak remote-add --if-not-exists <name> <other url>` exits 0 and leaves the
+        existing URL in place (measured), so the exit code is not evidence the remote is
+        the source's — only re-reading the target is.
+        """
+        target = FakeFlatpakTarget()
+        context, _source, _target = make_context(source_responses=self._SOURCE, fake_target=target)
+        job = FlatpakSyncJob(context)
+        plan = await job.plan()
+        # Between plan and converge the target gains the name, pointing elsewhere.
+        target.remotes["user"]["flathub"] = _BETA_FLATHUB
+
+        add = await job.converge(next(d for d in plan.diffs if d.item_class == ItemClass.FLATPAK_REMOTE))
+
+        assert add.success
+        with pytest.raises(ConvergeItemFailed, match="different"):
+            await job.converge(self._ref_install(plan))
+        assert not any("flatpak install" in cmd for cmd in all_calls(target))
+
+    @pytest.mark.asyncio
+    async def test_a_remote_written_after_a_refusal_is_seen_on_the_next_attempt(self) -> None:
+        """The read-back is cached per run, so a remote write has to discard it. Without
+        that, a ref converged in any order but remotes-then-refs would be judged against a
+        picture of the target taken before this run wrote to it.
+        """
+        target = FakeFlatpakTarget()
+        context, _source, _target = make_context(source_responses=self._SOURCE, fake_target=target)
+        job = FlatpakSyncJob(context)
+        plan = await job.plan()
+
+        with pytest.raises(ConvergeItemFailed, match="not configured on the target"):
+            await job.converge(self._ref_install(plan))
+        await job.converge(next(d for d in plan.diffs if d.item_class == ItemClass.FLATPAK_REMOTE))
+
+        assert (await job.converge(self._ref_install(plan))).success
+
+    @pytest.mark.asyncio
+    async def test_a_target_remote_that_does_not_verify_signatures_refuses_the_install(self) -> None:
+        target = FakeFlatpakTarget(remotes={"user": {"flathub": _REAL_FLATHUB}}, unverified={("user", "flathub")})
+        context, _source, _target = make_context(source_responses=self._SOURCE, fake_target=target)
+        job = FlatpakSyncJob(context)
+        plan = await job.plan()
+
+        with pytest.raises(ConvergeItemFailed, match="gpg verification"):
+            await job.converge(self._ref_install(plan))
+
+    @pytest.mark.asyncio
+    async def test_a_ref_that_landed_from_another_repository_fails_after_the_install(self) -> None:
+        """The read-back, not the pre-check: the target's remote is the source's, the
+        install exits 0, and the ref nevertheless reports an origin resolving to a
+        different URL.
+        """
+        target = FakeFlatpakTarget(
+            remotes={"user": {"flathub": _REAL_FLATHUB, "mirror": _BETA_FLATHUB}},
+            install_records_origin="mirror",
+        )
+        context, _source, _target = make_context(source_responses=self._SOURCE, fake_target=target)
+        job = FlatpakSyncJob(context)
+        plan = await job.plan()
+
+        with pytest.raises(ConvergeItemFailed) as excinfo:
+            await job.converge(self._ref_install(plan))
+
+        assert "mirror" in str(excinfo.value)
+        assert _BETA_FLATHUB in str(excinfo.value)
+        assert any("flatpak install" in cmd for cmd in all_calls(target))
+
+    @pytest.mark.asyncio
+    async def test_an_install_that_exited_zero_and_installed_nothing_fails_the_item(self) -> None:
+        target = FakeFlatpakTarget(remotes={"user": {"flathub": _REAL_FLATHUB}}, install_lands=False)
+        context, _source, _target = make_context(source_responses=self._SOURCE, fake_target=target)
+        job = FlatpakSyncJob(context)
+        plan = await job.plan()
+
+        with pytest.raises(ConvergeItemFailed, match="does not list"):
+            await job.converge(self._ref_install(plan))
+
+    @pytest.mark.asyncio
+    async def test_the_origin_check_reads_the_unfiltered_source_remotes(self) -> None:
+        """A skip-always recorded against the source's own remote drops it from the
+        diff (D-08), and must not also drop the fact that makes the ref's origin
+        checkable — the guarantee is not a machine-local preference.
+        """
+        decisions = (
+            "machine_specific:\n"
+            '  "flatpak:remote:user:flathub":\n'
+            "    item_class: flatpak_remote\n"
+            '    label: "flathub remote (user)"\n'
+            "    reason: null\n"
+            "    recorded_at: '2026-07-25T00:00:00Z'\n"
+        )
+        target = FakeFlatpakTarget(remotes={"user": {"flathub": _REAL_FLATHUB}})
+        context, _source, _target = make_context(
+            source_responses={**self._SOURCE, "flatpak.decisions.yaml": CommandResult(0, decisions, "")},
+            fake_target=target,
+        )
+        job = FlatpakSyncJob(context)
+        plan = await job.plan()
+
+        # The record really did take effect: with the source's flathub filtered out, the
+        # target's own copy now looks source-less and is proposed for removal.
+        remote_diff = next(d for d in plan.diffs if d.item_class == ItemClass.FLATPAK_REMOTE)
+        assert remote_diff.action == DiffAction.REMOVE
+        result = await job.converge(self._ref_install(plan))
+
+        assert result.success
 
 
 class TestMaskParse:
