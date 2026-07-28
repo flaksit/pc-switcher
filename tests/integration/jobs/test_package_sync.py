@@ -74,7 +74,7 @@ import pytest
 
 from pcswitcher.executor import BashLoginRemoteExecutor
 from pcswitcher.jobs.apt_sync import AptHoldItem, AptPackageItem
-from pcswitcher.jobs.flatpak_sync import FlatpakItem, FlatpakRemoteItem
+from pcswitcher.jobs.flatpak_sync import FlatpakItem
 from pcswitcher.jobs.manual_installs_sync import UnreproducibleItem
 from pcswitcher.jobs.packages.review import PACKAGE_REVIEW_AUTOMATION_ENV, Decision
 from pcswitcher.jobs.packages.state import DECISION_FILE_RELPATH_TEMPLATE, DecisionFile, Snippet, SnippetRegistry
@@ -1336,6 +1336,12 @@ class TestAptSyncEndToEnd:
         used to propagate the rehearsal's exit 100 out of the job before the review was
         drawn, so the user saw nothing at all — not the package, not the rest of the diff.
 
+        Run WITHOUT the automation hook, on purpose -- the same carve-out F23 takes: the
+        hook answers a review without ever printing it, so with it set the package's name
+        in the run's output comes from the dry-run apply preview and witnesses no review at
+        all. D-26 then leaves every item `SKIP_ONCE`, which is why the empty apply list
+        asserted below is what pins the name to the printed group and nothing else.
+
         `--dry-run`, so pc2's `/etc/apt` and package set are untouched; the subject is built
         on pc1 and removed from pc1 in a `finally` regardless of outcome.
         """
@@ -1359,16 +1365,24 @@ class TestAptSyncEndToEnd:
 
             await _write_apt_sync_config(pc1_executor)
 
-            item_id = AptPackageItem(name=name, version="").item_id
-            sync_cmd = f"{_automation_env_assignment(item_id)} pc-switcher sync pc2 --yes --dry-run"
-            sync_result = await pc1_executor.run_command(sync_cmd, timeout=300.0, login_shell=True)
+            sync_result = await pc1_executor.run_command(
+                "pc-switcher sync pc2 --yes --dry-run", timeout=300.0, login_shell=True
+            )
             assert sync_result.success, (
                 f"pc-switcher sync --dry-run exited {sync_result.exit_code} for a package pc2's apt "
                 f"cannot locate yet.\nstdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
             )
 
             combined_output = sync_result.stdout + sync_result.stderr
-            assert name in combined_output, (
+            collapsed = _collapse_run_output(combined_output)
+            assert "Install apt packages" in collapsed, (
+                f"the run drew no apt install review group at all.\n{combined_output}"
+            )
+            assert "No apt changes to apply" in collapsed, (
+                f"the run applied something, so a name in its output is not evidence of a review line.\n"
+                f"{combined_output}"
+            )
+            assert f"install {name}" in collapsed, (
                 f"{name} reached no review line, so the run survived by dropping it.\n{combined_output}"
             )
             assert "Unable to locate package" not in combined_output, (
@@ -1646,10 +1660,9 @@ class TestPackageSyncWholeRunContracts:
         provisions the remote first (D-06, D-14): `flatpak install` refuses outright
         when its remote is not yet configured in that scope.
 
-        The remote is DERIVED (ADR-020 D-37): the review below decides the ref only, and
-        deliberately answers the remote's own id SKIP_ONCE. Under the old model that
-        declined the one thing that could deliver the ref and the install failed; the
-        remote must now be provisioned anyway, because the ref was approved.
+        The remote is DERIVED (ADR-020 D-37): the add direction is no review entry at all
+        (`_diff_flatpak_remotes` emits REMOVE only), so the review below decides the ref
+        alone and the remote travels as a consequence of that one approval.
 
         The subject is a real Flathub app, present on pc1 only (`vm-test-fixtures.sh`), and
         the real Flathub remote. Nothing on pc2 trusts Flathub once this test deletes the
@@ -1663,11 +1676,10 @@ class TestPackageSyncWholeRunContracts:
         """
         _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
 
-        application, version, scope, remote_name, remote_url, ref = await _flatpak_subject(pc1_executor)
+        application, version, scope, remote_name, _remote_url, ref = await _flatpak_subject(pc1_executor)
         scope_flag = "--user" if scope == "user" else "--system"
         sudo = "sudo " if scope == "system" else ""
 
-        remote_item_id = FlatpakRemoteItem(name=remote_name, url=remote_url, scope=scope).item_id
         ref_item_id = FlatpakItem(
             application=application, version=version, origin=remote_name, scope=scope, ref=ref
         ).item_id
@@ -1703,7 +1715,7 @@ class TestPackageSyncWholeRunContracts:
 
             await _write_package_sync_config(pc1_executor, flatpak_sync=True)
 
-            decisions = {remote_item_id: Decision.SKIP_ONCE, ref_item_id: Decision.APPLY}
+            decisions = {ref_item_id: Decision.APPLY}
             sync_cmd = f"{_automation_env_assignment_multi(decisions)} pc-switcher sync pc2 --yes --allow-first-sync"
             # Longer than the other syncs in this module: with pc2's runtime in place the
             # app install takes about a second, but if Flathub has moved the app onto a
@@ -1768,11 +1780,16 @@ class TestPackageSyncWholeRunContracts:
 
         There is no flatpak counterpart to apt's never-removed distribution sources here:
         a fresh flatpak install configures zero remotes, so nothing is exempt from this.
+
+        pc2 loses the approved ref's OWN remote too, not just the ref: the guard that a
+        derived remote did travel is what separates this claim from a run that provisioned
+        nothing at all, and it can only fail if that remote is absent beforehand.
         """
         _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
 
         application, version, scope, remote_name, _remote_url, ref = await _flatpak_subject(pc1_executor)
         scope_flag = "--user" if scope == "user" else "--system"
+        sudo = "sudo " if scope == "system" else ""
         ref_item_id = FlatpakItem(
             application=application, version=version, origin=remote_name, scope=scope, ref=ref
         ).item_id
@@ -1793,7 +1810,21 @@ class TestPackageSyncWholeRunContracts:
 
         try:
             await pc2_executor.run_command(
-                f"flatpak uninstall --assumeyes {scope_flag} {shlex.quote(ref)}", login_shell=False, timeout=60.0
+                f"{sudo}flatpak uninstall --assumeyes {scope_flag} {shlex.quote(ref)}",
+                login_shell=False,
+                timeout=60.0,
+            )
+            await pc2_executor.run_command(
+                f"{sudo}flatpak remote-delete --force {scope_flag} {shlex.quote(remote_name)}",
+                login_shell=False,
+                timeout=30.0,
+            )
+            remotes_before = await pc2_executor.run_command(
+                f"flatpak remotes {scope_flag} --columns=name", login_shell=False, timeout=15.0
+            )
+            assert remote_name not in nonblank_lines(remotes_before.stdout), (
+                f"remote {remote_name} is still configured on pc2 after remote-delete, so its presence after the "
+                "sync would say nothing about what the run provisioned"
             )
             await _write_package_sync_config(pc1_executor, flatpak_sync=True)
 
@@ -1811,8 +1842,9 @@ class TestPackageSyncWholeRunContracts:
                 f"flatpak remotes {scope_flag} --columns=name", login_shell=False, timeout=15.0
             )
             remotes_after = nonblank_lines(after.stdout)
-            # The approved ref's own remote DID travel: without this the assertion below
-            # would pass on a run that provisioned nothing at all.
+            # The approved ref's own remote DID travel, from an absence asserted above:
+            # without this the assertion below would pass on a run that provisioned
+            # nothing at all.
             assert remote_name in remotes_after, f"{remote_name} not provisioned on pc2 after sync"
             assert _FIXTURE_UNUSED_FLATPAK_REMOTE not in remotes_after, (
                 f"{_FIXTURE_UNUSED_FLATPAK_REMOTE} travelled to pc2 although no approved ref comes from it"
