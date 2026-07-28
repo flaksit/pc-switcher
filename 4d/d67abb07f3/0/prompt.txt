@@ -1,0 +1,69 @@
+<task-notification>
+<task-id>bsa4kvn9d</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/1cfb7cbc-0306-41b6-8f82-7ed1281a66dd/tasks/bsa4kvn9d.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for integration CI" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+You had a script on the scratchpad to first test the TUI review/question/ask functionality. Still there? How to run? What can and do you want me to verify?
+
+---
+
+2:[Image #1] title and packages are shown twice: in a block and as a "prompt"
+
+---
+
+2:
+- [Image #1] title and packages are shown twice: in a block and as a "prompt"
+- "<a> to toggle" is not a clear name for what it does: it toggles ALL packages. so "<a> to toggle all"
+- "<i>" seems quite useless to me
+- It is not very clear what is selected and what is unselected. [Image #2] I think to understand now that a line with white background is selected and a line with black background unselected. But that is not clear at all. Would be much nicer UI if the "checkbox" was a real checkbox or similar icon (something that is hollow when not selected and that is filled with a cross or checkmark or something when selected), and no change in background color
+- legend does not say to press "<enter> to confirm selection"
+
+3:
+- I don't like that this is in two steps. Packages should be presented only once and I make the choice at once: install, skip-once, skip-always.
+  This could be by three columns of checkboxes. Or even better and easier: a single column that shows the choice the user made "install", "skip once", "always skip". User chooses by pressing a key for each row. In this case: "<i> Install", "<s> Skip once", "<a> Skip always" (or pick better letters; <a> is standard used for Abort)
+  This would make it much easier to understand the difference between apply/skip-once or apply/skip-once/skip-always questions.
+- "never offer again on this machine" is not a good phrase either. It is not about "this machine". It is about "consider as specific to this machine" or just "skip always".
+
+1-4: When choice made, the answers that appear in bold yellow are not consistent per question: 1 is a description, 2 gives "done (2 selections)", 3 gives "done" (should be explicit that nothing was selected), 4 lists the action with the single package: 3 different behaviors based on the number of items selected (0, 1 or multiple). Not nice. I would propose the simple "n selected" or the long variant listing the selection: "None" / "item1, item2, ... itemN".
+
+4: I selected the package to "never offer again" and it shows "[remove fortunes-min (1:1.99.1-7.3build1)]" as answer. This is the opposite of what I chose!
+
+6:
+- Prompt repeated in block and then again as prompt (same problem with every question)
+- Empty line at end of each block "on the target now" and "on the source" [Image #3]. Actually, this empty line is on EVERY block except the "Ubuntu Pro ..." block.
+- Choice "Skip for now" could be formulated more clearly as "Keep target's version as-is for now."
+
+7:
+- Says "repositorys" (spelling!)
+- Only gives filename, not url. Url is much more interesting to decide upon. Give both.
+
+8: Only gives filename. Show contents of each file, file per file. Just like 6. shows the differences file per file (6 shows 2 blocks; 8 only needs 1 block).
+
+General:
+- Each bluegreen block that lists the items, starts each line with the name of the action ("install", "remove", "overwrite", "delete repository"). This is already clear from the block's title (or should be). No need to repeat on each line.
+- Together with my remark on 3 and the double printing on each question (block and prompt): isn't it possible that I select INSIDE the block and that each item-line has a column with my decision. Then no need to repeat the "decision" afterwards eather: it is still in the scrollback in the block.
+- Do not speak about source and target as I do here, but use the hostnames (like p17 and fleksi)
+- Ctrl-C shows stacktrace on exit. Not needed: abort was user action. Only showing message "Aborted by user" is enough. Maybe it's only this script that shows stacktrace and pc-switcher already handles this well.
+
+9:
+- Is this about "manually-installed package" or about "target's machine-specific package?". I think the latter, no?
+- Message must be more explicit: "fortunes is a machine-specific package on target. However, installing/removing/upgrading package <name> you selected previously, would downgrade/remove fortunes. Choices:
+  - Yes, install/remove/upgrade package <name>. This will collaterally downgrade/remove fortunes on target.
+  - Skip <name>. fortunes will not be touched on target. (You'll need to resolve this conflict.)
+  - Abort the apt sync / Abort the sync completely                        <-- Be specific about if this aborts only apt-sync or the entire pc-switcher sync!
+- When I choose abort, the script exits with a traceback. Maybe this is just this script. pc-switcher should NOT show stacktrace: this is a deliberate user choice to abort; not a bug for which we need the stacktrace for debugging.
+
+10:
+- Option "Record as machine-specific (skip always)" can be more in user language: "This package is specific to <host>. Always skip." General remark: ensure all messages are oriented towards user and in user language: "what does it mean to me / what will be the impact/effect?"
+- Catching Ctrl-D here would be a good signal to finish the snippet input. Better than "Esc then Enter".
+- just a space or newline is accepted as "non-empty" snippet. strip whitespace before deciding a snippet is empty or not
+
+Ending:
+- This is not shown in pc-switcher, right? Only in this script to check if decisions well recorded from questions.
+- gate True: what does this mean? "was_interactive"?
+- Is "unresolved" possible?
