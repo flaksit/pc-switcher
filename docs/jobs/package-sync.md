@@ -108,7 +108,7 @@ So before `apt_sync` writes anything, it probes the target and — if the target
 
 The commands the prompt gives you, to run on the target, are `sudo pro attach <token>` followed by `sudo pro enable esm-apps esm-infra`.
 
-Skipping costs the whole apt job, not just the two files, and that is deliberate: pin files always travel, so the source's ESM pins would reach the target whether or not the sources they name did, leaving a candidate selection matching neither machine. A run with nobody to ask takes the skip too. A dry run never asks — it warns that the target is unattached and that a real run would skip `apt_sync` entirely.
+Skipping costs the whole apt job, not just the two files, and that is deliberate: pin files always travel, so a pin the source has and the target lacks would reach the target whether or not the sources it names did, leaving a candidate selection matching neither machine. A run with nobody to ask takes the skip too. A dry run never asks — it warns that the target is unattached and that a real run would skip `apt_sync` entirely.
 
 Only the yes/no attachment answer is ever logged or shown. The probe's own output names the subscriber's account and never leaves the check.
 
