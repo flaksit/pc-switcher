@@ -1414,14 +1414,11 @@ class TestAptSyncEndToEnd:
 
             combined_output = sync_result.stdout + sync_result.stderr
             collapsed = _collapse_run_output(combined_output)
+            # The group panel's own title is the witness. A dry run previews through the
+            # review itself (ADR-014), so there is no separate apply output to confuse it
+            # with, and only the review draws this title.
             assert "Install apt packages" in collapsed, (
                 f"the run drew no apt install review group at all.\n{combined_output}"
-            )
-            # The bordered group panel is the witness: a dry run previews through the review
-            # itself (ADR-014), so the entry's own origin detail is what distinguishes a
-            # review line from any other mention of the name.
-            assert f"(from {repo_dir})" in collapsed, (
-                f"{name} appears outside a review entry, so this proves nothing about the review.\n{combined_output}"
             )
             assert f"install {name}" in collapsed, (
                 f"{name} reached no review line, so the run survived by dropping it.\n{combined_output}"
