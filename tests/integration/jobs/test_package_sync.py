@@ -1421,8 +1421,7 @@ class TestAptSyncEndToEnd:
             # itself (ADR-014), so the entry's own origin detail is what distinguishes a
             # review line from any other mention of the name.
             assert f"(from {repo_dir})" in collapsed, (
-                f"{name} appears outside a review entry, so this proves nothing about the review.\n"
-                f"{combined_output}"
+                f"{name} appears outside a review entry, so this proves nothing about the review.\n{combined_output}"
             )
             assert f"install {name}" in collapsed, (
                 f"{name} reached no review line, so the run survived by dropping it.\n{combined_output}"
