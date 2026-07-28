@@ -197,26 +197,29 @@ _APT_PACKAGE_ID_PREFIX = "apt:package:"
 
 # Binaries this job runs under sudo, quoted back to the user when the passwordless-sudo
 # check fails. A lower bound on what must be permitted, not an exact scope (ADR-013).
-# The source is only ever read, so it needs just the /etc/apt digest capture.
-_SOURCE_SUDO_COMMANDS = ("/usr/bin/find", "/usr/bin/sha256sum")
+# The source is only ever read, so it needs just the /etc/apt digest capture and the
+# conflict-review `cat` of a file the two machines disagree about.
+_SOURCE_SUDO_COMMANDS = ("/usr/bin/find", "/usr/bin/sha256sum", "/usr/bin/test", "/usr/bin/cat")
 _TARGET_SUDO_COMMANDS = (
     "/usr/bin/apt-get",
     "/usr/bin/apt-mark",
     "/usr/bin/find",
     "/usr/bin/sha256sum",
+    "/usr/bin/test",
+    "/usr/bin/cat",
     "/usr/bin/install",
     "/usr/bin/cp",
     "/usr/bin/rm",
     "/usr/bin/fuser",
 )
 
+# The one start point the source-file scan walks: the only `/etc/apt` path whose existence
+# is implied by apt existing at all, which `validate()` has already established, so a `find`
+# rooted there has an unambiguous exit code (ADR-022).
+_APT_ROOT_DIR = "/etc/apt"
+
 # The five `/etc/apt/*` directories D-11/D-13 pull into scope, each captured with one
 # batched `sha256sum` listing (never one command per file).
-#
-# `_APT_ROOT_DIR` is the one start point the source-file scan walks: it is the only path in
-# this set whose existence is implied by apt existing at all, which `validate()` has already
-# established, so a `find` rooted there has an unambiguous exit code (ADR-022).
-_APT_ROOT_DIR = "/etc/apt"
 _APT_SOURCES_DIR = "/etc/apt/sources.list.d"
 # The only two extensions apt reads in `sources.list.d`. Everything else there — the
 # `.save` and `.curtin.orig` copies Ubuntu's own tooling leaves behind (four of them on the
@@ -1045,10 +1048,10 @@ async def _capture_dir_digests(
     *,
     extensions: Sequence[str] = (),
 ) -> dict[str, str]:
-    """One `sudo find <dir> -maxdepth 1 -type f -exec sha256sum {} +` per directory —
-    a single batched command, never one `sha256sum` per file. `-exec ... {} +` never
-    runs at all when the directory has no matching files, so an empty directory degrades
-    to an empty digest map rather than a shell error.
+    """One `if sudo test -d <dir>; then sudo find <dir> -maxdepth 1 -type f -exec sha256sum
+    {} +; fi` per directory — a single batched command, never one `sha256sum` per file.
+    `-exec ... {} +` never runs at all when the directory has no matching files, so an empty
+    directory degrades to an empty digest map rather than a shell error.
 
     `extensions` narrows the capture to the files apt itself reads, and is only correct
     where apt HAS such a rule: `sources.list.d` is read for `*.list`/`*.sources` alone, so
@@ -1056,7 +1059,7 @@ async def _capture_dir_digests(
     `preferences.d` and `apt.conf.d` pass no extensions, because apt reads extensionless
     files in both.
 
-    An ABSENT directory is a separate case and is what the `test -d` wrapper is for
+    An ABSENT directory is a separate case and is what the `sudo test -d` wrapper is for
     (ADR-022). Measured: `find` on a path that does not exist exits 1, exactly as it does
     when it cannot read one that does — so without the wrapper the two would be one signal,
     and the only ways to resolve it are both wrong. Failing every run on a machine with no
@@ -1065,13 +1068,21 @@ async def _capture_dir_digests(
     repositories", which offers every file on the other machine for removal. With the
     wrapper an absent directory answers "nothing" at exit 0 and a non-zero exit is only
     ever a real failure, which `require_answer` then fails the job on.
+
+    The test runs under `sudo` for the same WR-04 reason the `find` does, and the two must
+    stay at the same privilege: measured, an unprivileged `test -d` on a directory inside an
+    unsearchable parent exits 1, which collapses the whole `if` to exit 0 with no output —
+    the reshape's one failure mode, answering "this machine has no pins or keys" for a
+    directory root would have listed.
     """
     quoted = shlex.quote(directory)
     predicate = ""
     if extensions:
         names = " -o ".join(f"-name {shlex.quote(f'*{ext}')}" for ext in extensions)
         predicate = f"\\( {names} \\) "
-    command = f"if test -d {quoted}; then sudo find {quoted} -maxdepth 1 -type f {predicate}-exec sha256sum {{}} +; fi"
+    command = (
+        f"if sudo test -d {quoted}; then sudo find {quoted} -maxdepth 1 -type f {predicate}-exec sha256sum {{}} +; fi"
+    )
     result = await run(command)
     require_answer(command, result, host)
     return _parse_sha256sum(result.stdout)
@@ -1089,7 +1100,7 @@ async def _capture_file_digest(run: Callable[[str], Awaitable[CommandResult]], p
     return _parse_sha256sum(result.stdout).get(Path(path).name)
 
 
-async def _read_file_content(run: Callable[[str], Awaitable[CommandResult]], path: str) -> str:
+async def _read_file_content(run: Callable[[str], Awaitable[CommandResult]], path: str, host: Host) -> str:
     """One `sudo cat <path>` — used only for a file a diff actually implicates.
 
     `sudo`-qualified to match `_capture_dir_digests`'s `sudo find ... sha256sum`
@@ -1098,8 +1109,20 @@ async def _read_file_content(run: Callable[[str], Awaitable[CommandResult]], pat
     the digest capture (root) still sees it and proposes a diff — an `AptSourceItem`
     parsed from that empty content would find zero `keyring_refs`, so a dangling key
     reference this run never actually validated would go undetected.
+
+    Guarded on the exit code (ADR-022). Every path reaching here was named by the digest
+    capture root ran moments earlier, so the file exists and root can read it; measured in a
+    stock `ubuntu:24.04`, `cat` exits 1 on an absent or unreadable path and nothing else
+    makes it exit non-zero, so a non-zero exit here is only ever a real failure. What the
+    silence would otherwise become is file CONTENT: the repository-conflict review shows
+    this text as the two machines' versions of a file it is asking permission to overwrite
+    (ADR-021 ruling 6), and two empty panes are an overwrite approved off a diff nobody
+    could read. An empty answer at exit 0 stays data — an empty source file is a legitimate
+    file.
     """
-    result = await run(f"sudo cat {shlex.quote(path)}")
+    command = f"sudo cat {shlex.quote(path)}"
+    result = await run(command)
+    require_answer(command, result, host)
     return result.stdout
 
 
@@ -1346,8 +1369,10 @@ def _require_apt_answer(command: str, result: CommandResult, host: Host, *, bloc
     * `blocks == 0` where the caller knows at least one block was owed. apt prints exactly
       one block per name it knows (measured on the development machine: 152 blocks for a
       152-name `apt-mark showmanual` set), so no blocks at all over names apt must know
-      means the output is not apt's answer. Only `apt-cache policy` callers pass this —
-      every other apt read here has a legitimate empty answer.
+      means the output is not apt's answer. Callers therefore pass `blocks` only where a
+      block is genuinely owed: a name installed on the machine being asked, or one this run
+      has already established the machine has a candidate for. A caller asking about names
+      the machine may legitimately never have heard of passes nothing.
     """
     require_answer(command, result, host, answers=blocks, answer_noun="package block")
 
@@ -1379,11 +1404,23 @@ async def simulate_apt_transaction(
     """Run `apt-get --dry-run <apt_args>` on `executor` and parse its Inst/Remv action lines.
 
     No `sudo` is needed: simulation is read-only. Raises `ConvergeItemFailed` if the
-    simulation itself fails (dpkg lock contention, unmet dependencies, a transient
-    apt-cache read error): a failed `apt-get --dry-run` typically prints no Inst/Remv lines,
-    which would otherwise parse as an indistinguishable-from-clean empty preview and
-    let both call sites proceed with a real command whose simulation was never
-    actually trustworthy (WR-01) — refuse rather than silently degrade.
+    simulation itself fails: a failed `apt-get --dry-run` typically prints no Inst/Remv
+    lines, which would otherwise parse as an indistinguishable-from-clean empty preview and
+    let both call sites proceed with a real command whose simulation was never actually
+    trustworthy (WR-01) — refuse rather than silently degrade.
+
+    `ConvergeItemFailed` and not `ProbeFailed`, which is the deliberate boundary of ADR-022:
+    apt gives this command ONE failure code for both categories. Measured in a stock
+    `ubuntu:24.04`, a name apt cannot locate exits 100 with `E: Unable to locate package`,
+    which is byte-for-byte the exit code a held dpkg lock produces — and D-03's remedy,
+    reshaping the command until its exit code is unambiguous, does not exist here, because
+    apt offers no second code and no second mode. So the classification is decided by which
+    cause dominates, and at both call sites that is the request: apply time simulates one
+    approved install or removal, where apt's refusal is a fact about that request (ADR-021
+    D-27); plan time simulates the whole candidate set, which routinely names a package
+    whose repository this run has not written yet, so a non-zero exit there is the ORDINARY
+    answer and failing the job on it would break every run that carries a new vendor's
+    package.
     """
     result = await executor.run_command(f"apt-get --dry-run {apt_args}", login_shell=login_shell)
     if not result.success:
@@ -2133,8 +2170,8 @@ class AptSyncJob(PackageSyncJob):
         self._repo_conflicts = {}
         for filename, packages in machine_specific.items():
             path = _source_file_destination(filename)
-            target_version = await _read_file_content(target_run, path)
-            source_version = await _read_file_content(source_run, path)
+            target_version = await _read_file_content(target_run, path, Host.TARGET)
+            source_version = await _read_file_content(source_run, path, Host.SOURCE)
             self._repo_conflicts[filename] = _RepoConflict(
                 packages=tuple(packages), target_version=target_version, source_version=source_version
             )
@@ -2170,7 +2207,7 @@ class AptSyncJob(PackageSyncJob):
         diffs: list[ItemDiff] = []
 
         for filename in sorted(names.extra - _DISTRO_SOURCE_FILENAMES):
-            content = await _read_file_content(target_run, f"{_APT_SOURCES_DIR}/{filename}")
+            content = await _read_file_content(target_run, f"{_APT_SOURCES_DIR}/{filename}", Host.TARGET)
             fmt, _refs, _uris = _parse_source_file(filename, content)
             item = AptSourceItem(filename=filename, digest=target_digests[filename], fmt=fmt)
             diffs.append(
@@ -2240,6 +2277,12 @@ class AptSyncJob(PackageSyncJob):
         remove_names = [_package_name(d.item_id) for d in pkg if d.action == DiffAction.REMOVE]
         reviewed_names = frozenset(install_names) | frozenset(remove_names)
 
+        # Known limitation, not a classification question: `install_names` can name a package
+        # whose repository only lands during converge, which apt cannot locate yet, so this
+        # simulation exits 100 and its `ConvergeItemFailed` — correct for the command, see
+        # `simulate_apt_transaction` — escapes `plan()` because no per-item loop is running
+        # yet. What plan-time collateral protection should mean for a package apt cannot see
+        # is a D-30 question, not one this guard can answer.
         collateral: list[ItemDiff] = []
         if install_names:
             quoted = " ".join(shlex.quote(name) for name in install_names)

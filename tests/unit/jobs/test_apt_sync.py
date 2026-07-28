@@ -3815,11 +3815,13 @@ class TestSourceOnlyCollateral:
 
 # -- C26/N7: a repo/key removal names the target-side machine-specific packages ---------
 
-# Distinguishes the source-reference scan (C26's removal impact, and the reference count
-# keyring provisioning/collection run on) from `collect_hold_pin_facts`'s own `-exec awk`
-# over `preferences.d`, which any looser substring would also match. `/etc/apt/sources.list`
-# is part of the scan because a keyring named only there is still in use.
-_SOURCE_SCAN_CMD = "-exec awk"
+# Identifies the source-file reference scan (C26's removal impact, and the reference count
+# keyring provisioning and collection run on) by the `-path` selectors that give it its
+# unambiguous exit code. Not by `-exec awk`: `respond_to` matches by substring and the first
+# match wins, so a key loose enough to also match a second awk command added later would
+# silently reroute that command's fixture answer here. `/etc/apt/sources.list` is one of the
+# two selected locations because a keyring named only there is still in use.
+_SOURCE_SCAN_CMD = "-path /etc/apt/sources.list -o"
 
 _VENDOR_LIST = "deb [signed-by=/etc/apt/keyrings/vendor.gpg] https://vendor.example.com/apt stable main\n"
 _VENDOR_SOURCES = (
@@ -5804,9 +5806,14 @@ class TestAReadThatDidNotAnswer:
 
     @pytest.mark.asyncio
     async def test_an_absent_directory_answers_nothing_rather_than_failing(self) -> None:
-        """The `test -d` wrapper is what keeps a legitimately absent directory out of the
-        failure path: it is what makes the command exit 0 with no output, which this
+        """The `sudo test -d` wrapper is what keeps a legitimately absent directory out of
+        the failure path: it is what makes the command exit 0 with no output, which this
         asserts is planned through rather than raised on.
+
+        The `sudo` on the TEST is pinned as tightly as the wrapper itself: an unprivileged
+        `test -d` on a directory inside an unsearchable parent exits 1 and collapses the
+        whole `if` to exit 0 with no output, which is the reshape answering "this machine
+        has no pins" for a directory root would have listed.
         """
         context, _source, _target = make_context(source_responses=_NO_PACKAGES, target_responses=_NO_PACKAGES)
         job = AptSyncJob(context)
@@ -5815,8 +5822,31 @@ class TestAReadThatDidNotAnswer:
 
         assert plan.diffs == ()
         assert any(
-            c.startswith(f"if test -d {_APT_PREFERENCES_DIR}; then sudo find {_APT_PREFERENCES_DIR}")
+            c.startswith(f"if sudo test -d {_APT_PREFERENCES_DIR}; then sudo find {_APT_PREFERENCES_DIR}")
             for c in all_calls(_source)
+        )
+
+    @pytest.mark.asyncio
+    async def test_the_source_file_scan_selects_both_locations_from_one_start_point(self) -> None:
+        """The shape of the scan, pinned verbatim, because the shape IS the classification:
+        `/etc/apt` is the one start point whose existence apt guarantees, and the two
+        locations are `-path` selectors under it.
+
+        Naming `/etc/apt/sources.list` as a start point instead makes find exit 1 while
+        still walking the directory when that file is absent, which is the same exit code a
+        scan that could not run at all produces — and the scan's silence deletes keys that
+        are still in use. A "simplification" back to two start points is the specific edit
+        this asserts against, and no substring of the awk program can catch it.
+        """
+        context, _source, _target = make_context(source_responses=_NO_PACKAGES, target_responses=_NO_PACKAGES)
+
+        await AptSyncJob(context).plan()
+
+        scans = [c for c in all_calls(_source) if "-exec awk" in c]
+        assert len(scans) == 1
+        assert scans[0].startswith(
+            "sudo find /etc/apt -maxdepth 2 -type f "
+            "\\( -path /etc/apt/sources.list -o -path '/etc/apt/sources.list.d/*' \\) -exec awk "
         )
 
     @pytest.mark.asyncio
@@ -5837,6 +5867,55 @@ class TestAReadThatDidNotAnswer:
 
         assert "-exec awk" in str(excinfo.value)
         assert "No such file or directory" in str(excinfo.value)
+
+    @pytest.mark.asyncio
+    async def test_a_conflict_content_read_that_did_not_answer_fails_the_job(self) -> None:
+        """The two panes the repository-conflict review shows are `sudo cat` output (ADR-021
+        ruling 6). Reading that silence as CONTENT renders the source's pane empty and asks
+        the user to approve an overwrite off a diff nobody could read. The TARGET's `cat`
+        runs first and answers normally, so only the source's can fail this.
+        """
+        context, source, _target = TestRepositoryConflicts._differing_repo(recorded=_decision_file("apt:package:curl"))
+        answering = source.run_command.side_effect
+
+        def failing_cat(cmd: str, **kwargs: object) -> CommandResult:
+            """The conflict fixture unchanged, except that the source cannot read the file."""
+            if cmd.startswith("sudo cat "):
+                return CommandResult(1, "", f"cat: {cmd.removeprefix('sudo cat ')}: Permission denied\n")
+            return answering(cmd, **kwargs)
+
+        source.run_command = AsyncMock(side_effect=failing_cat)
+
+        with pytest.raises(ProbeFailed) as excinfo:
+            await AptSyncJob(context).plan()
+
+        # "probe on the source", not a bare "source": the path itself contains that word.
+        assert "sudo cat /etc/apt/sources.list.d/vendor.list" in str(excinfo.value)
+        assert "probe on the source" in str(excinfo.value)
+        assert "Permission denied" in str(excinfo.value)
+
+    @pytest.mark.asyncio
+    async def test_a_removal_content_read_that_did_not_answer_fails_the_job(self) -> None:
+        """The other `sudo cat` call site: a file only the target has is read to learn its
+        format before it is offered for removal. Its silence makes the removal item describe
+        a file this run never read.
+        """
+        context, _source, _target = _repo_context(
+            source_responses=_NO_PACKAGES,
+            target_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/sources.list.d": CommandResult(0, sha256_line("d1", "gone.list"), ""),
+                "cat /etc/apt/sources.list.d/gone.list": CommandResult(
+                    1, "", "cat: /etc/apt/sources.list.d/gone.list: Input/output error\n"
+                ),
+            },
+        )
+
+        with pytest.raises(ProbeFailed) as excinfo:
+            await AptSyncJob(context).plan()
+
+        assert "sudo cat /etc/apt/sources.list.d/gone.list" in str(excinfo.value)
+        assert "probe on the target" in str(excinfo.value)
 
     @pytest.mark.asyncio
     async def test_a_removal_impact_read_that_did_not_answer_fails_the_job(self) -> None:
