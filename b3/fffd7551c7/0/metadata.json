@@ -1,0 +1,56 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "b3fffd7551c7",
+  "session_id": "6f351f45-55a4-4eda-a695-eb874d952f76",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-28T10:15:29.45533609Z",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 2,
+  "save_step_count": 1,
+  "files_touched": [
+    ".planning/phases/02-package-management-sync/02-SPEC-package-review-model.md",
+    ".planning/phases/02-package-management-sync/02-SPEC-snap-flatpak-derivation.md",
+    "docs/system/package-sync.md",
+    "src/pcswitcher/jobs/apt_sync.py",
+    "src/pcswitcher/jobs/flatpak_sync.py",
+    "src/pcswitcher/jobs/packages/apt_policy.py",
+    "src/pcswitcher/jobs/packages/items.py",
+    "src/pcswitcher/jobs/packages/probes.py",
+    "src/pcswitcher/jobs/packages/review.py",
+    "src/pcswitcher/jobs/packages/sync_core.py",
+    "tests/integration/jobs/test_package_sync.py",
+    "tests/unit/jobs/test_apt_policy.py",
+    "tests/unit/jobs/test_apt_sync.py",
+    "tests/unit/jobs/test_block_state_decisions.py",
+    "tests/unit/jobs/test_flatpak_sync.py",
+    "tests/unit/jobs/test_package_review.py",
+    "tests/unit/jobs/test_package_state.py",
+    "tests/unit/test_mutates_audit.py"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "3295a223b404",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 1544,
+    "cache_creation_tokens": 740684,
+    "cache_read_tokens": 40178849,
+    "output_tokens": 188894,
+    "api_call_count": 149
+  },
+  "session_metrics": {
+    "turn_count": 20
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-28T10:15:29.314111369Z",
+    "agent_lines": 189,
+    "agent_removed": 197,
+    "human_added": 4,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 193,
+    "total_lines_changed": 394,
+    "agent_percentage": 97.96954314720813,
+    "metric_version": 2
+  }
+}

@@ -1,0 +1,194 @@
+while waiting, tell where I can find the spec you wrote
+
+---
+
+"Supersedes ADR-020": we are still in implementation phase. No amendments. Correct ADR-020 directly. Avoid possible confusion. Single bible.
+
+---
+
+adr-017 was created long after adr-016. We could say adr-020 is not completely "accepted" yet, because we are changing our decisions constantly based on progressive insight.
+
+---
+
+<task-notification>
+<task-id>aa981e3b86fb104bf</task-id>
+<tool-use-id>toolu_01X3nokPUbntvrM8reJiLidd</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/6fd79944-5079-446f-99f7-bbe44c27ff4e/tasks/aa981e3b86fb104bf.output</output-file>
+<status>completed</status>
+<summary>Agent "Flatpak conflict prompt" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done. Report:
+
+## What shipped
+
+Commit `69c1e04f` — `feat(flatpak): ask before repointing a remote a machine-specific ref comes from`. 4 files: `src/pcswitcher/jobs/flatpak_sync.py`, `tests/unit/jobs/test_flatpak_sync.py`, `.planning/phases/02-package-management-sync/02-SPEC-snap-flatpak-derivation.md`, and 3 hunks of `src/pcswitcher/jobs/packages/review.py`.
+
+**`review.py` was staged hunk-by-hunk**, not by path: the other agent has an in-progress `ask_gate` addition in that file. I extracted only my 3 hunks (`git apply --cached` of a filtered patch) and verified the staged diff. Their work is untouched and still unstaged.
+
+## How "machine-specific" is determined, and that it matches apt
+
+apt: `apt_sync.py:2128` — `_source_decisions, target_decisions = self._plan_decisions`, then every item id in the TARGET's decision file with the `apt:package:` prefix. `DecisionFile.load()` (`state.py:189`) returns exactly the skip-always entries (`state.py:96-99`: "Every entry below came from an explicit skip always choice").
+
+flatpak (`flatpak_sync.py:1276`): `[ref for ref in installed_target_refs if ref.item_id in target_decisions]`, where `installed_target_refs` is the UNFILTERED target listing (`flatpak_sync.py:1219`) — i.e. exactly the set `filter_inert` removed. Same file, same meaning. **Not** target-only. Mutation M1 pins it.
+
+Two further narrowings, both documented at `flatpak_sync.py:1247-1274`:
+- the remote must be in `_derive_remotes`' output over the *proposed* installs (a superset of what `accept_review` derives). This is a deliberate divergence from apt, whose screen covers every changed file and whose approval force-writes it (`apt_sync.py:2492-2496`). Flatpak's doctrine is "a remote travels because a ref needs it", so asking about a remote nothing will touch would describe a change that was never going to happen, and answering "overwrite" must not itself make one travel.
+- `target_item is not None` — a remote the target lacks is an ADD, replacing nothing.
+
+`key_digest` is excluded from the trigger (`_PROVENANCE_FACETS`, `flatpak_sync.py:213-217`): `--gpg-import` merges into the ostree keyring rather than replacing it — the same measured fact `_origin_refusal` already cites for not comparing digests — so it can neither move an origin nor withdraw trust. A key-only difference stays silent.
+
+## What the screen shows, and why
+
+`versions=(target_text, source_text)`, one **differing facet per line**, target's panel first (`_remote_conflict_versions`, `flatpak_sync.py:822`). e.g. target `url: https://old.mirror…/repo/` / source `url: https://dl.flathub.org/repo/`; a trust divergence adds `gpg verification: disabled` / `enabled`.
+
+Never `_remote_change_detail`'s `A vs B` form — that is a computed difference, and the user's verdict on apt's version ("diff is not very readable") rules it out. apt shows two whole file bodies because a repository file *is* a body; a remote is a handful of named values, so the readable answer is the fields that disagree, printed twice. `_remote_facets` is now the single definition of "differs" behind both renderings, so the log line and the screen cannot drift. Costs **no command** — the record is already on `FlatpakRemoteItem` (apt pays two `cat`s per entry).
+
+## What a skipped conflict does — and yes, `_origin_refusal` already covered it
+
+Skipped/undecided → the remote leaves `self._derived_remotes` but stays in `_ref_derived_remote_ids`, and `_failed_derived_remotes` is seeded (`accept_review`, `flatpak_sync.py:1421-1428`). Every approved ref that named it fails as its own item (D-27/D-39).
+
+**`_origin_refusal` already covers the wrong-vendor outcome on its own — verified, not assumed.** With the seeding mutated away (M7), the ref is still not installed; the message merely becomes the generic one:
+
+&gt; `install of org.example.App/x86_64/stable refused: the target's user-scope remote 'flathub' points at https://old.mirror.example.org/repo/, but the source takes this ref from https://dl.flathub.org/repo/ — same name, different repository…`
+
+So the seeding is **not** a second safety mechanism and I added none: it reuses the existing `_failed_derived_remotes` dict, and its only effect is that the failure names the user's own decision (checked first in `_converge_ref:1372`) instead of the symptom.
+
+## Mutation table — real results
+
+| # | Mutation | Test(s) | Result |
+|---|---|---|---|
+| M1 | machine-specific becomes *every* target ref (the "target-only" misreading) | `test_a_target_only_ref_is_not_machine_specific_and_the_repoint_stays_silent` | **RED** |
+| M2 | no conflict is ever captured | `test_a_machine_specific_ref_turns_the_repoint_into_a_two_answer_entry`, `test_the_entry_shows_both_configurations…` | **RED** (both) |
+| M3 | screen shows the computed `A vs B` difference | `test_the_entry_shows_both_configurations…`, `test_only_the_differing_facets…` | **RED** (both) |
+| M4 | source's version shown first | `test_the_entry_shows_both_configurations…` | **RED** |
+| M5 | signing-key-only difference also raises the screen | `test_a_signing_key_difference_alone_stays_silent` | **RED** |
+| M6 | skipped conflict stays in the write set | `test_skip_once_leaves_the_targets_remote_exactly_as_it_was`, `test_an_undecided_conflict_is_a_skip…` | **RED** (both) |
+| M7 | drop the seeded failure | `test_skip_once_fails_the_ref_that_needed_the_source_url_naming_the_decision` | **RED** (message only; ref still uninstalled — see above) |
+| M8 | answer looked up under the wrong id | `test_overwrite_repoints_the_remote_and_installs_the_ref` | **RED** |
+| M9 | trigger ignores whether this run would touch the remote | `test_a_remote_no_approved_ref_could_need_is_never_a_conflict` | **RED** |
+| M10 | an ADD treated as a repoint | `test_a_remote_the_target_lacks_is_an_add_and_never_a_conflict` | **RED** |
+| M11 | detail omits the refs | `test_the_detail_names_the_machine_specific_refs_that_are_the_reason` | **RED** |
+| M12 | capture pays for a read of its own | `test_finding_the_conflict_costs_no_command_of_its_own` | **RED** |
+| M13a | `_PROMOTABLE_ACTIONS += REPO_CONFLICT_REVIEW_ACTION` (by constant) | `test_the_conflict_screen_is_neither_a_removal_direction_nor_promotable` | **GREEN — ineffective mutation**: the constant is defined *after* `_PROMOTABLE_ACTIONS`, so it raised `NameError` at import and my parser misread the collection error |
+| M13b | same, re-aimed using the literal `"repo_conflict"` | same test | **RED** |
+| — | `test_a_conflict_id_marked_skip_always_reaches_no_decision_file` | — | **Deliberate negative control, must stay green.** A conflict id labels no diff, so `_record_permanent_skips` cannot reach one — there is no prefix filter to break (apt made the same call: `_UNRECORDABLE_ITEM_ID_PREFIXES` omits `apt:conflict:`). Non-vacuity checked separately: emptying the recordable diff set makes its positive half (`_APP_ID in recorded[0]`) go **RED**. |
+
+No vacuous tests found.
+
+## SPEC wording fix
+
+`02-SPEC-snap-flatpak-derivation.md`: §2.2 table row rewritten (`NOT SHIPPED / target-only` → shipped, two answers, **machine-specific**); the §2.2 prose paragraph replaced with the full rule including both narrowings, the key-digest exclusion, the rendering rationale and the `_origin_refusal` finding; §5.3 F7/F7a restated; §8.4's three test entries replaced with the shipped names and their real mutations; **§9 Q3 marked RESOLVED — exact parity with apt**. One precedence marker left at §2.2 (per the CLAUDE.md disambiguation exception) since the document is long and other prose predates the ruling.
+
+## Gates
+
+`ruff check .` — All checks passed. `ruff format .` — 126 files unchanged. `codespell` — clean (no output). `basedpyright` — 0 errors, 0 warnings, 0 notes. `pytest` — **1446 passed, 82 deselected** (baseline 1407; +15 mine, remainder the concurrent agent's).
+
+## Not done / unverified
+
+- **No integration test.** `tests/integration/jobs/test_package_sync.py` is untouched. Covering this needs pc2 to hold a ref recorded skip-always in its own `flatpak.decisions.yaml` *plus* a diverging `flathub`, i.e. a `FIXTURES_VERSION` bump — in a file the concurrent agent is editing, and I cannot run the suite to prove the fixture models a real machine. I judged an unrunnable test on a contested fixture worse than none; say the word and I'll add it.
+- **No ADR touched.** The prior flatpak derivation commit (`2512f32c`) also touched no ADR — it applies ADR-021's rules to a second ecosystem, documented in the module docstring and the SPEC. I kept that shape, which also avoids the `docs/adr/*` coordination hazard. ADR-021's D-37/ruling-6 text remains apt-worded.
+- **`docs/jobs/package-sync.md` / `docs/system/package-sync.md` not updated** — owned by a third agent. They will need the flatpak conflict rule; §5.4 of the SPEC already flags `docs/jobs/package-sync.md:157`.
+- Everything reported above is from this session's own runs. Nothing about real flatpak behaviour was newly measured — the key-merge and same-name-different-URL facts are cited from the existing measured docstrings, not re-verified.
+
+### Where the brief was slightly off
+
+You wrote "a remote whose URL (or trust state) differs … is repointed silently". `key_digest` is also trust state and also triggers a write, but I excluded it from the *question* on the harm test, so the trigger is deliberately narrower than "the write would happen". That is the one place I did not mirror the write condition exactly; rationale is in the code and the SPEC.</result>
+<usage><subagent_tokens>231553</subagent_tokens><tool_uses>86</tool_uses><duration_ms>1001708</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a452be6c4a10922d4</task-id>
+<tool-use-id>toolu_016M1StuHjTi9skqirk1hJKY</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/6fd79944-5079-446f-99f7-bbe44c27ff4e/tasks/a452be6c4a10922d4.output</output-file>
+<status>completed</status>
+<summary>Agent "S8 ESM Pro attachment gate" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done. Committed as `8a329c69` (single commit, staged by explicit path; nothing pushed).
+
+## What shipped
+
+**Probe** — `src/pcswitcher/jobs/apt_sync.py:2129` `_target_pro_attached()`: one `pro status --format json` on the target, `login_shell=False`, no `mutates=`. Every failure mode (no binary, non-zero exit, unparseable, non-object, missing key) answers `False`, because `False` asks a recoverable question and `True` writes files that break the target's next install. Only the parsed boolean leaves the method — the raw stdout is never logged, never shown, never in a `JobSkipped` reason.
+
+**Gate** — `apt_sync.py:2149` `_gate_esm_writes()`, called from `plan()` at `apt_sync.py:1902`, immediately after `_capture_origin_state()` and before `_plan_packages()`. Trigger is `_pending_esm_writes()` (`apt_sync.py:2113`): the same predicate `_compute_derived_writes` applies, so the gate can never ask about a file the run would not write.
+
+**Placement — the brief's premise still holds, with one correction.** `validate()` cannot host it: `ValidationError` (`src/pcswitcher/models.py:103`) has no severity and `orchestrator.py:1019-1041` raises `RuntimeError` on any of them. But **§5.3.2 is wrong on one fact**: it says the digests are "already captured by `_capture_origin_state` (`apt_sync.py:1737`)". They were not — `_plan_repo_diffs` captured them, and it runs *after* `_plan_packages`, so the trigger was unreadable at the specified placement. I moved the `sources.list.d` digest capture and the `/etc/apt/sources.list` file digest into `_capture_origin_state` (`apt_sync.py:2031-2038`); `_plan_repo_diffs` reads the cached values. Same commands, same count, one position earlier. Spec §5.3.2 and §9's S8 entry now record the deviation.
+
+**Prompt seam** — `src/pcswitcher/jobs/packages/review.py:683` `ask_gate()`, plus the `Reviewer` protocol method (`review.py:761`) and `TerminalUIReviewer` forwarder (`review.py:790`). Deliberately **no** `PACKAGE_REVIEW_AUTOMATION_ENV` hook: no scripted value can stand in for going and attaching the other machine. `None` = no TTY, `SyncAbortedByUser` on Ctrl-C, body wrapped in `Text` (T-02-02).
+
+**Exact prompt wording** (`apt_sync.py:2178-2190`), title `Ubuntu Pro attachment required on the target`:
+- Body names both files, states the target reports no attachment, gives the mechanism in one clause (indexes public → ESM wins candidate selection → next install of an ESM-covered package fails `401 Unauthorized` fetching the `.deb`), then the two copy-paste commands **on the target**: `sudo pro attach &lt;token from https://ubuntu.com/pro/dashboard&gt;` then `sudo pro enable esm-apps esm-infra`, then that skipping leaves `/etc/apt` untouched and every other job running.
+- Answers, exactly two: `I have attached the target — re-check and continue` / `Skip apt_sync this run (other jobs continue)`.
+
+**Skip semantics.** `JobSkipped("apt_sync", reason)` → the orchestrator's arm (`orchestrator.py:1271`) records `JobResult(status=SKIPPED, error_message=reason)`, logs `Job apt_sync skipped: …` at WARNING, and does **not** re-raise; `snap_sync`, `flatpak_sync`, `manual_installs_sync`, `folder_sync` all still run, the session stays COMPLETED and the exit code is unchanged. No decision-file entry, no registry push, no `/etc/apt` write — the gate is before the first mutation by construction, and the VM test asserts pc2's `/etc/apt` is byte-identical afterwards. Non-interactive takes the same skip (the user's ruling); the re-check loop is a bare `while True`.
+
+**Dry run** never prompts: one WARNING naming both files and stating a real run would *skip `apt_sync` entirely*, and the two files are dropped from the derived-write preview so it doesn't advertise writes no real run makes.
+
+## Mutation table — real results, 17/17 killed
+
+Harness applied each mutation to the shipped source, ran only the named test, restored from a copy (`diff` against the copy confirmed clean afterwards).
+
+| # | Mutation | Test | Result |
+|---|---|---|---|
+| M1 | write the ESM files without asking | `test_an_unattached_target_is_asked_about_before_anything_is_written` | FAILED as required |
+| M2 | skip answer returns instead of raising | `test_choosing_skip_raises_job_skipped_and_writes_nothing` | FAILED |
+| M3 | no-TTY withholds the two files and continues | `test_a_non_interactive_run_skips_the_whole_job` | FAILED |
+| M4 | trust "attach now" without re-probing | `test_attach_now_re_probes_and_continues_when_the_target_became_attached` | FAILED |
+| M5 | reintroduce a bound (3 re-checks) | `test_attach_now_can_be_answered_any_number_of_times` | FAILED |
+| M6 | invert the probe | `test_esm_sources_are_written_to_an_attached_target` | FAILED |
+| M7 | unreadable probe defaults to attached | `test_an_unreadable_pro_probe_is_treated_as_unattached` (5 params) | FAILED |
+| M8 | log the raw probe payload | `test_the_probe_payload_is_never_logged` | FAILED — assertion caught the account email verbatim in `caplog` |
+| M9 | prompt under `--dry-run` | `test_a_dry_run_never_prompts_about_attachment` | FAILED |
+| M10 | probe regardless of a pending write | `test_a_source_with_no_esm_sources_never_probes_at_all` | FAILED |
+| M11 | trigger ignores the digest comparison | `test_an_esm_file_the_target_already_matches_is_not_gated` | FAILED |
+| M12 | generic answer captions | `test_the_gate_offers_exactly_two_answers_and_names_both_of_them` | FAILED |
+| M13 | `ask_gate` honours the automation env | `test_the_automation_env_hook_cannot_answer_a_gate` | FAILED |
+| M14 | no TTY answers `False` not `None` | `test_no_tty_answers_none_without_constructing_a_prompt` | FAILED |
+| M15 | Ctrl-C at the gate answers `False` | `test_ctrl_c_aborts_the_whole_sync_and_hands_the_display_back` | FAILED |
+| M16 | gate body rendered as Rich markup | `test_the_message_is_rendered_as_text_not_markup` | FAILED |
+| M17 | gate moved out of `plan()` into `apply()` | `test_choosing_skip_raises_job_skipped_and_writes_nothing` | FAILED on `groups_seen is None` — the ordering claim, not an incidental |
+
+M13 is the **deliberate negative control** (the automation hook must *not* reach a gate); it stays green on the shipped code and is killed only by the mutation that adds the hook. No vacuous tests found; no mutation needed re-aiming.
+
+**Fixtures model a real unattached machine.** `_esm_job` (`tests/unit/jobs/test_apt_sync.py:6193`) answers `pro status` with `attached: false` and lets **every** apt command succeed, `apt-get update` included — an unattached machine is not a broken one, and a fixture that failed the refresh would let a wrong implementation pass for the wrong reason.
+
+## Integration test
+
+`tests/integration/jobs/test_package_sync.py`, new class `TestTheESMAttachmentGateOnVMs` appended at the end (lowest-conflict placement; no existing test touched, `FIXTURES_VERSION` not bumped — the test creates and removes its own files).
+
+**The VMs are not attachable to Pro** and never will be: `pro attach` needs the user's dashboard token or an interactive browser short-code flow, a machine's credentials are not transferable, and putting a subscription token in CI would violate the project's secrets rule. So the "attach now" arm has no VM to prove itself on and I did not write a test that cannot pass. The **skip arm needs no attachment** — an unattached target is exactly the machine under test. The test creates both ESM sources *and* the `ubuntu-pro-esm-apps` pin on pc1, runs a real non-interactive sync with `apt_sync` and `snap_sync` enabled, and asserts: exit 0, `apt_sync skipped` naming both files in the output, `snap_sync` still ran, and pc2 has none of the three files — the pin being the assertion no mocked-executor test can make, since a gate that withheld only the sources would still deliver it.
+
+**Unverified: I did not run it.** I could not run the integration suite. Two specific risks I could not close: whether `pro status --format json` exits 0 unprivileged on an *unattached* host (measured this session only on an attached one — either way the probe answers False and the test outcome is the same), and the exact substring `apt_sync skipped`, which I read off `orchestrator.py:1286` rather than observed.
+
+## Gates
+
+`ruff check .` clean · `ruff format --check .` 126 files already formatted · `codespell` clean · `basedpyright` 0 errors/0 warnings/0 notes · `pytest` **1446 passed, 82 deselected** (baseline 1407 + 24 mine + 15 from the flatpak agent's commits; integration count 81 → 82). Two transient failures in `test_flatpak_sync.py` mid-session were the other agent's in-flight edit — confirmed via `F821` undefined names in *their* uncommitted file, and gone once they committed (`69c1e04f`). Their `flatpak_sync.py` was never staged by me.
+
+## Docs
+
+Updated: `docs/adr/adr-021-origin-replicating-package-convergence.md` — D-38's line "A run with nobody to ask keeps the two files back, warns, and lets the rest of `apt_sync` proceed" was **wrong against the user's ruling** and is replaced with the skip, the reason (the pins travel regardless), the unbounded re-check and the dry-run behaviour; the MUST at :21, the negative consequence at :132 and the rejected alternative at :141 all now match. Also `.planning/…/02-SPEC-package-review-model.md` §5.3.2, §5.3.4 and §9's S8 entry.
+
+**What the three user-facing docs owe** (not edited, per the brief):
+- `docs/planning/Package sync requirements.md:396` says outright *"The Ubuntu Pro / ESM gate is not implemented … the single largest gap between the requirement and the code."* That is now false and is the highest-priority correction in the repo.
+- Same file, §"Ubuntu Pro and ESM" (:228-232): states only that pc-switcher "asks before writing anything". Owes the two answers verbatim, that skip costs the whole job, that a run with no terminal skips, and that a dry run warns instead.
+- Same file, :352 and :356 enumerate what SKIPPED means and why a headless run skips. Both lists now omit a case: an unattached target.
+- `docs/jobs/package-sync.md:149-151` describes SKIPPED for package jobs but only for the non-interactive-review cause. Owes the ESM gate as a second cause, and the user-facing remediation (`pro attach` / `pro enable esm-apps esm-infra` on the target).
+- `docs/system/package-sync.md` has **no** ESM or Pro content at all — it owes the whole gate: probe, trigger, placement in `plan()`, the two answers, the unbounded re-check, and the payload-never-logged rule.
+
+## Corrections to the brief
+
+1. §5.3.2's claim that `_capture_origin_state` already holds the digests was stale — it did not, and the placement was not achievable as written until the capture moved. Detailed above.
+2. Everything else in the brief held: no `pro status` probe existed anywhere in `src/`, the ESM files were written unconditionally, and `ValidationError` has no non-fatal form.</result>
+<usage><subagent_tokens>205006</subagent_tokens><tool_uses>125</tool_uses><duration_ms>1104405</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bzw72bt02</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/6fd79944-5079-446f-99f7-bbe44c27ff4e/tasks/bzw72bt02.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for integration CI" completed (exit code 0)</summary>
+</task-notification>

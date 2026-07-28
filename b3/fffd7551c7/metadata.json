@@ -1,0 +1,43 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "b3fffd7551c7",
+  "strategy": "manual-commit",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".planning/phases/02-package-management-sync/02-SPEC-package-review-model.md",
+    ".planning/phases/02-package-management-sync/02-SPEC-snap-flatpak-derivation.md",
+    "docs/system/package-sync.md",
+    "src/pcswitcher/jobs/apt_sync.py",
+    "src/pcswitcher/jobs/flatpak_sync.py",
+    "src/pcswitcher/jobs/packages/apt_policy.py",
+    "src/pcswitcher/jobs/packages/items.py",
+    "src/pcswitcher/jobs/packages/probes.py",
+    "src/pcswitcher/jobs/packages/review.py",
+    "src/pcswitcher/jobs/packages/sync_core.py",
+    "tests/integration/jobs/test_package_sync.py",
+    "tests/unit/jobs/test_apt_policy.py",
+    "tests/unit/jobs/test_apt_sync.py",
+    "tests/unit/jobs/test_block_state_decisions.py",
+    "tests/unit/jobs/test_flatpak_sync.py",
+    "tests/unit/jobs/test_package_review.py",
+    "tests/unit/jobs/test_package_state.py",
+    "tests/unit/test_mutates_audit.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/b3/fffd7551c7/0/metadata.json",
+      "transcript": "/b3/fffd7551c7/0/full.jsonl",
+      "compact_transcript": "/b3/fffd7551c7/0/transcript.jsonl",
+      "content_hash": "/b3/fffd7551c7/0/content_hash.txt",
+      "prompt": "/b3/fffd7551c7/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1544,
+    "cache_creation_tokens": 740684,
+    "cache_read_tokens": 40178849,
+    "output_tokens": 188894,
+    "api_call_count": 149
+  }
+}
