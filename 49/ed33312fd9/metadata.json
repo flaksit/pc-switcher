@@ -3,7 +3,7 @@
   "checkpoint_id": "49ed33312fd9",
   "strategy": "manual-commit",
   "branch": "gsd/phase-02-package-management-sync",
-  "checkpoints_count": 2,
+  "checkpoints_count": 5,
   "files_touched": [
     "tests/integration/jobs/test_package_sync.py"
   ],
@@ -21,13 +21,20 @@
       "compact_transcript": "/49/ed33312fd9/1/transcript.jsonl",
       "content_hash": "/49/ed33312fd9/1/content_hash.txt",
       "prompt": "/49/ed33312fd9/1/prompt.txt"
+    },
+    {
+      "metadata": "/49/ed33312fd9/2/metadata.json",
+      "transcript": "/49/ed33312fd9/2/full.jsonl",
+      "compact_transcript": "/49/ed33312fd9/2/transcript.jsonl",
+      "content_hash": "/49/ed33312fd9/2/content_hash.txt",
+      "prompt": "/49/ed33312fd9/2/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 18,
-    "cache_creation_tokens": 73005,
-    "cache_read_tokens": 4225963,
-    "output_tokens": 4625,
-    "api_call_count": 10
+    "input_tokens": 524,
+    "cache_creation_tokens": 3954880,
+    "cache_read_tokens": 136268050,
+    "output_tokens": 277154,
+    "api_call_count": 282
   }
 }
