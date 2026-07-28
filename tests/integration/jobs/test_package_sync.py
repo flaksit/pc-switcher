@@ -1417,8 +1417,11 @@ class TestAptSyncEndToEnd:
             assert "Install apt packages" in collapsed, (
                 f"the run drew no apt install review group at all.\n{combined_output}"
             )
-            assert "No apt changes to apply" in collapsed, (
-                f"the run applied something, so a name in its output is not evidence of a review line.\n"
+            # The bordered group panel is the witness: a dry run previews through the review
+            # itself (ADR-014), so the entry's own origin detail is what distinguishes a
+            # review line from any other mention of the name.
+            assert f"(from {repo_dir})" in collapsed, (
+                f"{name} appears outside a review entry, so this proves nothing about the review.\n"
                 f"{combined_output}"
             )
             assert f"install {name}" in collapsed, (
