@@ -65,8 +65,9 @@ the target's own answer does.
 The removal direction is disclosure rather than refusal (#214): a remote offered for
 deletion carries, in its review `detail`, the target refs that still name it as their
 origin in that same scope — deleting a remote whose refs are being removed too is
-legitimate cleanup, so the decision stays in the review where D-30 puts apt's collateral,
-never as a mid-apply refusal.
+legitimate cleanup, so the decision stays in the review where D-30 puts apt's collateral:
+the dependent refs are known from the plan's own reads, so the consequence can be stated
+while the user is deciding about the deletion that causes it.
 
 A remote carries its TRUST as part of the item, not as a property of the machine that
 happens to hold it (#215): `FlatpakRemoteItem` records the remote's GPG-verification
@@ -903,8 +904,9 @@ def _remove_remote_diff(item: FlatpakRemoteItem, dependent_refs: Sequence[str]) 
 
     Not a refusal, unlike the ref-install direction's `_remote_ready_on_target` guard:
     removing a remote whose refs are being removed in the same run is a legitimate
-    cleanup, and the decision belongs in the review rather than mid-apply. A remote with
-    no dependents keeps `detail=None` — no noise on the common case.
+    cleanup, and the dependents are already known from the plan's reads, so the review is
+    where that consequence can be put to the user. A remote with no dependents keeps
+    `detail=None` — no noise on the common case.
     """
     return ItemDiff(
         item_class=ItemClass.FLATPAK_REMOTE,

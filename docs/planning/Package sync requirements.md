@@ -52,7 +52,10 @@ Four jobs — `apt_sync`, `snap_sync`, `flatpak_sync`, `manual_installs_sync` �
 
 - **PKG-FR-REVIEW-FIRST**: A job MUST NOT modify the target before the user has approved that job's diff.
 - **PKG-FR-ONLY-APPROVED**: A job MUST apply only what the user approved.
-- **PKG-FR-NO-REREVIEW**: A job MUST NOT ask the user to review a diff it has already reviewed.
+- **PKG-FR-BATCHED**: A job's questions SHOULD be batched — one screen per manager per action — and a job MUST NOT ask item by item where one screen would do.
+  Why: a question per package is the interruption the review exists to replace.
+- **PKG-FR-ASK-AGAIN**: A job MAY ask again, including after it has begun changing the target, where the answer it needs rests on facts this run's own changes invalidated or that could not be established before the first change.
+  Why: correctness outranks batching, and some things are knowable only once an action has landed. What this permits is a second question, never a queue of them.
 - **PKG-FR-CONSENT-BEFORE-CHANGE**: Every consent a job needs for a change MUST be obtained before that change is made.
 - **PKG-FR-ASK-ABOUT-SOFTWARE**: The user MUST be asked about software, and MUST NOT be asked separately about machinery whose necessity follows from an approved package: the repository a package comes from, the key that makes that repository trusted, the pin that makes that vendor's build win, the remote a flatpak application is installed from.
   Why: the test is derivability. Approving the package answers the question; asking it separately would ask for an answer the user cannot give independently of the package, and the pairing was never expressible — a repository approved without its package does nothing, a package approved without its repository cannot be installed.
@@ -85,7 +88,8 @@ flowchart TD
 ```
 
 - **PKG-FR-APT-VENDOR-DISCLOSURE**: When an approved install would come from anything other than the distribution, the user MUST be told which vendor it comes from before approving it.
-- **PKG-FR-APT-ORIGIN-DERIVED**: Approving a package MUST carry the repository, key and pins its origin needs, without a separate question and without a second review after they land.
+- **PKG-FR-APT-ORIGIN-DERIVED**: Approving a package MUST carry the repository, key and pins its origin needs, without a separate question and without a further question once they land.
+  Why: they are derived from the approval itself, so nothing they change can invalidate the answer that produced them.
 - **PKG-FR-APT-ORIGIN-UNREPLICABLE**: Where no repository the source has declares the package's origin, or every repository that declares it names a key the source does not hold, the system MUST report the package with its origin and the reason, MUST NOT install it, and MUST NOT substitute another vendor's build.
 - **PKG-FR-APT-ORIGIN-VERIFY**: After repository convergence and before the first install, the system MUST verify against the target's own real state that each approved install will come from the source's origin. An install that would not MUST be refused as its own failure naming both origins, and the rest of the run MUST continue.
   Why: this check is the guarantee that `PKG-FR-APT-IDENTITY` holds; everything before it is preparation. It is not redundant with planning — a repository can fail to write, a pin can fail to win, and a distribution epoch can outrank every version a vendor publishes.
@@ -110,7 +114,8 @@ flowchart TD
 - **PKG-FR-COLLATERAL-AUTO**: Collateral removals and downgrades that touch only automatically-installed packages MUST proceed without asking.
   Why: that is the target's apt resolving its own dependency graph.
 - **PKG-FR-COLLATERAL-MANUAL**: An approved change MUST NOT remove or downgrade a package that is manually installed on the target unless the user has consented to that consequence specifically. The user MUST be able to accept it, to decline it — leaving the triggering install unapplied rather than failing later — or to abort the sync.
-- **PKG-FR-COLLATERAL-TIMING**: Collateral MUST be classified before anything is applied, never mid-apply. If the real transaction has drifted by the time it runs, the system MUST refuse it rather than proceed.
+- **PKG-FR-COLLATERAL-TIMING**: Collateral MUST be classified, and consented to, before anything is applied. If the real transaction has drifted by the time it runs, the system MUST refuse it rather than proceed.
+  Why: the package manager states the transaction in advance when asked, so the consequence is knowable while the user is deciding about the change that causes it.
 - **PKG-FR-COLLATERAL-NEW-ORIGIN**: For an install whose origin this run must itself provision, the protection of `PKG-FR-COLLATERAL-MANUAL` MUST still hold, but consent MUST NOT be sought in advance: unapproved collateral MUST fail that one item, and the run MUST continue.
   Why: the facts that question needs do not exist while the review is being built — until the repository lands, the target's apt cannot resolve the name, and including it would strip the protection from every other package in the run rather than weaken it for one. The cost is that for those packages the user is told afterwards instead of asked beforehand.
 
