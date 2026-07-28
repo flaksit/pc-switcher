@@ -185,7 +185,7 @@ from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, ClassVar, Literal, override
+from typing import Any, ClassVar, Literal, NamedTuple, override
 from uuid import uuid4
 
 from pcswitcher.executor import Executor, RemoteExecutor
@@ -317,13 +317,27 @@ _ITEM_CLASS_ORDER: dict[ItemClass, int] = {
     ItemClass.APT_HOLD: 4,
 }
 
+
+class _RemovalVocabulary(NamedTuple):
+    """How one deletable `/etc/apt` item class reads: `action_label` names the action for one
+    entry, `plural` names the objects for the group title.
+
+    Two words rather than one because the two positions are different parts of speech. A
+    title composed by pluralising the action label produces "Delete repositorys" — English
+    plurals do not follow from a verb phrase, and the noun is what is being counted.
+    """
+
+    action_label: str
+    plural: str
+
+
 # The two `/etc/apt` item classes whose ONLY remaining review direction is deletion, and
-# the verb each reads with (ADR-020 D-37, rulings 5 and 12). Both take two answers — delete
+# the words each reads with (ADR-020 D-37, rulings 5 and 12). Both take two answers — delete
 # or leave it for now — so both carry `REPO_REMOVAL_REVIEW_ACTION`; keeping them as two
 # entries is what gives the user two separate screens rather than one mixed list.
-_REPO_REMOVAL_VERBS: dict[ItemClass, str] = {
-    ItemClass.APT_SOURCE: "delete repository",
-    ItemClass.APT_PIN: "delete pin file",
+_REPO_REMOVAL_VERBS: dict[ItemClass, _RemovalVocabulary] = {
+    ItemClass.APT_SOURCE: _RemovalVocabulary("delete repository", "repositories"),
+    ItemClass.APT_PIN: _RemovalVocabulary("delete pin file", "pin files"),
 }
 
 # Item-id prefixes that may never appear in a decision file, in any direction (rulings 5
@@ -2030,7 +2044,7 @@ class AptSyncJob(PackageSyncJob):
                     ),
                 )
             )
-        for item_class, verb in _REPO_REMOVAL_VERBS.items():
+        for item_class, words in _REPO_REMOVAL_VERBS.items():
             entries = [diff for diff in removals if diff.item_class is item_class]
             if not entries:
                 continue
@@ -2038,9 +2052,14 @@ class AptSyncJob(PackageSyncJob):
                 ReviewGroup(
                     manager=self.manager_id,
                     action=REPO_REMOVAL_REVIEW_ACTION,
-                    title=f"{verb.capitalize()}s the source no longer has ({self.manager_id})",
+                    title=f"Delete {words.plural} the source no longer has ({self.manager_id})",
                     entries=tuple(
-                        ReviewEntry(item_id=diff.item_id, label=diff.label, action_label=verb, detail=diff.detail)
+                        ReviewEntry(
+                            item_id=diff.item_id,
+                            label=diff.label,
+                            action_label=words.action_label,
+                            detail=diff.detail,
+                        )
                         for diff in entries
                     ),
                 )

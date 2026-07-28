@@ -5372,6 +5372,21 @@ class TestTwoAnswerRemovals:
         assert (DiffAction.REMOVE.value, "config") in by_action
 
     @pytest.mark.asyncio
+    async def test_each_two_answer_screen_is_titled_in_correct_english(self) -> None:
+        """The title names the plural of the OBJECT, not a verb phrase with an `s` glued on
+        the end — "repositorys" is what the latter produces.
+        """
+        context, _source, _target = self._target_only_repo_state()
+
+        plan = await AptSyncJob(context).plan()
+
+        titles = {group.title for group in plan.groups if group.action == REPO_REMOVAL_REVIEW_ACTION}
+        assert titles == {
+            "Delete repositories the source no longer has (apt)",
+            "Delete pin files the source no longer has (apt)",
+        }
+
+    @pytest.mark.asyncio
     async def test_a_two_answer_group_is_unticked_and_never_offered_permanence(self) -> None:
         """Both halves of the sentinel's contract, read off the real groups this job builds
         rather than a hand-made one: unticked because it is a removal direction, never
