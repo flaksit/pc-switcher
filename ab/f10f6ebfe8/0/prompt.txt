@@ -1,0 +1,45 @@
+<task-notification>
+<task-id>a2043d03dc80d921b</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/1cfb7cbc-0306-41b6-8f82-7ed1281a66dd/tasks/a2043d03dc80d921b.output</output-file>
+<status>completed</status>
+<summary>Agent "Restore batching as preference not prohibition" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done. Committed as `50e4c697` (local only, branch `gsd/phase-02-package-management-sync`). Gates all clean; **1462 passed**, unchanged.
+
+## Sites changed
+
+`docs/adr/adr-020-declarative-package-convergence.md`
+- `:9` (TL;DR) — dropped "reviewing exactly once"; now "with every change approved before it is made and the questions batched into one screen per manager per action."
+- `:18` (Required) — replaced the MUST-review-once/MUST-NOT-prompt-after rule with: approval MUST precede the change it authorises; reviews SHOULD be batched, one screen per manager per action "is the norm and the shape to design for"; a job MUST NOT degrade a batch into a per-item question queue; "A job MAY ask again, including after it has begun writing, when the answer it needs rests on facts this run's own changes invalidated or that could not be established before the first write: correctness outranks the batching preference."
+- `:25` (transaction/collateral rule) — "never prompted mid-apply" → collateral MUST be determined at plan time "because apt's own rehearsal states that transaction in advance and there is nothing left to discover once the apply runs."
+- `:33` (Forbidden) — "No second review … no prompt of any kind after that job's first write" → "No change applied that the user did not approve, and no batched review degraded into a question per item."
+- `:111` heading — "One review per job, batched by action" → "Batched review inside each job". Body now: approval precedes each change, batching is the norm, no per-item queue (`:113`); a new paragraph `:115` states batching is a preference not a ban on asking twice, with the correctness-outranks clause; `:117` reframes apt's single review as a property of its diffs, and says explicitly "`apt_sync` therefore has no second review pass and needs none — nothing this section permits is an argument for adding one back."
+- `:121` — first absolute restated as "Nothing is applied that the user did not approve, and approval precedes the change it authorises."
+- `:190` (D-38 ESM) — "so the one-review-then-write rule is intact" → "so nothing is written before it is answered."
+- `:208` (D-40) — the prompt-flooding/violates-review-before-any-change clause replaced with the rehearsal justification: the collateral is knowable while the user decides about the install that causes it.
+- `:244` (Consequences) — "so no prompt can fire mid-apply with the Rich live display paused" → one batched screen per manager per action, every approval preceding its change.
+
+`docs/jobs/package-sync.md`
+- `:62` heading → "One review per job, and nothing applied you did not approve".
+- `:64` — "`apt_sync` batches its questions rather than interrupting you package by package: it asks everything it can ask before it writes anything, and it never applies something you did not approve. In practice one review is all it needs." (`:66` reason paragraph kept, opener adjusted.)
+- `:80` — "never mid-apply, so you are never prompted while changes are landing" → classification happens in the review "because apt's simulation already says what the real transaction will do".
+
+`docs/planning/Package sync requirements.md`
+- `:55` — `PKG-FR-NO-REREVIEW` replaced by `PKG-FR-BATCHED` (SHOULD batch; MUST NOT ask item by item where one screen would do) and `:57` `PKG-FR-ASK-AGAIN` (MAY ask again, including after writing has begun, with the correctness-outranks-batching Why and "What this permits is a second question, never a queue of them"). No document referenced the old id.
+- `:91` `PKG-FR-APT-ORIGIN-DERIVED` — "without a second review after they land" → "without a further question once they land", plus a Why: derived work cannot invalidate the answer that produced it. This is the requirement that plainly keeps the apt second review out.
+- `:117` `PKG-FR-COLLATERAL-TIMING` — "never mid-apply" removed; now "MUST be classified, and consented to, before anything is applied", with the rehearsal Why.
+
+`src/pcswitcher/jobs/flatpak_sync.py` — docstrings only, no code touched
+- `:69` and `:907` — "never as a mid-apply refusal" / "belongs in the review rather than mid-apply" replaced by the real reason: the dependent refs are already known from the plan's reads, so the review is where the consequence can be stated.
+
+## Answers to your questions
+
+- `PKG-FR-CONSENT-BEFORE-CHANGE` (`:59`) needed **no change**. "Every consent a job needs for a change MUST be obtained before that change is made" is already per-change, not all-questions-before-all-changes.
+- Sites you missed: none in `docs/` or `src/` beyond your list — I swept `.md` and `.py` for mid-apply, second review/screen/question, re-review, prompt-flooding, "no prompt after", "exactly once". Three near-misses I deliberately left, all descriptive-with-reason rather than prohibitions: `docs/system/package-sync.md:30` ("for `apt_sync` this is also exactly one review per run" + the origins reason), `src/pcswitcher/jobs/apt_sync.py:60` and `:1929` (collateral "decided at plan time … never a prompt during apply" — states where this job's decision lives, carries no categorical justification clause), and `apt_sync.py:161` ("reviews EXACTLY ONCE per run" + the reason). Say the word if you want them reworded too.
+- `.planning/` artifacts still carry the old phrasing — `.continue-here.md:133`, `02-16-PLAN.md:22`, `02-SCENARIO-COVERAGE.md:134`/`:407`, `02-SPEC-package-review-model.md` §3.4. I left them: they are phase working records, and `02-SPEC` §3.4's reasoning is already the correct one (the facts are no longer stale, not "asking twice is banned"). `02-UAT-01-RUNBOOK.md` untouched.
+- No behaviour and no test file changed; `git status` showed exactly the four files above before staging.
+
+Where your brief was slightly off: `PKG-FR-COLLATERAL-TIMING` was at `:113` and `PKG-FR-NO-REREVIEW`/`PKG-FR-CONSENT-BEFORE-CHANGE` at `:55`/`:56` as you said, but no batching requirement existed anywhere in the document, so `PKG-FR-BATCHED` is new rather than a check.</result>
+<usage><subagent_tokens>116396</subagent_tokens><tool_uses>48</tool_uses><duration_ms>341059</duration_ms></usage>
+</task-notification>
