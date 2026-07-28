@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bl3h3vctu</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/1cfb7cbc-0306-41b6-8f82-7ed1281a66dd/tasks/bl3h3vctu.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for integration CI" completed (exit code 0)</summary>
+</task-notification>
