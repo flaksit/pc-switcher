@@ -611,7 +611,7 @@ def _apt_context(
 # prints nothing is a broken probe, not a machine with unusual packages (`AptProbeFailed`),
 # so these fixtures state the answer a real source gives. The origin is the distribution
 # archive, which keeps every package exempt from the D-35 origin check.
-_SOURCE_SCAN_CMD = "/etc/apt/sources.list.d /etc/apt/sources.list -maxdepth 1 -type f -exec awk"
+_SOURCE_SCAN_CMD = "-exec awk"
 # The `ubuntu.sources` that makes the archive above a DISTRIBUTION origin, so `pkg-a` stays
 # exempt from the D-35 origin check and remains an ordinary install.
 _SOURCE_SCAN_UBUNTU = "/etc/apt/sources.list.d/ubuntu.sources\tURIs: http://ftp.belnet.be/ubuntu\n"

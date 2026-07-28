@@ -136,6 +136,14 @@ Every unreproducible item is resolved before the run continues: it gets a snippe
 - Choosing "add an install snippet" and then submitting an **empty** body is not accepted: the review re-prompts the three-way choice rather than falling through. You must enter a real snippet or pick skip-once / skip-always.
 - A **non-interactive** run (no TTY) cannot ask, so it marks every undecided item skip-once and reports them; it never records a snippet or a machine-specific mark. Re-run interactively to actually resolve anything.
 
+## When a package manager cannot be read
+
+A package sync compares what the source has with what the target has. If one of those reads fails — snapd is not running, apt's status file cannot be read, a lock is held, the network dropped — the answer is not "that machine has nothing". pc-switcher stops the job and tells you which command failed and what the tool said, instead of proposing to remove everything the other machine has.
+
+An empty *answer* is different and is left alone: a machine with no snaps, no flatpaks, no held packages and no pins is an ordinary machine, and syncing it is ordinary work.
+
+Today a job stopping this way ends the whole sync, including jobs that had nothing to do with the failure. That is a known limitation and is being addressed separately.
+
 ## Non-interactive runs
 
 A run without a TTY prompts for nothing, so every review item comes back skip-once and the job converges nothing. When the review had anything to offer, the job therefore reports **SKIPPED**, not SUCCESS, and the run continues with the remaining jobs. A run whose review was empty — the target already matches the source for that package manager — still reports SUCCESS: there was nothing to decide because there was nothing to do.

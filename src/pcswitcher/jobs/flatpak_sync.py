@@ -88,6 +88,7 @@ from pcswitcher.jobs.packages.items import (
     ItemDiff,
     build_version_mismatch_detail,
 )
+from pcswitcher.jobs.packages.probes import require_answer
 from pcswitcher.jobs.packages.state import DecisionFile, filter_inert
 from pcswitcher.jobs.packages.sync_core import ConvergeItemFailed, PackagePlan, PackageSyncJob
 from pcswitcher.models import CommandResult, FirstSyncScope, Host, ValidationError
@@ -813,28 +814,45 @@ class FlatpakSyncJob(PackageSyncJob):
         hook's item type here is safe: no code holding a `PackageSyncJob`-typed
         reference ever calls it expecting an `AptPackageItem` back — the same
         justification `SnapSyncJob.capture_source_items` documents.
+
+        Guarded on the exit code (ADR-022), like every flatpak read in this job. Measured
+        in a container with flatpak installed: an unreadable or unparsable installation
+        makes `flatpak list`, `remotes` and `mask` all exit 1 with `error:` on stderr, and
+        all three exit 0 printing nothing when the machine simply has none of what was
+        asked for. So the exit code is the whole discriminator, and empty output at exit 0
+        is a machine with no apps — an ordinary machine, and never a failure.
         """
         result = await self.source.run_command(_FLATPAK_LIST_CMD)
+        require_answer(_FLATPAK_LIST_CMD, result, Host.SOURCE)
         return _parse_flatpak_list(result.stdout)
 
     async def query_target_items(self) -> Sequence[FlatpakItem]:  # pyright: ignore[reportIncompatibleMethodOverride]
         """The target's own `flatpak list --app` (same reasoning as `capture_source_items`)."""
         result = await self.target.run_command(_FLATPAK_LIST_CMD, login_shell=False)
+        require_answer(_FLATPAK_LIST_CMD, result, Host.TARGET)
         return _parse_flatpak_list(result.stdout)
 
     async def _capture_source_remotes(self, scope: Literal["user", "system"]) -> list[FlatpakRemoteItem]:
         """One scope's remotes plus their per-remote keyring digests (#215): two reads,
         one listing and one batched `sha256sum`, never a command per remote.
+
+        Only the listing is guarded. The keyring digest command is the documented
+        counter-example to a blanket exit-code rule (ADR-022): its glob legitimately
+        matches nothing on a scope with no remote keyring, and `sha256sum` then exits 1 —
+        so on that command a non-zero exit is the NORMAL answer, and guarding it would fail
+        every run on a machine with no flatpak remotes.
         """
         keys = await self.source.run_command(_keyring_digests_cmd(scope))
-        result = await self.source.run_command(_FLATPAK_REMOTES_CMD_TEMPLATE.format(flag=_scope_flag(scope)))
+        command = _FLATPAK_REMOTES_CMD_TEMPLATE.format(flag=_scope_flag(scope))
+        result = await self.source.run_command(command)
+        require_answer(command, result, Host.SOURCE)
         return _parse_flatpak_remotes(result.stdout, scope, _parse_keyring_digests(keys.stdout))
 
     async def _query_target_remotes(self, scope: Literal["user", "system"]) -> list[FlatpakRemoteItem]:
         keys = await self.target.run_command(_keyring_digests_cmd(scope), login_shell=False)
-        result = await self.target.run_command(
-            _FLATPAK_REMOTES_CMD_TEMPLATE.format(flag=_scope_flag(scope)), login_shell=False
-        )
+        command = _FLATPAK_REMOTES_CMD_TEMPLATE.format(flag=_scope_flag(scope))
+        result = await self.target.run_command(command, login_shell=False)
+        require_answer(command, result, Host.TARGET)
         return _parse_flatpak_remotes(result.stdout, scope, _parse_keyring_digests(keys.stdout))
 
     async def _capture_all_source_remotes(self) -> list[FlatpakRemoteItem]:
@@ -855,11 +873,13 @@ class FlatpakSyncJob(PackageSyncJob):
     async def _capture_source_masks(self, scope: Literal["user", "system"]) -> list[FlatpakMaskItem]:
         cmd = _FLATPAK_MASK_CMD_TEMPLATE.format(flag=_scope_flag(scope))
         result = await self.source.run_command(cmd)
+        require_answer(cmd, result, Host.SOURCE)
         return _parse_flatpak_masks(result.stdout, scope)
 
     async def _query_target_masks(self, scope: Literal["user", "system"]) -> list[FlatpakMaskItem]:
         cmd = _FLATPAK_MASK_CMD_TEMPLATE.format(flag=_scope_flag(scope))
         result = await self.target.run_command(cmd, login_shell=False)
+        require_answer(cmd, result, Host.TARGET)
         return _parse_flatpak_masks(result.stdout, scope)
 
     async def _capture_all_source_masks(self) -> list[FlatpakMaskItem]:

@@ -22,6 +22,7 @@ from pcswitcher.jobs import JobContext
 from pcswitcher.jobs.manual_installs_sync import ManualInstallsSyncJob, UnreproducibleItem
 from pcswitcher.jobs.packages.apt_policy import installed_origins_by_package
 from pcswitcher.jobs.packages.items import DiffAction, DiffClass, ItemClass, ItemDiff
+from pcswitcher.jobs.packages.probes import ProbeFailed
 from pcswitcher.jobs.packages.review import (
     UNREPRODUCIBLE_REVIEW_ACTION,
     Decision,
@@ -335,10 +336,28 @@ class TestNoCandidateDetection:
             assert name in policy_calls[0]
 
     @pytest.mark.asyncio
-    async def test_a_policy_read_that_answers_nothing_indicts_nothing(self) -> None:
-        """No block for a queried name is silence, not evidence — sharpest when the command
-        failed outright. Indicting on absence would declare a machine's whole manual set
-        unreproducible, and hand `apt_sync`'s exclusion the same verdict."""
+    async def test_no_block_inside_an_answered_policy_read_indicts_nothing(self) -> None:
+        """No block for a queried name is silence, not evidence. Indicting on absence would
+        declare a machine's whole manual set unreproducible, and hand `apt_sync`'s exclusion
+        the same verdict. The probe ANSWERED here — exit 0, and a block for the other name —
+        so nothing but `gh`'s missing block can decide this."""
+        context, _source, _target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "code\ngh\n", ""),
+                "apt-cache policy": CommandResult(0, _POLICY_HAND_DEB, ""),
+            }
+        )
+
+        plan = await ManualInstallsSyncJob(context).plan()
+
+        assert self._unreproducible_ids(plan) == {"unreproducible:apt-no-candidate:code"}
+
+    @pytest.mark.asyncio
+    async def test_a_policy_read_that_did_not_answer_fails_the_job(self) -> None:
+        """ADR-022: the detection probe exits non-zero, so it reported nothing about any
+        package. Reading that as "no unreproducible packages here" silently drops findings
+        that `apt_sync` has meanwhile excluded from its own manifest off the same predicate.
+        """
         context, _source, _target = make_context(
             source_responses={
                 "apt-mark showmanual": CommandResult(0, "code\ngh\n", ""),
@@ -346,9 +365,29 @@ class TestNoCandidateDetection:
             }
         )
 
-        plan = await ManualInstallsSyncJob(context).plan()
+        with pytest.raises(ProbeFailed) as excinfo:
+            await ManualInstallsSyncJob(context).plan()
 
-        assert self._unreproducible_ids(plan) == set()
+        assert "apt-cache policy code gh" in str(excinfo.value)
+        assert "could not read the package lists" in str(excinfo.value)
+
+    @pytest.mark.asyncio
+    async def test_a_manual_set_read_that_did_not_answer_fails_the_job(self) -> None:
+        """The other end of the same detection: `apt-mark showmanual` exits non-zero, so the
+        run knows nothing about the source's packages. The policy probe below it is left
+        answering normally, so only the manual-set read can fail this."""
+        context, _source, _target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(100, "", "E: Problem opening /var/lib/dpkg/status\n"),
+                "apt-cache policy": CommandResult(0, _POLICY_HAND_DEB, ""),
+            }
+        )
+
+        with pytest.raises(ProbeFailed) as excinfo:
+            await ManualInstallsSyncJob(context).plan()
+
+        assert "apt-mark showmanual" in str(excinfo.value)
+        assert "exited 100" in str(excinfo.value)
 
     def test_only_the_installed_version_row_contributes_origins(self) -> None:
         """`gh`'s older version rows name three Ubuntu URIs that merely OFFER the package.

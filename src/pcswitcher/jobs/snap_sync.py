@@ -58,6 +58,7 @@ from pcswitcher.jobs.packages.items import (
     ItemDiff,
     build_version_mismatch_detail,
 )
+from pcswitcher.jobs.packages.probes import require_answer
 from pcswitcher.jobs.packages.state import DecisionFile, filter_inert
 from pcswitcher.jobs.packages.sync_core import ConvergeItemFailed, PackagePlan, PackageSyncJob
 from pcswitcher.models import CommandResult, FirstSyncScope, Host, LogLevel, ValidationError
@@ -458,13 +459,26 @@ class SnapSyncJob(PackageSyncJob):
         diff_items`'s apt-package-shaped dispatch (module docstring), so widening this
         hook's item type here is safe: no code holding a `PackageSyncJob`-typed
         reference ever calls it expecting an `AptPackageItem` back.
+
+        Guarded on the exit code (ADR-022). This is the read whose silence is worst: an
+        empty source manifest offers every snap on the target for removal, and the only
+        thing standing between that and a wiped target is that removal groups arrive
+        unticked. Measured against the real `snap` binary — with snapd unreachable it exits
+        1, and with snapd answering that zero snaps are installed it exits 0, writes "No
+        snaps are installed yet." to STDERR and leaves stdout empty. So the exit code
+        separates the two cleanly, and an empty stdout at exit 0 is a machine with no snaps,
+        which is an ordinary machine.
         """
-        result = await self.source.run_command("snap list --all")
+        command = "snap list --all"
+        result = await self.source.run_command(command)
+        require_answer(command, result, Host.SOURCE)
         return _parse_snap_list(result.stdout)
 
     async def query_target_items(self) -> Sequence[SnapItem]:  # pyright: ignore[reportIncompatibleMethodOverride]
         """The target's own `snap list --all` (same reasoning as `capture_source_items`)."""
-        result = await self.target.run_command("snap list --all", login_shell=False)
+        command = "snap list --all"
+        result = await self.target.run_command(command, login_shell=False)
+        require_answer(command, result, Host.TARGET)
         return _parse_snap_list(result.stdout)
 
     @override

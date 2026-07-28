@@ -173,6 +173,7 @@ from pcswitcher.jobs.packages.items import (
     ItemDiff,
     build_version_mismatch_detail,
 )
+from pcswitcher.jobs.packages.probes import require_answer
 from pcswitcher.jobs.packages.review import (
     COLLATERAL_REVIEW_ACTION,
     REPO_CONFLICT_REVIEW_ACTION,
@@ -187,7 +188,7 @@ from pcswitcher.jobs.packages.sync_core import ConvergeItemFailed, PackagePlan, 
 from pcswitcher.models import CommandResult, FirstSyncScope, Host, LogLevel, ValidationError
 from pcswitcher.sudoers import passwordless_sudo_hint
 
-__all__ = ["AptProbeFailed", "AptSyncJob", "AptTransactionPreview", "simulate_apt_transaction"]
+__all__ = ["AptSyncJob", "AptTransactionPreview", "simulate_apt_transaction"]
 
 # `AptPackageItem.item_id` is always this prefix + the package name (packages/items.py).
 # Parsing the name back out of the id is a legitimate use of a stable identity string,
@@ -211,6 +212,11 @@ _TARGET_SUDO_COMMANDS = (
 
 # The five `/etc/apt/*` directories D-11/D-13 pull into scope, each captured with one
 # batched `sha256sum` listing (never one command per file).
+#
+# `_APT_ROOT_DIR` is the one start point the source-file scan walks: it is the only path in
+# this set whose existence is implied by apt existing at all, which `validate()` has already
+# established, so a `find` rooted there has an unambiguous exit code (ADR-022).
+_APT_ROOT_DIR = "/etc/apt"
 _APT_SOURCES_DIR = "/etc/apt/sources.list.d"
 # The only two extensions apt reads in `sources.list.d`. Everything else there — the
 # `.save` and `.curtin.orig` copies Ubuntu's own tooling leaves behind (four of them on the
@@ -1035,26 +1041,39 @@ def _dangling_keyring_ref(keyring_refs: Sequence[str], source_key_filenames: fro
 async def _capture_dir_digests(
     run: Callable[[str], Awaitable[CommandResult]],
     directory: str,
+    host: Host,
     *,
     extensions: Sequence[str] = (),
 ) -> dict[str, str]:
     """One `sudo find <dir> -maxdepth 1 -type f -exec sha256sum {} +` per directory —
     a single batched command, never one `sha256sum` per file. `-exec ... {} +` never
-    runs at all when the directory has no matching files, so an empty/absent directory
-    degrades to an empty digest map rather than a shell error.
+    runs at all when the directory has no matching files, so an empty directory degrades
+    to an empty digest map rather than a shell error.
 
     `extensions` narrows the capture to the files apt itself reads, and is only correct
     where apt HAS such a rule: `sources.list.d` is read for `*.list`/`*.sources` alone, so
     the `.save`/`.curtin.orig` copies apt ignores must not become syncable items.
     `preferences.d` and `apt.conf.d` pass no extensions, because apt reads extensionless
     files in both.
+
+    An ABSENT directory is a separate case and is what the `test -d` wrapper is for
+    (ADR-022). Measured: `find` on a path that does not exist exits 1, exactly as it does
+    when it cannot read one that does — so without the wrapper the two would be one signal,
+    and the only ways to resolve it are both wrong. Failing every run on a machine with no
+    `/etc/apt/preferences.d` turns a legitimate "no pins here" into an error; accepting the
+    exit code turns a directory this run could not read into "that machine has no
+    repositories", which offers every file on the other machine for removal. With the
+    wrapper an absent directory answers "nothing" at exit 0 and a non-zero exit is only
+    ever a real failure, which `require_answer` then fails the job on.
     """
     quoted = shlex.quote(directory)
     predicate = ""
     if extensions:
         names = " -o ".join(f"-name {shlex.quote(f'*{ext}')}" for ext in extensions)
         predicate = f"\\( {names} \\) "
-    result = await run(f"sudo find {quoted} -maxdepth 1 -type f {predicate}-exec sha256sum {{}} +")
+    command = f"if test -d {quoted}; then sudo find {quoted} -maxdepth 1 -type f {predicate}-exec sha256sum {{}} +; fi"
+    result = await run(command)
+    require_answer(command, result, host)
     return _parse_sha256sum(result.stdout)
 
 
@@ -1090,6 +1109,7 @@ type _SourceFileRefs = Mapping[str, tuple[tuple[str, ...], tuple[str, ...]]]
 
 async def _scan_source_file_references(
     run: Callable[[str], Awaitable[CommandResult]],
+    host: Host,
 ) -> dict[str, tuple[tuple[str, ...], tuple[str, ...]]]:
     """`{filename: (keyring_refs, repository URIs)}` for EVERY source file on a machine,
     from ONE batched command — `sources.list.d` AND `/etc/apt/sources.list`.
@@ -1123,11 +1143,22 @@ async def _scan_source_file_references(
         r"tolower($0) ~ /^uris:/ || tolower($0) ~ /signed-by/ || tolower($0) ~ /^[ \t]*deb(-src)?[ \t]/ "
         r'{print FILENAME "\t" $0}'
     )
-    # Both paths in ONE `find`: a missing `/etc/apt/sources.list` makes find complain on
-    # stderr about that path alone and still walk the directory, so the scan degrades to
-    # "no references from that file" rather than failing.
-    paths = f"{shlex.quote(_APT_SOURCES_DIR)} {shlex.quote(_APT_SOURCES_LIST)}"
-    result = await run(f"sudo find {paths} -maxdepth 1 -type f -exec awk {shlex.quote(awk)} {{}} +")
+    # ONE start point that is always there, with `-path` selecting the two locations, rather
+    # than naming `/etc/apt/sources.list.d` and `/etc/apt/sources.list` as two start points.
+    # Measured: naming a `/etc/apt/sources.list` that is absent makes find complain on stderr
+    # about that path and exit 1 while still walking the directory — so the two-start-point
+    # form reports a legitimately-absent file with the same exit code as a scan that could
+    # not run at all. That ambiguity is not affordable here: the scan's silence reads as "no
+    # source file references any keyring", which deletes keys still in use
+    # (`_surviving_keyring_refs`). Selecting by `-path` makes an absent file match nothing at
+    # exit 0, leaving a non-zero exit to mean only a real failure, which `require_answer`
+    # fails the job on (ADR-022).
+    selector = f"\\( -path {shlex.quote(_APT_SOURCES_LIST)} -o -path {shlex.quote(f'{_APT_SOURCES_DIR}/*')} \\)"
+    command = (
+        f"sudo find {shlex.quote(_APT_ROOT_DIR)} -maxdepth 2 -type f {selector} -exec awk {shlex.quote(awk)} {{}} +"
+    )
+    result = await run(command)
+    require_answer(command, result, host)
     lines_by_file: dict[str, list[str]] = {}
     for line in result.stdout.splitlines():
         path, tab, rest = line.partition("\t")
@@ -1304,21 +1335,8 @@ def _backup_path_for(backup_dir: str, dest: str) -> str:
     return f"{backup_dir}/{dest.lstrip('/').replace('/', '_')}"
 
 
-class AptProbeFailed(RuntimeError):
-    """An apt READ this run's correctness depends on did not answer at all.
-
-    Deliberately NOT a `ConvergeItemFailed`. That type means "what we asked for is wrong",
-    which is under our control, belongs to one item, and lets the run continue (D-27). This
-    one means the tool or the machine is broken — a transient network failure, an apt lock,
-    an interrupted dpkg — which no package's provenance explains. It escapes `apply()`'s
-    per-item loop on purpose, so the run fails ONCE naming the command that failed rather
-    than N times naming N packages.
-    """
-
-
 def _require_apt_answer(command: str, result: CommandResult, host: Host, *, blocks: int | None = None) -> None:
-    """Refuse to read an apt probe's silence as an answer about the packages it was asked
-    about.
+    """`require_answer` with apt's own evidence for what "did not answer" means (ADR-022).
 
     Two conditions, and no others, mean apt did not answer:
 
@@ -1328,26 +1346,10 @@ def _require_apt_answer(command: str, result: CommandResult, host: Host, *, bloc
     * `blocks == 0` where the caller knows at least one block was owed. apt prints exactly
       one block per name it knows (measured on the development machine: 152 blocks for a
       152-name `apt-mark showmanual` set), so no blocks at all over names apt must know
-      means the output is not apt's answer.
-
-    The second is a JUDGEMENT, recorded as one: a probe that answered "I know none of these"
-    and a probe that died both print nothing, and the output alone cannot separate them. It
-    is resolved toward failing fast because the alternative misattributes an environment
-    failure to every package's provenance, and because a set apt knows nothing about is a
-    set from which nothing could have been installed anyway. Callers therefore pass `blocks`
-    only where a block is genuinely owed. A per-name absence INSIDE an answered probe is
-    left alone: that is apt saying it does not know that one name, which is evidence about
-    that one request.
+      means the output is not apt's answer. Only `apt-cache policy` callers pass this —
+      every other apt read here has a legitimate empty answer.
     """
-    if result.success and blocks != 0:
-        return
-    condition = (
-        f"exited {result.exit_code}"
-        if not result.success
-        else "exited 0 but printed no package block, so its output is not an answer"
-    )
-    detail = f": {result.stderr.strip()}" if result.stderr.strip() else ""
-    raise AptProbeFailed(f"apt probe on the {host.value} did not answer — `{command}` {condition}{detail}")
+    require_answer(command, result, host, answers=blocks, answer_noun="package block")
 
 
 @dataclass(frozen=True)
@@ -1565,13 +1567,22 @@ class AptSyncJob(PackageSyncJob):
         and where each of the rest came from (`self._source_origins`, the left-hand side of
         every ADR-021 D-34 comparison). A second call over the same names would cost a
         second full policy run to learn something already on screen.
+
+        The manifest read is guarded (ADR-022) because its silence is the single most
+        expensive misreading in this job: an empty source manifest is "the source has no
+        apt packages", which offers every package on the target for removal. Measured, apt
+        exits 100 when it cannot read the status file or parse `apt.conf.d`, so a non-zero
+        exit is the discriminator. Emptiness is NOT — see ADR-022 for the one measured
+        failure that survives it.
         """
-        manual = await self.source.run_command("apt-mark showmanual")
+        command = "apt-mark showmanual"
+        manual = await self.source.run_command(command)
+        require_answer(command, manual, Host.SOURCE)
         names = _lines(manual.stdout)
         policy = await self._source_policy(names)
         self._source_origins = installed_origins_by_package(policy)
         bare_debs = packages_installed_from_no_repository(policy, names)
-        items = await self._resolve_versions(manual.stdout, self.source.run_command)
+        items = await self._resolve_versions(manual.stdout, self.source.run_command, Host.SOURCE)
         return [item for item in items if item.name not in bare_debs]
 
     async def _source_policy(self, manual_names: Sequence[str]) -> str:
@@ -1605,19 +1616,36 @@ class AptSyncJob(PackageSyncJob):
         return result.stdout
 
     async def query_target_items(self) -> Sequence[AptPackageItem]:
-        """The target's own manually-installed apt packages, with versions."""
-        manual = await self.target.run_command("apt-mark showmanual", login_shell=False)
+        """The target's own manually-installed apt packages, with versions.
+
+        Guarded on the same terms as `capture_source_items` and for the mirror-image
+        reason (ADR-022): an empty target manifest is "the target has no apt packages",
+        which proposes installing the source's entire package set and hands
+        `_collect_plan_time_collateral` a simulation of it.
+        """
+        command = "apt-mark showmanual"
+        manual = await self.target.run_command(command, login_shell=False)
+        require_answer(command, manual, Host.TARGET)
 
         async def run(cmd: str) -> CommandResult:
             return await self.target.run_command(cmd, login_shell=False)
 
-        return await self._resolve_versions(manual.stdout, run)
+        return await self._resolve_versions(manual.stdout, run, Host.TARGET)
 
     @staticmethod
     async def _resolve_versions(
-        showmanual_output: str, run: Callable[[str], Awaitable[CommandResult]]
+        showmanual_output: str, run: Callable[[str], Awaitable[CommandResult]], host: Host
     ) -> list[AptPackageItem]:
-        """Resolve every name's version with ONE `dpkg-query` call (RESEARCH.md)."""
+        """Resolve every name's version with ONE `dpkg-query` call (RESEARCH.md).
+
+        Guarded on the exit code alone (ADR-022). A version this call fails to supply
+        becomes the empty string, which reads as a version difference against the other
+        machine and turns the whole manifest into upgrade proposals. Measured: `dpkg-query`
+        exits 1 when ANY queried name is unknown to dpkg and when its admin directory is
+        unreadable; every name here came from `apt-mark showmanual`, which lists only
+        installed packages (measured: a package removed without `--purge` leaves the
+        showmanual set), so the first case cannot arise and a non-zero exit means dpkg.
+        """
         names = _lines(showmanual_output)
         if not names:
             return []
@@ -1628,7 +1656,9 @@ class AptSyncJob(PackageSyncJob):
         # dpkg-query's OWN format-string escapes (interpreted by dpkg-query, not the
         # shell) — hence a plain (non-f) string so Python leaves them as two-char
         # backslash sequences for dpkg-query to expand into real tab/newline.
-        versions_result = await run("dpkg-query --show --showformat='${Package}\\t${Version}\\n' " + quoted)
+        versions_command = "dpkg-query --show --showformat='${Package}\\t${Version}\\n' " + quoted
+        versions_result = await run(versions_command)
+        require_answer(versions_command, versions_result, host)
 
         versions: dict[str, str] = {}
         for line in versions_result.stdout.splitlines():
@@ -1645,9 +1675,17 @@ class AptSyncJob(PackageSyncJob):
         membership diff: a name held on the source but not the target becomes a hold
         (INSTALL), the reverse an unhold (REMOVE), and the target set also suppresses a
         held package's own install/upgrade action in `_diff_apt_packages`.
+
+        Exit code only (ADR-022): holding nothing is what most machines do, so an empty
+        answer here is ordinary data — unlike the manifest reads, where emptiness at least
+        means something is unusual. A failed read would still flip the membership diff in
+        both directions, which is what the exit-code guard covers.
         """
-        source_hold = await self.source.run_command("apt-mark showhold")
-        target_hold = await self.target.run_command("apt-mark showhold", login_shell=False)
+        command = "apt-mark showhold"
+        source_hold = await self.source.run_command(command)
+        require_answer(command, source_hold, Host.SOURCE)
+        target_hold = await self.target.run_command(command, login_shell=False)
+        require_answer(command, target_hold, Host.TARGET)
         return frozenset(_lines(source_hold.stdout)), frozenset(_lines(target_hold.stdout))
 
     async def collect_target_policy(self, names: Sequence[str]) -> _TargetPolicy:
@@ -1659,12 +1697,19 @@ class AptSyncJob(PackageSyncJob):
         lacks, and where the copy it already has came from — the second is what makes a
         package installed on both machines from two different vendors visible at all
         (ADR-021 D-34).
+
+        Exit code only, deliberately without the `blocks` half (ADR-022): these are the
+        SOURCE's names asked of the TARGET's apt, and a name the target has never heard of
+        is the ordinary case this call exists to detect. No block is owed for any single
+        name, so no count can be required.
         """
         if not names:
             return _TargetPolicy()
 
         quoted = " ".join(shlex.quote(name) for name in sorted(names))
-        result = await self.target.run_command(f"apt-cache policy {quoted}", login_shell=False)
+        command = f"apt-cache policy {quoted}"
+        result = await self.target.run_command(command, login_shell=False)
+        _require_apt_answer(command, result, Host.TARGET)
         return _TargetPolicy(
             candidate_origins=candidate_origins_by_package(result.stdout),
             installed_origins=installed_origins_by_package(result.stdout),
@@ -1922,14 +1967,14 @@ class AptSyncJob(PackageSyncJob):
         # One `sha256sum` listing per key directory per machine, driven by `_KEY_DIRS` so
         # capture, reference resolution and provisioning can never disagree about which
         # directories exist.
-        source_keys = [await _capture_dir_digests(source_run, directory) for directory in _KEY_DIRS]
-        target_keys = [await _capture_dir_digests(target_run, directory) for directory in _KEY_DIRS]
+        source_keys = [await _capture_dir_digests(source_run, directory, Host.SOURCE) for directory in _KEY_DIRS]
+        target_keys = [await _capture_dir_digests(target_run, directory, Host.TARGET) for directory in _KEY_DIRS]
         self._source_keyrings, self._source_global_keys, self._source_shared_keys = source_keys
         self._target_keyrings, self._target_global_keys, self._target_shared_keys = target_keys
         self._source_key_filenames = frozenset(name for digests in source_keys for name in digests)
 
-        self._target_source_refs = await _scan_source_file_references(target_run)
-        self._source_source_refs = await _scan_source_file_references(source_run)
+        self._target_source_refs = await _scan_source_file_references(target_run, Host.TARGET)
+        self._source_source_refs = await _scan_source_file_references(source_run, Host.SOURCE)
 
     async def _plan_repo_diffs(self) -> list[ItemDiff]:
         """Capture the three `/etc/apt/*` directories and diff the item classes that still
@@ -1957,14 +2002,18 @@ class AptSyncJob(PackageSyncJob):
         async def target_run(cmd: str) -> CommandResult:
             return await self.target.run_command(cmd, login_shell=False)
 
-        source_sources = await _capture_dir_digests(source_run, _APT_SOURCES_DIR, extensions=_APT_SOURCE_EXTENSIONS)
-        target_sources = await _capture_dir_digests(target_run, _APT_SOURCES_DIR, extensions=_APT_SOURCE_EXTENSIONS)
+        source_sources = await _capture_dir_digests(
+            source_run, _APT_SOURCES_DIR, Host.SOURCE, extensions=_APT_SOURCE_EXTENSIONS
+        )
+        target_sources = await _capture_dir_digests(
+            target_run, _APT_SOURCES_DIR, Host.TARGET, extensions=_APT_SOURCE_EXTENSIONS
+        )
         self._source_sources_list_digest = await _capture_file_digest(source_run, _APT_SOURCES_LIST)
         self._target_sources_list_digest = await _capture_file_digest(target_run, _APT_SOURCES_LIST)
-        source_pins = await _capture_dir_digests(source_run, _APT_PREFERENCES_DIR)
-        target_pins = await _capture_dir_digests(target_run, _APT_PREFERENCES_DIR)
-        source_configs = await _capture_dir_digests(source_run, _APT_CONF_DIR)
-        target_configs = await _capture_dir_digests(target_run, _APT_CONF_DIR)
+        source_pins = await _capture_dir_digests(source_run, _APT_PREFERENCES_DIR, Host.SOURCE)
+        target_pins = await _capture_dir_digests(target_run, _APT_PREFERENCES_DIR, Host.TARGET)
+        source_configs = await _capture_dir_digests(source_run, _APT_CONF_DIR, Host.SOURCE)
+        target_configs = await _capture_dir_digests(target_run, _APT_CONF_DIR, Host.TARGET)
 
         self._source_source_digests, self._target_source_digests = source_sources, target_sources
         self._source_pin_digests, self._target_pin_digests = source_pins, target_pins
@@ -2027,6 +2076,13 @@ class AptSyncJob(PackageSyncJob):
         package, the `collect_target_policy` shape), gated on `filenames` being non-empty so
         an ordinary run pays nothing; the source-file scan it also needs was already
         captured for keyring correctness, so this adds no second scan.
+
+        Guarded on the exit code (ADR-022): an unanswered probe answers "this repository
+        strands nothing", which is the answer that turns the conflict screen off and lets a
+        repository feeding machine-specific packages be overwritten silently — the exact
+        disclosure this method exists to make. Without the `blocks` half, because these
+        names come from a decision FILE and a package recorded there may since have been
+        removed, so an empty answer is reachable without anything being broken.
         """
         if not filenames:
             return {}
@@ -2042,7 +2098,9 @@ class AptSyncJob(PackageSyncJob):
             return {}
 
         quoted = " ".join(shlex.quote(name) for name in names)
-        policy = await target_run(f"apt-cache policy {quoted}")
+        policy_command = f"apt-cache policy {quoted}"
+        policy = await target_run(policy_command)
+        _require_apt_answer(policy_command, policy, Host.TARGET)
         origins_by_package = installed_origins_by_package(policy.stdout)
         packages_by_origin: dict[str, list[str]] = {}
         for name in names:
@@ -2151,8 +2209,14 @@ class AptSyncJob(PackageSyncJob):
         source of the auto-versus-manual collateral split (D-30). This is the same set
         apt itself consults to decide what it may remove, so classifying a collateral
         package by membership here matches apt's own notion of "the user chose this".
+
+        Guarded (ADR-022): an unanswered read leaves the set empty, which classifies every
+        collateral package as automatic and so switches D-30's protection off entirely,
+        silently and in the direction that removes packages.
         """
-        result = await self.target.run_command("apt-mark showmanual", login_shell=False)
+        command = "apt-mark showmanual"
+        result = await self.target.run_command(command, login_shell=False)
+        require_answer(command, result, Host.TARGET)
         return frozenset(_lines(result.stdout))
 
     async def _collect_plan_time_collateral(self, diffs: Sequence[ItemDiff]) -> list[ItemDiff]:
@@ -3430,7 +3494,7 @@ class AptSyncJob(PackageSyncJob):
         candidates = frozenset(self._target_keyrings) - frozenset(self._source_keyrings)
         if not candidates:
             return
-        references = await _scan_source_file_references(target_run)
+        references = await _scan_source_file_references(target_run, Host.TARGET)
         referenced = {Path(ref).name for refs, _uris in references.values() for ref in refs}
 
         for filename in sorted(candidates - referenced):

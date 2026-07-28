@@ -22,9 +22,9 @@ from pcswitcher.config import Configuration
 from pcswitcher.executor import LocalExecutor
 from pcswitcher.jobs import JobContext
 from pcswitcher.jobs.apt_sync import (
+    _APT_PREFERENCES_DIR,
     _TARGET_SUDO_COMMANDS,
     AptPackageItem,
-    AptProbeFailed,
     AptSyncJob,
     _diff_apt_packages,
     _distribution_origins,
@@ -40,6 +40,7 @@ from pcswitcher.jobs.apt_sync import (
     simulate_apt_transaction,
 )
 from pcswitcher.jobs.packages.items import DiffAction, DiffClass, ItemClass, ItemDiff
+from pcswitcher.jobs.packages.probes import ProbeFailed
 from pcswitcher.jobs.packages.review import (
     _REMOVAL_ACTIONS,
     COLLATERAL_REVIEW_ACTION,
@@ -1248,7 +1249,7 @@ class TestBareDebPackagesAreNotAptSyncsBusiness:
             target_responses={"apt-mark showmanual": CommandResult(0, "", "")},
         )
 
-        with pytest.raises(AptProbeFailed) as excinfo:
+        with pytest.raises(ProbeFailed) as excinfo:
             await AptSyncJob(context).plan()
 
         assert "apt-cache policy pkg-a" in str(excinfo.value)
@@ -1269,7 +1270,7 @@ class TestBareDebPackagesAreNotAptSyncsBusiness:
             target_responses={"apt-mark showmanual": CommandResult(0, "", "")},
         )
 
-        with pytest.raises(AptProbeFailed) as excinfo:
+        with pytest.raises(ProbeFailed) as excinfo:
             await AptSyncJob(context).plan()
 
         assert "printed no package block" in str(excinfo.value)
@@ -2719,7 +2720,7 @@ class TestOriginEnforcement:
         job = AptSyncJob(context)
         _install_reviewer(job, {f"apt:package:{name}": Decision.APPLY for name in names})
 
-        with pytest.raises(AptProbeFailed) as excinfo:
+        with pytest.raises(ProbeFailed) as excinfo:
             await job.execute()
 
         assert "apt-cache policy pkg-a pkg-b pkg-c" in str(excinfo.value)
@@ -2751,7 +2752,7 @@ class TestOriginEnforcement:
         job = AptSyncJob(context)
         _install_reviewer(job, {f"apt:package:{name}": Decision.APPLY for name in names})
 
-        with pytest.raises(AptProbeFailed) as excinfo:
+        with pytest.raises(ProbeFailed) as excinfo:
             await job.execute()
 
         assert "printed no package block" in str(excinfo.value)
@@ -3818,7 +3819,7 @@ class TestSourceOnlyCollateral:
 # keyring provisioning/collection run on) from `collect_hold_pin_facts`'s own `-exec awk`
 # over `preferences.d`, which any looser substring would also match. `/etc/apt/sources.list`
 # is part of the scan because a keyring named only there is still in use.
-_SOURCE_SCAN_CMD = "/etc/apt/sources.list.d /etc/apt/sources.list -maxdepth 1 -type f -exec awk"
+_SOURCE_SCAN_CMD = "-exec awk"
 
 _VENDOR_LIST = "deb [signed-by=/etc/apt/keyrings/vendor.gpg] https://vendor.example.com/apt stable main\n"
 _VENDOR_SOURCES = (
@@ -5575,3 +5576,289 @@ class TestDiffEngine:
         assert diffs[0].detail is not None
         assert "gone.example.com/apt" in diffs[0].detail
         assert "no repository file on the source declares it" in diffs[0].detail
+
+
+class TestAReadThatDidNotAnswer:
+    """ADR-022, applied to the reads that build the two manifests and the `/etc/apt`
+    picture: a read that did not answer fails the job naming the command, a read that
+    answered "nothing" is data.
+
+    Which of the two an empty result is depends on the command, and every test here isolates
+    exactly one read: everything else in the fixture answers normally, so nothing but the
+    named read can produce the outcome.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_source_manual_set_read_that_did_not_answer_fails_the_job(self) -> None:
+        """Measured: `apt-mark showmanual` exits 100 when it cannot read `/var/lib/dpkg/
+        status` or parse `apt.conf.d`. Reading that silence as data makes the source
+        manifest empty, which offers every package on the target for removal.
+        """
+        context, _source, _target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(100, "", "E: Problem opening /var/lib/dpkg/status\n")
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-x\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-x\t1.0\n", ""),
+            },
+        )
+
+        with pytest.raises(ProbeFailed) as excinfo:
+            await AptSyncJob(context).plan()
+
+        assert "apt-mark showmanual" in str(excinfo.value)
+        assert "exited 100" in str(excinfo.value)
+        assert "/var/lib/dpkg/status" in str(excinfo.value)
+
+    @pytest.mark.asyncio
+    async def test_an_empty_source_manual_set_at_exit_zero_is_still_data(self) -> None:
+        """The deliberate limit of the rule above, pinned so it is not silently widened
+        later: the guard is on the EXIT CODE, and an empty answer at exit 0 still reaches
+        the diff as "remove the target's packages". Widening it to "empty means broken"
+        would fail every run against a machine whose manual set is legitimately empty.
+        """
+        context, _source, _target = make_context(
+            source_responses=_NO_PACKAGES,
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-x\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-x\t1.0\n", ""),
+            },
+        )
+
+        plan = await AptSyncJob(context).plan()
+
+        removals = {d.item_id for d in plan.diffs if d.action == DiffAction.REMOVE}
+        assert removals == {"apt:package:pkg-x"}
+
+    @staticmethod
+    def _target_failing_nth_showmanual(n: int) -> Callable[..., CommandResult]:
+        """A target whose n-th (1-based) `apt-mark showmanual` fails and whose others
+        answer normally.
+
+        `plan()` asks the target that ONE command twice — the manifest read, then the
+        collateral protection set — and a substring fixture cannot tell the two apart. A
+        fixture that failed both would pass on either guard's behalf, which is exactly the
+        vacuous shape these two tests exist to avoid.
+        """
+        state = {"calls": 0}
+        inner = respond_to({"dpkg-query": CommandResult(0, "pkg-x\t1.0\n", "")})
+
+        def _side_effect(cmd: str, **kwargs: object) -> CommandResult:
+            if "apt-mark showmanual" in cmd:
+                state["calls"] += 1
+                if state["calls"] == n:
+                    return CommandResult(100, "", "E: Could not open lock file\n")
+                return CommandResult(0, "pkg-x\n", "")
+            return inner(cmd, **kwargs)
+
+        return _side_effect
+
+    @pytest.mark.asyncio
+    async def test_a_target_manifest_read_that_did_not_answer_fails_the_job(self) -> None:
+        context, _source, target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+            }
+        )
+        target.run_command = AsyncMock(side_effect=self._target_failing_nth_showmanual(1))
+
+        with pytest.raises(ProbeFailed) as excinfo:
+            await AptSyncJob(context).plan()
+
+        assert "apt-mark showmanual" in str(excinfo.value)
+        assert "target" in str(excinfo.value)
+
+    @pytest.mark.asyncio
+    async def test_a_collateral_protection_read_that_did_not_answer_fails_the_job(self) -> None:
+        """The second of the two. Its silence empties the target's manual set, which
+        classifies every collateral package as automatic and switches D-30's protection off
+        entirely — the manifest read above it answers normally, so only this one can fail.
+        """
+        context, _source, target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+            }
+        )
+        target.run_command = AsyncMock(side_effect=self._target_failing_nth_showmanual(2))
+
+        with pytest.raises(ProbeFailed) as excinfo:
+            await AptSyncJob(context).plan()
+
+        assert "apt-mark showmanual" in str(excinfo.value)
+
+    @pytest.mark.asyncio
+    async def test_a_version_read_that_did_not_answer_fails_the_job(self) -> None:
+        """A `dpkg-query` that does not answer leaves every version empty, which reads as a
+        version difference against the other machine on every package at once.
+        """
+        context, _source, _target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(1, "", "dpkg-query: error: unable to access the database\n"),
+            },
+            target_responses=_NO_PACKAGES,
+        )
+
+        with pytest.raises(ProbeFailed) as excinfo:
+            await AptSyncJob(context).plan()
+
+        assert "dpkg-query --show" in str(excinfo.value)
+        assert "exited 1" in str(excinfo.value)
+
+    @pytest.mark.asyncio
+    async def test_a_hold_read_that_did_not_answer_fails_the_job(self) -> None:
+        context, _source, _target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+                "apt-mark showhold": CommandResult(100, "", "E: The package lists could not be parsed\n"),
+            },
+            target_responses=_NO_PACKAGES,
+        )
+
+        with pytest.raises(ProbeFailed) as excinfo:
+            await AptSyncJob(context).plan()
+
+        assert "apt-mark showhold" in str(excinfo.value)
+
+    @pytest.mark.asyncio
+    async def test_an_empty_hold_set_is_data_not_a_failure(self) -> None:
+        """Holding nothing is what most machines do, so an empty `apt-mark showhold` at
+        exit 0 must stay ordinary data — the plan completes and proposes no hold.
+        """
+        context, _source, _target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+                "apt-mark showhold": CommandResult(0, "", ""),
+            },
+            target_responses={**_NO_PACKAGES, "apt-mark showhold": CommandResult(0, "", "")},
+        )
+
+        plan = await AptSyncJob(context).plan()
+
+        assert not [d for d in plan.diffs if d.item_class == ItemClass.APT_HOLD]
+
+    @pytest.mark.asyncio
+    async def test_a_target_policy_read_that_did_not_answer_fails_the_job(self) -> None:
+        """The source has a package, so the only `apt-cache policy` the TARGET is asked at
+        plan time is `collect_target_policy`'s.
+        """
+        context, _source, _target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+            },
+            target_responses={
+                **_NO_PACKAGES,
+                "apt-cache policy": CommandResult(100, "", "E: Could not get lock /var/lib/dpkg/lock-frontend\n"),
+            },
+        )
+
+        with pytest.raises(ProbeFailed) as excinfo:
+            await AptSyncJob(context).plan()
+
+        assert "apt-cache policy pkg-a" in str(excinfo.value)
+        assert "lock-frontend" in str(excinfo.value)
+
+    @pytest.mark.asyncio
+    async def test_a_target_policy_that_knows_none_of_the_source_names_is_data(self) -> None:
+        """The `blocks` half of the apt guard is deliberately NOT applied here: these are
+        the SOURCE's names asked of the TARGET's apt, and a target that has never heard of
+        any of them is the ordinary case this call exists to detect. It must still plan.
+        """
+        context, _source, _target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+            },
+            target_responses={**_NO_PACKAGES, "apt-cache policy": CommandResult(0, "", "")},
+        )
+
+        plan = await AptSyncJob(context).plan()
+
+        assert {d.item_id for d in plan.diffs} == {"apt:package:pkg-a"}
+
+    @pytest.mark.asyncio
+    async def test_a_directory_digest_read_that_did_not_answer_fails_the_job(self) -> None:
+        """`sudo find <dir> ... sha256sum` on the source keyrings directory. Its silence
+        empties `_source_key_filenames`, which makes every `Signed-By:` reference look
+        dangling.
+        """
+        context, _source, _target = make_context(
+            source_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/keyrings": CommandResult(1, "", "find: '/etc/apt/keyrings': Permission denied\n"),
+            },
+            target_responses=_NO_PACKAGES,
+        )
+
+        with pytest.raises(ProbeFailed) as excinfo:
+            await AptSyncJob(context).plan()
+
+        assert "find /etc/apt/keyrings" in str(excinfo.value)
+        assert "Permission denied" in str(excinfo.value)
+
+    @pytest.mark.asyncio
+    async def test_an_absent_directory_answers_nothing_rather_than_failing(self) -> None:
+        """The `test -d` wrapper is what keeps a legitimately absent directory out of the
+        failure path: it is what makes the command exit 0 with no output, which this
+        asserts is planned through rather than raised on.
+        """
+        context, _source, _target = make_context(source_responses=_NO_PACKAGES, target_responses=_NO_PACKAGES)
+        job = AptSyncJob(context)
+
+        plan = await job.plan()
+
+        assert plan.diffs == ()
+        assert any(
+            c.startswith(f"if test -d {_APT_PREFERENCES_DIR}; then sudo find {_APT_PREFERENCES_DIR}")
+            for c in all_calls(_source)
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_source_file_scan_that_did_not_answer_fails_the_job(self) -> None:
+        """The scan's silence reads as "no source file references any keyring", which is
+        what deletes keys that are still in use.
+        """
+        context, _source, _target = make_context(
+            source_responses={
+                **_NO_PACKAGES,
+                _SOURCE_SCAN_CMD: CommandResult(1, "", "find: '/etc/apt': No such file or directory\n"),
+            },
+            target_responses=_NO_PACKAGES,
+        )
+
+        with pytest.raises(ProbeFailed) as excinfo:
+            await AptSyncJob(context).plan()
+
+        assert "-exec awk" in str(excinfo.value)
+        assert "No such file or directory" in str(excinfo.value)
+
+    @pytest.mark.asyncio
+    async def test_a_removal_impact_read_that_did_not_answer_fails_the_job(self) -> None:
+        """`_machine_specific_packages_by_source_file`. Its silence answers "this
+        repository strands nothing", which is the answer that lets a repository feeding
+        machine-specific packages be removed or overwritten with no disclosure. The source
+        holds no packages here, so `collect_target_policy` never runs and this is the only
+        `apt-cache policy` the target is asked.
+        """
+        context, _source, _target = make_context(
+            source_responses=_NO_PACKAGES,
+            target_responses={
+                **_NO_PACKAGES,
+                _SOURCE_SCAN_CMD: CommandResult(0, _scan_line("vendor.list", _VENDOR_LIST), ""),
+                "find /etc/apt/sources.list.d": CommandResult(0, sha256_line("d1", "vendor.list"), ""),
+                "apt.decisions.yaml": CommandResult(0, _decision_file("apt:package:vendor-tool"), ""),
+                "apt-cache policy": CommandResult(100, "", "E: Unable to read the package lists\n"),
+            },
+        )
+
+        with pytest.raises(ProbeFailed) as excinfo:
+            await AptSyncJob(context).plan()
+
+        assert "apt-cache policy vendor-tool" in str(excinfo.value)
+        assert "Unable to read the package lists" in str(excinfo.value)

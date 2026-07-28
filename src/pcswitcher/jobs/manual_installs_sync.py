@@ -55,6 +55,7 @@ from pcswitcher.jobs.packages.items import (
     ItemClass,
     ItemDiff,
 )
+from pcswitcher.jobs.packages.probes import require_answer
 from pcswitcher.jobs.packages.review import (
     UNREPRODUCIBLE_REVIEW_ACTION,
     Decision,
@@ -374,12 +375,21 @@ class ManualInstallsSyncJob(PackageSyncJob):
         package), read through `packages_installed_from_no_repository`: a package's own
         `Candidate:` line cannot answer this, because dpkg's status entry makes apt report
         a hand-installed package's installed version as its candidate.
+
+        Guarded on the exit code (ADR-022). Its silence indicts nothing on its own — an
+        unanswered probe reports no unreproducible packages, which proposes nothing — but
+        it does not stay harmless in a whole run: `apt_sync.capture_source_items` DROPS the
+        same bare-`.deb` packages from its own manifest off its own copy of this probe, so
+        one probe answering and the other not makes a package vanish from the run with
+        nothing said about it anywhere.
         """
         if not manual_names:
             return []
 
         quoted = " ".join(shlex.quote(name) for name in manual_names)
-        result = await self.source.run_command(f"apt-cache policy {quoted}")
+        command = f"apt-cache policy {quoted}"
+        result = await self.source.run_command(command)
+        require_answer(command, result, Host.SOURCE)
         no_repository = packages_installed_from_no_repository(result.stdout, manual_names)
         return [
             UnreproducibleItem(
@@ -398,6 +408,12 @@ class ManualInstallsSyncJob(PackageSyncJob):
         batched `dpkg --search` over those candidates decides ownership; a path absent from the
         `dpkg --search` output is unowned. Both steps run on the SOURCE (D-18) — a fact about
         what the source machine has installed, not the target.
+
+        Neither step is guarded, and both are ADR-022 counter-examples rather than
+        omissions. `dpkg --search` exits 1 as soon as ONE queried path is unowned, which is
+        precisely the finding this scan is looking for, so a non-zero exit here carries no
+        information about whether dpkg answered. The `find` already discards its own stderr
+        and tolerates an absent scan root by design.
         """
         quoted_roots = " ".join(shlex.quote(root) for root in _UNOWNED_SCAN_ROOTS)
         listing = await self.source.run_command(f"find {quoted_roots} -mindepth 1 -maxdepth 1 2>/dev/null")
@@ -425,7 +441,9 @@ class ManualInstallsSyncJob(PackageSyncJob):
         apt-package-shaped dispatch, so widening this hook's item type is safe (same
         reasoning as `SnapSyncJob.capture_source_items`).
         """
-        manual = await self.source.run_command("apt-mark showmanual")
+        command = "apt-mark showmanual"
+        manual = await self.source.run_command(command)
+        require_answer(command, manual, Host.SOURCE)
         manual_names = _lines(manual.stdout)
         return [
             *await self._scan_no_candidate_apt_packages(manual_names),

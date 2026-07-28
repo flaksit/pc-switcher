@@ -16,6 +16,7 @@ import pytest
 from pcswitcher.config import Configuration
 from pcswitcher.jobs import JobContext
 from pcswitcher.jobs.packages.items import DiffAction, DiffClass, ItemClass
+from pcswitcher.jobs.packages.probes import ProbeFailed
 from pcswitcher.jobs.packages.review import (
     Decision,
     ReviewGroup,
@@ -1078,3 +1079,65 @@ class TestSnapItem:
         assert "firefox" in label
         assert "latest/stable" in label
         assert "4536" in label
+
+
+class TestAProbeThatDidNotAnswer:
+    """ADR-022: a `snap list --all` that did not answer fails the job; one that answered
+    "no snaps" is data.
+
+    Both halves matter and only the exit code separates them, measured against the real
+    `snap` binary: snapd unreachable exits 1, and snapd reporting zero snaps exits 0 with
+    the "No snaps are installed yet." hint on STDERR and an empty stdout.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_source_list_that_did_not_answer_fails_the_job(self) -> None:
+        context, _source, _target = make_context(
+            source_responses={
+                "snap list --all": CommandResult(
+                    1, "", "error: cannot list snaps: cannot communicate with server: dial unix /run/snapd.socket\n"
+                )
+            },
+            target_responses={"snap list --all": CommandResult(0, SNAP_LIST_TARGET, "")},
+        )
+
+        with pytest.raises(ProbeFailed) as excinfo:
+            await SnapSyncJob(context).plan()
+
+        assert "snap list --all" in str(excinfo.value)
+        assert "exited 1" in str(excinfo.value)
+        assert "snapd.socket" in str(excinfo.value)
+
+    @pytest.mark.asyncio
+    async def test_a_target_list_that_did_not_answer_fails_the_job(self) -> None:
+        """Only the TARGET read fails here — the source answers three snaps — so nothing
+        but the target's exit code can produce this."""
+        context, _source, _target = make_context(
+            source_responses={"snap list --all": CommandResult(0, SNAP_LIST_SOURCE, "")},
+            target_responses={"snap list --all": CommandResult(1, "", "error: cannot communicate with server\n")},
+        )
+
+        with pytest.raises(ProbeFailed) as excinfo:
+            await SnapSyncJob(context).plan()
+
+        assert "exited 1" in str(excinfo.value)
+
+    @pytest.mark.asyncio
+    async def test_a_source_with_no_snaps_installed_is_data_not_a_failure(self) -> None:
+        """The legitimate-empty half, and the hazard the guard above exists for: the same
+        empty stdout that a failed read produces is a real answer at exit 0, and it must
+        still reach the diff as "remove the target's snaps" rather than fail the job.
+        """
+        context, _source, _target = make_context(
+            source_responses={
+                "snap list --all": CommandResult(
+                    0, "", "No snaps are installed yet. Try 'snap install hello-world'.\n"
+                )
+            },
+            target_responses={"snap list --all": CommandResult(0, SNAP_LIST_TARGET, "")},
+        )
+
+        plan = await SnapSyncJob(context).plan()
+
+        removals = {diff.item_id for diff in plan.diffs if diff.action == DiffAction.REMOVE}
+        assert removals == {"snap:beta", "snap:gamma", "snap:delta"}

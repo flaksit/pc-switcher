@@ -26,6 +26,7 @@ from pcswitcher.jobs.flatpak_sync import (
     flatpak_sync_exclude_paths,
 )
 from pcswitcher.jobs.packages.items import DiffAction, DiffClass, ItemClass
+from pcswitcher.jobs.packages.probes import ProbeFailed
 from pcswitcher.jobs.packages.review import (
     ReviewGroup,
     _is_removal_direction,  # pyright: ignore[reportPrivateUsage]
@@ -1528,3 +1529,94 @@ class TestOrphanedRefsDetail:
         assert "customremote" in detail
         assert "org.example.One" in detail
         assert "org.example.Two" in detail
+
+
+class TestAProbeThatDidNotAnswer:
+    """ADR-022: a flatpak read that did not answer fails the job; one that answered
+    "nothing" is data.
+
+    Measured in a container with flatpak installed: `list`, `remotes` and `mask` all exit 1
+    with `error:` on stderr when the installation cannot be opened, and all three exit 0
+    printing nothing when the machine has none of what was asked for.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_source_list_that_did_not_answer_fails_the_job(self) -> None:
+        context, _source, _target = make_context(
+            source_responses={
+                "flatpak list --app": CommandResult(1, "", "error: While opening repository: Permission denied\n"),
+                **SOURCE_RESPONSES,
+            },
+            target_responses=TARGET_RESPONSES,
+        )
+
+        with pytest.raises(ProbeFailed) as excinfo:
+            await FlatpakSyncJob(context).plan()
+
+        assert "flatpak list --app" in str(excinfo.value)
+        assert "exited 1" in str(excinfo.value)
+        assert "Permission denied" in str(excinfo.value)
+
+    @pytest.mark.asyncio
+    async def test_a_remotes_read_that_did_not_answer_fails_the_job(self) -> None:
+        """Only the user-scope remotes read fails; both list reads and the system-scope
+        remotes read answer normally, so nothing else can produce this."""
+        context, _source, _target = make_context(
+            source_responses={
+                "flatpak remotes --user": CommandResult(1, "", "error: Couldn't parse config file\n"),
+                **SOURCE_RESPONSES,
+            },
+            target_responses=TARGET_RESPONSES,
+        )
+
+        with pytest.raises(ProbeFailed) as excinfo:
+            await FlatpakSyncJob(context).plan()
+
+        assert "flatpak remotes --user" in str(excinfo.value)
+        assert "Couldn't parse config file" in str(excinfo.value)
+
+    @pytest.mark.asyncio
+    async def test_a_mask_read_that_did_not_answer_fails_the_job(self) -> None:
+        context, _source, _target = make_context(
+            source_responses={**SOURCE_RESPONSES, "flatpak --user mask": CommandResult(1, "", "error: no repo\n")},
+            target_responses=TARGET_RESPONSES,
+        )
+
+        with pytest.raises(ProbeFailed) as excinfo:
+            await FlatpakSyncJob(context).plan()
+
+        assert "flatpak --user mask" in str(excinfo.value)
+
+    @pytest.mark.asyncio
+    async def test_a_keyring_digest_read_exiting_non_zero_is_not_a_failure(self) -> None:
+        """The counter-example a blanket exit-code rule would break. `sha256sum` over a
+        glob that matches nothing exits 1, and that is the NORMAL answer for a scope whose
+        remotes rely on a machine-level trust anchor — so this read is deliberately
+        unguarded and the plan must complete.
+        """
+        context, _source, _target = make_context(
+            source_responses={**SOURCE_RESPONSES, "sha256sum": CommandResult(1, "", "sha256sum: No such file\n")},
+            target_responses={**TARGET_RESPONSES, "sha256sum": CommandResult(1, "", "sha256sum: No such file\n")},
+        )
+
+        plan = await FlatpakSyncJob(context).plan()
+
+        assert plan.diffs
+
+    @pytest.mark.asyncio
+    async def test_a_target_with_nothing_installed_is_data_not_a_failure(self) -> None:
+        """The legitimate-empty half: every target read answers empty at exit 0, which is a
+        machine with no flatpaks, and the source's apps must reach the diff as installs.
+        """
+        context, _source, _target = make_context(
+            source_responses=SOURCE_RESPONSES,
+            target_responses={
+                "flatpak list --app": CommandResult(0, "", ""),
+                "flatpak remotes": CommandResult(0, "", ""),
+            },
+        )
+
+        plan = await FlatpakSyncJob(context).plan()
+
+        installs = {diff.item_id for diff in plan.diffs if diff.action == DiffAction.INSTALL}
+        assert "flatpak:ref:user:org.gimp.GIMP" in installs
