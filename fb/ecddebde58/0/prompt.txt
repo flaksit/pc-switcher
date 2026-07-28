@@ -1,0 +1,43 @@
+<task-notification>
+<task-id>a350547218da8498b</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/1cfb7cbc-0306-41b6-8f82-7ed1281a66dd/tasks/a350547218da8498b.output</output-file>
+<status>completed</status>
+<summary>Agent "Rewrite the stale UAT runbook" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done. One local commit, `8d68bf81`, one file, staged by path. `uv run codespell` clean repo-wide; no source file touched; the other agent's `docs/planning/Package sync requirements.md` left unstaged.
+
+## What the rewrite covers
+
+Every prompt shape the review can now produce, each with a hand trigger and an undo, in one setup pass: install/change checkbox, removal checkbox, never-offer-again, report-only (no permanence question), apt repository deletion, apt pin deletion, flatpak remote deletion, apt repository conflict, flatpak remote-repoint conflict, collateral install-anyway/skip/abort, unreproducible three-way + multi-line editor, the Ubuntu Pro gate (its own run), and the snippet-registry overwrite confirmation as an optional extra. Ctrl-C is enumerated per prompt type with the verbatim message; Ctrl-D is explicitly not promised as anything.
+
+## Stale beyond your list
+
+- **The Live region pauses once per job review, not per prompt.** `review_items` calls `ui.pause()` before the group loop and `ui.resume()` in the `finally` after the last group. `ask_gate` pauses/resumes separately, inside `plan()`. The old checklist asserted a per-prompt erase/rebuild.
+- **`manual_installs_sync.manager_id` is `manual`.** Its decision file is `manual.decisions.yaml` and its titles read "Resolve manual items with no reproducible install". The old runbook said `manual_installs` in both places.
+- **`--dry-run` is now the cheap rehearsal, and the old text described it wrongly.** It plans and runs every review including the collateral and both conflict screens (their inputs are all read-only probes), and writes nothing — no decision file, no snippet, no `/etc/apt`. It does *not* ask the ESM gate; that path warns instead. I restructured the runbook around a dry-run pass then a real pass.
+- **Fixtures are version 4**, not 3, and now seed real Flathub: pc1 gets `io.github.fragglet.sdl_sopwith` + `flathub-beta`, both machines get `flathub`, the `org.freedesktop.Platform/x86_64/25.08` runtime and the `hello`/`hello-world` snaps. The flatpak setup builds on that instead of the old synthetic repo.
+- **Abort messages dropped "/EOF"** — they now read `(Ctrl-C)`, matching your ruling.
+
+## Two defects found while grounding the procedure
+
+- **Cosmetic:** the apt repository-deletion group title is `Delete repositorys the source no longer has (apt)` — `_REPO_REMOVAL_VERBS` supplies "delete repository" and `_build_review_groups` appends `"s"`. The pin group reads correctly. Noted in the runbook as an observation, not a failure.
+- **Behavioural, worth an issue:** answering **Skip** at the collateral prompt writes `SKIP_ONCE` over *every* package in the batched removal (or install) candidate set, not only the ones that produced the collateral — `_classify_collateral` passes the whole candidate set as `trigger_ids`. Since `_record_permanent_skips` runs on the post-override decision map, a "Skip" silently cancels a never-offer-again tick the user made on an unrelated removal in the same review. The runbook's answer plan works around it and tells the user to record the erasure.
+
+## Could not provoke by hand — flagged, not invented
+
+- apt `ORIGIN_MISMATCH` and `REPO_UNAVAILABLE`: both need two machines drawing one name from two vendors, or a repository whose signing key is missing. Not buildable on these VMs without adding a real third-party repo and leaving it behind.
+- ADR-022's fail-fast probe rule: only reachable by breaking a package manager mid-plan.
+- `flatpak install` of a ref pc2 already has (the "Overwrite" branch of the remote-conflict setup) — exit code unverified, so a per-item failure there is called out as not-a-finding.
+- `flatpak remote-add NAME &lt;.flatpakrepo URL&gt;` needs network from pc2 to Flathub; no other hand trigger for the remote-deletion screen without a second real remote.
+
+## Where your brief was wrong or incomplete
+
+- **The ESM gate is not naturally reachable at all on these VMs.** `ubuntu-esm-*.sources` are written by `pro enable`, so neither unattached VM has them and `_pending_esm_writes()` is empty. Provocation is creating `ubuntu-esm-apps.sources` on pc1 with `Enabled: no` (the gate keys on filename + digest, never content). Both answers are then reachable *without attaching anything*: "re-check and continue" re-probes, logs the WARNING and re-asks (unbounded by design), and "skip" gives `JobSkipped` → `JobStatus.SKIPPED` while the other three jobs run. That skip is also the only hand-reachable `SKIPPED` in this runbook.
+- The obvious collateral pair fails: `fortune-mod` *Recommends* `fortunes-min`. Verified against the noble archive that `fortunes` **Depends:** `fortunes-min`, so that is the pair the runbook uses, with `apt-get -s remove | grep '^Remv'` as the authoritative gate.
+
+## Harness
+
+**Not folded in.** Your commit constraint is one file, and a rehearsal script has no home under `src/` or `tests/` without its own commit — I named `tests/manual/review_harness.py` as the place if you want it permanently. Instead it is embedded verbatim in the runbook's §3, extended from the version in the scratchpad to cover the two-answer removal groups, both conflict screens (with `versions=` panels), a report-only group and `ask_gate`. I re-ran its non-interactive path (`&lt; /dev/null`): it renders every group panel, returns all `skip_once`, populates `unresolved` for the unreproducible group, and `was_interactive=False`. The interactive path is untested by me — it needs a TTY.</result>
+<usage><subagent_tokens>327208</subagent_tokens><tool_uses>51</tool_uses><duration_ms>801209</duration_ms></usage>
+</task-notification>
