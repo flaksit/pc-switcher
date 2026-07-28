@@ -1,0 +1,8 @@
+You talk about S0-S9 all the time, but what do they mean?
+
+You can push and let integr tests run now, while you implement the remaining tasks. Early feedback is good :-)
+More remaining: snap and flatpak must have similar repo&key-follow-package automation so user doesn't need to bother with repos&keys for them either (in so far possible).
+
+Where can I find a clear requirements spec (USER viewpoint) of the different package syncs? Doc that defines the basic principles and then more concrete the different cases that can exist and how pc-switcher should handle them. Requirements evolved a lot informally during this and previous sessions. If doesn't exist: create it.
+
+Update to-do list and go.
