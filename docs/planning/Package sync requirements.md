@@ -310,6 +310,10 @@ This is not a theoretical guard. Two remotes can share a name and serve differen
 
 An app whose origin remote exists neither on the target nor in this run's own additions is refused as its own item naming the missing remote, rather than issuing an install flatpak would reject.
 
+Those two checks guard an install, and an app already present on both machines issues none — so the already-diverged case is reported instead. The same app, same scope, same branch, installed from different remotes on the two machines is a provenance divergence: reported with both remotes and both URLs named, never converged, and it takes precedence over a version difference on the same app, because two vendors' builds are numbered independently and reporting the numbers would state a difference of degree where the real difference is of origin. Converging it is not on offer at all: flatpak refuses to install a ref that is already installed from another remote, so the only mechanical resolution would be uninstalling the app you have and reinstalling it from the other vendor. Origins are compared by the remotes' URLs, never their names, so a target `flathub` pointing at the beta repository is caught and a remote the two machines merely named differently is not.
+
+A remote the source restricts with a filter is replicated **unfiltered**, and the run warns once per such remote rather than letting a successful add read as full replication. The filter's content is an ordinary local file at whatever path the source happens to name — flatpak stores the path, not the content, and validates neither — so it is not repository-or-key material that can travel. The warning names the remote and the command to re-apply the filter on the target.
+
 A third named installation, neither user nor system, is skipped.
 
 Masks are patterns, not references to installed apps, and replicate whether or not anything matches. Present on the source only means mask; on the target only means unmask, unticked. Editing a pattern reads as remove-old plus add-new, and moving one between scopes reads as add plus remove — reported as found, never normalised. A system-scope mask needs sudo on the target; a user-scope one does not, and a user-scope-only run never asks for root.
@@ -398,7 +402,7 @@ Manual installs cannot be removed. The job keeps no record of what it put on the
 
 Version drift is reported, never resolved, for apt and flatpak. Aligning two machines' versions is your job, not the sync's.
 
-Cross-vendor divergence is reported, never resolved. When both machines have the same package from different vendors, pc-switcher will not pick one.
+Cross-vendor divergence is reported, never resolved, for apt packages and flatpak apps alike. When both machines have the same one from different vendors, pc-switcher will not pick one.
 
 A package job's review cannot be answered without a terminal. There is no config file of standing answers and no `--yes`.
 
@@ -407,10 +411,6 @@ Machine-specific marks are per manager and per machine, in files that are delibe
 ## Where the tool does not yet meet these requirements
 
 Verified against the code on the current branch, not against the older documents.
-
-Two flatpak apps of the same name and branch installed from *different* remotes on the two machines are not reported. apt reports the equivalent as a provenance divergence; flatpak compares only versions, so the pair produces either nothing at all or a bare version difference that says nothing about where the two builds came from. The origin checks that run before and after each install do not cover it — they guard an install, and this case issues none.
-
-A flatpak remote the source restricts with a filter replicates as an unfiltered remote on the target. The filter's content lives at an arbitrary local path outside flatpak's own store, so nothing carries it; the run does not yet say so.
 
 ## Open questions
 

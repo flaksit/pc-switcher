@@ -216,8 +216,8 @@ Under `/etc/apt` only three things are reviewed: an `apt.conf.d` file in all thr
 | F20 | skip-always on a mask, next run | inert | U | flat:`TestMaskSkipAlways::test_recorded_mask_produces_no_diff_on_the_next_run`, blk:`TestFlatpakMaskDecisions` (2) |
 | F21 | Remote removed while a target ref still uses it | removal offered on its own TWO-answer screen with the dependent target refs named in its `detail` (same scope only); never recordable; not refused | U | flat:`TestRemoteRemovalOrphansRefs` (6, incl. `test_removal_offers_exactly_two_answers_and_is_never_recordable`) |
 | F22 | `~/.local/share/flatpak` exclusion, `~/.var/app` never excluded | store owned by the job, data by folder_sync | U | flat:`test_returns_flatpak_data_dir_excludes_var_app`, fold:`test_flatpak_data_dir_included_var_app_never_mentioned` |
-| F23 | Same ref, same scope, same branch, installed from two DIFFERENT remotes on the two machines | ADR-020 D-41 requires `ORIGIN_MISMATCH` → REPORT_ONLY naming both remotes, ahead of the version branch | ‼ | **not implemented.** `_diff_flatpak_refs` compares versions only, so an equal-version pair produces no diff at all and an unequal one produces a bare `VERSION_MISMATCH`. The pre- and post-install origin checks do not cover it — they guard an install, and this case issues none |
-| F24 | Source remote carrying a `filtered` option | ADR-020 requires one WARNING per derived remote naming the remote and the filter path, because the filter's content lives outside the ostree store and cannot travel | ‼ | **not implemented.** The remote listing reads `name,url,options` and nothing inspects `options` for `filtered`, so a filtered source remote replicates as an unfiltered one with nothing said |
+| F23 | Same ref, same scope, same branch, installed from two DIFFERENT remotes on the two machines | `ORIGIN_MISMATCH` → REPORT_ONLY naming both remotes and both URLs, ahead of the version branch; never converged | U | flat:`TestRefOriginMismatch` (10) — `test_two_differently_named_remotes_yield_one_report_only_diff`, `test_origin_mismatch_outranks_a_version_mismatch`, `test_the_mismatch_is_reported_and_never_converged` |
+| F24 | Source remote carrying a `filtered` option | one WARNING per DERIVED remote whose source is filtered, naming the remote, its scope and the re-apply command; fires in a dry run too; the remote still travels, unfiltered | U | flat:`TestFilteredRemoteWarning` (6) — `test_a_derived_remote_whose_source_is_filtered_warns_once`, `test_the_warning_fires_in_a_dry_run_too`, `test_a_filtered_remote_no_approved_ref_needs_never_warns` |
 
 ## G. manual installs and snippets (D-18…D-23, decision 9, corrected D-23)
 
@@ -403,8 +403,6 @@ These are the narrative scenarios. Each is a composition of the branches above; 
 ### Open defects and unimplemented requirements
 
 - N6 — no "this was the last package from that source, remove it too?" prompt. Source removals propagate only because the source machine's own files disappeared, as unticked items; the key that removal orphans then goes on its own, with no item and no prompt. Example narrative 2 is not implemented.
-- F23 — a flatpak ref present on both machines from two different remotes is not reported. ADR-020 D-41 requires `ORIGIN_MISMATCH`; the ref diff compares versions only.
-- F24 — a filtered source remote replicates as an unfiltered one with no warning, where ADR-020 requires one per affected derived remote.
 
 ### One review per job, and why nothing invalidates it
 

@@ -7,6 +7,7 @@ All executor interactions are mocked; no real flatpak commands run.
 
 from __future__ import annotations
 
+import logging
 import shlex
 from collections.abc import Callable
 from pathlib import Path
@@ -464,6 +465,249 @@ class TestPlanDiff:
         # The target lacks the system-scope flathub the source has. That is no longer a
         # review line at all: it travels because a ref approved this run comes from it.
         assert not any(d.item_class == ItemClass.FLATPAK_REMOTE for d in plan.diffs)
+
+
+_FLATHUB_URL = "https://dl.flathub.org/repo/"
+_BETA_URL = "https://dl.flathub.org/beta-repo/"
+_FIREFOX_REF = "org.mozilla.firefox/x86_64/stable"
+_FIREFOX_ID = f"flatpak:ref:user:{_FIREFOX_REF}"
+_DEFAULT_ORIGIN_REMOTES = (("flathub", _FLATHUB_URL), ("flathub-beta", _BETA_URL))
+
+
+def _ref_line(ref: str, version: str, origin: str, scope: str) -> str:
+    return f"{ref.split('/', maxsplit=1)[0]}\t{version}\t{origin}\t{scope}\t{ref}\n"
+
+
+def _remote_lines(*remotes: tuple[str, str]) -> str:
+    return "".join(f"{name}\t{url}\n" for name, url in remotes)
+
+
+def origin_pair_context(
+    *,
+    source_origin: str = "flathub",
+    target_origin: str = "flathub",
+    source_version: str = "128.0",
+    target_version: str = "128.0",
+    source_remotes: tuple[tuple[str, str], ...] = _DEFAULT_ORIGIN_REMOTES,
+    target_remotes: tuple[tuple[str, str], ...] = _DEFAULT_ORIGIN_REMOTES,
+    target_scope: str = "user",
+    target_decisions: str | None = None,
+) -> tuple[JobContext, MagicMock, Any]:
+    """Two machines that each hold ONE ref, installed on both, each from a remote that
+    machine configures for itself.
+
+    This is the shape `_origin_refusal`/`_installed_origin_refusal` structurally cannot see:
+    the ref is present on both sides, so no install is ever issued and neither guard runs.
+    Each machine therefore gets its OWN remote list — the same name may carry a different
+    URL on the two sides, which is the whole divergence — rather than one list shared by
+    both, which would make the wrong-vendor case unrepresentable.
+    """
+    target_responses = {
+        "flatpak list --app": CommandResult(
+            0, _ref_line(_FIREFOX_REF, target_version, target_origin, target_scope), ""
+        ),
+        "flatpak remotes --user --columns=name,url": CommandResult(0, _remote_lines(*target_remotes), ""),
+        "flatpak remotes --system --columns=name,url": CommandResult(0, _remote_lines(*target_remotes), ""),
+    }
+    if target_decisions is not None:
+        target_responses["flatpak.decisions.yaml"] = CommandResult(0, target_decisions, "")
+    return make_context(
+        source_responses={
+            "flatpak list --app": CommandResult(0, _ref_line(_FIREFOX_REF, source_version, source_origin, "user"), ""),
+            "flatpak remotes --user --columns=name,url": CommandResult(0, _remote_lines(*source_remotes), ""),
+            "flatpak remotes --system --columns=name,url": CommandResult(0, _remote_lines(*source_remotes), ""),
+        },
+        target_responses=target_responses,
+    )
+
+
+class TestRefOriginMismatch:
+    """ADR-020 D-41: a ref present on both machines from different remotes is
+    `ORIGIN_MISMATCH`, reported and never converged.
+
+    The comparison runs on the remotes' URLs, never their names, so the two ways a name
+    lies both come out right: a target `flathub` pointing at the beta repo is a different
+    vendor, and a remote the two machines merely named differently is not.
+    """
+
+    @pytest.mark.asyncio
+    async def test_two_differently_named_remotes_yield_one_report_only_diff(self) -> None:
+        context, _source, _target = origin_pair_context(source_origin="flathub", target_origin="flathub-beta")
+        job = FlatpakSyncJob(context)
+
+        plan = await job.plan()
+
+        assert len(plan.diffs) == 1
+        diff = plan.diffs[0]
+        assert diff.item_id == _FIREFOX_ID
+        assert (diff.diff_class, diff.action) == (DiffClass.ORIGIN_MISMATCH, DiffAction.REPORT_ONLY)
+        assert diff.detail is not None
+        assert "flathub-beta" in diff.detail
+        assert _FLATHUB_URL in diff.detail
+        assert _BETA_URL in diff.detail
+
+        # "Reported" is the whole of what this diff does, so it has to reach the screen:
+        # a diff class nobody sees closes nothing.
+        entry = next(e for group in plan.groups for e in group.entries if e.item_id == _FIREFOX_ID)
+        assert entry.detail == diff.detail
+
+    @pytest.mark.asyncio
+    async def test_origin_mismatch_outranks_a_version_mismatch(self) -> None:
+        """Two vendors' builds of one ref share no version scale, so "source has X, target
+        has Y" would state a difference of degree where the real difference is of provenance.
+        """
+        context, _source, _target = origin_pair_context(
+            source_origin="flathub",
+            target_origin="flathub-beta",
+            source_version="128.0",
+            target_version="129.0beta",
+        )
+        job = FlatpakSyncJob(context)
+
+        plan = await job.plan()
+
+        assert len(plan.diffs) == 1
+        assert plan.diffs[0].diff_class == DiffClass.ORIGIN_MISMATCH
+        assert plan.diffs[0].detail is not None
+        assert "129.0beta" not in plan.diffs[0].detail
+
+    @pytest.mark.asyncio
+    async def test_one_name_pointing_at_two_vendors_is_a_mismatch(self) -> None:
+        """The case a name comparison cannot see (`5fc3ac01`): both machines report the
+        ref's origin as `flathub`, and the two `flathub`s are different vendors.
+        """
+        context, _source, _target = origin_pair_context(
+            source_origin="flathub",
+            target_origin="flathub",
+            source_remotes=(("flathub", _FLATHUB_URL),),
+            target_remotes=(("flathub", _BETA_URL),),
+        )
+        job = FlatpakSyncJob(context)
+
+        plan = await job.plan()
+
+        assert [d.diff_class for d in plan.diffs] == [DiffClass.ORIGIN_MISMATCH]
+        assert plan.diffs[0].detail is not None
+        assert _FLATHUB_URL in plan.diffs[0].detail
+        assert _BETA_URL in plan.diffs[0].detail
+
+    @pytest.mark.asyncio
+    async def test_a_remote_the_two_machines_merely_named_differently_is_not_a_mismatch(self) -> None:
+        """One vendor under two labels. Reporting it would be noise about a label, and the
+        label is not what D-41 replicates.
+        """
+        context, _source, _target = origin_pair_context(
+            source_origin="flathub",
+            target_origin="flathub-mirror",
+            source_remotes=(("flathub", _FLATHUB_URL),),
+            target_remotes=(("flathub-mirror", _FLATHUB_URL),),
+        )
+        job = FlatpakSyncJob(context)
+
+        plan = await job.plan()
+
+        # The target-only remote still earns its own REMOVE line; the REF is what must
+        # produce nothing.
+        assert [d for d in plan.diffs if d.item_class is ItemClass.FLATPAK_REF] == []
+
+    @pytest.mark.asyncio
+    async def test_one_vendor_and_one_version_still_produces_no_diff(self) -> None:
+        """Negative control: the ordinary case must stay silent, or the mismatch branch is
+        reporting the machines rather than a divergence.
+        """
+        context, _source, _target = origin_pair_context()
+        job = FlatpakSyncJob(context)
+
+        plan = await job.plan()
+
+        assert plan.diffs == ()
+
+    @pytest.mark.asyncio
+    async def test_an_origin_naming_no_configured_remote_falls_back_to_the_name(self) -> None:
+        """A ref whose origin remote has since been deleted has no URL to compare. Equal
+        names then read as one vendor rather than manufacturing a mismatch from a lookup miss.
+        """
+        context, _source, _target = origin_pair_context(
+            source_origin="flathub",
+            target_origin="flathub",
+            source_remotes=(("flathub", _FLATHUB_URL),),
+            target_remotes=(),
+        )
+        job = FlatpakSyncJob(context)
+
+        plan = await job.plan()
+
+        assert plan.diffs == ()
+
+    @pytest.mark.asyncio
+    async def test_an_unresolvable_origin_with_a_different_name_is_still_reported(self) -> None:
+        """The name is all the evidence there is, and two different names are evidence."""
+        context, _source, _target = origin_pair_context(
+            source_origin="flathub",
+            target_origin="flathub-beta",
+            source_remotes=(("flathub", _FLATHUB_URL),),
+            target_remotes=(),
+        )
+        job = FlatpakSyncJob(context)
+
+        plan = await job.plan()
+
+        assert [d.diff_class for d in plan.diffs] == [DiffClass.ORIGIN_MISMATCH]
+        # No URL is known for the target's side, so the detail names what there is and
+        # invents nothing.
+        assert plan.diffs[0].detail is not None
+        assert plan.diffs[0].detail.endswith("target from flathub-beta")
+
+    @pytest.mark.asyncio
+    async def test_the_mismatch_is_reported_and_never_converged(self) -> None:
+        """`REPORT_ONLY` is forced by flatpak, not chosen: `flatpak install <other remote>
+        <installed ref>` refuses on an already-installed ref, so approving the entry must
+        still issue no install and no uninstall.
+        """
+        context, _source, target = origin_pair_context(source_origin="flathub", target_origin="flathub-beta")
+        job = FlatpakSyncJob(context)
+
+        await run_job(job)
+
+        assert not any("flatpak install" in cmd for cmd in all_calls(target))
+        assert not any("flatpak uninstall" in cmd for cmd in all_calls(target))
+        assert not any("remote-add" in cmd or "remote-modify" in cmd for cmd in all_calls(target))
+
+    @pytest.mark.asyncio
+    async def test_a_skip_always_on_the_targets_own_remote_does_not_hide_the_mismatch(self) -> None:
+        """The URL maps are the UNFILTERED captures. A machine-local mark on a remote makes
+        it inert as an item; letting it withdraw the URL as well would silently switch the
+        wrong-vendor finding off on exactly the machine that recorded it.
+        """
+        context, _source, _target = origin_pair_context(
+            source_origin="flathub",
+            target_origin="flathub",
+            source_remotes=(("flathub", _FLATHUB_URL),),
+            target_remotes=(("flathub", _BETA_URL),),
+            target_decisions=target_decision_file("flatpak:remote:user:flathub"),
+        )
+        job = FlatpakSyncJob(context)
+
+        plan = await job.plan()
+
+        assert [d.diff_class for d in plan.diffs] == [DiffClass.ORIGIN_MISMATCH]
+
+    @pytest.mark.asyncio
+    async def test_a_scope_split_is_two_items_not_an_origin_mismatch(self) -> None:
+        """Scope is identity, so the two sides are different items and never meet in the
+        both-present arm at all — the mismatch branch must not reach across scopes.
+        """
+        context, _source, _target = origin_pair_context(
+            source_origin="flathub", target_origin="flathub-beta", target_scope="system"
+        )
+        job = FlatpakSyncJob(context)
+
+        plan = await job.plan()
+
+        assert {(d.item_id, d.action) for d in plan.diffs} == {
+            (_FIREFOX_ID, DiffAction.INSTALL),
+            (f"flatpak:ref:system:{_FIREFOX_REF}", DiffAction.REMOVE),
+        }
 
 
 _SRC_URL = "https://dl.flathub.org/repo/"
@@ -1428,9 +1672,6 @@ class TestPlanReadOnly:
             assert "remote-delete" not in cmd
 
 
-_FLATHUB_URL = "https://dl.flathub.org/repo/"
-
-
 def converge_target() -> FakeFlatpakTarget:
     """`TARGET_RESPONSES`' picture of the target, as a machine whose reads answer for the
     writes this run makes — required from the moment a ref install verifies the target's
@@ -2204,6 +2445,121 @@ class TestMaskSystemScopeGate:
 
         assert errors == []
         assert not any("sudo --non-interactive true" in c for c in all_calls(target))
+
+
+class TestFilteredRemoteWarning:
+    """ADR-020, Consequences: a filtered flatpak remote replicates as an unfiltered one,
+    and the run warns per affected remote rather than claiming the remote replicated.
+
+    Measured in a stock `ubuntu:24.04` container, Flatpak 1.14.6: `flatpak remote-modify
+    --filter=<path> <name>` exits 0, adds `filtered` to the `options` column as its own
+    comma-separated token, and stores the path VERBATIM as `xa.filter` in the installation's
+    `repo/config` — unvalidated, so a relative path and a path that does not exist are both
+    accepted. The filter's content therefore lives in an arbitrary local file outside the
+    ostree store and is not repository-or-key material this job can carry.
+    """
+
+    _FILTERED_REMOTE = "customremote\thttps://custom.example.org/repo/\tfiltered\n"
+    _PLAIN_REMOTE = "customremote\thttps://custom.example.org/repo/\n"
+    _CUSTOM_APP_LINE = "org.example.App\t1.0\tcustomremote\tuser\torg.example.App/x86_64/stable\n"
+
+    def _source(self, remotes: str) -> dict[str, CommandResult]:
+        return derivation_source(remotes=remotes, apps=self._CUSTOM_APP_LINE)
+
+    @staticmethod
+    def _warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
+        return [record.message for record in caplog.records if record.levelno == logging.WARNING]
+
+    def test_the_filtered_token_is_parsed_next_to_verification(self) -> None:
+        """Two independent tokens: a filtered remote's verification state must parse exactly
+        as an unfiltered one's, and vice versa.
+        """
+        filtered_signed = _parse_flatpak_remotes("a\thttps://example.org/a/\tfiltered\n", "user", {})
+        filtered_unsigned = _parse_flatpak_remotes("b\thttps://example.org/b/\tno-gpg-verify,filtered\n", "user", {})
+        plain = _parse_flatpak_remotes("c\thttps://example.org/c/\n", "user", {})
+
+        assert (filtered_signed[0].is_filtered, filtered_signed[0].gpg_verify) == (True, True)
+        assert (filtered_unsigned[0].is_filtered, filtered_unsigned[0].gpg_verify) == (True, False)
+        assert (plain[0].is_filtered, plain[0].gpg_verify) == (False, True)
+
+    def test_a_filter_difference_never_makes_two_remotes_compare_unequal(self) -> None:
+        """`is_filtered` is `compare=False` on purpose: no command this job can issue would
+        make the two sides agree, so letting it into `__eq__` would make
+        `_write_derived_remote`'s whole-item equality test miss and issue a `remote-modify`
+        that changes nothing, on every run, forever.
+        """
+        filtered = FlatpakRemoteItem(name="r", url="https://example.org/r/", scope="user", is_filtered=True)
+        plain = FlatpakRemoteItem(name="r", url="https://example.org/r/", scope="user")
+
+        assert filtered == plain
+
+    @pytest.mark.asyncio
+    async def test_a_derived_remote_whose_source_is_filtered_warns_once(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        context, _source, target = make_context(
+            source_responses=self._source(self._FILTERED_REMOTE), fake_target=FakeFlatpakTarget()
+        )
+        job = FlatpakSyncJob(context)
+
+        with caplog.at_level(logging.WARNING, logger="pcswitcher.jobs.base"):
+            await run_job(job)
+
+        warnings = self._warnings(caplog)
+        assert len(warnings) == 1
+        assert "customremote" in warnings[0]
+        assert "user" in warnings[0]
+        assert "UNFILTERED" in warnings[0]
+        # The remote itself still travels — the warning qualifies the write, it does not
+        # replace it.
+        assert any("remote-add" in cmd for cmd in all_calls(target))
+
+    @pytest.mark.asyncio
+    async def test_an_unfiltered_derived_remote_produces_no_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Negative control: without this the warning could be firing on every derived
+        remote and the test above would not notice.
+        """
+        context, _source, _target = make_context(
+            source_responses=self._source(self._PLAIN_REMOTE), fake_target=FakeFlatpakTarget()
+        )
+        job = FlatpakSyncJob(context)
+
+        with caplog.at_level(logging.WARNING, logger="pcswitcher.jobs.base"):
+            await run_job(job)
+
+        assert self._warnings(caplog) == []
+
+    @pytest.mark.asyncio
+    async def test_the_warning_fires_in_a_dry_run_too(self, caplog: pytest.LogCaptureFixture) -> None:
+        """ADR-014 makes the preview the whole report, so a rehearsal that hid this would
+        overstate the real run it is previewing.
+        """
+        context, _source, target = make_context(
+            source_responses=self._source(self._FILTERED_REMOTE), fake_target=FakeFlatpakTarget(), dry_run=True
+        )
+        job = FlatpakSyncJob(context)
+
+        with caplog.at_level(logging.WARNING, logger="pcswitcher.jobs.base"):
+            await run_job(job)
+
+        assert len(self._warnings(caplog)) == 1
+        assert not any("remote-add" in cmd for cmd in all_calls(target))
+
+    @pytest.mark.asyncio
+    async def test_a_filtered_remote_no_approved_ref_needs_never_warns(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A remote nothing derives does not travel at all (D-41), so warning about it would
+        describe a replication that was never going to happen.
+        """
+        context, _source, _target = make_context(
+            source_responses=self._source(self._PLAIN_REMOTE + "unused\thttps://unused.example.org/repo/\tfiltered\n"),
+            fake_target=FakeFlatpakTarget(),
+        )
+        job = FlatpakSyncJob(context)
+
+        with caplog.at_level(logging.WARNING, logger="pcswitcher.jobs.base"):
+            await run_job(job)
+
+        assert self._warnings(caplog) == []
 
 
 class TestExcludePaths:

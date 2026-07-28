@@ -107,13 +107,23 @@ managers (D-15, D-24).
 Flatpak ref VERSIONS are captured for reporting only (D-04, like apt package
 versions): a version difference on a ref present in the same scope on both machines
 is a `REPORT_ONLY` diff, never something this job installs or removes to force.
+
+A ref's ORIGIN is reported the same way and outranks it (`_diff_flatpak_refs`, D-41). The
+two install-time refusals above guard an install, and a ref already present on BOTH machines
+issues none — so the already-diverged case they cannot see is `ORIGIN_MISMATCH`: same scope,
+same `<application>/<arch>/<branch>`, two vendors. It is compared by the remotes' URLs rather
+than their names for the reason `5fc3ac01` records, so a target `flathub` pointing at the beta
+repo is caught and a remote the two machines merely named differently is not. It is
+`REPORT_ONLY` because flatpak leaves no verb: `flatpak install <other remote> <installed ref>`
+refuses with `already installed from remote <name>` (measured), so converging it would mean
+uninstalling the app the user has and reinstalling it from the other vendor.
 """
 
 from __future__ import annotations
 
 import shlex
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar, Literal, override
 
@@ -180,6 +190,17 @@ _FLATPAK_REMOTES_CMD_TEMPLATE = "flatpak remotes {flag} --columns=name,url,optio
 # The token `flatpak remotes --columns=options` prints for a remote with GPG
 # verification turned off.
 _NO_GPG_VERIFY_OPTION = "no-gpg-verify"
+
+# The token the same column prints for a remote carrying a ref filter. Measured in a stock
+# `ubuntu:24.04` container on Flatpak 1.14.6: `flatpak remote-modify --filter=<path> <name>`
+# exits 0, adds `filtered` to `options` as a distinct comma-separated token (so the
+# `no-gpg-verify` membership test above is unaffected), stores the path VERBATIM as
+# `xa.filter` in the installation's `repo/config`, and reports it in a separate `filter`
+# column. The path is not validated: a relative path and a path that does not exist are both
+# accepted at exit 0. So the filter's CONTENT lives at an arbitrary local location outside the
+# ostree store and is not repository-or-key material this job can carry — which is why a
+# filtered remote is warned about rather than replicated (ADR-020, Consequences).
+_FILTERED_OPTION = "filtered"
 
 # ostree stores a remote's own trusted public keys in one file per remote inside the
 # installation's repo, named `<remote>.trustedkeys.gpg` (verified live, libostree
@@ -340,6 +361,14 @@ class FlatpakRemoteItem:
     scope: Literal["user", "system"]
     gpg_verify: bool = True
     key_digest: str | None = None
+    # Whether the source's remote carries a ref filter, for the warning `apply()` raises per
+    # derived remote (ADR-020, Consequences). Deliberately `compare=False`, which is what
+    # keeps it a REPORTED fact rather than a converged one: the filter's content lives at an
+    # arbitrary local path outside the ostree store (`_FILTERED_OPTION`), so no command this
+    # job can issue would make the two sides agree — and letting it into `__eq__` would make
+    # `_write_derived_remote`'s whole-item equality test miss, issuing a `remote-modify` that
+    # changes nothing and leaves the difference exactly where it was, every run.
+    is_filtered: bool = field(default=False, compare=False)
 
     ITEM_CLASS: ClassVar[ItemClass] = ItemClass.FLATPAK_REMOTE
 
@@ -378,6 +407,35 @@ class FlatpakMaskItem:
     def label(self) -> str:
         """Human-readable text for the review UI and logs."""
         return f"{self.pattern} (mask, {self.scope})"
+
+
+def _origin_display(name: str, url: str | None) -> str:
+    """One side of an origin comparison, as the user meets it: the remote NAME they see in
+    `flatpak list --columns=origin`, and the URL that decides which vendor it actually is.
+
+    The URL is what the comparison runs on (ADR-020 D-41), but a bare URL names nothing the
+    user configured, and a bare name is exactly the string that reads identical on both
+    machines in the same-name-different-vendor case. Both, or the name alone when the
+    machine no longer configures a remote by that name at all.
+    """
+    return f"{name} ({url})" if url is not None else name
+
+
+def build_flatpak_origin_mismatch_detail(
+    source_origin: str, source_url: str | None, target_origin: str, target_url: str | None
+) -> str:
+    """Detail for a ref's `ORIGIN_MISMATCH` diff: the same ref, two vendors (ADR-020 D-41).
+
+    Same shape and same reason as `apt_sync`'s `build_origin_mismatch_detail` — report only,
+    both sides named, because neither machine is wrong and only the user can say which one
+    is the odd one out. Converging it is not on the table at all here: `flatpak install
+    <other remote> <installed ref>` refuses with `already installed from remote <name>`
+    (measured), so the only mechanical resolution would be uninstall-then-reinstall, which
+    is a cross-vendor replacement of an app the user has, not a float (D-04).
+    """
+    source = _origin_display(source_origin, source_url)
+    target = _origin_display(target_origin, target_url)
+    return f"source installed it from {source}, target from {target}"
 
 
 def build_orphaned_refs_detail(remote: str, refs: Sequence[str]) -> str:
@@ -528,6 +586,11 @@ def _parse_flatpak_remotes(
     remote name so a remote's trust arrives as part of the item rather than as a
     second lookup at converge time (#215).
 
+    `options` is a comma-separated token list carrying two facts this job reads: whether
+    verification is off (`no-gpg-verify`) and whether the remote carries a ref filter
+    (`filtered`, `_FILTERED_OPTION`). They are independent tokens, so a filtered remote's
+    verification state parses exactly as an unfiltered one's.
+
     A remote with no options at all prints only two fields (no trailing tab), so both
     widths are accepted; a remote absent from `key_digests` keeps `key_digest=None`,
     which is the honest reading of "verification is on but this remote carries no key of
@@ -540,8 +603,8 @@ def _parse_flatpak_remotes(
         if len(fields) not in (2, 3):
             continue
         name, url = fields[0], fields[1]
-        options = fields[2] if len(fields) == 3 else ""
-        gpg_verify = _NO_GPG_VERIFY_OPTION not in options.split(",")
+        options = fields[2].split(",") if len(fields) == 3 else []
+        gpg_verify = _NO_GPG_VERIFY_OPTION not in options
         items.append(
             FlatpakRemoteItem(
                 name=name,
@@ -549,6 +612,7 @@ def _parse_flatpak_remotes(
                 scope=scope,
                 gpg_verify=gpg_verify,
                 key_digest=key_digests.get(name) if gpg_verify else None,
+                is_filtered=_FILTERED_OPTION in options,
             )
         )
     return items
@@ -612,12 +676,86 @@ def _version_mismatch_ref_diff(item_id: str, source_item: FlatpakItem, target_it
     )
 
 
-def _diff_flatpak_refs(source_items: Sequence[FlatpakItem], target_items: Sequence[FlatpakItem]) -> list[ItemDiff]:
+def _origin_mismatch_ref_diff(
+    item_id: str, source_item: FlatpakItem, target_item: FlatpakItem, source_url: str | None, target_url: str | None
+) -> ItemDiff:
+    """ADR-020 D-41: a ref present on both machines from different remotes is reported and
+    never converged.
+
+    `REPORT_ONLY` is forced by flatpak itself, not chosen for symmetry with `VERSION_MISMATCH`:
+    origin is deliberately out of `item_id` (`FlatpakItem`) because the install-plus-removal
+    pair it would produce cannot run — `flatpak install <other remote> <installed ref>` exits
+    with `already installed from remote <name>` (measured) — so there is no verb to offer.
+    The mismatch is therefore a diff CLASS over the single item both machines share, never a
+    second item.
+    """
+    return ItemDiff(
+        item_class=ItemClass.FLATPAK_REF,
+        diff_class=DiffClass.ORIGIN_MISMATCH,
+        action=DiffAction.REPORT_ONLY,
+        item_id=item_id,
+        label=target_item.label(),
+        detail=build_flatpak_origin_mismatch_detail(source_item.origin, source_url, target_item.origin, target_url),
+    )
+
+
+def _remote_urls_by_scope_and_name(remotes: Sequence[FlatpakRemoteItem]) -> dict[tuple[str, str], str]:
+    """`(scope, remote name) -> url`, the lookup that turns a ref's `origin` column into the
+    vendor it actually names (ADR-020 D-41).
+    """
+    return {(item.scope, item.name): item.url for item in remotes}
+
+
+def _same_vendor(
+    source_item: FlatpakItem,
+    target_item: FlatpakItem,
+    source_remote_urls: Mapping[tuple[str, str], str],
+    target_remote_urls: Mapping[tuple[str, str], str],
+) -> bool:
+    """Whether the two machines' copies of one ref provably come from the same vendor.
+
+    ADR-020 D-41: origin is compared by the remote's URL, never by its name. Both directions
+    of that rule matter here and pull opposite ways, which is why neither comparison alone is
+    the answer:
+
+    - Same NAME, different URL is the dangerous case — a target remote called `flathub`
+      pointing at the beta repo serves a different vendor's build and `flatpak list
+      --columns=origin` prints `flathub` on both machines (measured, `5fc3ac01`). Comparing
+      names would report nothing at all.
+    - Different NAME, same URL is a pure rename. The provenance is identical, so reporting it
+      would be noise about a label.
+
+    When either side's origin resolves to no configured remote — the machine holds a ref whose
+    remote has since been deleted — there is no URL to compare and the fallback is the name.
+    That is the conservative reading: it keeps an ordinary machine quiet on the equal-name case
+    rather than manufacturing a mismatch out of a lookup miss, and still reports two different
+    names, which is all the evidence there is.
+    """
+    source_url = source_remote_urls.get((source_item.scope, source_item.origin))
+    target_url = target_remote_urls.get((target_item.scope, target_item.origin))
+    if source_url is not None and target_url is not None:
+        return source_url == target_url
+    return source_item.origin == target_item.origin
+
+
+def _diff_flatpak_refs(
+    source_items: Sequence[FlatpakItem],
+    target_items: Sequence[FlatpakItem],
+    source_remote_urls: Mapping[tuple[str, str], str],
+    target_remote_urls: Mapping[tuple[str, str], str],
+) -> list[ItemDiff]:
     """One diff per ref `item_id` present on either side, source-then-target order —
     same shape as `PackageSyncJob._diff_apt_packages`/`snap_sync._diff_snap_items`.
     Scope already lives inside `item_id`, so an application installed in a different
     scope on each machine naturally produces one install-side entry and one
     remove-side entry here, never a single combined diff.
+
+    Present on both, the origin comparison runs BEFORE the version comparison, exactly as
+    `_diff_apt_packages` orders its own two provenance-and-version branches: two vendors'
+    builds of one ref share no version scale — Flathub's and Flathub-beta's `org.mozilla.
+    firefox` are numbered independently — so reporting "source has X, target has Y" would
+    state a difference of degree where the real difference is of provenance, and would hide
+    the wrong-vendor finding behind a version line the user reads as ordinary drift.
     """
     source_by_id = {item.item_id: item for item in source_items}
     target_by_id = {item.item_id: item for item in target_items}
@@ -635,9 +773,20 @@ def _diff_flatpak_refs(source_items: Sequence[FlatpakItem], target_items: Sequen
             diffs.append(_install_ref_diff(source_item))
         elif target_item is not None and source_item is None:
             diffs.append(_remove_ref_diff(target_item))
-        elif source_item is not None and target_item is not None and source_item.version != target_item.version:
-            diffs.append(_version_mismatch_ref_diff(item_id, source_item, target_item))
-        # else: present on both, same scope, equal version -> no diff.
+        elif source_item is not None and target_item is not None:
+            if not _same_vendor(source_item, target_item, source_remote_urls, target_remote_urls):
+                diffs.append(
+                    _origin_mismatch_ref_diff(
+                        item_id,
+                        source_item,
+                        target_item,
+                        source_remote_urls.get((source_item.scope, source_item.origin)),
+                        target_remote_urls.get((target_item.scope, target_item.origin)),
+                    )
+                )
+            elif source_item.version != target_item.version:
+                diffs.append(_version_mismatch_ref_diff(item_id, source_item, target_item))
+            # else: present on both, one vendor, equal version -> no diff.
 
     return diffs
 
@@ -1198,7 +1347,8 @@ class FlatpakSyncJob(PackageSyncJob):
         installed_target_refs = await self.query_target_items()
         target_refs = await filter_inert(installed_target_refs, target_decisions)
         source_remotes = await self._capture_all_source_remotes()
-        target_remotes = await filter_inert(await self._query_all_target_remotes(), target_decisions)
+        installed_target_remotes = await self._query_all_target_remotes()
+        target_remotes = await filter_inert(installed_target_remotes, target_decisions)
         source_masks = await filter_inert(await self._capture_all_source_masks(), source_decisions)
         target_masks = await filter_inert(await self._query_all_target_masks(), target_decisions)
 
@@ -1219,7 +1369,17 @@ class FlatpakSyncJob(PackageSyncJob):
         # ticking the remote's; the detail states the target's current state, which holds
         # either way.
         remote_diffs = _diff_flatpak_remotes(source_remotes, target_remotes, installed_target_refs)
-        ref_diffs = _diff_flatpak_refs(source_refs, target_refs)
+        # Both URL maps are the UNFILTERED remote captures. A skip-always recorded on a
+        # machine's own remote makes that remote inert as an ITEM (it is never proposed for
+        # deletion), but it must not withdraw the URL the origin comparison runs on — that
+        # would silently switch the wrong-vendor finding off, which is the same reason
+        # `_origin_refusal` checks against the source's unfiltered remotes (`5fc3ac01`).
+        ref_diffs = _diff_flatpak_refs(
+            source_refs,
+            target_refs,
+            _remote_urls_by_scope_and_name(source_remotes),
+            _remote_urls_by_scope_and_name(installed_target_remotes),
+        )
         mask_diffs = _diff_flatpak_masks(source_masks, target_masks)
         # Ordering (D-08): refs -> masks, with the remote removals trailing (their own
         # two-answer screen, `_build_review_groups`). A mask must land AFTER the refs so it
@@ -1429,8 +1589,13 @@ class FlatpakSyncJob(PackageSyncJob):
         `[dry-run] ` prefix the base loop uses, and no command is issued. Without this a
         rehearsal of a first sync would preview the installs and say nothing about the
         remotes they depend on.
+
+        The filter warning precedes the dry-run branch for the same reason: it is a
+        qualification of what provisioning this remote does and does not achieve, so a
+        rehearsal that hid it would overstate the real run it is previewing.
         """
         for derived in self._derived_remotes:
+            self._warn_if_filtered(derived)
             if self.context.dry_run:
                 self._log(
                     Host.TARGET,
@@ -1441,6 +1606,35 @@ class FlatpakSyncJob(PackageSyncJob):
                 continue
             await self._write_derived_remote(derived)
         await super().apply()
+
+    def _warn_if_filtered(self, derived: _DerivedRemote) -> None:
+        """One WARNING per derived remote whose SOURCE carries a ref filter (ADR-020,
+        Consequences: "The run warns per affected remote rather than claiming the remote
+        replicated").
+
+        The remote itself replicates — name, URL, trust and key all travel — but the filter
+        does not, because its content is an arbitrary local file at an arbitrary path
+        (`_FILTERED_OPTION`) rather than repository-or-key material, and copying a path the
+        source happens to use would plant a file this job neither owns nor can keep current.
+        So the honest outcome is that the target gets the remote UNFILTERED, and the run says
+        so instead of letting a successful `remote-add` read as full replication.
+
+        Keyed on the derived set rather than on the source's remote list: a remote no approved
+        ref needs never travels at all (D-41), so warning about it would describe a
+        replication that was never going to happen. `_derived_remotes` is deduplicated by
+        remote id, so a remote several approved refs need still warns once.
+        """
+        source_item = self._source_remotes_by_id.get(derived.remote_id)
+        if source_item is None or not source_item.is_filtered:
+            return
+        self._log(
+            Host.TARGET,
+            LogLevel.WARNING,
+            f"The {derived.scope} flatpak remote {derived.name} carries a ref filter on the source. A filter's "
+            f"content lives in a local file outside the ostree store, so it cannot travel: {derived.name} is "
+            f"provisioned UNFILTERED on the target and will offer refs the source hides. Re-apply it there with "
+            f"`flatpak remote-modify {_scope_flag(derived.scope)} --filter=<file> {derived.name}` if it is wanted.",
+        )
 
     async def _write_derived_remote(self, derived: _DerivedRemote) -> None:
         """Bring one derived remote's URL and trust on the target to the source's.
