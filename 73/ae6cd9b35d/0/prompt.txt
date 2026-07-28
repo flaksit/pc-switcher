@@ -1,0 +1,209 @@
+<task-notification>
+<task-id>a16b57687612618be</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/6fd79944-5079-446f-99f7-bbe44c27ff4e/tasks/a16b57687612618be.output</output-file>
+<status>completed</status>
+<summary>Agent "Measure flatpak remote selection" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Verdict
+
+**YES.** Flatpak installs silently from a remote the source did not use. The earlier "flatpak refuses to guess" claim is only true when **two or more registered remotes** offer the ref. With exactly one, it resolves silently, exit 0.
+
+Environment: `ubuntu:24.04` container, `Flatpak 1.14.6` (same version Ubuntu 24.04 desktops ship). Remotes: real Flathub (`https://dl.flathub.org/repo/`) and real Flathub-beta (`https://dl.flathub.org/beta-repo/`); a second same-content remote was made by registering the Flathub URL under the name `notflathub` (controllable, no OSTree build needed). `--no-deps` used to skip runtime downloads; it does not affect resolution. All host `flatpak` state untouched; all five containers and the image removed.
+
+## Evidence
+
+### Case 1 — one registered remote offering the ref: silent
+
+```
+$ flatpak remote-add --if-not-exists notflathub https://dl.flathub.org/repo/flathub.flatpakrepo   # exit=0
+$ flatpak remotes --columns=name,url
+notflathub	https://dl.flathub.org/repo/
+$ flatpak install --noninteractive --no-deps org.gnome.Calculator
+exit=0
+Installing runtime/org.gnome.Calculator.Locale/x86_64/stable
+Installing app/org.gnome.Calculator/x86_64/stable
+$ flatpak list --app --columns=application,origin,installation
+org.gnome.Calculator	notflathub	system
+```
+
+No prompt, no warning naming the remote beyond the `Installing app/...` line, exit 0. Same result at user scope (`flatpak install --user --assumeyes --no-deps org.gnome.Calculator` → exit 0, `origin=notflathub`, `installation=user`).
+
+### Case 2 — two registered remotes offering the ref: refusal, all three flag sets
+
+`--noninteractive`, bare (stdin `/dev/null`), and `--assumeyes` all behave identically:
+
+```
+$ flatpak install --assumeyes --no-deps org.gnome.Calculator &lt; /dev/null
+exit=1
+Remotes found with refs similar to ‘org.gnome.Calculator’:
+   1) ‘flathub’ (system)
+   2) ‘notflathub’ (system)
+Which do you want to use (0 to abort)? [0-2]: 0
+error: No remote chosen to resolve matches for ‘org.gnome.Calculator’
+```
+
+`--assumeyes` does **not** auto-pick a remote. It leaves the choice unanswered and exits 1.
+
+### Case 4 — the asymmetric case, in pc-switcher's actual command shape
+
+pc-switcher issues (`/home/janfr/dev/pc-switcher/src/pcswitcher/jobs/flatpak_sync.py:1072-1075`):
+
+```python
+cmd = (
+    f"{sudo}flatpak install --assumeyes {scope_flag} "
+    f"{shlex.quote(source_item.origin)} {shlex.quote(application)}"
+)
+```
+
+**4A — target's only remote has a different name.** Guarded before it runs by `_remote_ready_on_target` (line 1065). Raw flatpak also fails loudly: with only `notflathub` registered, `flatpak install --assumeyes --no-deps flathub org.gnome.Calculator` → `exit=1`, `error: No remote refs found for ‘flathub’` (it re-reads the unknown remote name as a ref pattern). **No wrong install here.**
+
+**4B — target's remote has the same NAME but a different URL. This is the hole.** Remote `flathub` registered against the beta repo:
+
+```
+$ flatpak remotes --columns=name,url
+flathub	https://dl.flathub.org/beta-repo/
+$ flatpak install --assumeyes --no-deps flathub app/org.mozilla.firefox/x86_64/stable
+exit=0
+Installation complete.
+$ flatpak info org.mozilla.firefox
+          ID: org.mozilla.firefox
+      Branch: stable
+     Version: 148.0
+      Origin: flathub
+  Collection: org.flathub.Beta
+     Runtime: org.freedesktop.Platform/x86_64/24.08
+      Commit: 5b5450d862f9f405b4e3a229709f88200e4443fb5011d2f3bd1f5579985eb4a7
+```
+
+Compare the same ref from real Flathub: `Version: 153.0`, `Collection: org.flathub.Stable`, `Runtime: .../25.08`, `Commit: eef9e631...`. Different vendor, different binary, exit 0, no warning. `flatpak list --columns=origin` reports `flathub` in **both** cases — the name matches, so a name-only origin check cannot detect this.
+
+pc-switcher does capture and diff the remote URL (`_change_remote_diff`, line 612), so a URL divergence is surfaced as a reviewable `CHANGE`. But it is a **separate, independently skippable** review item from the ref `INSTALL`, and `_remote_ready_on_target` (line 1182) matches on `f"flatpak:remote:{scope}:{origin}"` — **name and scope only, never URL**. Decline the remote CHANGE, accept the ref INSTALL, and the ref lands from the wrong repo.
+
+### Case 5 — explicit remote qualification works
+
+```
+$ flatpak install --assumeyes --no-deps notflathub org.gnome.Calculator   # both remotes offer it
+exit=0 → origin = notflathub
+$ flatpak install --assumeyes --no-deps flathub org.does.not.Exist.Xyz
+exit=1
+error: Nothing matches org.does.not.Exist.Xyz in remote flathub
+```
+
+Positional remote reliably forces the origin, and fails cleanly when the remote lacks the ref.
+
+### Case 6 — a fully-qualified ref does NOT pin the origin
+
+```
+$ flatpak install --assumeyes --no-deps app/org.gnome.Calculator/x86_64/stable &lt; /dev/null
+exit=1
+Remotes found with refs similar to ‘app/org.gnome.Calculator/x86_64/stable’:
+   1) ‘flathub’ (system)   2) ‘notflathub’ (system)
+error: No remote chosen to resolve matches for ...
+```
+
+A full ref carries arch and branch, never a remote. Origin can only be pinned by remote name.
+
+## The two reported defects
+
+**"Install by app id is ambiguous between stable and beta" — PARTLY REFUTED, and it errors rather than guessing.** Ambiguity is a property of the *named remote*, not of flatpak generally. Flathub carries only `stable` for `org.mozilla.firefox`, so `flatpak install --assumeyes flathub org.mozilla.firefox` installed silently, exit 0, `Branch: stable`. Flathub-beta carries both branches, and there it fails:
+
+```
+$ flatpak install --assumeyes --no-deps flathub-beta org.mozilla.firefox &lt; /dev/null
+exit=1
+Similar refs found for ‘org.mozilla.firefox’ in remote ‘flathub-beta’ (system):
+   1) app/org.mozilla.firefox/x86_64/stable
+   2) app/org.mozilla.firefox/x86_64/beta
+error: No ref chosen to resolve matches for ‘org.mozilla.firefox’
+```
+
+Appending the full ref fixes it: `flatpak install --assumeyes --no-deps flathub-beta app/org.mozilla.firefox/x86_64/beta` → exit 0, `branch=beta`, `origin=flathub-beta`. So this is not a silent-wrong-branch risk, but it **is** a live availability bug: pc-switcher's `FlatpakItem` carries no branch, so any app the source installed from a multi-branch remote fails to converge with exit 1 every run.
+
+**Origin recoverable from an installed ref — CONFIRMED, with a caveat.** `flatpak list --app --columns=application,version,origin,installation` and `flatpak info &lt;id&gt;` both report `Origin:` reliably. The caveat is 4B: origin is the remote *name*. `flatpak info` also prints `Collection:` (`org.flathub.Stable` vs `org.flathub.Beta`) and `Commit:`, which do distinguish the repos, but neither is in the columns pc-switcher queries (line 103).
+
+## Design implications
+
+The derived-remote design cannot rely on flatpak refusing. It needs apt-equivalent guarantees:
+
+1. **Qualify by remote** — already done (line 1073). Keep it; it is what prevents cases 1 and 2 from ever being reached.
+2. **Verify the remote's URL, not just its name, before installing.** `_remote_ready_on_target` should require the target's same-named remote to match the source's URL (and trust), not merely exist. Otherwise a declined-or-deferred remote `CHANGE` silently redirects every ref that names it.
+3. **Verify the installed origin after converge** — and compare the remote's URL, since the name alone matched in the 4B wrong-vendor install.
+4. **Capture the branch** into `FlatpakItem` and install the full ref, or app-id installs from any multi-branch remote will keep failing exit 1.
+
+## Container caveats
+
+- User-scope `flatpak install` fails in a bare container with `Error: Could not connect: No such file or directory` until a system D-Bus is running (`dbus-daemon --system --fork`). Container artifact only; a real desktop always has one. Once started, user-scope behaviour was identical to system scope in every case tested.
+- Containers start with **zero** remotes. A real desktop typically has `flathub` pre-registered in at least one scope, which makes case 2 (refusal) more common there and case 1 (silent) rarer — but case 1 still applies to any app id Flathub does not carry, and case 4B is unaffected by how many remotes exist.
+- `--privileged` was used for the containers; the resolution behaviour under test is CLI-level and does not depend on it.</result>
+<usage><subagent_tokens>69241</subagent_tokens><tool_uses>27</tool_uses><duration_ms>455027</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ac5f7918807aa1518</task-id>
+<tool-use-id>toolu_01WB1XbrUchitW7Xk2WRYZER</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/6fd79944-5079-446f-99f7-bbe44c27ff4e/tasks/ac5f7918807aa1518.output</output-file>
+<status>completed</status>
+<summary>Agent "Review reconstructed apt_sync diff" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Verdict
+
+The `apt_sync.py` reconstruction is **faithful**. Every hunk in `git diff 61c54336~1..HEAD -- src/pcswitcher/jobs/apt_sync.py` is guard-related — a diff against the pre-change commit is exhaustive, so nothing unrelated was lost. No guard is on the wrong call, no host argument is swapped, no `mutates=` was added to a read or dropped from a write (the diff touches no mutating call), and both reshaped commands are output-identical to their predecessors (verified by execution). `snap_sync.py`, `flatpak_sync.py` and `packages/probes.py` are clean.
+
+What follows are real but non-breaking findings, most severe first.
+
+## Findings
+
+### 1. Two identical probes, two different guards — `src/pcswitcher/jobs/manual_installs_sync.py:392`
+`apt-cache policy &lt;source's apt-mark showmanual set&gt;` on the source is guarded with bare `require_answer` (exit code only). The byte-identical probe — same command, same name set, same host — in `apt_sync._source_policy` (`src/pcswitcher/jobs/apt_sync.py:1615`) passes `blocks=len(installed_origins_by_package(...))`.
+
+ADR-022 D-04 (`docs/adr/adr-022-...md:68`) states `answers=` is passed "today only by `apt-cache policy` reads over names that are known to be installed on the machine being asked". This site is exactly that. Either the ADR sentence or the call site is wrong, and the same function's own docstring (lines 379-384) argues that the two jobs' copies of this probe diverging is the hazard it exists to prevent.
+
+Impact today is nil — apt_sync's stricter copy fails the run first (D-06) — but it becomes real the moment issue #220 lands job independence. Verified by reading both call sites plus ADR D-04.
+
+### 2. Two reads that feed decisions were never classified — `src/pcswitcher/jobs/apt_sync.py:1092` and `:1080`
+ADR-022's first Required rule is that *every* read feeding a decision is classified at the call site. Two are not:
+
+- `_read_file_content` (`:1092-1103`) is `sudo cat`, consumed at `:2136-2137` by `_capture_repo_conflicts` to build the repository-conflict screen. If the `cat` does not answer, both panes render empty and the user approves an overwrite on the strength of a diff nobody read — the exact disclosure ruling 6 exists to make. Its docstring discusses *privilege* (WR-04), not the ADR-022 category. (Checked that the file content written to the target travels by `send_file` from a local path at `:3245`, not from this `cat`, so there is no empty-content write.)
+- `_capture_file_digest` (`:1080-1089`) is a third deliberately-unguarded `sha256sum`-exits-1-when-absent site. ADR-022 D-03 names only two counter-examples (`sha256sum` over an empty glob, `dpkg --search`); this one is absent from the ADR.
+
+Consequently `docs/system/package-sync.md:71` overstates: "Every read this job's decisions rest on — … the `/etc/apt` digest captures … — fails the job once" is not true of the `sources.list` digest, nor of the conflict-content read. Verified by reading.
+
+### 3. The `test -d` wrapper is unprivileged while its `find` is not — `src/pcswitcher/jobs/apt_sync.py:1074`
+```
+if test -d /etc/apt/preferences.d; then sudo find /etc/apt/preferences.d … ; fi
+```
+`test -d` runs as the invoking/SSH user; only `find` gets `sudo`. This contradicts the WR-04 rationale recorded three functions below at `:1095-1100` — "an unprivileged read … would silently return empty output rather than failing" — and it is the ADR-022 defect shape in miniature: if `/etc/apt` (or `/usr/share`) is not traversable by that user, the command answers "nothing" at exit 0 where root would have listed files, and the other machine's pins/keys are offered for removal. Low likelihood (both parents are 0755 on any normal Ubuntu), and `sudo test -d` closes it at no cost. Verified by reading and by running the generated command form.
+
+### 4. Comment now contradicts its constant — `tests/unit/jobs/test_apt_sync.py:3818-3822`
+The comment still reads "…from `collect_hold_pin_facts`'s own `-exec awk` over `preferences.d`, **which any looser substring would also match**", but the constant it introduces was loosened in `b0c32b91` from `"/etc/apt/sources.list.d /etc/apt/sources.list -maxdepth 1 -type f -exec awk"` to `_SOURCE_SCAN_CMD = "-exec awk"` — the loosest possible value. Harmless today (the pin-stanza scan is retired and `_PIN_STANZA_SCAN_CMD` is only asserted *absent*), but the note now argues against the code beneath it, and `respond_to`'s first-match-wins substring matching would silently swallow any future second `-exec awk` command. Verified by diffing against `61c54336~1`. The parallel constant in `tests/unit/jobs/test_package_state.py:611` was loosened too, but its comment is about `apt-cache policy` and does not contradict.
+
+### 5. Rewritten docstring lost a correct rule and states a wrong one — `src/pcswitcher/jobs/apt_sync.py:1349-1350`
+`_require_apt_answer` now closes with "Only `apt-cache policy` callers pass this — every other apt read here has a legitimate empty answer." All four of its callers are `apt-cache policy` callers (`:1615`, `:1712`, `:2103`, `:2671`) and two of them deliberately do **not** pass `blocks`. The pre-rewrite wording — "Callers therefore pass `blocks` only where a block is genuinely owed" — was correct and is what the two unguarded sites actually implement. Verified by reading all four call sites against `git show 477f191e`.
+
+### 6. Only one of the two reshapes has a regression test
+`tests/unit/jobs/test_apt_sync.py` pins the `test -d` form (`assert any(c.startswith(f"if test -d {_APT_PREFERENCES_DIR}; then sudo find …"))`). The `_scan_source_file_references` `-path` reshape is pinned only by the substring `"-exec awk"`, which both the old and new forms contain. ADR-022's Negative consequences explicitly warn that a future "simplification" back to two start points silently reintroduces the ambiguity; nothing in the suite would catch it. Verified by scanning the added tests.
+
+### 7. Informational
+- `src/pcswitcher/jobs/apt_sync.py:1158` — `-maxdepth 2` from `/etc/apt` now traverses *all* of `/etc/apt`'s subdirectories (`keyrings`, `trusted.gpg.d`, `auth.conf.d`, …) rather than one directory, so any traversal error anywhere under `/etc/apt` now raises `ProbeFailed`. Under `sudo` on a local filesystem this should not fire; it is a wider blast radius than the old form.
+- `src/pcswitcher/jobs/apt_sync.py:1381-1390` — `simulate_apt_transaction` classifies "dpkg lock contention" and "a transient apt-cache read error" as `ConvergeItemFailed`, while ADR-022 D-01 names a package-manager lock as the canonical fail-fast environment failure. Untouched by these commits; flagged only as an unreconciled boundary.
+- `src/pcswitcher/jobs/apt_sync.py:213-219` — the new `_APT_ROOT_DIR` paragraph was inserted *inside* the comment block introducing "the five `/etc/apt/*` directories … each captured with one batched `sha256sum` listing". `/etc/apt` is a scan start point, not one of the five.
+- `src/pcswitcher/jobs/apt_sync.py:1048` — the docstring's opening line still quotes `sudo find &lt;dir&gt; …` verbatim as "the" command; the `test -d` wrapper is explained two paragraphs later, so it reads as stale on first pass.
+
+## Verified by execution (this machine, read-only, `sudo` for `/etc/apt`)
+
+- **Both reshaped commands are output-identical.** Ran the exact strings the code generates (regenerated via the actual Python expressions) against their pre-change forms: `_scan_source_file_references` produced **byte-for-byte identical** 40-line output including ordering and absolute `FILENAME` paths, both at exit 0; `_capture_dir_digests` produced identical output for `sources.list.d` (with extension predicate), `preferences.d` and `apt.conf.d`. An absent directory under the wrapper exits 0 with empty stdout, as documented.
+- **The `dpkg-query` guard is safe on a real machine**: `dpkg-query --show` over the full 152-name `apt-mark showmanual` set returned 152 lines at exit 0 with empty stderr — the guard added at `:1661` will not fire spuriously.
+- `apt-mark showhold` (empty) and `apt-mark showmanual` both exit 0; `apt-cache policy $(apt-mark showmanual)` yields 152 blocks for 152 names, matching the `blocks=` measurement.
+- `sha256sum &lt;non-matching glob&gt;` exits 1, confirming flatpak's documented counter-example.
+- `tests/unit/jobs/{test_apt_sync,test_snap_sync,test_flatpak_sync,test_manual_installs_sync,test_package_state,test_block_state_decisions}.py`: 454 passed.
+
+## Verified by reading
+
+- No stale `AptProbeFailed` reference remains anywhere in `src/`, `tests/` or `docs/`.
+- `ProbeFailed` genuinely escapes the per-item loop: `packages/sync_core.py:480` is the only `except` in the base class and it catches `ConvergeItemFailed`; none of the four jobs has a broad `except`, and the `_surviving_keyring_refs` scan at `apt_sync.py:3494` sits outside the loop's `try` at `:3504`.
+- All 20 host arguments match their `run` closures (`source_run` → `Host.SOURCE`, `target_run` → `Host.TARGET`, including `_machine_specific_packages_by_source_file`'s injected `target_run` from `_plan_repo_diffs`).
+- Test stub matching (`respond_to`, substring, first-match-wins) is unaffected by the reshapes: the digest command still contains `find /etc/apt/sources.list.d`, and the awk scan command does not, so no fixture cross-matches.</result>
+<usage><subagent_tokens>138987</subagent_tokens><tool_uses>46</tool_uses><duration_ms>514094</duration_ms></usage>
+</task-notification>
