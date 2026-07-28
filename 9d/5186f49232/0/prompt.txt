@@ -1,0 +1,55 @@
+<task-notification>
+<task-id>a21a8a37cc85ecfc0</task-id>
+<tool-use-id>toolu_01Axm5XXUr5XPftNSucutoRB</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/1cfb7cbc-0306-41b6-8f82-7ed1281a66dd/tasks/a21a8a37cc85ecfc0.output</output-file>
+<status>completed</status>
+<summary>Agent "Rewrite as requirements spec" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done. Commit `20ef1280`, local only.
+
+## Requirement id convention
+
+`PKG-FR-*` for obligations, `PKG-NG-*` for non-goals — 119 ids, no duplicates, every in-document cross-reference resolves to a definition (checked by script).
+
+Source of the scheme: `docs/system/core.md` uses `&lt;DOMAIN&gt;-&lt;TYPE&gt;-&lt;TOPIC&gt;` as a bolded bullet label (`CORE-FR-SNAP-PRE`, `CORE-SC-ABORT`), and `docs/system/package-sync.md` line 3 already declares **Domain Code: `PKG`**. So `PKG-FR-*` is the repo's own scheme applied to this domain. `NG` is the one extension I made: the repo has no id'd non-goals (`core.md`'s "Out of Scope" is unlabelled bullets), but the brief requires negative requirements to be citable. I did **not** copy core.md's `[Principle]` tags — that would have meant inventing constitution mappings.
+
+Rationale that is not itself a requirement sits on a `Why:` continuation line under its requirement, mirroring core.md's `Lineage:` continuation style.
+
+## Dropped
+
+No requirement was culled. Dropped material was mechanism, anecdote, or duplication of the spec:
+
+- The `sync_jobs` YAML block (replaced by `PKG-FR-OPT-IN` + `PKG-FR-JOB-INDEPENDENCE`), `apt-mark showmanual`, `/etc/apt/preferences.d`, keyring search locations, `apt-cache policy`, D-numbers, exit codes.
+- Machine-specific anecdotes used as evidence: `code` on this machine, `firefox` at `1:1snap1-0ubuntu5`, `no-esm-docker`, the `.save` filenames, `ubuntu-pro-esm-apps` at 510. The obligations they justified survive; the reasoning survives compressed in `Why:` lines without the measurements.
+- The "three shapes of question" taxonomy (tick lists, two-answer screens, per-item resolutions) — replaced by the obligations that taxonomy encoded: `PKG-FR-SKIP-ONCE`, `PKG-FR-MACHINE-SPECIFIC`, `PKG-FR-NO-MARK-ON-ORIGIN`, `PKG-FR-REMOVAL-DISTINCT`.
+- The two `pro attach` commands — replaced by the obligation `PKG-FR-ESM-GATE`: "The user MUST be told what to do on the target to attach it."
+- One factual note with no obligation in it: a PPA whose key is inline in the repository file needs no keyring copy. It is spec territory.
+
+Paths I deliberately kept: `/usr/local` and `/opt`, because "where you may install bare software" is substance the user acts on, not mechanism (High level requirements calls it out as an acceptable constraint).
+
+## Untestable statements
+
+Moved to `Why:` rationale rather than deleted: the derivability test, the ESM candidate-selection hazard, snap's single-store model, the epoch/pin argument, why flatpak has no distribution remote. Each now hangs off a testable obligation instead of standing alone.
+
+## Where the brief is wrong
+
+- **There is a fourth non-derivable question and a fifth consent obligation.** The brief names three further questions. apt's own behavioural configuration is a fourth (it was already principle 4's stated exception, reviewed in all three directions — `PKG-FR-APTCONF`). And `manual_installs_sync` must obtain consent before a registry transfer that would lose or change an entry the target holds (`PKG-FR-REGISTRY-CONSENT`).
+- **Consequently I did not state "every question comes before that job writes anything."** That is false as written: the registry-consent question precedes a write that follows the review, and the per-command confirmation mode interleaves questions with writes by design. What I stated instead: `PKG-FR-REVIEW-FIRST` (no modification before the job's diff is approved), `PKG-FR-NO-REREVIEW`, and `PKG-FR-CONSENT-BEFORE-CHANGE` (every consent a job needs for a change is obtained before that change). Those are all true and testable.
+- **The "known gaps" section records nothing.** It contained only the verification note. I preserved it as an explicitly empty register ("None are currently recorded"), which reads as a deliberate register rather than an orphan heading. I did not verify its emptiness myself — it carries the verification you did this session.
+
+## Parent document house style
+
+`docs/planning/High level requirements.md` does **not** set a usable style. It is descriptive prose with a numbered "What Must Sync" list, no ids, no normative keywords, and mixes vision, environment, workflow and "ideas for later". It reads as description rather than requirements — the same failure mode, at a higher altitude. Out of scope per your brief; not touched beyond its one-line link description.
+
+## Cross-references updated
+
+`docs/README.md`, `docs/planning/High level requirements.md`, `docs/jobs/package-sync.md` — all three described the document as "principles, every case per ecosystem, non-goals". `docs/system/package-sync.md` ("the user-viewpoint requirements this spec implements") and ADR-020's reference still fit and were left alone.
+
+`uv run codespell` clean on all four files. pytest not run. `tests/integration/jobs/test_package_sync.py` and the modified `.planning/` SPEC were left unstaged and untouched.</result>
+<usage><subagent_tokens>101608</subagent_tokens><tool_uses>22</tool_uses><duration_ms>465113</duration_ms></usage>
+</task-notification>
+
+---
+
+You made ADR-020:33 up again and it is TOTALLY NOT CORRECT. I can't believe we are going over this AGAIN.
+No-one ever told you that a second round of questions or follow-up questions or whatever are not allowed. The only PREFERENCE is to bundle questions as much as possible to not bother the user constantly through the run, if the questions can be batched. But there are situations where a follow-up question, even after some writing/applying on target already has been done, is legitimate and good. This can simplify implementation logic and some things are just impossible to know exactly before a first action has already been applied.
