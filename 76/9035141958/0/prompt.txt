@@ -1,0 +1,72 @@
+<task-notification>
+<task-id>a1a9f869ae88e3744</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/6fd79944-5079-446f-99f7-bbe44c27ff4e/tasks/a1a9f869ae88e3744.output</output-file>
+<status>completed</status>
+<summary>Agent "S9 docs and scenario matrix" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done. Gates green, one commit, nothing pushed.
+
+## Gate output
+`ruff check` clean · `ruff format` 126 files unchanged · `codespell` 0 · `basedpyright` 0 errors/0 warnings · `pytest` **1446 passed, 82 deselected** (baseline held).
+
+Commit `5489ffe3`, 12 files, +266/−123.
+
+## Per document
+
+### `docs/planning/Package sync requirements.md`
+- `:396` "The Ubuntu Pro / ESM gate is not implemented … single largest gap" — **false**, deleted. The gate is in `src/pcswitcher/jobs/apt_sync.py:2059-2159` (`_pending_esm_writes`, `_target_pro_attached`, `_gate_esm_writes`), driven from `plan()` at `:1906`.
+- "Ubuntu Pro and ESM" section rewritten: both answers verbatim, the unbounded re-probe, that skipping costs the whole `apt_sync` job while every other job runs, the no-TTY skip, the dry-run warning, the two remediation commands, and that only the parsed boolean ever leaves the probe.
+- SKIPPED enumeration (`:352`) now names three causes; the headless paragraph (`:356`) names the unattached-target case.
+- Collateral section gained the plan-time rehearsal exclusion (`_target_resolvable`, `apt_sync.py:2398`).
+- Flatpak section: the repoint-conflict exception added. **The rest of the flatpak section was already current** — full-ref identity, URL-based origin comparison, derived remotes, two-answer removal were all correct already.
+- Snap paragraph rewritten from "Snaps have not had the origin treatment apt has" to D-42's positive statement.
+- Open questions: the flatpak-repoint and non-interactive-dry-run entries deleted (both decided and shipped). "Where the tool does not yet meet these requirements" now carries the two real gaps below.
+
+### `docs/jobs/package-sync.md`
+- `:183` "repointed in place, without a review line" — corrected with the machine-specific conflict prompt (`flatpak_sync.py:1241-1310`, `_capture_remote_conflicts`).
+- `:149-151` SKIPPED — ESM added as the second cause, with the `pro attach` / `pro enable` remediation.
+- "Signing keys" replaced by "Repositories, pins and keys are derived" + an "Ubuntu Pro and ESM" subsection + a "Signing keys" subsection. Killed `:84` ("a repository offered for install or change names … the keys it would copy" — no such review line) and `:98` (a dangling key reports the *repository*; it now reports the **package** as `REPO_UNAVAILABLE`).
+- Versions `:155` and Holds-and-masks `:189` pin parentheticals ("sync as items like any other apt configuration") corrected — pins are derived, not items.
+- Deletions section: apt repository and pin removals now stated as two-answer and non-recordable, with `apt.conf.d` as the counter-case.
+- `apt_sync` scope bullet rewritten to the reviewed/derived split; batched-review section gained the two-answer shapes.
+
+### `docs/system/package-sync.md`
+- `:71` read list corrected in **both** directions. It omitted the `sudo cat` behind the conflict/removal reviews (`apt_sync.py:1137`), the target manual set behind collateral protection (`:2395`), and the post-refresh origin verification (`:2886`); and it swept the unguarded single-file `sha256sum` for `/etc/apt/sources.list` (`_capture_file_digest`, `:1103`) into "the `/etc/apt` digest captures". Both deliberate exemptions are now named — that one and the Pro probe. "The two `apt-cache policy` reads over names known to be installed" was imprecise: the second one is over names this run established have a *candidate*.
+- Added the whole ESM gate bullet (probe, trigger, placement in `plan()`, two answers, unbounded re-check, no-TTY skip, dry-run warning, payload never logged) and a collateral-rehearsal-admission bullet.
+- Item classes corrected (`APT_SOURCE`/`APT_PIN` removal-only), "Converges by" now describes the derived-write ordering and D-39 attribution.
+- `:78` snap — nothing implied a store check was coming; I added an explicit D-42 statement so nothing can drift into implying one.
+- Flatpak: added the conflict-screen bullet.
+- It did **not** reference superseded ADR-020 content and already stated D-18 correctly (`:65`).
+
+### `docs/system/data-model.md`
+Item-identity table was stale: `flatpak:ref:&lt;scope&gt;:&lt;application&gt;` (branch is now in the id, `flatpak_sync.py:304`), no removal-only note on `apt:source:`/`apt:pin:`/`flatpak:remote:`, no hold ids, no mask id, no conflict id, and no statement that derived writes carry no `item_id` at all. All fixed.
+
+### `.planning/.../02-SCENARIO-COVERAGE.md`
+I checked every test name in the matrix against `tests/` mechanically: **21 named tests no longer exist**. That drove the edits.
+
+Rewritten: A2 (+ new A2a), A7, A8, A9, A11, B4, C1 (+ C1a/C1b), C2, C3, C4, C9 (+ C9a), C10, C13, C27, C28, C38, D3, D9, H19, N5, N6, N9, the C-section preamble, and the header's provenance line.
+Deleted as unreachable: A7a, D19-as-written, N12, N13-as-written, N14, and the "Facts a run invalidates for itself" finding (it described the deleted second review).
+Added: A14–A17 (origin capture, distribution origins, origin naming, D-35 enforcement), C43–C52 (extension filter, `sources.list` digest, distribution always-sync, two-answer removals, silent overwrite, conflict asked, conflict answered, the six ESM rows, dry-run derived preview, both-machine source scan), D19/D19a (rehearsal exclusion), F7e–F7h (flatpak conflict), F23/F24 (the two gaps), H20 (two-answer plumbing), J11–J15 (SKIPPED).
+
+### Module docstrings
+- `snap_sync.py:30` and `flatpak_sync.py:106` both claimed *"this job implements no review of its own — the coordinator (plan 02-03) reviews every enabled manager at once"*. That directly contradicts ADR-020 D-24 and the no-coordinator rule. Both rewritten; both also referenced a `PackageSyncJob.diff_items` that no longer exists and called `plan()` an override of a base implementation that is abstract. `snap_sync` gained D-42; `flatpak_sync` now says `accept_review()`/`apply()` are overridden (they are).
+- `apt_sync.py:146-147` "Apt sources/keys/pins/config, and the other two managers … are later Phase 2 plans" deleted; the ESM gate and the rehearsal exclusion added.
+- `items.py:39-41` claimed `SNAP`, `FLATPAK_REF`, `FLATPAK_REMOTE`, `UNREPRODUCIBLE` have "no capturing job yet"; `DiffClass` referenced a `diff_items` dispatch that is gone. Both fixed.
+- `review.py` and `sync_core.py`: `ask_gate` and `JobSkipped` documented; stale plan numbers dropped.
+
+## Findings — doc vs code where the CODE looks wrong (not fixed)
+
+1. **flatpak `ORIGIN_MISMATCH` is not implemented.** ADR-020 D-41 states "A ref present on both machines from different remotes is therefore `ORIGIN_MISMATCH`, reported and never converged", and the snap/flatpak SPEC stages it as S2. `_diff_flatpak_refs` (`src/pcswitcher/jobs/flatpak_sync.py:618-645`) compares `version` only, so an equal-version pair from two remotes produces **no diff at all** and an unequal one produces a bare `VERSION_MISMATCH`. `grep ORIGIN_MISMATCH src/pcswitcher/jobs/flatpak_sync.py` → nothing. `_origin_refusal`/`_installed_origin_refusal` do not cover it: they guard an install, and this case issues none. Recorded as matrix row F23 (‼) and in the requirements doc's gap section.
+2. **The filtered-remote warning is not implemented.** ADR-020 Consequences: "The run warns per affected remote rather than claiming the remote replicated"; SPEC S8. `_FLATPAK_REMOTES_CMD_TEMPLATE` reads `name,url,options` but nothing inspects `options` for `filtered`. Matrix row F24 (‼).
+3. **`tests/unit/test_dry_run.py:6`** states "Returns SUCCESS/FAILED as expected (not SKIPPED)" as an existing decision. A non-interactive dry run of a package job with a non-empty plan now raises `JobSkipped` (`sync_core.py:522`, no dry-run exemption). The behaviour matches the ruling you gave; the test module's docstring asserts the opposite. Worth a one-line fix in that docstring, but it is a test file so I left it.
+4. Minor: `_capture_file_digest`'s docstring (`apt_sync.py:1104-1110`) says "Verified: `sha256sum` on a missing path exits 1 and writes nothing to stdout", while the apt SPEC's residual-risk list (§11 item 4) records that as assumed from the documented contract rather than observed. Behaviour is right either way; one of the two claims is overstated.
+
+## Corrections to your brief
+
+- **`docs/README.md` / doc indexes needed no change.** `grep -rn 'adr-021\|ADR-021'` over the whole repo returns zero hits — nothing ever linked it, and `docs/adr/_index.md` already lists only ADR-020 and ADR-022.
+- **The "snap store question" was not in the requirements doc's Open questions.** Only two of the three items you listed were there (flatpak adopting the apt model, and the non-interactive dry-run status). The snap staleness lived in the body (`:248` "Snaps have not had the origin treatment apt has") and in Known limitations; both are rewritten.
+- **Several queued corrections were already done.** The entire flatpak "every case" section except the repoint conflict was current — full ref, URL-based origin, derived remotes, two-answer removal all already described. `docs/system/package-sync.md:65` already stated D-18 correctly. `docs/jobs/package-sync.md:78` already had the target-only manual set. Matrix rows F1, F2, F4a, F4b, F5, F5e–F5g, F7b–F7d and F21 were already rewritten for the flatpak changes.
+- **Your affected-row list was partly wrong in both directions.** C16, C17, C25, C37 and C39–C42 were *not* stale (their tests exist and their claims hold); C38 was stale only in a renamed test. Conversely you did not name A7, A7a, A8, A9, A11, B4, D3, D9, N9, N12 or N14, all of which were stale — D3/D9/N9 asserted the *union* collateral protection that ruling 13 inverted, and N12/N14 documented the deleted second review.</result>
+<usage><subagent_tokens>320115</subagent_tokens><tool_uses>125</tool_uses><duration_ms>1120423</duration_ms></usage>
+</task-notification>
