@@ -608,7 +608,7 @@ def _apt_context(
 
 
 # The source's own `apt-cache policy` answer about its manual set. A source apt that
-# prints nothing is a broken probe, not a machine with unusual packages (`AptProbeFailed`),
+# prints nothing is a broken probe, not a machine with unusual packages (`ProbeFailed`),
 # so these fixtures state the answer a real source gives. The origin is the distribution
 # archive, which keeps every package exempt from the D-35 origin check.
 _SOURCE_SCAN_CMD = "-exec awk"
