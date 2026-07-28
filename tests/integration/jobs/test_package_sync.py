@@ -64,7 +64,7 @@ from __future__ import annotations
 import json
 import re
 import shlex
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal
@@ -1038,6 +1038,45 @@ async def _create_synthetic_pin(executor: BashLoginRemoteExecutor) -> str:
     )
     assert result.success, f"Failed to create synthetic pin on source: {result.stderr}"
     return filename
+
+
+async def _take_apt_paths_aside(executor: BashLoginRemoteExecutor, paths: Sequence[str]) -> str:
+    """Move whichever of `paths` exist into a fresh backup directory, and return it for
+    `_put_apt_paths_back`.
+
+    A move, not a captured copy: everything under `/etc/apt` is root-owned and some of it
+    is dpkg-shipped, and moving the file itself is the only restoration that is exact in
+    content, mode, ownership and timestamp without reproducing any of them. The backup sits
+    outside `/etc/apt` so apt never parses it while it is set aside.
+    """
+    backup_dir = f"/var/tmp/pcswitcher-it-apt-aside-{uuid4().hex[:12]}"
+    parents = sorted({backup_dir + path.rsplit("/", 1)[0] for path in paths})
+    command = " && ".join(
+        [f"sudo mkdir --parents {shlex.quote(parent)}" for parent in parents]
+        + [
+            f"(test ! -e {shlex.quote(path)} || sudo mv {shlex.quote(path)} {shlex.quote(backup_dir + path)})"
+            for path in paths
+        ]
+    )
+    result = await executor.run_command(command, login_shell=False, timeout=20.0)
+    assert result.success, f"Failed to move {list(paths)} aside into {backup_dir}: {result.stderr}"
+    return backup_dir
+
+
+async def _put_apt_paths_back(executor: BashLoginRemoteExecutor, backup_dir: str, paths: Sequence[str]) -> None:
+    """Undo `_take_apt_paths_aside`: each path ends as whatever was there before, present or
+    absent.
+
+    Every step runs unconditionally (`;`, not `&&`) so a test that failed halfway still
+    leaves the machine's `/etc/apt` as it found it.
+    """
+    steps = [
+        f"sudo rm --force {shlex.quote(path)}; "
+        f"test ! -e {shlex.quote(backup_dir + path)} || sudo mv {shlex.quote(backup_dir + path)} {shlex.quote(path)}"
+        for path in paths
+    ]
+    steps.append(f"sudo rm --force --recursive {shlex.quote(backup_dir)}")
+    await executor.run_command("; ".join(steps), login_shell=False, timeout=20.0)
 
 
 async def _apt_get_update(executor: BashLoginRemoteExecutor) -> CommandResult:
@@ -2973,11 +3012,6 @@ _ESM_SOURCE_BODIES = {
         "Signed-By: /usr/share/keyrings/ubuntu-pro-esm-infra.gpg\n"
     ),
 }
-# The pin `pro enable esm-apps` writes beside the source. It is in the always-sync bucket
-# with no derivation predicate, which is the whole reason the gate skips the JOB rather
-# than the two files: withholding the sources alone would still put this on the target.
-_ESM_PIN_FILENAME = "ubuntu-pro-esm-apps"
-_ESM_PIN_BODY = "Package: *\nPin: release o=UbuntuESMApps\nPin-Priority: 510\n"
 
 
 class TestTheESMAttachmentGateOnVMs:
@@ -2990,12 +3024,16 @@ class TestTheESMAttachmentGateOnVMs:
     transferable, and putting a subscription token in CI would violate the project's
     secrets rule. Both VMs are therefore permanently unattached — which is exactly the
     machine this test needs, and is why nothing here is skipped or discovered: the test
-    creates the divergence itself and removes it in a `finally`.
+    puts both machines in the state the gate needs and restores them in a `finally`.
 
-    What only a VM can prove: that the skip costs the WHOLE job. The source's ESM pin is
-    in the always-sync bucket with no derivation predicate, so an implementation that
-    withheld only the two sources would still leave it on the target — visible here as a
-    file on pc2, and invisible to any mocked-executor unit test.
+    What only a VM can prove: that the skip costs the WHOLE job. `/etc/apt/preferences.d`
+    always-syncs with no derivation predicate, so an implementation that withheld only the
+    two sources would still put the source's pin on the target — visible here as a file on
+    pc2, and invisible to any mocked-executor unit test. That pin is the uuid-suffixed
+    synthetic one, not `ubuntu-pro-esm-apps`: `ubuntu-pro-client` SHIPS
+    `/etc/apt/preferences.d/ubuntu-pro-esm-apps` and `-esm-infra` (`dpkg -L`, measured on
+    both VMs) whether or not the machine is attached, so the real ESM pins are byte-identical
+    on source and target and can never be a pending write to witness anything with.
     """
 
     async def test_an_unattached_target_skips_apt_sync_and_leaves_etc_apt_untouched(
@@ -3009,25 +3047,24 @@ class TestTheESMAttachmentGateOnVMs:
         _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
 
         esm_dests = [f"{_APT_SOURCES_DIR}/{name}" for name in _ESM_SOURCE_BODIES]
-        pin_dest = f"{_APT_PREFERENCES_DIR}/{_ESM_PIN_FILENAME}"
-        all_dests = [*esm_dests, pin_dest]
+        source_aside = ""
+        target_aside = ""
+        pin_dest = ""
         try:
-            # pc2 must lack all three before the run, or the assertions afterwards prove
-            # nothing. A fresh unattached VM has none of them.
-            absent = await pc2_executor.run_command(
-                " && ".join(f"test ! -e {shlex.quote(path)}" for path in all_dests),
-                login_shell=False,
-                timeout=10.0,
-            )
-            assert absent.success, "pc2 already carries ESM sources or the ESM pin before the run"
-
+            # Both machines are PUT in the state the gate needs rather than asked to be in
+            # it already: pc2 carrying neither file — a target copy with the source's digest
+            # is not a pending write, so the gate would never fire — and pc1 carrying both
+            # with the bodies below, whatever either machine came with.
+            target_aside = await _take_apt_paths_aside(pc2_executor, esm_dests)
+            source_aside = await _take_apt_paths_aside(pc1_executor, esm_dests)
             writes = [
                 f"printf %s {shlex.quote(body)} | sudo tee {shlex.quote(f'{_APT_SOURCES_DIR}/{name}')} > /dev/null"
                 for name, body in _ESM_SOURCE_BODIES.items()
             ]
-            writes.append(f"printf %s {shlex.quote(_ESM_PIN_BODY)} | sudo tee {shlex.quote(pin_dest)} > /dev/null")
             created = await pc1_executor.run_command(" && ".join(writes), login_shell=False, timeout=20.0)
-            assert created.success, f"Failed to create the ESM source/pin set on pc1: {created.stderr}"
+            assert created.success, f"Failed to create the ESM sources on pc1: {created.stderr}"
+
+            pin_dest = f"{_APT_PREFERENCES_DIR}/{await _create_synthetic_pin(pc1_executor)}"
 
             # snap_sync runs after apt_sync and is the evidence that a skip is not an abort.
             await _write_package_sync_config(pc1_executor, apt_sync=True, snap_sync=True)
@@ -3052,7 +3089,7 @@ class TestTheESMAttachmentGateOnVMs:
             # The load-bearing assertion: pc2's /etc/apt is exactly as it was, the PIN
             # included. A gate that withheld only the two sources would leave the pin here.
             untouched = await pc2_executor.run_command(
-                " && ".join(f"test ! -e {shlex.quote(path)}" for path in all_dests),
+                " && ".join(f"test ! -e {shlex.quote(path)}" for path in (*esm_dests, pin_dest)),
                 login_shell=False,
                 timeout=10.0,
             )
@@ -3060,6 +3097,12 @@ class TestTheESMAttachmentGateOnVMs:
                 "a skipped apt_sync still wrote to pc2's /etc/apt — the whole job must leave it as it was"
             )
         finally:
-            cleanup = " ".join(shlex.quote(path) for path in all_dests)
-            await pc1_executor.run_command(f"sudo rm --force {cleanup}", login_shell=False, timeout=15.0)
-            await pc2_executor.run_command(f"sudo rm --force {cleanup}", login_shell=False, timeout=15.0)
+            if pin_dest:
+                # uuid-suffixed, so this can never name a file either machine came with.
+                cleanup = shlex.quote(pin_dest)
+                await pc1_executor.run_command(f"sudo rm --force {cleanup}", login_shell=False, timeout=15.0)
+                await pc2_executor.run_command(f"sudo rm --force {cleanup}", login_shell=False, timeout=15.0)
+            if source_aside:
+                await _put_apt_paths_back(pc1_executor, source_aside, esm_dests)
+            if target_aside:
+                await _put_apt_paths_back(pc2_executor, target_aside, esm_dests)
