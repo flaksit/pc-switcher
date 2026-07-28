@@ -13,6 +13,12 @@ removal diff, never a single in-place change, because they are simply two differ
 explicitly out of scope (deferred, CONTEXT.md): it is a change to the machines, not a
 sync feature, and this job reports the split exactly as found.
 
+BRANCH is identity for the same reason (`FlatpakItem`): a ref is identified by its full
+`<application>/<arch>/<branch>` ref, which is also the only string `flatpak install` and
+`flatpak uninstall` can resolve on a remote or a machine holding two branches of one
+application id. Origin is deliberately NOT identity — see `FlatpakItem` for why the two
+go opposite ways.
+
 `flatpak install` refuses outright when the remote it names is not yet configured in
 the scope being installed into (D-14), so remotes are captured and diffed as their
 own item class (`FLATPAK_REMOTE`) and this job's own ordering stage (mirroring
@@ -97,10 +103,18 @@ from pcswitcher.sudoers import passwordless_sudo_hint
 __all__ = ["FlatpakSyncJob", "flatpak_sync_exclude_paths"]
 
 # `flatpak list --app` is run with an explicit --columns flag naming exactly these
-# four fields in this order (RESEARCH: verified live against Flatpak 1.14.6) — unlike
+# five fields in this order (RESEARCH: verified live against Flatpak 1.14.6) — unlike
 # `snap list --all`, the invocation itself names its columns, so the output has no
 # header row and is parsed by fixed tab-separated position.
-_FLATPAK_LIST_CMD = "flatpak list --app --columns=application,version,origin,installation"
+#
+# `ref` is what makes a ref nameable. It prints `<application>/<arch>/<branch>` (measured
+# live: `com.slack.Slack/x86_64/stable`), and that exact string is what `flatpak install`
+# and `flatpak uninstall` accept positionally — the bare application id is NOT enough on a
+# remote carrying two branches of one id, where `flatpak install <remote> <id>` exits 1
+# with `Multiple branches available for <id>` (measured against real Flathub-beta, which
+# carries both `stable` and `beta` for `org.mozilla.firefox`). Without the branch such an
+# app fails to converge on every single run.
+_FLATPAK_LIST_CMD = "flatpak list --app --columns=application,version,origin,installation,ref"
 
 # Same reasoning for `flatpak remotes`, but flatpak tracks remotes PER INSTALLATION —
 # even a byte-identical `flathub` URL is two separate configuration entries — so this
@@ -171,23 +185,43 @@ class FlatpakItem:
     id, and folding scope into `item_id` is what makes "same name, different scope"
     fall out of the generic diff engine as two distinct items with no special-casing
     in `flatpak_sync`.
+
+    So does `ref` (`<application>/<arch>/<branch>`), and NOT the bare application id, for
+    two reasons that the application id alone cannot serve:
+
+    - Two branches of one application id can be installed side by side in ONE scope —
+      that is what branches are for — so `(scope, application)` is not a unique key for a
+      machine's own listing, and keying on it silently drops one of the two rows when the
+      captured items are folded into a `{item_id: item}` map.
+    - The install and the removal both need the full ref anyway (`_FLATPAK_LIST_CMD`), so
+      the identity and the command argument are the same string rather than two facts that
+      can drift.
+
+    ORIGIN deliberately stays out (a field, not identity), because the install-plus-removal
+    pair it would produce cannot converge: `flatpak install <other remote> <ref>` on an
+    already-installed ref exits with `<ref> is already installed from remote <name>`, so
+    the install half could never run while the removal half proposed deleting the app the
+    user has. A BRANCH difference has the opposite property — branches coexist, so the
+    install half succeeds and the removal half then leaves exactly the source's set — which
+    is why a branch change replicates as two items and an origin change does not.
     """
 
     application: str
     version: str
     origin: str
     scope: Literal["user", "system"]
+    ref: str
 
     ITEM_CLASS: ClassVar[ItemClass] = ItemClass.FLATPAK_REF
 
     @property
     def item_id(self) -> str:
-        """Stable identity string: `flatpak:ref:<scope>:<application>`."""
-        return f"flatpak:ref:{self.scope}:{self.application}"
+        """Stable identity string: `flatpak:ref:<scope>:<application>/<arch>/<branch>`."""
+        return f"flatpak:ref:{self.scope}:{self.ref}"
 
     def label(self) -> str:
         """Human-readable text for the review UI and logs."""
-        return f"{self.application} ({self.version}, {self.origin}, {self.scope})"
+        return f"{self.ref} ({self.version}, {self.origin}, {self.scope})"
 
 
 @dataclass(frozen=True)
@@ -262,7 +296,7 @@ class FlatpakMaskItem:
         return f"{self.pattern} (mask, {self.scope})"
 
 
-def build_orphaned_refs_detail(remote: str, applications: Sequence[str]) -> str:
+def build_orphaned_refs_detail(remote: str, refs: Sequence[str]) -> str:
     """Detail string for a flatpak remote REMOVE diff whose removal would leave
     target-side refs without their origin (#214).
 
@@ -271,7 +305,7 @@ def build_orphaned_refs_detail(remote: str, applications: Sequence[str]) -> str:
     legitimate cleanup removes the refs too, but it is never offered as a bare presence
     difference with nothing said about what depends on it.
     """
-    return f"target refs still using {remote}: {', '.join(applications)} (removal orphans them)"
+    return f"target refs still using {remote}: {', '.join(refs)} (removal orphans them)"
 
 
 def _lines(output: str) -> list[str]:
@@ -355,11 +389,11 @@ def _parse_keyring_digests(output: str) -> dict[str, str]:
 def _split_flatpak_item_id(item_id: str, expected_kind: Literal["ref", "remote", "mask"]) -> tuple[str, str]:
     """`(scope, name)` from a `flatpak:<kind>:<scope>:<name>` item id (`FlatpakItem` above).
 
-    `name` is the application id for a ref, the remote name for a remote, the pattern
-    for a mask — none carries a `:` of its own: refs/remotes are dotted/alnum tokens
-    and mask patterns are partial refs with `/` and `*` wildcards but never `:`
-    (RESEARCH Standard Stack, verified live), so a fixed 3-colon split is exact rather
-    than a heuristic (the `split(":", 3)` cap keeps any `/` inside a pattern intact).
+    `name` is the full `<application>/<arch>/<branch>` ref for a ref, the remote name for
+    a remote, the pattern for a mask — none carries a `:` of its own: application ids and
+    remote names are dotted/alnum tokens, and refs and mask patterns are partial refs with
+    `/` and `*` but never `:` (RESEARCH Standard Stack, verified live), so a fixed 3-colon
+    split is exact rather than a heuristic (the `split(":", 3)` cap keeps every `/` intact).
     This is a legitimate use of a
     stable identity string (the same pattern `apt_sync._package_name` and
     `snap_sync._snap_name` already establish): the plan only ever carries `ItemDiff`s,
@@ -384,9 +418,9 @@ def _parse_flatpak_list(output: str) -> list[FlatpakItem]:
     items: list[FlatpakItem] = []
     for line in _lines(output):
         fields = line.split("\t")
-        if len(fields) != 4:
+        if len(fields) != 5:
             continue
-        application, version, origin, installation = fields
+        application, version, origin, installation, ref = fields
         scope: Literal["user", "system"]
         if installation == "user":
             scope = "user"
@@ -394,7 +428,7 @@ def _parse_flatpak_list(output: str) -> list[FlatpakItem]:
             scope = "system"
         else:
             continue
-        items.append(FlatpakItem(application=application, version=version, origin=origin, scope=scope))
+        items.append(FlatpakItem(application=application, version=version, origin=origin, scope=scope, ref=ref))
     return items
 
 
@@ -479,9 +513,10 @@ def _remove_ref_diff(item: FlatpakItem) -> ItemDiff:
 
 def _version_mismatch_ref_diff(item_id: str, source_item: FlatpakItem, target_item: FlatpakItem) -> ItemDiff:
     """D-04: a flatpak ref's version floats like an apt package's does — reported,
-    never force-installed/removed to converge it. Only reachable for two items
-    sharing the same `item_id`, i.e. the same application AND the same scope: a scope
-    difference is never this diff (module docstring — it is two distinct items).
+    never force-installed/removed to converge it. Only reachable for two items sharing the
+    same `item_id`, i.e. the same ref (application, arch AND branch) in the same scope: a
+    scope or branch difference is never this diff (`FlatpakItem` — it is two distinct
+    items, an install and a removal).
     """
     return ItemDiff(
         item_class=ItemClass.FLATPAK_REF,
@@ -534,7 +569,7 @@ def _install_remote_diff(item: FlatpakRemoteItem) -> ItemDiff:
     )
 
 
-def _remove_remote_diff(item: FlatpakRemoteItem, dependent_applications: Sequence[str]) -> ItemDiff:
+def _remove_remote_diff(item: FlatpakRemoteItem, dependent_refs: Sequence[str]) -> ItemDiff:
     """Deleting a remote the target's own refs still name as their origin orphans them
     (#214), so the dependents are named in `detail` — the review states the consequence
     before the user approves it, D-30's placement for apt's transaction collateral.
@@ -550,7 +585,7 @@ def _remove_remote_diff(item: FlatpakRemoteItem, dependent_applications: Sequenc
         action=DiffAction.REMOVE,
         item_id=item.item_id,
         label=item.label(),
-        detail=build_orphaned_refs_detail(item.name, dependent_applications) if dependent_applications else None,
+        detail=build_orphaned_refs_detail(item.name, dependent_refs) if dependent_refs else None,
     )
 
 
@@ -641,8 +676,8 @@ def _change_remote_diff(source_item: FlatpakRemoteItem, target_item: FlatpakRemo
 
 
 def _target_refs_by_origin_remote(target_refs: Sequence[FlatpakItem]) -> dict[str, list[str]]:
-    """Target ref application ids keyed by the `item_id` of the remote they name as
-    origin, IN THEIR OWN SCOPE (#214).
+    """Target refs keyed by the `item_id` of the remote they name as origin, IN THEIR OWN
+    SCOPE (#214).
 
     A remote is per-installation (module docstring), so `flathub` in `user` and
     `flathub` in `system` are two entries and only same-scope refs depend on either —
@@ -651,7 +686,7 @@ def _target_refs_by_origin_remote(target_refs: Sequence[FlatpakItem]) -> dict[st
     """
     by_remote: dict[str, list[str]] = {}
     for ref in target_refs:
-        by_remote.setdefault(f"flatpak:remote:{ref.scope}:{ref.origin}", []).append(ref.application)
+        by_remote.setdefault(f"flatpak:remote:{ref.scope}:{ref.origin}", []).append(ref.ref)
     return by_remote
 
 
@@ -1045,15 +1080,24 @@ class FlatpakSyncJob(PackageSyncJob):
         )
 
     async def _converge_ref(self, diff: ItemDiff) -> CommandResult:
-        scope, application = _split_flatpak_item_id(diff.item_id, "ref")
+        """Install or uninstall one ref, always naming the FULL `<application>/<arch>/
+        <branch>` ref rather than the bare application id.
+
+        Both verbs need it. `flatpak install <remote> <id>` exits 1 with `Multiple branches
+        available for <id>` on a remote carrying two branches of that id, and
+        `flatpak uninstall <id>` is equally ambiguous once two branches are installed
+        locally — measured live against real Flathub-beta, which carries `stable` and
+        `beta` for `org.mozilla.firefox`. The ref comes straight out of the item_id
+        (`FlatpakItem`), so neither direction needs a source-side lookup to name its
+        subject.
+        """
+        scope, ref = _split_flatpak_item_id(diff.item_id, "ref")
         scope_flag = _scope_flag(scope)
         sudo = _sudo_prefix(scope)
 
         if diff.action == DiffAction.REMOVE:
-            cmd = f"{sudo}flatpak uninstall --assumeyes {scope_flag} {shlex.quote(application)}"
-            return await self.target.run_command(
-                cmd, login_shell=False, mutates=f"uninstall {scope} flatpak {application}"
-            )
+            cmd = f"{sudo}flatpak uninstall --assumeyes {scope_flag} {shlex.quote(ref)}"
+            return await self.target.run_command(cmd, login_shell=False, mutates=f"uninstall {scope} flatpak {ref}")
 
         if diff.action == DiffAction.INSTALL:
             source_item = self._source_refs_by_id.get(diff.item_id)
@@ -1065,16 +1109,15 @@ class FlatpakSyncJob(PackageSyncJob):
             if not self._remote_ready_on_target(scope, source_item.origin):
                 # T-02-24: refuse rather than issue an install flatpak will reject.
                 raise ConvergeItemFailed(
-                    f"install of {application} refused: origin remote {source_item.origin!r} ({scope}) is "
+                    f"install of {ref} refused: origin remote {source_item.origin!r} ({scope}) is "
                     "neither already configured on the target nor among this run's successfully-added "
                     "remotes (D-14)"
                 )
             cmd = (
-                f"{sudo}flatpak install --assumeyes {scope_flag} "
-                f"{shlex.quote(source_item.origin)} {shlex.quote(application)}"
+                f"{sudo}flatpak install --assumeyes {scope_flag} {shlex.quote(source_item.origin)} {shlex.quote(ref)}"
             )
             return await self.target.run_command(
-                cmd, login_shell=False, mutates=f"install {scope} flatpak {application} from {source_item.origin}"
+                cmd, login_shell=False, mutates=f"install {scope} flatpak {ref} from {source_item.origin}"
             )
 
         raise ConvergeItemFailed(

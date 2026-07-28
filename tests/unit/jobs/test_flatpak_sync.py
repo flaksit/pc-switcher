@@ -35,37 +35,44 @@ from pcswitcher.jobs.packages.sync_core import ConvergeItemFailed, PackagePlan
 from pcswitcher.models import CommandResult, Host, ValidationError
 from pcswitcher.orchestrator import Orchestrator
 
-# `flatpak list --app --columns=application,version,origin,installation` has NO
+# `flatpak list --app --columns=application,version,origin,installation,ref` has NO
 # header row (RESEARCH: verified live against Flatpak 1.14.6, unlike `snap list`) —
 # the --columns flag itself names the columns, so output is exactly those four
 # tab-separated fields per line.
 FLATPAK_LIST_SOURCE = (
-    "com.slack.Slack\t4.50.0\tflathub\tsystem\n"
-    "org.gnome.Podcasts\t1.0\tflathub\tuser\n"
-    "org.gimp.GIMP\t2.10\tflathub\tuser\n"
-    "org.example.SplitScope\t1.0\tflathub\tuser\n"
-    "org.example.NeedsRemote\t1.0\tcustomremote\tuser\n"
+    "com.slack.Slack\t4.50.0\tflathub\tsystem\tcom.slack.Slack/x86_64/stable\n"
+    "org.gnome.Podcasts\t1.0\tflathub\tuser\torg.gnome.Podcasts/x86_64/stable\n"
+    "org.gimp.GIMP\t2.10\tflathub\tuser\torg.gimp.GIMP/x86_64/stable\n"
+    "org.example.SplitScope\t1.0\tflathub\tuser\torg.example.SplitScope/x86_64/stable\n"
+    "org.example.NeedsRemote\t1.0\tcustomremote\tuser\torg.example.NeedsRemote/x86_64/stable\n"
 )
 
 FLATPAK_LIST_TARGET = (
-    "org.gnome.Podcasts\t1.0\tflathub\tuser\n"
-    "org.gimp.GIMP\t2.9\tflathub\tuser\n"
-    "com.spotify.Client\t1.0\tflathub\tuser\n"
-    "org.example.SplitScope\t1.0\tflathub\tsystem\n"
+    "org.gnome.Podcasts\t1.0\tflathub\tuser\torg.gnome.Podcasts/x86_64/stable\n"
+    "org.gimp.GIMP\t2.9\tflathub\tuser\torg.gimp.GIMP/x86_64/stable\n"
+    "com.spotify.Client\t1.0\tflathub\tuser\tcom.spotify.Client/x86_64/stable\n"
+    "org.example.SplitScope\t1.0\tflathub\tsystem\torg.example.SplitScope/x86_64/stable\n"
 )
 
-FLATPAK_LIST_BOTH_SCOPES = "org.example.App\t1.0\tflathub\tuser\norg.example.App\t1.0\tflathub\tsystem\n"
+FLATPAK_LIST_BOTH_SCOPES = (
+    "org.example.App\t1.0\tflathub\tuser\torg.example.App/x86_64/stable\n"
+    "org.example.App\t1.0\tflathub\tsystem\torg.example.App/x86_64/stable\n"
+)
 
 _FLATHUB_REMOTE_LINE = "flathub\thttps://dl.flathub.org/repo/\n"
 
 SOURCE_RESPONSES = {
-    "flatpak list --app --columns=application,version,origin,installation": CommandResult(0, FLATPAK_LIST_SOURCE, ""),
+    "flatpak list --app --columns=application,version,origin,installation,ref": CommandResult(
+        0, FLATPAK_LIST_SOURCE, ""
+    ),
     "flatpak remotes --user --columns=name,url": CommandResult(0, _FLATHUB_REMOTE_LINE, ""),
     "flatpak remotes --system --columns=name,url": CommandResult(0, _FLATHUB_REMOTE_LINE, ""),
 }
 
 TARGET_RESPONSES = {
-    "flatpak list --app --columns=application,version,origin,installation": CommandResult(0, FLATPAK_LIST_TARGET, ""),
+    "flatpak list --app --columns=application,version,origin,installation,ref": CommandResult(
+        0, FLATPAK_LIST_TARGET, ""
+    ),
     "flatpak remotes --user --columns=name,url": CommandResult(0, _FLATHUB_REMOTE_LINE, ""),
     "flatpak remotes --system --columns=name,url": CommandResult(0, "", ""),
 }
@@ -157,7 +164,7 @@ class TestCapture:
 
     @pytest.mark.asyncio
     async def test_unrecognized_installation_value_is_skipped(self) -> None:
-        weird = "org.example.Weird\t1.0\tflathub\tcustom-install\n"
+        weird = "org.example.Weird\t1.0\tflathub\tcustom-install\torg.example.Weird/x86_64/stable\n"
         context, _source, _target = make_context(source_responses={"flatpak list --app": CommandResult(0, weird, "")})
         job = FlatpakSyncJob(context)
 
@@ -169,6 +176,113 @@ class TestCapture:
         job = FlatpakSyncJob(context)
 
         assert await job.capture_source_items() == []
+
+
+# `flatpak list --columns=ref` prints `<application>/<arch>/<branch>` (measured live), and
+# that exact string is what `flatpak install`/`flatpak uninstall` accept positionally.
+_BETA_REF_LINE = "org.example.App\t2.0b\tflathub-beta\tuser\torg.example.App/x86_64/beta\n"
+_STABLE_REF_LINE = "org.example.App\t1.0\tflathub\tuser\torg.example.App/x86_64/stable\n"
+
+
+class TestRefIdentityCarriesTheBranch:
+    """The full ref, not the bare application id, is both the identity and the command
+    argument — a remote or a machine holding two branches of one id cannot resolve the
+    bare id (measured: `Multiple branches available for org.mozilla.firefox`).
+    """
+
+    @pytest.mark.asyncio
+    async def test_capture_asks_for_the_ref_column_and_keeps_it_on_the_item(self) -> None:
+        context, source, _target = make_context(
+            source_responses={"flatpak list --app": CommandResult(0, _BETA_REF_LINE, "")}
+        )
+        job = FlatpakSyncJob(context)
+
+        items = await job.capture_source_items()
+
+        assert any(",ref" in cmd for cmd in all_calls(source))
+        assert [item.ref for item in items] == ["org.example.App/x86_64/beta"]
+        assert items[0].item_id == "flatpak:ref:user:org.example.App/x86_64/beta"
+
+    @pytest.mark.asyncio
+    async def test_two_branches_of_one_application_in_one_scope_are_two_items(self) -> None:
+        """`(scope, application)` is not a unique key for a machine's own listing: keying
+        on it folds the two rows into one and silently loses a ref.
+        """
+        context, _source, _target = make_context(
+            source_responses={"flatpak list --app": CommandResult(0, _STABLE_REF_LINE + _BETA_REF_LINE, "")}
+        )
+        job = FlatpakSyncJob(context)
+
+        items = await job.capture_source_items()
+
+        assert len({item.item_id for item in items}) == 2
+
+    def test_origin_stays_out_of_the_identity(self) -> None:
+        """The opposite ruling from branch, and for a measured reason: an install-plus-
+        removal pair on an origin change cannot converge, because
+        `flatpak install <other remote> <ref>` on an installed ref refuses.
+        """
+        common = {"application": "org.example.App", "version": "1.0", "scope": "user"}
+        from_flathub = FlatpakItem(origin="flathub", ref="org.example.App/x86_64/stable", **common)  # pyright: ignore[reportArgumentType]
+        from_beta = FlatpakItem(origin="flathub-beta", ref="org.example.App/x86_64/stable", **common)  # pyright: ignore[reportArgumentType]
+
+        assert from_flathub.item_id == from_beta.item_id
+
+    @pytest.mark.asyncio
+    async def test_a_branch_change_reads_as_install_plus_removal_never_a_version_mismatch(self) -> None:
+        context, _source, _target = make_context(
+            source_responses={
+                "flatpak list --app": CommandResult(0, _BETA_REF_LINE, ""),
+                "flatpak remotes --user": CommandResult(0, "flathub-beta\thttps://dl.flathub.org/beta-repo/\n", ""),
+            },
+            target_responses={
+                "flatpak list --app": CommandResult(0, _STABLE_REF_LINE, ""),
+                "flatpak remotes --user": CommandResult(0, "flathub-beta\thttps://dl.flathub.org/beta-repo/\n", ""),
+            },
+        )
+        job = FlatpakSyncJob(context)
+
+        plan = await job.plan()
+
+        ref_diffs = {d.item_id: d.action for d in plan.diffs if d.item_class == ItemClass.FLATPAK_REF}
+        assert ref_diffs == {
+            "flatpak:ref:user:org.example.App/x86_64/beta": DiffAction.INSTALL,
+            "flatpak:ref:user:org.example.App/x86_64/stable": DiffAction.REMOVE,
+        }
+
+    @pytest.mark.asyncio
+    async def test_install_names_the_full_ref_after_the_remote(self) -> None:
+        context, _source, target = make_context(
+            source_responses={
+                "flatpak list --app": CommandResult(0, _BETA_REF_LINE, ""),
+                "flatpak remotes --user": CommandResult(0, "flathub-beta\thttps://dl.flathub.org/beta-repo/\n", ""),
+            },
+            target_responses={
+                "flatpak remotes --user": CommandResult(0, "flathub-beta\thttps://dl.flathub.org/beta-repo/\n", ""),
+            },
+        )
+        job = FlatpakSyncJob(context)
+        plan = await job.plan()
+        diff = next(d for d in plan.diffs if d.action == DiffAction.INSTALL)
+
+        await job.converge(diff)
+
+        install_cmd = next(c for c in all_calls(target) if "flatpak install" in c)
+        assert install_cmd.rstrip().endswith("flathub-beta org.example.App/x86_64/beta")
+
+    @pytest.mark.asyncio
+    async def test_uninstall_names_the_full_ref(self) -> None:
+        context, _source, target = make_context(
+            target_responses={"flatpak list --app": CommandResult(0, _BETA_REF_LINE, "")},
+        )
+        job = FlatpakSyncJob(context)
+        plan = await job.plan()
+        diff = next(d for d in plan.diffs if d.action == DiffAction.REMOVE)
+
+        await job.converge(diff)
+
+        uninstall_cmd = next(c for c in all_calls(target) if "flatpak uninstall" in c)
+        assert uninstall_cmd.rstrip().endswith("--user org.example.App/x86_64/beta")
 
 
 class TestPlanDiff:
@@ -187,11 +301,11 @@ class TestPlanDiff:
         by_id = {diff.item_id: diff for diff in plan.diffs}
 
         # Missing on target -> install.
-        assert by_id["flatpak:ref:system:com.slack.Slack"].action == DiffAction.INSTALL
-        assert by_id["flatpak:ref:system:com.slack.Slack"].diff_class == DiffClass.MISSING_ON_TARGET
+        assert by_id["flatpak:ref:system:com.slack.Slack/x86_64/stable"].action == DiffAction.INSTALL
+        assert by_id["flatpak:ref:system:com.slack.Slack/x86_64/stable"].diff_class == DiffClass.MISSING_ON_TARGET
 
         # Version differs, same scope -> report_only, never a converge verb (D-04).
-        gimp = by_id["flatpak:ref:user:org.gimp.GIMP"]
+        gimp = by_id["flatpak:ref:user:org.gimp.GIMP/x86_64/stable"]
         assert gimp.action == DiffAction.REPORT_ONLY
         assert gimp.diff_class == DiffClass.VERSION_MISMATCH
         assert gimp.detail is not None
@@ -200,18 +314,18 @@ class TestPlanDiff:
 
         # Same application, different scope on each machine -> one install, one
         # removal, never a single change (scope is identity, module docstring).
-        assert by_id["flatpak:ref:user:org.example.SplitScope"].action == DiffAction.INSTALL
-        assert by_id["flatpak:ref:system:org.example.SplitScope"].action == DiffAction.REMOVE
+        assert by_id["flatpak:ref:user:org.example.SplitScope/x86_64/stable"].action == DiffAction.INSTALL
+        assert by_id["flatpak:ref:system:org.example.SplitScope/x86_64/stable"].action == DiffAction.REMOVE
 
         # Extra on target -> removal, its own review group.
-        assert by_id["flatpak:ref:user:com.spotify.Client"].action == DiffAction.REMOVE
+        assert by_id["flatpak:ref:user:com.spotify.Client/x86_64/stable"].action == DiffAction.REMOVE
         remove_group = next(g for g in plan.groups if g.action == "remove")
         install_group = next(g for g in plan.groups if g.action == "install")
-        assert "flatpak:ref:user:com.spotify.Client" in {e.item_id for e in remove_group.entries}
-        assert "flatpak:ref:user:com.spotify.Client" not in {e.item_id for e in install_group.entries}
+        assert "flatpak:ref:user:com.spotify.Client/x86_64/stable" in {e.item_id for e in remove_group.entries}
+        assert "flatpak:ref:user:com.spotify.Client/x86_64/stable" not in {e.item_id for e in install_group.entries}
 
         # Identical application/version/scope on both -> no diff at all.
-        assert "flatpak:ref:user:org.gnome.Podcasts" not in by_id
+        assert "flatpak:ref:user:org.gnome.Podcasts/x86_64/stable" not in by_id
 
         # Remote missing on target (system-scope flathub) -> its own add diff.
         assert by_id["flatpak:remote:system:flathub"].action == DiffAction.INSTALL
@@ -839,7 +953,8 @@ class TestConverge:
         applicable = [
             diff
             for diff in plan.diffs
-            if diff.action != DiffAction.REPORT_ONLY and diff.item_id != "flatpak:ref:user:org.example.NeedsRemote"
+            if diff.action != DiffAction.REPORT_ONLY
+            and diff.item_id != "flatpak:ref:user:org.example.NeedsRemote/x86_64/stable"
         ]
         for diff in applicable:
             await job.converge(diff)
@@ -856,7 +971,7 @@ class TestConverge:
         context, _source, target = make_context(source_responses=SOURCE_RESPONSES, target_responses=TARGET_RESPONSES)
         job = FlatpakSyncJob(context)
         plan = await job.plan()
-        diff = next(d for d in plan.diffs if d.item_id == "flatpak:ref:user:org.example.SplitScope")
+        diff = next(d for d in plan.diffs if d.item_id == "flatpak:ref:user:org.example.SplitScope/x86_64/stable")
 
         await job.converge(diff)
 
@@ -871,7 +986,7 @@ class TestConverge:
         job = FlatpakSyncJob(context)
         plan = await job.plan()
         remote_diff = next(d for d in plan.diffs if d.item_id == "flatpak:remote:system:flathub")
-        ref_diff = next(d for d in plan.diffs if d.item_id == "flatpak:ref:system:com.slack.Slack")
+        ref_diff = next(d for d in plan.diffs if d.item_id == "flatpak:ref:system:com.slack.Slack/x86_64/stable")
 
         await job.converge(remote_diff)
         await job.converge(ref_diff)
@@ -886,7 +1001,7 @@ class TestConverge:
         context, _source, target = make_context(source_responses=SOURCE_RESPONSES, target_responses=TARGET_RESPONSES)
         job = FlatpakSyncJob(context)
         plan = await job.plan()
-        diff = next(d for d in plan.diffs if d.item_id == "flatpak:ref:user:com.spotify.Client")
+        diff = next(d for d in plan.diffs if d.item_id == "flatpak:ref:user:com.spotify.Client/x86_64/stable")
 
         await job.converge(diff)
 
@@ -898,7 +1013,7 @@ class TestConverge:
         context, _source, target = make_context(source_responses=SOURCE_RESPONSES, target_responses=TARGET_RESPONSES)
         job = FlatpakSyncJob(context)
         plan = await job.plan()
-        diff = next(d for d in plan.diffs if d.item_id == "flatpak:ref:user:org.example.NeedsRemote")
+        diff = next(d for d in plan.diffs if d.item_id == "flatpak:ref:user:org.example.NeedsRemote/x86_64/stable")
 
         with pytest.raises(ConvergeItemFailed, match="customremote"):
             await job.converge(diff)
@@ -1001,7 +1116,9 @@ class TestMaskDiff:
         # dependency of the ref being installed the same run (D-08).
         context, _source, _target = make_context(
             source_responses={
-                "flatpak list --app": CommandResult(0, "org.example.App\t1.0\tflathub\tuser\n", ""),
+                "flatpak list --app": CommandResult(
+                    0, "org.example.App\t1.0\tflathub\tuser\torg.example.App/x86_64/stable\n", ""
+                ),
                 "flatpak remotes --user --columns=name,url": CommandResult(0, _FLATHUB_REMOTE_LINE, ""),
                 "flatpak --user mask": CommandResult(0, "  org.example.Blocked\n", ""),
             },
@@ -1069,7 +1186,7 @@ class TestMaskEditsAndScopeMoves:
         `flatpak list`: a pattern matching nothing installed on EITHER machine is still
         replicated, because it encodes the user's intent about future installs.
         """
-        installed = "org.gnome.Podcasts\t1.0\tflathub\tuser\n"
+        installed = "org.gnome.Podcasts\t1.0\tflathub\tuser\torg.gnome.Podcasts/x86_64/stable\n"
         context, _source, _target = make_context(
             source_responses={
                 "flatpak list --app": CommandResult(0, installed, ""),
@@ -1131,14 +1248,18 @@ class TestMaskReviewVerbs:
     async def _mixed_plan() -> PackagePlan:
         context, _source, _target = make_context(
             source_responses={
-                "flatpak list --app": CommandResult(0, "org.example.SourceOnly\t1.0\tflathub\tuser\n", ""),
+                "flatpak list --app": CommandResult(
+                    0, "org.example.SourceOnly\t1.0\tflathub\tuser\torg.example.SourceOnly/x86_64/stable\n", ""
+                ),
                 "flatpak remotes --user --columns=name,url": CommandResult(
                     0, _FLATHUB_REMOTE_LINE + "srcremote\thttps://src.example.org/repo/\n", ""
                 ),
                 "flatpak --user mask": CommandResult(0, "  org.example.MaskNew\n", ""),
             },
             target_responses={
-                "flatpak list --app": CommandResult(0, "org.example.TargetOnly\t1.0\tflathub\tuser\n", ""),
+                "flatpak list --app": CommandResult(
+                    0, "org.example.TargetOnly\t1.0\tflathub\tuser\torg.example.TargetOnly/x86_64/stable\n", ""
+                ),
                 "flatpak remotes --user --columns=name,url": CommandResult(
                     0, _FLATHUB_REMOTE_LINE + "tgtremote\thttps://tgt.example.org/repo/\n", ""
                 ),
@@ -1175,8 +1296,8 @@ class TestMaskReviewVerbs:
     async def test_ref_and_remote_groups_keep_their_own_verbs_and_exclude_masks(self) -> None:
         plan = await self._mixed_plan()
 
-        ref_install = self._group_holding(plan, "flatpak:ref:user:org.example.SourceOnly")
-        ref_remove = self._group_holding(plan, "flatpak:ref:user:org.example.TargetOnly")
+        ref_install = self._group_holding(plan, "flatpak:ref:user:org.example.SourceOnly/x86_64/stable")
+        ref_remove = self._group_holding(plan, "flatpak:ref:user:org.example.TargetOnly/x86_64/stable")
         remote_install = self._group_holding(plan, "flatpak:remote:user:srcremote")
         remote_remove = self._group_holding(plan, "flatpak:remote:user:tgtremote")
 
@@ -1204,8 +1325,8 @@ class TestRemoteRemovalOrphansRefs:
     never appear in the review at all.
     """
 
-    _USER_REF_LINE = "org.example.NeedsRemote\t1.0\tcustomremote\tuser\n"
-    _SYSTEM_REF_LINE = "org.example.SystemOnly\t1.0\tcustomremote\tsystem\n"
+    _USER_REF_LINE = "org.example.NeedsRemote\t1.0\tcustomremote\tuser\torg.example.NeedsRemote/x86_64/stable\n"
+    _SYSTEM_REF_LINE = "org.example.SystemOnly\t1.0\tcustomremote\tsystem\torg.example.SystemOnly/x86_64/stable\n"
     _CUSTOM_REMOTE_LINE = "customremote\thttps://custom.example.org/repo/\n"
 
     def _responses(self) -> tuple[dict[str, CommandResult], dict[str, CommandResult]]:
@@ -1443,7 +1564,11 @@ class TestValidate:
     @pytest.mark.asyncio
     async def test_system_scope_item_present_without_sudo_yields_validation_error(self) -> None:
         context, _source, _target = make_context(
-            source_responses={"flatpak list --app": CommandResult(0, "com.slack.Slack\t1.0\tflathub\tsystem\n", "")},
+            source_responses={
+                "flatpak list --app": CommandResult(
+                    0, "com.slack.Slack\t1.0\tflathub\tsystem\tcom.slack.Slack/x86_64/stable\n", ""
+                )
+            },
             target_responses={"sudo --non-interactive true": CommandResult(1, "", "sudo: a password is required")},
         )
         job = FlatpakSyncJob(context)
@@ -1455,7 +1580,11 @@ class TestValidate:
     @pytest.mark.asyncio
     async def test_user_scope_only_never_checks_sudo(self) -> None:
         context, _source, target = make_context(
-            source_responses={"flatpak list --app": CommandResult(0, "org.example.App\t1.0\tflathub\tuser\n", "")}
+            source_responses={
+                "flatpak list --app": CommandResult(
+                    0, "org.example.App\t1.0\tflathub\tuser\torg.example.App/x86_64/stable\n", ""
+                )
+            }
         )
         job = FlatpakSyncJob(context)
 
@@ -1487,13 +1616,31 @@ class TestFlatpakItem:
         assert FlatpakItem.ITEM_CLASS == ItemClass.FLATPAK_REF
 
     def test_same_application_different_scope_yields_distinct_item_ids(self) -> None:
-        user_item = FlatpakItem(application="com.slack.Slack", version="4.50", origin="flathub", scope="user")
-        system_item = FlatpakItem(application="com.slack.Slack", version="4.50", origin="flathub", scope="system")
+        user_item = FlatpakItem(
+            application="com.slack.Slack",
+            version="4.50",
+            origin="flathub",
+            scope="user",
+            ref="com.slack.Slack/x86_64/stable",
+        )
+        system_item = FlatpakItem(
+            application="com.slack.Slack",
+            version="4.50",
+            origin="flathub",
+            scope="system",
+            ref="com.slack.Slack/x86_64/stable",
+        )
 
         assert user_item.item_id != system_item.item_id
 
     def test_label_names_the_item_in_actionable_terms(self) -> None:
-        item = FlatpakItem(application="com.slack.Slack", version="4.50", origin="flathub", scope="user")
+        item = FlatpakItem(
+            application="com.slack.Slack",
+            version="4.50",
+            origin="flathub",
+            scope="user",
+            ref="com.slack.Slack/x86_64/stable",
+        )
 
         label = item.label()
 
@@ -1619,4 +1766,4 @@ class TestAProbeThatDidNotAnswer:
         plan = await FlatpakSyncJob(context).plan()
 
         installs = {diff.item_id for diff in plan.diffs if diff.action == DiffAction.INSTALL}
-        assert "flatpak:ref:user:org.gimp.GIMP" in installs
+        assert "flatpak:ref:user:org.gimp.GIMP/x86_64/stable" in installs

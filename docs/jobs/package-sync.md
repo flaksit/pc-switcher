@@ -162,6 +162,10 @@ A snap installed from a local `.snap` file (`snap install --dangerous`, `snap tr
 
 To keep the revision from changing mid-sync, snapd's **automatic** refresh is briefly paused on both machines for the duration of the run (snapd auto-refreshes several times a day, even for closed apps). The pause blocks only automatic refreshes; snap_sync's own `--revision` convergence still works. Each machine's prior refresh policy is read before the pause and written back when the run ends, so a hold you set yourself — including an indefinite one — survives the sync. If that prior value cannot be read on a machine, its refresh policy is left untouched rather than cleared; the pause pc-switcher set expires on its own a few hours later.
 
+## Flatpak refs
+
+A flatpak app is identified by its full `<application>/<arch>/<branch>` reference, not by the bare application id, and that reference is what the install and the uninstall name. Two branches of one app can be installed side by side, and a remote can offer several — flatpak refuses to guess between them and exits with `Multiple branches available`, so an app whose remote carries more than one branch never converges when only the id is named. The review line therefore shows the branch, and the same app on `stable` on one machine and `beta` on the other reads as an install plus a removal rather than as a version difference.
+
 ## Flatpak remotes
 
 A flatpak remote is replicated as its own review item, per installation scope: `flathub` in the user installation and `flathub` in the system installation are two separate items, because flatpak configures them separately. Remotes always converge before the refs that come from them — `flatpak install` refuses outright when its remote is not configured in that scope.

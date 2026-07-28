@@ -273,7 +273,9 @@ Flatpak has not had the origin treatment either. A remote is reviewed as an item
 
 Scope is identity. The same application in the user installation on one machine and the system installation on the other is two items: one install and one removal, never a change. pc-switcher reports the split as found and does not normalise it.
 
-An app on the source only: installed, after its remote. On the target only: offered for removal, unticked. Same app, same scope, different version: reported only. Identical: nothing.
+So is the branch. An app is identified, installed and uninstalled by its full `<application>/<arch>/<branch>` reference, never by the bare application id, because two branches of one id can be installed side by side and a remote can offer several — flatpak refuses to guess between them, so the bare id fails on every run for such an app. The same app on `stable` on one machine and `beta` on the other is two items, an install and a removal, and the review line names the branch. Where the app comes from is deliberately *not* identity: see the origin paragraphs below.
+
+An app on the source only: installed, after its remote. On the target only: offered for removal, unticked. Same app, same branch, same scope, different version: reported only. Identical: nothing.
 
 A remote missing on the target is its own review item, ticked by default, and every remote converges before any app that depends on it — `flatpak install` refuses outright when its remote is not configured in that scope.
 

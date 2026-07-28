@@ -671,20 +671,20 @@ async def _common_apt_package(pc1_executor: BashLoginRemoteExecutor, pc2_executo
 # -- flatpak helpers: independent of flatpak_sync's private parsers ------------------
 
 
-def parse_flatpak_list_lines(output: str) -> list[tuple[str, str, str, str]]:
-    """Parse `flatpak list --app --columns=application,version,origin,installation`
-    into `(application, version, origin, installation)` tuples, tab-separated (mirrors
+def parse_flatpak_list_lines(output: str) -> list[tuple[str, str, str, str, str]]:
+    """Parse `flatpak list --app --columns=application,version,origin,installation,ref`
+    into `(application, version, origin, installation, ref)` tuples, tab-separated (mirrors
     `flatpak_sync._parse_flatpak_list`'s shape, kept independent since that parser is
     private to `flatpak_sync.py`).
     """
-    rows: list[tuple[str, str, str, str]] = []
+    rows: list[tuple[str, str, str, str, str]] = []
     for line in output.splitlines():
         if not line.strip():
             continue
         fields = line.split("\t")
-        if len(fields) != 4:
+        if len(fields) != 5:
             continue
-        rows.append((fields[0], fields[1], fields[2], fields[3]))
+        rows.append((fields[0], fields[1], fields[2], fields[3], fields[4]))
     return rows
 
 
@@ -708,17 +708,17 @@ _FIXTURE_FLATPAK_REPOFILE = "https://dl.flathub.org/repo/flathub.flatpakrepo"
 
 async def _flatpak_subject(
     executor: BashLoginRemoteExecutor,
-) -> tuple[str, str, Literal["user", "system"], str, str]:
-    """`(application, version, scope, remote_name, remote_url)` for the fixture flatpak
-    ref installed on `executor` (the source), used to prove D-06/D-14 convergence for a
-    real ref+remote pair.
+) -> tuple[str, str, Literal["user", "system"], str, str, str]:
+    """`(application, version, scope, remote_name, remote_url, ref)` for the fixture
+    flatpak ref installed on `executor` (the source), used to prove D-06/D-14 convergence
+    for a real ref+remote pair.
 
     Read off `flatpak list`/`flatpak remotes` rather than assembled from the constants
     above so the tuple carries the machine's own idea of the ref (notably `version`,
     which the diff compares) and so a machine missing the fixture fails naming it.
     """
     list_result = await executor.run_command(
-        "flatpak list --app --columns=application,version,origin,installation",
+        "flatpak list --app --columns=application,version,origin,installation,ref",
         login_shell=False,
         timeout=20.0,
     )
@@ -727,7 +727,7 @@ async def _flatpak_subject(
         f"The fixture flatpak {_FIXTURE_FLATPAK_APP} is not installed. It is created by "
         f"tests/integration/scripts/internal/vm-test-fixtures.sh.\n{list_result.stdout}"
     )
-    application, version, origin, installation = rows[0]
+    application, version, origin, installation, ref = rows[0]
     assert installation == _FIXTURE_FLATPAK_SCOPE, (
         f"{application} is installed in scope {installation!r}, expected {_FIXTURE_FLATPAK_SCOPE!r}"
     )
@@ -739,7 +739,7 @@ async def _flatpak_subject(
     for line in remotes_result.stdout.splitlines():
         fields = line.split("\t")
         if len(fields) == 2 and fields[0] == origin:
-            return application, version, _FIXTURE_FLATPAK_SCOPE, fields[0], fields[1]
+            return application, version, _FIXTURE_FLATPAK_SCOPE, fields[0], fields[1], ref
     raise AssertionError(
         f"{application}'s origin remote {origin!r} is not configured in scope "
         f"{_FIXTURE_FLATPAK_SCOPE}:\n{remotes_result.stdout}"
@@ -903,7 +903,7 @@ class _MachinePackageState:
     apt_held: tuple[str, ...]
     apt_installed: tuple[str, ...]
     snap_revisions: tuple[tuple[str, str], ...]
-    flatpak_refs: tuple[tuple[str, str, str, str], ...]
+    flatpak_refs: tuple[tuple[str, str, str, str, str], ...]
 
 
 async def _capture_machine_package_state(executor: BashLoginRemoteExecutor) -> _MachinePackageState:
@@ -920,7 +920,7 @@ async def _capture_machine_package_state(executor: BashLoginRemoteExecutor) -> _
     )
     snaps = await executor.run_command("snap list --all", login_shell=False, timeout=20.0)
     flatpaks = await executor.run_command(
-        "flatpak list --app --columns=application,version,origin,installation", login_shell=False, timeout=20.0
+        "flatpak list --app --columns=application,version,origin,installation,ref", login_shell=False, timeout=20.0
     )
     return _MachinePackageState(
         apt_manual=tuple(sorted(nonblank_lines(manual.stdout))),
@@ -1403,12 +1403,14 @@ class TestPackageSyncWholeRunContracts:
         """
         _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
 
-        application, version, scope, remote_name, remote_url = await _flatpak_subject(pc1_executor)
+        application, version, scope, remote_name, remote_url, ref = await _flatpak_subject(pc1_executor)
         scope_flag = "--user" if scope == "user" else "--system"
         sudo = "sudo " if scope == "system" else ""
 
         remote_item_id = FlatpakRemoteItem(name=remote_name, url=remote_url, scope=scope).item_id
-        ref_item_id = FlatpakItem(application=application, version=version, origin=remote_name, scope=scope).item_id
+        ref_item_id = FlatpakItem(
+            application=application, version=version, origin=remote_name, scope=scope, ref=ref
+        ).item_id
 
         try:
             # The app is already absent on pc2 (it is installed on pc1 only), so this is
