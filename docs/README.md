@@ -35,6 +35,7 @@ Setup, architecture understanding, and troubleshooting:
 Requirements and planning artifacts:
 
 - [High level requirements.md](planning/High%20level%20requirements.md) - Project vision, scope, and constraints
+- [Package sync requirements.md](planning/Package%20sync%20requirements.md) - User-viewpoint requirements for the four package jobs: principles, every case per ecosystem, non-goals
 - [Feature breakdown.md](planning/Feature%20breakdown.md) - Feature planning
 - [Issue triage 2025-12-31.md](planning/Issue%20triage%202025-12-31.md) - Issue analysis
 

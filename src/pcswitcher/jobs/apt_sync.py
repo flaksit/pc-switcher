@@ -28,6 +28,11 @@ produced, so a repository whose write failed or a pin that never landed is caugh
 rather than shipping the wrong vendor's package. Packages the source has only from its own
 distribution files are exempt: two machines on different Ubuntu mirrors are one vendor.
 
+That refusal is for a request that is wrong, which is per-item. A probe that did not run at
+all is a different thing and gets a different answer: `_require_apt_answer` fails the run
+once, naming the command, rather than blaming N packages' provenance for a transient
+network, an apt lock or an interrupted dpkg.
+
 Bare-`.deb` packages are NOT in scope and are dropped at capture
 (`capture_source_items`). A package whose installed version comes from no configured
 repository was put there with `dpkg --install`; apt cannot install it on the target, and
@@ -182,7 +187,7 @@ from pcswitcher.jobs.packages.sync_core import ConvergeItemFailed, PackagePlan, 
 from pcswitcher.models import CommandResult, FirstSyncScope, Host, LogLevel, ValidationError
 from pcswitcher.sudoers import passwordless_sudo_hint
 
-__all__ = ["AptSyncJob", "AptTransactionPreview", "simulate_apt_transaction"]
+__all__ = ["AptProbeFailed", "AptSyncJob", "AptTransactionPreview", "simulate_apt_transaction"]
 
 # `AptPackageItem.item_id` is always this prefix + the package name (packages/items.py).
 # Parsing the name back out of the id is a legitimate use of a stable identity string,
@@ -1299,6 +1304,52 @@ def _backup_path_for(backup_dir: str, dest: str) -> str:
     return f"{backup_dir}/{dest.lstrip('/').replace('/', '_')}"
 
 
+class AptProbeFailed(RuntimeError):
+    """An apt READ this run's correctness depends on did not answer at all.
+
+    Deliberately NOT a `ConvergeItemFailed`. That type means "what we asked for is wrong",
+    which is under our control, belongs to one item, and lets the run continue (D-27). This
+    one means the tool or the machine is broken — a transient network failure, an apt lock,
+    an interrupted dpkg — which no package's provenance explains. It escapes `apply()`'s
+    per-item loop on purpose, so the run fails ONCE naming the command that failed rather
+    than N times naming N packages.
+    """
+
+
+def _require_apt_answer(command: str, result: CommandResult, host: Host, *, blocks: int | None = None) -> None:
+    """Refuse to read an apt probe's silence as an answer about the packages it was asked
+    about.
+
+    Two conditions, and no others, mean apt did not answer:
+
+    * a NON-ZERO EXIT. Measured in a stock `ubuntu:24.04`: `apt-cache policy` exits 0 for a
+      name it has never heard of, and 100 when it cannot read the sources at all. So a
+      non-zero exit is never a statement about a package.
+    * `blocks == 0` where the caller knows at least one block was owed. apt prints exactly
+      one block per name it knows (measured on the development machine: 152 blocks for a
+      152-name `apt-mark showmanual` set), so no blocks at all over names apt must know
+      means the output is not apt's answer.
+
+    The second is a JUDGEMENT, recorded as one: a probe that answered "I know none of these"
+    and a probe that died both print nothing, and the output alone cannot separate them. It
+    is resolved toward failing fast because the alternative misattributes an environment
+    failure to every package's provenance, and because a set apt knows nothing about is a
+    set from which nothing could have been installed anyway. Callers therefore pass `blocks`
+    only where a block is genuinely owed. A per-name absence INSIDE an answered probe is
+    left alone: that is apt saying it does not know that one name, which is evidence about
+    that one request.
+    """
+    if result.success and blocks != 0:
+        return
+    condition = (
+        f"exited {result.exit_code}"
+        if not result.success
+        else "exited 0 but printed no package block, so its output is not an answer"
+    )
+    detail = f": {result.stderr.strip()}" if result.stderr.strip() else ""
+    raise AptProbeFailed(f"apt probe on the {host.value} did not answer — `{command}` {condition}{detail}")
+
+
 @dataclass(frozen=True)
 class AptTransactionPreview:
     """The parsed result of `apt-get --dry-run <args>` — what apt says it WOULD do.
@@ -1534,12 +1585,23 @@ class AptSyncJob(PackageSyncJob):
         have never heard the name, so it would fall through to a proposed `INSTALL` that
         fails with "Unable to locate package" while `manual_installs_sync` offers the same
         package as an install snippet in the same run.
+
+        Guarded, because BOTH facts read out of it fail silently and in the dangerous
+        direction: an unanswered probe leaves `self._source_origins` empty, which exempts
+        every package from the D-35 origin check, and leaves the bare-`.deb` set empty,
+        which offers `manual_installs_sync`'s packages as apt installs that cannot work.
+        Every name here came from `apt-mark showmanual`, so every name IS installed on the
+        source and apt owes a block for each — which is what makes `blocks` unambiguous here.
         """
         if not manual_names:
             return ""
 
         quoted = " ".join(shlex.quote(name) for name in manual_names)
-        result = await self.source.run_command(f"apt-cache policy {quoted}")
+        command = f"apt-cache policy {quoted}"
+        result = await self.source.run_command(command)
+        # A second walk over output already in memory, so the guard can count blocks without
+        # `capture_source_items` having to hand its own parse back down here.
+        _require_apt_answer(command, result, Host.SOURCE, blocks=len(installed_origins_by_package(result.stdout)))
         return result.stdout
 
     async def query_target_items(self) -> Sequence[AptPackageItem]:
@@ -2501,11 +2563,13 @@ class AptSyncJob(PackageSyncJob):
         Packages whose source origins are all distribution origins never enter the set
         (D-35's exemption): two machines on different Ubuntu mirrors are not two vendors.
 
-        A name apt answers nothing for is refused like any other mismatch. That is
-        deliberately stricter than the plan-time rule, where apt's silence condemns nothing
-        (`df48cd07`): there, silence leaves the install to report its own failure; here the
-        install IS the thing being guarded, and a guarantee that could not be evaluated has
-        not been met.
+        A name an ANSWERED probe printed no block for is refused like any other mismatch.
+        That is deliberately stricter than the plan-time rule, where apt's silence condemns
+        nothing (`df48cd07`): there, silence leaves the install to report its own failure;
+        here the install IS the thing being guarded, and a guarantee that could not be
+        evaluated has not been met. A probe that did not answer at all is a different thing
+        and does not reach this refusal — `_require_apt_answer` fails the run once instead,
+        because "the environment broke" is not a finding about any package's provenance.
         """
         if self._origin_refusals is None:
             self._origin_refusals = await self._verify_approved_origins()
@@ -2534,8 +2598,13 @@ class AptSyncJob(PackageSyncJob):
             return {}
 
         quoted = " ".join(shlex.quote(name) for name in sorted(held_to))
-        result = await self.target.run_command(f"apt-cache policy {quoted}", login_shell=False)
+        command = f"apt-cache policy {quoted}"
+        result = await self.target.run_command(command, login_shell=False)
         candidates = candidate_origins_by_package(result.stdout)
+        # Every name here is an approved install with a vendor origin, so plan-time
+        # classification already found either a target candidate (class 2) or a source
+        # repository this run has since written (class 3) — apt owes a block for each.
+        _require_apt_answer(command, result, Host.TARGET, blocks=len(candidates))
         return {
             name: build_origin_refusal_detail(name, sorted(origins), sorted(candidates.get(name, frozenset())))
             for name, origins in sorted(held_to.items())

@@ -9,6 +9,7 @@
 - [Data Model](data-model.md) — item identity, the machine-local decision file and the install-snippet registry
 - [Core Spec](core.md)
 - [Package sync (user guide)](../jobs/package-sync.md)
+- [Package sync requirements](../planning/Package%20sync%20requirements.md) — the user-viewpoint requirements this spec implements
 
 Four `SyncJob`s — `apt_sync`, `snap_sync`, `flatpak_sync`, `manual_installs_sync` — replicate *what is installed* (apt packages plus the `/etc/apt` repository state they depend on, snaps, flatpaks, and the things no package manager can reproduce) rather than user data. The convergence model they implement is ADR-020: the source captures a manifest, the target diffs its own state against it, and each ecosystem's own tooling does the converging.
 
@@ -66,6 +67,7 @@ Capture and every decision (what to install, what to mark machine-specific, how 
 - **Preconditions**: `apt-mark` on both machines; passwordless sudo on the source (reading `/etc/apt` state needs root even though the source is read-only) and on the target; a free dpkg frontend lock on the target — a lock held by e.g. `unattended-upgrades` is reported rather than raced against.
 - **Converges by**: `apt-get install`/`apt-get remove` per approved package (never `purge`), each preceded by a transaction simulation that refuses the real command if it would touch an unapproved package; file writes for the `/etc/apt` group, which is transactional — a failed metadata refresh restores every file the group touched.
 - **Origin enforcement** (ADR-021 D-35): after the run's single `apt-get update` and before its first install, one batched `apt-cache policy` re-reads the target's candidate origins for the approved install set. An install apt would satisfy from none of the source's origins fails as its own item (D-27), naming both origins. Plan-time classification only decides what repository work to derive; this is what decides what may be installed, so a repository that failed to land or a pin that never won cannot ship a different vendor's package. Packages the source has only from its own distribution files are exempt — two machines on different Ubuntu mirrors are one vendor.
+- **A probe that did not answer is not a finding about a package.** An `apt-cache policy` read the origin model depends on — the source's own installed origins, and the post-refresh verification above — fails the run once, naming the command, when it exits non-zero or prints not one block over names apt owes a block for. Only apt's answer decides a package: a name an *answered* probe printed no block for is still refused as its own item. The alternative reported a transient network failure, an apt lock or an interrupted dpkg as every non-distribution package's provenance being wrong, with the real cause appearing nowhere.
 - **First-sync scope** (ADR-015): "apt packages (manually-installed set)", via `apt-get install/remove per item, after review`.
 
 ## `snap_sync`

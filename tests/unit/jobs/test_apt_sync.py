@@ -24,6 +24,7 @@ from pcswitcher.jobs import JobContext
 from pcswitcher.jobs.apt_sync import (
     _TARGET_SUDO_COMMANDS,
     AptPackageItem,
+    AptProbeFailed,
     AptSyncJob,
     _diff_apt_packages,
     _distribution_origins,
@@ -99,6 +100,37 @@ def respond_to(
     return _side_effect
 
 
+# The archive every baseline source fixture is on. Paired with a `ubuntu.sources` scan line
+# declaring it, so it resolves to a DISTRIBUTION origin and no package acquires a vendor
+# origin it was never given (ADR-021 D-35's exemption).
+_BASELINE_ARCHIVE = "http://ftp.belnet.be/ubuntu"
+
+
+def respond_to_source(mapping: dict[str, CommandResult]) -> Callable[..., CommandResult]:
+    """`respond_to`, plus the two answers every real source machine gives about its own
+    packages, for a fixture that does not state them.
+
+    A source `apt-cache policy` that prints nothing is a BROKEN apt, not a machine with
+    unusual packages — apt prints one block per installed name it is asked about — and
+    `_require_apt_answer` now says so rather than reading the silence as "no package has a
+    vendor origin". So the baseline answers with one archive block per queried name, plus
+    the `ubuntu.sources` scan line that makes that archive a distribution origin. Any test
+    with an opinion about either overrides its key and this never fires.
+    """
+    inner = respond_to(mapping)
+
+    def _side_effect(cmd: str, **kwargs: object) -> CommandResult:
+        if not any(pattern in cmd for pattern in mapping):
+            if cmd.startswith("apt-cache policy"):
+                names = shlex.split(cmd)[2:]
+                return CommandResult(0, "".join(_policy_block(name, _BASELINE_ARCHIVE) for name in names), "")
+            if _SOURCE_SCAN_CMD in cmd:
+                return CommandResult(0, _scan_line("ubuntu.sources", _UBUNTU_SOURCES_BELNET), "")
+        return inner(cmd, **kwargs)
+
+    return _side_effect
+
+
 def make_context(
     *,
     source_responses: dict[str, CommandResult] | None = None,
@@ -106,7 +138,7 @@ def make_context(
     dry_run: bool = False,
 ) -> tuple[JobContext, MagicMock, MagicMock]:
     source = MagicMock()
-    source.run_command = AsyncMock(side_effect=respond_to(source_responses or {}))
+    source.run_command = AsyncMock(side_effect=respond_to_source(source_responses or {}))
     target = MagicMock()
     target.run_command = AsyncMock(side_effect=respond_to(target_responses or {}))
     target.send_file = AsyncMock(return_value=None)
@@ -938,13 +970,14 @@ class TestUnavailableCapture:
 
     @pytest.mark.asyncio
     async def test_a_package_no_repository_can_supply_is_reported_not_installed(self) -> None:
-        """No origin on the source, and the target's apt says it will install nothing: two
-        answers that agree, so the package is reported.
+        """The source's origin is declared by no file the source still has, and the target's
+        apt says it will install nothing: two answers that agree, so the package is reported.
         """
         context, _source, _target = make_context(
             source_responses={
                 "apt-mark showmanual": CommandResult(0, "brscan3\n", ""),
                 "dpkg-query": CommandResult(0, "brscan3\t1.0\n", ""),
+                "apt-cache policy": CommandResult(0, _policy_block("brscan3", "https://gone.example.com/apt"), ""),
             },
             target_responses={
                 "apt-mark showmanual": CommandResult(0, "", ""),
@@ -1175,21 +1208,71 @@ class TestBareDebPackagesAreNotAptSyncsBusiness:
         assert [(d.diff_class, d.action) for d in plan.diffs] == [(DiffClass.MISSING_ON_TARGET, DiffAction.INSTALL)]
 
     @pytest.mark.asyncio
-    async def test_a_source_policy_read_that_answers_nothing_excludes_nothing(self) -> None:
-        """Silence is not evidence. If `apt-cache policy` fails on the source, indicting on
-        absence would drop the machine's entire manual set from the sync without a word."""
+    async def test_a_name_an_answered_policy_printed_no_block_for_is_not_excluded(self) -> None:
+        """Silence inside an ANSWERED probe is not evidence: apt spoke, and it said nothing
+        about `ghost-pkg`, which is not the same as saying it came from no repository.
+        Indicting on that absence would drop the package from the sync without a word.
+        """
         context, _source, _target = make_context(
             source_responses={
-                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
-                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
-                "apt-cache policy": CommandResult(100, "", "E: could not read the package lists\n"),
+                "apt-mark showmanual": CommandResult(0, "pkg-a\nghost-pkg\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\nghost-pkg\t1.0\n", ""),
+                "apt-cache policy": CommandResult(0, _policy_block("pkg-a", _BASELINE_ARCHIVE), ""),
             },
             target_responses={"apt-mark showmanual": CommandResult(0, "", "")},
         )
 
         plan = await AptSyncJob(context).plan()
 
-        assert [d.item_id for d in plan.diffs] == ["apt:package:pkg-a"]
+        assert [d.item_id for d in plan.diffs] == ["apt:package:pkg-a", "apt:package:ghost-pkg"]
+
+    @pytest.mark.asyncio
+    async def test_a_source_policy_that_did_not_run_fails_the_run_naming_the_command(self) -> None:
+        """The other side of the same distinction, and a deliberate reversal: a policy read
+        that EXITED NON-ZERO answered nothing about any package. Tolerating it silently
+        exempted every package from the D-35 origin check and offered
+        `manual_installs_sync`'s bare-`.deb` packages as apt installs, both without a word.
+
+        The stdout is a COMPLETE, parseable block on purpose: it isolates the exit code as
+        the only thing that can catch this, so the zero-block rule cannot pass the test on
+        the exit code's behalf.
+        """
+        context, _source, _target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+                "apt-cache policy": CommandResult(
+                    100, _policy_block("pkg-a", _BASELINE_ARCHIVE), "E: could not read the package lists\n"
+                ),
+            },
+            target_responses={"apt-mark showmanual": CommandResult(0, "", "")},
+        )
+
+        with pytest.raises(AptProbeFailed) as excinfo:
+            await AptSyncJob(context).plan()
+
+        assert "apt-cache policy pkg-a" in str(excinfo.value)
+        assert "exited 100" in str(excinfo.value)
+        assert "could not read the package lists" in str(excinfo.value)
+
+    @pytest.mark.asyncio
+    async def test_a_source_policy_that_printed_nothing_at_all_fails_the_run(self) -> None:
+        """Exit 0 and no block for a single name apt must know. Measured: apt prints one
+        block per installed name it is asked about, so this output is not apt's answer.
+        """
+        context, _source, _target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+                "apt-cache policy": CommandResult(0, "", ""),
+            },
+            target_responses={"apt-mark showmanual": CommandResult(0, "", "")},
+        )
+
+        with pytest.raises(AptProbeFailed) as excinfo:
+            await AptSyncJob(context).plan()
+
+        assert "printed no package block" in str(excinfo.value)
 
     @pytest.mark.asyncio
     async def test_an_excluded_bare_deb_package_is_not_protected_from_collateral(self) -> None:
@@ -2573,29 +2656,106 @@ class TestOriginEnforcement:
         assert _policy_calls_after_the_update(target) == []
 
     @pytest.mark.asyncio
-    async def test_a_verification_apt_answers_nothing_for_refuses_the_install(self) -> None:
+    async def test_a_name_the_answered_verification_skipped_refuses_only_that_install(self) -> None:
         """Stricter than the plan-time rule on purpose: there, apt's silence leaves the
         install to report its own failure; here the install is the thing being guarded, and a
-        guarantee that could not be evaluated has not been met.
+        guarantee that could not be evaluated has not been met. apt DID answer — it printed a
+        block for `pkg-b` — so the silence about `pkg-a` is evidence about `pkg-a` alone, and
+        `pkg-b` still installs.
         """
+        vendor = "https://vendor.example.com/apt"
         context, _source, target = make_context(
             source_responses={
-                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
-                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
-                "apt-cache policy": CommandResult(0, _policy_block("pkg-a", "https://vendor.example.com/apt"), ""),
+                "apt-mark showmanual": CommandResult(0, "pkg-a\npkg-b\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\npkg-b\t1.0\n", ""),
+                "apt-cache policy": CommandResult(
+                    0, _policy_block("pkg-a", vendor) + _policy_block("pkg-b", vendor), ""
+                ),
                 _SOURCE_SCAN_CMD: CommandResult(0, _scan_line("vendor.list", _VENDOR_LIST), ""),
                 "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "vendor.gpg"), ""),
             },
-            target_responses={"apt-mark showmanual": CommandResult(0, "", "")},
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "", ""),
+                "apt-cache policy": CommandResult(0, _policy_block("pkg-b", vendor), ""),
+            },
         )
         job = AptSyncJob(context)
-        _install_reviewer(job, {"apt:package:pkg-a": Decision.APPLY})
+        _install_reviewer(job, {"apt:package:pkg-a": Decision.APPLY, "apt:package:pkg-b": Decision.APPLY})
 
         with pytest.raises(PackageItemFailures) as excinfo:
             await job.execute()
 
+        assert [diff.item_id for diff, _reason in excinfo.value.failures] == ["apt:package:pkg-a"]
         assert "no repository at all" in excinfo.value.failures[0][1]
         assert not any("pkg-a" in cmd for cmd in _real_installs(target))
+        assert [cmd for cmd in _real_installs(target) if "pkg-b" in cmd]
+
+    @pytest.mark.asyncio
+    async def test_a_verification_probe_that_did_not_answer_fails_once_not_per_package(self) -> None:
+        """The environment broke, not the request. Three approved vendor installs and a
+        policy read that exited non-zero: one failure naming the command, never three
+        failures blaming three packages' provenance for an apt that never ran.
+        """
+        names = ("pkg-a", "pkg-b", "pkg-c")
+        vendor_policy = "".join(_policy_block(name, "https://vendor.example.com/apt") for name in names)
+        context, _source, target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, SHOWMANUAL_3, ""),
+                "dpkg-query": CommandResult(0, DPKG_QUERY_3, ""),
+                "apt-cache policy": CommandResult(0, vendor_policy, ""),
+                _SOURCE_SCAN_CMD: CommandResult(0, _scan_line("vendor.list", _VENDOR_LIST), ""),
+                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "vendor.gpg"), ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "", ""),
+                # A complete, ORIGIN-MATCHING answer alongside the failure, so nothing but
+                # the exit code can refuse these three: a guard that ignored it would let
+                # all three install off output apt never stood behind.
+                "apt-cache policy": CommandResult(
+                    100, vendor_policy, "E: Could not get lock /var/lib/dpkg/lock-frontend\n"
+                ),
+            },
+        )
+        job = AptSyncJob(context)
+        _install_reviewer(job, {f"apt:package:{name}": Decision.APPLY for name in names})
+
+        with pytest.raises(AptProbeFailed) as excinfo:
+            await job.execute()
+
+        assert "apt-cache policy pkg-a pkg-b pkg-c" in str(excinfo.value)
+        assert "exited 100" in str(excinfo.value)
+        assert "lock-frontend" in str(excinfo.value)
+        assert _real_installs(target) == []
+
+    @pytest.mark.asyncio
+    async def test_a_verification_probe_that_printed_nothing_fails_once_not_per_package(self) -> None:
+        """The ambiguous half, resolved toward failing fast: exit 0 and not one block over a
+        set apt owes a block for. Indistinguishable from "apt knows none of these", and
+        misattributing a broken probe to every package's provenance is the worse reading.
+        """
+        names = ("pkg-a", "pkg-b", "pkg-c")
+        vendor_policy = "".join(_policy_block(name, "https://vendor.example.com/apt") for name in names)
+        context, _source, target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, SHOWMANUAL_3, ""),
+                "dpkg-query": CommandResult(0, DPKG_QUERY_3, ""),
+                "apt-cache policy": CommandResult(0, vendor_policy, ""),
+                _SOURCE_SCAN_CMD: CommandResult(0, _scan_line("vendor.list", _VENDOR_LIST), ""),
+                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "vendor.gpg"), ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "", ""),
+                "apt-cache policy": CommandResult(0, "", ""),
+            },
+        )
+        job = AptSyncJob(context)
+        _install_reviewer(job, {f"apt:package:{name}": Decision.APPLY for name in names})
+
+        with pytest.raises(AptProbeFailed) as excinfo:
+            await job.execute()
+
+        assert "printed no package block" in str(excinfo.value)
+        assert _real_installs(target) == []
 
     @pytest.mark.asyncio
     async def test_a_skipped_install_is_never_named_in_the_verification(self) -> None:
@@ -2691,7 +2851,7 @@ def _repo_context(
     repository-group write needs it for the staging path.
     """
     source = MagicMock()
-    source.run_command = AsyncMock(side_effect=respond_to(source_responses or {}))
+    source.run_command = AsyncMock(side_effect=respond_to_source(source_responses or {}))
     target = MagicMock()
     if target_side_effect is not None:
         target.run_command = AsyncMock(side_effect=target_side_effect)
@@ -2825,12 +2985,14 @@ class TestRepoGroupOrdering:
     async def test_a_package_apt_reports_no_candidate_for_is_withheld_from_the_first_pass(self) -> None:
         """The other half of what N5's ordering test cannot show: an available package is
         offered, one apt reports `Candidate: (none)` for is not — it is `REPORT_ONLY`, and
-        the first review never even shows it as installable.
+        the first review never even shows it as installable. The source's origin is one no
+        file on the source declares, so nothing this run could add would supply it either.
         """
         context, _source, _target = make_context(
             source_responses={
                 "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
                 "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+                "apt-cache policy": CommandResult(0, _policy_block("pkg-a", "https://gone.example.com/apt"), ""),
             },
             target_responses={
                 "apt-mark showmanual": CommandResult(0, "", ""),

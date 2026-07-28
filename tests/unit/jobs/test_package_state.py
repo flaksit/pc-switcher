@@ -607,12 +607,28 @@ def _apt_context(
     )
 
 
+# The source's own `apt-cache policy` answer about its manual set. A source apt that
+# prints nothing is a broken probe, not a machine with unusual packages (`AptProbeFailed`),
+# so these fixtures state the answer a real source gives. The origin is the distribution
+# archive, which keeps every package exempt from the D-35 origin check.
+_SOURCE_SCAN_CMD = "/etc/apt/sources.list.d /etc/apt/sources.list -maxdepth 1 -type f -exec awk"
+# The `ubuntu.sources` that makes the archive above a DISTRIBUTION origin, so `pkg-a` stays
+# exempt from the D-35 origin check and remains an ordinary install.
+_SOURCE_SCAN_UBUNTU = "/etc/apt/sources.list.d/ubuntu.sources\tURIs: http://ftp.belnet.be/ubuntu\n"
+
+_SOURCE_POLICY_PKG_A = (
+    "pkg-a:\n  Installed: 1.0\n  Candidate: 1.0\n  Version table:\n *** 1.0 500\n"
+    "        500 http://ftp.belnet.be/ubuntu noble/main amd64 Packages\n"
+    "        100 /var/lib/dpkg/status\n"
+)
+
+
 class TestDecisionScopeIsDiffFilteringOnly:
     """D20 / decision 8: a machine-local decision makes an item inert in the DIFF, and
     nothing else. It is deliberately NOT consulted by apt's collateral protection, whose
-    protected set is the union of the two machines' `apt-mark showmanual` sets — an
-    accepted limitation, on the grounds that a package a user records "skip always" is
-    normally in `showmanual` anyway, so the extra lookup would buy nothing.
+    protected set is the TARGET's `apt-mark showmanual` set (ADR-021 D-40) — an accepted
+    limitation, on the grounds that a package a user records "skip always" is normally in
+    `showmanual` anyway, so the extra lookup would buy nothing.
 
     Both tests share one decision file and differ only in the target's manual set, which
     is what makes the limitation visible: membership of `showmanual` decides protection,
@@ -627,6 +643,8 @@ class TestDecisionScopeIsDiffFilteringOnly:
             source_responses={
                 "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
                 "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+                "apt-cache policy": CommandResult(0, _SOURCE_POLICY_PKG_A, ""),
+                _SOURCE_SCAN_CMD: CommandResult(0, _SOURCE_SCAN_UBUNTU, ""),
             },
             target_responses={
                 # ghost-tool is recorded machine-specific below but is manual on NEITHER
@@ -655,6 +673,8 @@ class TestDecisionScopeIsDiffFilteringOnly:
             source_responses={
                 "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
                 "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+                "apt-cache policy": CommandResult(0, _SOURCE_POLICY_PKG_A, ""),
+                _SOURCE_SCAN_CMD: CommandResult(0, _SOURCE_SCAN_UBUNTU, ""),
             },
             target_responses={
                 "apt-mark showmanual": CommandResult(0, "ghost-tool\n", ""),
