@@ -1,0 +1,20 @@
+A lots of docs were created about the package sync (scope of and implemented in this PR). User requirements were very high level at the start: only what was in issue description of #118 and maybe in another, old, high-level doc that lists all functionalities of pc-switcher. Don't bother searching for it.
+Along the way, while responding to your analysis questions and to the many questions that came up during implementation, testing and review (still in progress), the requirements became finer but the decisions we made have spread around a myriad of docs, code comments, ADR, ...
+I asked you in another session to reconstruct a user requirements document. This gave "docs/planning/Package sync requirements.md". That's not what I wanted.
+
+So let's take a step back. What is a "user requirements document" for you?
+For me, it is NOT a list of 100's of separate rules that are impossible to reconstruct mentally (for a human; I don't know about you but I doubt) into a vision of how the product should do, look like, behave. The 100's of rules written like a lawbook are the conversion of the "user requirements document" into hard rules that the implementation can be checked against.
+For me, user requirements are more prose, maybe with diagrams or sketches, that explain the intent of a product and how it should work and behave. Use-cases can be a good way to express (a big) part of user requirements, but not everything can nor should be formulated as use case.
+What do you propose as structure and how do we get there? I absolutely want the reconstruct a high level user requirements doc like I describe it, because with all documentation spread over a lot of places and mostly as small individual decisions without a vision of the whole nor of how the individual rules hang together, it has become impossible for me, nor for any reviewer or tester, human or AI agent, to
+- understand the product and the logic that we need and decided upon, after all back-and-forth decisions;
+- verify if the implementation covers those real user's needs/requests.
+
+I want to be able to review a (rather high-level, but concrete) document that I understand, approve it, and then let a reviewer critically check if the implementation and the tests cover the requirements.
+
+Do you agree? Challenge me if there are points you disagree with or if this is a bad idea anyway.
+
+PS Don't throw away the detailed articles of "docs/planning/Package sync requirements.md" if they are still valuable.
+
+PPS I just glanced through them and spotted immediately a first problem with ambiguous phrasing. A requirements doc should be written in a way that it is clear and unambiguous.
+PKG-FR-MACHINE-SPECIFIC: "offered again on that machine. The mark MUST be local to that machine": "THAT" machine is very unclear. What we decided: the decision that something is machine-specific, is noted in a decision file on the machine that holds the "something". This will be often the target machine, even though pc-switcher is launched on the source machine and the question is presented on the source machine and the decision is made on the source machine.
+Example: Source machine does not have package P, target machine has package P. The user is asked on the source machine if package P should be removed from the target machine. The user says "skip always". This decision tells that package P is "machine specific" for the target machine, so the decision is stored there.
