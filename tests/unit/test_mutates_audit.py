@@ -129,6 +129,9 @@ _READ_ONLY_CALLS: dict[str, int] = {
     # the package diff because the origin classification consumes them (ADR-021 D-34).
     "jobs/apt_sync.py::AptSyncJob._capture_origin_state.source_run::run_command": 1,
     "jobs/apt_sync.py::AptSyncJob._capture_origin_state.target_run::run_command": 1,
+    # `pro status --format json` on the target — a read, and the only thing that leaves it
+    # is the parsed `attached` boolean (ADR-021 D-38).
+    "jobs/apt_sync.py::AptSyncJob._target_pro_attached::run_command": 1,
     # The post-write re-scan of the target's source files that keyring collection counts
     # references against — a `find ... -exec awk` read, no different from the plan-time one.
     "jobs/apt_sync.py::AptSyncJob._remove_unused_keyrings.target_run::run_command": 1,

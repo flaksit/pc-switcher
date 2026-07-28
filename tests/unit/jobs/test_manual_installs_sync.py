@@ -220,6 +220,9 @@ class FakeReviewer:
         self._was_interactive = was_interactive
         self.groups_seen: tuple[ReviewGroup, ...] | None = None
 
+    async def ask_gate(self, *, title: str, message: str, proceed_label: str, stop_label: str) -> bool | None:
+        raise AssertionError(f"manual_installs_sync has no gate question; asked {title!r}")
+
     async def review(self, groups: Sequence[ReviewGroup]) -> ReviewOutcome:
         self.groups_seen = tuple(groups)
         item_ids = {entry.item_id for group in groups for entry in group.entries}

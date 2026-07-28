@@ -99,6 +99,7 @@ __all__ = [
     "ReviewOutcome",
     "Reviewer",
     "TerminalUIReviewer",
+    "ask_gate",
     "review_items",
 ]
 
@@ -644,6 +645,59 @@ async def review_items(
     return ReviewOutcome(decisions=decisions, was_interactive=True, snippets=snippets, unresolved=())
 
 
+async def ask_gate(
+    *,
+    title: str,
+    message: str,
+    proceed_label: str,
+    stop_label: str,
+    console: Console,
+    ui: PausableUI,
+    logger: logging.Logger | None = None,
+) -> bool | None:
+    """Ask one two-answer question about the MACHINE, outside the item review.
+
+    Sibling of `review_items`, not a group inside it: a gate asks whether the job may run
+    at all, so one of its answers means there is no review to present. It reuses this
+    module for the pause-ask-resume `finally` and the interactivity test, which is the only
+    place in the codebase that knows how to run a blocking `questionary` prompt under the
+    Rich live display.
+
+    True is the proceed answer and False the stop answer. `None` means nobody was there to
+    ask — the caller owns that fallback, because "no TTY" means something different to
+    every question. There is deliberately NO automation-environment hook: the answer here
+    can require the user to go and change the other machine, which no scripted value can
+    stand in for.
+
+    Ctrl-C aborts the whole sync (`SyncAbortedByUser`), matching every checkbox screen.
+    `title` and `message` are rendered as `Text`, never markup (T-02-02).
+    """
+    log = logger if logger is not None else _logger
+
+    if not is_interactive(console):
+        log.warning("%s — not asked, no TTY", title)
+        return None
+
+    ui.pause()
+    try:
+        console.print()
+        console.print(Panel(Text(message), title=Text(title), border_style="yellow"))
+        prompt = questionary.select(
+            title,
+            choices=[
+                questionary.Choice(title=proceed_label, value=True),
+                questionary.Choice(title=stop_label, value=False),
+            ],
+        )
+        selected = await asyncio.to_thread(prompt.ask)
+    finally:
+        ui.resume()
+
+    if selected is None:
+        raise SyncAbortedByUser(f"sync aborted at a gate question (Ctrl-C): {title}")
+    return bool(selected)
+
+
 @runtime_checkable
 class Reviewer(Protocol):
     """A package job's review seam (D-24): given the groups one job planned, return that
@@ -656,6 +710,8 @@ class Reviewer(Protocol):
     """
 
     async def review(self, groups: Sequence[ReviewGroup]) -> ReviewOutcome: ...
+
+    async def ask_gate(self, *, title: str, message: str, proceed_label: str, stop_label: str) -> bool | None: ...
 
 
 class TerminalUIReviewer:
@@ -681,3 +737,14 @@ class TerminalUIReviewer:
 
     async def review(self, groups: Sequence[ReviewGroup]) -> ReviewOutcome:
         return await review_items(groups, console=self._console, ui=self._ui, logger=self._logger)
+
+    async def ask_gate(self, *, title: str, message: str, proceed_label: str, stop_label: str) -> bool | None:
+        return await ask_gate(
+            title=title,
+            message=message,
+            proceed_label=proceed_label,
+            stop_label=stop_label,
+            console=self._console,
+            ui=self._ui,
+            logger=self._logger,
+        )

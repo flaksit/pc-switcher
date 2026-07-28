@@ -149,6 +149,7 @@ Phase 2 plans.
 
 from __future__ import annotations
 
+import json
 import re
 import shlex
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
@@ -185,7 +186,7 @@ from pcswitcher.jobs.packages.review import (
 )
 from pcswitcher.jobs.packages.state import DecisionFile, filter_inert
 from pcswitcher.jobs.packages.sync_core import ConvergeItemFailed, PackagePlan, PackageSyncJob
-from pcswitcher.models import CommandResult, FirstSyncScope, Host, LogLevel, ValidationError
+from pcswitcher.models import CommandResult, FirstSyncScope, Host, JobSkipped, LogLevel, ValidationError
 from pcswitcher.sudoers import passwordless_sudo_hint
 
 __all__ = ["AptSyncJob", "AptTransactionPreview", "simulate_apt_transaction"]
@@ -236,6 +237,17 @@ _APT_SOURCES_LIST = "/etc/apt/sources.list"
 # a `ubuntu-esm-*` glob: a glob would also swallow a file a user happened to name
 # `ubuntu-esm-mine.sources`, and the set is short enough to enumerate.
 _DISTRO_SOURCE_FILENAMES = frozenset({"ubuntu.sources", "ubuntu-esm-apps.sources", "ubuntu-esm-infra.sources"})
+# The subset of the above that only a Pro-attached machine can actually fetch from, and so
+# the only two files in the always-sync bucket that are gated on the target's attachment
+# (D-38). Measured: `esm.ubuntu.com` serves its INDEX publicly, so an unattached target's
+# `apt-get update` still exits 0 and the ESM suites enter candidate selection at priority
+# 500 — above `noble/universe`. Only the pool is 401, so the failure surfaces much later,
+# as `apt-get install` exiting 100 on the `.deb`, which no user connects back to a sync.
+_ESM_SOURCE_FILENAMES = frozenset({"ubuntu-esm-apps.sources", "ubuntu-esm-infra.sources"})
+# `pro status --format json` exits 0 for an unprivileged user and reports a top-level
+# `attached` boolean. Its payload ALSO names the subscriber's account, so only the parsed
+# boolean may ever be logged, shown or put in a `JobSkipped` reason.
+_PRO_STATUS_COMMAND = "pro status --format json"
 # The filenames whose URIs count as DISTRIBUTION ORIGINS, computed per machine (D-35): a
 # package apt serves from one of these is served by the distribution, not by a vendor, so
 # two machines pointed at different Ubuntu mirrors must not read as two different vendors.
@@ -1517,8 +1529,11 @@ class AptSyncJob(PackageSyncJob):
         # written and updated but never removed (ADR-021 D-38).
         self._source_sources_list_digest: str | None = None
         self._target_sources_list_digest: str | None = None
+        # ESM sources the gate held back. Only ever non-empty under `--dry-run`: a real
+        # unattached run raises `JobSkipped` instead of writing a subset (D-38).
+        self._withheld_esm_sources: frozenset[str] = frozenset()
         # `{filename: digest}` for the three reviewable `/etc/apt` directories on each
-        # machine, captured once by `_plan_repo_diffs`. Kept on the job because the derived
+        # machine, captured once by `_capture_origin_state`/`_plan_repo_diffs`. Kept on the job because the derived
         # write set is computed AFTER the review, from the same digests the diff used:
         # recapturing them there would ask both machines the same question twice and could
         # answer it differently.
@@ -1868,6 +1883,14 @@ class AptSyncJob(PackageSyncJob):
         the `/etc/apt` reference scans are an input to the package diff rather than a
         by-product of the repository one.
 
+        The ESM gate (D-38) runs next, for three reasons that each rule out a later spot:
+        one of its answers ends the job, so it must precede the expensive planning and a
+        review the user would otherwise answer for nothing; its probe is a read, and this is
+        the last read-only phase; and it puts the target's environment problem and its
+        copy-paste remedy on screen before anything is approved or written. Not `validate()`
+        — every `ValidationError` is fatal (`orchestrator.py`, `models.py`), so there is no
+        way to express "the user answered, carry on".
+
         Collateral classification runs AFTER the base diff and BEFORE review groups are
         (re)built. The batched
         apt-get --dry-run simulations reveal what the pending transaction would also remove or
@@ -1880,6 +1903,11 @@ class AptSyncJob(PackageSyncJob):
         during apply.
         """
         await self._capture_origin_state()
+        pending_esm = self._pending_esm_writes()
+        if pending_esm and not await self._gate_esm_writes(pending_esm):
+            # Dry run only (`_gate_esm_writes`): a real run has raised by now. Withholding
+            # keeps the preview from claiming writes no real run would make.
+            self._withheld_esm_sources = frozenset(pending_esm)
         base_plan = await self._plan_packages()
         self._target_manual_set = await self._capture_target_manual_set()
         collateral_diffs = await self._collect_plan_time_collateral(base_plan.diffs)
@@ -1994,6 +2022,11 @@ class AptSyncJob(PackageSyncJob):
         Unconditional, one batched command per machine for the scan: which keyrings the
         target's sources point at is what makes a key correct, and that is a property of
         EVERY source file on the target, not just the ones a diff implicates.
+
+        The two source-file digest sets belong here for a second reason: the ESM gate
+        (§5.3, D-38) reads them to decide whether it must ask, and it asks before the
+        package diff runs so a "skip" answer does not cost the user the whole planning
+        pass and a review they would answer for nothing.
         """
 
         async def source_run(cmd: str) -> CommandResult:
@@ -2011,8 +2044,119 @@ class AptSyncJob(PackageSyncJob):
         self._target_keyrings, self._target_global_keys, self._target_shared_keys = target_keys
         self._source_key_filenames = frozenset(name for digests in source_keys for name in digests)
 
+        self._source_source_digests = await _capture_dir_digests(
+            source_run, _APT_SOURCES_DIR, Host.SOURCE, extensions=_APT_SOURCE_EXTENSIONS
+        )
+        self._target_source_digests = await _capture_dir_digests(
+            target_run, _APT_SOURCES_DIR, Host.TARGET, extensions=_APT_SOURCE_EXTENSIONS
+        )
+        self._source_sources_list_digest = await _capture_file_digest(source_run, _APT_SOURCES_LIST)
+        self._target_sources_list_digest = await _capture_file_digest(target_run, _APT_SOURCES_LIST)
+
         self._target_source_refs = await _scan_source_file_references(target_run, Host.TARGET)
         self._source_source_refs = await _scan_source_file_references(source_run, Host.SOURCE)
+
+    def _pending_esm_writes(self) -> tuple[str, ...]:
+        """The `ubuntu-esm-*` filenames this run's always-sync bucket would put on the
+        target: present on the source, and absent or different there.
+
+        Same predicate `_compute_derived_writes` applies to the whole distribution bucket,
+        so the gate can never ask about a file the run would not have written.
+        """
+        return tuple(
+            filename
+            for filename in sorted(_ESM_SOURCE_FILENAMES & frozenset(self._source_source_digests))
+            if self._source_source_digests[filename] != self._target_source_digests.get(filename)
+        )
+
+    async def _target_pro_attached(self) -> bool:
+        """Whether the target reports an Ubuntu Pro attachment.
+
+        Every failure mode — no `pro` binary, a non-zero exit, output that will not parse —
+        answers False, which is the recoverable one: False asks a question the user can
+        answer, True writes files that break the target's next install.
+
+        The payload also carries the subscriber's account, so nothing but the parsed
+        boolean leaves this method (D-38).
+        """
+        result = await self.target.run_command(_PRO_STATUS_COMMAND, login_shell=False)
+        if not result.success:
+            return False
+        try:
+            payload = json.loads(result.stdout)
+        except ValueError:
+            return False
+        return isinstance(payload, dict) and payload.get("attached") is True
+
+    async def _gate_esm_writes(self, esm_files: Sequence[str]) -> bool:
+        """Ask before putting `ubuntu-esm-*` sources on a target that is not Pro-attached
+        (D-38), and return whether they may travel.
+
+        Two real outcomes: True, the target is attached (possibly after the user attached it
+        and this re-probed), so the files travel with the rest of the always-sync bucket;
+        or `JobSkipped`, because the user chose to skip or nobody was there to answer. False
+        is reachable only under `--dry-run`, where neither answer writes anything.
+
+        Skipping the whole job rather than withholding the two files is the user's ruling
+        and the only coherent partial outcome: `/etc/apt/preferences.d` always-syncs with no
+        derivation predicate, so the source's ESM pins land on the target whether or not the
+        sources they name do, leaving a candidate selection that matches neither machine.
+        Skipping leaves `/etc/apt` exactly as it was.
+
+        The re-check loop is deliberately unbounded — the user's ruling: re-probing is free,
+        and the exit is choosing to skip.
+        """
+        if await self._target_pro_attached():
+            return True
+
+        named = ", ".join(esm_files)
+        if self.context.dry_run:
+            self._log(
+                Host.TARGET,
+                LogLevel.WARNING,
+                f"[dry-run] The target reports no Ubuntu Pro attachment, so {named} would not be written: "
+                f"a real run would skip {self.name} entirely and leave every other job running.",
+            )
+            return False
+
+        assert self.context.reviewer is not None, (
+            f"{self.manager_id} sync has no reviewer; the orchestrator must inject one "
+            "through JobContext.reviewer before plan()."
+        )
+        message = (
+            f"The source carries {named}, which this sync would write to the target, but the target reports no "
+            "Ubuntu Pro attachment.\n\n"
+            "The ESM repository indexes are public, so apt would still refresh cleanly and the ESM versions would "
+            "win candidate selection. The target's next install of an ESM-covered package would then fail with "
+            "401 Unauthorized when apt fetches the .deb.\n\n"
+            "To attach, run on the target:\n"
+            "    sudo pro attach <token from https://ubuntu.com/pro/dashboard>\n"
+            "    sudo pro enable esm-apps esm-infra\n\n"
+            f"Skipping runs no part of {self.name} this sync and leaves the target's /etc/apt untouched. "
+            "Every other job still runs."
+        )
+        while True:
+            answer = await self.context.reviewer.ask_gate(
+                title="Ubuntu Pro attachment required on the target",
+                message=message,
+                proceed_label="I have attached the target — re-check and continue",
+                stop_label=f"Skip {self.name} this run (other jobs continue)",
+            )
+            if answer is None:
+                raise JobSkipped(
+                    self.name,
+                    f"the source carries {named} and the target reports no Ubuntu Pro attachment; "
+                    "no TTY was available to ask whether to attach it or skip",
+                )
+            if not answer:
+                raise JobSkipped(
+                    self.name,
+                    f"the source carries {named}, the target reports no Ubuntu Pro attachment, "
+                    "and the user chose to skip rather than attach it",
+                )
+            if await self._target_pro_attached():
+                return True
+            self._log(Host.TARGET, LogLevel.WARNING, "The target still reports no Ubuntu Pro attachment.")
 
     async def _plan_repo_diffs(self) -> list[ItemDiff]:
         """Capture the three `/etc/apt/*` directories and diff the item classes that still
@@ -2025,9 +2169,9 @@ class AptSyncJob(PackageSyncJob):
         question; apt config keeps all three directions, because no package implies whether
         a proxy or a `no-install-recommends` policy should be replicated (D-37).
 
-        The key directories and the reference scans are NOT captured here — they are
-        `_capture_origin_state`'s, because the package diff needs them first — but their
-        cached results are read here for the removal impact.
+        The key directories, the reference scans and the two source-file digest sets are
+        NOT captured here — they are `_capture_origin_state`'s, because the package diff
+        and the ESM gate need them first — but their cached results are read here.
 
         A source offered for REMOVAL is additionally classified against what the TARGET
         still needs (C26) before the diff is built, so the review names the consequence
@@ -2040,20 +2184,13 @@ class AptSyncJob(PackageSyncJob):
         async def target_run(cmd: str) -> CommandResult:
             return await self.target.run_command(cmd, login_shell=False)
 
-        source_sources = await _capture_dir_digests(
-            source_run, _APT_SOURCES_DIR, Host.SOURCE, extensions=_APT_SOURCE_EXTENSIONS
-        )
-        target_sources = await _capture_dir_digests(
-            target_run, _APT_SOURCES_DIR, Host.TARGET, extensions=_APT_SOURCE_EXTENSIONS
-        )
-        self._source_sources_list_digest = await _capture_file_digest(source_run, _APT_SOURCES_LIST)
-        self._target_sources_list_digest = await _capture_file_digest(target_run, _APT_SOURCES_LIST)
+        source_sources = self._source_source_digests
+        target_sources = self._target_source_digests
         source_pins = await _capture_dir_digests(source_run, _APT_PREFERENCES_DIR, Host.SOURCE)
         target_pins = await _capture_dir_digests(target_run, _APT_PREFERENCES_DIR, Host.TARGET)
         source_configs = await _capture_dir_digests(source_run, _APT_CONF_DIR, Host.SOURCE)
         target_configs = await _capture_dir_digests(target_run, _APT_CONF_DIR, Host.TARGET)
 
-        self._source_source_digests, self._target_source_digests = source_sources, target_sources
         self._source_pin_digests, self._target_pin_digests = source_pins, target_pins
 
         self._target_package_owned_keys = await self._capture_package_owned_keys(target_run)
@@ -2478,7 +2615,9 @@ class AptSyncJob(PackageSyncJob):
 
         distro: list[str] = [
             f"{_APT_SOURCES_DIR}/{filename}"
-            for filename in sorted(_DISTRO_SOURCE_FILENAMES & frozenset(self._source_source_digests))
+            for filename in sorted(
+                (_DISTRO_SOURCE_FILENAMES - self._withheld_esm_sources) & frozenset(self._source_source_digests)
+            )
             if differs(self._source_source_digests, self._target_source_digests, filename)
         ]
         if (

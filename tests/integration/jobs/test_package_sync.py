@@ -2586,3 +2586,115 @@ class TestCrossDirectionRoundTrips:
             if cleanup_paths:
                 await pc2_executor.run_command(f"sudo rm --force {cleanup_paths}", login_shell=False, timeout=15.0)
                 await pc1_executor.run_command(f"sudo rm --force {cleanup_paths}", login_shell=False, timeout=15.0)
+
+
+# The two files ADR-021 D-38 gates on the target's Ubuntu Pro attachment, with the real
+# stanzas `pro enable` writes. Their `Signed-By:` keyrings ship with `ubuntu-pro-client`
+# on every Ubuntu 24.04, attached or not, so this is the file set a genuinely attached
+# source carries — not an approximation of it.
+_ESM_SOURCE_BODIES = {
+    "ubuntu-esm-apps.sources": (
+        "Types: deb\n"
+        "URIs: https://esm.ubuntu.com/apps/ubuntu\n"
+        "Suites: noble-apps-security noble-apps-updates\n"
+        "Components: main\n"
+        "Signed-By: /usr/share/keyrings/ubuntu-pro-esm-apps.gpg\n"
+    ),
+    "ubuntu-esm-infra.sources": (
+        "Types: deb\n"
+        "URIs: https://esm.ubuntu.com/infra/ubuntu\n"
+        "Suites: noble-infra-security noble-infra-updates\n"
+        "Components: main\n"
+        "Signed-By: /usr/share/keyrings/ubuntu-pro-esm-infra.gpg\n"
+    ),
+}
+# The pin `pro enable esm-apps` writes beside the source. It is in the always-sync bucket
+# with no derivation predicate, which is the whole reason the gate skips the JOB rather
+# than the two files: withholding the sources alone would still put this on the target.
+_ESM_PIN_FILENAME = "ubuntu-pro-esm-apps"
+_ESM_PIN_BODY = "Package: *\nPin: release o=UbuntuESMApps\nPin-Priority: 510\n"
+
+
+class TestTheESMAttachmentGateOnVMs:
+    """ADR-021 D-38 at VM level: a source carrying the two `ubuntu-esm-*` sources and a
+    target with no Ubuntu Pro attachment.
+
+    Only the SKIP arm is testable here, and that is a statement about the fixtures, not a
+    gap in the gate: `pro attach` needs the user's own subscription token from their Pro
+    dashboard or an interactive browser short-code flow, a machine's credentials are not
+    transferable, and putting a subscription token in CI would violate the project's
+    secrets rule. Both VMs are therefore permanently unattached — which is exactly the
+    machine this test needs, and is why nothing here is skipped or discovered: the test
+    creates the divergence itself and removes it in a `finally`.
+
+    What only a VM can prove: that the skip costs the WHOLE job. The source's ESM pin is
+    in the always-sync bucket with no derivation predicate, so an implementation that
+    withheld only the two sources would still leave it on the target — visible here as a
+    file on pc2, and invisible to any mocked-executor unit test.
+    """
+
+    async def test_an_unattached_target_skips_apt_sync_and_leaves_etc_apt_untouched(
+        self,
+        pc1_executor: BashLoginRemoteExecutor,
+        pc2_executor: BashLoginRemoteExecutor,
+        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
+        pc2_with_pcswitcher: BashLoginRemoteExecutor,
+        reset_pcswitcher_state: None,
+    ) -> None:
+        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
+
+        esm_dests = [f"{_APT_SOURCES_DIR}/{name}" for name in _ESM_SOURCE_BODIES]
+        pin_dest = f"{_APT_PREFERENCES_DIR}/{_ESM_PIN_FILENAME}"
+        all_dests = [*esm_dests, pin_dest]
+        try:
+            # pc2 must lack all three before the run, or the assertions afterwards prove
+            # nothing. A fresh unattached VM has none of them.
+            absent = await pc2_executor.run_command(
+                " && ".join(f"test ! -e {shlex.quote(path)}" for path in all_dests),
+                login_shell=False,
+                timeout=10.0,
+            )
+            assert absent.success, "pc2 already carries ESM sources or the ESM pin before the run"
+
+            writes = [
+                f"printf %s {shlex.quote(body)} | sudo tee {shlex.quote(f'{_APT_SOURCES_DIR}/{name}')} > /dev/null"
+                for name, body in _ESM_SOURCE_BODIES.items()
+            ]
+            writes.append(f"printf %s {shlex.quote(_ESM_PIN_BODY)} | sudo tee {shlex.quote(pin_dest)} > /dev/null")
+            created = await pc1_executor.run_command(" && ".join(writes), login_shell=False, timeout=20.0)
+            assert created.success, f"Failed to create the ESM source/pin set on pc1: {created.stderr}"
+
+            # snap_sync runs after apt_sync and is the evidence that a skip is not an abort.
+            await _write_package_sync_config(pc1_executor, apt_sync=True, snap_sync=True)
+
+            # No automation env and no pty: `ask_gate` finds no TTY, which is the
+            # non-interactive path the user ruled must skip the whole job.
+            sync_result = await pc1_executor.run_command(
+                "pc-switcher sync pc2 --yes --allow-first-sync", timeout=300.0, login_shell=True
+            )
+            assert sync_result.success, (
+                f"a skipped job must not fail the run.\nstdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
+            )
+
+            combined_output = sync_result.stdout + sync_result.stderr
+            assert "apt_sync skipped" in combined_output, f"apt_sync was not reported as skipped.\n{combined_output}"
+            for name in _ESM_SOURCE_BODIES:
+                assert name in combined_output, f"the skip reason does not name {name}.\n{combined_output}"
+            assert "snap_sync" in combined_output, (
+                f"the job after apt_sync did not run — a skip must not abort the sync.\n{combined_output}"
+            )
+
+            # The load-bearing assertion: pc2's /etc/apt is exactly as it was, the PIN
+            # included. A gate that withheld only the two sources would leave the pin here.
+            untouched = await pc2_executor.run_command(
+                " && ".join(f"test ! -e {shlex.quote(path)}" for path in all_dests),
+                login_shell=False,
+                timeout=10.0,
+            )
+            assert untouched.success, (
+                "a skipped apt_sync still wrote to pc2's /etc/apt — the whole job must leave it as it was"
+            )
+        finally:
+            cleanup = " ".join(shlex.quote(path) for path in all_dests)
+            await pc1_executor.run_command(f"sudo rm --force {cleanup}", login_shell=False, timeout=15.0)
+            await pc2_executor.run_command(f"sudo rm --force {cleanup}", login_shell=False, timeout=15.0)

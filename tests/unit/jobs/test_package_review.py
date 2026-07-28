@@ -35,6 +35,7 @@ from pcswitcher.jobs.packages.review import (
     ReviewGroup,
     ReviewOutcome,
     TerminalUIReviewer,
+    ask_gate,
     review_items,
 )
 from pcswitcher.jobs.packages.sync_core import PackagePlan
@@ -393,6 +394,124 @@ class TestTerminalUIReviewer:
 
         ui.pause.assert_called_once()
         ui.resume.assert_called_once()
+
+
+@pytest.mark.asyncio
+class TestAskGate:
+    """`ask_gate` asks about the MACHINE, not an item: two answers, no automation hook, and
+    a `None` the caller owns when there is no TTY (ADR-021 D-38).
+    """
+
+    @staticmethod
+    def _ask(prompt: MagicMock, *, console: Console | None = None, ui: MagicMock | None = None) -> Any:
+        return ask_gate(
+            title="Ubuntu Pro attachment required on the target",
+            message="body",
+            proceed_label="re-check and continue",
+            stop_label="skip apt_sync",
+            console=console if console is not None else _interactive_console(),
+            ui=ui if ui is not None else MagicMock(),
+        )
+
+    async def test_the_two_answers_come_back_as_true_and_false(self) -> None:
+        for selected, expected in ((True, True), (False, False)):
+            with (
+                patch.object(sys, "stdin", _mock_isatty(True)),
+                patch(
+                    "pcswitcher.jobs.packages.review.questionary.select",
+                    return_value=_fake_prompt(ask_return=selected),
+                ),
+            ):
+                assert await self._ask(MagicMock()) is expected
+
+    async def test_exactly_two_choices_are_offered_with_the_captions_the_caller_gave(self) -> None:
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch(
+                "pcswitcher.jobs.packages.review.questionary.select",
+                return_value=_fake_prompt(ask_return=True),
+            ) as select,
+        ):
+            await self._ask(MagicMock())
+
+        choices = select.call_args.kwargs["choices"]
+        assert [choice.title for choice in choices] == ["re-check and continue", "skip apt_sync"]
+
+    async def test_no_tty_answers_none_without_constructing_a_prompt(self) -> None:
+        ui = MagicMock()
+        with (
+            patch.object(sys, "stdin", _mock_isatty(False)),
+            patch("pcswitcher.jobs.packages.review.questionary.select") as select,
+        ):
+            answer = await self._ask(MagicMock(), console=_non_interactive_console(), ui=ui)
+
+        assert answer is None
+        select.assert_not_called()
+        ui.pause.assert_not_called()
+
+    async def test_the_automation_env_hook_cannot_answer_a_gate(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Deliberate negative control: the review's scripted-answer hook must NOT reach
+        here — no environment value can stand in for going and attaching the other machine.
+        """
+        monkeypatch.setenv(PACKAGE_REVIEW_AUTOMATION_ENV, "all")
+        with (
+            patch.object(sys, "stdin", _mock_isatty(False)),
+            patch("pcswitcher.jobs.packages.review.questionary.select") as select,
+        ):
+            assert await self._ask(MagicMock(), console=_non_interactive_console()) is None
+        select.assert_not_called()
+
+    async def test_ctrl_c_aborts_the_whole_sync_and_hands_the_display_back(self) -> None:
+        ui = MagicMock()
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch(
+                "pcswitcher.jobs.packages.review.questionary.select",
+                return_value=_fake_prompt(ask_return=None),
+            ),
+            pytest.raises(SyncAbortedByUser),
+        ):
+            await self._ask(MagicMock(), ui=ui)
+
+        ui.pause.assert_called_once()
+        ui.resume.assert_called_once()
+
+    async def test_the_message_is_rendered_as_text_not_markup(self) -> None:
+        """T-02-02: a bracketed token in the body must reach the console verbatim rather
+        than being parsed as a Rich style.
+        """
+        buffer = io.StringIO()
+        console = Console(file=buffer, force_terminal=True, width=200)
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch(
+                "pcswitcher.jobs.packages.review.questionary.select",
+                return_value=_fake_prompt(ask_return=True),
+            ),
+        ):
+            await ask_gate(
+                title="gate",
+                message="run [sudo pro attach] first",
+                proceed_label="yes",
+                stop_label="no",
+                console=console,
+                ui=MagicMock(),
+            )
+
+        assert "[sudo pro attach]" in buffer.getvalue()
+
+    async def test_the_terminal_reviewer_forwards_its_console_ui_and_logger(self) -> None:
+        console = _interactive_console()
+        ui = MagicMock()
+        logger = MagicMock()
+        reviewer = TerminalUIReviewer(console, ui, logger=logger)
+
+        with patch("pcswitcher.jobs.packages.review.ask_gate", AsyncMock(return_value=True)) as gate:
+            assert await reviewer.ask_gate(title="t", message="m", proceed_label="p", stop_label="s") is True
+
+        gate.assert_awaited_once_with(
+            title="t", message="m", proceed_label="p", stop_label="s", console=console, ui=ui, logger=logger
+        )
 
 
 @pytest.mark.asyncio

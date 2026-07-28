@@ -322,9 +322,11 @@ pc-switcher cannot resolve this itself. `pro attach` requires a subscription tok
 
 #### 5.3.2 Trigger and placement
 
-Trigger, computable at plan time: the source has `ubuntu-esm-apps.sources` or `ubuntu-esm-infra.sources` and the target's digest for that file is absent or different — i.e. the always-sync bucket would write it. These files are not derived from approved packages (§1), so the trigger needs no review outcome; the digests `_capture_origin_state` already captures (`apt_sync.py:1737`) are enough. No ESM write pending means no probe and no prompt.
+Trigger, computable at plan time: the source has `ubuntu-esm-apps.sources` or `ubuntu-esm-infra.sources` and the target's digest for that file is absent or different — i.e. the always-sync bucket would write it. These files are not derived from approved packages (§1), so the trigger needs no review outcome; the two machines' `sources.list.d` digests are enough. No ESM write pending means no probe and no prompt.
 
-Placement: in `plan()`, immediately after `await self._capture_origin_state()` (`apt_sync.py:1677`), before `_plan_packages()` and before any review group is built. Three reasons, each load-bearing: one answer ends the job, so it must precede the expensive planning and the review the user would otherwise answer for nothing; the probe is a read, and `plan()` is the last read-only phase; and it puts the question and its copy-paste remediation on screen before anything is approved or written, which is as much of the standing "validate environment assumptions early" rule as this question can satisfy.
+Placement: in `plan()`, immediately after `await self._capture_origin_state()`, before `_plan_packages()` and before any review group is built. Three reasons, each load-bearing: one answer ends the job, so it must precede the expensive planning and the review the user would otherwise answer for nothing; the probe is a read, and `plan()` is the last read-only phase; and it puts the question and its copy-paste remediation on screen before anything is approved or written, which is as much of the standing "validate environment assumptions early" rule as this question can satisfy.
+
+As shipped, `_capture_origin_state` also owns the `sources.list.d` digest capture and the `/etc/apt/sources.list` file digest. They were `_plan_repo_diffs`'s, which runs after `_plan_packages` — so the trigger was unreadable at the placement above until they moved. Same commands, same count, one position earlier; `_plan_repo_diffs` reads the cached values.
 
 Not `validate()`: every `ValidationError` is fatal. `orchestrator.py:1019-1025` collects them across all jobs and raises `RuntimeError`; `ValidationError` (`models.py:103`) has no severity field, so there is no non-fatal form and no way to express "the user answered, carry on".
 
@@ -344,7 +346,7 @@ The payload also carries an `account` object naming the subscriber. Only the par
 async def _gate_esm_writes(self, esm_files: Sequence[str]) -> bool
 ```
 
-Two real outcomes: **True** — attached, or attached after a re-check; the ESM files travel with the rest of the always-sync bucket. **Raises `JobSkipped`** — the user chose to skip, or nobody could be asked. **False** survives only for the dry-run branch (rule 2), where nothing is written on either path.
+Two real outcomes: **True** — attached, or attached after a re-check; the ESM files travel with the rest of the always-sync bucket. **Raises `JobSkipped`** — the user chose to skip, or nobody could be asked. **False** survives only for the dry-run branch (rule 2), where nothing is written on either path; as shipped, `plan()` records the two filenames and `_compute_derived_writes` drops them, so the preview does not list writes no real run would make.
 
 Rules:
 
@@ -615,7 +617,11 @@ Deliberately **not** converted, so the boundary stays legible: a package job who
 
 Note for scope: `JobResult` is currently read only by `_summarize_job_outcomes` and the CLI's exit code (`cli.py:387`) — nothing renders per-job outcomes, so `CORE-FR-SUMMARY` (`docs/system/core.md:540`, which names SUCCESS/SKIPPED/FAILED explicitly) is unimplemented. S8a makes the status honest; rendering it is a separate piece of work and is **not** in this stage.
 
-**S8 — ESM and Pro.** The attachment probe (`_target_pro_attached`), the two-answer gate in `plan()` (`_gate_esm_writes`) with its unbounded re-check, `review.ask_gate` and its `Reviewer` method. Depends on S4 — the always-sync write set is what the gate guards — and on S8a for `JobSkipped`. Its blocking VM check is **DONE**: measured in a stock `ubuntu:24.04` container, `apt-get update` exits 0 with the ESM sources and no credentials, one failing source never aborts the others, and the real failure is `apt-get install` exiting 100 on a 401 for the `.deb` (§5.3.1).
+**S8 — ESM and Pro. SHIPPED.** The attachment probe (`_target_pro_attached`), the two-answer gate in `plan()` (`_gate_esm_writes`) with its unbounded re-check, `review.ask_gate` and its `Reviewer` method. Depended on S4 — the always-sync write set is what the gate guards — and on S8a for `JobSkipped`. Its blocking VM check was **DONE**: measured in a stock `ubuntu:24.04` container, `apt-get update` exits 0 with the ESM sources and no credentials, one failing source never aborts the others, and the real failure is `apt-get install` exiting 100 on a 401 for the `.deb` (§5.3.1).
+
+One deviation from §5.3.2, forced by today's code: the trigger's digests were captured by `_plan_repo_diffs`, which runs after `_plan_packages`, so the gate could not sit "immediately after `_capture_origin_state`" and still read them. The `sources.list.d` digest capture and the `/etc/apt/sources.list` file digest moved INTO `_capture_origin_state` — same commands, same count, earlier position — and `_plan_repo_diffs` now reads the cached values. Everything §5.3.2 gives as the reason for the placement holds unchanged.
+
+The VM test covers the skip arm only (`tests/integration/jobs/test_package_sync.py`, `TestTheESMAttachmentGateOnVMs`), and that is a statement about the fixtures rather than a gap: neither VM can be attached to Ubuntu Pro without putting the user's subscription token in CI, so the "attach now" arm has no VM to prove itself on. What the VM does prove, and no mocked-executor test can, is that the skip costs the whole job: the source's `ubuntu-pro-esm-apps` pin is in the always-sync bucket and must not reach the target either.
 
 **S9 — docs and scenario matrix.** ADR-021 and `docs/adr/_index.md` are already written; what is left is §7.4's documentation list and §7.3's matrix rows. Depends on everything; can be drafted alongside S4-S8 and finished last.
 

@@ -77,6 +77,16 @@ class FakeReviewer:
         self._was_interactive = was_interactive
         self.groups_seen: tuple[ReviewGroup, ...] | None = None
         self.call_count = 0
+        # Gate answers, consumed in order; the list is also the record of what was asked.
+        # Empty means "this test's job must not reach a gate" — the pop raises if it does.
+        self.gate_answers: list[bool | None] = []
+        self.gate_calls: list[dict[str, str]] = []
+
+    async def ask_gate(self, *, title: str, message: str, proceed_label: str, stop_label: str) -> bool | None:
+        self.gate_calls.append(
+            {"title": title, "message": message, "proceed_label": proceed_label, "stop_label": stop_label}
+        )
+        return self.gate_answers.pop(0)
 
     async def review(self, groups: Sequence[ReviewGroup]) -> ReviewOutcome:
         self.call_count += 1
