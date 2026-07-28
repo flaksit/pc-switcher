@@ -3,7 +3,7 @@
   "checkpoint_id": "8d3eae1ed32f",
   "strategy": "manual-commit",
   "branch": "gsd/phase-02-package-management-sync",
-  "checkpoints_count": 2,
+  "checkpoints_count": 5,
   "files_touched": [
     "docs/adr/_index.md",
     "docs/adr/adr-020-declarative-package-convergence.md",
@@ -17,6 +17,13 @@
       "compact_transcript": "/8d/3eae1ed32f/0/transcript.jsonl",
       "content_hash": "/8d/3eae1ed32f/0/content_hash.txt",
       "prompt": "/8d/3eae1ed32f/0/prompt.txt"
+    },
+    {
+      "metadata": "/8d/3eae1ed32f/1/metadata.json",
+      "transcript": "/8d/3eae1ed32f/1/full.jsonl",
+      "compact_transcript": "/8d/3eae1ed32f/1/transcript.jsonl",
+      "content_hash": "/8d/3eae1ed32f/1/content_hash.txt",
+      "prompt": "/8d/3eae1ed32f/1/prompt.txt"
     }
   ],
   "token_usage": {
