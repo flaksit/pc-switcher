@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "b95d0c52b24f",
+  "strategy": "manual-commit",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/02-package-management-sync/02-SPEC-snap-flatpak-derivation.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/b9/5d0c52b24f/0/metadata.json",
+      "transcript": "/b9/5d0c52b24f/0/full.jsonl",
+      "compact_transcript": "/b9/5d0c52b24f/0/transcript.jsonl",
+      "content_hash": "/b9/5d0c52b24f/0/content_hash.txt",
+      "prompt": "/b9/5d0c52b24f/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 6,
+    "cache_creation_tokens": 12371,
+    "cache_read_tokens": 1023590,
+    "output_tokens": 3454,
+    "api_call_count": 3
+  }
+}

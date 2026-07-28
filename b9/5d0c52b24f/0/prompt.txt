@@ -1,0 +1,164 @@
+<task-notification>
+<task-id>a8c2a05ea6e537159</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/6fd79944-5079-446f-99f7-bbe44c27ff4e/tasks/a8c2a05ea6e537159.output</output-file>
+<status>completed</status>
+<summary>Agent "Write package sync requirements spec" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done. The document is at `/home/janfr/dev/pc-switcher/docs/planning/Package sync requirements.md` (404 lines).
+
+## Where it went, and why
+
+`docs/planning/` — ADR-012 assigns that folder "Scope, requirements, planning artifacts", audience "project owner", and it is where `High level requirements.md` already lives. This is a requirements document elaborating one scope area of that file, so it is its natural sibling. `docs/system/` was wrong (ADR-011 Golden Copy = implementation-facing specs, and `system/package-sync.md` already holds that role); `docs/jobs/` was wrong (that folder is how-it-works behaviour, not requirements). Filename follows the folder's existing Title-Case-with-spaces convention.
+
+Indexed in `docs/README.md` (Project Scope section), cross-linked from `High level requirements.md` nav, from `docs/jobs/package-sync.md` (with a precedence line: where the two disagree, the requirements doc is the intent), and from `docs/system/package-sync.md` nav. Not added to `docs/system/_index.md` — that index is explicitly the Golden Copy spec set.
+
+## Commit — one thing went wrong, flagging it
+
+I did **not** get a separate atomic docs-only commit. While I was working, the other agent committed with a whole-tree add: commit `477f191e` ("fix(apt): a probe that did not answer fails the run, not every package") swept in all five of my doc files alongside their `apt_sync.py`/test changes. Nothing was lost and the working tree is clean, but the docs are inside their code commit. I did not amend or rewrite anything. If you want them separated, that needs a history edit you have to authorise.
+
+`uv run codespell` clean. No source file touched by me. pytest not run.
+
+## Premises to correct
+
+`docs/jobs/package-sync.md` is **less stale than the brief says**. The second apt review and the held/pinned echo are already gone from it (`354cea89`), and the SKIPPED semantics are already in (`113af123`). What is actually stale there is narrower — see below.
+
+Also: the phase spec's §2.3 four classes were deliberately collapsed to three outcomes in the code (classes 2 and 3 differ only in appearance, never in behaviour). That is a documented, reasoned deviation, not a contradiction.
+
+## Conflicts resolved
+
+- ADR-020 vs ADR-021 on repositories/pins as items → ADR-021: derived, not reviewed, in the add and change directions.
+- ADR-020 D-30 union manual set vs ADR-021 D-40 → target-only set (code confirms).
+- Handover "`ubuntu.sources` is never collected" vs spec §5 "written and updated" → both true; the handover was silent on the add direction.
+- Spec §2.3's four classes vs code's three outcomes → described the behaviour, which is identical.
+- `REPO_UNAVAILABLE` old meaning ("no candidate") vs new ("origin cannot be provided") → new, everywhere.
+
+## Where the code contradicts current documentation
+
+1. **The ESM / Ubuntu Pro attachment gate does not exist.** No `pro status`, no `ask_gate`, no `_gate_esm_writes` anywhere in `src/`. `ubuntu-esm-apps.sources` and `ubuntu-esm-infra.sources` are written unconditionally as part of the distribution always-sync bucket. ADR-021 D-38 states this MUST ask first. This is the biggest gap and I gave it its own section in the doc.
+2. **A non-interactive dry run reports SKIPPED.** `PackageSyncJob.execute` raises `JobSkipped` on the non-interactive path with no dry-run exemption; the spec's S8a explicitly says dry-run is "deliberately not converted" and stays SUCCESS.
+3. `docs/jobs/package-sync.md` stale passages: the `apt_sync` scope bullet still lists sources and pins as reviewed repository configuration; the Signing keys section still claims "a repository offered for install or change names, in its own review line, the keys approving it would copy" (no such line exists); the Versions and Holds-and-masks sections both still say pins "sync as items like any other apt configuration"; the Deletions section has no two-answer rule, no never-removed set and no conflict prompt.
+4. `docs/system/package-sync.md` still says "The convergence model they implement is ADR-020" (superseded), and its `apt_sync` **Covers** bullet still frames sources/pins/apt config as one reviewed "repository state".
+
+## Absorb / delete proposals — not acted on
+
+- `docs/jobs/package-sync.md` now overlaps the new document heavily. My recommendation is to **trim, not delete**: leave it as the short how-it-works + config-pointer page and let the requirements doc own the exhaustive case list. Deleting it would break `docs/README.md`'s "Job behaviour" section and the `folder-sync.md`/`vscode-state-sync.md` symmetry. Your call.
+- `docs/system/package-sync.md` should stay — it is the implementation spec — but needs the ADR-020 reference and the `apt_sync` Covers bullet corrected.
+- `.planning/phases/02-.../02-CONTEXT.md` D-numbers are historical; leave them.
+
+## Unresolved — this list goes to you
+
+1. **Should `flatpak_sync` adopt the apt model?** Flatpak remotes are still reviewed items in all three directions, and snap has no origin model at all. The asymmetry with apt is real and appears to be an artefact of ordering, not a decision.
+2. **What should a non-interactive dry run report?** Code says SKIPPED, design note says SUCCESS. Both are defensible; they contradict.
+3. **Decision arity for `/etc/apt/apt.conf.d`.** Ruling 11 says "reviewed in all three directions" but never said with how many answers. Code gives it the full three-way plus the permanent registry, reasoned by analogy. Never actually ruled.
+4. **Should a repository deletion ever be markable machine-specific?** Current answer is no, remedy is "consolidate the two files yourself" — real work the user may not want.
+5. **ESM blast radius unmeasured.** Container had 0 of 13 upgradable packages with an ESM candidate; that a real desktop has many more follows from priority ordering but is inferred, not measured.
+6. **Frequency of the given-up collateral case** (manual on source, automatic on target) is unknown. The doc does not claim it is rare.</result>
+<usage><subagent_tokens>210030</subagent_tokens><tool_uses>61</tool_uses><duration_ms>599562</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a337672a65e032136</task-id>
+<tool-use-id>toolu_01NmoZ19Jrr62EHrw61Mq5nE</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/6fd79944-5079-446f-99f7-bbe44c27ff4e/tasks/a337672a65e032136.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix vocabulary and fail-fast probes" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done. Both tasks committed locally on `gsd/phase-02-package-management-sync`.
+
+## Task 1 — apt-config review vocabulary
+
+**Your premise was right but incomplete.** Adding three `_ACTION_VOCABULARY` entries alone cannot fix the wording: the title is built as `f"{verb.capitalize()} {self.manager_id} packages"` (`sync_core.py:278` before my change), so any verb still yields "… apt packages". I added a sibling `_ITEM_CLASS_NOUN` table (`sync_core.py:127-134`) supplying the object for the one reviewed class that is not a package. Result: "Add / Update / Delete apt configuration files", entry labels `add|update|delete &lt;filename&gt;`. Verbs are bare because the noun now carries the thing — putting it in both reads "Add apt config file apt configuration files".
+
+### Reachability trace for the deleted `(APT_SOURCE, REMOVE)` entry — confirmed unreachable
+
+- `AptSyncJob._build_review_groups` (`apt_sync.py:1784-1791`) computes `removals = [d for d in diffs if _is_repo_removal_diff(d)]`; `_is_repo_removal_diff` (`apt_sync.py:3482-3485`) is exactly `item_class in _REPO_REMOVAL_VERBS and action is REMOVE`, and `_REPO_REMOVAL_VERBS` (`apt_sync.py:269-272`) is `{APT_SOURCE, APT_PIN}`. Those ids go into `carved_ids` and are removed from `rest` before `super()._build_review_groups(rest)` is called.
+- The early return at `apt_sync.py:1786` is taken only when `removals` is empty, i.e. when no such diff exists.
+- The only producer of an `APT_SOURCE`/`REMOVE` diff is `_diff_apt_sources` (`apt_sync.py:2052-2065`). The synthetic metadata-refresh marker reuses `APT_SOURCE` but with `DiffAction.CHANGE` (`apt_sync.py:1256-1263`) and is inserted in `accept_review`, after groups are built. No other job emits `APT_SOURCE` (grep over `src/`).
+- Dynamic canary: I temporarily made the base builder raise on `(APT_SOURCE|APT_PIN, REMOVE)` and ran the full suite. Exactly one test tripped it — `test_every_pair_without_a_vocabulary_entry_still_produces_a_usable_group` (`tests/unit/jobs/test_package_sync_core.py:255`), the synthetic exhaustive-pairs backstop that deliberately calls the base builder for every *uncovered* pair. No production path, no apt path.
+
+I did **not** add `(APT_PIN, REMOVE)` (which the SPEC §6 asks for) — same trace, same unreachability.
+
+## Task 2 — probe failure vs. wrong request
+
+### How I tell "apt answered nothing" from "the probe failed"
+
+`_require_apt_answer` (`apt_sync.py:1316-1346`), two conditions and no others:
+
+1. **Non-zero exit.** Measured in a stock `ubuntu:24.04` container: `apt-cache policy &lt;unknown-name&gt;` exits **0** and prints nothing; a broken sources config exits **100** with `E:` on stderr and empty stdout. Corrupt lists, unreadable cache, unprivileged user, bad apt.conf all still exit 0 and answer. So a non-zero exit is never a statement about a package. Unambiguous.
+2. **Zero blocks parsed where the caller knows at least one was owed.** Measured on this machine: `apt-cache policy $(apt-mark showmanual)` → 152 names, 152 blocks, exit 0. This one is **a judgement, not a discrimination**, and the code says so: a probe that answered "I know none of these" and a probe that died both print nothing, and the output cannot separate them. I resolved it toward fail-fast, and stated the cost in the docstring — a single-name set whose one name apt legitimately never heard of now fails the run instead of refusing one item.
+
+Per-name absence *inside* an answered probe is untouched: it stays a per-item `ConvergeItemFailed` ("offers it from no repository at all"). That is the asymmetry you asked me not to break, and the plan-time rule (`_OriginPlan.target_candidate_known`, `df48cd07`) is untouched.
+
+`AptProbeFailed` subclasses `RuntimeError`, **not** `ConvergeItemFailed`, so it escapes `_converge_one`'s `except` (`sync_core.py:456`) and fails once. Note the downstream consequence I did not change: the orchestrator's default `except Exception` arm (`orchestrator.py:1315-1330`) records the job FAILED **and re-raises**, aborting the run. That is the existing "every other exception keeps today's abort-the-run behavior" policy, not a new decision — flagging it because an apt probe failure now aborts `folder_sync` too.
+
+### Conflation sweep
+
+| Site | What absence/error is read as | Verdict |
+| --- | --- | --- |
+| `apt_sync._verify_approved_origins:2549` | probe failure → every approved vendor install refused for provenance | **FIXED** (the named case) |
+| `apt_sync._source_policy:1597` | failed source policy → `_source_origins` empty → every package exempt from D-35, and `manual_installs_sync`'s bare-`.deb` packages offered as apt installs | **FIXED** — same guarantee, same command, block-per-installed-name invariant holds |
+| `apt_sync.collect_target_policy:1653` | plan-time target policy failure → "target has no candidates" | not fixed — failure degrades toward deriving *more* repo work, and the apply-time D-35 check still guards; a fix here would collide with the plan-time silence rule |
+| `apt_sync._machine_specific_packages_by_source_file:2032` | failed policy → "no machine-specific packages stranded" → ruling-3 conflict prompt never fires, ruling-5 disclosure missing | not fixed (debatable) — the names come from a *decision file*, so some may no longer be installed and owe no block; only the exit code is checkable here |
+| `apt_sync._capture_target_manual_set:2141` | failed `apt-mark showmanual` → empty protected set → **D-30 collateral protection silently off** | not fixed (debatable) — clear-cut in badness, but the fix is the same decision as the capture-layer one below |
+| `apt_sync.capture_source_items:1564` / `query_target_items:1609` / `_resolve_versions` / `collect_hold_sets:1637` / `_capture_dir_digests:1101` | a failed read → "that machine has nothing" → the diff proposes installing/removing everything | not fixed — systemic, see below |
+| `snap_sync.capture_source_items:463` / `query_target_items:468` | failed `snap list --all` on the source → empty manifest → **every snap on the target becomes an `EXTRA_ON_TARGET` removal proposal** (the code says so itself at `snap_sync.py:501-506`) | not fixed — systemic |
+| `flatpak_sync` list/remotes/masks, both sides (`818, 823, 831, 838, 858, 863`) | same shape | not fixed — systemic |
+| `manual_installs_sync._scan_no_candidate_apt_packages:383` | failed source policy → nothing indicted | not fixed — direction is already safe; `packages_installed_from_no_repository` refuses to indict on absence by design |
+| `manual_installs_sync._scan_unowned_installs:404-410` | `find`/`dpkg --search` failure → no unowned paths | not fixed — same safe direction |
+| `packages/apt_policy.py` (all three parsers) | — | **correct already**; key/value separability is documented and load-bearing |
+| `apt_sync.simulate_apt_transaction:1370` and the `dpkg --search` ownership read (`apt_sync.py:3200`) | — | **correct already**; both document why they check / deliberately ignore the exit code |
+
+The systemic one is the big finding and I deliberately left it for you: a failed *manifest capture* in any of the four jobs reads as "that machine has nothing", which flips the diff wholesale. Mitigated only by removals being default-unticked. Fixing it well means deciding one failure mode for every job's capture (`JobSkipped`? `ValidationError`? hard fail?) and touching ~15 sites across four files — a design change, not a guard.
+
+### Premise correction
+
+`tests/unit/jobs/test_apt_sync.py` contained `test_a_source_policy_read_that_answers_nothing_excludes_nothing`, which **explicitly asserted the old conflation** (source `apt-cache policy` exit 100 tolerated, packages planned anyway) under the banner "silence is not evidence". My change overturns a documented decision, not an oversight. I split it: the "silence is not evidence" half survives for per-name absence inside an answered probe; the exit-100 half now fails the run.
+
+### Mutation table — real results
+
+| # | Mutation | Test(s) | Result |
+| --- | --- | --- | --- |
+| 1 | drop `(APT_CONFIG, INSTALL)` verb | `test_each_direction_names_the_config_file_not_a_package` | RED |
+| 2 | drop `(APT_CONFIG, CHANGE)` verb | same | RED |
+| 3 | drop `(APT_CONFIG, REMOVE)` verb | same | RED |
+| 4 | drop `_ITEM_CLASS_NOUN[APT_CONFIG]` | both `TestAptConfigVocabulary` tests | RED |
+| 5 | canary in base builder for `(APT_SOURCE\|APT_PIN, REMOVE)` | full suite | tripped only by the synthetic exhaustive-pairs test — reachability confirmed |
+| 6 | guard ignores non-zero exit | `test_a_source_policy_that_did_not_run_fails_the_run_naming_the_command`, `test_a_verification_probe_that_did_not_answer_fails_once_not_per_package` | **GREEN first — vacuous. Fixed and re-run → RED** |
+| 7 | guard ignores the zero-block condition | `..._printed_nothing_at_all_fails_the_run`, `..._printed_nothing_fails_once_not_per_package` | RED |
+| 8 | drop the guard call in `_verify_approved_origins` | both verification tests | RED |
+| 9 | drop the guard call in `_source_policy` | both source tests | RED |
+| 10 | `AptProbeFailed(ConvergeItemFailed)` — swallowed per item | both verification tests | RED (proves "once, not per package") |
+| 11 | guard over-reaches: any missing name counts as broken | `test_a_name_the_answered_verification_skipped_refuses_only_that_install` | RED |
+| 12 | `packages_installed_from_no_repository` indicts on absence | `test_a_name_an_answered_policy_printed_no_block_for_is_not_excluded` | RED |
+
+**Mutation 6 came back GREEN and I fixed the tests.** Both fixtures had exit≠0 *and* empty stdout, so the zero-block rule passed the test on the exit code's behalf — exactly the shape you warned about. Both now carry a complete, parseable, origin-matching stdout alongside the failure, so only the exit code can catch them, and both assert `"exited 100"`.
+
+### Test-fixture change worth knowing about
+
+My source-policy guard broke 42 existing tests whose fixtures gave the source manual packages but no `apt-cache policy` answer — a machine that cannot exist. Rather than patch 42 fixtures I added `respond_to_source` (`tests/unit/jobs/test_apt_sync.py:102-127`), used by `make_context` and `_repo_context`: an unmatched source `apt-cache policy` synthesises one archive block per queried name, and an unmatched source-file scan returns a `ubuntu.sources` line declaring that archive, so it resolves to a *distribution* origin and no package silently acquires a vendor origin. Any test with an opinion overrides its key. Two tests that had relied on "source has no origin" now state an origin no source file declares (`https://gone.example.com/apt`), which is what they always meant. Two tests in `tests/unit/jobs/test_package_state.py` got the same baseline explicitly; I also corrected that class's docstring, which still described the collateral protected set as the union of both machines' manual sets (ADR-021 D-40 narrowed it to the target's).
+
+### Gates
+
+```
+uv run ruff check .        All checks passed!
+uv run ruff format --check 125 files already formatted
+uv run codespell           (clean)
+uv run basedpyright        0 errors, 0 warnings, 0 notes
+uv run pytest              1360 passed, 79 deselected
+```
+Baseline 1354 → 1360: +2 (Task 1), −2 rewritten +6 new (Task 2).
+
+### Commits
+
+- `ad4759ed` fix(packages): apt config is reviewed as config, not as packages
+- `477f191e` fix(apt): a probe that did not answer fails the run, not every package
+
+### Two things you need to know
+
+1. **`477f191e` swept in five doc files that are not mine.** `git add -A` picked up `docs/planning/Package sync requirements.md` (new, 404 lines) plus one-line link additions in `docs/README.md`, `docs/jobs/package-sync.md`, `docs/planning/High level requirements.md`, and my own edit to `docs/system/package-sync.md`. Those four files appeared in the working tree *between* my two commits — the tree was clean at session start and `ad4759ed` shows only two files. Something else wrote them mid-session. Nothing is lost, but that commit is not atomic. I did not amend or reset, per your rule; splitting it is yours to decide.
+2. **Not verified:** no integration coverage was written or run — I cannot run the integration suite, and nothing here needed a real machine beyond the container/host measurements quoted above. The abort-the-whole-run consequence of `AptProbeFailed` reaching `orchestrator.py:1315` is read from the code, not exercised end to end.</result>
+<usage><subagent_tokens>231309</subagent_tokens><tool_uses>109</tool_uses><duration_ms>1359684</duration_ms></usage>
+</task-notification>
