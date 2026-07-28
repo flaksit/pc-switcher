@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "cf6d769deea7",
+  "strategy": "manual-commit",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/02-package-management-sync/02-SPEC-package-review-model.md",
+    "docs/adr/adr-021-origin-replicating-package-convergence.md",
+    "docs/adr/adr-022-broken-tool-fails-fast-bad-data-is-handled.md",
+    "src/pcswitcher/jobs/apt_sync.py",
+    "tests/unit/jobs/test_apt_sync.py",
+    "tests/unit/jobs/test_package_state.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/cf/6d769deea7/0/metadata.json",
+      "transcript": "/cf/6d769deea7/0/full.jsonl",
+      "compact_transcript": "/cf/6d769deea7/0/transcript.jsonl",
+      "content_hash": "/cf/6d769deea7/0/content_hash.txt",
+      "prompt": "/cf/6d769deea7/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 2,
+    "cache_creation_tokens": 6557,
+    "cache_read_tokens": 408545,
+    "output_tokens": 498,
+    "api_call_count": 1
+  }
+}

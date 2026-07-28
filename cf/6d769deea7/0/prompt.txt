@@ -1,0 +1,109 @@
+<task-notification>
+<task-id>a615f016f59c81cc0</task-id>
+<tool-use-id>toolu_015C36opXcRpmAZvaXQpHyKu</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/6fd79944-5079-446f-99f7-bbe44c27ff4e/tasks/a615f016f59c81cc0.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix flatpak wrong-remote and branch bugs" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All three commits landed. Report:
+
+## Commits (local, not pushed)
+
+| SHA | Title |
+| --- | --- |
+| `4d80e0bd` | `fix(flatpak)!: a ref is its full ref, and the install names it` |
+| `5fc3ac01` | `fix(flatpak)!: a ref's origin is checked against the target, not its remote's name` |
+| `2512f32c` | `feat(flatpak)!: a remote travels because an approved ref needs it` |
+
+Nothing of the concurrent apt agent's work was staged (`apt_sync.py`, `test_apt_sync.py`, `test_package_state.py` remain unstaged and untouched by me).
+
+## Branch in `item_id` — decided YES, against the SPEC's ruling
+
+`item_id` is now `flatpak:ref:&lt;scope&gt;:&lt;application&gt;/&lt;arch&gt;/&lt;branch&gt;` (`flatpak_sync.py:200`). Three reasons, the first of which the SPEC missed:
+
+- **`(scope, application)` is not a unique key for a machine's own listing.** Two branches of one id coexist in one installation — that is what branches are for — and `plan()` folds captured items into `{item_id: item}` maps (`flatpak_sync.py:1046`, `_diff_flatpak_refs`), so one of the two rows was silently dropped.
+- **The origin argument does not carry over.** Origin must stay out because `flatpak install &lt;other remote&gt; &lt;ref&gt;` on an installed ref refuses, so the install half of the pair could never run. A branch change's install half *can* run — branches coexist — so install-plus-removal converges to exactly the source's set.
+- Both `install` and `uninstall` need the full ref anyway, so identity and command argument are one string rather than two facts that can drift.
+
+The SPEC's residual risk "`flatpak uninstall &lt;application id&gt;` is assumed unambiguous" was **wrong and is now measured wrong**: `flatpak uninstall --assumeyes --user org.example.Nope/x86_64/stable` → `error: No installed refs found for ... with arch ... with branch ...`, i.e. it parses the full ref, and the bare id is ambiguous under exactly the two-branch condition. Removed from §10.
+
+## What I compare to verify origin, and why
+
+- **Pre-install** (`_origin_refusal`, `flatpak_sync.py:1327`): the target's **URL** and **gpg_verify**, re-read off the target (`_target_remotes_now`, cached per run, discarded on every remote write). Not the name — the name matched in the wrong-vendor case. Not `Collection:`/`Commit:` — both would need a new per-ref command, while the URL is already on `FlatpakRemoteItem` and is the thing that differs. Not `key_digest`: ostree's import *merges*, so a target that already trusted another key keeps the digests unequal forever, and refusing on it would refuse every install from that remote permanently.
+- **Post-install** (`_installed_origin_refusal`, `flatpak_sync.py:1374`): the landed origin read off `flatpak list`, resolved through the same remote map to a URL. **`flatpak info --show-origin` deliberately not used** — it exits 1 both for "ref not installed" (data) and "installation cannot be opened" (probe failure), which ADR-022 D-03 forbids; the listing answers "not installed" as an absent row at exit 0, so the exit code becomes an unambiguous discriminator and `require_answer` fails the job once.
+- Neither the plan-time query nor this run's own exit codes are admissible: `remote-add --if-not-exists &lt;name&gt; &lt;other url&gt;` exits 0 and changes nothing. `_converged_remote_scope_names` was deleted for that reason.
+
+## Mutation table — real results
+
+| # | Mutation | Test | Result |
+| --- | --- | --- | --- |
+| M1 | drop `,ref` from the list columns | `test_capture_asks_for_the_ref_column_and_keeps_it_on_the_item` | RED |
+| M2 | `item_id` keys on `application` | `test_two_branches_of_one_application_in_one_scope_are_two_items` | RED |
+| M3 | same | `test_a_branch_change_reads_as_install_plus_removal…` | RED |
+| M4 | fold origin into `item_id` | `test_origin_stays_out_of_the_identity` | RED |
+| M5 | install names the bare app id | `test_install_names_the_full_ref_after_the_remote` | RED |
+| M6 | uninstall names the bare app id | `test_uninstall_names_the_full_ref` | RED |
+| M7 | readiness is name-only again | `test_a_same_named_remote_pointing_elsewhere_refuses_the_install` | RED |
+| M8 | same | `test_a_remote_add_that_exited_zero_and_changed_nothing…` | RED |
+| M9 | trust state not compared | `test_a_target_remote_that_does_not_verify_signatures…` | RED |
+| M10 | read plan-time remotes instead of the target's now | `test_a_remote_add_that_exited_zero…` | RED |
+| M11 | no post-install read-back | 2 read-back tests | RED (both) |
+| M12 | read-back compares origin NAME not URL | `test_a_ref_that_landed_from_another_repository…` | RED |
+| M13 | origin check uses the filtered source remotes | `test_a_recorded_source_remote_is_not_withheld…` | RED |
+| M14 | disable the URL check | `test_the_derived_write_repointing_the_remote_lets_the_same_install_through` | **GREEN — intentional control** (see below) |
+| M14b | `remote-modify` stops carrying the source URL | same test | RED |
+| M15 | remote-write cache never invalidated | `test_a_remote_written_after_a_refusal…` | **GREEN first, fixed** (see below) |
+| M15 (retry) | same | same | RED |
+| M16 | remote adds are review lines again | `test_no_remote_appears_in_any_review_group` | RED |
+| M17 | derive every source remote | `test_a_remote_no_approved_ref_needs_does_not_travel` | RED |
+| M18 | derive before applying the decisions | `test_declining_the_ref_declines_its_remote` | RED |
+| M19 | drop the runtime-completion pass | `test_the_runtime_an_approved_app_needs_brings_its_own_remote` | RED |
+| M20 | mutate only the derived `remote_id`'s scope | `test_a_user_scope_ref_derives_only_the_user_scope_remote` | **GREEN — ineffective mutation** (see below) |
+| M20b | derivation ignores the ref's own scope | that test + `test_the_same_remote_in_two_scopes…` | RED (both) |
+| M21 | derived writes run after the base loop | `test_a_remote_is_provisioned_before_the_ref_that_needed_it` | RED |
+| M22 | a failed write fails every approved ref | `test_a_failed_derived_write_fails_only_the_ref_that_needed_it` | RED |
+| M23 | the write's own stderr is dropped | `test_a_failed_derived_write_names_the_remote_and_its_own_stderr` | RED |
+| M24 | dry run issues the writes anyway | `test_a_dry_run_previews_the_derived_writes_and_issues_none` | RED |
+| M25 | a matching target remote is rewritten anyway | `test_a_remote_the_target_already_matches_is_not_written_at_all` | RED |
+| M26 | removals lose the two-answer screen | `test_removal_offers_exactly_two_answers_and_is_never_recordable` | RED |
+| — | drop the `_record_permanent_skips` override | same test | RED |
+
+Three non-RED results, all reported honestly:
+
+- **M14 is a deliberate control.** `test_the_derived_write_repointing_the_remote_lets_the_same_install_through` is the negative control for the wrong-vendor test — it must stay green when the guard is disabled, otherwise the wrong-vendor test could be passing for a reason other than the URL check. Its own mutation is M14b, which is RED.
+- **M15 came back GREEN and I fixed it.** The cache invalidation after a remote write was uncovered (ordering meant nothing exercised it). I added `test_a_remote_written_after_a_refusal_is_seen_on_the_next_attempt`; the same mutation is now RED.
+- **M20 was an ineffective mutation, not a vacuous test.** I mutated the derived `remote_id`'s scope but `_DerivedRemote.scope` still carried the real scope, so the command was unchanged. M20b mutates the actual input and is RED on two tests.
+
+## Commit 3 landed
+
+Derivation is in: `_derive_remotes` (`flatpak_sync.py:660`), the `accept_review` override, `apply()` writing derived remotes ahead of the base loop, `_build_review_groups` carving removals into a `REPO_REMOVAL_REVIEW_ACTION` group, `_record_permanent_skips` filtering `flatpak:remote:` by prefix, and D-39 attribution through `_derived_remote_failure`. Source remotes no longer go through `filter_inert` at all — they are not reviewable in any direction, and filtering them turned the target's own copy into a spurious removal proposal.
+
+**One deliberate gap:** the SPEC's `flatpak:conflict:` two-answer prompt (repointing a remote that target-only refs depend on) is **not shipped** — the change is derived and silent. Your decisions list named only removal as staying reviewed, and the apt precedent commits you cited (`c5f34462`, `33b3da33`) don't include the conflict prompt either; that was a separate commit (`c253355a`). It is not a regression — the change was already a default-ticked line — and the origin check now turns the alternative into a clean per-ref failure. Recorded as the open question in `Package sync requirements.md` and marked NOT SHIPPED in the SPEC table.
+
+## Integration fixture changes — unverified
+
+I cannot run the integration suite. These are written and unverified:
+
+- `vm-test-fixtures.sh`: `FIXTURES_VERSION` 3 → 4; new `converge_unused_remote()` adding real `flathub-beta` on `--with-app` machines (pc1) only and deleting it elsewhere. Costs one `.flatpakrepo` fetch, no ref download. `common.sh` `PCSWITCHER_TEST_FIXTURES_VERSION` 3 → 4. `bash -n` and shellcheck clean.
+- `test_flatpak_installs_into_source_scope_after_remote` → `test_flatpak_derives_the_remote_its_ref_needs_and_carries_its_key`. It now answers the remote's own item id **`SKIP_ONCE`** and only the ref `APPLY` — under the old model that declined the one thing that could deliver the ref. The ordering marker changed from the remote's converge log line (gone) to a new FULL log line `provision &lt;scope&gt; flatpak remote &lt;name&gt;` I added in `_write_derived_remote`, which is a derived write's only trace in the run's log.
+- New `test_a_flatpak_remote_no_synced_ref_needs_does_not_travel`. No `pytest.skip`; a missing fixture subject is an assertion failure naming `vm-test-fixtures.sh`.
+- Per your note, no assertion anywhere keys a remote on its key digest — both Flathub keyrings share one sha256; the fixture comment records that.
+
+I did **not** add a beta-ref install to the fixture (the SPEC's "prove the positive" half): that pulls a second multi-GB runtime into the baseline, and the positive is already proven by the rewritten test, which deletes Flathub on pc2 and requires the sync to bring it back.
+
+## Measurements I made myself (Docker + read-only host)
+
+- `flatpak list --columns=ref` prints `&lt;application&gt;/&lt;arch&gt;/&lt;branch&gt;`, no `app/` prefix (host).
+- `flatpak install --noninteractive --assumeyes flathub-beta org.mozilla.firefox/x86_64/beta` resolves and proceeds; the bare id gives `error: Multiple branches available for org.mozilla.firefox, you must specify one of: .../stable, .../beta` (container, real Flathub-beta).
+- `flatpak uninstall --assumeyes --user &lt;id&gt;/&lt;arch&gt;/&lt;branch&gt;` parses the full ref.
+- `flatpak info --show-runtime &lt;ref&gt;` prints a bare `&lt;id&gt;/&lt;arch&gt;/&lt;branch&gt;` — byte-identical to the `ref` column, so the origin lookup is a dictionary hit — in 10 ms, no network; exits 1 for a ref that is not installed.
+
+## Gates
+
+`ruff check` / `ruff format --check` / `codespell` / `basedpyright` all clean; `uv run pytest` **1407 passed, 81 deselected** (baseline 1383 + 24 new/rewritten flatpak tests, plus the apt agent's additions landing on the same branch).
+
+## Could not verify
+
+The integration suite (no VM/CI access from here — the fixture bump and both integration tests are unverified). One transient full-suite failure in `test_apt_sync.py::TestAReadThatDidNotAnswer` occurred while the concurrent apt agent was saving `apt_sync.py` mid-run; it passes in isolation and in every subsequent full run, and is not in my diff.</result>
+<usage><subagent_tokens>433327</subagent_tokens><tool_uses>200</tool_uses><duration_ms>2591664</duration_ms></usage>
+</task-notification>
