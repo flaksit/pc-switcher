@@ -61,7 +61,7 @@ Items that only **report** a condition are not offered skip-always: a version di
 
 ### One review per job, always before the first change
 
-`apt_sync` asks you everything it is going to ask before it writes anything. There is no second screen part-way through a run.
+`apt_sync` asks you everything it is going to ask before it writes anything. It never re-reviews a diff it already showed you, and no prompt of any kind comes after its first write.
 
 That holds because of what the review decides. A package is judged by where your **source** installed it from, and a sync never changes the source — so nothing the run does to the target can make an answer you already gave wrong. The one fact that does depend on what the run wrote, namely which repository actually ends up supplying a package, is not guessed during the review at all: it is measured afterwards, and a package that comes out wrong is refused and reported rather than turned into another question.
 
