@@ -7,9 +7,9 @@ What pc-switcher promises about installed software, from the point of view of th
 - [High level requirements](High%20level%20requirements.md) — project vision and scope; this document elaborates one area of it
 - [Package sync job behaviour](../jobs/package-sync.md) — the same ground as a how-it-works guide
 - [Package sync specification](../system/package-sync.md) — the implementation-facing spec
-- [ADR-021](../adr/adr-021-origin-replicating-package-convergence.md) — the decision this document is the user-facing statement of
+- [ADR-020](../adr/adr-020-declarative-package-convergence.md) — the decision this document is the user-facing statement of
 
-Where this document and any other disagree, this one and ADR-021 are the intent; the other is stale. Section [Where the tool does not yet meet these requirements](#where-the-tool-does-not-yet-meet-these-requirements) lists the places the shipped code is knowingly behind.
+Where this document and any other disagree, this one and ADR-020 are the intent; the other is stale. Section [Where the tool does not yet meet these requirements](#where-the-tool-does-not-yet-meet-these-requirements) lists the places the shipped code is knowingly behind.
 
 ## Principles
 

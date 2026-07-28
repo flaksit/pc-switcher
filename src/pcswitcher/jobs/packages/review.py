@@ -46,14 +46,14 @@ populated only on the non-interactive path, where it reports (never fails) the i
 one was present to resolve (D-26).
 
 A `ReviewGroup` whose `action` is `REPO_REMOVAL_REVIEW_ACTION` keeps the ordinary checkbox
-shape but takes only TWO answers (ADR-021 rulings 5 and 12): delete, or leave it for now.
+shape but takes only TWO answers (ADR-020 D-07): delete, or leave it for now.
 It arrives unticked like every other removal direction and is never offered the "never
 offer again" promotion, so `Decision.SKIP_ALWAYS` is unreachable for it and nothing about
 it is ever recorded. That is why `_REMOVAL_ACTIONS` and `_PROMOTABLE_ACTIONS` are two
 independent sets rather than one derived from the other.
 
 A `ReviewGroup` whose `action` is `REPO_CONFLICT_REVIEW_ACTION` gets a per-entry two-way
-flow instead (ADR-021 ruling 6): something that differs on the two machines and feeds an
+flow instead (ADR-020 D-37): something that differs on the two machines and feeds an
 item the target recorded machine-specific — a repository file for `apt_sync`, a remote for
 `flatpak_sync` — is shown as both versions, never a unified diff, and answered overwrite or
 skip-once. Nothing is recorded either way.
@@ -111,7 +111,7 @@ PACKAGE_REVIEW_AUTOMATION_ENV = "PCSWITCHER_PACKAGE_REVIEW_AUTOMATION"
 
 # Sentinel `ReviewGroup.action` a caller (today, only `AptSyncJob`) uses to mark a group of
 # `/etc/apt` repository or pin DELETIONS as taking only two answers — delete, or leave it
-# for now (ADR-021 D-37, rulings 5 and 12). Unlike the other two sentinels this needs no
+# for now (ADR-020 D-07). Unlike the other two sentinels this needs no
 # per-entry flow: it renders as an ordinary unticked checkbox list, and the whole difference
 # is that it is never offered the "never offer again" promotion. A permanent machine-local
 # mark on a file whose entire purpose is to feed packages would silently and permanently
@@ -137,8 +137,8 @@ _REMOVAL_ACTIONS = frozenset({"remove", "delete", "disable", REPO_REMOVAL_REVIEW
 #
 # Enumerated independently of `_REMOVAL_ACTIONS` rather than derived from it: "arrives
 # unticked" and "is offered permanence" are two different questions about a group, and
-# ADR-021's two-answer screens answer them differently — `REPO_REMOVAL_REVIEW_ACTION` is
-# in the first set and deliberately absent from this one.
+# ADR-020 D-07's two-answer screens answer them differently — `REPO_REMOVAL_REVIEW_ACTION`
+# is in the first set and deliberately absent from this one.
 _PROMOTABLE_ACTIONS = frozenset({"install", "add", "enable", "change", "remove", "delete", "disable"})
 
 # Sentinel `ReviewGroup.action` a caller (today, only `AptSyncJob`) uses to mark a group
@@ -161,7 +161,7 @@ UNREPRODUCIBLE_REVIEW_ACTION = "unreproducible"
 COLLATERAL_REVIEW_ACTION = "collateral"
 
 # Sentinel `ReviewGroup.action` for the one `/etc/apt` CHANGE that is still a question
-# (ADR-021 ruling 6): a repository file present on both machines with different content that
+# (ADR-020 D-37): a repository file present on both machines with different content that
 # feeds a package the target recorded machine-specific. Every other change overwrites
 # silently, because the user asked for the two machines to match; this one cannot, because
 # overwriting it moves software the user explicitly told this tool to leave alone.
@@ -189,7 +189,7 @@ class ReviewEntry:
     02-03 introduces. Plan 02-05 adapts `ItemDiff` onto this shape.
 
     `versions` carries `(the target's current content, the source's content)` for the one
-    screen that shows two whole files side by side instead of a detail line (ADR-021's
+    screen that shows two whole files side by side instead of a detail line (ADR-020 D-37's
     repository conflict). Optional and defaulted so every other construction site — and
     every other screen — is unaffected; a unified diff is deliberately not the shape.
     """
@@ -502,7 +502,7 @@ async def _review_repo_conflict_group(
     decisions: dict[str, Decision],
 ) -> None:
     """Resolve one `REPO_CONFLICT_REVIEW_ACTION` group's entries, one at a time, with the
-    two-way choice ADR-021 ruling 6 requires: overwrite the target's version with the
+    two-way choice ADR-020 D-37 requires: overwrite the target's version with the
     source's, or skip for now.
 
     Both versions are printed, the target's first, never a unified diff — the user's own

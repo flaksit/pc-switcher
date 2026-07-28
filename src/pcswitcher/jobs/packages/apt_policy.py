@@ -2,7 +2,7 @@
 
 Two jobs ask apt three different questions off the same command, and all three need the
 same version-table walk to answer them: `apt_sync` asks what repository an INSTALLED
-package came from (C26's source-removal impact, and ADR-021 D-34's provenance comparison)
+package came from (C26's source-removal impact, and ADR-020 D-34's provenance comparison)
 and what repository the version the TARGET would install comes from (D-34's origin
 classification); `manual_installs_sync` asks whether a package on the SOURCE came from any
 repository at all (D-18).
@@ -72,7 +72,7 @@ def installed_origins_by_package(policy_output: str) -> dict[str, frozenset[str]
 
 def candidate_origins_by_package(policy_output: str) -> dict[str, frozenset[str]]:
     """Parse a batched `apt-cache policy <name...>` run into `{package: origin URIs of the
-    version apt WOULD install}` (ADR-021 D-34).
+    version apt WOULD install}` (ADR-020 D-34).
 
     Not the same rows as `installed_origins_by_package`, and the difference is the whole
     point: a machine can have vendor A's copy installed while apt's candidate is vendor B's,

@@ -106,7 +106,7 @@ def respond_to(
 
 # The archive every baseline source fixture is on. Paired with a `ubuntu.sources` scan line
 # declaring it, so it resolves to a DISTRIBUTION origin and no package acquires a vendor
-# origin it was never given (ADR-021 D-35's exemption).
+# origin it was never given (ADR-020 D-35's exemption).
 _BASELINE_ARCHIVE = "http://ftp.belnet.be/ubuntu"
 
 
@@ -643,7 +643,7 @@ class TestTransactionGuard:
 
 class TestHoldPinCapture:
     """collect_hold_sets: apt-mark showhold on BOTH machines. Pins are read no more: they
-    are files, not facts about packages (ADR-021 D-25/D-36)."""
+    are files, not facts about packages (ADR-020 D-25/D-36)."""
 
     @pytest.mark.asyncio
     async def test_hold_sets_from_both_machines_surface(self) -> None:
@@ -1001,7 +1001,7 @@ class TestHoldsDriveNoSimulation:
 class TestUnavailableCapture:
     """ONE batched `apt-cache policy` on the target answers every origin question this run
     asks of it, and a package whose origin cannot be provided there is reported rather than
-    installed from somewhere else (ADR-021 D-34).
+    installed from somewhere else (ADR-020 D-34).
     """
 
     @pytest.mark.asyncio
@@ -1318,7 +1318,7 @@ class TestBareDebPackagesAreNotAptSyncsBusiness:
     @pytest.mark.asyncio
     async def test_an_excluded_bare_deb_package_is_not_protected_from_collateral(self) -> None:
         """`code` is a bare `.deb` on the source, so it is dropped from the manifest, and it
-        is auto on the target. Under ADR-021 D-40 the target's apt owns it: an install whose
+        is auto on the target. Under ADR-020 D-40 the target's apt owns it: an install whose
         simulation would remove it proceeds with no collateral item and no prompt.
         """
         context, _source, _target = make_context(
@@ -1689,7 +1689,7 @@ _TARGET_GH_NO_CANDIDATE = "gh:\n  Installed: (none)\n  Candidate: (none)\n  Vers
 
 
 class TestAPackageTheTargetCannotResolveYet:
-    """ADR-021 §2.3 class 3 at plan time: the repository that supplies the package is derived
+    """ADR-020 D-34 class 3 at plan time: the repository that supplies the package is derived
     from the package's own approval and written during converge, so the target's apt has no
     candidate for the name while `plan()` runs and refuses to rehearse a transaction naming
     it — with the same exit 100 a held dpkg lock produces (ADR-022 D-01).
@@ -1962,7 +1962,7 @@ _LEGACY_BAR = "deb [signed-by=/etc/apt/keyrings/bar.gpg] https://example.com sta
 
 class TestRepoStateCapture:
     """AptSyncJob.plan() extended with the `/etc/apt` directions that still have a review
-    line (D-11/D-13, ADR-021 D-37): repository and pin REMOVALS, apt config in all three.
+    line (D-11/D-13, ADR-020 D-37): repository and pin REMOVALS, apt config in all three.
     """
 
     @pytest.mark.asyncio
@@ -2083,7 +2083,7 @@ class TestRepoStateCapture:
         assert by_id["apt:config:99extra"].action == DiffAction.REMOVE
 
 
-# -- ADR-021 seams: what apt actually reads, on BOTH machines --------------------------
+# -- Capture seams: what apt actually reads, on BOTH machines (ADR-020 D-11) -----------
 
 # The extension predicate the `sources.list.d` capture carries. Keyed FIRST in a response
 # mapping so the fake can answer the filtered command differently from the unfiltered one:
@@ -2094,7 +2094,7 @@ _SOURCES_LIST_DIGEST_CMD = "sudo sha256sum /etc/apt/sources.list"
 
 
 class TestWhatAptItselfReads:
-    """The capture is scoped to the files apt reads, on both machines (ADR-021 §5)."""
+    """The capture is scoped to the files apt reads, on both machines (ADR-020 D-11)."""
 
     @pytest.mark.asyncio
     async def test_a_save_file_in_sources_list_d_is_never_captured(self) -> None:
@@ -2148,7 +2148,7 @@ class TestWhatAptItselfReads:
     @pytest.mark.asyncio
     async def test_sources_list_is_digested_on_both_machines_and_is_still_not_an_item(self) -> None:
         """`/etc/apt/sources.list` is a file, not a directory, so it appears in no `find`
-        listing and needs its own digest — which ADR-021 D-38's write-when-different rule
+        listing and needs its own digest — which ADR-020 D-38's write-when-different rule
         compares. Capturing it must not turn it into a reviewable item.
         """
         context, source, target = make_context(
@@ -2272,7 +2272,7 @@ class TestWhatAptItselfReads:
         """The scan is machine-agnostic and both answers are load-bearing: the target's
         drives keyring reference counting and the removal impact, the source's is what maps
         a package's origin URIs back to the repository file that would have to travel
-        (ADR-021 D-34).
+        (ADR-020 D-34).
         """
         context, source, target = make_context(
             source_responses={
@@ -2293,7 +2293,7 @@ class TestWhatAptItselfReads:
 
 
 class TestOriginCapture:
-    """ADR-021 D-34's origin facts: where the source installed each package from, which
+    """ADR-020 D-34's origin facts: where the source installed each package from, which
     repository file on the source declares that place, and which places are the
     distribution's own.
     """
@@ -2407,7 +2407,7 @@ _RIVAL_LIST = "deb https://rival.example.com/apt stable main\n"
 
 
 class TestOriginClassification:
-    """ADR-021 D-34 at plan time: a package replicates as (name, origin), so a name the
+    """ADR-020 D-34 at plan time: a package replicates as (name, origin), so a name the
     target could satisfy from a different vendor is not "already available".
     """
 
@@ -2721,7 +2721,7 @@ def _mozilla_source_responses() -> dict[str, CommandResult]:
 
 
 class TestOriginEnforcement:
-    """ADR-021 D-35 at converge time: whatever plan-time classification concluded and
+    """ADR-020 D-35 at converge time: whatever plan-time classification concluded and
     whatever `/etc/apt` work this run derived, the target may not install a package from a
     vendor the source does not use. Checked against the real post-`apt-get update` state.
     """
@@ -3061,7 +3061,7 @@ _POLICY_NO_CANDIDATE = "pkg-a:\n  Installed: (none)\n  Candidate: (none)\n  Vers
 def _foo_source_responses(**overrides: CommandResult) -> dict[str, CommandResult]:
     """A source machine whose `pkg-a` comes from the repository `foo.sources` declares.
 
-    The only shape that makes a repository travel now (ADR-021 D-37): a source file is
+    The only shape that makes a repository travel now (ADR-020 D-37): a source file is
     derived from the packages approved from it, so a test that wants `foo.sources` written
     must give the source a package whose origin `foo.sources` serves. `foo.gpg` is the key
     that file names, present on the source, so the repository is writable.
@@ -3901,7 +3901,7 @@ class TestMetadataRefreshBeforeInstall:
         assert update_idx < install_idx
 
 
-# -- ADR-021 D-40: collateral protects the TARGET's manual set alone -------------------
+# -- ADR-020 D-40: collateral protects the TARGET's manual set alone -------------------
 
 _SOURCE_DECISION_SKIP_SRC_ONLY = (
     "machine_specific:\n"
@@ -3913,7 +3913,7 @@ _SOURCE_DECISION_SKIP_SRC_ONLY = (
 
 
 class TestSourceOnlyCollateral:
-    """ADR-021 D-40: a package manual on the SOURCE alone is NOT protected from collateral
+    """ADR-020 D-40: a package manual on the SOURCE alone is NOT protected from collateral
     removal/downgrade. The loss is deliberate — if the target's apt installed the package
     automatically, the target's apt owns it, and reclaiming it as a user choice on the
     strength of the other machine's bookkeeping is a guess. These two tests are kept
@@ -4055,7 +4055,7 @@ def _scan_line(filename: str, content: str, *, path: str | None = None) -> str:
 
 
 # The source-side scan that makes the shared `apt-cache policy` fixtures' origins resolve to
-# a repository file (ADR-021 D-34). Without one, `gh`'s vendor origin is declared by no file
+# a repository file (ADR-020 D-34). Without one, `gh`'s vendor origin is declared by no file
 # on the source and the package is correctly unreplicable — which is a different fact from
 # the one those tests are about.
 _POLICY_FIXTURE_SCAN = (
@@ -5004,7 +5004,7 @@ class TestInlineArmoredSignedBy:
         )
 
 
-# -- One review per run, before the first write (ADR-021, D-24 retired for apt) ---------
+# -- One review per run, before the first write (ADR-020 D-24) -------------------------
 #
 # A package is classified from the SOURCE's origins, which no run mutates, so nothing this
 # run writes can invalidate a decision it already took. The one fact that genuinely depends
@@ -5086,7 +5086,7 @@ def _pinned_target_only_package_context(
 
 
 class TestAPinNeverSpeaksForAPackage:
-    """The defect ADR-021 D-25 closes: a package present only on the target and named by
+    """The defect ADR-020 D-25 closes: a package present only on the target and named by
     any pin stanza produced a `REPORT_ONLY` echo instead of its own removal diff — so it
     could neither be removed nor marked machine-specific, and came back every run.
     """
@@ -5650,7 +5650,7 @@ class TestCompareDebVersions:
 
 
 class TestRepoUnavailableWording:
-    """`REPO_UNAVAILABLE`'s detail, whose meaning ADR-021 redefined."""
+    """`REPO_UNAVAILABLE`'s detail: the source's origin cannot be provided (ADR-020 D-25)."""
 
     def test_build_repo_unavailable_detail_names_the_package_its_origin_and_the_cause(self) -> None:
         detail = build_repo_unavailable_detail(
@@ -5743,14 +5743,14 @@ class TestDiffEngine:
 
     def test_the_diff_takes_no_pin_input_at_all(self) -> None:
         """The signature is the deletion, made structural: with no pin argument there is no
-        way to reintroduce the echo without changing every caller (ADR-021 D-25).
+        way to reintroduce the echo without changing every caller (ADR-020 D-25).
         """
         parameters = inspect.signature(_diff_apt_packages).parameters
 
         assert not any("pin" in name for name in parameters)
 
     def test_an_origin_no_source_file_declares_yields_repo_unavailable_not_install(self) -> None:
-        """ADR-021 §2.3 class 4, the only remaining meaning of `REPO_UNAVAILABLE`: the
+        """ADR-020 D-34 class 4, the only remaining meaning of `REPO_UNAVAILABLE`: the
         source has the package from a repository that has since been deleted from the
         source's own `/etc/apt`, so the origin cannot be handed to the target at all.
         """
@@ -6057,8 +6057,8 @@ class TestAReadThatDidNotAnswer:
 
     @pytest.mark.asyncio
     async def test_a_conflict_content_read_that_did_not_answer_fails_the_job(self) -> None:
-        """The two panes the repository-conflict review shows are `sudo cat` output (ADR-021
-        ruling 6). Reading that silence as CONTENT renders the source's pane empty and asks
+        """The two panes the repository-conflict review shows are `sudo cat` output
+        (ADR-020 D-37). Reading that silence as CONTENT renders the source's pane empty and asks
         the user to approve an overwrite off a diff nobody could read. The TARGET's `cat`
         runs first and answers normally, so only the source's can fail this.
         """
@@ -6131,7 +6131,7 @@ class TestAReadThatDidNotAnswer:
 
 
 # ---------------------------------------------------------------------------
-# The ESM / Ubuntu Pro attachment gate (ADR-021 D-38, spec §5.3)
+# The ESM / Ubuntu Pro attachment gate (ADR-020 D-38, spec §5.3)
 #
 # The hazard is NOT a failing refresh. Measured in a stock `ubuntu:24.04` container with
 # both real ESM source files and no credentials: `apt-get update` exits 0, because

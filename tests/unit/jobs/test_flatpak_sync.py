@@ -496,7 +496,7 @@ def derivation_source(
 
 
 class TestRemotesAreDerivedFromApprovedRefs:
-    """ADR-021 D-37 for flatpak: a remote travels because an approved ref needs it, and is
+    """ADR-020 D-41: a remote travels because an approved ref needs it, and is
     never a tickable line in the add or the change direction.
 
     The pairing this makes unrepresentable is the one that mattered: a ref approved and its
@@ -707,7 +707,7 @@ _FLATHUB_CONFLICT_ID = "flatpak:conflict:user:flathub"
 
 def target_decision_file(*item_ids: str) -> str:
     """The TARGET's own decision file recording `item_ids` skip-always — the one and only
-    definition of "machine-specific" (ADR-021 ruling 6), read straight off the file rather
+    definition of "machine-specific" (ADR-020 D-41), read straight off the file rather
     than inferred from the ref being target-only.
     """
     body = "".join(
@@ -767,7 +767,7 @@ def conflict_entries(plan: PackagePlan) -> list[ReviewEntry]:
 
 
 class TestARepointThatMovesAMachineSpecificRefIsAsked:
-    """ADR-021 ruling 6, applied to a flatpak remote: repointing is silent mechanism EXCEPT
+    """ADR-020 D-41: repointing a flatpak remote is silent mechanism EXCEPT
     when a ref the target recorded skip-always takes that remote as its origin.
 
     Machine-specific is the trigger, exactly as apt reads it from the target's decision file
@@ -1510,7 +1510,7 @@ _APP_REF = "org.mozilla.firefox/x86_64/stable"
 
 
 class TestOriginIsReplicatedNotJustNamed:
-    """ADR-021 D-34/D-35 for flatpak: a ref replicates as (ref, origin), and the origin is
+    """ADR-020 D-41: a ref replicates as (ref, origin), and the origin is
     checked against the target's real state rather than inferred from a name.
 
     Measured against real Flathub: a target remote called `flathub` pointing at
@@ -2085,7 +2085,7 @@ class TestRemoteRemovalOrphansRefs:
 
     @pytest.mark.asyncio
     async def test_removal_offers_exactly_two_answers_and_is_never_recordable(self) -> None:
-        """ADR-021 D-37's exception: delete, or leave it for now. A permanent machine-local
+        """ADR-020 D-07's exception: delete, or leave it for now. A permanent machine-local
         mark on a remote whose whole purpose is to feed refs would silently and permanently
         change where those refs come from.
         """

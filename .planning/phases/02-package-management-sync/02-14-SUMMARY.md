@@ -29,7 +29,7 @@ key-files:
     - docs/adr/_index.md
 
 key-decisions:
-  - "ADR-020 rewritten in place (Status unchanged, no ADR-021, no changelog) because the record was authored from corrected decisions, not superseded"
+  - "ADR-020 rewritten in place (Status unchanged, no superseding ADR, no changelog) because the record was authored from corrected decisions, not superseded"
   - "PackagePhaseCoordinator removed from the durable record; each package job owns plan → review → apply inside its own execute()"
 
 patterns-established:

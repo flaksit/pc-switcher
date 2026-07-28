@@ -6,7 +6,7 @@ Every factual claim about snap or flatpak behaviour below is tagged **measured**
 
 ## 0. Settled premises, carried from apt
 
-These were decided for apt this session (ADR-021, commits `c5f34462`, `33b3da33`, `c253355a`) and carry over unless this document says otherwise:
+These were decided for apt (ADR-020 D-34 through D-40) and carry over unless this document says otherwise:
 
 - A package replicates as (name, origin), not name alone.
 - The review lists packages only. A line names its origin.
@@ -26,12 +26,12 @@ Already correct, do not disturb:
 
 - A ref's origin is recoverable from the installed ref. `flatpak list --columns=origin` prints it per ref (**measured**: every ref on this machine reports `flathub`), and `flatpak info --show-origin <app>` prints it for one ref in 11 ms with no network (**measured**). `flatpak_sync` captures it into `FlatpakItem.origin` (`src/pcswitcher/jobs/flatpak_sync.py:177`) via `_FLATPAK_LIST_CMD` (`flatpak_sync.py:102`).
 - The install command already names the remote positionally (`flatpak_sync.py:1052-1055`), so the ref is installed *from that remote* or not at all.
-- The review line already names the origin: `FlatpakItem.label()` (`flatpak_sync.py:187-189`) renders `app (version, origin, scope)`. ADR-021's "each line names its origin" is satisfied with no change.
+- The review line already names the origin: `FlatpakItem.label()` (`flatpak_sync.py:187-189`) renders `app (version, origin, scope)`. ADR-020 D-34's "each line names its origin" is satisfied with no change.
 - Keys already travel byte-for-byte and are staged, imported and discarded (#215, `flatpak_sync.py:1097-1150`). This is verified working and must not regress.
 
 ### 1.1.0 DISPROVEN: "flatpak refuses to guess, so no origin verification is needed"
 
-This document originally claimed that the silent wrong-vendor install motivating ADR-021 D-34 was *structurally unreachable* for flatpak, on the grounds that `flatpak install` refuses to choose between remotes. **That claim is false**, and everything derived from it — in particular §2.5's "flatpak chooses nothing, so there is no candidate to re-read" — is wrong. Replaced by the following, all **measured** in a stock `ubuntu:24.04` container on Flatpak 1.14.6 against the real Flathub and Flathub-beta:
+This document originally claimed that the silent wrong-vendor install motivating ADR-020 D-34 was *structurally unreachable* for flatpak, on the grounds that `flatpak install` refuses to choose between remotes. **That claim is false**, and everything derived from it — in particular §2.5's "flatpak chooses nothing, so there is no candidate to re-read" — is wrong. Replaced by the following, all **measured** in a stock `ubuntu:24.04` container on Flatpak 1.14.6 against the real Flathub and Flathub-beta:
 
 1. Flatpak refuses to guess **only when two or more registered remotes offer the ref**. With exactly one registered remote offering it, it resolves silently at exit 0, in both scopes. `--noninteractive`, bare and `--assumeyes` behave identically; `--assumeyes` does not auto-pick a remote.
 2. **The wrong-vendor install is live, and silent.** A target remote with the same NAME and a different URL installs the other vendor's binary: remote `flathub` pointed at `https://dl.flathub.org/beta-repo/`, then `flatpak install --assumeyes flathub app/org.mozilla.firefox/x86_64/stable` → **exit 0**, `Version: 148.0`, `Collection: org.flathub.Beta`, against real Flathub's `153.0` / `org.flathub.Stable`. Different commit, different binary, no warning. `flatpak list --columns=origin` reports `flathub` in BOTH cases, so a name-only origin check cannot see it.
@@ -44,7 +44,7 @@ Shipped (commits on `gsd/phase-02-package-management-sync`): branch folded into 
 
 Three real gaps remain, and all three are in scope:
 
-1. **Remotes are review lines.** `_install_remote_diff` (`flatpak_sync.py:525`), `_change_remote_diff` (`flatpak_sync.py:611`) and `_diff_flatpak_remotes` (`flatpak_sync.py:657`) put every remote add and every URL/trust change in front of the user as a tickable entry. That is exactly the unrepresentable pairing ADR-021 deleted for apt: a remote ticked without its refs does nothing, a ref ticked without its remote is refused at converge (`flatpak_sync.py:1045-1051`).
+1. **Remotes are review lines.** `_install_remote_diff` (`flatpak_sync.py:525`), `_change_remote_diff` (`flatpak_sync.py:611`) and `_diff_flatpak_remotes` (`flatpak_sync.py:657`) put every remote add and every URL/trust change in front of the user as a tickable entry. That is exactly the unrepresentable pairing ADR-020 D-37 deletes for apt: a remote ticked without its refs does nothing, a ref ticked without its remote is refused at converge (`flatpak_sync.py:1045-1051`).
 2. **Origin is not part of ref identity.** `FlatpakItem.item_id` is `flatpak:ref:<scope>:<application>` (`flatpak_sync.py:185`). A ref installed on both machines from *different* remotes therefore produces no diff at all when the versions match, and a bare `VERSION_MISMATCH` that says nothing about provenance when they differ (`_version_mismatch_ref_diff`, `flatpak_sync.py:479`). This is the flatpak `ORIGIN_MISMATCH`.
 3. **The install is issued by app id, not by ref.** `flatpak_sync.py:1052-1055` interpolates the application id alone. **Measured**: `flatpak install --assumeyes --noninteractive flathub-beta org.mozilla.firefox` — a remote carrying two branches of one id — prints `Similar refs found for "org.mozilla.firefox" in remote "flathub-beta"` with a stable/beta menu and aborts. The full ref is available from the same listing command (`flatpak list --columns=ref`, **measured**) and is not captured today. This is the same class of defect as name-only matching: the identity is not precise enough to name one thing.
 
@@ -71,7 +71,7 @@ It is however orthogonal to the repos-and-keys request and touches a different j
 
 ### 2.1 What becomes derived
 
-A remote travels because a ref approved this run comes from it. Nothing else makes a remote travel: a source remote feeding no ref this run syncs stays where it is, exactly as ADR-021 rules for an apt repository.
+A remote travels because a ref approved this run comes from it. Nothing else makes a remote travel: a source remote feeding no ref this run syncs stays where it is, exactly as ADR-020 D-34 rules for an apt repository.
 
 Two sources feed the derived set, both computed on the source, both local and network-free:
 
@@ -114,9 +114,9 @@ def _derive_remotes(
 | Remote removal | `FLATPAK_REMOTE` | **two** (delete / skip once) | **no** |
 | Remote change that re-points **machine-specific** refs | `flatpak:conflict:<scope>:<name>` | **two** (overwrite / skip once) | **no** |
 
-Masks keep the three-way decision. A mask is the flatpak analogue of an apt hold — a standing user preference about updating, not mechanism serving a ref — so ADR-021's `apt.conf.d` reasoning applies: nothing about an approved ref implies whether a mask should travel, so the only honest source of the answer is the user.
+Masks keep the three-way decision. A mask is the flatpak analogue of an apt hold — a standing user preference about updating, not mechanism serving a ref — so ADR-020 D-37's `apt.conf.d` reasoning applies: nothing about an approved ref implies whether a mask should travel, so the only honest source of the answer is the user.
 
-Remote removal drops from three answers to two, reusing the existing `REPO_REMOVAL_REVIEW_ACTION` sentinel (`packages/review.py:120`) and the `_REMOVAL_ACTIONS`/`_PROMOTABLE_ACTIONS` split already in place (`review.py:126,140`). Rationale carries verbatim from ADR-021's D-07 exception: a permanent machine-local mark on a remote whose whole purpose is to feed refs would silently and permanently change where those refs come from, and the user's remedy is consolidating the two configurations, not recording a preference. `build_orphaned_refs_detail` (`flatpak_sync.py:264`) and the dependent-naming behaviour (#214) are unchanged — they are what makes the two-way answer informed.
+Remote removal drops from three answers to two, reusing the existing `REPO_REMOVAL_REVIEW_ACTION` sentinel (`packages/review.py:120`) and the `_REMOVAL_ACTIONS`/`_PROMOTABLE_ACTIONS` split already in place (`review.py:126,140`). Rationale carries verbatim from ADR-020 D-07's two-answer exception: a permanent machine-local mark on a remote whose whole purpose is to feed refs would silently and permanently change where those refs come from, and the user's remedy is consolidating the two configurations, not recording a preference. `build_orphaned_refs_detail` (`flatpak_sync.py:264`) and the dependent-naming behaviour (#214) are unchanged — they are what makes the two-way answer informed.
 
 The change direction becomes the apt conflict prompt (`c253355a`'s shape), shipped. A remote present on both sides whose URL or `gpg_verify` differs is repointed **silently** as derived mechanism, *unless* a **machine-specific** ref on the target takes it as its origin in that same scope — in which case repointing it changes where software the user told this tool never to touch updates from.
 
@@ -133,7 +133,7 @@ The entry shows the two configurations, target first, one differing facet per li
 
 Skip once keeps the remote out of the write set but **not** out of the D-39 attribution map, so every approved ref that named it fails quoting the decision. `_origin_refusal` would refuse those installs anyway — it re-reads the target and compares URL and verification, which is precisely what a declined conflict leaves diverging (**verified** by mutation: dropping the seeded failure leaves the ref uninstalled and only changes the message) — so the seeding is not what makes the outcome safe, it is what makes the failure name the user's own choice instead of the symptom.
 
-Everything above is one review, before the job's first mutating command. ADR-021 retired D-24's "may review again" clause for apt; the same holds here for the same reason — nothing this run does changes the *source's* origins, and the classification depends only on those.
+Everything above is one review, before the job's first mutating command. ADR-020 D-24 gives apt exactly one review per run; the same holds here for the same reason — nothing this run does changes the *source's* origins, and the classification depends only on those.
 
 ### 2.3 Origin as ref identity, and the `ORIGIN_MISMATCH` diff
 
@@ -206,7 +206,7 @@ Two consequences. First, the `filtered` token is harmless to the existing parse 
 
 No derivation, no new item class, no new review line. Snap's whole answer to the request is §1.2: there is no repository or key for the user to be bothered by.
 
-The one thing worth adding is a validation-time provenance check, in the spirit of ADR-021's refusal to replicate a name when the provenance would invert — and placed in `validate()` per the standing rule that environment assumptions are checked with copy-paste remediation, never mid-execute:
+The one thing worth adding is a validation-time provenance check, in the spirit of ADR-020 D-34's refusal to replicate a name when the provenance would invert — and placed in `validate()` per the standing rule that environment assumptions are checked with copy-paste remediation, never mid-execute:
 
 ```python
 async def _store_identity(self, executor: Executor) -> tuple[str, str, str | None]:
@@ -219,7 +219,7 @@ async def _store_identity(self, executor: Executor) -> tuple[str, str, str | Non
     """
 ```
 
-`validate()` compares the two machines' tuples and appends a `ValidationError` when they differ, stating that the two machines draw snaps from different stores, that pc-switcher cannot converge that (a remodel needs a brand-signed model assertion; a proxy store id is site configuration), and that `snap_sync` should be disabled or the machines re-provisioned to match. This is a **blocking** validation error rather than a warning, because a name that resolves to different bytes on the two machines is the exact failure ADR-021 exists to prevent, and unlike apt there is no per-item origin to fall back on.
+`validate()` compares the two machines' tuples and appends a `ValidationError` when they differ, stating that the two machines draw snaps from different stores, that pc-switcher cannot converge that (a remodel needs a brand-signed model assertion; a proxy store id is site configuration), and that `snap_sync` should be disabled or the machines re-provisioned to match. This is a **blocking** validation error rather than a warning, because a name that resolves to different bytes on the two machines is the exact failure ADR-020 D-34 exists to prevent, and unlike apt there is no per-item origin to fall back on.
 
 On a pair of ordinary Ubuntu desktops this check is always satisfied and costs two commands. It is the entire "in so far possible" for snap.
 
@@ -229,7 +229,7 @@ Could a snap's provenance differ between machines in a Firefox-like way, with th
 
 ## 4. The four-jobs rule is unaffected
 
-ADR-020 D-15/D-16, carried forward by ADR-021, keeps `apt_sync`, `snap_sync`, `flatpak_sync` and `manual_installs_sync` as four independent `SyncJob`s. Nothing here changes that: flatpak derivation is entirely internal to `flatpak_sync`, and the snap check is entirely internal to `snap_sync`. Neither job imports the other, and neither consults the other's result. The shared plumbing they touch (`packages/review.py`'s sentinels, `packages/items.py`'s `DiffClass.ORIGIN_MISMATCH`, `packages/sync_core.py`'s `_ACTION_VOCABULARY`) is already shared and already carries what apt needed; flatpak reuses it rather than extending it, with one exception (§7 S3's vocabulary entries).
+ADR-020 D-15/D-16 keeps `apt_sync`, `snap_sync`, `flatpak_sync` and `manual_installs_sync` as four independent `SyncJob`s. Nothing here changes that: flatpak derivation is entirely internal to `flatpak_sync`, and the snap check is entirely internal to `snap_sync`. Neither job imports the other, and neither consults the other's result. The shared plumbing they touch (`packages/review.py`'s sentinels, `packages/items.py`'s `DiffClass.ORIGIN_MISMATCH`, `packages/sync_core.py`'s `_ACTION_VOCABULARY`) is already shared and already carries what apt needed; flatpak reuses it rather than extending it, with one exception (§7 S3's vocabulary entries).
 
 S6 (sideloaded snaps → `manual_installs_sync`) moves a *responsibility* between two jobs. That is the same kind of move D-18 already made for bare-`.deb` packages and does not create a dependency: `manual_installs_sync` will run its own `snap list --all`, exactly as it runs its own `dpkg`/`apt-cache` rather than sharing `apt_sync`'s (`manual_installs_sync.py:16-19`).
 
@@ -310,9 +310,9 @@ No `pytest.skip` may appear in this module. Fixtures live in `tests/integration/
 
 ## 6. ADR
 
-This does not need a new ADR. ADR-021 is `Accepted` and immutable (`docs/adr/adr-001-adr.md:15`), and its rules are written for apt specifically — D-34 through D-40 all say "apt". The flatpak work *applies* ADR-021's principle (D-02's carried-forward "mechanism the user has no basis to judge is not an item") to a second ecosystem without contradicting any ADR-021 rule.
+This needs no ADR of its own. ADR-020 already holds the general rule (D-02: mechanism the user has no basis to judge is not an item), and it records what that rule does and does not reach in each ecosystem: **D-41** for flatpak's derived remotes, the URL-based origin check and the absence of a distribution remote, and **D-42** for snap having no repository or key decision at all and the store-identity check that replaces it. The two negatives are the point of writing them down — a future reader will otherwise re-derive them.
 
-Two ADR-021 lines do need checking against the result, and both hold: line 15's "the flatpak OSTree store MUST NOT be rsynced or otherwise file-mirrored" (unchanged — the derived path still shells out to `flatpak`), and line 25's four-jobs rule (§4).
+Two ADR-020 implementation rules need checking against the result, and both hold: "the flatpak OSTree store MUST NOT be rsynced or otherwise file-mirrored" (unchanged — the derived path still shells out to `flatpak`), and the four-jobs rule (§4).
 
 If the reviewer disagrees and wants the ruling recorded as a decision rather than as an application of one, the cheapest form is a short **ADR-022: repository derivation across ecosystems**, stating the general rule once and enumerating per-ecosystem what it does and does not reach — including the two negatives (snap has no repository; flatpak has no distribution remote), which are the most valuable thing here to write down, because a future reader will otherwise re-derive them. Flagged as §9 Q1.
 
@@ -425,9 +425,9 @@ No `pytest.skip`. A missing fixture subject is an assertion failure naming `vm-t
 
 ## 9. Open questions
 
-**Q1 — ADR or no ADR.** §6 argues this is an application of ADR-021's principle to a second ecosystem, not a new decision, so no ADR is needed. The counter-argument is that the two *negatives* — snap has no repository question, flatpak has no distribution remote — are exactly the kind of finding a future reader will re-derive expensively, and an ADR is where they would look. Materially different code either way: none. Materially different *artifact*: yes. Decide before S9.
+**Q1 — where the ruling is recorded. RESOLVED.** No separate ADR; ADR-020 gains D-41 (flatpak) and D-42 (snap), including the two *negatives* — snap has no repository question, flatpak has no distribution remote — which are the findings a future reader would otherwise re-derive expensively. See §6.
 
-**Q2 — derived-remote precision vs. always-sync.** This spec derives remotes from approved refs (the apt *repository* rule). The alternative is to always-sync every source remote (the apt *pin* rule, ADR-021 D-36), justified there by "a pin naming an absent origin is inert, so the precision buys nothing and the derivation has a wrong-answer mode that always-syncing does not". A flatpak remote is *nearly* inert — it costs one summary fetch per `flatpak update` and one line in `flatpak remotes` — and the derivation does have a wrong-answer mode (the runtime hole, §2.1, which S3 closes with two extra reads). If the answer is always-sync, §2.1's runtime completion, S3's derivation function and four of §8.3's tests all disappear and the stage shrinks by more than half. **My recommendation is derive**, because "the two machines' remote lists are converged for what refs need, not made identical" is the property ADR-021 chose for apt and a user should not have to learn two rules. But this is a real fork.
+**Q2 — derived-remote precision vs. always-sync.** This spec derives remotes from approved refs (the apt *repository* rule). The alternative is to always-sync every source remote (the apt *pin* rule, ADR-020 D-36), justified there by "a pin naming an absent origin is inert, so the precision buys nothing and the derivation has a wrong-answer mode that always-syncing does not". A flatpak remote is *nearly* inert — it costs one summary fetch per `flatpak update` and one line in `flatpak remotes` — and the derivation does have a wrong-answer mode (the runtime hole, §2.1, which S3 closes with two extra reads). If the answer is always-sync, §2.1's runtime completion, S3's derivation function and four of §8.3's tests all disappear and the stage shrinks by more than half. **My recommendation is derive**, because "the two machines' remote lists are converged for what refs need, not made identical" is the property ADR-020 D-34 chose for apt and a user should not have to learn two rules. But this is a real fork.
 
 **Q3 — the flatpak conflict prompt's trigger. RESOLVED: exact parity with apt.** The trigger is refs recorded skip-always in the TARGET's `flatpak.decisions.yaml`, not target-only refs. Everything this document said about "target-only" is superseded by §2.2; the prompt is correspondingly rare, which is the intent — a target-only ref already has a REMOVE line of its own, so it needs no second screen.
 

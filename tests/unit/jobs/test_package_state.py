@@ -634,7 +634,7 @@ _TARGET_POLICY_PKG_A = (
 class TestDecisionScopeIsDiffFilteringOnly:
     """D20 / decision 8: a machine-local decision makes an item inert in the DIFF, and
     nothing else. It is deliberately NOT consulted by apt's collateral protection, whose
-    protected set is the TARGET's `apt-mark showmanual` set (ADR-021 D-40) — an accepted
+    protected set is the TARGET's `apt-mark showmanual` set (ADR-020 D-40) — an accepted
     limitation, on the grounds that a package a user records "skip always" is normally in
     `showmanual` anyway, so the extra lookup would buy nothing.
 

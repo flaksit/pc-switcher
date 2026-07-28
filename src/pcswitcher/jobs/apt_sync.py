@@ -7,7 +7,7 @@ contract), diffs it against the same query on the target into every D-25 class
 (`PackageSyncJob._diff_apt_packages`), and converges the approved `INSTALL`/`REMOVE`
 items via `apt-get install`/`apt-get remove`.
 
-A package is matched by (name, ORIGIN), never by name alone (ADR-021 D-34). The target
+A package is matched by (name, ORIGIN), never by name alone (ADR-020 D-34). The target
 having a candidate for a name is not evidence it can supply the source's software: one name
 is often offered by two vendors, and Ubuntu's `firefox` carries epoch 1, which outranks
 every unpinned vendor version, so an install matched by name replicates the name and
@@ -68,7 +68,7 @@ repository whose packages are going too is legitimate, so the removal stays offe
 like every removal group, unticked).
 
 Neither is `/etc/apt` itself, in most directions. Only what the user has a basis to judge
-is an item (ADR-021 D-37): a repository REMOVAL, a pin REMOVAL, and apt config in all
+is an item (ADR-020 D-37): a repository REMOVAL, a pin REMOVAL, and apt config in all
 three directions. Everything else under `/etc/apt` is derived and written without a
 question, in three buckets `_build_derived_writes` assembles from the accepted decisions:
 
@@ -128,9 +128,9 @@ allowed to accumulate rather than be deleted on a guess.
 
 Keys travel byte-for-byte and are never re-fetched from a vendor (D-12).
 
-This job reviews EXACTLY ONCE per run, before its first mutating command (ADR-021, D-24
-retired for apt). Nothing this run writes can invalidate a decision it already took: a
-package is classified from the SOURCE's origins, which no run mutates, and the one fact
+This job reviews EXACTLY ONCE per run, before its first mutating command (ADR-020 D-24).
+Nothing this run writes can invalidate a decision it already took: a package is classified
+from the SOURCE's origins, which no run mutates, and the one fact
 that genuinely depends on the target's post-write state — which origin actually wins — is
 not guessed at plan time at all, it is read back by `_origin_refusal` and turned into a
 per-item refusal rather than a question.
@@ -230,10 +230,10 @@ _APT_SOURCE_EXTENSIONS = (".list", ".sources")
 # apt's other source location. It is scanned for keyring references, because a keyring named
 # only here is still in use and deleting it would break apt — the clearest instance of "a
 # source file this tool does not sync still counts as a reference" — and its digest is
-# captured on both machines, which is what ADR-021 D-38's write-when-missing/overwrite-when-
+# captured on both machines, which is what ADR-020 D-38's write-when-missing/overwrite-when-
 # different rule compares. It is never a removal candidate in any direction.
 _APT_SOURCES_LIST = "/etc/apt/sources.list"
-# The distribution's own source files in `sources.list.d` (ADR-021 D-38). Exact names, not
+# The distribution's own source files in `sources.list.d` (ADR-020 D-38). Exact names, not
 # a `ubuntu-esm-*` glob: a glob would also swallow a file a user happened to name
 # `ubuntu-esm-mine.sources`, and the set is short enough to enumerate.
 _DISTRO_SOURCE_FILENAMES = frozenset({"ubuntu.sources", "ubuntu-esm-apps.sources", "ubuntu-esm-infra.sources"})
@@ -289,7 +289,7 @@ _ITEM_CLASS_ORDER: dict[ItemClass, int] = {
 }
 
 # The two `/etc/apt` item classes whose ONLY remaining review direction is deletion, and
-# the verb each reads with (ADR-021 D-37, rulings 5 and 12). Both take two answers — delete
+# the verb each reads with (ADR-020 D-37, rulings 5 and 12). Both take two answers — delete
 # or leave it for now — so both carry `REPO_REMOVAL_REVIEW_ACTION`; keeping them as two
 # entries is what gives the user two separate screens rather than one mixed list.
 _REPO_REMOVAL_VERBS: dict[ItemClass, str] = {
@@ -308,9 +308,9 @@ _UNRECORDABLE_ITEM_ID_PREFIXES = ("apt:source:", "apt:pin:")
 # `_build_derived_writes`.
 _CONFLICT_ID_PREFIX = "apt:conflict:"
 
-# Deletion order inside the repository group (ADR-021 §3.3 step 5), deliberately the
-# reverse of the write order: the repository goes before the pin that prefers it, so the
-# target never sits with a pin naming an origin apt no longer has.
+# Deletion order inside the repository group (`02-SPEC-package-review-model.md` §3.3
+# step 5), deliberately the reverse of the write order: the repository goes before the pin
+# that prefers it, so the target never sits with a pin naming an origin apt no longer has.
 _REMOVAL_CLASS_ORDER: dict[ItemClass, int] = {
     ItemClass.APT_SOURCE: 1,
     ItemClass.APT_PIN: 2,
@@ -404,7 +404,7 @@ def build_origin_detail(origins: Sequence[str]) -> str | None:
 
 def build_repo_unavailable_detail(name: str, origins: Sequence[str], cause: str) -> str:
     """Detail for a `REPO_UNAVAILABLE` diff: where the source has this package from, and why
-    the target cannot be given the same place (ADR-021 D-34).
+    the target cannot be given the same place (ADR-020 D-34).
 
     Both halves are load-bearing. Naming the origin is what stops this reading as "apt has
     never heard of it"; naming the cause is what tells the user whether the remedy is theirs
@@ -427,7 +427,7 @@ def build_origin_mismatch_detail(source_origins: Sequence[str], target_origins: 
 
 
 def build_origin_refusal_detail(name: str, source_origins: Sequence[str], target_origins: Sequence[str]) -> str:
-    """Why an approved install was refused at the last moment (ADR-021 D-35): the origin the
+    """Why an approved install was refused at the last moment (ADR-020 D-35): the origin the
     source uses, and the origin the target's apt would have installed from instead.
 
     Both are named because either half alone is unactionable. "The wrong vendor" does not
@@ -442,7 +442,7 @@ def build_origin_refusal_detail(name: str, source_origins: Sequence[str], target
         instead = "offers it from no repository at all"
     return (
         f"install of {name} refused: the source has it from {wanted}, but after this run's "
-        f"apt-get update the target {instead} (ADR-021 D-35)"
+        f"apt-get update the target {instead} (ADR-020 D-35)"
     )
 
 
@@ -476,7 +476,7 @@ class AptHoldItem:
 class _OriginOutcome(StrEnum):
     """What the origin facts say can be done about one package missing on the target.
 
-    Three outcomes, not ADR-021 §2.3's four: its classes 2 and 3 (the target has a candidate
+    Three outcomes, not ADR-020 D-34's four: its classes 2 and 3 (the target has a candidate
     from the wrong vendor / the target has no candidate at all) differ only in what they
     look like, never in what happens — both install the package and both derive the source's
     repository first — so collapsing them keeps the diff from branching on a distinction
@@ -497,7 +497,7 @@ class _OriginOutcome(StrEnum):
 
 @dataclass(frozen=True)
 class _OriginPlan:
-    """Every origin fact one source package's classification turns on (ADR-021 D-34).
+    """Every origin fact one source package's classification turns on (ADR-020 D-34).
 
     Assembled per package in `plan()` from facts about BOTH machines, because the question
     "can the target end up with this package from the same place the source has it?" is not
@@ -537,7 +537,7 @@ class _OriginPlan:
     repository apt would refuse on the target, so it cannot deliver the origin."""
 
     def outcome(self) -> _OriginOutcome:
-        """Which of ADR-021 §2.3's outcomes this package falls into.
+        """Which of ADR-020 D-34's outcomes this package falls into.
 
         The ladder is ordered by what it takes to be sure: a target candidate from an origin
         the source uses settles the question outright, and only after that does it matter
@@ -633,7 +633,7 @@ def _diff_apt_packages(
 
     - missing-on-target -> `MISSING_ON_TARGET`/`INSTALL` when the source's origin either
       already serves the target or can be made to (`_OriginPlan.outcome`), else
-      `REPO_UNAVAILABLE`/`REPORT_ONLY`. This is ADR-021 D-34: the package a target could
+      `REPO_UNAVAILABLE`/`REPORT_ONLY`. This is ADR-020 D-34: the package a target could
       satisfy from a DIFFERENT vendor is still an install, but one that carries the source's
       repository with it, and the review line names where it will come from.
     - extra-on-target -> `EXTRA_ON_TARGET`/`REMOVE`.
@@ -800,7 +800,7 @@ class AptPinItem:
     """One apt pin-preference file under `/etc/apt/preferences.d` (D-13).
 
     Diffed by whole-file digest, never by parsed stanza. The package names a pin file
-    mentions are deliberately not carried: under ADR-021 D-36 a pin is mechanism, and its
+    mentions are deliberately not carried: under ADR-020 D-36 a pin is mechanism, and its
     only effect — which origin wins — is read back from the target's real candidate
     origins after the refresh (D-35), not predicted from the stanzas here.
     """
@@ -887,7 +887,7 @@ def build_dangling_keyring_detail(filename: str, missing_ref: str) -> str:
 @dataclass(frozen=True)
 class _RepoConflict:
     """One repository file the two machines disagree about that feeds packages the target
-    keeps (ADR-021 ruling 6) — the only `/etc/apt` CHANGE that is still a question.
+    keeps (ADR-020 D-37) — the only `/etc/apt` CHANGE that is still a question.
 
     Both whole versions are carried, never a diff of them: the question is which of two
     configurations the machine should have, and the user's position is that a diff of two
@@ -1128,7 +1128,7 @@ async def _read_file_content(run: Callable[[str], Awaitable[CommandResult]], pat
     makes it exit non-zero, so a non-zero exit here is only ever a real failure. What the
     silence would otherwise become is file CONTENT: the repository-conflict review shows
     this text as the two machines' versions of a file it is asking permission to overwrite
-    (ADR-021 ruling 6), and two empty panes are an overwrite approved off a diff nobody
+    (ADR-020 D-37), and two empty panes are an overwrite approved off a diff nobody
     could read. An empty answer at exit 0 stays data — an empty source file is a legitimate
     file.
     """
@@ -1152,7 +1152,7 @@ async def _scan_source_file_references(
     Machine-agnostic by construction (it takes the `run` callable and names no host), and
     run against BOTH machines: the target's answer drives the two consumers below, the
     source's answer is what maps a package's origin URIs back to the repository file that
-    would have to travel for it (ADR-021 D-34).
+    would have to travel for it (ADR-020 D-34).
 
     Two target-side consumers, both of which need a fact no diff carries. The source-removal
     impact (C26) needs the repository URIs of a file whose deletion is offered. Keyring
@@ -1209,7 +1209,7 @@ async def _scan_source_file_references(
 def _source_files_serving(source_refs: _SourceFileRefs, origins: frozenset[str]) -> frozenset[str]:
     """Every file in one machine's source-file scan whose repository URIs intersect
     `origins` — the files that would have to travel for a package from those origins to be
-    installable from the same place on the other machine (ADR-021 D-34).
+    installable from the same place on the other machine (ADR-020 D-34).
 
     The UNION, not a pick: a package's installed version can genuinely list several origins
     (a vendor repository and a security pocket both carrying it), and every one of them
@@ -1219,7 +1219,7 @@ def _source_files_serving(source_refs: _SourceFileRefs, origins: frozenset[str])
 
 
 def _distribution_origins(source_refs: _SourceFileRefs) -> frozenset[str]:
-    """The URIs one machine's own distribution source files declare (ADR-021 D-35).
+    """The URIs one machine's own distribution source files declare (ADR-020 D-35).
 
     Computed per machine rather than matched against a list of known Ubuntu hostnames:
     the whole reason the exemption exists is that two machines legitimately point at
@@ -1274,7 +1274,7 @@ def _diff_apt_pins(source_digests: Mapping[str, str], target_digests: Mapping[st
     """Pin-file diffs, from the digest manifests alone — the REMOVAL direction only.
 
     A pin the source has is written to the target when missing and overwritten when
-    different, with no review line at all (ADR-021 D-36): a pin is what makes an origin win,
+    different, with no review line at all (ADR-020 D-36): a pin is what makes an origin win,
     in the same sense a signing key is what makes a repository trusted, and neither is
     something an approved package leaves the user a basis to judge. A pin naming an origin
     the target does not have is inert, so the always-sync rule cannot get the derivation
@@ -1428,7 +1428,7 @@ async def simulate_apt_transaction(
     command's SYNTAX separates them — apt offers no second code and no second mode.
 
     Apply time simulates one approved install or removal, where apt's refusal is a fact
-    about that request (ADR-021 D-27). Plan time removes the ambiguity from its ARGUMENTS
+    about that request (ADR-020 D-27). Plan time removes the ambiguity from its ARGUMENTS
     instead: it rehearses only names the target's `apt-cache policy` gave a candidate for
     (`AptSyncJob._target_resolvable`), so "unable to locate" is not among the failures it
     can meet. What remains there — a lock, a broken apt, an unresolvable candidate set — has
@@ -1508,11 +1508,11 @@ class AptSyncJob(PackageSyncJob):
         # The same scan run against the SOURCE machine. Its URIs are what map a package's
         # installed-version origins back to the repository file that declares them, which
         # is the file that has to travel for that package to be installable from the same
-        # place on the target (ADR-021 D-34).
+        # place on the target (ADR-020 D-34).
         self._source_source_refs: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {}
         # `{package: origin URIs of its INSTALLED version}` on the SOURCE, from the one
         # batched policy call `capture_source_items` already issues. This is the provenance
-        # ADR-021 D-34 replicates: the target must end up installing from one of these.
+        # ADR-020 D-34 replicates: the target must end up installing from one of these.
         self._source_origins: Mapping[str, frozenset[str]] = {}
         # Every filename across the three key directories on the SOURCE. A `Signed-By:`
         # reference resolves against this set, so it is what decides whether a repository
@@ -1526,7 +1526,7 @@ class AptSyncJob(PackageSyncJob):
         # `/etc/apt/sources.list`'s digest on each machine, or None where the file is
         # absent. Captured separately from the five directories because it is a single
         # file: it has no `find` listing to appear in, and it is one of the files that is
-        # written and updated but never removed (ADR-021 D-38).
+        # written and updated but never removed (ADR-020 D-38).
         self._source_sources_list_digest: str | None = None
         self._target_sources_list_digest: str | None = None
         # ESM sources the gate held back. Only ever non-empty under `--dry-run`: a real
@@ -1541,8 +1541,8 @@ class AptSyncJob(PackageSyncJob):
         self._target_source_digests: dict[str, str] = {}
         self._source_pin_digests: dict[str, str] = {}
         self._target_pin_digests: dict[str, str] = {}
-        # The `/etc/apt` files this run writes with no review line of their own (ADR-021
-        # D-37/D-38), in the three buckets §3.3's command order distinguishes. Populated by
+        # The `/etc/apt` files this run writes with no review line of their own (ADR-020
+        # D-37/D-38), in the three buckets the command order distinguishes. Populated by
         # `_build_derived_writes` from the accepted decisions, so a run that approves
         # nothing writes nothing.
         self._derived_pin_writes: tuple[str, ...] = ()
@@ -1618,7 +1618,7 @@ class AptSyncJob(PackageSyncJob):
         The one batched `apt-cache policy` this needs answers two questions, so it is issued
         once and parsed twice: which names came from no repository at all (the exclusion),
         and where each of the rest came from (`self._source_origins`, the left-hand side of
-        every ADR-021 D-34 comparison). A second call over the same names would cost a
+        every ADR-020 D-34 comparison). A second call over the same names would cost a
         second full policy run to learn something already on screen.
 
         The manifest read is guarded (ADR-022) because its silence is the single most
@@ -1749,7 +1749,7 @@ class AptSyncJob(PackageSyncJob):
         questions are asked of the same output: what the target would install for a name it
         lacks, and where the copy it already has came from — the second is what makes a
         package installed on both machines from two different vendors visible at all
-        (ADR-021 D-34).
+        (ADR-020 D-34).
 
         Exit code only, deliberately without the `blocks` half (ADR-022): these are the
         SOURCE's names asked of the TARGET's apt, and a name the target has never heard of
@@ -1940,7 +1940,7 @@ class AptSyncJob(PackageSyncJob):
     def _build_review_groups(self, diffs: Sequence[ItemDiff]) -> tuple[ReviewGroup, ...]:
         """Carve apt's two non-standard screens out of the ordinary checkbox groups.
 
-        Repository and pin DELETIONS (ADR-021 rulings 5 and 12) become
+        Repository and pin DELETIONS (ADR-020 D-07) become
         `REPO_REMOVAL_REVIEW_ACTION` groups: still checkbox lists, still unticked, but
         offered only two answers because a permanent machine-local mark on a file whose
         purpose is to feed packages would silently change where those packages come from
@@ -2014,7 +2014,7 @@ class AptSyncJob(PackageSyncJob):
 
         Both machines' source-file reference scans and the three key directories on each.
         They belong here rather than in `_plan_repo_diffs` because the origin
-        classification (ADR-021 D-34) consumes them: which repository file declares a
+        classification (ADR-020 D-34) consumes them: which repository file declares a
         package's origin, which of those files are the distribution's own, and whether the
         file's `Signed-By:` resolves to a key the source actually has are all inputs to the
         package's diff class, and the package diff runs first.
@@ -2160,7 +2160,7 @@ class AptSyncJob(PackageSyncJob):
 
     async def _plan_repo_diffs(self) -> list[ItemDiff]:
         """Capture the three `/etc/apt/*` directories and diff the item classes that still
-        HAVE a review direction (D-11/D-13, ADR-021 D-37), by whole-file digest (module
+        HAVE a review direction (D-11/D-13, ADR-020 D-37), by whole-file digest (module
         docstring): one batched `sha256sum` listing per directory per machine, full content
         fetched only for a file a diff implicates.
 
@@ -2226,12 +2226,13 @@ class AptSyncJob(PackageSyncJob):
     ) -> dict[str, list[str]]:
         """`{filename: machine-specific packages the target installs from it}`, for the
         files in `filenames` that feed at least one — the shared computation behind both
-        `/etc/apt` follow-ups (ADR-021 §4.1).
+        `/etc/apt` follow-ups (`02-SPEC-package-review-model.md` §4.1).
 
         Two callers, two prompts, one question. A repository the source no longer has
         discloses what its deletion would strand (C26/N7); a repository whose two copies
-        differ becomes the conflict screen instead of a silent overwrite (ruling 6). Both
-        turn on the same fact: which packages this machine keeps that only this file feeds.
+        differ becomes the conflict screen instead of a silent overwrite (ADR-020 D-37).
+        Both turn on the same fact: which packages this machine keeps that only this file
+        feeds.
 
         Scope is deliberately the target's MACHINE-SPECIFIC packages, not every installed
         package from the repository. A skip-always package is structurally invisible:
@@ -2321,7 +2322,7 @@ class AptSyncJob(PackageSyncJob):
         target_digests: Mapping[str, str],
         removal_details: Mapping[str, str] | None = None,
     ) -> list[ItemDiff]:
-        """Source-file diffs — the REMOVAL direction only (ADR-021 D-37).
+        """Source-file diffs — the REMOVAL direction only (ADR-020 D-37).
 
         Adding a repository is not a question. A source file lands on the target because a
         package approved on the review comes from it, so "package ticked, its repository
@@ -2363,7 +2364,7 @@ class AptSyncJob(PackageSyncJob):
 
     def _protected_manual_set(self) -> frozenset[str]:
         """Packages a collateral removal/downgrade must not silently touch: the TARGET's
-        `apt-mark showmanual` set alone (ADR-021 D-40).
+        `apt-mark showmanual` set alone (ADR-020 D-40).
 
         The source's manual set is deliberately NOT unioned in, and the case that gives up
         is knowingly accepted rather than overlooked: a package the user installed by hand
@@ -2399,7 +2400,7 @@ class AptSyncJob(PackageSyncJob):
         the batched `apt-cache policy` this run already ran (`collect_target_policy`).
 
         The plan-time rehearsal's admission test, and a D-30 ruling rather than a detail. An
-        ADR-021 §2.3 class-3 install — the repository that supplies it is derived from the
+        ADR-020 D-34 class-3 install — the repository that supplies it is derived from the
         package's own approval and written during converge — is a name the target's apt
         cannot locate yet, and `apt-get --dry-run` refuses the WHOLE batch on it with the
         exit code a held dpkg lock also produces. Including such a name therefore does not
@@ -2477,7 +2478,7 @@ class AptSyncJob(PackageSyncJob):
     ) -> list[ItemDiff]:
         """Partition a simulation's would-remove/would-downgrade packages by provenance
         (D-30): a package in the TARGET's manual set becomes a manual-collateral review
-        item (ADR-021 D-40); one outside it is auto-installed — apt's own dependency — and
+        item (ADR-020 D-40); one outside it is auto-installed — apt's own dependency — and
         produces nothing, not even a report line the user cannot act on.
 
         A downgrade is detected exactly as before: an `install_versions` entry with a
@@ -2567,7 +2568,7 @@ class AptSyncJob(PackageSyncJob):
 
     def _build_derived_writes(self, plan: PackagePlan, outcome: ReviewOutcome) -> None:
         """Turn the accepted decisions into the `/etc/apt` files this run writes WITHOUT a
-        review line (ADR-021 D-37/D-38) — the counterpart to `_approved_repo_group_diffs`,
+        review line (ADR-020 D-37/D-38) — the counterpart to `_approved_repo_group_diffs`,
         which carries the reviewed half.
 
         Three buckets, in the order §3.3 writes them, and each is a different answer to
@@ -2606,7 +2607,7 @@ class AptSyncJob(PackageSyncJob):
         # the wrong vendor's software on the target — the one outcome D-34 exists to prevent.
         skipped = {
             _source_file_destination(filename): (
-                "the user chose to keep the target's version of this file for now (ADR-021 ruling 6)"
+                "the user chose to keep the target's version of this file for now (ADR-020 D-37)"
             )
             for filename in self._repo_conflicts
             if outcome.decisions.get(f"{_CONFLICT_ID_PREFIX}{filename}") != Decision.APPLY
@@ -2674,7 +2675,7 @@ class AptSyncJob(PackageSyncJob):
         from it.
 
         The marker is ALSO what carries the work no diff represents: the derived writes
-        (ADR-021 D-37/D-38 — a repository, a pin or a distribution file travels without a
+        (ADR-020 D-37/D-38 — a repository, a pin or a distribution file travels without a
         review line, so nothing else would ever route into `_converge_repo_group_item`),
         and a rotated keyring, which changes no source file at all.
         `_pending_keyring_work` is a superset test — the group recomputes the exact set
@@ -2719,8 +2720,8 @@ class AptSyncJob(PackageSyncJob):
 
     @override
     async def _record_permanent_skips(self, plan: PackagePlan, decisions: Mapping[str, Decision]) -> None:
-        """The base recording pass, minus every `apt:source:`/`apt:pin:` id (ADR-021
-        rulings 5 and 12).
+        """The base recording pass, minus every `apt:source:`/`apt:pin:` id (ADR-020
+        D-07).
 
         The interactive flow already cannot produce a `SKIP_ALWAYS` for one — their groups
         are absent from `_PROMOTABLE_ACTIONS`, so the promotion screen never offers them —
@@ -2822,7 +2823,7 @@ class AptSyncJob(PackageSyncJob):
 
     async def _origin_refusal(self, name: str) -> str | None:
         """Why this approved install may not run, or `None` when its origin checks out
-        (ADR-021 D-35) — the hard guarantee behind origin replication.
+        (ADR-020 D-35) — the hard guarantee behind origin replication.
 
         Plan-time classification decides what `/etc/apt` work to derive; only this decides
         what may be installed, because only it sees the state that derivation actually
@@ -2894,7 +2895,7 @@ class AptSyncJob(PackageSyncJob):
         plan-time collateral classification (D-30). Auto-installed collateral (a package
         apt pulls in that is outside the target's `apt-mark showmanual` set) proceeds
         silently — apt resolving its own dependencies. A manually-installed collateral
-        removal or downgrade (manual on the TARGET, ADR-021 D-40) is
+        removal or downgrade (manual on the TARGET, ADR-020 D-40) is
         refused unless the user approved it install-anyway in the review; the decision was
         made at plan time, and this guard only verifies the real transaction has not
         drifted to touch a manual package nobody saw.
@@ -2951,7 +2952,7 @@ class AptSyncJob(PackageSyncJob):
         install guard is (D-30). A collateral removal of an auto-installed package (outside
         the target's `apt-mark showmanual` set) proceeds — removing a package legitimately
         removes the now-orphaned dependencies apt pulled in for it. A collateral removal of a
-        manually-installed package (manual on the TARGET, ADR-021 D-40) is
+        manually-installed package (manual on the TARGET, ADR-020 D-40) is
         refused unless it was itself an approved removal this run or approved
         install-anyway as collateral; that decision was made at plan time, and this guard
         only catches a real transaction that drifted to touch a manual package nobody
@@ -3042,7 +3043,7 @@ class AptSyncJob(PackageSyncJob):
         (T-02-34) — never partially, since a failed metadata refresh with some files
         written and others not would leave `/etc/apt` in a configuration nobody reviewed.
 
-        The group is a MIX (ADR-021 D-39): reviewed items — repository and pin removals,
+        The group is a MIX (ADR-020 D-39): reviewed items — repository and pin removals,
         apt config in all three directions — and derived writes, which have no item and so
         no `self._repo_group_outcome` entry. A derived write that fails is recorded in
         `self._failed_derived_writes` and charged to the packages that needed it; a rollback
@@ -3613,7 +3614,7 @@ class AptSyncJob(PackageSyncJob):
         writes and approved removals have been applied.
 
         Three populations, and getting any of them wrong provisions or deletes the wrong
-        key: source files this run WRITES — the derived set, since ADR-021 D-37 leaves no
+        key: source files this run WRITES — the derived set, since ADR-020 D-37 leaves no
         other way for one to travel — contribute the SOURCE machine's references (a
         repository this run overwrites may point somewhere new); source files this run
         REMOVES contribute nothing (their keyring is about to be collected, not refreshed);
@@ -3828,7 +3829,7 @@ def _is_collateral_diff(diff: ItemDiff) -> bool:
 
 def _is_repo_removal_diff(diff: ItemDiff) -> bool:
     """A `/etc/apt` repository or pin DELETION — the only direction either class still
-    reaches the user in, and a two-answer one (ADR-021 rulings 5 and 12)."""
+    reaches the user in, and a two-answer one (ADR-020 D-07)."""
     return diff.item_class in _REPO_REMOVAL_VERBS and diff.action is DiffAction.REMOVE
 
 

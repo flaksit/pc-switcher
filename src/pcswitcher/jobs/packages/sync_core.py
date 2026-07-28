@@ -103,7 +103,7 @@ class PackagePlan:
 # class the engine produces gets SOME review presentation).
 #
 # `APT_SOURCE`/`APT_PIN` are deliberately absent: their only surviving direction is
-# removal, and ADR-021 rulings 5 and 12 route that through `AptSyncJob`'s own
+# removal, and ADR-020 D-07 route that through `AptSyncJob`'s own
 # `REPO_REMOVAL_REVIEW_ACTION` groups, which supply their own title and verb before this
 # table is ever consulted.
 _ACTION_VOCABULARY: dict[tuple[ItemClass, DiffAction], str] = {
@@ -112,7 +112,7 @@ _ACTION_VOCABULARY: dict[tuple[ItemClass, DiffAction], str] = {
     (ItemClass.APT_PACKAGE, DiffAction.REMOVE): "remove",
     (ItemClass.APT_PACKAGE, DiffAction.REPORT_ONLY): "report",
     # `/etc/apt/apt.conf.d` is the one non-package class reviewed in all three directions
-    # (ADR-021 D-37), so all three need a verb — without them a config file reads
+    # (ADR-020 D-37), so all three need a verb — without them a config file reads
     # "Install/Change/Remove apt packages", which is wrong about both the verb and the
     # thing. Paired with `_ITEM_CLASS_NOUN` below, which fixes the second half.
     (ItemClass.APT_CONFIG, DiffAction.INSTALL): "add",

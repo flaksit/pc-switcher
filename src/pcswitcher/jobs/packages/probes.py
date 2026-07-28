@@ -1,9 +1,8 @@
 """The fail-fast boundary for package-manager READS (ADR-022).
 
-Free functions, not a base class: ADR-020 D-15/D-16 (carried forward by ADR-021) keeps the
-four package jobs independent, and a guard every job needs is exactly the kind of thing a
-shared base class would smuggle a manager's assumptions into. `apt_policy.py` is the
-precedent.
+Free functions, not a base class: ADR-020 D-15/D-16 keeps the four package jobs
+independent, and a guard every job needs is exactly the kind of thing a shared base class
+would smuggle a manager's assumptions into. `apt_policy.py` is the precedent.
 
 The distinction this module exists to hold is the one in ADR-022: a tool that ANSWERED —
 including answering "nothing" — produced data, and data is this project's business to
@@ -39,7 +38,7 @@ class ProbeFailed(RuntimeError):
     """A package-manager READ this run's correctness depends on did not answer at all.
 
     Deliberately NOT a `ConvergeItemFailed`. That type means "what we asked for is wrong",
-    which is under our control, belongs to one item, and lets the run continue (ADR-021
+    which is under our control, belongs to one item, and lets the run continue (ADR-020
     D-27). This one means the tool or the machine is broken — a transient network failure,
     a package-manager lock, an interrupted dpkg, a daemon that is not running — which no
     item's own state explains. It escapes the per-item loops on purpose, so the run fails

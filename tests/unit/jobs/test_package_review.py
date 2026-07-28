@@ -294,8 +294,8 @@ class TestInteractive:
 
     async def test_every_direction_that_arrives_unticked_is_still_offered_permanence(self) -> None:
         """ "Arrives unticked" and "is offered permanence" are two independent properties of
-        a group (`_REMOVAL_ACTIONS` vs `_PROMOTABLE_ACTIONS`), and ADR-021 makes them differ
-        for the two-answer screens. Every ordinary removal direction must keep both.
+        a group (`_REMOVAL_ACTIONS` vs `_PROMOTABLE_ACTIONS`), and ADR-020 D-07 makes them
+        differ for the two-answer screens. Every ordinary removal direction must keep both.
         """
         console = _interactive_console()
         ui = MagicMock()
@@ -324,7 +324,7 @@ class TestInteractive:
         assert outcome.decisions == dict.fromkeys(("remove", "delete", "disable"), Decision.SKIP_ALWAYS)
 
     async def test_repo_removal_is_unticked_and_never_offered_permanence(self) -> None:
-        """The two-answer screen (ADR-021 rulings 5 and 12). It is a removal direction, so
+        """The two-answer screen (ADR-020 D-07). It is a removal direction, so
         it arrives unticked like any other; it is NOT promotable, so the "never offer again"
         screen is never built and `SKIP_ALWAYS` is unreachable — which is what "no registry
         entry" means at this layer.
@@ -399,7 +399,7 @@ class TestTerminalUIReviewer:
 @pytest.mark.asyncio
 class TestAskGate:
     """`ask_gate` asks about the MACHINE, not an item: two answers, no automation hook, and
-    a `None` the caller owns when there is no TTY (ADR-021 D-38).
+    a `None` the caller owns when there is no TTY (ADR-020 D-38).
     """
 
     @staticmethod

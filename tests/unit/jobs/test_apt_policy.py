@@ -17,7 +17,7 @@ from pcswitcher.jobs.packages.apt_policy import (
 )
 
 # `firefox`, not installed: the archive's only candidate carries epoch 1, which is the fact
-# ADR-021 D-36 rests on. Verbatim.
+# ADR-020 D-36 rests on. Verbatim.
 POLICY_ARCHIVE_CANDIDATE_UNINSTALLED = """firefox:
   Installed: (none)
   Candidate: 1:1snap1-0ubuntu5
@@ -80,7 +80,7 @@ POLICY_NO_CANDIDATE = """docker.io:
 # COMPOSED, not measured: the development machine does not have Mozilla's repository, so
 # this is `firefox`'s real archive row (above, verbatim) with a vendor row added in the shape
 # `git`'s PPA row has, at the priority Mozilla's documented `preferences.d` pin gives it. It
-# is the source-side half of the defect ADR-021 D-34 closes: the vendor's copy is installed
+# is the source-side half of the defect ADR-020 D-34 closes: the vendor's copy is installed
 # here, and the archive's epoch-1 copy is what the target would install.
 POLICY_MOZILLA_FIREFOX_INSTALLED = """firefox:
   Installed: 145.0

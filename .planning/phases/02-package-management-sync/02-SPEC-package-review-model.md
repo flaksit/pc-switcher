@@ -1,6 +1,6 @@
 # Phase 02 — SPEC: the apt review model after the origin-replication rulings
 
-Status: design contract for implementation. Every question this document once carried is answered; nothing in it is open. It supersedes the "derived repos" section of `.planning/phases/02-package-management-sync/02-HANDOVER-package-review.md` (§2) and the parts of ADR-020 that ADR-021 overturns (§8).
+Status: design contract for implementation. Every question this document once carried is answered; nothing in it is open. It supersedes the "derived repos" section of `.planning/phases/02-package-management-sync/02-HANDOVER-package-review.md` (§2), and is the implementation contract behind ADR-020's apt decisions (§8).
 
 This document is what implementation is briefed from. It reconciles the user's rulings with the code as it stands on `gsd/phase-02-package-management-sync` at `9c25d101`. Every claim about the code carries a `path:line`. Anything not verified is labelled as a hypothesis (§11 collects them).
 
@@ -94,7 +94,7 @@ This replaces `collect_unavailable_item_ids`'s single question ("does the target
 
 1. **Same origin.** `target_candidate_origins ∩ source_origins ≠ ∅`. Ordinary `MISSING_ON_TARGET`/`INSTALL`. No repository work is derived for it. Detail names the origin unless it is a distribution origin (§2.5).
 2. **Different origin — the Firefox case.** The target has a candidate, but from none of the source's origins. This is the live bug: today `apt_sync.py:1205` matches on name only, sees a candidate, emits an ordinary `INSTALL`, and installs a different vendor's package. New behaviour: still `MISSING_ON_TARGET`/`INSTALL`, but the item **carries derived repository work** — every file in `source_files`, its keyrings, and the always-sync pin bucket — and its review detail names the origin the install will come from. Approving it adds the Mozilla repository, writes the pin, refreshes metadata, then §2.4's verification decides whether the install is allowed to run. The user is never asked about the repository; they were asked about the package.
-3. **No target candidate, origin replicable.** `source_files` non-empty. Also `MISSING_ON_TARGET`/`INSTALL` with derived work. This subsumes what `089ea985`'s second review existed to catch (matrix row N13): the repository lands because the package was approved, so the availability question never has to be re-asked. Because the target's apt cannot locate the name until that repository lands, this outcome is also the one excluded from D-30's plan-time collateral rehearsal and protected by the apply-time guard alone (ADR-021 D-40, ADR-022 D-01).
+3. **No target candidate, origin replicable.** `source_files` non-empty. Also `MISSING_ON_TARGET`/`INSTALL` with derived work. This subsumes what `089ea985`'s second review existed to catch (matrix row N13): the repository lands because the package was approved, so the availability question never has to be re-asked. Because the target's apt cannot locate the name until that repository lands, this outcome is also the one excluded from D-30's plan-time collateral rehearsal and protected by the apply-time guard alone (ADR-020 D-40, ADR-022 D-01).
 4. **No target candidate, origin not replicable.** `source_files` empty (the origin is declared by no file on the source — a deleted repository whose packages remain, a `cdrom:` origin), or every serving file is unwritable because its `Signed-By:` resolves to no key on the source (`_dangling_keyring_ref`, `apt_sync.py:737`). `REPO_UNAVAILABLE`/`REPORT_ONLY`, detail naming the origin and the cause. This is `REPO_UNAVAILABLE`'s **only** remaining meaning; it is no longer "apt printed `Candidate: (none)`".
 
 Bare-`.deb` packages never reach any of this: they are dropped at capture (`apt_sync.py:1092`, `30a9eb6f`) and are `manual_installs_sync`'s exclusive territory (ruling 10).
@@ -545,31 +545,22 @@ No `pytest.skip` may appear in this module (`02-HANDOVER-package-review.md:77`).
 
 ## 8. ADR
 
-Written: `docs/adr/adr-021-origin-replicating-package-convergence.md`. `docs/adr/adr-001-adr.md:15` makes accepted ADRs immutable, and ADR-020 is `Status: Accepted`, so ADR-020's body is **not edited** — only its header gains `Status: Superseded by ADR-021` and a `Superseded by:` line, matching ADR-016's precedent. ADR-021 carries `Supersedes: ADR-020`; `_index.md` moves ADR-020 into the Superseded list and adds ADR-021 to Active (ADR-001's two-way-reference rule).
+The decisions above are recorded in `docs/adr/adr-020-declarative-package-convergence.md`, which is `Status: Draft` and is edited in place as the model settles (`docs/adr/adr-001-adr.md:15` makes only *accepted* ADRs immutable). Where a decision here needs a citable identity, use the ADR's D-number:
 
-Title: **ADR-021: Origin-replicating package convergence — the review decides packages, `/etc/apt` follows**.
-
-ADR-021 is a full replacement rather than a delta, because ADR-020's decision list is where a fresh reader looks first and a delta ADR would leave them assembling the truth from two documents. Carry every ADR-020 decision forward verbatim in substance except the ones below.
-
-Overturned:
-
-- **D-02 (item model).** Narrow "every handled thing is an item" to "everything the user can decide about is an item". apt sources and pins remain items in the removal direction only; in the add and change directions they are mechanism, like the signing key already is. apt config stays a full item in every direction, because no package implies it. State the general rule: mechanism the user has no basis to judge is the job's own business.
-- **D-07 (three-way decision for every actionable item).** Repository removals, pin removals and repository conflict-overwrites take a two-way decision — act, or skip once. Give the reason: a permanent machine-local mark on a file whose whole purpose is to feed packages would silently and permanently change where those packages come from, and the user's remedy is consolidating the two files, not recording a preference. Packages, holds and apt config keep the three-way decision unchanged.
-- **D-11 / D-13 (repository configuration as items).** Keep the rejection of a `--delete` file mirror. Replace "sources, pins and apt config are inventory items" with the bucket model of §1: derived-from-packages for repository adds, always-sync for pins and the distribution files, reviewed for repository and pin removals, conflict-prompted for a change that touches a machine-specific package — and apt config still an inventory item in all three directions.
-- **D-30 (apt transaction collateral).** Keep the classify-don't-refuse model, the install-anyway / skip / abort prompt and its placement in the review. Overturn only the trigger: the protected set is the TARGET's `apt-mark showmanual`, not the union. Record the given-up case and why (§4.4).
-- **D-24 (batched review, "a job MAY review again when this run's own changes invalidate the facts an earlier review was answered on").** Retire the clause for apt. State that under origin replication a package's classification depends on the source's origins, which no run mutates, so no fact a review is answered on can be invalidated by that same run. Every apt prompt precedes the job's first mutating command, unconditionally.
-- **D-25 (diff taxonomy).** `HELD_OR_PINNED` is retired. `REPO_UNAVAILABLE` is redefined as "the source's origin cannot be provided on the target". `ORIGIN_MISMATCH` is added.
-- **D-18's calibration** ("4 apt packages have no repo candidate on P17") is void — it came from a rule that never matched reality (`02-HANDOVER-package-review.md:50-54`), and the case it described is now `manual_installs_sync`'s alone (`30a9eb6f`).
-
-New decisions ADR-021 must state:
-
-- **Origin replication.** The unit of replication for an apt package is (name, origin), not name. The target must install from an origin the source installed from, and a package that cannot be given one is reported, never installed from somewhere else. Name the failure mode this closes: a package name offered by two vendors.
-- **Origin enforcement point.** The guarantee is checked against the target's real post-`apt-get update` candidate origins, immediately before the first install, not inferred at plan time. Distribution origins are exempt so that two machines on different Ubuntu mirrors do not diverge.
-- **Pins are mechanism.** A pin travels because it is what makes an origin win, in the same sense and for the same reason a signing key travels because it is what makes a repository trusted. Neither is reviewed. Record the epoch fact that forces this: Ubuntu's `firefox` carries epoch 1 and outranks every unpinned vendor version.
-- **The distribution's own source files.** Enumerate them, state that they are written and updated but never removed, and state the ESM/Pro consequence: the two-answer gate on an unattached target, and why the tool cannot attach it.
-- **Derived-work failure attribution.** A derived `/etc/apt` write that fails does not fail an item of its own — it fails every package that depended on it, because that is the thing the user decided about.
-
-Carried forward unchanged, and worth saying so explicitly: D-01, D-03, D-04/D-05, D-06, D-08/D-08a/D-09/D-10 (the machine-local registry for packages, holds and apt config), D-12 (keys travel byte-for-byte, never re-fetched), D-15/D-16/D-17, D-19 through D-23 (`manual_installs_sync` and snippets), D-26, D-27 and its transactional `/etc/apt` boundary, D-28, D-29, D-33.
+| Decision | ADR-020 |
+| --- | --- |
+| Item model — only what the user can decide about is an item; mechanism is the job's own business | D-02 |
+| Two-answer screens for repository removal, pin removal and the repository conflict | D-07 |
+| The four `/etc/apt` buckets, the extension filter, and keys travelling byte-for-byte | D-11, D-12, D-13, D-14 |
+| Exactly one review per job per run, before its first mutating command | D-24 |
+| Diff taxonomy — `ORIGIN_MISMATCH`, `REPO_UNAVAILABLE`, and no pin echo | D-25 |
+| Collateral protection on the target's manual set, and the class-3 rehearsal exclusion | D-30, D-40 |
+| Origin replication and the four classes of §2.3 | D-34 |
+| Origin enforcement against the target's post-refresh state | D-35 |
+| Pins are mechanism and always sync (the epoch evidence) | D-36 |
+| The review's scope and the `apt.conf.d` exception | D-37 |
+| The distribution's own source files and the ESM/Pro attachment gate | D-38 |
+| Derived-work failure attribution onto the packages that depended on it | D-39 |
 
 ## 9. Staged implementation plan
 
@@ -623,7 +614,7 @@ One deviation from §5.3.2, forced by today's code: the trigger's digests were c
 
 The VM test covers the skip arm only (`tests/integration/jobs/test_package_sync.py`, `TestTheESMAttachmentGateOnVMs`), and that is a statement about the fixtures rather than a gap: neither VM can be attached to Ubuntu Pro without putting the user's subscription token in CI, so the "attach now" arm has no VM to prove itself on. What the VM does prove, and no mocked-executor test can, is that the skip costs the whole job: the source's `ubuntu-pro-esm-apps` pin is in the always-sync bucket and must not reach the target either.
 
-**S9 — docs and scenario matrix.** ADR-021 and `docs/adr/_index.md` are already written; what is left is §7.4's documentation list and §7.3's matrix rows. Depends on everything; can be drafted alongside S4-S8 and finished last.
+**S9 — docs and scenario matrix.** ADR-020 and `docs/adr/_index.md` are already written; what is left is §7.4's documentation list and §7.3's matrix rows. Depends on everything; can be drafted alongside S4-S8 and finished last.
 
 Parallelism. After S0 lands, two lanes touch disjoint regions of `apt_sync.py`:
 

@@ -19,8 +19,8 @@ BRANCH is identity for the same reason (`FlatpakItem`): a ref is identified by i
 application id. Origin is deliberately NOT identity — see `FlatpakItem` for why the two
 go opposite ways.
 
-A remote is DERIVED from the refs approved from it, never ticked (ADR-021 D-37's rule for
-apt repositories, applied to a second ecosystem). `flatpak install` refuses outright when
+A remote is DERIVED from the refs approved from it, never ticked (ADR-020 D-41, which is
+D-37's rule for apt repositories in a second ecosystem). `flatpak install` refuses outright when
 the remote it names is not configured in the scope being installed into (D-14), so
 "ref ticked, its remote unticked" was an unrepresentable pairing offered as two independent
 review lines — and worse, "ref ticked, its remote's URL change declined" silently installed
@@ -37,8 +37,8 @@ than three (`REPO_REMOVAL_REVIEW_ACTION`): a permanent machine-local mark on a r
 whole purpose is to feed refs would silently and permanently change where those refs come
 from, and the remedy is consolidating the two configurations, not recording a preference.
 
-Repointing a remote is silent too, with ADR-021 ruling 6's single exception, which this job
-applies to remotes exactly as `apt_sync` applies it to repository files: a remote whose URL
+Repointing a remote is silent too, with ADR-020 D-41's single exception, which this job
+applies to remotes exactly as `apt_sync` applies D-37's to repository files: a remote whose URL
 or verification setting differs is overwritten without a word UNLESS a ref the TARGET
 recorded skip-always takes it as its origin, in which case both configurations are shown and
 the answer is overwrite or skip-once (`_capture_remote_conflicts`,
@@ -219,7 +219,7 @@ _SCOPES: tuple[Literal["user", "system"], ...] = ("user", "system")
 # screen that no longer offers the promotion.
 _REMOTE_ITEM_ID_PREFIX = "flatpak:remote:"
 
-# Identity of a remote-CONFLICT review entry (ADR-021 ruling 6). Deliberately not a
+# Identity of a remote-CONFLICT review entry (ADR-020 D-41). Deliberately not a
 # `flatpak:remote:` id, because it is not the same question: that one asks whether to DELETE
 # a remote the source no longer has, this one asks which of two configurations of a remote
 # BOTH machines have should win. It names no diff and reaches no decision file — a conflict
@@ -647,7 +647,7 @@ def _diff_flatpak_refs(source_items: Sequence[FlatpakItem], target_items: Sequen
 
 @dataclass(frozen=True)
 class _DerivedRemote:
-    """One remote this run must provision because an approved ref needs it (ADR-021 D-37).
+    """One remote this run must provision because an approved ref needs it (ADR-020 D-41).
 
     Not an `ItemDiff` and never in a review group: the user decided about a ref, and the
     remote is the mechanism that delivers it. `reason` is carried so a failure can say why
@@ -664,7 +664,7 @@ class _DerivedRemote:
 @dataclass(frozen=True)
 class _RemoteConflict:
     """One remote this run would repoint that a machine-specific target ref takes as its
-    origin (ADR-021 ruling 6) — the only remote CHANGE that is still a question.
+    origin (ADR-020 D-41) — the only remote CHANGE that is still a question.
 
     Both configurations are carried, never a rendering of the difference between them, for
     the reason `_remote_conflict_versions` documents. Unlike apt's file-level counterpart
@@ -823,7 +823,7 @@ def _verification_word(item: FlatpakRemoteItem) -> str:
 
 def build_remote_conflict_detail(name: str, scope: str, refs: Sequence[str]) -> str:
     """Detail for a remote-conflict entry: why THIS differing remote is being put to the user
-    when every other one is repointed silently (ADR-021 ruling 6).
+    when every other one is repointed silently (ADR-020 D-41).
 
     The named refs are the whole reason. They are recorded skip-always, so `filter_inert`
     keeps them out of the target manifest and they produce no diff of their own in any run —
@@ -891,7 +891,7 @@ def _diff_flatpak_remotes(
     target_refs: Sequence[FlatpakItem],
 ) -> list[ItemDiff]:
     """One REMOVE diff per remote the target has and the source does not — the only
-    direction a remote is still a review line (ADR-021 D-37, applied to flatpak).
+    direction a remote is still a review line (ADR-020 D-41).
 
     The add and change directions are gone: a remote travels because an approved ref needs
     it (`_derive_remotes`), and a remote present on both sides whose URL or trust differs is
@@ -1244,7 +1244,7 @@ class FlatpakSyncJob(PackageSyncJob):
         installed_target_refs: Sequence[FlatpakItem],
         target_decisions: Mapping[str, DecisionEntry],
     ) -> None:
-        """Find the repoints ADR-021 ruling 6 turns into a question instead of a silent
+        """Find the repoints ADR-020 D-41 turns into a question instead of a silent
         write: a remote this run may repoint, whose URL or verification setting differs, and
         which a MACHINE-SPECIFIC target ref takes as its origin in that same scope.
 
@@ -1307,9 +1307,9 @@ class FlatpakSyncJob(PackageSyncJob):
 
     @override
     def _build_review_groups(self, diffs: Sequence[ItemDiff]) -> tuple[ReviewGroup, ...]:
-        """Carve remote DELETIONS out into their own two-answer screen (ADR-021 D-37's
-        exception, `REPO_REMOVAL_REVIEW_ACTION`), mirroring `AptSyncJob`'s, and append
-        ruling 6's conflict screen when `_capture_remote_conflicts` found one.
+        """Carve remote DELETIONS out into their own two-answer screen (ADR-020 D-07,
+        `REPO_REMOVAL_REVIEW_ACTION`), mirroring `AptSyncJob`'s, and append D-41's conflict
+        screen when `_capture_remote_conflicts` found one.
 
         The removal screen is still an unticked checkbox list; the whole difference is that
         the never-offer-again screen never follows it, because a permanent machine-local mark
@@ -1389,7 +1389,7 @@ class FlatpakSyncJob(PackageSyncJob):
             self._source_runtime_by_ref_id,
         )
         skipped = {
-            remote_id: "the user chose to keep the target's own version of it for now (ADR-021 ruling 6)"
+            remote_id: "the user chose to keep the target's own version of it for now (ADR-020 D-41)"
             for remote_id in self._remote_conflicts
             if outcome.decisions.get(_conflict_id(remote_id)) != Decision.APPLY
         }
@@ -1399,7 +1399,7 @@ class FlatpakSyncJob(PackageSyncJob):
 
     @override
     async def _record_permanent_skips(self, plan: PackagePlan, decisions: Mapping[str, Decision]) -> None:
-        """The base recording pass, minus every `flatpak:remote:` id (ADR-021 D-37).
+        """The base recording pass, minus every `flatpak:remote:` id (ADR-020 D-41).
 
         The interactive flow already cannot produce a `SKIP_ALWAYS` for one — the removal
         group is absent from `_PROMOTABLE_ACTIONS`, so the promotion screen never offers it
@@ -1735,8 +1735,8 @@ class FlatpakSyncJob(PackageSyncJob):
         ref — different commit, different collection id, different binary — and
         `flatpak install --assumeyes flathub <ref>` installs it at exit 0 with no warning,
         while `flatpak list --columns=origin` reports `flathub` on both machines. Only the
-        URL separates the two, so the URL is what is compared (ADR-021 D-34's rule that a
-        package replicates as name-and-origin, applied to a ref).
+        URL separates the two, so the URL is what is compared (ADR-020 D-41: an origin is
+        a remote's URL, never its name).
 
         GPG verification is compared too: a ref the source takes from a verified remote,
         landing on the target from an unverified one of the same name, has not replicated
@@ -1750,7 +1750,7 @@ class FlatpakSyncJob(PackageSyncJob):
         if source_remote is None:
             return (
                 f"the source has no {scope}-scope remote named {origin!r}, so the ref's own origin "
-                "cannot be replicated (ADR-021 D-34)"
+                "cannot be replicated (ADR-020 D-41)"
             )
         target_remote = (await self._target_remotes_now()).get(remote_id)
         if target_remote is None:
@@ -1771,8 +1771,8 @@ class FlatpakSyncJob(PackageSyncJob):
 
     async def _installed_origin_refusal(self, scope: str, ref: str, expected_origin: str) -> str | None:
         """`None` if `ref` really did land in `scope` from `expected_origin`'s repository,
-        otherwise why not — read back off the target AFTER the install (ADR-021 D-35's
-        "the guarantee is checked, not inferred", applied to flatpak).
+        otherwise why not — read back off the target AFTER the install (ADR-020 D-41's
+        "checked, not inferred", the flatpak counterpart of D-35).
 
         The read is `_FLATPAK_LIST_CMD`, not `flatpak info --show-origin`, because ADR-022
         D-03 forbids an ambiguous discriminator and `flatpak info` exits 1 both for a ref

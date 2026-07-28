@@ -119,18 +119,18 @@ _READ_ONLY_CALLS: dict[str, int] = {
     "jobs/apt_sync.py::AptSyncJob.query_target_items.run::run_command": 1,
     "jobs/apt_sync.py::AptSyncJob.collect_hold_sets::run_command": 2,
     "jobs/apt_sync.py::AptSyncJob.collect_target_policy::run_command": 1,
-    # The post-`apt-get update` origin verification (ADR-021 D-35): one batched
+    # The post-`apt-get update` origin verification (ADR-020 D-35): one batched
     # `apt-cache policy` re-read of the converged target, which refuses installs but
     # changes nothing itself.
     "jobs/apt_sync.py::AptSyncJob._verify_approved_origins::run_command": 1,
     "jobs/apt_sync.py::AptSyncJob._plan_repo_diffs.source_run::run_command": 1,
     "jobs/apt_sync.py::AptSyncJob._plan_repo_diffs.target_run::run_command": 1,
     # The key-directory digests and the two source-file reference scans, captured ahead of
-    # the package diff because the origin classification consumes them (ADR-021 D-34).
+    # the package diff because the origin classification consumes them (ADR-020 D-34).
     "jobs/apt_sync.py::AptSyncJob._capture_origin_state.source_run::run_command": 1,
     "jobs/apt_sync.py::AptSyncJob._capture_origin_state.target_run::run_command": 1,
     # `pro status --format json` on the target — a read, and the only thing that leaves it
-    # is the parsed `attached` boolean (ADR-021 D-38).
+    # is the parsed `attached` boolean (ADR-020 D-38).
     "jobs/apt_sync.py::AptSyncJob._target_pro_attached::run_command": 1,
     # The post-write re-scan of the target's source files that keyring collection counts
     # references against — a `find ... -exec awk` read, no different from the plan-time one.
@@ -157,7 +157,7 @@ _READ_ONLY_CALLS: dict[str, int] = {
     "jobs/flatpak_sync.py::FlatpakSyncJob._capture_source_ref_origins::run_command": 1,
     "jobs/flatpak_sync.py::FlatpakSyncJob._capture_source_runtimes::run_command": 1,
     # The post-install origin read-back: the same `flatpak list` the capture uses, re-run on
-    # the target so a ref's real provenance is checked rather than inferred (ADR-021 D-35).
+    # the target so a ref's real provenance is checked rather than inferred (ADR-020 D-35).
     "jobs/flatpak_sync.py::FlatpakSyncJob._installed_origin_refusal::run_command": 1,
     "jobs/flatpak_sync.py::FlatpakSyncJob.validate::run_command": 3,
     # folder_sync: capability probes, and the per-directory filter-file digest manifest.

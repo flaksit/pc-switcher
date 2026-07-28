@@ -60,22 +60,23 @@ class DiffClass(StrEnum):
     """The full D-25 conflict taxonomy — every member is producible once this plan's
     `diff_items` dispatch (`packages/sync_core.py`) is filled out.
 
-    `REPO_UNAVAILABLE` and `ORIGIN_MISMATCH` are the two ADR-021 D-34 classes and are about
-    WHERE an item comes from, not whether it is present:
+    `REPO_UNAVAILABLE` and `ORIGIN_MISMATCH` are the two provenance members (ADR-020 D-34)
+    and are about WHERE an item comes from, not whether it is present:
 
     - `REPO_UNAVAILABLE` — the source's origin cannot be provided on the target, so the
-      item is reported rather than installed from somewhere else. Redefined by ADR-021: it
-      no longer means "apt printed `Candidate: (none)`", which said nothing about
-      provenance and read as unavailable for packages the target could have installed.
+      item is reported rather than installed from somewhere else. It is a statement about
+      provenance, NOT "apt printed `Candidate: (none)`" — that says nothing about where a
+      package comes from and reads as unavailable for packages the target could install.
     - `ORIGIN_MISMATCH` — present on both machines, from two different vendors. A real
       divergence a presence-and-version diff cannot see.
 
-    ADR-020's `HELD_OR_PINNED` is retired. A hold replicates as its own `apt:hold:`/
-    `snap:hold:` membership item, and a pin's only effect — which origin wins — is read
-    back off the target after the refresh (ADR-021 D-35) rather than echoed onto every
-    package a pin file happens to name. The echo also made a target-only package named by
-    any pin impossible to remove: `REPORT_ONLY` outranked its own `EXTRA_ON_TARGET`/
-    `REMOVE` diff, and a report-only item cannot be skipped-always either.
+    There is deliberately no `HELD_OR_PINNED` member. A hold replicates as its own
+    `apt:hold:`/`snap:hold:` membership item, and a pin's only effect — which origin wins —
+    is read back off the target after the refresh (ADR-020 D-35) rather than echoed onto
+    every package a pin file happens to name. Such an echo makes a target-only package
+    named by any pin impossible to remove: `REPORT_ONLY` outranks its own
+    `EXTRA_ON_TARGET`/`REMOVE` diff, and a report-only item cannot be skipped-always
+    either.
     """
 
     MISSING_ON_TARGET = "missing_on_target"

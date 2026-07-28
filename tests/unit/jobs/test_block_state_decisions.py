@@ -212,7 +212,7 @@ class TestAptRepoItemDecisions:
     with no input item to filter and depends on the same post-diff pass.
 
     Apt config is the ONE `/etc/apt` class that keeps the full three-way decision and the
-    machine-local registry, in all three directions (ADR-021 D-37): a proxy or a
+    machine-local registry, in all three directions (ADR-020 D-37): a proxy or a
     `no-install-recommends` policy is a standing machine-local preference no approved
     package implies. Repositories and pins are mechanism and have no registry at all, and a
     signing key is not even an item — none of the three can ever be offered, declined, or

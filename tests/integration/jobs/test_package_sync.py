@@ -836,7 +836,7 @@ async def _install_from_a_repo_the_target_lacks(executor: BashLoginRemoteExecuto
     repository, declare that repository, and install the package from it. Returns
     `(package_name, repo_dir, list_filename)`.
 
-    The only construction that produces ADR-021 §2.3's class 3 on real machines: a package
+    The only construction that produces ADR-020 D-34's class 3 on real machines: a package
     the source has FROM A REPOSITORY IT DECLARES whose name the target's apt has never
     heard. `_create_synthetic_repo_and_key`'s repository cannot do it — its host does not
     resolve, so no package can be installed from it, and a repository feeding no package
@@ -919,7 +919,7 @@ async def _create_synthetic_pin(executor: BashLoginRemoteExecutor) -> str:
     """Create a uuid-suffixed `/etc/apt/preferences.d` file the target lacks, and return its
     filename.
 
-    A pin is in ADR-021 D-36's always-sync bucket: it travels with no review line and no
+    A pin is in ADR-020 D-36's always-sync bucket: it travels with no review line and no
     derivation predicate, which makes it the cheapest real subject for the derived-write
     preview. Its stanza names a package and an origin neither machine has, so it is inert
     wherever it lands — a pin naming an absent origin changes nothing about apt's choices.
@@ -1129,7 +1129,7 @@ class TestAptSyncEndToEnd:
         pc2_with_pcswitcher: BashLoginRemoteExecutor,
         reset_pcswitcher_state: None,
     ) -> None:
-        """ADR-021 D-37/D-38 at VM level, in both directions at once.
+        """ADR-020 D-37/D-38 at VM level, in both directions at once.
 
         The synthetic repository the source has and the target lacks feeds NO package this
         run syncs, so under derivation it does not travel and it is not a review line
@@ -1223,7 +1223,7 @@ class TestAptSyncEndToEnd:
         pc2_with_pcswitcher: BashLoginRemoteExecutor,
         reset_pcswitcher_state: None,
     ) -> None:
-        """ADR-021 §2.3 class 3 at VM level: the repository that supplies the package is
+        """ADR-020 D-34 class 3 at VM level: the repository that supplies the package is
         derived from the package's own approval and written during converge, so at plan time
         the target's apt has never heard the name and refuses to rehearse any transaction
         containing it.
@@ -1543,7 +1543,7 @@ class TestPackageSyncWholeRunContracts:
         provisions the remote first (D-06, D-14): `flatpak install` refuses outright
         when its remote is not yet configured in that scope.
 
-        The remote is DERIVED (ADR-021 D-37): the review below decides the ref only, and
+        The remote is DERIVED (ADR-020 D-37): the review below decides the ref only, and
         deliberately answers the remote's own id SKIP_ONCE. Under the old model that
         declined the one thing that could deliver the ref and the install failed; the
         remote must now be provisioned anyway, because the ref was approved.
@@ -1655,7 +1655,7 @@ class TestPackageSyncWholeRunContracts:
         pc2_with_pcswitcher: BashLoginRemoteExecutor,
         reset_pcswitcher_state: None,
     ) -> None:
-        """The other half of derivation (ADR-021 D-37): a remote the source has and no
+        """The other half of derivation (ADR-020 D-37): a remote the source has and no
         approved ref comes from stays where it is.
 
         Without this, "the target ends up with the source's remotes" and "the target ends
@@ -2588,7 +2588,7 @@ class TestCrossDirectionRoundTrips:
                 await pc1_executor.run_command(f"sudo rm --force {cleanup_paths}", login_shell=False, timeout=15.0)
 
 
-# The two files ADR-021 D-38 gates on the target's Ubuntu Pro attachment, with the real
+# The two files ADR-020 D-38 gates on the target's Ubuntu Pro attachment, with the real
 # stanzas `pro enable` writes. Their `Signed-By:` keyrings ship with `ubuntu-pro-client`
 # on every Ubuntu 24.04, attached or not, so this is the file set a genuinely attached
 # source carries — not an approximation of it.
@@ -2616,7 +2616,7 @@ _ESM_PIN_BODY = "Package: *\nPin: release o=UbuntuESMApps\nPin-Priority: 510\n"
 
 
 class TestTheESMAttachmentGateOnVMs:
-    """ADR-021 D-38 at VM level: a source carrying the two `ubuntu-esm-*` sources and a
+    """ADR-020 D-38 at VM level: a source carrying the two `ubuntu-esm-*` sources and a
     target with no Ubuntu Pro attachment.
 
     Only the SKIP arm is testable here, and that is a statement about the fixtures, not a
