@@ -1,425 +1,254 @@
 # Package sync requirements
 
-What pc-switcher promises about installed software, from the point of view of the person whose machines it changes. It states the principles, then every case that can arise and what happens in it, then what it deliberately will not do.
+Requirements on the four package-sync jobs, stated from the point of view of the person whose machines are changed: what the system must do to their software, what it must ask them, what it must never do to them without consent, and what it must tell them afterwards.
+
+Requirement ids are `PKG-FR-*` for obligations and `PKG-NG-*` for non-goals — outcomes the system is required not to attempt. MUST, MUST NOT, SHOULD and MAY carry their usual normative force. How an obligation is met — which command reads what, which file holds it, what a screen says — is not specified here; that is the specification's job.
 
 ## Navigation
 
-- [High level requirements](High%20level%20requirements.md) — project vision and scope; this document elaborates one area of it
-- [Package sync job behaviour](../jobs/package-sync.md) — the same ground as a how-it-works guide
-- [Package sync specification](../system/package-sync.md) — the implementation-facing spec
-- [ADR-020](../adr/adr-020-declarative-package-convergence.md) — the decision this document is the user-facing statement of
+- [High level requirements](High%20level%20requirements.md) — project vision and scope; this document elaborates "installed packages must sync"
+- [Package sync job behaviour](../jobs/package-sync.md) — user guide to the same jobs
+- [Package sync specification](../system/package-sync.md) — how these requirements are implemented
+- [ADR-020](../adr/adr-020-declarative-package-convergence.md) — the decision these requirements follow from
 
-Where this document and any other disagree, this one and ADR-020 are the intent; the other is stale. Section [Where the tool does not yet meet these requirements](#where-the-tool-does-not-yet-meet-these-requirements) lists the places the shipped code is knowingly behind.
+Precedence: where this document and any other disagree, this document and ADR-020 state the intent. Section [Where the tool does not yet meet these requirements](#where-the-tool-does-not-yet-meet-these-requirements) records requirements the shipped code knowingly does not meet.
 
-## Principles
+## Scope
 
-These are the rules everything below follows from. If you remember nothing else, remember these.
+Four jobs — `apt_sync`, `snap_sync`, `flatpak_sync`, `manual_installs_sync` — replicate what software is installed. Application data is not theirs.
 
-### 1. The source machine is the intent; the target is changed to match it
+- **PKG-FR-OPT-IN**: All four jobs MUST ship disabled and MUST be enabled individually in configuration.
+  Why: enabling one authorises the system to install and remove software on the target.
+- **PKG-FR-JOB-INDEPENDENCE**: Each job MUST be enableable, reviewable and failable on its own. Enabling one MUST NOT enable another, and no job's behaviour may depend on whether another is enabled.
+- **PKG-FR-JOB-ORDER**: The three package-manager jobs MUST run before the user-data sync, and the system MUST refuse to start when they are ordered otherwise.
+  Why: software must exist before data lands on top of it, or an installer's stock defaults overwrite synced configuration.
+- **PKG-FR-APT-SCOPE**: `apt_sync` MUST cover the manually-installed apt package set, the repositories and pins that govern where those packages come from, apt's own behavioural configuration, and apt holds. Packages apt installed automatically to satisfy dependencies MUST NOT be items.
+- **PKG-FR-SNAP-SCOPE**: `snap_sync` MUST cover installed snaps with their revision, tracking channel, confinement mode and per-snap refresh holds.
+- **PKG-FR-FLATPAK-SCOPE**: `flatpak_sync` MUST cover installed flatpak applications per installation scope, the remotes those applications need, and mask patterns per scope.
+- **PKG-FR-MANUAL-SCOPE**: `manual_installs_sync` MUST cover what no package manager can reproduce — apt packages whose installed version comes from no repository the machine has configured, and software under `/usr/local` and `/opt` that no package owns — together with the registry of install snippets that is the only way such software can be reproduced on the other machine.
+- **PKG-FR-DEB-OWNERSHIP**: Software installed from a hand-downloaded `.deb` MUST belong to `manual_installs_sync` alone. `apt_sync` MUST NOT produce an item, a review line or an install for it in any configuration.
+  Why: the target's apt has never heard the name; an apt item for it could only fail.
+- **PKG-FR-DATA-BOUNDARY**: No package job may sync application data. Data belongs to the user-data sync.
 
-Every capture and every decision happens on the machine you sync *from*. The target answers read-only questions during planning and runs commands during applying. It never decides anything, and a sync never changes the source.
+## Convergence model
 
-### 2. Software is replicated by asking each package manager, never by copying its files
+- **PKG-FR-SOURCE-INTENT**: The source machine's state MUST be the only statement of intent. A sync MUST NOT modify the source, and the target MUST NOT decide anything: it answers read-only questions while the change is planned and carries out what was approved.
+- **PKG-FR-MANAGER-CONVERGES**: Software MUST be replicated by having the target's own package managers install and remove it. The system MUST NOT copy a package manager's database, store or unpacked files between machines. What travels is the decision, plus the configuration a manager needs in order to obey it.
+- **PKG-FR-APT-IDENTITY**: An apt package MUST be identified by name and origin together. The system MUST NOT satisfy an approved install from a vendor the source does not use.
+  Why: `gh` from a vendor's repository and `gh` from the distribution archive are one name and two different pieces of software.
+- **PKG-FR-DISTRO-ORIGIN**: All origins a machine's distribution source files declare MUST count as one origin, computed per machine.
+  Why: two machines on different mirrors are not two vendors and must not disagree about every package.
+- **PKG-FR-SNAP-IDENTITY**: A snap MUST be identified by name alone, and the system MUST NOT ask the user anything about snap provenance.
+  Why: one store, and a name resolves to one publisher through an assertion snapd validates itself, so no second build of a name exists to install by mistake.
+- **PKG-FR-FLATPAK-IDENTITY**: A flatpak application MUST be identified by its installation scope and its full reference including branch. The same application in two scopes, or on two branches, MUST be treated as two independent items — one install and one removal — and the system MUST NOT normalise the difference away.
+  Why: two branches of one application can be installed side by side, and the two scopes are configured separately.
+- **PKG-FR-FLATPAK-ORIGIN-NOT-IDENTITY**: A flatpak application's origin remote MUST NOT be part of its identity.
+- **PKG-FR-VERSION-FLOAT**: For apt and flatpak the system MUST install by name and accept whatever the target's own repositories offer. A version difference MUST be reported and MUST NOT be forced, upgraded or downgraded.
+- **PKG-FR-SNAP-REVISION**: For snap the system MUST converge the target to the source's exact revision and tracking channel.
+  Why: snap keeps per-user data in revision-numbered directories, so the data sync is only correct when both machines are on the same revision.
+- **PKG-FR-BLOCKS-REPLICATE**: Blocks the user set by hand — apt holds, snap refresh holds, flatpak masks — MUST replicate, each as an item decided separately from the software it applies to.
 
-Nothing copies `/var/lib/dpkg`, snapd's state or the flatpak store between machines. The target's own `apt`, `snap` and `flatpak` do the work, resolve their own dependencies and download from their own servers. What travels is the *decision* — install this, remove that — plus the small amount of configuration a package manager needs to be able to obey it.
+## Consent
 
-### 3. An apt package is replicated as name *and* origin, not name alone
+- **PKG-FR-REVIEW-FIRST**: A job MUST NOT modify the target before the user has approved that job's diff.
+- **PKG-FR-ONLY-APPROVED**: A job MUST apply only what the user approved.
+- **PKG-FR-NO-REREVIEW**: A job MUST NOT ask the user to review a diff it has already reviewed.
+- **PKG-FR-CONSENT-BEFORE-CHANGE**: Every consent a job needs for a change MUST be obtained before that change is made.
+- **PKG-FR-ASK-ABOUT-SOFTWARE**: The user MUST be asked about software, and MUST NOT be asked separately about machinery whose necessity follows from an approved package: the repository a package comes from, the key that makes that repository trusted, the pin that makes that vendor's build win, the remote a flatpak application is installed from.
+  Why: the test is derivability. Approving the package answers the question; asking it separately would ask for an answer the user cannot give independently of the package, and the pairing was never expressible — a repository approved without its package does nothing, a package approved without its repository cannot be installed.
+- **PKG-FR-ASK-WHEN-NOT-DERIVABLE**: Where the answer does not follow from any approved package, the system MUST ask. Four such questions exist and are required, each specified below: apt's own behavioural configuration (`PKG-FR-APTCONF`), an unattached Ubuntu Pro target (`PKG-FR-ESM-GATE`), collateral damage to software the user installed by hand on the target (`PKG-FR-COLLATERAL-MANUAL`), and repointing an origin that machine-specific software depends on (`PKG-FR-REPO-CONFLICT`, `PKG-FR-FLATPAK-REPOINT`).
+- **PKG-FR-REMOVAL-DISTINCT**: Approving the removal of software MUST require a gesture distinct from approving installs, MUST NOT be the default, and MUST be presented so that the user is told the approval deletes something.
+- **PKG-FR-SKIP-ONCE**: The user MUST be able to decline any reviewed item for the current run only. Nothing MUST be recorded, and the item MUST be offered again on the next sync.
+- **PKG-FR-MACHINE-SPECIFIC**: The user MUST be able to mark a reviewed item as never to be offered again on that machine. The mark MUST be local to that machine, MUST NOT be synced, and MUST suppress the item in every later sync in both directions.
+- **PKG-FR-NO-MARK-ON-ORIGIN**: Deleting an apt repository, deleting an apt pin, resolving a repository conflict, and deleting or repointing a flatpak remote MUST NOT be markable machine-specific. Declining them MUST record nothing.
+  Why: a permanent machine-local mark on configuration whose whole purpose is to feed software would silently and permanently change where that software comes from. Where the two machines' configurations genuinely differ on purpose, the remedy is consolidating them.
+- **PKG-FR-ABORT**: The user MUST be able to abort the whole sync at any question, and an abort MUST NOT be read as declining a single item.
+- **PKG-FR-CONFIRM-EACH**: The system MUST offer a mode in which every individual modification a package job makes is shown verbatim and applied only after explicit consent, covering every write including decision records, the snippet registry and the refresh pause. That mode MUST offer proceed or abort only, and MUST require an interactive terminal.
+  Why: one reviewed item can span several commands, so skipping one would leave the item half-applied.
 
-`gh` from `cli.github.com` and `gh` from Ubuntu's archive are the same name and two different pieces of software. pc-switcher will not satisfy "install `gh`" from a vendor your source machine does not use. If it cannot give the target the same origin, it reports the package and installs nothing.
+## apt
 
-Two machines on different Ubuntu mirrors are not two vendors: origins declared by the distribution's own source files count as one origin, computed per machine.
-
-### 4. You are asked about packages; the machinery packages need follows from your answer
-
-You decide what software should exist. You are not separately asked about the repository it comes from, the signing key that makes the repository trusted, or the pin that makes that vendor's build win. Those travel because a package you approved needs them. The one exception is `/etc/apt/apt.conf.d`, which governs apt's own behaviour rather than serving any package, so nothing about an approved package implies whether it should travel — you are asked, in all three directions.
-
-### 5. Every change is reviewed before anything is written, once per job
-
-Each enabled job shows you its whole diff, takes your answers, and only then starts changing the target. There is no second question part-way through. Nothing is applied that you did not tick.
-
-### 6. Removals are never bulk-approved by accident
-
-Installs and removals never share a checkbox list. Removal lists start unticked. A group that deletes something says so in its title.
-
-### 7. Versions float; deliberate blocks replicate
-
-apt and flatpak install by name and take whatever the target's own repositories currently offer. A version difference is reported, never forced or downgraded. snap is the exception and converges the exact revision, because snap keeps per-user data in revision-numbered directories and the data sync depends on both machines being on the same one. The blocks you set by hand — apt holds, snap refresh holds, flatpak masks — replicate as items of their own.
-
-### 8. A machine can keep things to itself, permanently
-
-Any reviewed item can be marked "never offer again on this machine". That mark lives in a file on that machine, is never synced, and makes the item invisible to every future sync in both directions.
-
-### 9. Nothing is done that cannot be reported
-
-A failed item fails alone and is named. A job that decided nothing says so rather than reporting success. A rehearsal changes nothing.
-
-### 10. All four jobs ship disabled
-
-Enabling one lets pc-switcher install and remove software on the target. That is opt-in, per job, in `sync_jobs`.
-
-## What each job covers
-
-Four independent jobs, four enable flags, four separate reviews. Enabling one never drags in another, and no job reads another's flag.
-
-```yaml
-sync_jobs:
-  apt_sync: false             # apt packages, and the /etc/apt configuration they need
-  snap_sync: false            # installed snaps, at the source's revision and channel
-  flatpak_sync: false         # installed flatpak apps and their remotes, per scope
-  manual_installs_sync: false # what no package manager can reproduce, plus the snippet registry
-```
-
-The three package-manager jobs must be listed before `folder_sync`. pc-switcher refuses to start otherwise. Software has to exist before your data lands on top of it, or the installer's stock defaults overwrite your synced config.
-
-### `apt_sync`
-
-The manually-installed apt set — what `apt-mark showmanual` reports, not every package on disk. Dependencies apt pulled in on its own are apt's business and are never items; the target resolves its own.
-
-Also in scope, but as machinery rather than as questions: repository files under `/etc/apt/sources.list.d` and `/etc/apt/sources.list`, their signing keys, and pin files under `/etc/apt/preferences.d`. Reviewed as items: `/etc/apt/apt.conf.d` files, apt holds, and the deletion of a repository or pin file the source no longer has.
-
-Out of scope: packages installed from a hand-downloaded `.deb`.
-
-### `snap_sync`
-
-Installed snaps, converged to the source's exact revision and tracking channel, with their confinement mode and their per-snap refresh holds. Sideloaded snaps are excluded.
-
-### `flatpak_sync`
-
-Installed flatpak applications, per installation scope, plus the remotes they are derived to need. User-scope `flathub` and system-scope `flathub` are two separate things, because flatpak configures them separately. Masks are included.
-
-### `manual_installs_sync`
-
-Everything no package manager can reproduce: apt packages whose installed version comes from no repository the machine has configured (a `.deb` you installed by hand), and files under `/usr/local` and `/opt` that no package owns. It also owns the install-snippet registry, the only way such an item can be reproduced on the other machine.
-
-### The boundaries between them
-
-A hand-installed `.deb` belongs to `manual_installs_sync` alone. `apt_sync` detects the same packages with the same test and drops them before it diffs anything — they produce no apt item, no review line and no install. There is nothing apt could do with them: the target's apt has never heard the name.
-
-On this machine, `code` is exactly that case. `apt-cache policy code` names only `/var/lib/dpkg/status` as a source, so it is `manual_installs_sync`'s to reproduce, and it is invisible to `apt_sync` no matter how `apt_sync` is configured.
-
-The consequence to know: enable `apt_sync` and disable `manual_installs_sync`, and your hand-installed `.deb` packages are synced by nobody. They are silently absent from the review rather than offered as installs that would fail.
-
-Application *data* is never any of these jobs' business. `~/.var/app`, `~/snap/<app>/`, dotfiles and everything else under your home belong to `folder_sync`.
-
-## How you are asked
-
-Three shapes of question exist. Which one an item gets is a property of the item, not a setting.
-
-The ordinary three-way decision, for packages, holds, masks and apt config: tick to apply. Whatever you leave unticked is offered once more as "never offer again on this machine"; ticking it there is the permanent machine-specific mark, and ticking nothing means skip this run and ask again next time. If you ticked everything, the second list is not shown.
-
-A two-way decision — act, or leave it for now — for deleting an apt repository file, deleting an apt pin file, and overwriting a repository file the two machines disagree about. There is no permanent mark for these and nothing is recorded. A permanent machine-local mark on a file whose whole job is to feed packages would silently and permanently change where those packages come from; if the two machines' files genuinely differ on purpose, the remedy is to consolidate them yourself.
-
-A per-item resolution, for the two cases where "should this apply" is the wrong question: apt collateral damage takes install-anyway, skip, or abort the sync; an unreproducible manual install takes add a snippet, mark machine-specific, or skip for now.
-
-Ctrl-C at any screen aborts the whole sync. It is never read as a per-item skip.
-
-`pc-switcher sync <target> --confirm-each-command` inserts a prompt before every individual command, showing it verbatim, with proceed or abort and no per-command skip — one reviewed item can span several commands, so skipping one would leave it half-applied. It covers every write the jobs make, including the decision files, the snippet registry and the snapd refresh pause. It needs a real terminal.
-
-## apt: every case
-
-### A package on the source that the target does not have
+### Installing
 
 ```mermaid
 flowchart TD
-    A["Package on the source,<br/>absent on the target"] --> B{"Where did the<br/>source install it from?"}
-    B -->|"the distribution's<br/>own archive"| C["Ordinary install.<br/>No origin shown, no /etc/apt work."]
-    B -->|"a vendor"| D{"Does the target already<br/>offer it from that vendor?"}
+    A["On the source,<br/>absent on the target"] --> B{"Origin of the<br/>source's copy"}
+    B -->|"the distribution"| C["MUST offer an ordinary install"]
+    B -->|"a vendor"| D{"Target already offers it<br/>from that vendor?"}
     D -->|yes| C
-    D -->|no| E{"Does a repository file<br/>on the source declare it,<br/>with a key the source has?"}
-    E -->|yes| F["Install, with that repository,<br/>its key and the pins<br/>derived from your approval.<br/>The line names the vendor."]
-    E -->|no| G["Reported, never installed.<br/>The line names the vendor<br/>and why it cannot travel."]
-    F --> H{"After the repositories land<br/>and metadata refreshes:<br/>does the target's candidate<br/>now come from that vendor?"}
-    H -->|yes| I["Installed"]
-    H -->|no| J["Refused, naming both origins.<br/>Other packages continue."]
+    D -->|no| E{"Can the source's origin<br/>be replicated?"}
+    E -->|yes| F["MUST offer the install,<br/>naming the vendor;<br/>MUST provision the origin<br/>as a consequence"]
+    E -->|no| G["MUST report the package<br/>with origin and reason;<br/>MUST NOT install"]
+    F --> H{"Target's real candidate<br/>after convergence"}
+    H -->|"the source's vendor"| I["MUST install"]
+    H -->|otherwise| J["MUST refuse that install,<br/>naming both origins;<br/>MUST continue the run"]
 ```
 
-Same origin already available on the target. An ordinary install line, ticked by default, no origin named, and nothing under `/etc/apt` changes for it.
+- **PKG-FR-APT-VENDOR-DISCLOSURE**: When an approved install would come from anything other than the distribution, the user MUST be told which vendor it comes from before approving it.
+- **PKG-FR-APT-ORIGIN-DERIVED**: Approving a package MUST carry the repository, key and pins its origin needs, without a separate question and without a second review after they land.
+- **PKG-FR-APT-ORIGIN-UNREPLICABLE**: Where no repository the source has declares the package's origin, or every repository that declares it names a key the source does not hold, the system MUST report the package with its origin and the reason, MUST NOT install it, and MUST NOT substitute another vendor's build.
+- **PKG-FR-APT-ORIGIN-VERIFY**: After repository convergence and before the first install, the system MUST verify against the target's own real state that each approved install will come from the source's origin. An install that would not MUST be refused as its own failure naming both origins, and the rest of the run MUST continue.
+  Why: this check is the guarantee that `PKG-FR-APT-IDENTITY` holds; everything before it is preparation. It is not redundant with planning — a repository can fail to write, a pin can fail to win, and a distribution epoch can outrank every version a vendor publishes.
 
-A different vendor would satisfy the name on the target. Still an install line, but the line names where it will come from — `install gh (from cli.github.com/packages)` — and approving it carries the source's repository file, its signing key and the source's pin files with it. You are not asked about any of those. This is the case that would otherwise replicate the name and invert the provenance: on this machine `gh` is installed from `cli.github.com` at pin priority 1001, while Ubuntu's archive and Ubuntu ESM both offer a `gh` of their own.
+### Removing and diverging
 
-The target has no candidate at all, but the source's repository can be replicated. Identical treatment to the previous case: install, with the repository derived. You are not asked twice and there is no second review after the repository lands.
-
-The origin cannot be replicated. No repository file on the source declares it — a repository you deleted while its packages stayed, a `cdrom:` origin — or every file that does declare it names a signing key the source machine does not actually have. The package is reported, naming the origin and the reason, and nothing is installed. pc-switcher will not substitute another vendor's build.
-
-The last-moment check. After the run's single metadata refresh and before its first install, the target's real candidate origins are read back for every approved install that has a vendor origin. If the vendor's build is still not what the target would install — the repository failed to write, a pin did not land, an epoch still outranks it — the install is refused as its own item naming both origins, and the rest of the run continues. This check is the guarantee; everything before it is preparation.
-
-The epoch case, measured on this machine, is why pins must travel and why the check exists: Ubuntu's `firefox` is version `1:1snap1-0ubuntu5` at priority 500. That epoch 1 outranks every epoch-free Mozilla version at equal priority, so adding Mozilla's repository alone still installs Ubuntu's transitional package. Only Mozilla's pin file changes the outcome.
-
-### A package on the target that the source does not have
-
-Offered for removal, in an unticked removal group. Approving it runs `apt-get remove`, never `purge`. Marking it "never offer again" makes it this machine's own and it is not offered again.
-
-### A package on both machines
-
-Same version, same vendor: no item at all.
-
-Different versions: reported, both versions named, never acted on. apt versions float by design.
-
-Different vendors: reported as a provenance divergence, both origins named, and nothing is done. Converging it would mean a cross-vendor reinstall, which is neither a version float nor something you asked for. This check runs before the version comparison, because two vendors' copies of one name have no common version scale. It never fires for a mirror difference.
-
-Held on the target: the package's own install or version action is suppressed entirely — a held package is never proposed for install or upgrade — and no package-level line appears. The hold travels as its own item.
+- **PKG-FR-APT-REMOVE**: A package on the target that the source does not have MUST be offered for removal. Approval MUST remove the package without purging its configuration.
+- **PKG-FR-APT-SAME**: A package present on both machines at the same version from the same vendor MUST produce no item.
+- **PKG-FR-APT-VERSION-DIFF**: A version difference MUST be reported with both versions named and MUST NOT be acted on.
+- **PKG-FR-APT-VENDOR-DIFF**: The same package installed from different vendors on the two machines MUST be reported as a provenance divergence naming both origins, MUST NOT be converged, and MUST take precedence over any version difference on that package. It MUST NOT be raised for a mirror difference.
+  Why: converging it would mean a cross-vendor reinstall the user did not ask for, and two vendors' builds share no version scale.
+- **PKG-FR-APT-HELD-TARGET**: A package held on the target MUST NOT be proposed for install or upgrade, and MUST produce no package-level item. Its hold MUST still be an item.
 
 ### Holds
 
-An apt hold is a separate item from the package it applies to, with its own review line and the ordinary three-way decision. Held on the source and not the target: a hold line, ticked by default, applied after the package install so the package exists before it is pinned in place. Held on the target and not the source: an unhold line, in the unticked removal group. Held on both or neither: nothing.
+- **PKG-FR-APT-HOLD-ITEM**: An apt hold MUST be an item separate from the package it applies to, decided separately, in both directions.
+- **PKG-FR-APT-HOLD-ORDER**: An approved hold MUST be applied after the package it names exists.
+- **PKG-FR-APT-HOLD-INERT**: Replicating a hold MUST NOT change the package's version, and a hold whose package install was not approved or failed MUST fail alone.
 
-A hold approved for a package whose install you skipped fails as its own item and nothing else is affected. Replicating a hold never changes the package's version.
+### Collateral damage
 
-### Collateral damage from dependency resolution
+- **PKG-FR-COLLATERAL-AUTO**: Collateral removals and downgrades that touch only automatically-installed packages MUST proceed without asking.
+  Why: that is the target's apt resolving its own dependency graph.
+- **PKG-FR-COLLATERAL-MANUAL**: An approved change MUST NOT remove or downgrade a package that is manually installed on the target unless the user has consented to that consequence specifically. The user MUST be able to accept it, to decline it — leaving the triggering install unapplied rather than failing later — or to abort the sync.
+- **PKG-FR-COLLATERAL-TIMING**: Collateral MUST be classified before anything is applied, never mid-apply. If the real transaction has drifted by the time it runs, the system MUST refuse it rather than proceed.
+- **PKG-FR-COLLATERAL-NEW-ORIGIN**: For an install whose origin this run must itself provision, the protection of `PKG-FR-COLLATERAL-MANUAL` MUST still hold, but consent MUST NOT be sought in advance: unapproved collateral MUST fail that one item, and the run MUST continue.
+  Why: the facts that question needs do not exist while the review is being built — until the repository lands, the target's apt cannot resolve the name, and including it would strip the protection from every other package in the run rather than weaken it for one. The cost is that for those packages the user is told afterwards instead of asked beforehand.
 
-Approving one package can make apt remove or downgrade others. Every approved change is simulated before anything is applied, and the collateral is classified.
+### Repositories, keys and pins
 
-Collateral that only touches automatically-installed packages proceeds silently — that is apt resolving its own dependencies, and it is not your decision to make.
-
-Collateral that would remove or downgrade a package that is *manually installed on the target* becomes its own review item: install anyway, skip, or abort the sync. Skipping leaves the triggering install unapproved rather than failing it later.
-
-The classification happens during the review, never mid-apply. If the real transaction has drifted by the time it runs, the guard refuses it there rather than proceeding.
-
-One class of install is left out of that review-time simulation on purpose: a package whose repository this run is about to add. Until the repository lands the target's apt has never heard the name, and apt refuses the whole simulated batch on one such name — including it would strip the protection from every other package in the run rather than weaken it for one. Those packages are covered by the same simulation re-run per item after `/etc/apt` has converged, where apt can resolve them: unapproved manual collateral fails that one item and the run continues. The cost is stated plainly — for those packages you are told afterwards rather than asked beforehand — and is accepted because the facts that question needs do not exist while the review is being built.
-
-One case is given up on purpose: a package you installed by hand on the *source*, which arrived on the target as an automatic dependency, is not protected. If the target's apt installed it automatically, the target's apt owns it, and that is the same set apt itself consults.
-
-### Repositories
-
-You are never asked to add or change one. A repository file lands on the target because a package you approved comes from it, and only then. A repository on the source that feeds no package this run syncs does not travel at all — the two machines' `/etc/apt` are converged for what packages need, not made identical.
-
-Missing on the target and needed by an approved package: written, silently, with its signing key first.
-
-Present on both with different content: overwritten with the source's version, silently — unless it feeds a package the target has marked machine-specific. In that case you are shown the file's two versions side by side, whole, never as a diff, and asked to overwrite or leave it for now. Leaving it means every approved package whose origin depended on that file fails, named, rather than being installed from somewhere else.
-
-Present on the target and not the source: offered for deletion, unticked, with two answers. The line names the machine-specific packages on the target that the deletion would strand — those packages are invisible in the review by design, so nothing else in the run would tell you. It is disclosure, not refusal; deleting a repository whose packages are also going is normal cleanup.
-
-The distribution's own files — `ubuntu.sources`, `/etc/apt/sources.list`, `ubuntu-esm-apps.sources` and `ubuntu-esm-infra.sources` — are written when the target lacks them and overwritten when they differ. They are never removed and never offered for removal. They are what defines "the distribution's own origin" on each machine, which is what keeps two machines on different mirrors from disagreeing about every package.
-
-Files apt does not read are ignored. `sources.list.d` on this machine also holds `ubuntu.sources.save`, `ubuntu.sources.curtin.orig`, `ubuntu-esm-apps.sources.save` and `ubuntu-esm-infra.sources.save`; apt reads only `.list` and `.sources`, so neither does pc-switcher.
-
-### Signing keys
-
-Never an item, in any direction. You think in repositories and packages; a key is only how a repository is made to work.
-
-A key the target lacks is copied, byte-for-byte from the source machine, before the repository that names it is written — whatever package owns it on the source, because vendors like Microsoft and Tailscale ship a `.deb` carrying both the repository entry and its key, and refusing to copy a package-owned key would make that repository permanently untrustable.
-
-A key the target already has with different bytes is refreshed, which is what makes a vendor's key rotation follow you even though the rotation changes no repository file. The one exception: if the target's own dpkg owns that path, it is left alone. Replacing a distribution keyring is not a sync's job.
-
-A key that already matches byte-for-byte is left entirely alone — no transfer, no command.
-
-Keys are never fetched from a vendor. A key travels with its repository or not at all.
-
-Keys are looked for in `/etc/apt/keyrings`, `/etc/apt/trusted.gpg.d` and `/usr/share/keyrings`. The last matters more than its name suggests: it is where `add-apt-repository`, Ubuntu's own files and most vendor `.deb`s put the key their `Signed-By:` points at.
-
-A repository whose key is written inline in the file itself — what `add-apt-repository` does for a PPA — needs no keyring, and none is copied.
-
-When you approve deleting a repository, a key in `/etc/apt/keyrings` that nothing else references any more goes with it. The count is taken against the target's real state after the deletion, so a repository you left unticked still counts as a user, one you marked machine-specific still counts, and `/etc/apt/sources.list` counts too. Nothing is deleted if the source machine still has that key. If you removed no repository, no collection happens at all. Only `/etc/apt/keyrings` is ever cleaned up: `trusted.gpg.d` keys are ambient trust nothing names, and `/usr/share/keyrings` is package territory. Both are copied from and neither is deleted from.
-
-### Pins and priorities
-
-Every `/etc/apt/preferences.d` file the source has is written to the target when missing and overwritten when different. Always, silently, with no review line. A pin is what makes a vendor's build win, in the same sense a key is what makes a repository trusted, and a pin naming an origin the target does not have does nothing at all — so always sending them costs nothing and cannot get a per-package derivation wrong.
-
-The cost of that rule, stated plainly: a pin file you wanted on one machine only comes back on every sync. The only way to keep it machine-local is to delete it on the source.
-
-Deleting one is different and is reviewed, unticked, with two answers. A pin the target has and the source does not is holding some vendor above another on a machine the source knows nothing about, and removing it can flip which vendor supplies a package at the target's next upgrade.
-
-A pin is never read as a statement about the packages it names. On this machine `ubuntu-pro-esm-apps` pins `Package: *` at priority 510; a rule that echoed a pin onto every package it named would report every package on the machine, and would make a target-only package impossible to remove and impossible to silence.
-
-Pins that push a version *down* work the same way. This machine's `no-esm-docker` pins the ESM origin to −1 for `docker.io` and friends, and `apt-cache policy docker.io` reports `Candidate: (none)` for that installed package. That file travels like any other pin, and a target that received the pin without the ESM repository is simply unaffected by it.
-
-### apt configuration
-
-`/etc/apt/apt.conf.d` is the one thing under `/etc/apt` reviewed in all three directions — add, change and remove — each with the ordinary three-way decision and the ordinary permanent machine-specific mark. A proxy setting or a `no-install-recommends` policy governs apt's behaviour, and no approved package implies whether it should travel, so the only honest source of that answer is you. It is also the kind of standing preference someone genuinely holds per machine, which is why it keeps the permanent mark that repository and pin deletions do not.
+- **PKG-FR-REPO-DERIVED**: The user MUST NOT be asked to add or change a repository. A repository MUST be written to the target only because an approved package comes from it. A repository on the source that feeds no package this run syncs MUST NOT travel.
+- **PKG-FR-REPO-OVERWRITE**: A repository present on both machines with differing content MUST be overwritten with the source's version, except as required by `PKG-FR-REPO-CONFLICT`.
+- **PKG-FR-REPO-CONFLICT**: Where overwriting would repoint a repository that software the target marked machine-specific depends on, the system MUST obtain consent first, MUST show both machines' versions of the configuration in full, and MUST NOT record the answer. Declining MUST fail every approved package whose origin depended on it, naming them, rather than installing them from elsewhere.
+  Why: machine-specific software produces no review line in any run, so nothing else would tell the user its origin was about to move. Ordinary target-only software already has a removal line of its own.
+- **PKG-FR-REPO-DELETE**: A repository present on the target and not on the source MUST NOT be deleted without explicit approval, and the request MUST name the machine-specific packages on the target the deletion would strand.
+  Why: disclosure, not refusal — deleting a repository whose packages are also going is ordinary cleanup, and the stranded packages are invisible in the review by design.
+- **PKG-FR-DISTRO-FILES**: The distribution's own source files MUST be written when the target lacks them and overwritten when they differ. They MUST NEVER be removed and MUST NEVER be offered for removal.
+  Why: they are what defines "the distribution's own origin" on each machine, which is what makes `PKG-FR-DISTRO-ORIGIN` computable.
+- **PKG-FR-APT-IGNORES**: Files apt itself does not read MUST NOT be treated as repository configuration in any direction.
+- **PKG-FR-KEY-NOT-ITEM**: A signing key MUST NOT be a review item in any direction.
+- **PKG-FR-KEY-COPY**: A key the target lacks MUST be copied byte-for-byte from the source before the repository that names it is written, whatever owns it on the source. Keys MUST NEVER be fetched from a vendor.
+  Why: vendors ship packages carrying both the repository entry and its key; refusing to copy a package-owned key would make such a repository permanently untrustable.
+- **PKG-FR-KEY-REFRESH**: A key the target holds with different content MUST be refreshed, except where the target's own distribution packaging owns it, which MUST be left alone. A key that already matches MUST NOT be touched.
+  Why: refreshing is what makes a vendor's key rotation follow the user even though rotation changes no repository file. Replacing a distribution keyring is not a sync's job.
+- **PKG-FR-KEY-CLEANUP**: When the user approves deleting a repository, a repository-specific key that nothing on the target references any more MAY be deleted with it. A key the source still holds MUST NOT be deleted, and keys in the locations that hold ambient or distribution-owned trust MUST NEVER be deleted.
+- **PKG-FR-PIN-ALWAYS**: Every pin the source has MUST be replicated to the target, always and without review.
+  Why: a pin is what makes a vendor's build win, in the same sense a key is what makes a repository trusted, and a pin naming an origin the target does not have does nothing at all — so replicating them all costs nothing and cannot get a per-package derivation wrong.
+- **PKG-FR-PIN-DELETE**: A pin present on the target and not the source MUST NOT be deleted without explicit approval.
+  Why: it is holding some vendor above another on a machine the source knows nothing about, and removing it can flip which vendor supplies a package at the target's next upgrade.
+- **PKG-FR-PIN-NOT-INVENTORY**: A pin MUST NOT be read as a statement about the packages it names.
+  Why: a machine-wide pin would otherwise report every package on the machine, and would make a target-only package impossible to remove and impossible to silence.
+- **PKG-FR-APTCONF**: apt's own behavioural configuration — the settings that govern how apt behaves rather than where packages come from — MUST be reviewed in all three directions, with the ordinary decision and the permanent machine-specific mark.
+  Why: no approved package implies whether such a setting should travel, so the only honest source of that answer is the user, and it is the kind of standing preference someone genuinely holds per machine.
 
 ### Ubuntu Pro and ESM
 
-`ubuntu-esm-apps.sources` and `ubuntu-esm-infra.sources` are part of the distribution set, so they would be written to a target that lacks them. If the target has no Ubuntu Pro attachment, that is a problem, and pc-switcher asks before writing anything.
-
-The hazard, measured: `esm.ubuntu.com` serves its repository *index* publicly, so an unattached target's `apt-get update` succeeds and the ESM suites enter candidate selection above the ordinary archive. Only the package pool is 401. The failure therefore lands later, at install time, on a package you will not connect to the sync.
-
-pc-switcher cannot fix this itself. Attaching needs a subscription token from your Pro dashboard or an interactive browser flow, the source machine's own credentials are root-only and not reusable for another machine, and holding a token would put a secret on a command line.
-
-So before `apt_sync` writes anything — and before you are asked to decide anything else, because one answer ends the job — it probes the target and, if the target reports no attachment, asks with exactly two answers:
-
-- **I have attached the target — re-check and continue.** pc-switcher probes the target again rather than believing the answer. If it still reports unattached it says so and asks again. You can answer this as many times as you like; there is no limit, because re-probing is free and the exit is choosing the other answer.
-- **Skip `apt_sync` this run (other jobs continue).** `/etc/apt` on the target is left exactly as it was, ESM files included, and `snap_sync`, `flatpak_sync`, `manual_installs_sync` and `folder_sync` all run normally.
-
-The prompt gives you the two commands to run on the target: `sudo pro attach <token from your Pro dashboard>`, then `sudo pro enable esm-apps esm-infra`.
-
-Skipping costs the whole apt job for that run, not just the two files, and that is the only coherent partial outcome: pin files always travel, so the source's ESM pins would reach the target whether or not the sources they name did, leaving the target with a candidate selection matching neither machine. Leaving `/etc/apt` untouched is a state you can reason about.
-
-A run with nobody to ask takes the skip too, and says why. A dry run never asks — it warns that the target is unattached and that a real run would skip `apt_sync` entirely, because a rehearsal must not send you off to attach a machine.
-
-Only the yes/no answer to "is this target attached" is ever logged or shown. The probe also reports the subscriber's account, and that never leaves the check.
-
-### The `/etc/apt` group is all-or-nothing
-
-Everything under `/etc/apt` that a run writes or deletes is backed up first, applied, and followed by exactly one `apt-get update`. If that refresh fails, every file the group touched is restored and the target's `/etc/apt` is left as it was found. Every approved package whose origin depended on one of those files then fails, named, and the run continues with the packages that did not.
-
-A single derived file that fails to write does the same, on a smaller scale: it has no review line of its own to fail, so the failure is charged to every package that needed it, naming the file. That is deliberate — you decided about a package, not about a file.
-
-## snap: every case
-
-Snap needs no origin model, and does not get one. There is one store, and a snap name resolves to one snap-id and one publisher through an assertion snapd validates itself — there is no second `firefox` for the target to install by mistake, and no repository or key for you to be asked about. What is left of provenance is which revision of that one snap is installed and which channel it tracks, and both of those converge.
-
-On the source only: installed at the source's exact revision, then switched to the source's channel.
-
-On the target only: offered for removal, unticked. snapd keeps its own pre-removal snapshot; pc-switcher does not disable that.
-
-Different revision, or the same revision on a different channel: converged to the source's, as a change item. Both are one line naming the two revisions or the two channels.
-
-Identical revision and channel: nothing.
-
-Confinement — classic or devmode — is captured on the source and replicated with the install.
-
-Sideloaded snaps (`snap install --dangerous`, `snap try`) are the one thing snap sync leaves alone. Their revision has an `x` prefix and no store can serve it, and pc-switcher has no way to carry the file. Sideloaded snaps on the source are named in a warning and skipped entirely, and so is any hold set on one. A sideloaded snap that exists only on the *target* is unaffected: it is still offered for removal like any other.
-
-A snap whose revision the target's snapd cannot fetch fails as its own item; the rest of the run continues.
-
-Holds are separate items with the ordinary three-way decision: held on the source only means hold, held on the target only means unhold in the unticked group, held on both or neither means nothing. A hold recorded for a snap the source no longer has produces no item. No command this job runs ever sets a standing hold as a side effect.
-
-For the duration of the run, snapd's *automatic* refresh is paused on both machines, because snapd refreshes several times a day and would otherwise move a revision mid-sync. Only automatic refreshes are blocked; the job's own revision convergence still works. Each machine's prior refresh policy is read first and written back at the end, so a hold you set yourself, including an indefinite one, survives. If the prior value cannot be read on a machine, that machine's policy is left untouched and the pause pc-switcher set expires on its own.
-
-Revision convergence is what makes snap application data syncable at all. With both machines on the same revision, `folder_sync` mirrors the current revision's data directory and the revision-independent `common` directory. Retained older revisions — ones the target's snapd never installed — stay excluded rather than leaving orphan data behind.
-
-## flatpak: every case
-
-Flatpak follows the same rule as apt: a remote is derived from the apps approved from it, never ticked.
-
-Scope is identity. The same application in the user installation on one machine and the system installation on the other is two items: one install and one removal, never a change. pc-switcher reports the split as found and does not normalise it.
-
-So is the branch. An app is identified, installed and uninstalled by its full `<application>/<arch>/<branch>` reference, never by the bare application id, because two branches of one id can be installed side by side and a remote can offer several — flatpak refuses to guess between them, so the bare id fails on every run for such an app. The same app on `stable` on one machine and `beta` on the other is two items, an install and a removal, and the review line names the branch. Where the app comes from is deliberately *not* identity: see the origin paragraphs below.
-
-An app on the source only: installed, after its remote. On the target only: offered for removal, unticked. Same app, same branch, same scope, different version: reported only. Identical: nothing.
-
-A remote is not a review item in the add or the change direction. It travels because an app approved this run comes from it, and declining the app is the only way to decline the remote. Every derived remote is provisioned before the first app installs — `flatpak install` refuses outright when its remote is not configured in that scope.
-
-Derivation reaches the runtime too. An approved app's install pulls the runtime it is built against, and if the source holds that runtime from another remote, that remote travels as well; the app's own origin alone would leave the install unable to resolve it.
-
-A remote the source has that feeds no app approved this run does not travel. There is no exception for a "distribution" remote the way apt has one for the Ubuntu archive: a fresh flatpak install configures zero remotes and a machine with none is a perfectly ordinary machine, so even Flathub travels only as a consequence of something needing it.
-
-A remote that cannot be provisioned has no line of its own to fail. The failure lands on every app that needed it, naming the remote and quoting flatpak's own error.
-
-A remote travels with its trust, not only its name and URL. pc-switcher captures whether the source verifies the remote's signatures and, when it does, the remote's own signing key, and re-adds it on the target with that key imported. The key is copied byte-for-byte and never fetched from a vendor. Without it a replicated remote is configured but unusable and every install from it fails with a missing-public-key error. A remote the source itself does not verify is replicated unverified and says so in the review; a verified remote is never turned into an unverified one. A verified remote with no key of its own — trusted through a machine-level anchor — is added plainly.
-
-A remote present on both machines whose URL, verification setting or key differs is repointed in place, silently and without a review line, keeping the apps that name it as their origin intact. A target that already trusted a different key ends up trusting both, because flatpak merges imported keys rather than replacing them.
-
-The exception is apt's repository-conflict rule in a second ecosystem. If a differing URL or verification setting would repoint a remote that an app you marked machine-specific on the target takes as its origin in that scope, you are shown both configurations — the target's first, one differing field per line, never a computed diff, because a remote is a handful of named values rather than a file body — and asked to overwrite or leave it for now. Two answers, nothing recorded either way. Machine-specific is the trigger, not merely target-only: such an app produces no review line in any run, so nothing else would tell you its updates were about to move; an ordinary target-only app already has a removal line of its own. The entry names the apps that are the reason. Leaving it fails every approved app that needed the source's URL, quoting your own decision rather than the symptom. A key-only difference never raises it: importing a key can neither move an app's origin nor withdraw trust.
-
-A remote present only on the target is offered for removal, unticked, and its line names the apps on the target that still have it as their origin in that scope. Deleting a remote also drops its key. That screen takes two answers, not three: delete, or leave it for now. A permanent machine-specific mark on a remote whose whole purpose is to feed apps would silently and permanently change where those apps come from, and the remedy is consolidating the two machines' configurations. Nothing is recorded either way.
-
-An app is installed from the source's remote or not at all, and "the source's remote" means the same URL, not merely the same name. Before each install pc-switcher re-reads the target's own remote list and requires the app's origin remote to carry the source remote's URL and verification setting; after the install it reads the app's landed origin back and resolves that to a URL again. Either check failing is that app's own failure, naming both URLs, and nothing is installed on the strength of a matching name.
-
-This is not a theoretical guard. Two remotes can share a name and serve different vendors' builds of the same app — a `flathub` pointing at Flathub's beta repository hands over a different version, a different collection and a different binary, at success exit and with `flatpak list` reporting `flathub` either way. A successful `flatpak remote-add` is not evidence either: adding a name that already exists leaves the existing URL untouched and still exits successfully.
-
-An app whose origin remote exists neither on the target nor in this run's own additions is refused as its own item naming the missing remote, rather than issuing an install flatpak would reject.
-
-Those two checks guard an install, and an app already present on both machines issues none — so the already-diverged case is reported instead. The same app, same scope, same branch, installed from different remotes on the two machines is a provenance divergence: reported with both remotes and both URLs named, never converged, and it takes precedence over a version difference on the same app, because two vendors' builds are numbered independently and reporting the numbers would state a difference of degree where the real difference is of origin. Converging it is not on offer at all: flatpak refuses to install a ref that is already installed from another remote, so the only mechanical resolution would be uninstalling the app you have and reinstalling it from the other vendor. Origins are compared by the remotes' URLs, never their names, so a target `flathub` pointing at the beta repository is caught and a remote the two machines merely named differently is not.
-
-A remote the source restricts with a filter is replicated **unfiltered**, and the run warns once per such remote rather than letting a successful add read as full replication. The filter's content is an ordinary local file at whatever path the source happens to name — flatpak stores the path, not the content, and validates neither — so it is not repository-or-key material that can travel. The warning names the remote and the command to re-apply the filter on the target.
-
-A third named installation, neither user nor system, is skipped.
-
-Masks are patterns, not references to installed apps, and replicate whether or not anything matches. Present on the source only means mask; on the target only means unmask, unticked. Editing a pattern reads as remove-old plus add-new, and moving one between scopes reads as add plus remove — reported as found, never normalised. A system-scope mask needs sudo on the target; a user-scope one does not, and a user-scope-only run never asks for root.
-
-## Manual installs: every case
-
-This job detects two things on the source: apt packages whose installed version comes from no configured repository, and paths directly under `/usr/local` and `/opt` (plus the immediate children of `/usr/local/bin` and `/usr/local/lib`) that no package owns.
-
-Each detected item ends the run resolved in one of three ways, and there is no fourth: it has an install snippet, it is marked machine-specific, or you skipped it once. Skip-once is a real resolution, not an unresolved state.
-
-An item with a snippet in the source's registry is an install line and is reproduced by replaying the snippet. An item with a snippet only on the *target* is still unresolved: whether something is reproducible is decided by what the source holds. An item with no snippet anywhere is a report line in its own group, asking for a resolution.
-
-A snippet authored during the review is persisted, pushed and replayed in the same run — you do not have to sync twice.
-
-A snippet is a shell command that reproduces the item. pc-switcher never parses, interprets or reasons about it. It is stored verbatim, whitespace included, and replayed verbatim as the target user with no `sudo` wrapped around it — any privilege it needs must be written inside it. It runs with no stdin, so a command that prompts fails rather than hanging the sync. Submitting an empty body re-prompts the three-way choice rather than falling through.
-
-The registry lives at `~/.config/pc-switcher/package-snippets.yaml` and, unlike the decision files, it *does* travel: how to install something is knowledge about the package, not about the machine. It is pushed as a whole-file overwrite. A purely additive push proceeds silently. A push that would lose an entry the target holds, or change one, shows you exactly which entries and asks. Declining aborts the run, and a run that cannot ask aborts too — so you can consolidate the two registries by hand rather than silently dropping the target's snippets.
-
-A snippet that has vanished between planning and replay, or whose replay fails, is a per-item failure naming the item; the rest of the run continues.
-
-This job is install-only. It has no record of what it installed on the target, so it never proposes a removal. Removing a hand-installed item on the target is manual work.
-
-## What you are never asked about, and why
-
-The test is derivability: if an approved package implies the answer, asking you would be asking a question you cannot answer independently of the package.
-
-Adding or changing an apt repository. It is where an approved package comes from. Ticking a repository without its package does nothing; ticking a package without its repository cannot be installed. The pairing was never expressible, so the repository has no tick.
-
-Signing keys, in every direction. A key is only how a repository is made to work.
-
-Adding or updating an apt pin. A pin is what makes an origin win, and origin is part of what is being replicated. One naming an origin the target lacks is inert.
-
-The distribution's own source files. They define what "the distribution" means on each machine.
-
-The single `apt-get update` a run issues, and the cleanup of a keyring nothing references any more.
-
-Automatically-installed apt dependencies, and collateral that touches only them. The target's apt owns its own dependency graph.
-
-Files apt does not read, like the `.save` copies its own tooling leaves behind.
-
-The snapd auto-refresh pause, and flatpak's remote-before-app ordering.
-
-None of this is hidden — every derived write is logged as it lands and previewed under `--dry-run`. It is simply not a question.
-
-The counter-case, so the rule is legible: `/etc/apt/apt.conf.d` is reviewed in all three directions precisely because no approved package implies anything about it.
-
-## Failure and partial outcomes
-
-A job reports one of three outcomes.
-
-SUCCESS means the job did what its review approved. A job whose review was empty — the target already matches — is also a success: that is the goal, met.
-
-SKIPPED means the job deliberately did nothing and says so, rather than reporting a success it did not earn. Three things produce it. A package job whose review had something to offer but ran without a terminal is skipped. `apt_sync` is skipped when the target reports no Ubuntu Pro attachment and you answer "skip" — or when nobody was there to answer. And a job with nothing applicable is skipped: a `folder_sync` with no enabled folders, a VS Code state sync with nothing to sync, an enabled job name that resolves to nothing. A skipped job records no decision, pushes no registry and leaves the target untouched. The run continues and the exit code is unchanged.
-
-FAILED means at least one approved item could not be applied. Every approved item is attempted; failures are collected and reported together at the end, naming each item. One bad package never blocks the rest of the same job, and one failed job never stops the others.
-
-A run without a terminal prompts for nothing, so every reviewable item comes back skip-once and every package job with a non-empty review reports SKIPPED. `apt_sync` also reports SKIPPED, without reaching a review at all, when the target is unattached and ESM sources would have been written — there is nobody to ask. Nothing is recorded, no snippet is written, no registry is pushed. Re-run interactively to decide anything.
-
-A dry run produces the same plan and the same review as a real run, and issues no command that changes either machine. The review *is* the preview: it lists every item, and the derived `/etc/apt` writes that have no review line of their own are previewed alongside it, so a run whose entire repository work is derived does not show a bare metadata refresh with no reason for it. A dry run on a terminal is a SUCCESS; a dry run without one is a SKIPPED for the same reason a real one is, because nothing was decided.
-
-Aborting — Ctrl-C at any review screen, an unanswerable prompt, or choosing abort at a collateral item — stops the whole sync. It is never a per-item skip.
-
-## Known limitations and deliberate non-goals
-
-These are given up knowingly. Each one is a real cost.
-
-`/etc/apt` on the target is no longer under your line-by-line control. Repositories, keys and pins appear because a package was approved, and the only way to decline one is to decline the package.
-
-The two machines' `/etc/apt` are converged for what packages need, not made identical. A repository on the source that feeds nothing this run syncs does not travel.
-
-Pin files always travel. One you wanted on a single machine comes back every run, and deleting it on the source is the only way to stop that.
-
-A package you installed by hand on the source but which arrived on the target as an automatic dependency is not protected from collateral removal. The target's apt owns what the target's apt installed.
-
-Machine-specific marks are not consulted when protecting against collateral. A package you marked skip-always can still be removed as collateral of an approved install.
-
-snap has no origin model, and does not need one: one name resolves to one publisher, enforced store-side.
-
-Enabling `apt_sync` against a target with no Ubuntu Pro attachment costs you the whole apt job for that run, not just the two ESM files.
-
-Deleting an apt config file can be marked machine-specific; deleting an apt repository, an apt pin or a flatpak remote cannot.
-
-Sideloaded snaps cannot be reproduced. Nothing carries the `.snap` bytes between machines.
-
-Manual installs cannot be removed. The job keeps no record of what it put on the target.
-
-Version drift is reported, never resolved, for apt and flatpak. Aligning two machines' versions is your job, not the sync's.
-
-Cross-vendor divergence is reported, never resolved, for apt packages and flatpak apps alike. When both machines have the same one from different vendors, pc-switcher will not pick one.
-
-A package job's review cannot be answered without a terminal. There is no config file of standing answers and no `--yes`.
-
-Machine-specific marks are per manager and per machine, in files that are deliberately never synced. Moving to a new machine means re-deciding.
+- **PKG-FR-ESM-GATE**: Where the source carries ESM repositories that would be written to a target reporting no Ubuntu Pro attachment, the system MUST obtain the user's decision before writing anything and before asking that job's other questions, with exactly two outcomes: attach the target, or skip the apt job for this run while the other jobs proceed. The user MUST be told what to do on the target to attach it.
+  Why: an unattached target's metadata refresh succeeds because the ESM indexes are public, so the ESM suites enter candidate selection above the ordinary archive and the failure lands later, at install time, on a package the user will not connect to the sync. The system cannot fix this itself: attaching needs a subscription token or an interactive browser flow, the source's own credentials are root-only and not reusable, and carrying a token would put a secret on a command line.
+- **PKG-FR-ESM-VERIFY**: An answer claiming the target is attached MUST be verified against the target rather than believed, and the user MAY answer it any number of times.
+- **PKG-FR-ESM-SKIP-WHOLE-JOB**: Skipping MUST leave the target's apt configuration exactly as it was found, and MUST skip the whole apt job rather than only the ESM repositories.
+  Why: pins always travel (`PKG-FR-PIN-ALWAYS`), so the source's ESM pins would reach a target without the sources they name, leaving a candidate selection matching neither machine. An untouched configuration is a state the user can reason about.
+- **PKG-FR-ESM-NO-ASK**: A run with nobody to ask MUST take the skip and MUST say why. A dry run MUST NOT ask, and MUST warn that a real run would skip the apt job.
+  Why: a rehearsal must not send the user off to attach a machine.
+- **PKG-FR-ESM-PRIVACY**: Only whether the target is attached may be logged or shown. Nothing else the attachment check learns, including the subscriber's identity, may leave it.
+
+### Applying
+
+- **PKG-FR-APT-CONFIG-ATOMIC**: All repository-configuration changes a run makes MUST be applied as one unit, backed up beforehand, and followed by a single metadata refresh. If that refresh fails, every file the unit touched MUST be restored. Every approved package whose origin depended on the unit MUST then fail, named, and the run MUST continue with the packages that did not.
+- **PKG-FR-DERIVED-FAILURE**: A derived write has no item of its own to fail; its failure MUST be charged to every approved package that needed it, naming what failed.
+  Why: the user decided about a package, not about a file.
+- **PKG-FR-DERIVED-VISIBLE**: Every derived write MUST be logged as it lands and MUST appear in a dry run's preview.
+  Why: not asking is not the same as hiding.
+
+## snap
+
+- **PKG-FR-SNAP-CASES**: A snap on the source only MUST be offered for install at the source's revision and channel; a snap on the target only MUST be offered for removal; a difference of revision or channel MUST be offered as a single change naming both values; identical revision and channel MUST produce no item.
+- **PKG-FR-SNAP-CONFINEMENT**: A snap's confinement mode MUST be captured on the source and replicated with the install.
+- **PKG-FR-SNAP-REMOVE-SNAPSHOT**: Removing a snap MUST leave snapd's own pre-removal snapshot in place.
+- **PKG-FR-SNAP-SIDELOAD**: Sideloaded snaps MUST NOT be replicated. Those on the source MUST be reported and skipped, along with any hold set on them. A sideloaded snap on the target MUST still be offered for removal like any other.
+  Why: no store can serve such a revision and nothing carries the file between machines.
+- **PKG-FR-SNAP-FAIL-ITEM**: A snap whose revision the target cannot fetch MUST fail as its own item, and the rest of the run MUST continue.
+- **PKG-FR-SNAP-HOLD**: A snap refresh hold MUST be an item of its own in both directions. A hold recorded for a snap the source no longer has MUST produce no item, and no command a sync issues may set a standing hold as a side effect.
+- **PKG-FR-SNAP-REFRESH-PAUSE**: Automatic snap refreshes MUST be suspended on both machines for the duration of a run and MUST NOT interfere with the run's own revision convergence. Each machine's prior refresh policy MUST be restored afterwards, including an indefinite hold the user set. Where the prior policy cannot be read on a machine, that machine's policy MUST be left untouched.
+  Why: snapd refreshes several times a day and would otherwise move a revision mid-sync.
+- **PKG-FR-SNAP-DATA-BOUNDARY**: Data directories of revisions the target's snapd never installed MUST NOT be synced.
+  Why: they would leave orphan data behind on the target.
+
+## flatpak
+
+- **PKG-FR-FLATPAK-CASES**: An application on the source only MUST be offered for install; on the target only, for removal; the same application, scope and branch at different versions MUST be reported only; identical MUST produce no item.
+- **PKG-FR-FLATPAK-REMOTE-DERIVED**: A remote MUST NOT be a review item when it is added or changed. It MUST travel because an application approved this run comes from it, including the remote that supplies an approved application's runtime, and declining the application MUST be the only way to decline the remote. A remote that feeds no application approved this run MUST NOT travel, and no remote is exempt from this rule.
+  Why: a fresh flatpak installation configures zero remotes, so there is no "distribution" remote the way apt has a distribution archive.
+- **PKG-FR-FLATPAK-REMOTE-FIRST**: Every derived remote MUST be provisioned before the first application installs.
+- **PKG-FR-FLATPAK-REMOTE-TRUST**: A remote MUST replicate with its trust, not only its name and URL: whether the source verifies its signatures and, where it does, its signing key, copied byte-for-byte and never fetched from a vendor. A verified remote MUST NOT be replicated as an unverified one; a remote the source itself does not verify MUST be replicated unverified and the user MUST be told.
+  Why: without the key a replicated remote is configured but unusable and every install from it fails.
+- **PKG-FR-FLATPAK-REPOINT**: A remote present on both machines whose URL, verification setting or key differs MUST be repointed in place without a review line and without disturbing the applications that name it as their origin — except where the repoint would move the origin of an application the target marked machine-specific, in which case the system MUST obtain consent first, MUST show both configurations, MUST name the applications that are the reason, and MUST NOT record the answer. Declining MUST fail every approved application that needed the source's URL, citing the decision. A difference of key alone MUST NOT raise the question.
+  Why: importing a key can neither move an application's origin nor withdraw trust, since flatpak merges imported keys rather than replacing them.
+- **PKG-FR-FLATPAK-REMOTE-DELETE**: A remote present only on the target MUST NOT be deleted without explicit approval, and the request MUST name the applications on the target that still have it as their origin in that scope.
+- **PKG-FR-FLATPAK-INSTALL-ORIGIN**: An application MUST be installed from the source's remote or not at all, and the source's remote MUST be identified by its URL and verification setting rather than its name. The system MUST verify this against the target's own state before the install and MUST verify the landed origin after it; either failure MUST fail that application alone, naming both URLs.
+  Why: two remotes can share a name and serve different vendors' builds of the same application, with success reported either way, and re-adding an existing remote name succeeds without changing where it points — so neither a matching name nor a successful add is evidence.
+- **PKG-FR-FLATPAK-MISSING-REMOTE**: An application whose origin remote exists neither on the target nor among this run's own additions MUST be refused as its own item naming the missing remote.
+- **PKG-FR-FLATPAK-ORIGIN-DIFF**: The same application, scope and branch installed from different remotes on the two machines MUST be reported as a provenance divergence naming both remotes and both URLs, MUST NOT be converged, and MUST take precedence over a version difference on that application. Origins MUST be compared by URL, never by remote name.
+  Why: flatpak refuses to install a reference already installed from another remote, so the only mechanical convergence would be uninstalling what the user has and reinstalling it from the other vendor.
+- **PKG-FR-FLATPAK-REMOTE-FAILURE**: A remote that cannot be provisioned has no item of its own to fail; the failure MUST land on every application that needed it, naming the remote and quoting flatpak's own error.
+- **PKG-FR-FLATPAK-FILTER**: A remote the source restricts with a filter MUST be replicated unfiltered, and the run MUST warn once per such remote and tell the user how to re-apply the filter on the target.
+  Why: flatpak stores the filter's path rather than its content and validates neither, so it is not repository-or-key material that can travel; a silent successful add would read as full replication.
+- **PKG-FR-FLATPAK-THIRD-SCOPE**: An installation that is neither the user nor the system one MUST be skipped.
+- **PKG-FR-FLATPAK-MASK**: Mask patterns MUST replicate per scope whether or not anything currently matches them, in both directions. Editing or moving a pattern MUST be reported as found and MUST NOT be normalised.
+- **PKG-FR-FLATPAK-PRIVILEGE**: A run that touches only the user scope MUST NOT require root on the target.
+
+## Manual installs
+
+- **PKG-FR-MANUAL-RESOLUTION**: Every detected item MUST end the run in one of exactly three states: reproducible by an install snippet, marked machine-specific, or skipped for this run. Skip-once MUST count as a resolution, not as an unresolved state.
+- **PKG-FR-MANUAL-SOURCE-DECIDES**: Whether an item is reproducible MUST be decided by what the source holds. An item with a snippet only on the target MUST still be treated as unresolved.
+- **PKG-FR-MANUAL-SAME-RUN**: A snippet authored during a review MUST be persisted, transferred and replayed in the same run.
+- **PKG-FR-SNIPPET-VERBATIM**: A snippet MUST be stored and replayed exactly as written. The system MUST NOT parse, interpret or reason about it. It MUST run as the target user with no privilege added around it, and MUST run without standing input so that a command expecting input fails rather than hanging the sync. An empty snippet MUST NOT be accepted as a resolution.
+- **PKG-FR-REGISTRY-TRAVELS**: The snippet registry MUST sync between machines.
+  Why: how to install something is knowledge about the software, not about the machine — unlike the machine-specific marks of `PKG-FR-MACHINE-SPECIFIC`, which must never travel.
+- **PKG-FR-REGISTRY-CONSENT**: A registry transfer that would lose or change an entry the target holds MUST NOT proceed without consent, and MUST name the affected entries. Declining MUST abort the run, and a run that cannot ask MUST abort.
+  Why: aborting lets the user consolidate the two registries by hand; the alternative silently drops the target's snippets.
+- **PKG-FR-MANUAL-FAIL-ITEM**: A snippet that has vanished between planning and replay, or whose replay fails, MUST fail as its own item naming the item, and the run MUST continue.
+
+## Reporting, failure and rehearsal
+
+- **PKG-FR-OUTCOME-SUCCESS**: A job MUST report success when it did what its review approved, including when its review was empty because the target already matches.
+- **PKG-FR-OUTCOME-SKIPPED**: A job that deliberately did nothing MUST report skipped rather than success, MUST say why, MUST record no decision, MUST transfer no registry and MUST leave the target untouched. The run MUST continue and the exit code MUST be unaffected.
+- **PKG-FR-OUTCOME-FAILED**: A job MUST report failure when at least one approved item could not be applied. Every approved item MUST be attempted, failures MUST be collected and reported together naming each item, one failed item MUST NOT block the rest of its job, and one failed job MUST NOT stop the others.
+- **PKG-FR-NO-TERMINAL**: A run with no interactive terminal MUST ask nothing, MUST treat every reviewable item as declined for this run, and MUST report every package job with a non-empty review as skipped. Nothing may be recorded, no snippet written and no registry transferred.
+- **PKG-FR-DRY-RUN**: A rehearsal MUST produce the same plan and the same review as a real run and MUST issue no command that changes either machine. The preview MUST include the derived changes that have no review line of their own. A rehearsal on a terminal MUST report success; without one it MUST report skipped, for the same reason a real run does.
+- **PKG-FR-FAIL-NAMED**: Every failure MUST name the item, package or file it concerns.
+
+## Non-goals and accepted costs
+
+Each of these is a real cost, given up knowingly.
+
+- **PKG-NG-APT-LINE-CONTROL**: The target's apt configuration is not under the user's line-by-line control. Repositories, keys and pins appear because a package was approved, and declining the package is the only way to decline them.
+- **PKG-NG-APT-IDENTICAL**: The two machines' apt configurations are converged for what packages need, not made identical.
+- **PKG-NG-PIN-LOCAL**: A pin cannot be kept on one machine only. It returns on every sync until it is deleted on the source.
+- **PKG-NG-COLLATERAL-SOURCE-MANUAL**: A package installed by hand on the source but present on the target as an automatic dependency is not protected from collateral removal. The target's apt owns what the target's apt installed.
+- **PKG-NG-COLLATERAL-MARKS**: Machine-specific marks are not consulted when protecting against collateral. Software marked never-offer-again can still be removed as collateral of an approved install.
+- **PKG-NG-DEB-ORPHANED**: Enabling `apt_sync` without `manual_installs_sync` leaves hand-installed `.deb` packages replicated by nobody. They are absent from the review rather than offered as installs that would fail.
+- **PKG-NG-SNAP-ORIGIN**: snap has no origin model and needs none.
+- **PKG-NG-ESM-PARTIAL**: A target with no Ubuntu Pro attachment costs the whole apt job for that run, not only the ESM repositories.
+- **PKG-NG-MARK-ORIGIN**: Deleting an apt configuration file can be marked machine-specific; deleting an apt repository, an apt pin or a flatpak remote cannot.
+- **PKG-NG-SIDELOAD**: Sideloaded snaps cannot be reproduced. Nothing carries the file between machines.
+- **PKG-NG-MANUAL-REMOVE**: Manual installs cannot be removed. The job keeps no record of what it put on the target.
+- **PKG-NG-VERSION-CONVERGE**: Version drift is reported, never resolved, for apt and flatpak. Aligning two machines' versions is the user's job.
+- **PKG-NG-VENDOR-CONVERGE**: Cross-vendor divergence is reported, never resolved, for apt packages and flatpak applications alike. Where both machines have the same software from different vendors, the system will not pick one.
+- **PKG-NG-UNATTENDED**: A package job's review cannot be answered without a terminal. There is no file of standing answers and no assume-yes option.
+- **PKG-NG-MARK-PORTABILITY**: Machine-specific marks are per manager and per machine and are deliberately never synced. A new machine means deciding again.
 
 ## Where the tool does not yet meet these requirements
 
-Verified against the code on the current branch, not against the older documents.
+Requirements the shipped code knowingly does not satisfy are recorded here, verified against the code on the current branch rather than against older documents. None are currently recorded.
 
 ## Open questions
 
 Genuinely undecided. An answer invented here would be worse than the question.
 
-Is the three-way decision right for `/etc/apt/apt.conf.d`? The ruling says it is reviewed in all three directions but does not say with how many answers. It currently gets the full three-way decision and the permanent mark, reasoned from the fact that the two-answer screens were justified by consequences an apt config file does not have. That reasoning is sound but was never ruled on.
+How many answers should `PKG-FR-APTCONF` offer? It is required to be reviewed in all three directions, and it currently carries the full decision including the permanent mark, reasoned from the fact that the restricted screens were justified by consequences an apt configuration file does not have. That reasoning is sound but was never ruled on.
 
-Should a repository deletion ever be markable machine-specific? The current answer is no, with the remedy being to consolidate the two machines' files. That remedy is real work the user may not want to do, and the alternative — a permanent mark that silently fixes where packages come from — was rejected rather than tested against use.
+Should `PKG-FR-REPO-DELETE` ever be markable machine-specific? `PKG-FR-NO-MARK-ON-ORIGIN` says no, with consolidation as the remedy. That remedy is real work the user may not want to do, and the alternative was rejected rather than tested against use.
 
-How much does the ESM hazard actually cost on a real desktop? Measured in a container, zero of thirteen upgradable packages had an ESM candidate. That a desktop with a large `universe` set has many more follows from the priority ordering but has not been measured. The gate does not depend on the count, but the size of the problem is unknown.
+How much does the ESM hazard behind `PKG-FR-ESM-GATE` cost on a real desktop? Measured in a container, zero of thirteen upgradable packages had an ESM candidate. That a desktop with a large `universe` set has many more follows from the priority ordering but has not been measured. The gate does not depend on the count, but the size of the problem is unknown.
 
-How often is a package manual on the source and automatic on the target — the collateral case knowingly given up? Nobody has counted. "Rare" is not a claim this document makes.
+How often is a package manual on the source and automatic on the target — the case `PKG-NG-COLLATERAL-SOURCE-MANUAL` gives up? Nobody has counted. "Rare" is not a claim this document makes.
