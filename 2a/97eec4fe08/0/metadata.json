@@ -1,0 +1,70 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "2a97eec4fe08",
+  "session_id": "6f351f45-55a4-4eda-a695-eb874d952f76",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-28T09:56:36.891354236Z",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 4,
+  "save_step_count": 2,
+  "files_touched": [
+    "src/pcswitcher/jobs/flatpak_sync.py",
+    "src/pcswitcher/jobs/packages/review.py"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "01a1095f61cc",
+  "checkpoint_transcript_start": 789,
+  "transcript_lines_at_start": 789,
+  "compact_transcript_start": 165,
+  "token_usage": {
+    "input_tokens": 30,
+    "cache_creation_tokens": 23102,
+    "cache_read_tokens": 6423776,
+    "output_tokens": 15420,
+    "api_call_count": 15
+  },
+  "session_metrics": {
+    "turn_count": 17
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-28T09:56:36.767501971Z",
+    "agent_lines": 76,
+    "agent_removed": 6,
+    "human_added": 400,
+    "human_modified": 101,
+    "human_removed": 0,
+    "total_committed": 565,
+    "total_lines_changed": 590,
+    "agent_percentage": 13.898305084745763,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 9,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 293,
+      "user_lines_removed": 26,
+      "agent_lines_added": 67,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9,
+        "src/pcswitcher/jobs/apt_sync.py": 154,
+        "src/pcswitcher/jobs/flatpak_sync.py": 130
+      },
+      "user_removed_per_file": {
+        "src/pcswitcher/jobs/apt_sync.py": 15,
+        "src/pcswitcher/jobs/flatpak_sync.py": 11
+      }
+    }
+  ]
+}

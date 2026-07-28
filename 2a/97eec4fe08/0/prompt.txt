@@ -1,0 +1,9 @@
+while waiting, tell where I can find the spec you wrote
+
+---
+
+"Supersedes ADR-020": we are still in implementation phase. No amendments. Correct ADR-020 directly. Avoid possible confusion. Single bible.
+
+---
+
+adr-017 was created long after adr-016. We could say adr-020 is not completely "accepted" yet, because we are changing our decisions constantly based on progressive insight.
