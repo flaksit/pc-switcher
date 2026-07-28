@@ -14,8 +14,12 @@ own package-manager or filesystem state (`apt-mark showmanual`, `/etc/apt`, `sna
 the pushed snippet registry) -- never against pc-switcher's log text -- except where an
 explicit witness legitimately needs the run's own output: the apt-repository-state
 dry-run test, whose subject IS the review output because a rehearsal makes no filesystem
-change to assert against. `apt-cache rdepends` output is also read to pick a safe removal
-candidate before either machine's package state is touched.
+change to assert against; the flatpak ORIGIN_MISMATCH test, for the same reason (a
+REPORT_ONLY diff changes nothing anywhere); and the filtered-remote test, whose subject is
+the warning itself. Those three read the output through `_collapse_run_output`, which is
+where the wrapping every Rich renderer applies is dealt with once. `apt-cache rdepends`
+output is also read to pick a safe removal candidate before either machine's package state
+is touched.
 
 `TestPackageSyncWholeRunContracts` (plan 02-11) extends this same module with the
 phase's whole-run contracts -- properties of an entire sync (non-interactive skip-all,
@@ -101,6 +105,29 @@ _RDEPENDS_PROBE_LIMIT = 40
 def nonblank_lines(text: str) -> list[str]:
     """Split command output into stripped, non-empty lines."""
     return [line.strip() for line in text.splitlines() if line.strip()]
+
+
+# Every escape sequence `logger.RichFormatter` can emit around a log line's styled fields.
+# Stripped before any assertion reads the run's own output: the formatter always renders
+# through a `force_terminal=True` console, so the text is coloured even when stdout is a pipe.
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _collapse_run_output(text: str) -> str:
+    """A sync's combined stdout+stderr as one ANSI-free, single-spaced line.
+
+    Both renderers that carry a package job's own words wrap them: `RichFormatter` folds a
+    long log record at its console width, and a review group arrives inside a Rich `Panel`.
+    A phrase that has to be matched whole therefore has to be matched after the line breaks
+    and the padding are gone. Single TOKENS (a package name, a ref, a URL) need none of
+    this and are asserted against the raw output elsewhere in this module — Rich never
+    breaks a word that fits the line.
+
+    Panel BORDER characters are deliberately left in place: they mark the wrap points
+    inside a panel, so a phrase that spans one still fails to match here rather than
+    matching a rendering nobody has seen.
+    """
+    return " ".join(_ANSI_ESCAPE_RE.sub("", text).split())
 
 
 def parse_dpkg_installed(dpkg_query_output: str) -> set[str]:
@@ -778,6 +805,82 @@ async def _restore_flatpak_target_baseline(executor: BashLoginRemoteExecutor) ->
     )
     if not result.success:
         print(f"[cleanup] failed to restore the target's flatpak baseline: {result.stderr}")
+
+
+async def _restore_flatpak_source_baseline(
+    executor: BashLoginRemoteExecutor, remote_name: str, scope: Literal["user", "system"], filter_path: str
+) -> None:
+    """Put `executor` (the sync SOURCE) back to an UNFILTERED `remote_name`, and drop the
+    filter file at `filter_path`.
+
+    Delete-and-re-add rather than `flatpak remote-modify --no-filter`: that option's
+    availability on this flatpak is not something this suite has measured, and re-adding from
+    Flathub's own `.flatpakrepo` is the one restore already proven to reproduce the remote's
+    trust configuration byte-for-byte (`_restore_flatpak_target_baseline`). The app installed
+    from it stays installed and keeps naming `remote_name` as its origin.
+    """
+    scope_flag = "--user" if scope == "user" else "--system"
+    sudo = "" if scope == "user" else "sudo "
+    result = await executor.run_command(
+        f"{sudo}flatpak remote-delete {scope_flag} --force {shlex.quote(remote_name)} || true; "
+        f"{sudo}flatpak remote-add {scope_flag} --if-not-exists {shlex.quote(remote_name)} "
+        f"{shlex.quote(_FIXTURE_FLATPAK_REPOFILE)}; "
+        f"rm --force {filter_path}",
+        login_shell=False,
+        timeout=180.0,
+    )
+    if not result.success:
+        print(f"[cleanup] failed to restore the source's unfiltered {remote_name}: {result.stderr}")
+
+
+async def _flatpak_app_rows(executor: BashLoginRemoteExecutor) -> list[tuple[str, str, str, str, str]]:
+    """Every installed APP on `executor`'s machine, as `parse_flatpak_list_lines` tuples.
+
+    The same five columns `flatpak_sync` captures, so a comparison of this list before and
+    after a run is a comparison of exactly what the job would have seen.
+    """
+    result = await executor.run_command(
+        "flatpak list --app --columns=application,version,origin,installation,ref", login_shell=False, timeout=20.0
+    )
+    return parse_flatpak_list_lines(result.stdout)
+
+
+async def _flatpak_remote_row(
+    executor: BashLoginRemoteExecutor, remote_name: str, scope: Literal["user", "system"]
+) -> tuple[str, tuple[str, ...]]:
+    """`(url, options)` for `remote_name` in `scope` on `executor`'s machine.
+
+    `options` is flatpak's own comma-separated token list, split the way
+    `flatpak_sync._parse_flatpak_remotes` splits it -- an optionless remote prints two fields
+    rather than three, so both widths are accepted here as they are there. It is read as a
+    tuple of TOKENS, never searched as a string: `filtered` and `no-gpg-verify` are
+    independent members.
+    """
+    scope_flag = "--user" if scope == "user" else "--system"
+    result = await executor.run_command(
+        f"flatpak remotes {scope_flag} --columns=name,url,options", login_shell=False, timeout=20.0
+    )
+    for line in nonblank_lines(result.stdout):
+        fields = line.split("\t")
+        if fields[0] == remote_name:
+            options = tuple(token for token in fields[2].split(",") if token) if len(fields) == 3 else ()
+            return fields[1], options
+    raise AssertionError(
+        f"no {scope}-scope flatpak remote named {remote_name!r} on this machine. The fixture remotes are "
+        f"created by tests/integration/scripts/internal/vm-test-fixtures.sh.\n{result.stdout}"
+    )
+
+
+# A ref filter's CONTENT is irrelevant to everything under test: `flatpak_sync` reads only the
+# `filtered` token the presence of a filter puts in the `options` column, and deliberately
+# replicates nothing of the file itself. This one allows the fixture app, so a machine left
+# with it by a failed cleanup is no worse off than one with no filter at all.
+_FLATPAK_FILTER_BODY = f"allow {_FIXTURE_FLATPAK_APP}\n"
+
+# The token `flatpak remotes --columns=options` prints for a remote carrying a ref filter --
+# restated here rather than imported, so the test fails when the shipped constant and the real
+# flatpak disagree instead of agreeing with whatever `flatpak_sync` happens to say.
+_FLATPAK_FILTERED_OPTION = "filtered"
 
 
 # -- apt repository-state helpers (D-11/D-12): synthesize a repo+key divergence -----
@@ -1715,6 +1818,236 @@ class TestPackageSyncWholeRunContracts:
                 f"{_FIXTURE_UNUSED_FLATPAK_REMOTE} travelled to pc2 although no approved ref comes from it"
             )
         finally:
+            await _restore_flatpak_target_baseline(pc2_executor)
+
+    async def test_one_ref_from_two_vendors_is_reported_with_both_urls(
+        self,
+        pc1_executor: BashLoginRemoteExecutor,
+        pc2_executor: BashLoginRemoteExecutor,
+        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
+        pc2_with_pcswitcher: BashLoginRemoteExecutor,
+        reset_pcswitcher_state: None,
+    ) -> None:
+        """ADR-020 D-41 at VM level: one ref, one scope, one branch, two vendors is
+        `ORIGIN_MISMATCH` -- reported naming both remotes and both URLs, and converged by
+        nothing.
+
+        The divergence is built by installing the fixture app on pc2 from the real Flathub
+        and then repointing pc2's `flathub` at the beta repository's URL (`remote-modify
+        --url=`, no second download: the app is already there). Both machines then print
+        `flathub` in `flatpak list --columns=origin`, which is asserted below BEFORE the
+        sync -- so a comparison by remote NAME provably sees nothing here, and only the URL
+        comparison D-41 mandates can produce the finding. The two URLs are what the run has
+        to name, and the assertion that it does is what proves the origin column and the
+        remote table were read the way the comparison assumes.
+
+        Run WITHOUT the automation hook, on purpose. A `REPORT_ONLY` diff makes no
+        filesystem change to assert against, so the review panel IS the result -- the same
+        carve-out the apt repository-state dry run takes -- and the automation hook answers
+        a review without ever printing it. D-26 then skips the job, which is why pc2's
+        unchanged app list below is a guard against a convergence that must not happen
+        rather than the claim itself; that a ticked `ORIGIN_MISMATCH` still converges
+        nothing is `sync_core.apply()`'s own exclusion, asserted by unit test.
+        """
+        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
+
+        application, _version, scope, remote_name, source_url, ref = await _flatpak_subject(pc1_executor)
+        scope_flag = "--user" if scope == "user" else "--system"
+        sudo = "sudo " if scope == "system" else ""
+
+        # The fixture's second remote supplies a real, differently-vendored URL, so nothing
+        # here invents one. Both Flathub keyrings share a sha256 (measured, vm-test-fixtures.sh),
+        # which is why the URL -- never a key digest -- is the whole evidence.
+        beta_url, _beta_options = await _flatpak_remote_row(pc1_executor, _FIXTURE_UNUSED_FLATPAK_REMOTE, scope)
+        assert beta_url != source_url, (
+            f"pc1's {remote_name} and {_FIXTURE_UNUSED_FLATPAK_REMOTE} both report {source_url!r}, so no vendor "
+            "divergence can be built from the fixture remotes "
+            "(tests/integration/scripts/internal/vm-test-fixtures.sh)"
+        )
+
+        try:
+            install = await pc2_executor.run_command(
+                f"{sudo}flatpak install {scope_flag} --assumeyes --noninteractive "
+                f"{shlex.quote(remote_name)} {shlex.quote(ref)}",
+                login_shell=False,
+                timeout=600.0,
+            )
+            assert install.success, (
+                f"failed to install {ref} on pc2 from {remote_name}, so the two machines never share the ref this "
+                f"test diverges: {install.stderr}"
+            )
+
+            target_rows = [row for row in await _flatpak_app_rows(pc2_executor) if row[4] == ref]
+            assert target_rows, f"{ref} is not installed on pc2 after the install; there is no shared ref to diverge"
+            assert target_rows[0][2] == remote_name, (
+                f"pc2 reports origin {target_rows[0][2]!r} for {ref}, not {remote_name!r} -- the two machines must "
+                "print the SAME origin name for the name comparison to be provably blind to this divergence"
+            )
+
+            repoint = await pc2_executor.run_command(
+                f"{sudo}flatpak remote-modify {scope_flag} --url={shlex.quote(beta_url)} {shlex.quote(remote_name)}",
+                login_shell=False,
+                timeout=30.0,
+            )
+            assert repoint.success, f"failed to repoint pc2's {remote_name} at {beta_url}: {repoint.stderr}"
+            target_url, _target_options = await _flatpak_remote_row(pc2_executor, remote_name, scope)
+            assert target_url != source_url, (
+                f"pc2's {remote_name} still reports {target_url!r} after the repoint, so both machines' copies of "
+                f"{ref} still come from one vendor and this run cannot exercise ORIGIN_MISMATCH"
+            )
+
+            before_rows = await _flatpak_app_rows(pc2_executor)
+            await _write_package_sync_config(pc1_executor, flatpak_sync=True)
+
+            # No automation env and no pty: the non-interactive path prints every group.
+            sync_result = await pc1_executor.run_command(
+                "pc-switcher sync pc2 --yes --allow-first-sync", timeout=900.0, login_shell=True
+            )
+            assert sync_result.success, (
+                f"pc-switcher sync exited {sync_result.exit_code}.\n"
+                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
+            )
+
+            combined_output = sync_result.stdout + sync_result.stderr
+            collapsed = _collapse_run_output(combined_output)
+            assert "Report flatpak packages" in collapsed, (
+                f"the mismatch reached no REPORT_ONLY review group.\n{combined_output}"
+            )
+            assert ref in combined_output, f"the report does not name the ref {ref}.\n{combined_output}"
+            # The discriminating pair: a VERSION_MISMATCH -- what this diverged pair would
+            # produce if the vendor comparison missed -- names two versions and no URL at all.
+            assert source_url in combined_output, (
+                f"the report does not name the source's vendor {source_url}.\n{combined_output}"
+            )
+            assert target_url in combined_output, (
+                f"the report does not name the target's vendor {target_url}.\n{combined_output}"
+            )
+
+            after_rows = await _flatpak_app_rows(pc2_executor)
+            assert after_rows == before_rows, (
+                "the run changed pc2's installed refs; an ORIGIN_MISMATCH is reported and converged by nothing.\n"
+                f"before: {before_rows}\nafter: {after_rows}"
+            )
+        finally:
+            # `_restore_flatpak_target_baseline` re-adds with `--if-not-exists`, which cannot
+            # repair a URL, so the repointed remote is deleted here first.
+            await pc2_executor.run_command(
+                f"{sudo}flatpak uninstall {scope_flag} --assumeyes {shlex.quote(application)} || true; "
+                f"{sudo}flatpak remote-delete {scope_flag} --force {shlex.quote(remote_name)} || true",
+                login_shell=False,
+                timeout=120.0,
+            )
+            await _restore_flatpak_target_baseline(pc2_executor)
+
+    async def test_a_filtered_source_remote_warns_once_and_travels_unfiltered(
+        self,
+        pc1_executor: BashLoginRemoteExecutor,
+        pc2_executor: BashLoginRemoteExecutor,
+        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
+        pc2_with_pcswitcher: BashLoginRemoteExecutor,
+        reset_pcswitcher_state: None,
+    ) -> None:
+        """ADR-020 (Consequences) at VM level: a derived remote whose SOURCE copy carries a
+        ref filter warns once, and the remote still travels -- unfiltered.
+
+        What only a real machine can establish is the fact the whole behaviour rests on:
+        that `flatpak remote-modify --filter=<file>` puts a `filtered` token in THIS
+        flatpak's `flatpak remotes --columns=options`, which is the single thing
+        `_parse_flatpak_remotes` reads to decide whether to warn. It is asserted on pc1
+        before the sync runs, so a flatpak that reports the filter some other way fails here
+        naming the command, instead of leaving the run silent for the wrong reason and this
+        test green.
+
+        pc2's `flathub` is deleted first, so the derived write genuinely provisions it and
+        the target's own `options` column afterwards is an observation about a remote this
+        run created rather than about one that was already there. One warning, not two: the
+        approved ref AND its runtime both come from `flathub`, so the derived set
+        deduplicates them and the count is a real claim.
+        """
+        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
+
+        application, version, scope, remote_name, _source_url, ref = await _flatpak_subject(pc1_executor)
+        scope_flag = "--user" if scope == "user" else "--system"
+        sudo = "sudo " if scope == "system" else ""
+        ref_item_id = FlatpakItem(
+            application=application, version=version, origin=remote_name, scope=scope, ref=ref
+        ).item_id
+        # Unquoted `$HOME` on purpose: the remote shell expands it, and flatpak stores
+        # whatever path it is given verbatim.
+        filter_path = f"$HOME/.cache/pcswitcher-it-flatpak-filter-{uuid4().hex[:12]}"
+
+        try:
+            filtered = await pc1_executor.run_command(
+                f"mkdir --parents $HOME/.cache && printf %s {shlex.quote(_FLATPAK_FILTER_BODY)} > {filter_path} && "
+                f"{sudo}flatpak remote-modify {scope_flag} --filter={filter_path} {shlex.quote(remote_name)}",
+                login_shell=False,
+                timeout=30.0,
+            )
+            assert filtered.success, (
+                f"`flatpak remote-modify {scope_flag} --filter=` failed on pc1, so no filtered remote exists to "
+                f"warn about: {filtered.stderr}"
+            )
+            _source_url_after, source_options = await _flatpak_remote_row(pc1_executor, remote_name, scope)
+            assert _FLATPAK_FILTERED_OPTION in source_options, (
+                f"pc1's {remote_name} reports options {source_options!r} after `flatpak remote-modify {scope_flag} "
+                f"--filter=`, so this flatpak does not print the {_FLATPAK_FILTERED_OPTION!r} token "
+                "`flatpak_sync._FILTERED_OPTION` reads and the warning under test can never fire"
+            )
+
+            # The app is absent on pc2 by fixture; deleting the remote is what makes the
+            # derived write provision it, and the target's `options` column meaningful.
+            await pc2_executor.run_command(
+                f"{sudo}flatpak uninstall {scope_flag} --assumeyes {shlex.quote(application)} || true; "
+                f"{sudo}flatpak remote-delete {scope_flag} --force {shlex.quote(remote_name)} || true",
+                login_shell=False,
+                timeout=120.0,
+            )
+            before_remotes = await pc2_executor.run_command(
+                f"flatpak remotes {scope_flag} --columns=name", login_shell=False, timeout=15.0
+            )
+            assert remote_name not in nonblank_lines(before_remotes.stdout), (
+                f"remote {remote_name} still configured on pc2, so this run cannot show it being provisioned"
+            )
+            assert application not in [row[0] for row in await _flatpak_app_rows(pc2_executor)], (
+                f"{application} still installed on pc2, so no approved ref derives {remote_name}"
+            )
+
+            await _write_package_sync_config(pc1_executor, flatpak_sync=True)
+            sync_cmd = f"{_automation_env_assignment(ref_item_id)} pc-switcher sync pc2 --yes --allow-first-sync"
+            sync_result = await pc1_executor.run_command(sync_cmd, timeout=900.0, login_shell=True)
+            assert sync_result.success, (
+                f"pc-switcher sync exited {sync_result.exit_code}.\n"
+                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
+            )
+
+            combined_output = sync_result.stdout + sync_result.stderr
+            collapsed = _collapse_run_output(combined_output)
+            warning = f"The {scope} flatpak remote {remote_name} carries a ref filter on the source."
+            assert collapsed.count(warning) == 1, (
+                f"expected exactly one filtered-remote warning, found {collapsed.count(warning)}.\n{combined_output}"
+            )
+            assert f"flatpak remote-modify {scope_flag} --filter=<file> {remote_name}" in collapsed, (
+                f"the warning does not carry the command that re-applies the filter.\n{combined_output}"
+            )
+
+            # The app first: a remote that was warned about but never usably provisioned
+            # fails here, rather than as a confusing lookup miss on the row read below.
+            assert application in [row[0] for row in await _flatpak_app_rows(pc2_executor)], (
+                f"{application} not installed on pc2 -- the remote was warned about but never usably provisioned.\n"
+                f"{combined_output}"
+            )
+            _target_url, target_options = await _flatpak_remote_row(pc2_executor, remote_name, scope)
+            assert _FLATPAK_FILTERED_OPTION not in target_options, (
+                f"pc2's provisioned {remote_name} reports options {target_options!r}: the filter travelled, which "
+                "is exactly what the warning says did not happen"
+            )
+
+            _source_url_final, source_options_after = await _flatpak_remote_row(pc1_executor, remote_name, scope)
+            assert _FLATPAK_FILTERED_OPTION in source_options_after, (
+                f"the run changed pc1's own {remote_name}: a source is read, never converged"
+            )
+        finally:
+            await _restore_flatpak_source_baseline(pc1_executor, remote_name, scope, filter_path)
             await _restore_flatpak_target_baseline(pc2_executor)
 
     async def test_skip_always_is_inert_in_both_roles(
