@@ -1,0 +1,82 @@
+<task-notification>
+<task-id>aa7415f1f95c5aa94</task-id>
+<tool-use-id>toolu_01Q1JzqxzzBqtkqdTFpg9Zns</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/1cfb7cbc-0306-41b6-8f82-7ed1281a66dd/tasks/aa7415f1f95c5aa94.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix collateral over-skip and plural title" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Both defects confirmed and fixed. Two local commits, nothing pushed.
+
+## Defect 1 — confirmed, with one correction to your brief
+
+Your reading of the code was right. `_collect_plan_time_collateral` built one `trigger_ids` frozenset per direction from the whole candidate set and handed it to every collateral item, and `_resolve_collateral` overrode every one of those ids to `SKIP_ONCE` — including ids the user had decided `SKIP_ALWAYS`. `apply()` calls `_record_permanent_skips(plan, decisions)` on that overridden map (`packages/sync_core.py:367`, `:459`), so the permanent mark was never written.
+
+One correction: the erasure is not limited to collateral's own batch semantics. Even with perfect attribution, a package that genuinely *is* a trigger and was marked `SKIP_ALWAYS` would still have lost its mark. My first version of the "skip-always survives" test used an *unrelated* package and came back GREEN under mutation M1 — attribution alone saved it. I rewrote it so the skip-always package is a real trigger; that is the test that actually pins the protection.
+
+### Was exact attribution achievable, and at what cost
+
+Yes, and cheaper than the ADR feared. The narrowing (`apt_sync.py:_collateral_for`) runs **only when the batched rehearsal already found manual collateral** — then it rehearses each candidate alone and blames it for the collateral its own transaction reproduces. Cost: **zero extra `apt-get --dry-run` on a clean run** (the common case, pinned by `test_a_clean_batch_costs_no_extra_rehearsal`), and **one per candidate in that direction** on a run that found collateral. A single candidate is its own answer and is not rehearsed twice, so the existing single-candidate tests still show exactly one simulation.
+
+What is *not* exact, stated honestly rather than papered over: **joint causation**. apt keeps a package while either of two others is present and drops it once both go; no single candidate reproduces it. That collateral is attributed to the whole batch and the question says "the selected packages" rather than naming one. This is conservative and true, not an approximation dressed as exact. Isolating a minimal cause set there is delta-debugging over the candidate set, and I judged that disproportionate — it is documented as a negative consequence in ADR-020 instead.
+
+The permanent-decision fix is independent of all of that: `_resolve_collateral` now downgrades only an `APPLY`.
+
+## Defect 2 — confirmed
+
+Not `sync_core.py:300` (its `_ITEM_CLASS_NOUN` values are already plural and correct). The culprit is `apt_sync.py:_build_review_groups`, which built `f"{verb.capitalize()}s ..."` over `_REPO_REMOVAL_VERBS` values that are verb phrases ending in a noun. "delete pin file" + "s" read correctly by luck. `_REPO_REMOVAL_VERBS` now maps to a `_RemovalVocabulary(action_label, plural)` — the entry keeps the action label, the title is composed from the plural noun, so nothing pluralises a verb phrase. `flatpak_sync.py:1511` was already composed this way; nothing else in the codebase has the pattern.
+
+## Mutation table — real results
+
+Pre-fix status was measured by restoring `apt_sync.py` from `8d68bf81` into the tree (source only, tests kept), not inferred.
+
+| Test | Pre-fix | M1 drop APPLY guard | M2 never narrow | M3 narrow always | M4 drop joint fallback | M5 title from action_label |
+|---|---|---|---|---|---|---|
+| `test_skip_cancels_only_the_candidate_whose_transaction_causes_it` | FAIL | pass | **FAIL** | pass | pass | — |
+| `test_a_collateral_skip_does_not_discard_a_trigger_own_skip_always` | FAIL | **FAIL** | pass | pass | pass | — |
+| `test_a_collateral_skip_does_not_discard_an_unrelated_skip_always` | FAIL | pass | pass | pass | pass | — |
+| `test_the_narrowing_names_the_causing_candidate_in_the_question` | FAIL | pass | **FAIL** | **FAIL** | pass | — |
+| `test_a_clean_batch_costs_no_extra_rehearsal` | PASS | pass | pass | **FAIL** | pass | — |
+| `test_collateral_no_single_candidate_reproduces_is_blamed_on_the_whole_batch` | PASS | pass | pass | pass | **FAIL** | — |
+| `test_each_two_answer_screen_is_titled_in_correct_english` | FAIL | — | — | — | — | **FAIL** |
+
+Read honestly:
+
+- **One vacuous test caught and fixed.** My first skip-always test passed under M1 because its subject was not a trigger. Rewritten as `..._a_trigger_own_skip_always`; the original survives as `..._an_unrelated_skip_always`, which is RED pre-fix but killed by no single mutation — it only fails when both bugs are present. I kept it as the regression guard for the exact shape you described, and I am not claiming it is independently load-bearing.
+- **Two deliberate negative controls**, GREEN pre-fix by design: `test_a_clean_batch_costs_no_extra_rehearsal` (the cost budget must not regress) and the joint-causation test (the fallback must keep behaving as the old code did). Each is killed by the mutation that targets it (M3, M4), so neither is vacuous.
+
+## Docs
+
+- `docs/planning/Package sync requirements.md` — two new normative ids next to `PKG-FR-COLLATERAL-MANUAL`: `PKG-FR-COLLATERAL-ATTRIBUTION` (decline cancels only the causing changes; the joint case cancels all and must say so) and `PKG-FR-COLLATERAL-KEEPS-MARKS` (a cancellation must not alter a decision the user gave).
+- `docs/adr/adr-020-declarative-package-convergence.md` — D-30/D-40 section gains the attribution rule, its cost model and the joint-causation fallback; two new entries under Negative consequences (the per-candidate cost on a collateral run; the coarseness of the joint case).
+- `docs/jobs/package-sync.md` — user-facing paragraph: skipping cancels only the causing changes, "the selected packages" means the joint case, and a never-offer-again mark survives a skip.
+- `docs/system/package-sync.md` — new "Collateral attribution" bullet covering the narrowing, when it is paid, and why only an `APPLY` is downgraded.
+- Untouched as instructed: `.planning/phases/02-package-management-sync/02-UAT-01-RUNBOOK.md` — it still says "Delete repositorys" verbatim at line 313 and calls it a known cosmetic defect. That is now stale and needs your revision.
+
+## Gates
+
+`uv run ruff check .` all checks passed; `ruff format --check .` 126 files already formatted; `codespell` clean; `basedpyright` 0 errors, 0 warnings, 0 notes; `pytest` **1469 passed** (1462 baseline + 7 new), 84 deselected.
+
+## Commits
+
+- `402f7067` `fix(apt): a collateral skip cancelled the whole batch and erased skip-always` — `apt_sync.py`, `test_apt_sync.py`, four docs
+- `ffa06900` `fix(apt): "Delete repositorys the source no longer has"` — `apt_sync.py`, `test_apt_sync.py`
+
+Staged by explicit path, no amends, working tree clean.
+
+## Unverified
+
+- **The integration suite was not run** — I cannot run it. I grepped `tests/integration/jobs/test_package_sync.py`: it has one incidental mention of collateral in a comment and no assertion on any group title, collateral detail string, or simulation count, so I expect no breakage — but that is inference, not a measurement.
+- **No real apt was involved.** The narrowing's premise — that `apt-get --dry-run remove &lt;one&gt;` reproduces the collateral a batch containing it reported, when that one package is the cause — is modelled by fixtures, not measured against a live apt. It matches how apt resolves reverse dependencies, and the apply-time guard re-checks the real transaction per item regardless, so a wrong attribution degrades to a refused item rather than an unapproved removal. Worth one pass on a VM during the next UAT.
+- I made no change to the review prompt wording in `review.py`; "Skip (leave the triggering install unapproved)" was inaccurate before this change and is accurate now.</result>
+<usage><subagent_tokens>164575</subagent_tokens><tool_uses>81</tool_uses><duration_ms>891381</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b5n91yze2</task-id>
+<tool-use-id>toolu_01L5Escv2AFLS2tD8ubA7E3s</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/1cfb7cbc-0306-41b6-8f82-7ed1281a66dd/tasks/b5n91yze2.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for integration CI" completed (exit code 0)</summary>
+</task-notification>
