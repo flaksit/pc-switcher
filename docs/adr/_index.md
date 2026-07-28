@@ -1,4 +1,4 @@
-# Architecture Decisions Summary (Last updated: 2026-07-27)
+# Architecture Decisions Summary (Last updated: 2026-07-28)
 
 ## Active Decisions
 
@@ -21,6 +21,7 @@
 - [ADR-018](adr-018-selective-vscode-state-sync.md): SQLite-aware selective sync of VS Code editor state.vscdb
 - [ADR-019](adr-019-homogeneous-fleet.md): Homogeneous fleet — matching real users (uid/gid >= 1000) and paths across machines (no user/id/path mapping)
 - [ADR-021](adr-021-origin-replicating-package-convergence.md): Origin-replicating package convergence — an apt package replicates as (name, origin); the review decides packages and apt config, while repositories, keys and pins are derived from the packages approved from them
+- [ADR-022](adr-022-broken-tool-fails-fast-bad-data-is-handled.md): A tool that did not answer fails fast; a tool that answered is data we handle — a read whose silence would be parsed as a manifest raises `ProbeFailed` and fails the job naming the command, while an answer of "nothing" stays data
 
 ### Instructions for AI agents
 Load specific ADRs only when relevant to current task: search workspace files to find relevant ADRs
