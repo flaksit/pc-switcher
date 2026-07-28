@@ -36,10 +36,11 @@ __all__ = [
 class ItemClass(StrEnum):
     """The full D-02 item-class taxonomy.
 
-    `APT_PACKAGE` is captured and diffed by `apt_sync` (plan 02-03/02-05). `SNAP`,
-    `FLATPAK_REF`, `FLATPAK_REMOTE` and `UNREPRODUCIBLE` have item dataclasses (below)
-    but no capturing job yet — those arrive in plans 02-07..02-09. `SNAP_CHANNEL`
-    never becomes a standalone item; see `SnapItem`'s docstring.
+    Not every member is reviewable in every direction. `APT_SOURCE` and `APT_PIN` identify
+    reviewed REMOVALS only, and `FLATPAK_REMOTE` likewise: adds and changes for all three
+    are derived from the packages or refs approved from them (ADR-020 D-34/D-36/D-41) and
+    carry no `item_id` at all. `SNAP_CHANNEL` never becomes a standalone item; see
+    `SnapItem`'s docstring. A signing key has no member here in any direction.
     """
 
     APT_PACKAGE = "apt_package"
@@ -57,8 +58,9 @@ class ItemClass(StrEnum):
 
 
 class DiffClass(StrEnum):
-    """The full D-25 conflict taxonomy — every member is producible once this plan's
-    `diff_items` dispatch (`packages/sync_core.py`) is filled out.
+    """The full D-25 conflict taxonomy. Each manager's own diff decides which members it
+    can produce; the enum is the definition of what the shared review and the decision
+    files can carry, not one manager's business.
 
     `REPO_UNAVAILABLE` and `ORIGIN_MISMATCH` are the two provenance members (ADR-020 D-34)
     and are about WHERE an item comes from, not whether it is present:

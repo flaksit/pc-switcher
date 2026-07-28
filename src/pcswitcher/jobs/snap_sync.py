@@ -17,17 +17,29 @@ The snapd store stays authoritative for its own state (D-01): this job never tou
 `/var/lib/snapd` directly, only shells out to `snap` itself, the same shape
 `apt_sync` uses for `apt`/`dpkg`.
 
-`SnapSyncJob` subclasses `PackageSyncJob` but overrides `plan()` rather than
-inheriting the base implementation: `PackageSyncJob.diff_items`/`_diff_apt_packages`
-is apt-package-shaped (a version difference is `REPORT_ONLY` per D-04, and it has no
-notion of a tracking channel), while D-06 wants a snap's revision AND channel
-differences to actively converge (`CHANGE`). `plan()` here reuses the same shared
-building blocks apt_sync's own diff-taxonomy plan relies on — `DecisionFile`/
+Snap has no repository or key decision to replicate, and gets no screen for one (D-42).
+One store serves the device, and name -> publisher is pinned store-side by a
+canonical-signed `snap-declaration` snapd validates itself, so one name resolves to one
+snap-id resolves to one publisher and there is no second `firefox` for the target to
+install by accident. Keys are snapd's own, not the user's. A brand store or a store
+proxy could in principle make two machines draw from different stores, but both are
+device-provisioning facts rather than per-snap facts and neither is replicable, so snap
+is treated as having one store and no store-identity check exists. The provenance
+variable that remains is which revision of that one snap is installed and which channel
+it tracks, and D-06 converges both.
+
+`SnapSyncJob` subclasses `PackageSyncJob` and implements the abstract `plan()`: what a
+diff even IS differs per manager, so the base class holds no diff to inherit. apt's own
+diff lives in `apt_sync` and is apt-package-shaped (a version difference is `REPORT_ONLY`
+per D-04, with no notion of a tracking channel), while D-06 wants a snap's revision AND
+channel differences to actively converge (`CHANGE`). `plan()` here reuses the
+manager-agnostic building blocks the shared core does provide — `DecisionFile`/
 `filter_inert` (D-08's machine-local skip-always filtering) and
 `PackageSyncJob._build_review_groups` (D-24's action-grouped review) — so the only
-genuinely snap-specific code is capture, diff and converge. `accept_review()`,
-`apply()` and `execute()` are inherited unchanged; this job implements no review of
-its own — the coordinator (plan 02-03) reviews every enabled manager at once.
+genuinely snap-specific code is capture, diff and converge. `accept_review()`, `apply()`
+and `execute()` are inherited unchanged, and `execute()` is where this job's own single
+review happens, before its own first mutating command: there is no coordinator and no
+review spanning two managers (D-15, D-24).
 
 Revision AND channel differences share one `DiffAction.CHANGE` diff per snap, tagged
 `ItemClass.SNAP` in both cases (never `ItemClass.SNAP_CHANNEL`) even though a

@@ -26,6 +26,8 @@ review-before-any-change ordering checkable and testable per job:
   self-contained: it plans, reviews through the injected `JobContext.reviewer`, accepts the
   outcome, then applies. A `plan()` failure propagates naturally out of `execute()` and
   lands in this job's own `JobResult` through the orchestrator's per-job exception handling.
+  A non-interactive run with a NON-EMPTY plan raises `JobSkipped` there instead of applying
+  nothing and reporting SUCCESS; an empty plan on the same path stays SUCCESS.
 """
 
 from __future__ import annotations

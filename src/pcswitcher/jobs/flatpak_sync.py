@@ -90,22 +90,19 @@ folder_sync's territory;
 D-17's job-before-folder_sync ordering exists precisely so `flatpak install` creates
 the store first and folder_sync's data lands on top of it, never the reverse.
 
-`FlatpakSyncJob` subclasses `PackageSyncJob` but overrides `plan()` rather than
-inheriting the base implementation, for the same reason `SnapSyncJob` does (see that
-module's docstring and 02-08's own deviation note): `PackageSyncJob.diff_items`/
-`_diff_apt_packages` is apt-package-shaped — one item class, `MISSING_ON_TARGET`/
-`EXTRA_ON_TARGET`/`VERSION_MISMATCH` only, no notion of a second item class that must
-converge ahead of the first. This job diffs and converges THREE item classes
-(`FLATPAK_REMOTE`, `FLATPAK_REF`, `FLATPAK_MASK`) with an ordering dependency between
-them (remotes -> refs -> masks, D-08/D-14), which the shared dispatch has no way to
-express. `plan()` here reuses every manager-agnostic
-building block the shared core provides — `DecisionFile`/`filter_inert` (D-08's
-machine-local skip-always filtering) and `PackageSyncJob._build_review_groups`
-(D-24's action-grouped review) — so only capture, diff and converge are genuinely
-flatpak-specific. `accept_review()`, `apply()` and `execute()` are inherited
-unchanged; this job implements no review of its own — the coordinator (plan 02-03)
-reviews every enabled manager at once, and this module never calls that reviewing
-function directly.
+`FlatpakSyncJob` subclasses `PackageSyncJob` and implements the abstract `plan()`, for the
+same reason `SnapSyncJob` does: what a diff even IS differs per manager, so the base class
+holds no diff to inherit. apt's own diff is apt-package-shaped — one item class,
+`MISSING_ON_TARGET`/`EXTRA_ON_TARGET`/`VERSION_MISMATCH` only, no notion of derived work
+that must land ahead of an item. `plan()` here reuses every manager-agnostic building
+block the shared core provides — `DecisionFile`/`filter_inert` (D-08's machine-local
+skip-always filtering) and `PackageSyncJob._build_review_groups` (D-24's action-grouped
+review) — so only capture, diff and converge are genuinely flatpak-specific.
+`accept_review()` is overridden to turn the approved refs into the derived remote set,
+and `apply()` to write those remotes before the base converge loop reaches its first ref.
+`execute()` is inherited unchanged and is where this job's own single review happens,
+before its own first mutating command: there is no coordinator and no review spanning two
+managers (D-15, D-24).
 
 Flatpak ref VERSIONS are captured for reporting only (D-04, like apt package
 versions): a version difference on a ref present in the same scope on both machines

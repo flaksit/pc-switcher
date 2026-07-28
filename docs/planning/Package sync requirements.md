@@ -175,6 +175,8 @@ Collateral that would remove or downgrade a package that is *manually installed 
 
 The classification happens during the review, never mid-apply. If the real transaction has drifted by the time it runs, the guard refuses it there rather than proceeding.
 
+One class of install is left out of that review-time simulation on purpose: a package whose repository this run is about to add. Until the repository lands the target's apt has never heard the name, and apt refuses the whole simulated batch on one such name — including it would strip the protection from every other package in the run rather than weaken it for one. Those packages are covered by the same simulation re-run per item after `/etc/apt` has converged, where apt can resolve them: unapproved manual collateral fails that one item and the run continues. The cost is stated plainly — for those packages you are told afterwards rather than asked beforehand — and is accepted because the facts that question needs do not exist while the review is being built.
+
 One case is given up on purpose: a package you installed by hand on the *source*, which arrived on the target as an automatic dependency, is not protected. If the target's apt installed it automatically, the target's apt owns it, and that is the same set apt itself consults.
 
 ### Repositories
@@ -227,15 +229,24 @@ Pins that push a version *down* work the same way. This machine's `no-esm-docker
 
 ### Ubuntu Pro and ESM
 
-`ubuntu-esm-apps.sources` and `ubuntu-esm-infra.sources` are part of the distribution set, so they are written to a target that lacks them. If the target has no Ubuntu Pro attachment, that is a problem, and the required behaviour is that pc-switcher asks before writing anything.
+`ubuntu-esm-apps.sources` and `ubuntu-esm-infra.sources` are part of the distribution set, so they would be written to a target that lacks them. If the target has no Ubuntu Pro attachment, that is a problem, and pc-switcher asks before writing anything.
 
-The hazard, measured: `esm.ubuntu.com` serves its repository *index* publicly, so an unattached target's `apt-get update` succeeds and the ESM suites enter candidate selection above the ordinary archive. Only the package pool is 401. The failure therefore lands later, at install time, on a package the user will not connect to the sync.
+The hazard, measured: `esm.ubuntu.com` serves its repository *index* publicly, so an unattached target's `apt-get update` succeeds and the ESM suites enter candidate selection above the ordinary archive. Only the package pool is 401. The failure therefore lands later, at install time, on a package you will not connect to the sync.
 
 pc-switcher cannot fix this itself. Attaching needs a subscription token from your Pro dashboard or an interactive browser flow, the source machine's own credentials are root-only and not reusable for another machine, and holding a token would put a secret on a command line.
 
-The required behaviour: before its first write, `apt_sync` asks, with exactly two answers. "I have attached the target — re-check and continue" re-probes the target and carries on, as many times as you want. "Skip `apt_sync` this run" leaves `/etc/apt` exactly as it was and lets every other job run. A run with nobody to ask skips `apt_sync` too. A dry run never asks; it warns.
+So before `apt_sync` writes anything — and before you are asked to decide anything else, because one answer ends the job — it probes the target and, if the target reports no attachment, asks with exactly two answers:
 
-This is not implemented yet. See [Where the tool does not yet meet these requirements](#where-the-tool-does-not-yet-meet-these-requirements).
+- **I have attached the target — re-check and continue.** pc-switcher probes the target again rather than believing the answer. If it still reports unattached it says so and asks again. You can answer this as many times as you like; there is no limit, because re-probing is free and the exit is choosing the other answer.
+- **Skip `apt_sync` this run (other jobs continue).** `/etc/apt` on the target is left exactly as it was, ESM files included, and `snap_sync`, `flatpak_sync`, `manual_installs_sync` and `folder_sync` all run normally.
+
+The prompt gives you the two commands to run on the target: `sudo pro attach <token from your Pro dashboard>`, then `sudo pro enable esm-apps esm-infra`.
+
+Skipping costs the whole apt job for that run, not just the two files, and that is the only coherent partial outcome: pin files always travel, so the source's ESM pins would reach the target whether or not the sources they name did, leaving the target with a candidate selection matching neither machine. Leaving `/etc/apt` untouched is a state you can reason about.
+
+A run with nobody to ask takes the skip too, and says why. A dry run never asks — it warns that the target is unattached and that a real run would skip `apt_sync` entirely, because a rehearsal must not send you off to attach a machine.
+
+Only the yes/no answer to "is this target attached" is ever logged or shown. The probe also reports the subscriber's account, and that never leaves the check.
 
 ### The `/etc/apt` group is all-or-nothing
 
@@ -245,7 +256,7 @@ A single derived file that fails to write does the same, on a smaller scale: it 
 
 ## snap: every case
 
-Snaps have not had the origin treatment apt has. There is one store, and where a snap came from is not modelled.
+Snap needs no origin model, and does not get one. There is one store, and a snap name resolves to one snap-id and one publisher through an assertion snapd validates itself — there is no second `firefox` for the target to install by mistake, and no repository or key for you to be asked about. What is left of provenance is which revision of that one snap is installed and which channel it tracks, and both of those converge.
 
 On the source only: installed at the source's exact revision, then switched to the source's channel.
 
@@ -288,6 +299,8 @@ A remote that cannot be provisioned has no line of its own to fail. The failure 
 A remote travels with its trust, not only its name and URL. pc-switcher captures whether the source verifies the remote's signatures and, when it does, the remote's own signing key, and re-adds it on the target with that key imported. The key is copied byte-for-byte and never fetched from a vendor. Without it a replicated remote is configured but unusable and every install from it fails with a missing-public-key error. A remote the source itself does not verify is replicated unverified and says so in the review; a verified remote is never turned into an unverified one. A verified remote with no key of its own — trusted through a machine-level anchor — is added plainly.
 
 A remote present on both machines whose URL, verification setting or key differs is repointed in place, silently and without a review line, keeping the apps that name it as their origin intact. A target that already trusted a different key ends up trusting both, because flatpak merges imported keys rather than replacing them.
+
+The exception is apt's repository-conflict rule in a second ecosystem. If a differing URL or verification setting would repoint a remote that an app you marked machine-specific on the target takes as its origin in that scope, you are shown both configurations — the target's first, one differing field per line, never a computed diff, because a remote is a handful of named values rather than a file body — and asked to overwrite or leave it for now. Two answers, nothing recorded either way. Machine-specific is the trigger, not merely target-only: such an app produces no review line in any run, so nothing else would tell you its updates were about to move; an ordinary target-only app already has a removal line of its own. The entry names the apps that are the reason. Leaving it fails every approved app that needed the source's URL, quoting your own decision rather than the symptom. A key-only difference never raises it: importing a key can neither move an app's origin nor withdraw trust.
 
 A remote present only on the target is offered for removal, unticked, and its line names the apps on the target that still have it as their origin in that scope. Deleting a remote also drops its key. That screen takes two answers, not three: delete, or leave it for now. A permanent machine-specific mark on a remote whose whole purpose is to feed apps would silently and permanently change where those apps come from, and the remedy is consolidating the two machines' configurations. Nothing is recorded either way.
 
@@ -349,13 +362,13 @@ A job reports one of three outcomes.
 
 SUCCESS means the job did what its review approved. A job whose review was empty — the target already matches — is also a success: that is the goal, met.
 
-SKIPPED means the job deliberately did nothing and says so, rather than reporting a success it did not earn. A package job whose review had something to offer but ran without a terminal is skipped. So is a `folder_sync` with no enabled folders, a VS Code state sync with nothing to sync, and an enabled job name that resolves to nothing. A skipped job records no decision, pushes no registry and leaves the target untouched. The run continues and the exit code is unchanged.
+SKIPPED means the job deliberately did nothing and says so, rather than reporting a success it did not earn. Three things produce it. A package job whose review had something to offer but ran without a terminal is skipped. `apt_sync` is skipped when the target reports no Ubuntu Pro attachment and you answer "skip" — or when nobody was there to answer. And a job with nothing applicable is skipped: a `folder_sync` with no enabled folders, a VS Code state sync with nothing to sync, an enabled job name that resolves to nothing. A skipped job records no decision, pushes no registry and leaves the target untouched. The run continues and the exit code is unchanged.
 
 FAILED means at least one approved item could not be applied. Every approved item is attempted; failures are collected and reported together at the end, naming each item. One bad package never blocks the rest of the same job, and one failed job never stops the others.
 
-A run without a terminal prompts for nothing, so every reviewable item comes back skip-once and every package job with a non-empty review reports SKIPPED. Nothing is recorded, no snippet is written, no registry is pushed. Re-run interactively to decide anything.
+A run without a terminal prompts for nothing, so every reviewable item comes back skip-once and every package job with a non-empty review reports SKIPPED. `apt_sync` also reports SKIPPED, without reaching a review at all, when the target is unattached and ESM sources would have been written — there is nobody to ask. Nothing is recorded, no snippet is written, no registry is pushed. Re-run interactively to decide anything.
 
-A dry run produces the same plan and the same review as a real run, and issues no command that changes either machine. The review *is* the preview: it lists every item, and the derived `/etc/apt` writes that have no review line of their own are previewed alongside it, so a run whose entire repository work is derived does not show a bare metadata refresh with no reason for it.
+A dry run produces the same plan and the same review as a real run, and issues no command that changes either machine. The review *is* the preview: it lists every item, and the derived `/etc/apt` writes that have no review line of their own are previewed alongside it, so a run whose entire repository work is derived does not show a bare metadata refresh with no reason for it. A dry run on a terminal is a SUCCESS; a dry run without one is a SKIPPED for the same reason a real one is, because nothing was decided.
 
 Aborting — Ctrl-C at any review screen, an unanswerable prompt, or choosing abort at a collateral item — stops the whole sync. It is never a per-item skip.
 
@@ -373,7 +386,9 @@ A package you installed by hand on the source but which arrived on the target as
 
 Machine-specific marks are not consulted when protecting against collateral. A package you marked skip-always can still be removed as collateral of an approved install.
 
-snap has no origin model, and does not need one: one name resolves to one publisher, enforced store-side. flatpak now follows apt's — apps replicate as (ref, origin) and remotes are derived — but with one gap apt has closed and flatpak has not: repointing a remote the target's own apps depend on happens silently, where apt asks before overwriting a repository file that feeds machine-specific packages.
+snap has no origin model, and does not need one: one name resolves to one publisher, enforced store-side.
+
+Enabling `apt_sync` against a target with no Ubuntu Pro attachment costs you the whole apt job for that run, not just the two ESM files.
 
 Deleting an apt config file can be marked machine-specific; deleting an apt repository, an apt pin or a flatpak remote cannot.
 
@@ -393,19 +408,13 @@ Machine-specific marks are per manager and per machine, in files that are delibe
 
 Verified against the code on the current branch, not against the older documents.
 
-The Ubuntu Pro / ESM gate is not implemented. The two ESM source files are today written to the target whenever they are missing or differ, with no attachment probe and no question. On a target with no Pro attachment that is the exact failure the gate exists to prevent: the ESM suites win candidate selection and a later install fails with a 401 nobody will trace back to the sync. This is the single largest gap between the requirement and the code.
+Two flatpak apps of the same name and branch installed from *different* remotes on the two machines are not reported. apt reports the equivalent as a provenance divergence; flatpak compares only versions, so the pair produces either nothing at all or a bare version difference that says nothing about where the two builds came from. The origin checks that run before and after each install do not cover it — they guard an install, and this case issues none.
 
-`docs/jobs/package-sync.md` and `docs/system/package-sync.md` still describe repositories and pins as reviewed items with three-way answers, and still say a repository offered for install names the keys it would copy. Those review lines no longer exist. Both documents predate the derived-repository change in part and are stale in exactly those passages.
-
-A non-interactive dry run reports SKIPPED for every package job with a non-empty plan, because the skip is raised on the non-interactive path with no dry-run exemption. The intent recorded elsewhere is that a rehearsal that completes reports SUCCESS. One of the two is wrong; see the open questions.
+A flatpak remote the source restricts with a filter replicates as an unfiltered remote on the target. The filter's content lives at an arbitrary local path outside flatpak's own store, so nothing carries it; the run does not yet say so.
 
 ## Open questions
 
 Genuinely undecided. An answer invented here would be worse than the question.
-
-Should repointing a flatpak remote that the target's own apps depend on ask first, the way apt's repository conflict does? Today it is silent. apt's trigger is deliberately narrow — the file feeds packages you marked machine-specific — and the flatpak equivalent has not been decided.
-
-What should a non-interactive dry run report? Raising the skip on the non-interactive path is defensible (nothing was decided), and so is exempting dry runs (a rehearsal that completes did what a rehearsal does). The code says SKIPPED; the design note says SUCCESS.
 
 Is the three-way decision right for `/etc/apt/apt.conf.d`? The ruling says it is reviewed in all three directions but does not say with how many answers. It currently gets the full three-way decision and the permanent mark, reasoned from the fact that the two-answer screens were justified by consequences an apt config file does not have. That reasoning is sound but was never ruled on.
 

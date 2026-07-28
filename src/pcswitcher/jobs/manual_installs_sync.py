@@ -10,13 +10,13 @@ Two detectors, both run on the SOURCE:
   `/usr/local/bin` and `/usr/local/lib`) that no dpkg package owns — software an install
   script dropped there, bypassing apt entirely.
 
-Both were previously folded into `apt_sync`. D-18 pulls them into their own job with its
-own enable flag, because half of what they cover is not apt's business at all (unowned
-files under `/usr/local`/`/opt`), and folding it into `apt_sync` meant disabling apt
-silently disabled manual-install detection with nothing telling the user. This job does
-its OWN `dpkg`/`apt-cache` queries rather than sharing `apt_sync`'s, so ownership stays
-clean — it never imports `apt_sync` (D-18). The `apt-cache policy` PARSING both jobs need
-lives in `packages/apt_policy.py`, a third module neither job owns.
+D-18 gives them their own job and their own enable flag, because half of what they cover is
+not apt's business at all (unowned files under `/usr/local`/`/opt`), and folding them into
+`apt_sync` would make disabling apt silently disable manual-install detection with nothing
+telling the user. This job does its OWN `dpkg`/`apt-cache` queries rather than sharing
+`apt_sync`'s, so ownership stays clean — it never imports `apt_sync` (D-18). The
+`apt-cache policy` PARSING both jobs need lives in `packages/apt_policy.py`, a third
+module neither job owns.
 
 An unreproducible item ends an interactive run resolved in one of three ways (D-21,
 decision 10): it has an install snippet in the shared, synced registry (`SnippetRegistry`,

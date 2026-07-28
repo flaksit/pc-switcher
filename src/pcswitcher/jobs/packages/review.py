@@ -1,9 +1,8 @@
 """Batched checkbox review — the single interaction surface for every package diff (D-24).
 
-`apt_sync`, `snap_sync` and `flatpak_sync` (plans 02-06..02-11) each compute a set of
-differences against the source's manifest and hand them to `review_items` as
-`ReviewGroup`s before applying anything. The user ticks items off a checkable list in one
-sitting rather than answering a sequence of yes/no prompts.
+Each package job computes its own set of differences against the source's manifest and hands
+them to `review_items` as `ReviewGroup`s before applying anything. The user ticks items off a
+checkable list in one sitting rather than answering a sequence of yes/no prompts.
 
 This composes with the single persistent Live display (Phase 1 plans 01-17/01-18) exactly
 as `TerminalUIConfirmer.confirm` (`pcswitcher.confirmer`) does: pause the live region before
@@ -14,9 +13,16 @@ the prompt, run the blocking `questionary` checkbox off the event loop via
 Removals get their own group, never sharing a checkbox list with installs (D-07/D-24): a
 bulk tick that also deletes software would be exactly the silent-destruction failure D-07
 exists to prevent. Which of a caller's `ReviewGroup`s are "removal-direction" is decided by
-`ReviewGroup.action` — grouping itself (turning an `ItemDiff` into `ReviewGroup`s keyed by
-manager+action) is Claude's Discretion for plan 02-05, which owns the real item model; this
-module only consumes already-grouped input.
+`ReviewGroup.action`; grouping itself (turning an `ItemDiff` into `ReviewGroup`s keyed by
+manager+action) belongs to `PackageSyncJob._build_review_groups`, and this module only
+consumes already-grouped input.
+
+`ask_gate` is the one question here that is NOT a review item: a two-answer yes/no about the
+target's environment, asked before any group is built, whose "no" answer means there is no
+review to hold (`apt_sync`'s Ubuntu Pro gate, ADR-020 D-38). It lives here because this
+module already owns pause-the-live-UI-ask-resume, interactivity detection and the
+Ctrl-C-aborts-the-sync rule; it returns `None` when nobody could be asked, and the caller
+owns what that means.
 
 D-07's three-way decision is completed by a second checkbox per actionable group (install /
 change / remove direction, which includes the block-state items): whatever the apply list

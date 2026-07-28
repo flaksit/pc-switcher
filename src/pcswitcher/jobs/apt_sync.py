@@ -3,9 +3,10 @@
 
 Captures the source's `apt-mark showmanual` set with `dpkg-query`-sourced versions
 (never `apt list --installed` — its own manpage says the output has no stable scripting
-contract), diffs it against the same query on the target into every D-25 class
-(`PackageSyncJob._diff_apt_packages`), and converges the approved `INSTALL`/`REMOVE`
-items via `apt-get install`/`apt-get remove`.
+contract), diffs it against the same query on the target into every D-25 class this
+manager produces (`_diff_apt_packages`, this module's own — the base class holds no diff
+for anyone to inherit, D-15), and converges the approved `INSTALL`/`REMOVE` items via
+`apt-get install`/`apt-get remove`.
 
 A package is matched by (name, ORIGIN), never by name alone (ADR-020 D-34). The target
 having a candidate for a name is not evidence it can supply the source's software: one name
@@ -58,6 +59,17 @@ classifies their collateral against the target manual set, emitting a three-way
 install-anyway / skip / abort review item for each manual-collateral package so the decision
 is made in the batched review, never as a prompt during apply.
 
+One install is admitted to no plan-time rehearsal at all (`_target_resolvable`, D-40): a
+D-34 class-3 package, whose repository this run derives from its own approval and writes
+during converge. Until that write lands the target's apt has never heard the name and
+`apt-get --dry-run` refuses the WHOLE batch containing it, which would strip the protection
+from every other package in the run rather than weaken it for one. The exclusion keys on the
+target's own `apt-cache policy`, never on the simulation's exit code, which cannot separate
+"unable to locate" from a held dpkg lock (ADR-022 D-01). What covers those packages instead
+is the per-item rehearsal `_converge_install` runs after the group has converged, where apt
+CAN resolve them: unapproved manual collateral fails that one item, so the user is told
+afterwards rather than asked beforehand.
+
 The same plan-time-classification rule covers the `/etc/apt` removal direction (C26): a
 source file offered for deletion because the source machine no longer has it carries, in
 its review `detail`, the machine-specific packages the target still installs from that
@@ -80,6 +92,24 @@ question, in three buckets `_build_derived_writes` assembles from the accepted d
 - the distribution's own source files — `ubuntu.sources`, the two `ubuntu-esm-*` files and
   `/etc/apt/sources.list` — written when missing and overwritten when different, never
   removed and never offered for removal (D-38).
+
+The two `ubuntu-esm-*` files carry the one question this job asks that is not about an item
+(`_gate_esm_writes`, D-38). Writing them to a target with no Ubuntu Pro attachment is not
+harmless: `esm.ubuntu.com` serves its INDEX publicly, so the refresh succeeds and the ESM
+suites win candidate selection, and the failure surfaces much later as a 401 on the `.deb`
+of the target's next install of an ESM-covered package — a failure nobody traces back to a
+sync. pc-switcher cannot attach the target itself (`pro attach` needs a subscription token
+or a browser flow, and a machine's own credentials are root-only and not reusable), so it
+asks, with exactly two answers: attach now, which RE-PROBES rather than trusting the answer
+and may be given any number of times, or skip `apt_sync` for this run while every other job
+runs. A run with nobody to ask takes the skip; a dry run warns instead. Skipping the whole
+job rather than withholding the two files is the only coherent partial outcome, because
+`preferences.d` always-syncs with no derivation predicate and the source's ESM pins would
+land regardless. The gate sits in `plan()`, right after `_capture_origin_state` supplies the
+digests its trigger reads and before any review group is built: one answer ends the job, so
+it must precede the planning and the review the user would otherwise answer for nothing.
+Only the parsed `attached` boolean ever leaves `_target_pro_attached` — the probe's payload
+names the subscriber's account.
 
 A derived write has no item, so it cannot fail as one. It is recorded against its
 destination and charged to every approved package whose origin depended on it (D-39):
@@ -142,9 +172,6 @@ and named by any pin impossible to REMOVE (a `REPORT_ONLY` echo outranks its own
 `EXTRA_ON_TARGET` diff) and impossible to silence (a `REPORT_ONLY` item cannot be recorded
 skip-always). Pins themselves DO replicate, as FILES under `/etc/apt/preferences.d`, and
 that is the whole mechanism: a report about them was never part of it.
-
-Apt sources/keys/pins/config, and the other two managers (snap, flatpak), are later
-Phase 2 plans.
 """
 
 from __future__ import annotations
