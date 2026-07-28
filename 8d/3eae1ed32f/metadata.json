@@ -1,0 +1,29 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "8d3eae1ed32f",
+  "strategy": "manual-commit",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "docs/adr/_index.md",
+    "docs/adr/adr-020-declarative-package-convergence.md",
+    "docs/adr/adr-021-origin-replicating-package-convergence.md",
+    "docs/adr/adr-022-broken-tool-fails-fast-bad-data-is-handled.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/8d/3eae1ed32f/0/metadata.json",
+      "transcript": "/8d/3eae1ed32f/0/full.jsonl",
+      "compact_transcript": "/8d/3eae1ed32f/0/transcript.jsonl",
+      "content_hash": "/8d/3eae1ed32f/0/content_hash.txt",
+      "prompt": "/8d/3eae1ed32f/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1544,
+    "cache_creation_tokens": 740684,
+    "cache_read_tokens": 40178849,
+    "output_tokens": 188894,
+    "api_call_count": 149
+  }
+}
