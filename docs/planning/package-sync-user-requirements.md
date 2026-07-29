@@ -98,7 +98,9 @@ A marked item is filtered out before the difference is computed, so it never app
 
 Marks never sync between machines. Snippets do, because how to install something is knowledge about the software rather than the machine.
 
-Some things cannot be marked. Deleting a repository or a pin, resolving a repository conflict, and deleting or repointing a flatpak remote each take two answers (apply or skip-once) and record nothing: a permanent mark on configuration that feeds software would silently change where that software comes from. Report-only findings cannot be marked either — no machine holds a version difference, and a mark would stop the package syncing rather than stop the report.
+Repositories, pins and flatpak remotes cannot be marked machine-specific, in any direction. Where the two machines disagree about where software comes from, that disagreement keeps surfacing every run instead of being silenced once, and the remedy is to align the two machines. apt's own configuration files *can* be marked, because they say how apt behaves rather than where software comes from.
+
+Report-only findings cannot be marked either — no machine holds a version difference, and a mark would stop the package syncing rather than stop the report.
 
 ## apt
 
@@ -166,7 +168,7 @@ Adding or changing a repository is never a question: it is written because an ap
 
 Deleting one is a question, since nothing derives a deletion. The request names the URLs the file declares — not just its filename — and the machine-specific packages the deletion would strand.
 
-A repository both machines have with different content is overwritten with the source's version silently — unless it feeds a package the target marked machine-specific. Then the user is asked, shown both versions of the file in full, with two answers and nothing recorded. Declining fails every approved package whose origin depended on that file.
+A repository both machines have with different content is overwritten with the source's version silently — unless it feeds a package the target marked machine-specific. Then the user is asked, and shown both versions of the file in full. Declining fails every approved package whose origin depended on that file.
 
 The distribution's own source files are written and updated, never removed or offered for removal. Files apt itself does not read are not treated as repository configuration.
 
