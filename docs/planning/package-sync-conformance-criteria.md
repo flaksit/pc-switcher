@@ -209,7 +209,7 @@ Decomposes [snap](package-sync-user-requirements.md#snap).
 - **PKG-FR-SNAP-CASES**: A snap on the source only MUST be offered for install at the source's revision and channel; a snap on the target only MUST be offered for removal; a difference of revision or channel MUST be offered as a single change naming both values; identical revision and channel MUST produce no item.
 - **PKG-FR-SNAP-CONFINEMENT**: A snap's confinement mode MUST be captured on the source and replicated with the install.
 - **PKG-FR-SNAP-REMOVE-SNAPSHOT**: Removing a snap MUST leave snapd's own pre-removal snapshot in place.
-- **PKG-FR-SNAP-SIDELOAD**: Sideloaded snaps MUST NOT be replicated. Those on the source MUST be reported and skipped, along with any hold set on them. A sideloaded snap on the target MUST still be offered for removal like any other.
+- **PKG-FR-SNAP-SIDELOAD**: Sideloaded snaps MUST NOT be replicated while they are out of scope (#221). Those on the source MUST be reported and skipped, along with any hold set on them. A sideloaded snap on the target MUST still be offered for removal like any other.
   Why: no store can serve such a revision and nothing carries the file between machines.
 - **PKG-FR-SNAP-FAIL-ITEM**: A snap whose revision the target cannot fetch MUST fail as its own item, and the rest of the run MUST continue.
 - **PKG-FR-SNAP-HOLD**: A snap refresh hold MUST be an item of its own, both when it is added and when it is removed. A hold recorded for a snap the source no longer has MUST produce no item, and no command a sync issues may set a standing hold as a side effect.
@@ -283,7 +283,6 @@ Each of these is a real cost, given up knowingly.
 - **PKG-NG-SNAP-ORIGIN**: snap has no origin model and needs none.
 - **PKG-NG-ESM-PARTIAL**: A target with no Ubuntu Pro attachment costs the whole apt job for that run, not only the ESM repositories.
 - **PKG-NG-MARK-ORIGIN**: Deleting an apt configuration file can be marked machine-specific; deleting an apt repository, an apt pin or a flatpak remote cannot.
-- **PKG-NG-SIDELOAD**: Sideloaded snaps cannot be reproduced. Nothing carries the file between machines.
 - **PKG-NG-MANUAL-REMOVE**: Manual installs cannot be removed. The job keeps no record of what it put on the target.
 - **PKG-NG-VERSION-CONVERGE**: Version drift is reported, never resolved, for apt and flatpak. Aligning two machines' versions is the user's job.
 - **PKG-NG-ORIGIN-CONVERGE**: A divergence of origin is reported, never resolved, for apt packages and flatpak applications alike. Where both machines have the same software from different origins, the system will not pick one.
@@ -310,7 +309,7 @@ How often is a package manual on the source and automatic on the target — the 
 
 ## Traceability
 
-Every article above decomposes exactly one section of [Package sync — user requirements](package-sync-user-requirements.md). 125 articles, no orphans in either direction. A new article needs a home here; a narrative section with no articles is either intentionally non-normative or a coverage gap.
+Every article above decomposes exactly one section of [Package sync — user requirements](package-sync-user-requirements.md). 124 articles, no orphans in either direction. A new article needs a home here; a narrative section with no articles is either intentionally non-normative or a coverage gap.
 
 | User-requirements section | Articles | |
 | - | - | - |
@@ -329,6 +328,6 @@ Every article above decomposes exactly one section of [Package sync — user req
 | [flatpak](package-sync-user-requirements.md#flatpak) | 14 | `PKG-FR-FLATPAK-CASES` `PKG-FR-FLATPAK-REMOTE-DERIVED` `PKG-FR-FLATPAK-REMOTE-FIRST` `PKG-FR-FLATPAK-REMOTE-TRUST` `PKG-FR-FLATPAK-REPOINT` `PKG-FR-FLATPAK-REMOTE-DELETE` `PKG-FR-FLATPAK-INSTALL-ORIGIN` `PKG-FR-FLATPAK-MISSING-REMOTE` `PKG-FR-FLATPAK-ORIGIN-DIFF` `PKG-FR-FLATPAK-REMOTE-FAILURE` `PKG-FR-FLATPAK-FILTER` `PKG-FR-FLATPAK-THIRD-SCOPE` `PKG-FR-FLATPAK-MASK` `PKG-FR-FLATPAK-PRIVILEGE` |
 | [Software no manager can reproduce](package-sync-user-requirements.md#software-no-manager-can-reproduce) | 7 | `PKG-FR-MANUAL-RESOLUTION` `PKG-FR-MANUAL-SOURCE-DECIDES` `PKG-FR-MANUAL-SAME-RUN` `PKG-FR-SNIPPET-VERBATIM` `PKG-FR-REGISTRY-TRAVELS` `PKG-FR-REGISTRY-CONSENT` `PKG-FR-MANUAL-FAIL-ITEM` |
 | [When something goes wrong](package-sync-user-requirements.md#when-something-goes-wrong) | 4 | `PKG-FR-OUTCOME-SUCCESS` `PKG-FR-OUTCOME-SKIPPED` `PKG-FR-OUTCOME-FAILED` `PKG-FR-FAIL-NAMED` |
-| [What this deliberately does not do](package-sync-user-requirements.md#what-this-deliberately-does-not-do) | 15 | `PKG-NG-APT-LINE-CONTROL` `PKG-NG-APT-IDENTICAL` `PKG-NG-PIN-LOCAL` `PKG-NG-COLLATERAL-SOURCE-MANUAL` `PKG-NG-COLLATERAL-MARKS` `PKG-NG-DEB-ORPHANED` `PKG-NG-SNAP-ORIGIN` `PKG-NG-ESM-PARTIAL` `PKG-NG-MARK-ORIGIN` `PKG-NG-SIDELOAD` `PKG-NG-MANUAL-REMOVE` `PKG-NG-VERSION-CONVERGE` `PKG-NG-ORIGIN-CONVERGE` `PKG-NG-UNATTENDED` `PKG-NG-MARK-PORTABILITY` |
+| [What this deliberately does not do](package-sync-user-requirements.md#what-this-deliberately-does-not-do) | 14 | `PKG-NG-APT-LINE-CONTROL` `PKG-NG-APT-IDENTICAL` `PKG-NG-PIN-LOCAL` `PKG-NG-COLLATERAL-SOURCE-MANUAL` `PKG-NG-COLLATERAL-MARKS` `PKG-NG-DEB-ORPHANED` `PKG-NG-SNAP-ORIGIN` `PKG-NG-ESM-PARTIAL` `PKG-NG-MARK-ORIGIN` `PKG-NG-MANUAL-REMOVE` `PKG-NG-VERSION-CONVERGE` `PKG-NG-ORIGIN-CONVERGE` `PKG-NG-UNATTENDED` `PKG-NG-MARK-PORTABILITY` |
 
 Two narrative sections carry no articles, deliberately. [Vocabulary](package-sync-user-requirements.md#vocabulary) defines terms rather than imposing obligations — but it is what makes the articles unambiguous, so an article that cannot be stated in its vocabulary is an article to rewrite. [Open questions](package-sync-user-requirements.md#open-questions) records what is undecided, and an open question resolved becomes one or more articles here.

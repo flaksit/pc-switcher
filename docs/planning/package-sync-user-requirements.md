@@ -212,7 +212,7 @@ Removing a snap leaves snapd's own pre-removal snapshot in place — the only re
 
 Refresh holds replicate as their own items, both when added and when removed. A hold recorded for a snap the source no longer has produces no item.
 
-Sideloaded snaps — installed from a local `.snap` file — cannot be reproduced by any snap command. They are reported and skipped, and the target's matching entry is withheld so that "cannot reproduce this" does not become "propose deleting it there". **A current gap**: a snippet could reproduce one.
+Sideloaded snaps — installed from a local `.snap` file — are out of scope for now (#221). One on the source is reported and skipped, along with the target's copy of the same snap; one only the target has is an ordinary removal candidate.
 
 ## flatpak
 
@@ -240,7 +240,7 @@ Software that arrived on the source by a route nothing can replay automatically.
 
 - **A hand-downloaded `.deb`** — apt knows the name, but no configured repository offers that version.
 - **Unowned software under `/usr/local` or `/opt`** — dropped there by an install script or a tarball. The scan is deliberately shallow: it names a finding so the user can decide, it does not walk a tree.
-- **A sideloaded snap**, and **a flatpak from a local bundle or a dead remote** — neither is handled today; both are deferred. See the open questions.
+- **A sideloaded snap**, and **a flatpak from a local bundle or a dead remote** — out of scope for now (#221).
 
 Detection runs on the **source** only, so there is no record of what was installed this way on the target and **nothing here is ever removed**.
 
@@ -269,7 +269,6 @@ A read that does not answer is different. If a package manager cannot be queried
 - **Enabling apt sync without the job for irreproducible software** leaves hand-installed `.deb` packages replicated by nobody.
 - **Version drift and origin divergence are reported, never resolved**, for apt and flatpak.
 - **Hand-installed software is never removed from the target.**
-- **Sideloaded snaps are replicated by nobody today.**
 - **A target with no Ubuntu Pro attachment costs the whole apt job for that run.**
 - **A non-interactive run can answer no review.** There is no file of standing answers and no assume-yes option.
 - **Machine-specific marks are per job, per machine, and never synced.**
