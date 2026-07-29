@@ -3,9 +3,18 @@
   "checkpoint_id": "41ccc5c83541",
   "strategy": "manual-commit",
   "branch": "gsd/phase-02-package-management-sync",
-  "checkpoints_count": 1,
+  "checkpoints_count": 4,
   "files_touched": [
-    "docs/planning/package-sync-user-requirements.md"
+    "docs/adr/adr-020-declarative-package-convergence.md",
+    "docs/jobs/package-sync.md",
+    "docs/planning/package-sync-user-requirements.md",
+    "src/pcswitcher/jobs/packages/review.py",
+    "src/pcswitcher/orchestrator.py",
+    "tests/manual/review_harness.py",
+    "tests/unit/jobs/test_apt_sync.py",
+    "tests/unit/jobs/test_flatpak_sync.py",
+    "tests/unit/jobs/test_package_review.py",
+    "tests/unit/jobs/test_review_skip_always.py"
   ],
   "sessions": [
     {
@@ -14,13 +23,20 @@
       "compact_transcript": "/41/ccc5c83541/0/transcript.jsonl",
       "content_hash": "/41/ccc5c83541/0/content_hash.txt",
       "prompt": "/41/ccc5c83541/0/prompt.txt"
+    },
+    {
+      "metadata": "/41/ccc5c83541/1/metadata.json",
+      "transcript": "/41/ccc5c83541/1/full.jsonl",
+      "compact_transcript": "/41/ccc5c83541/1/transcript.jsonl",
+      "content_hash": "/41/ccc5c83541/1/content_hash.txt",
+      "prompt": "/41/ccc5c83541/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 17,
-    "cache_creation_tokens": 16860,
-    "cache_read_tokens": 6102783,
-    "output_tokens": 6004,
-    "api_call_count": 9
+    "input_tokens": 1805,
+    "cache_creation_tokens": 3339912,
+    "cache_read_tokens": 114232421,
+    "output_tokens": 288043,
+    "api_call_count": 282
   }
 }
