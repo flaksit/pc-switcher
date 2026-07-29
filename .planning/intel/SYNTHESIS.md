@@ -6,7 +6,7 @@ Single entry point for `gsd-roadmapper`. Mode: new (net-new bootstrap). Source: 
 
 - ADR: 12 (docs/adr/adr-001 … adr-012)
 - SPEC: 5 (docs/system/architecture.md, core.md, data-model.md, logging.md, testing.md)
-- PRD: 6 (docs/planning/High level requirements.md, docs/planning/Feature breakdown.md, specs/001-core/spec.md, specs/002-testing-framework/spec.md, specs/003-core-tests/spec.md, specs/004-python-logging/spec.md)
+- PRD: 6 (docs/planning/high-level-requirements.md, docs/planning/feature-breakdown.md, specs/001-core/spec.md, specs/002-testing-framework/spec.md, specs/003-core-tests/spec.md, specs/004-python-logging/spec.md)
 - DOC: 1 (README.md)
 - Total: 24. All high-confidence, manifest_override=true. No UNKNOWN/low-confidence docs.
 

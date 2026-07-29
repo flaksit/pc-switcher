@@ -8,7 +8,7 @@
 ## Navigation
 
 **Documentation Hierarchy:**
-- [High level requirements](../../docs/High%20level%20requirements.md) - Project vision and scope
+- [High level requirements](../../docs/high-level-requirements.md) - Project vision and scope
 - [Architecture Decision Records](../../docs/adr/_index.md) - Cross-cutting architectural decisions
 - Specification (this document) - Detailed requirements for this feature
 - [Architecture](architecture.md) - Component design and interactions

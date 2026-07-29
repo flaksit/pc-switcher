@@ -1,6 +1,6 @@
 # Phase 02 — package sync scenario/coverage matrix
 
-Requirement-derived scenario enumeration for the four package jobs, mapped to pytest coverage. Branches come from ADR-020 (D-01…D-42), ADR-022, 02-208-HOLD-MASK-REPLICATION.md and `docs/planning/Package sync requirements.md` — not from code paths, though code was read to decide what actually happens.
+Requirement-derived scenario enumeration for the four package jobs, mapped to pytest coverage. Branches come from ADR-020 (D-01…D-42), ADR-022, 02-208-HOLD-MASK-REPLICATION.md and `docs/planning/package-sync-conformance-criteria.md` — not from code paths, though code was read to decide what actually happens.
 
 ## Legend
 

@@ -117,7 +117,7 @@ Phase 2 replicates *what is installed* from source to target across apt, snap an
 - `.planning/PROJECT.md` — project vision, locked decisions, reliability priority order.
 - `.planning/REQUIREMENTS.md` — REQ-sync-scope-packages, REQ-conflict-detection-no-resolution. NOTE: needs update for the `/etc/apt` scope move out of REQ-sync-scope-app-and-system-config.
 - `.planning/ROADMAP.md` §"Phase 2" — goal and the 3 success criteria. NOTE: needs the same `/etc/apt` boundary update.
-- `docs/planning/High level requirements.md` — item 2 (installed packages), the "Never Synced: Machine-Specific items" list, and the acceptable-constraints clause that permits a documented convention for bare installs.
+- `docs/planning/high-level-requirements.md` — item 2 (installed packages), the "Never Synced: Machine-Specific items" list, and the acceptable-constraints clause that permits a documented convention for bare installs.
 - `.planning/phases/01-home-sync-mvp-user-data-sync/01-CONTEXT.md` — Phase 1 decisions this phase builds on and must not contradict.
 
 ### Architecture decisions (locked)

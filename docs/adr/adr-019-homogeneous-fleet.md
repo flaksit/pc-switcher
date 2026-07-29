@@ -15,9 +15,9 @@ The fleet's real (human) user accounts — uid/gid >= 1000 — are assumed ident
 - No user, uid/gid, or path mapping is performed anywhere; there is no preflight that detects a mismatch, so keeping the real users uniform is the operator's responsibility.
 
 ## Context
-pc-switcher's goal is near-complete system-state replication between a small set of the same operator's machines (`docs/planning/High level requirements.md`) — the machines are interchangeable clones for that person, not independently administered multi-tenant hosts. The real user(s) are the same person's accounts, kept uniform (name, uid/gid, home path). System accounts are assigned per distro/install and may diverge; the sync does not depend on them matching. Components already rely on the real-user assumption implicitly: folder_sync mirrors `/home` and `/root` with `--numeric-ids` and no name mapping (ADR-013), and vscode_state_sync computes each machine's `state.vscdb` path from `Path.home()` on the assumption that the invoking user's home resolves identically. This ADR states the assumption explicitly so future jobs can depend on it and reviewers can reject accidental per-machine "smartness."
+pc-switcher's goal is near-complete system-state replication between a small set of the same operator's machines (`docs/planning/high-level-requirements.md`) — the machines are interchangeable clones for that person, not independently administered multi-tenant hosts. The real user(s) are the same person's accounts, kept uniform (name, uid/gid, home path). System accounts are assigned per distro/install and may diverge; the sync does not depend on them matching. Components already rely on the real-user assumption implicitly: folder_sync mirrors `/home` and `/root` with `--numeric-ids` and no name mapping (ADR-013), and vscode_state_sync computes each machine's `state.vscdb` path from `Path.home()` on the assumption that the invoking user's home resolves identically. This ADR states the assumption explicitly so future jobs can depend on it and reviewers can reject accidental per-machine "smartness."
 
-This ADR covers the real-user / identity / path axis of fleet homogeneity. Other axes are assumed too and documented elsewhere — do not duplicate them here: CPU architecture (ADR-017, with a `uname -m` preflight guard) and OS plus filesystem (Ubuntu 24.04 LTS on a single flat btrfs filesystem — `docs/planning/High level requirements.md`).
+This ADR covers the real-user / identity / path axis of fleet homogeneity. Other axes are assumed too and documented elsewhere — do not duplicate them here: CPU architecture (ADR-017, with a `uname -m` preflight guard) and OS plus filesystem (Ubuntu 24.04 LTS on a single flat btrfs filesystem — `docs/planning/high-level-requirements.md`).
 
 ## Decision
 - Assume the real user accounts (uid/gid >= 1000) are identical across the fleet: same names, uid/gid numbering, and home/filesystem paths.
@@ -38,4 +38,4 @@ This ADR covers the real-user / identity / path axis of fleet homogeneity. Other
 ## References
 - ADR-013: rsync-over-SSH as user-data transport (`--numeric-ids`)
 - ADR-017: single-architecture fleet (a related homogeneity constraint, on CPU arch)
-- `docs/planning/High level requirements.md` (near-complete system-state replication goal; Ubuntu 24.04 + single btrfs filesystem — the OS/filesystem homogeneity axis)
+- `docs/planning/high-level-requirements.md` (near-complete system-state replication goal; Ubuntu 24.04 + single btrfs filesystem — the OS/filesystem homogeneity axis)

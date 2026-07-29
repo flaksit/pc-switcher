@@ -23,7 +23,7 @@ pc-switcher/
 │   ├── dev/                 # Agent-facing development and testing guides
 │   ├── ops/                 # CI and test-infrastructure operations
 │   ├── planning/            # High level requirements, feature breakdown
-│   └── Premature analysis/  # Early exploration; inspiration only, not requirements
+│   └── premature-analysis/  # Early exploration; inspiration only, not requirements
 ├── specs/                   # SpecKit feature specs
 ├── .planning/               # GSD planning state (roadmap, phases, codebase map)
 ├── .github/                 # CI workflows
@@ -140,7 +140,7 @@ pc-switcher/
 **`.entire/`, `.codex/`, `.claude/`, `.vscode/`:**
 - Purpose: tooling/agent configuration and session metadata; not application code
 
-**`docs/Premature analysis/`:**
+**`docs/premature-analysis/`:**
 - Purpose: early exploration that may conflict with the current requirements
 - Treat as inspiration only; never read automatically or treat as requirements
 

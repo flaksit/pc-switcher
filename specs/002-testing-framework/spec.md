@@ -8,7 +8,7 @@
 ## Navigation
 
 Documentation Hierarchy:
-- [High level requirements](../../High%20level%20requirements.md) - Project vision and scope
+- [High level requirements](../../high-level-requirements.md) - Project vision and scope
 - [Architecture Decision Records](../../docs/adr/_index.md) - Cross-cutting architectural decisions
 - [ADR-006: Testing Framework](../../docs/adr/adr-006-testing-framework.md) - Testing architecture decision
 - Specification (this document) - Detailed requirements for this feature

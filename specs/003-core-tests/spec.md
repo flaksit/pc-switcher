@@ -8,7 +8,7 @@
 ## Navigation
 
 Documentation Hierarchy:
-- [High level requirements](../../High%20level%20requirements.md) - Project vision and scope
+- [High level requirements](../../high-level-requirements.md) - Project vision and scope
 - [Architecture Decision Records](../../docs/adr/_index.md) - Cross-cutting architectural decisions
 - [001-Core Specification](../001-core/spec.md) - Requirements being tested
 - Specification (this document) - Detailed requirements for retroactive tests

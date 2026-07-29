@@ -98,7 +98,7 @@ These preconditions make the one-directional mirror safe and the captured state 
 - `.planning/PROJECT.md` — project vision, locked decisions, reliability priority order.
 - `.planning/REQUIREMENTS.md` — REQ-sync-scope-user-data, REQ-machine-specific-exclusions, REQ-sync-scope-file-metadata, REQ-manual-sync-workflow, REQ-terminal-ux (Phase 1 requirements). NOTE: needs update to move `/root` into Phase 1.
 - `.planning/ROADMAP.md` §"Phase 1" — goal and the 5 success criteria. NOTE: needs update for `/root` scope move.
-- `docs/planning/High level requirements.md` — complete project vision, acceptable-constraints clause.
+- `docs/planning/high-level-requirements.md` — complete project vision, acceptable-constraints clause.
 
 ### Architecture decisions (locked)
 

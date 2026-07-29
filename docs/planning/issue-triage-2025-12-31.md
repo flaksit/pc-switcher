@@ -1,6 +1,6 @@
 # Issue Triage 2025-12-31
 
-**Objective:** Identify which open GitHub issues must be resolved before implementing user features (sync jobs: items 5-10 from Feature breakdown.md).
+**Objective:** Identify which open GitHub issues must be resolved before implementing user features (sync jobs: items 5-10 from feature-breakdown.md).
 
 **Scope:** All open issues excluding those in "Done" or "In Review" status in:
 
@@ -37,7 +37,7 @@
 **Critical before user features:** YES
 **Work started:** NO
 
-**Reasoning:** Dry-run is critical for reliability (priority #1 in project requirements) and preventing data loss. The issue specifically notes "each Job should have a dry-run mode," indicating this is an architectural requirement that must be built into the Job base class infrastructure BEFORE implementing user feature sync jobs (items 5-10 in Feature breakdown.md). Currently, the `sync` command has no `--dry-run` flag, and the Job interface has no dry-run support.
+**Reasoning:** Dry-run is critical for reliability (priority #1 in project requirements) and preventing data loss. The issue specifically notes "each Job should have a dry-run mode," indicating this is an architectural requirement that must be built into the Job base class infrastructure BEFORE implementing user feature sync jobs (items 5-10 in feature-breakdown.md). Currently, the `sync` command has no `--dry-run` flag, and the Job interface has no dry-run support.
 
 ### #47 - Warning on consecutive syncs from same source
 

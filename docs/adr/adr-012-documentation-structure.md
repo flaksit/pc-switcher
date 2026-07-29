@@ -19,7 +19,7 @@ docs/
 │   ├── testing-ops.md            # Runbooks, troubleshooting
 │   └── ci-setup.md               # CI/CD configuration
 ├── planning/                     # Planning & scope
-│   ├── High level requirements.md
+│   ├── high-level-requirements.md
 │   └── [other planning docs]
 ├── system/                       # Golden Copy specs (per ADR-011)
 └── adr/                          # Decisions
@@ -54,7 +54,7 @@ tests/
 | `tests/manual-playbook.md` | Project owner | Manual verification procedures for releases |
 
 ### CLAUDE.md and AGENTS.md Strategy
-- Brief summary of sync scope with link to `docs/planning/High level requirements.md`
+- Brief summary of sync scope with link to `docs/planning/high-level-requirements.md`
 - Pointers to `docs/dev/` for agent instructions
 - Essential commands, constraints, and patterns inline
 - Avoid duplicating content that agents can load on-demand

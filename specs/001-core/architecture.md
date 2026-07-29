@@ -5,7 +5,7 @@ This document describes the architecture for the pc-switcher core infrastructure
 ## Navigation
 
 **Documentation Hierarchy:**
-- [High level requirements](../../docs/High%20level%20requirements.md) - Project vision and scope
+- [High level requirements](../../docs/high-level-requirements.md) - Project vision and scope
 - [Architecture Decision Records](../../docs/adr/_index.md) - Cross-cutting architectural decisions
 - [Feature spec](spec.md) - Detailed requirements for this feature
 - Architecture (this document) - Component design and interactions

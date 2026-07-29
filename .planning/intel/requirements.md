@@ -1,71 +1,71 @@
 # Requirements (from PRDs)
 
-Synthesized from PRD-tier docs: `docs/planning/High level requirements.md` (prec 1), `docs/planning/Feature breakdown.md` (prec 1), and SpecKit specs `specs/001-core`, `specs/002-testing-framework`, `specs/003-core-tests`, `specs/004-python-logging` (prec 3). Per ADR-011, where `specs/00x` content overlaps `docs/system/*.md` (SPEC tier, prec 2), the living Golden Copy is authoritative for current-state truth — see INGEST-CONFLICTS.md.
+Synthesized from PRD-tier docs: `docs/planning/high-level-requirements.md` (prec 1), `docs/planning/feature-breakdown.md` (prec 1), and SpecKit specs `specs/001-core`, `specs/002-testing-framework`, `specs/003-core-tests`, `specs/004-python-logging` (prec 3). Per ADR-011, where `specs/00x` content overlaps `docs/system/*.md` (SPEC tier, prec 2), the living Golden Copy is authoritative for current-state truth — see INGEST-CONFLICTS.md.
 
-## Vision / Product-level (source: docs/planning/High level requirements.md)
+## Vision / Product-level (source: docs/planning/high-level-requirements.md)
 
 ### REQ-near-full-state-replication
-- source: /home/janfr/dev/pc-switcher/docs/planning/High level requirements.md
+- source: /home/janfr/dev/pc-switcher/docs/planning/high-level-requirements.md
 - description: Keep multiple Linux desktop machines in sync with minimal friction, aiming at near-full system-state replication (not just user-data sync). Generic to N machines; concrete case is two laptops (P17 primary, XPS13 mobile). Only one machine actively used at a time; no bi-directional sync.
 
 ### REQ-sync-scope-user-data
-- source: docs/planning/High level requirements.md
+- source: docs/planning/high-level-requirements.md
 - description: Sync `/home` and `/root` — documents, code, configs, application data. Selective caches: include dev tool caches (uv, pip, cargo, npm); exclude browser/IDE caches (VS Code specifically mentioned).
 
 ### REQ-sync-scope-packages
-- source: docs/planning/High level requirements.md
+- source: docs/planning/high-level-requirements.md
 - description: Sync installed packages across apt, snap, flatpak, manual .debs, custom PPAs, and packages from install scripts; detect package conflicts / version mismatches.
 
 ### REQ-sync-scope-app-and-system-config
-- source: docs/planning/High level requirements.md
+- source: docs/planning/high-level-requirements.md
 - description: Sync application configurations (GNOME desktop, cloud mounts, systemd services) and machine-independent system configs (`/etc`, startup services, users/groups). Detect conflicting system changes.
 
 ### REQ-sync-scope-file-metadata
-- source: docs/planning/High level requirements.md
+- source: docs/planning/high-level-requirements.md
 - description: Preserve file metadata — owner, permissions, ACLs, timestamps.
 
 ### REQ-sync-scope-vms
-- source: docs/planning/High level requirements.md
+- source: docs/planning/high-level-requirements.md
 - description: Sync KVM/virt-manager VMs. Constraint: VMs must be suspended/powered off before sync; detect concurrent VM usage.
 
 ### REQ-sync-scope-docker
-- source: docs/planning/High level requirements.md
+- source: docs/planning/high-level-requirements.md
 - description: Sync Docker images, containers, volumes, cache; detect running containers or incompatible states.
 
 ### REQ-sync-scope-k3s
-- source: docs/planning/High level requirements.md
+- source: docs/planning/high-level-requirements.md
 - description: Sync local single-node k3s cluster state including PVCs; validate cluster state and detect active workloads.
 
 ### REQ-machine-specific-exclusions
-- source: docs/planning/High level requirements.md
+- source: docs/planning/high-level-requirements.md
 - description: Never sync machine-specific items: SSH keys (`.ssh/id_*`), Tailscale config (`.config/tailscale`), hardware caches (GPU shaders, fontconfig), machine-specific packages and configuration.
 
 ### REQ-environment-constraints
-- source: docs/planning/High level requirements.md
+- source: docs/planning/high-level-requirements.md
 - description: Target environment is Ubuntu 24.04 LTS, single flat-layout btrfs filesystem per machine, machines reachable via SSH during sync (LAN / VPN such as Tailscale). Documented acceptable constraints allowed (e.g. apps not running during sync, logout required, subvolume creation) provided they do not significantly hinder usability; everything automatable should be automated.
 
 ### REQ-manual-sync-workflow
-- source: docs/planning/High level requirements.md
+- source: docs/planning/high-level-requirements.md
 - description: Manual single-command trigger from source to target; user works on source, wakes target, triggers sync, waits, resumes. No real-time/cloud syncing.
 
 ### REQ-conflict-detection-no-resolution
-- source: docs/planning/High level requirements.md
+- source: docs/planning/high-level-requirements.md
 - description: Detect conflicts arising from unsupported concurrent use; report conflicts but resolution is manual (no automatic resolution).
 
 ### REQ-terminal-ux
-- source: docs/planning/High level requirements.md
+- source: docs/planning/high-level-requirements.md
 - description: Single command launches the full sync across both machines; terminal-based UI; simple, intuitive experience for sync, conflict, and error handling.
 
 ### REQ-reliability-principles
-- source: docs/planning/High level requirements.md
+- source: docs/planning/high-level-requirements.md
 - description: Project principles in priority order: (1) Reliability — no data loss, conflict detection, consistent post-sync state, detailed logging, audit + rollback; (2) smooth UX; (3) well-supported tools/best practices; (4) minimize disk wear (NVMe); (5) sync speed; (6) maintainability/simplicity; (7) always-current navigable documentation.
 
 NOTE — competing-variants check: "Ideas for later" (parallel jobs, partial sync, multi-user parallel use, bi-directional sync, WiFi/internet sync, GUI) are explicitly out-of-scope future ideas, not current requirements. Not treated as competing acceptance variants.
 
-## Feature decomposition (source: docs/planning/Feature breakdown.md)
+## Feature decomposition (source: docs/planning/feature-breakdown.md)
 
 ### REQ-feature-modular-architecture
-- source: /home/janfr/dev/pc-switcher/docs/planning/Feature breakdown.md
+- source: /home/janfr/dev/pc-switcher/docs/planning/feature-breakdown.md
 - description: Decompose into core cross-cutting infrastructure (features 1-4) plus modular user-facing sync features (5-10). Each user feature is a self-contained modular component built on core infrastructure, with its own sync logic, conflict detection, and validation.
 - core features: (1) Basic CLI & Infrastructure — parser, config, connection, logging, TUI skeleton, modular-feature architecture; (2) Safety Infrastructure — pre-sync validation framework, btrfs snapshot management (pre/post snapshots, cleanup); (3) Installation & Setup — deploy to machines, dependency install (early, to enable real-machine testing); (4) Rollback Capability — restore from pre-sync snapshots via `pc-switcher rollback` (deferred until core stable).
 - user features (5-10): User Data Sync; Package Management Sync; System Configuration Sync; Docker State Sync; VM State Sync; k3s Cluster Sync. Each with conflict detection and validation as listed in REQ-sync-scope-* above.

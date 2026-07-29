@@ -184,7 +184,7 @@ With a token, the rate limit increases to 5,000 requests/hour.
 See [docs/README.md](docs/README.md) for the documentation index.
 
 Key documents:
-- **[High level requirements](docs/planning/High%20level%20requirements.md)** - Project vision, scope, workflow
+- **[High level requirements](docs/planning/high-level-requirements.md)** - Project vision, scope, workflow
 - **[Architecture](docs/system/architecture.md)** - System architecture and design
 - **[Architecture Decision Records](docs/adr/_index.md)** - Design decisions and rationale
 - **[Configuration Reference](docs/configuration.md)** - Every config option, defaults, filter-rule syntax
