@@ -1,0 +1,25 @@
+fix that commit: leave 02-UAT.md out and let the session owns it commit their own changes
+
+---
+
+STOP
+
+---
+
+other session was still finalizing. Done now. Do your surgery. Be sure to not loose anything!
+
+---
+
+/security-review
+
+---
+
+/crit:review
+
+---
+
+y
+
+---
+
+/crit:review
