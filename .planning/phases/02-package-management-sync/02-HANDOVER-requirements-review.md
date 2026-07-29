@@ -29,15 +29,18 @@ Do not chain the check and the commit with `&&` — gate the commit on the check
 
 ## Review position
 
-The user has read to the **flatpak** section. Everything above it is reviewed and settled. Not yet read: the rest of flatpak, *Software no manager can reproduce*, *When something goes wrong*, *What this deliberately does not do*, *Open questions*.
+The user has read through **flatpak** and has commented on *When something goes wrong*. Not yet read: *Software no manager can reproduce*, the rest of *When something goes wrong*, *What this deliberately does not do*, *Open questions*.
+
+snap and flatpak were restructured on the user's comment that both read as lists of unrelated statements: each section now opens by naming the shape every job shares and splits into subsections. The traceability table still maps their articles to `#snap` and `#flatpak`, which remain the section headings.
 
 ## Rulings made during review that the code does not implement
 
-All three are in the criteria's gap register and in `02-DIVERGENCES.md`. They are requirements changes, not doc fixes.
+All four are in the criteria's gap register and in `02-DIVERGENCES.md`. They are requirements changes, not doc fixes.
 
 1. **`PKG-FR-APT-HOLD-VERSION`** — a held package must be installed at the source's exact version, failing if the target cannot supply it. A hold names no version and blocks install, upgrade and removal alike (measured), so it carries "do not move this off the version that works". Code installs by name and holds afterwards. Still unruled: the same package held on *both* machines at different versions, which today produces no item at all.
 2. **`PKG-FR-FLATPAK-REMOTE-DELETE`** — a remote is never a review item. One the source lacks is deleted once nothing on the target uses it, counted after this run's approved removals and including machine-specific and origin-diverged applications. Code still offers it as a two-answer item.
 3. **`PKG-FR-SNAP-SIDELOAD`** — sideloaded snaps are out of scope (#221) and ignored on both machines; a run names them and does nothing else. Code still offers a target-only sideload for removal.
+4. **`PKG-FR-FLATPAK-FILTER`** (DIV-11) — a remote's filter is replicated: the file copied byte-for-byte to the same path on the target, re-applied, derived, after that remote's applications land. flatpak records the filter's path rather than its content, which makes the content an ordinary file the run can carry like a signing key; the earlier "unsyncable" reading confused the content with the path. Code does the opposite and does not even request the filter column. Unmeasured within the ruling: whether flatpak refuses to install a ref its own filter excludes.
 
 ## Open items unrelated to the review
 
