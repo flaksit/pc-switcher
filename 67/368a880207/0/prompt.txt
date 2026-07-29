@@ -1,0 +1,9 @@
+rename files so they don't contain spaces - vscode doesn't make clickable links for pathnames with spaces
+
+---
+
+give better name to package-sync-requirements.md to distinguish it from package-sync-user-requirements.md
+
+---
+
+do now

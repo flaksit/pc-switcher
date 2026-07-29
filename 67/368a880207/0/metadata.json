@@ -1,0 +1,145 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "67368a880207",
+  "session_id": "0c0e36c3-689a-4554-be65-d4a075a59e88",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-29T08:10:10.871460674Z",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 4,
+  "save_step_count": 4,
+  "files_touched": [
+    ".planning/INGEST-CONFLICTS.md",
+    ".planning/codebase/STRUCTURE.md",
+    ".planning/intel/SYNTHESIS.md",
+    ".planning/intel/classifications/Feature-breakdown-2c3be317.json",
+    ".planning/intel/classifications/High-level-requirements-973bd4f0.json",
+    ".planning/intel/classifications/README-4615cda9.json",
+    ".planning/intel/classifications/spec-0c4a31bf.json",
+    ".planning/intel/classifications/spec-17bc91e8.json",
+    ".planning/intel/classifications/spec-acba96b4.json",
+    ".planning/intel/context.md",
+    ".planning/intel/requirements.md",
+    ".planning/phases/01-home-sync-mvp-user-data-sync/01-CONTEXT.md",
+    ".planning/phases/02-package-management-sync/02-CONTEXT.md",
+    ".planning/phases/02-package-management-sync/02-SCENARIO-COVERAGE.md",
+    ".specify/memory/constitution.md",
+    "CLAUDE.md",
+    "README.md",
+    "docs/Premature analysis/Context.md",
+    "docs/Premature analysis/Plan.md",
+    "docs/Premature analysis/README.md",
+    "docs/Premature analysis/What Must Sync - Review by Deepseek.md",
+    "docs/Premature analysis/What Must Sync - Review by GPT-5-Codex.md",
+    "docs/Premature analysis/What Must Sync - Review by Gemini.md",
+    "docs/Premature analysis/btrfs.md",
+    "docs/adr/adr-012-documentation-structure.md",
+    "docs/adr/adr-019-homogeneous-fleet.md",
+    "docs/planning/Feature breakdown.md",
+    "docs/planning/High level requirements.md",
+    "docs/planning/Issue triage 2025-12-31.md",
+    "docs/planning/Package sync requirements.md",
+    "docs/planning/feature-breakdown.md",
+    "docs/planning/high-level-requirements.md",
+    "docs/planning/issue-triage-2025-12-31.md",
+    "docs/planning/package-sync-conformance-criteria.md",
+    "docs/premature-analysis/Context.md",
+    "docs/premature-analysis/Plan.md",
+    "docs/premature-analysis/README.md",
+    "docs/premature-analysis/btrfs.md",
+    "docs/premature-analysis/what-must-sync-review-by-deepseek.md",
+    "docs/premature-analysis/what-must-sync-review-by-gemini.md",
+    "docs/premature-analysis/what-must-sync-review-by-gpt-5-codex.md",
+    "specs/001-core/architecture.md",
+    "specs/001-core/data-model.md",
+    "specs/001-core/plan.md",
+    "specs/001-core/spec.md",
+    "specs/001-core/tasks.md",
+    "specs/002-testing-framework/spec.md",
+    "specs/003-core-tests/spec.md"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-5[1m]",
+  "turn_id": "78d97d34a4cc",
+  "checkpoint_transcript_start": 56,
+  "transcript_lines_at_start": 56,
+  "compact_transcript_start": 5,
+  "token_usage": {
+    "input_tokens": 2740,
+    "cache_creation_tokens": 802538,
+    "cache_read_tokens": 29036056,
+    "output_tokens": 129016,
+    "api_call_count": 85
+  },
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-29T08:10:10.642852393Z",
+    "agent_lines": 2320,
+    "agent_removed": 2322,
+    "human_added": 0,
+    "human_modified": 7,
+    "human_removed": 61,
+    "total_committed": 2327,
+    "total_lines_changed": 4710,
+    "agent_percentage": 98.55626326963906,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 9,
+      "user_lines_removed": 0,
+      "agent_lines_added": 686,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9
+      }
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 11,
+      "user_lines_removed": 2,
+      "agent_lines_added": 3021,
+      "agent_lines_removed": 2335,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9,
+        ".planning/phases/02-package-management-sync/02-BEHAVIOUR-LEDGER.md": 2
+      },
+      "user_removed_per_file": {
+        ".planning/phases/02-package-management-sync/02-BEHAVIOUR-LEDGER.md": 2
+      }
+    },
+    {
+      "checkpoint_number": 4,
+      "user_lines_added": 11,
+      "user_lines_removed": 2,
+      "agent_lines_added": 3021,
+      "agent_lines_removed": 2335,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9,
+        ".planning/phases/02-package-management-sync/02-BEHAVIOUR-LEDGER.md": 2
+      },
+      "user_removed_per_file": {
+        ".planning/phases/02-package-management-sync/02-BEHAVIOUR-LEDGER.md": 2
+      }
+    },
+    {
+      "checkpoint_number": 5,
+      "user_lines_added": 9,
+      "user_lines_removed": 0,
+      "agent_lines_added": 3101,
+      "agent_lines_removed": 2335,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9
+      }
+    }
+  ]
+}
