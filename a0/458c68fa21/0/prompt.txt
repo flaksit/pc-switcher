@@ -1,0 +1,1 @@
+"An approved hold is applied after the package exists, and never changes the package's version": not good. If hold is approved, it is the user's intent to install the version that is specified by the hold. Not possible to set the hold first and then install the package?
