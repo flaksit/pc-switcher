@@ -3,48 +3,51 @@
   "checkpoint_id": "bbf1fcf24eeb",
   "session_id": "6f351f45-55a4-4eda-a695-eb874d952f76",
   "strategy": "manual-commit",
-  "created_at": "2026-07-29T08:18:58.393011351Z",
-  "branch": "gsd/phase-02-package-management-sync",
-  "checkpoints_count": 2,
+  "created_at": "2026-07-29T08:25:53.244867343Z",
+  "checkpoints_count": 1,
   "save_step_count": 2,
   "files_touched": [
     "docs/planning/package-sync-user-requirements.md"
   ],
   "agent": "Claude Code",
   "model": "",
-  "turn_id": "dab0521a96a3",
+  "turn_id": "829d0353b30d",
   "compact_transcript_start": 0,
   "token_usage": {
-    "input_tokens": 1769,
-    "cache_creation_tokens": 2657036,
-    "cache_read_tokens": 102252218,
-    "output_tokens": 278301,
-    "api_call_count": 263
+    "input_tokens": 1773,
+    "cache_creation_tokens": 2660792,
+    "cache_read_tokens": 103548102,
+    "output_tokens": 279098,
+    "api_call_count": 265
   },
   "session_metrics": {
-    "turn_count": 46
+    "turn_count": 47
   },
   "initial_attribution": {
-    "calculated_at": "2026-07-29T08:18:58.168275355Z",
-    "agent_lines": 381,
+    "calculated_at": "2026-07-29T08:25:53.012473473Z",
+    "agent_lines": 0,
     "agent_removed": 0,
-    "human_added": 50,
-    "human_modified": 4,
+    "human_added": 6,
+    "human_modified": 2,
     "human_removed": 0,
-    "total_committed": 435,
-    "total_lines_changed": 452,
-    "agent_percentage": 84.2920353982301,
+    "total_committed": 6,
+    "total_lines_changed": 14,
+    "agent_percentage": 0,
     "metric_version": 2
   },
   "prompt_attributions": [
     {
       "checkpoint_number": 2,
-      "user_lines_added": 9,
-      "user_lines_removed": 0,
+      "user_lines_added": 10,
+      "user_lines_removed": 1,
       "agent_lines_added": 0,
       "agent_lines_removed": 0,
       "user_added_per_file": {
-        ".claude/settings.local.json": 9
+        ".claude/settings.local.json": 9,
+        "docs/planning/package-sync-user-requirements.md": 1
+      },
+      "user_removed_per_file": {
+        "docs/planning/package-sync-user-requirements.md": 1
       }
     }
   ]

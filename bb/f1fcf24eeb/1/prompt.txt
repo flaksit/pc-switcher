@@ -259,3 +259,48 @@ Not pushed. Untracked files left untouched.
 ---
 
 Need to update the 02-UAT*.md
+
+---
+
+<task-notification>
+<task-id>ac518d79437430ffb</task-id>
+<tool-use-id>toolu_011x6FNshWVk8ugVbC2NV8Ad</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/1cfb7cbc-0306-41b6-8f82-7ed1281a66dd/tasks/ac518d79437430ffb.output</output-file>
+<status>completed</status>
+<summary>Agent "Update the UAT documents" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done. One commit: `d23bf796` — but it contains only the runbook, for a reason worth flagging.
+
+## Correction to the brief
+
+**`02-UAT.md` is not in my commit.** The concurrent session committed my working-tree rewrite of it as collateral in `0863c37b` ("docs(packages): the other job is folder sync, not user-data sync") at 10:18:48, evidently via `git add -A`/`commit -a`. I verified the diff: my text is in verbatim and unmangled. Since amending and history rewriting are off limits, my commit stages the runbook alone. Nothing is lost, but `02-UAT.md`'s change is filed under a commit message that has nothing to do with it.
+
+## What was stale
+
+`02-UAT.md`: every clause of test 1 — checkboxes, tick state, the two-pass flow, "skip-always" as the answer's name. Test 2 used the old vocabulary and said nothing about hostnames or holding-machine routing. Test 3 was accurate as written (verified `_PROCEED = "p"` / `_ABORT = "a"` in `step_gate.py`, no default, TTY refusal in `cli.py`); I added only a `PKG-FR-CONFIRM-EACH` citation.
+
+`02-UAT-01-RUNBOOK.md`: the prompt inventory, the setup rationales, the whole "what to check on screen" section, and every abort string. Three staleness sources the brief did not name:
+
+- **4b was materially wrong.** It instructed the tester to expect a collateral "Skip" to erase an unrelated always-skip across the whole batch. `402f7067` fixed exactly that — collateral is now narrowed per candidate (`_collateral_trigger_ids`), and a decision the user gave survives a cancellation.
+- **4d told the tester to record a real cosmetic defect** ("Delete repositorys") that `ffa06900` had already fixed. Title is now `Delete repositories pc1 no longer has (apt)`.
+- **Abort messages are no longer fixed strings.** `_review_decision_group` raises `package review aborted at '&lt;group title&gt;' (Ctrl-C)`, so the runbook's five verbatim quotes were all wrong, and the never-offer-again abort no longer exists. Also: Ctrl-Q aborts a decision screen too, `&lt;a&gt;` is actively rejected as a decision key (`decision_list.FORBIDDEN_KEY`), and Ctrl-D now *submits* the snippet editor rather than being undefined.
+
+I rebuilt 4d to declare a real `URIs:` under `Enabled: no`, so the URL disclosure added in `6541eae4` is actually exercised rather than hitting the "declares no repository URL" branch.
+
+## Rehearsal evidence and counts
+
+Recorded as a `note:` block under test 1 — the field 01-UAT.md already uses for exactly this. It states what was driven (`tests/manual/review_harness.py`, real `TerminalUI`/`review_items`/`ask_gate`), lists the twelve findings with the three commits that fixed them, separates the two harness artifacts from the product defects, and closes with what the rehearsal structurally cannot reach.
+
+`result:` stays `[pending]` and the counts stay `total 3 / passed 0 / pending 3`. The rehearsal is evidence, not the test: test 1 *is* a real sync between two machines with decision files written and a snippet replayed, and that has never run. Marking it anything else would misreport phase readiness. `Gaps` says "none open" with the reason rather than staying `[none yet]`.
+
+## Harness listing
+
+Dropped. It had already drifted — the committed file names `p17`/`fleksi`, catches `SyncAbortedByUser`, and carries pin `content=` and hostname-bearing details that the inline copy did not. Two copies of a rehearsal script is exactly the drift that produced this task.
+
+## Unverified
+
+I did not run the harness (no TTY here), so the runbook's expected *rendering* is derived from the code, not observed. Every quoted string, title, key binding, default and abort message was read out of the source. `uv run codespell` clean; pytest not run per instructions.
+
+One nit: the markdown hard-wrap hook flags `expected: |` / `note: |` / `name:` in `02-UAT.md` as continuation lines. Those are the GSD template's YAML block scalars — false positives, unavoidable without abandoning the schema.</result>
+<usage><subagent_tokens>174705</subagent_tokens><tool_uses>52</tool_uses><duration_ms>559392</duration_ms></usage>
+</task-notification>

@@ -2,8 +2,7 @@
   "cli_version": "0.8.42",
   "checkpoint_id": "bbf1fcf24eeb",
   "strategy": "manual-commit",
-  "branch": "gsd/phase-02-package-management-sync",
-  "checkpoints_count": 3,
+  "checkpoints_count": 2,
   "files_touched": [
     ".planning/phases/02-package-management-sync/02-DIVERGENCES.md",
     ".planning/phases/02-package-management-sync/02-UAT.md",
@@ -29,11 +28,11 @@
     }
   ],
   "token_usage": {
-    "input_tokens": 1793,
-    "cache_creation_tokens": 2679964,
-    "cache_read_tokens": 108734366,
-    "output_tokens": 289782,
-    "api_call_count": 276
+    "input_tokens": 1797,
+    "cache_creation_tokens": 2683720,
+    "cache_read_tokens": 110030250,
+    "output_tokens": 290579,
+    "api_call_count": 278
   },
   "combined_attribution": {
     "calculated_at": "2026-07-29T08:18:58.543011107Z",
