@@ -34,10 +34,11 @@ Setup, architecture understanding, and troubleshooting:
 
 Requirements and planning artifacts:
 
-- [High level requirements.md](planning/High%20level%20requirements.md) - Project vision, scope, and constraints
-- [Package sync requirements.md](planning/Package%20sync%20requirements.md) - User-viewpoint requirements for the four package jobs: `PKG-FR-*` obligations, `PKG-NG-*` non-goals
-- [Feature breakdown.md](planning/Feature%20breakdown.md) - Feature planning
-- [Issue triage 2025-12-31.md](planning/Issue%20triage%202025-12-31.md) - Issue analysis
+- [high-level-requirements.md](planning/high-level-requirements.md) - Project vision, scope, and constraints
+- [package-sync-user-requirements.md](planning/package-sync-user-requirements.md) - What package sync is for and how it behaves, in prose. Authoritative for intent; read this first
+- [package-sync-conformance-criteria.md](planning/package-sync-conformance-criteria.md) - The same intent as individually checkable articles (`PKG-FR-*` obligations, `PKG-NG-*` non-goals), for verifying an implementation against
+- [feature-breakdown.md](planning/feature-breakdown.md) - Feature planning
+- [issue-triage-2025-12-31.md](planning/issue-triage-2025-12-31.md) - Issue analysis
 
 ## Specifications (`system/`)
 
@@ -58,4 +59,4 @@ Architectural Decision Records:
 
 ## Other
 
-- [Premature analysis/](Premature%20analysis/) - Early exploration (historical, do not use as requirements)
+- [premature-analysis/](premature-analysis/) - Early exploration (historical, do not use as requirements)

@@ -1,19 +1,26 @@
-# Package sync requirements
+# Package sync conformance criteria
 
-Requirements on the four package-sync jobs, stated from the point of view of the person whose machines are changed: what the system must do to their software, what it must ask them, what it must never do to them without consent, and what it must tell them afterwards.
+The intent stated in [Package sync — user requirements](package-sync-user-requirements.md), decomposed into individually checkable obligations so an implementation, its tests and its documentation can be verified against them one at a time.
+
+Read that document first. It says what package sync is for and why it behaves as it does, which is what makes these articles cohere; this one is a checklist and is not meant to be read end to end.
 
 Requirement ids are `PKG-FR-*` for obligations and `PKG-NG-*` for non-goals — outcomes the system is required not to attempt. MUST, MUST NOT, SHOULD and MAY carry their usual normative force. How an obligation is met — which command reads what, which file holds it, what a screen says — is not specified here; that is the specification's job.
 
 ## Navigation
 
-- [High level requirements](High%20level%20requirements.md) — project vision and scope; this document elaborates "installed packages must sync"
-- [Package sync job behaviour](../jobs/package-sync.md) — user guide to the same jobs
+- [Package sync — user requirements](package-sync-user-requirements.md) — the intent these articles decompose
+- [High level requirements](high-level-requirements.md) — project vision and scope
+- [Package sync job behaviour](../jobs/package-sync.md) — operator's guide to the same jobs
 - [Package sync specification](../system/package-sync.md) — how these requirements are implemented
-- [ADR-020](../adr/adr-020-declarative-package-convergence.md) — the decision these requirements follow from
+- [ADR-020](../adr/adr-020-declarative-package-convergence.md) — the decision record behind the model
 
-Precedence: where this document and any other disagree, this document and ADR-020 state the intent. Section [Where the tool does not yet meet these requirements](#where-the-tool-does-not-yet-meet-these-requirements) records requirements the shipped code knowingly does not meet.
+Precedence: the user requirements state the intent. Where an article here and that document disagree, the article is wrong and is what gets fixed. Where this document and anything downstream of it — the specification, the job guide, the code, the tests — disagree, this document wins. Section [Where the tool does not yet meet these requirements](#where-the-tool-does-not-yet-meet-these-requirements) records requirements the shipped code knowingly does not meet.
+
+Every article decomposes exactly one section of the user requirements. Each section below names the section it comes from, and [Traceability](#traceability) lists the whole mapping.
 
 ## Scope
+
+Decomposes [What package sync is for](package-sync-user-requirements.md#what-package-sync-is-for).
 
 Four jobs — `apt_sync`, `snap_sync`, `flatpak_sync`, `manual_installs_sync` — replicate what software is installed. Application data is not theirs.
 
@@ -32,6 +39,8 @@ Four jobs — `apt_sync`, `snap_sync`, `flatpak_sync`, `manual_installs_sync` �
 
 ## Convergence model
 
+Decomposes [The model](package-sync-user-requirements.md#the-model).
+
 - **PKG-FR-SOURCE-INTENT**: The source machine's state MUST be the only statement of intent. A sync MUST NOT modify the source, and the target MUST NOT decide anything: it answers read-only questions while the change is planned and carries out what was approved.
 - **PKG-FR-MANAGER-CONVERGES**: Software MUST be replicated by having the target's own package managers install and remove it. The system MUST NOT copy a package manager's database, store or unpacked files between machines. What travels is the decision, plus the configuration a manager needs in order to obey it.
 - **PKG-FR-APT-IDENTITY**: An apt package MUST be identified by name and origin together. The system MUST NOT satisfy an approved install from a vendor the source does not use.
@@ -49,6 +58,8 @@ Four jobs — `apt_sync`, `snap_sync`, `flatpak_sync`, `manual_installs_sync` �
 - **PKG-FR-BLOCKS-REPLICATE**: Blocks the user set by hand — apt holds, snap refresh holds, flatpak masks — MUST replicate, each as an item decided separately from the software it applies to.
 
 ## Consent
+
+Decomposes [The model](package-sync-user-requirements.md#the-model); the review mechanics it constrains are in [One run, start to finish](package-sync-user-requirements.md#one-run-start-to-finish) and [Decisions and their memory](package-sync-user-requirements.md#decisions-and-their-memory).
 
 - **PKG-FR-REVIEW-FIRST**: A job MUST NOT modify the target before the user has approved that job's diff.
 - **PKG-FR-ONLY-APPROVED**: A job MUST apply only what the user approved.
@@ -77,6 +88,8 @@ Four jobs — `apt_sync`, `snap_sync`, `flatpak_sync`, `manual_installs_sync` �
 
 ### Installing
 
+Decomposes [apt / Installing](package-sync-user-requirements.md#installing).
+
 ```mermaid
 flowchart TD
     A["On the source,<br/>absent on the target"] --> B{"Origin of the<br/>source's copy"}
@@ -100,6 +113,8 @@ flowchart TD
 
 ### Removing and diverging
 
+Decomposes [apt / Removing, and reporting without acting](package-sync-user-requirements.md#removing-and-reporting-without-acting).
+
 - **PKG-FR-APT-REMOVE**: A package on the target that the source does not have MUST be offered for removal. Approval MUST remove the package without purging its configuration.
 - **PKG-FR-APT-SAME**: A package present on both machines at the same version from the same vendor MUST produce no item.
 - **PKG-FR-APT-VERSION-DIFF**: A version difference MUST be reported with both versions named and MUST NOT be acted on.
@@ -109,11 +124,15 @@ flowchart TD
 
 ### Holds
 
+Decomposes [apt / Holds](package-sync-user-requirements.md#holds).
+
 - **PKG-FR-APT-HOLD-ITEM**: An apt hold MUST be an item separate from the package it applies to, decided separately, in both directions.
 - **PKG-FR-APT-HOLD-ORDER**: An approved hold MUST be applied after the package it names exists.
 - **PKG-FR-APT-HOLD-INERT**: Replicating a hold MUST NOT change the package's version, and a hold whose package install was not approved or failed MUST fail alone.
 
 ### Collateral damage
+
+Decomposes [apt / Collateral damage](package-sync-user-requirements.md#collateral-damage).
 
 - **PKG-FR-COLLATERAL-AUTO**: Collateral removals and downgrades that touch only automatically-installed packages MUST proceed without asking.
   Why: that is the target's apt resolving its own dependency graph.
@@ -128,6 +147,8 @@ flowchart TD
   Why: the facts that question needs do not exist while the review is being built — until the repository lands, the target's apt cannot resolve the name, and including it would strip the protection from every other package in the run rather than weaken it for one. The cost is that for those packages the user is told afterwards instead of asked beforehand.
 
 ### Repositories, keys and pins
+
+Decomposes [apt / Repositories, keys and pins](package-sync-user-requirements.md#repositories-keys-and-pins).
 
 - **PKG-FR-REPO-DERIVED**: The user MUST NOT be asked to add or change a repository. A repository MUST be written to the target only because an approved package comes from it. A repository on the source that feeds no package this run syncs MUST NOT travel.
 - **PKG-FR-REPO-OVERWRITE**: A repository present on both machines with differing content MUST be overwritten with the source's version, except as required by `PKG-FR-REPO-CONFLICT`.
@@ -155,6 +176,8 @@ flowchart TD
 
 ### Ubuntu Pro and ESM
 
+Decomposes [apt / Ubuntu Pro](package-sync-user-requirements.md#ubuntu-pro).
+
 - **PKG-FR-ESM-GATE**: Where the source carries ESM repositories that would be written to a target reporting no Ubuntu Pro attachment, the system MUST obtain the user's decision before writing anything and before asking that job's other questions, with exactly two outcomes: attach the target, or skip the apt job for this run while the other jobs proceed. The user MUST be told what to do on the target to attach it.
   Why: an unattached target's metadata refresh succeeds because the ESM indexes are public, so the ESM suites enter candidate selection above the ordinary archive and the failure lands later, at install time, on a package the user will not connect to the sync. The system cannot fix this itself: attaching needs a subscription token or an interactive browser flow, the source's own credentials are root-only and not reusable, and carrying a token would put a secret on a command line.
 - **PKG-FR-ESM-VERIFY**: An answer claiming the target is attached MUST be verified against the target rather than believed, and the user MAY answer it any number of times.
@@ -166,6 +189,8 @@ flowchart TD
 
 ### Applying
 
+Decomposes [apt / Applying apt's changes](package-sync-user-requirements.md#applying-apts-changes).
+
 - **PKG-FR-APT-CONFIG-ATOMIC**: All repository-configuration changes a run makes MUST be applied as one unit, backed up beforehand, and followed by a single metadata refresh. If that refresh fails, every file the unit touched MUST be restored. Every approved package whose origin depended on the unit MUST then fail, named, and the run MUST continue with the packages that did not.
 - **PKG-FR-DERIVED-FAILURE**: A derived write has no item of its own to fail; its failure MUST be charged to every approved package that needed it, naming what failed.
   Why: the user decided about a package, not about a file.
@@ -173,6 +198,8 @@ flowchart TD
   Why: not asking is not the same as hiding.
 
 ## snap
+
+Decomposes [snap](package-sync-user-requirements.md#snap).
 
 - **PKG-FR-SNAP-CASES**: A snap on the source only MUST be offered for install at the source's revision and channel; a snap on the target only MUST be offered for removal; a difference of revision or channel MUST be offered as a single change naming both values; identical revision and channel MUST produce no item.
 - **PKG-FR-SNAP-CONFINEMENT**: A snap's confinement mode MUST be captured on the source and replicated with the install.
@@ -187,6 +214,8 @@ flowchart TD
   Why: they would leave orphan data behind on the target.
 
 ## flatpak
+
+Decomposes [flatpak](package-sync-user-requirements.md#flatpak).
 
 - **PKG-FR-FLATPAK-CASES**: An application on the source only MUST be offered for install; on the target only, for removal; the same application, scope and branch at different versions MUST be reported only; identical MUST produce no item.
 - **PKG-FR-FLATPAK-REMOTE-DERIVED**: A remote MUST NOT be a review item when it is added or changed. It MUST travel because an application approved this run comes from it, including the remote that supplies an approved application's runtime, and declining the application MUST be the only way to decline the remote. A remote that feeds no application approved this run MUST NOT travel, and no remote is exempt from this rule.
@@ -211,6 +240,8 @@ flowchart TD
 
 ## Manual installs
 
+Decomposes [Software no manager can reproduce](package-sync-user-requirements.md#software-no-manager-can-reproduce).
+
 - **PKG-FR-MANUAL-RESOLUTION**: Every detected item MUST end the run in one of exactly three states: reproducible by an install snippet, marked machine-specific, or skipped for this run. Skip-once MUST count as a resolution, not as an unresolved state.
 - **PKG-FR-MANUAL-SOURCE-DECIDES**: Whether an item is reproducible MUST be decided by what the source holds. An item with a snippet only on the target MUST still be treated as unresolved.
 - **PKG-FR-MANUAL-SAME-RUN**: A snippet authored during a review MUST be persisted, transferred and replayed in the same run.
@@ -223,6 +254,8 @@ flowchart TD
 
 ## Reporting, failure and rehearsal
 
+Decomposes [When something goes wrong](package-sync-user-requirements.md#when-something-goes-wrong) and the rehearsal and no-terminal paragraphs of [One run, start to finish](package-sync-user-requirements.md#one-run-start-to-finish).
+
 - **PKG-FR-OUTCOME-SUCCESS**: A job MUST report success when it did what its review approved, including when its review was empty because the target already matches.
 - **PKG-FR-OUTCOME-SKIPPED**: A job that deliberately did nothing MUST report skipped rather than success, MUST say why, MUST record no decision, MUST transfer no registry and MUST leave the target untouched. The run MUST continue and the exit code MUST be unaffected.
 - **PKG-FR-OUTCOME-FAILED**: A job MUST report failure when at least one approved item could not be applied. Every approved item MUST be attempted, failures MUST be collected and reported together naming each item, one failed item MUST NOT block the rest of its job, and one failed job MUST NOT stop the others.
@@ -231,6 +264,8 @@ flowchart TD
 - **PKG-FR-FAIL-NAMED**: Every failure MUST name the item, package or file it concerns.
 
 ## Non-goals and accepted costs
+
+Decomposes [What this deliberately does not do](package-sync-user-requirements.md#what-this-deliberately-does-not-do).
 
 Each of these is a real cost, given up knowingly.
 
@@ -265,3 +300,28 @@ Should `PKG-FR-REPO-DELETE` ever be markable machine-specific? `PKG-FR-NO-MARK-O
 How much does the ESM hazard behind `PKG-FR-ESM-GATE` cost on a real desktop? Measured in a container, zero of thirteen upgradable packages had an ESM candidate. That a desktop with a large `universe` set has many more follows from the priority ordering but has not been measured. The gate does not depend on the count, but the size of the problem is unknown.
 
 How often is a package manual on the source and automatic on the target — the case `PKG-NG-COLLATERAL-SOURCE-MANUAL` gives up? Nobody has counted. "Rare" is not a claim this document makes.
+
+## Traceability
+
+Every article above decomposes exactly one section of [Package sync — user requirements](package-sync-user-requirements.md). 124 articles, no orphans in either direction. A new article needs a home here; a narrative section with no articles is either intentionally non-normative or a coverage gap.
+
+| User-requirements section | Articles | |
+| - | - | - |
+| [What package sync is for](package-sync-user-requirements.md#what-package-sync-is-for) | 8 | `PKG-FR-OPT-IN` `PKG-FR-JOB-INDEPENDENCE` `PKG-FR-JOB-ORDER` `PKG-FR-APT-SCOPE` `PKG-FR-SNAP-SCOPE` `PKG-FR-FLATPAK-SCOPE` `PKG-FR-MANUAL-SCOPE` `PKG-FR-DATA-BOUNDARY` |
+| [The model](package-sync-user-requirements.md#the-model) | 18 | `PKG-FR-SOURCE-INTENT` `PKG-FR-MANAGER-CONVERGES` `PKG-FR-APT-IDENTITY` `PKG-FR-DISTRO-ORIGIN` `PKG-FR-SNAP-IDENTITY` `PKG-FR-FLATPAK-IDENTITY` `PKG-FR-FLATPAK-ORIGIN-NOT-IDENTITY` `PKG-FR-VERSION-FLOAT` `PKG-FR-SNAP-REVISION` `PKG-FR-BLOCKS-REPLICATE` `PKG-FR-REVIEW-FIRST` `PKG-FR-ONLY-APPROVED` `PKG-FR-BATCHED` `PKG-FR-ASK-AGAIN` `PKG-FR-CONSENT-BEFORE-CHANGE` `PKG-FR-ASK-ABOUT-SOFTWARE` `PKG-FR-ASK-WHEN-NOT-DERIVABLE` `PKG-FR-REMOVAL-DISTINCT` |
+| [One run, start to finish](package-sync-user-requirements.md#one-run-start-to-finish) | 6 | `PKG-FR-NAME-THE-MACHINES` `PKG-FR-EFFECT-NOT-MECHANISM` `PKG-FR-ABORT` `PKG-FR-CONFIRM-EACH` `PKG-FR-NO-TERMINAL` `PKG-FR-DRY-RUN` |
+| [Decisions and their memory](package-sync-user-requirements.md#decisions-and-their-memory) | 3 | `PKG-FR-SKIP-ONCE` `PKG-FR-MACHINE-SPECIFIC` `PKG-FR-NO-MARK-ON-ORIGIN` |
+| [apt / Installing](package-sync-user-requirements.md#installing) | 5 | `PKG-FR-DEB-OWNERSHIP` `PKG-FR-APT-VENDOR-DISCLOSURE` `PKG-FR-APT-ORIGIN-DERIVED` `PKG-FR-APT-ORIGIN-UNREPLICABLE` `PKG-FR-APT-ORIGIN-VERIFY` |
+| [apt / Removing, and reporting without acting](package-sync-user-requirements.md#removing-and-reporting-without-acting) | 5 | `PKG-FR-APT-REMOVE` `PKG-FR-APT-SAME` `PKG-FR-APT-VERSION-DIFF` `PKG-FR-APT-VENDOR-DIFF` `PKG-FR-APT-HELD-TARGET` |
+| [apt / Holds](package-sync-user-requirements.md#holds) | 3 | `PKG-FR-APT-HOLD-ITEM` `PKG-FR-APT-HOLD-ORDER` `PKG-FR-APT-HOLD-INERT` |
+| [apt / Collateral damage](package-sync-user-requirements.md#collateral-damage) | 6 | `PKG-FR-COLLATERAL-AUTO` `PKG-FR-COLLATERAL-MANUAL` `PKG-FR-COLLATERAL-ATTRIBUTION` `PKG-FR-COLLATERAL-KEEPS-MARKS` `PKG-FR-COLLATERAL-TIMING` `PKG-FR-COLLATERAL-NEW-ORIGIN` |
+| [apt / Repositories, keys and pins](package-sync-user-requirements.md#repositories-keys-and-pins) | 14 | `PKG-FR-REPO-DERIVED` `PKG-FR-REPO-OVERWRITE` `PKG-FR-REPO-CONFLICT` `PKG-FR-REPO-DELETE` `PKG-FR-DISTRO-FILES` `PKG-FR-APT-IGNORES` `PKG-FR-KEY-NOT-ITEM` `PKG-FR-KEY-COPY` `PKG-FR-KEY-REFRESH` `PKG-FR-KEY-CLEANUP` `PKG-FR-PIN-ALWAYS` `PKG-FR-PIN-DELETE` `PKG-FR-PIN-NOT-INVENTORY` `PKG-FR-APTCONF` |
+| [apt / Ubuntu Pro](package-sync-user-requirements.md#ubuntu-pro) | 5 | `PKG-FR-ESM-GATE` `PKG-FR-ESM-VERIFY` `PKG-FR-ESM-SKIP-WHOLE-JOB` `PKG-FR-ESM-NO-ASK` `PKG-FR-ESM-PRIVACY` |
+| [apt / Applying apt's changes](package-sync-user-requirements.md#applying-apts-changes) | 3 | `PKG-FR-APT-CONFIG-ATOMIC` `PKG-FR-DERIVED-FAILURE` `PKG-FR-DERIVED-VISIBLE` |
+| [snap](package-sync-user-requirements.md#snap) | 8 | `PKG-FR-SNAP-CASES` `PKG-FR-SNAP-CONFINEMENT` `PKG-FR-SNAP-REMOVE-SNAPSHOT` `PKG-FR-SNAP-SIDELOAD` `PKG-FR-SNAP-FAIL-ITEM` `PKG-FR-SNAP-HOLD` `PKG-FR-SNAP-REFRESH-PAUSE` `PKG-FR-SNAP-DATA-BOUNDARY` |
+| [flatpak](package-sync-user-requirements.md#flatpak) | 14 | `PKG-FR-FLATPAK-CASES` `PKG-FR-FLATPAK-REMOTE-DERIVED` `PKG-FR-FLATPAK-REMOTE-FIRST` `PKG-FR-FLATPAK-REMOTE-TRUST` `PKG-FR-FLATPAK-REPOINT` `PKG-FR-FLATPAK-REMOTE-DELETE` `PKG-FR-FLATPAK-INSTALL-ORIGIN` `PKG-FR-FLATPAK-MISSING-REMOTE` `PKG-FR-FLATPAK-ORIGIN-DIFF` `PKG-FR-FLATPAK-REMOTE-FAILURE` `PKG-FR-FLATPAK-FILTER` `PKG-FR-FLATPAK-THIRD-SCOPE` `PKG-FR-FLATPAK-MASK` `PKG-FR-FLATPAK-PRIVILEGE` |
+| [Software no manager can reproduce](package-sync-user-requirements.md#software-no-manager-can-reproduce) | 7 | `PKG-FR-MANUAL-RESOLUTION` `PKG-FR-MANUAL-SOURCE-DECIDES` `PKG-FR-MANUAL-SAME-RUN` `PKG-FR-SNIPPET-VERBATIM` `PKG-FR-REGISTRY-TRAVELS` `PKG-FR-REGISTRY-CONSENT` `PKG-FR-MANUAL-FAIL-ITEM` |
+| [When something goes wrong](package-sync-user-requirements.md#when-something-goes-wrong) | 4 | `PKG-FR-OUTCOME-SUCCESS` `PKG-FR-OUTCOME-SKIPPED` `PKG-FR-OUTCOME-FAILED` `PKG-FR-FAIL-NAMED` |
+| [What this deliberately does not do](package-sync-user-requirements.md#what-this-deliberately-does-not-do) | 15 | `PKG-NG-APT-LINE-CONTROL` `PKG-NG-APT-IDENTICAL` `PKG-NG-PIN-LOCAL` `PKG-NG-COLLATERAL-SOURCE-MANUAL` `PKG-NG-COLLATERAL-MARKS` `PKG-NG-DEB-ORPHANED` `PKG-NG-SNAP-ORIGIN` `PKG-NG-ESM-PARTIAL` `PKG-NG-MARK-ORIGIN` `PKG-NG-SIDELOAD` `PKG-NG-MANUAL-REMOVE` `PKG-NG-VERSION-CONVERGE` `PKG-NG-VENDOR-CONVERGE` `PKG-NG-UNATTENDED` `PKG-NG-MARK-PORTABILITY` |
+
+Two narrative sections carry no articles, deliberately. [Vocabulary](package-sync-user-requirements.md#vocabulary) defines terms rather than imposing obligations — but it is what makes the articles unambiguous, so an article that cannot be stated in its vocabulary is an article to rewrite. [Open questions](package-sync-user-requirements.md#open-questions) records what is undecided, and an open question resolved becomes one or more articles here.

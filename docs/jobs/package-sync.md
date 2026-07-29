@@ -4,7 +4,7 @@ The package jobs replicate *what is installed* — apt packages plus the `/etc/a
 
 Configuration for these jobs is limited to their `sync_jobs` enable flags; see the [configuration reference](../configuration.md#sync_jobs). There are no per-job config keys.
 
-For the requirements these jobs implement — the `PKG-FR-*` obligations per ecosystem and the `PKG-NG-*` non-goals — see [Package sync requirements](../planning/Package%20sync%20requirements.md). Where this page and that one disagree, that one is the intent.
+For what these jobs are for and why they behave as they do, see [Package sync — user requirements](../planning/package-sync-user-requirements.md); for the same requirements as checkable articles — the `PKG-FR-*` obligations per ecosystem and the `PKG-NG-*` non-goals — see [Package sync conformance criteria](../planning/package-sync-conformance-criteria.md). Where this page disagrees with either, this page is wrong.
 
 ## The four jobs
 

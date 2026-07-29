@@ -291,7 +291,8 @@ The provenance variable that remains is which revision of that one snap is insta
 - ADR-018: Selective VS Code state sync — the path-export mechanism D-29 reuses for `flatpak_sync` and `snap_sync`.
 - ADR-022: a read that did not answer fails the job; an answer of "nothing" is data — the guard every capture in these jobs passes through.
 - `docs/system/package-sync.md` and `docs/jobs/package-sync.md`: the resulting spec and user-facing description.
-- `docs/planning/Package sync requirements.md`: the user-viewpoint statement of what these jobs must deliver.
+- `docs/planning/package-sync-user-requirements.md`: the user-viewpoint statement of what these jobs must deliver, and the authority on intent.
+- `docs/planning/package-sync-conformance-criteria.md`: that intent as individually checkable articles.
 - `.planning/phases/02-package-management-sync/02-SPEC-package-review-model.md`: the apt implementation contract — the four review screens, the origin classification, the enforcement point.
 - `.planning/phases/02-package-management-sync/02-SPEC-snap-flatpak-derivation.md`: the snap and flatpak implementation contract, and the measurements behind D-41 and D-42.
 - GitHub issue #118: the feature issue, including the snap-revision discussion motivating D-06.

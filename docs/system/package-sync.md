@@ -9,7 +9,8 @@
 - [Data Model](data-model.md) — item identity, the machine-local decision file and the install-snippet registry
 - [Core Spec](core.md)
 - [Package sync (user guide)](../jobs/package-sync.md)
-- [Package sync requirements](../planning/Package%20sync%20requirements.md) — the user-viewpoint requirements this spec implements
+- [Package sync — user requirements](../planning/package-sync-user-requirements.md) — the intent this spec implements
+- [Package sync conformance criteria](../planning/package-sync-conformance-criteria.md) — the checkable articles this spec is verified against
 
 Four `SyncJob`s — `apt_sync`, `snap_sync`, `flatpak_sync`, `manual_installs_sync` — replicate *what is installed* (apt packages plus the `/etc/apt` repository state they depend on, snaps, flatpaks, and the things no package manager can reproduce) rather than user data. The convergence model they implement is ADR-020: the source captures a manifest, the target diffs its own state against it, and each ecosystem's own tooling does the converging.
 
