@@ -98,3 +98,19 @@ An apt hold blocks install, upgrade and removal alike — measured on `ubuntu:24
 ## Ambiguity flagged for the Stage 5 article audit
 
 `PKG-FR-MACHINE-SPECIFIC` says the item is "never to be offered again on that machine. The mark MUST be local to that machine" with no antecedent for either "that machine". The rule the code implements is the holder rule (`sync_core.py:213-223`): install and change diffs record on the source, removal diffs on the target, written through that machine's own executor. The article is unstatable without a name for the holding machine, which the narrative's vocabulary section introduces. Full audit of all 124 articles against that vocabulary follows once the narrative is approved.
+
+## DIV-11 — A filtered remote is replicated unfiltered
+
+Ruled on 2026-07-29, after the code was written, so this is a known gap rather than a contradiction.
+
+**Measured** (flatpak 1.14.6, `02-SPEC-snap-flatpak-derivation.md` §2.8): `flatpak remote-modify --filter=/tmp/f.filter <remote>` records the *path* `/tmp/f.filter` in the remote's `filter` column and adds a `filtered` token to `options`. The filter's content is an ordinary file at that arbitrary local path, outside the ostree store.
+
+The original reading was that this makes the filter unsyncable — "not repository-or-key material". It does not. The content is a file, and the run already carries files byte-for-byte: a repository's signing key is copied exactly this way. What the earlier decision actually gave up on was the *path*: it is arbitrary, so replicating the filter means the flatpak job writing to a location it does not own, possibly inside `folder_sync`'s territory.
+
+`PKG-FR-FLATPAK-FILTER` now requires the filter to be replicated: copied byte-for-byte to the same absolute path on the target, re-applied to the replicated remote, derived rather than reviewed, and applied after the approved applications from that remote have landed. Failure to copy or re-apply fails every approved application from that remote.
+
+`flatpak_sync` implements the opposite: `_FLATPAK_REMOTES_CMD_TEMPLATE` requests `name,url,options`, so the path is never read, and the shipped behaviour is one WARNING per filtered remote naming the `remote-modify --filter` command. Implementing the requirement widens the capture to four columns, which reshapes every remote fixture in the suite — with the `filter` column requested, an unfiltered remote prints four fields, not three.
+
+`docs/jobs/package-sync.md:252` documents the shipped warning behaviour and stays accurate until the code changes.
+
+**Open within this ruling:** the ordering rule is stated as a design requirement, not from measurement. Whether flatpak actually refuses to install a ref its own filter excludes has not been tested.

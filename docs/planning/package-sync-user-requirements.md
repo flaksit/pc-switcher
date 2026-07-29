@@ -250,7 +250,7 @@ A remote both machines have whose URL or verification differs is repointed silen
 
 One the source does not have is deleted once nothing on the target still uses it — after this run's approved removals, counted against what the machine actually has, including applications marked machine-specific. While anything still uses it, it stays. Deleting a remote takes its signing key with it.
 
-A remote the source restricts with a filter is replicated **unfiltered**, with a warning and the command to re-apply it: the filter's content lives outside flatpak's store.
+A remote the source restricts with a filter is replicated **with its filter**. The filter is a separate file at a path of the user's choosing — flatpak records the path, not the content — so it is copied byte-for-byte to the same path on the target and re-applied there. Like a signing key, it is derived and never a review item. It is applied after the approved applications from that remote have landed, because a filter can be narrower than what the source has installed and must not block replicating it. If it cannot land, every approved application from that remote fails.
 
 ### Masks and scopes
 

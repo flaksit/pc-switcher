@@ -239,8 +239,9 @@ Decomposes [flatpak](package-sync-user-requirements.md#flatpak).
 - **PKG-FR-FLATPAK-ORIGIN-DIFF**: The same application, scope and branch installed from different remotes on the two machines MUST be reported as a provenance divergence naming both remotes and both URLs, MUST NOT be converged, and MUST take precedence over a version difference on that application. Origins MUST be compared by URL, never by remote name.
   Why: flatpak refuses to install a reference already installed from another remote, so the only mechanical convergence would be uninstalling what the user has and reinstalling it from the other origin.
 - **PKG-FR-FLATPAK-REMOTE-FAILURE**: A remote that cannot be provisioned has no item of its own to fail; the failure MUST land on every application that needed it, naming the remote and quoting flatpak's own error.
-- **PKG-FR-FLATPAK-FILTER**: A remote the source restricts with a filter MUST be replicated unfiltered, and the run MUST warn once per such remote and tell the user how to re-apply the filter on the target.
-  Why: flatpak stores the filter's path rather than its content and validates neither, so it is not repository-or-key material that can be synced; a silent successful add would read as full replication.
+- **PKG-FR-FLATPAK-FILTER**: A remote the source restricts with a filter MUST be replicated with that filter. The filter file MUST be copied byte-for-byte from the source to the same absolute path on the target and re-applied to the replicated remote. It is derived like a signing key and MUST NOT be a review item. It MUST be applied after the approved applications from that remote have landed. A filter that cannot be copied or re-applied MUST fail every approved application from that remote, naming the remote and the path.
+  Why: flatpak stores the filter's path rather than its content, so the content is an ordinary file the run can carry byte-for-byte exactly as it carries a signing key; replicating the remote without it silently widens what the target offers.
+  Why the ordering: a filter can be narrower than the set the source has installed, so applying it before the installs could block the very replication it describes.
 - **PKG-FR-FLATPAK-THIRD-SCOPE**: An installation that is neither the user nor the system one MUST be skipped.
 - **PKG-FR-FLATPAK-MASK**: Mask patterns MUST replicate per scope, added and removed alike, whether or not anything currently matches them. Editing or moving a pattern MUST be reported as found and MUST NOT be normalised.
 - **PKG-FR-FLATPAK-PRIVILEGE**: A run that touches only the user scope MUST NOT require root on the target.
@@ -296,6 +297,8 @@ Each of these is a real cost, given up knowingly.
 Requirements the shipped code knowingly does not satisfy are recorded here, verified against the code on the current branch rather than against older documents.
 
 - **PKG-FR-FLATPAK-REMOTE-DELETE** is not implemented. `flatpak_sync` still offers a target-only remote for deletion as a two-answer review item (`_diff_flatpak_remotes`), so the user can delete a remote that machine-specific or origin-diverged applications still depend on.
+- **PKG-FR-FLATPAK-FILTER** is not implemented, and the code implements the opposite. `_FLATPAK_REMOTES_CMD_TEMPLATE` requests `name,url,options` only, so the run never reads the filter's path; a filtered source remote is provisioned unfiltered and `flatpak_sync` emits one warning per such remote naming the `remote-modify --filter` command. The requirement was ruled on after the code was written.
+
 - **PKG-FR-SNAP-SIDELOAD** is only half implemented. `snap_sync` withholds a sideloaded snap the source also has, but one only the target has is still an ordinary removal candidate — so the tool can offer to delete a snap it cannot reinstall.
 
 - **PKG-FR-APT-HOLD-VERSION** is not implemented. `apt_sync` installs every package by name and applies the hold afterwards, so a held package the target lacks is installed at whatever version the target offers and then frozen there. The requirement was ruled on after the code was written.
