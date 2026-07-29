@@ -31,7 +31,7 @@ An **item** is one thing the user can be asked about: a package, a snap, a flatp
 
 A **decision** is the user's answer about an item: apply it, skip it this run, or always skip it in future runs.
 
-**Machine-specific** describes an item marked "always skip". The job that marked it never touches that item again on that machine, in either direction — it is neither sent to another machine nor changed by one.
+**Machine-specific** describes an item marked "always skip". The job that marked it never touches that item again on that machine, whichever machine the sync runs from — it is neither sent to the other machine nor changed by it.
 
 **Derived** describes plumbing that travels because approved software needs it — the repository a package comes from, its signing key, a pin, a flatpak remote. It is never a question of its own.
 
@@ -78,7 +78,7 @@ Each job then plans, reviews, applies and reports.
 
 **Plan** issues read commands only: what each machine has, filtered by the standing machine-specific marks, and the difference between them. A question that cannot be derived is asked here rather than in the review — [apt's Ubuntu Pro question (see below)](#ubuntu-pro) is one, because one of its answers ends the job before there is anything to review.
 
-**Review** presents one group of same-kind, same-direction items at a time, each item carrying its own decision, all of them settled in a single pass. The default choice for each item is the action that does no harm: *apply* for an install, *skip* for anything that removes or overwrites. Three answers are offered, or two where a permanent decision is not meaningful.
+**Review** presents one group at a time: items of one kind, all doing the same thing, each carrying its own decision and all settled in a single pass. The default choice for each item is the action that does no harm: *apply* for an install, *skip* for anything that removes or overwrites. Three answers are offered, or two where a permanent decision is not meaningful.
 
 The two machines are named by hostname wherever the user reads them, and every answer states its effect on a named machine — the skip answer on a removal reads *keep it on MyMachine*, not "skip". The user can abort the whole sync at any question, and aborting is never read as declining one item.
 
@@ -92,13 +92,13 @@ A **dry run** plans and reviews exactly as a real run does — the questions are
 
 **Apply** does the thing. **Skip** declines it for this run only. **Always skip** marks the item machine-specific. The mark is recorded on the **holding machine** — not necessarily the machine the sync was launched from.
 
-Example: two machines Atlas and Vega, sync launched from Atlas. Vega has `steam`; Atlas does not, so the sync offers to remove it from Vega. Answering "always skip" writes the mark **on Vega**, because Vega holds `steam`. The other direction: Atlas has `wireshark`, the sync offers to install it on Vega, and "always skip" writes the mark on **Atlas**.
+Example: two machines Atlas and Vega, sync launched from Atlas. Vega has `steam`; Atlas does not, so the sync offers to remove it from Vega. Answering "always skip" writes the mark **on Vega**, because Vega holds `steam`. The reverse case: Atlas has `wireshark`, the sync offers to install it on Vega, and "always skip" writes the mark on **Atlas**.
 
 A marked item is filtered out before the difference is computed, so it never appears in a later review. Because of that, two questions have to disclose it explicitly: repository deletion and repository conflict, both below.
 
 Marks never sync between machines. Snippets do, because how to install something is knowledge about the software rather than the machine.
 
-Repositories, pins and flatpak remotes cannot be marked machine-specific, in any direction. Where the two machines disagree about where software comes from, that disagreement keeps surfacing every run instead of being silenced once, and the remedy is to align the two machines. apt's own configuration files *can* be marked, because they say how apt behaves rather than where software comes from.
+Repositories, pins and flatpak remotes cannot be marked machine-specific, whether they are being added, changed or deleted. Where the two machines disagree about where software comes from, that disagreement keeps surfacing every run instead of being silenced once, and the remedy is to align the two machines. apt's own configuration files *can* be marked, because they say how apt behaves rather than where software comes from.
 
 Report-only findings cannot be marked either — no machine holds a version difference, and a mark would stop the package syncing rather than stop the report.
 
@@ -146,7 +146,7 @@ A package held on the target is never proposed for install or upgrade. Its hold 
 
 ### Holds
 
-An apt hold is its own item, decided separately from its package, in both directions.
+An apt hold is its own item, decided separately from its package, both when it is added and when it is removed.
 
 A hold blocks everything: apt will not install, upgrade or remove a held package, not even as an unused dependency. So it serves two intents at once — "never lose this" and "never move this off the version that works" — and apt gives no way to tell them apart.
 
@@ -160,7 +160,7 @@ Approving an install can make apt remove something else.
 
 If apt installed that something automatically, the removal proceeds silently — apt is resolving its own dependencies.
 
-If it is **manually installed on the target**, the user is asked first. The question names the package, says why it is protected — that machine's apt has it marked manually installed — and says what would happen to it. Three answers, each stating its effect: install anyway, skip and leave the triggering install unapplied, or stop. The stop answer says that it ends the whole sync.
+If it is **manually installed on the target**, the user is asked first. The question names the package, says why it is protected — that machine's apt has it marked manually installed — and says what would happen to it. Three answers, each stating its effect: install anyway, skip and leave the triggering install unapplied, or stop the whole apt sync.
 
 It is asked during the review, from apt's own simulation, never mid-install.
 
@@ -172,21 +172,21 @@ One exception: where this run must itself provision the repository, apt cannot s
 
 Adding or changing a repository is never a question: it is written because an approved package comes from it, and one that feeds nothing this run syncs does not travel.
 
-Deleting one is a question, since nothing derives a deletion. The request names the URLs the file declares — not just its filename — and the machine-specific packages the deletion would strand.
+Deleting one is a question. The question names the URLs the file declares — not just its filename — and the machine-specific packages the deletion would strand.
 
 A repository both machines have with different content is overwritten with the source's version silently — unless it feeds a package the target marked machine-specific. Then the user is asked, and shown both versions of the file in full. Declining fails every approved package whose origin depended on that file.
 
 The distribution's own source files are written and updated, never removed or offered for removal. Files apt itself does not read are not treated as repository configuration.
 
-**Signing keys are never a review item.** A key the target lacks is copied byte-for-byte from the source before the repository naming it is written; one that differs is refreshed, unless the target's own distribution packaging owns it. Keys travel only from the source, never over the network. An approved repository deletion may take an unreferenced key with it.
+**Signing keys are never a review item.** A key the target lacks is copied byte-for-byte from the source before the repository naming it is written; one that differs is refreshed, unless the target's own distribution packaging owns it. Keys are synced from the source machine, not fetched from the internet. An approved repository deletion may take an unreferenced key with it.
 
-**Every** pin the source has is written to the target, always, without review: a pin decides which origin wins, and one naming an absent origin does nothing. Deleting a pin only the target has *is* reviewed, and the file is shown whole — a filename says neither which origin it favours nor at what priority.
+**Every** pin the source has is written to the target, always, without review: a pin decides which origin wins, and one naming an absent origin does nothing. Deleting a pin only the target has *is* reviewed, and the file is shown whole.
 
 A pin is never read as a statement about the packages it names.
 
-apt's own configuration — proxy settings, recommends policy — is reviewed in all three directions with the full decision, because no approved package implies whether such a setting should travel.
+apt's own configuration — proxy settings, recommends policy — is reviewed whether it is being added, changed or removed, with the full decision, because no approved package implies whether such a setting should travel.
 
-### Ubuntu Pro
+### ESM repositories — Ubuntu Pro
 
 If the source carries ESM repositories and the target reports no Ubuntu Pro attachment, the user is asked before anything is written and before any other apt question. Two answers: attach the target now, or skip apt for this run while everything else proceeds. The user is told what to run on the target to attach it.
 
@@ -210,7 +210,7 @@ snap converges the source's **exact revision and channel**, where apt and flatpa
 
 Removing a snap leaves snapd's own pre-removal snapshot in place — the only recovery path if the removal was a mistake.
 
-Refresh holds replicate as their own items in both directions. A hold recorded for a snap the source no longer has produces no item.
+Refresh holds replicate as their own items, both when added and when removed. A hold recorded for a snap the source no longer has produces no item.
 
 Sideloaded snaps — installed from a local `.snap` file — cannot be reproduced by any snap command. They are reported and skipped, and the target's matching entry is withheld so that "cannot reproduce this" does not become "propose deleting it there". **A current gap**: a snippet could reproduce one.
 
@@ -232,7 +232,7 @@ An application is installed from the source's remote or not at all, and that rem
 
 A remote the source restricts with a filter is replicated **unfiltered**, with a warning and the command to re-apply it: the filter's content lives outside flatpak's store.
 
-Mask patterns replicate per scope in both directions, whether or not anything currently matches them, and land after the applications. A flatpak installation that is neither the user nor the system one is skipped.
+Mask patterns replicate per scope, added and removed alike, whether or not anything currently matches them, and land after the applications. A flatpak installation that is neither the user nor the system one is skipped.
 
 ## Software no manager can reproduce
 

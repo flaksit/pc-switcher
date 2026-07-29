@@ -79,7 +79,7 @@ Decomposes [The model](package-sync-user-requirements.md#the-model); the review 
 - **PKG-FR-SKIP-ONCE**: The user MUST be able to decline any reviewed item for the current run only. Nothing MUST be recorded, and the item MUST be offered again on the next sync.
 - **PKG-FR-MACHINE-SPECIFIC**: The user MUST be able to mark a reviewed item as specific to one machine. A marked item MUST NOT be synced to any other machine, MUST NOT be removed or overwritten by a sync from any other machine, and MUST NOT be proposed in any later review: it is protected from every action the tool takes. The mark MUST be recorded on the machine that HOLDS the item — the machine that has the software the decision is about, which for a removal is the target and for an install or a change is the source — and MUST NOT be synced.
   Why: the holding machine is the one whose state the mark describes, and it is frequently not the machine the sync was launched from. Recording it anywhere else would leave the mark on a machine the item is not on.
-- **PKG-FR-NO-MARK-ON-ORIGIN**: An apt repository, an apt pin and a flatpak remote MUST NOT be markable machine-specific in any direction — deletion, overwrite or repoint. Declining any of them MUST record nothing.
+- **PKG-FR-NO-MARK-ON-ORIGIN**: An apt repository, an apt pin and a flatpak remote MUST NOT be markable machine-specific, whether they are being deleted, overwritten or repointed. Declining any of them MUST record nothing.
   Why: a mark would silence a real disagreement between the two machines about where software comes from, permanently and without further mention. Leaving them unmarkable makes that disagreement surface on every run until the user aligns the two machines.
 - **PKG-FR-ABORT**: The user MUST be able to abort the whole sync at any question, and an abort MUST NOT be read as declining a single item.
 - **PKG-FR-CONFIRM-EACH**: Every modification a package job makes MUST be covered by pc-switcher's per-command confirmation, including the decision records, the snippet registry and the snap refresh pause. No write a package job makes may bypass it.
@@ -127,7 +127,7 @@ Decomposes [apt / Removing, and reporting without acting](package-sync-user-requ
 
 Decomposes [apt / Holds](package-sync-user-requirements.md#holds).
 
-- **PKG-FR-APT-HOLD-ITEM**: An apt hold MUST be an item separate from the package it applies to, decided separately, in both directions.
+- **PKG-FR-APT-HOLD-ITEM**: An apt hold MUST be an item separate from the package it applies to, decided separately, both when it is added and when it is removed.
 - **PKG-FR-APT-HOLD-ORDER**: An approved hold MUST be applied after the package it names is installed, never before.
   Why: apt refuses to install a held package (`E: Held packages were changed`, measured on Ubuntu 24.04), so setting the hold first blocks the install it is meant to protect and leaves the package `hold ok not-installed`.
 - **PKG-FR-APT-HOLD-VERSION**: Where the source holds a package the target lacks, the target MUST be given the source's exact version, not whatever its repositories currently offer. Where that version cannot be obtained on the target, the install MUST fail as its own item naming both versions, and MUST NOT fall back to another version.
@@ -163,8 +163,8 @@ Decomposes [apt / Repositories, keys and pins](package-sync-user-requirements.md
   Why: disclosure, not refusal — deleting a repository whose packages are also going is ordinary cleanup, and the stranded packages are invisible in the review by design. The filename alone is not the decision: it is whatever created the file happened to call it, and two machines routinely name the same repository differently, while the URL is what the deletion actually takes away.
 - **PKG-FR-DISTRO-FILES**: The distribution's own source files MUST be written when the target lacks them and overwritten when they differ. They MUST NEVER be removed and MUST NEVER be offered for removal.
   Why: they are what defines "the distribution's own origin" on each machine, which is what makes `PKG-FR-DISTRO-ORIGIN` computable.
-- **PKG-FR-APT-IGNORES**: Files apt itself does not read MUST NOT be treated as repository configuration in any direction.
-- **PKG-FR-KEY-NOT-ITEM**: A signing key MUST NOT be a review item in any direction.
+- **PKG-FR-APT-IGNORES**: Files apt itself does not read MUST NOT be treated as repository configuration, in any of add, change or remove.
+- **PKG-FR-KEY-NOT-ITEM**: A signing key MUST NOT be a review item, whether it is being added, refreshed or deleted.
 - **PKG-FR-KEY-COPY**: A key the target lacks MUST be copied byte-for-byte from the source before the repository that names it is written, whatever owns it on the source. Keys MUST NEVER be fetched over the network; they travel only from the source machine.
   Why: some projects ship packages carrying both the repository entry and its key; refusing to copy a package-owned key would make such a repository permanently untrustable.
 - **PKG-FR-KEY-REFRESH**: A key the target holds with different content MUST be refreshed, except where the target's own distribution packaging owns it, which MUST be left alone. A key that already matches MUST NOT be touched.
@@ -176,7 +176,7 @@ Decomposes [apt / Repositories, keys and pins](package-sync-user-requirements.md
   Why: it is holding one origin above another on a machine the source knows nothing about, and removing it can flip which origin supplies a package at the target's next upgrade. A pin filename names neither the origin it favours nor the priority it gives it, so the file itself is the only thing the decision can rest on — and `PKG-FR-PIN-NOT-INVENTORY` rules out summarising it.
 - **PKG-FR-PIN-NOT-INVENTORY**: A pin MUST NOT be read as a statement about the packages it names.
   Why: a machine-wide pin would otherwise report every package on the machine, and would make a target-only package impossible to remove and impossible to silence.
-- **PKG-FR-APTCONF**: apt's own behavioural configuration — the settings that govern how apt behaves rather than where packages come from — MUST be reviewed in all three directions, with the ordinary decision and the permanent machine-specific mark.
+- **PKG-FR-APTCONF**: apt's own behavioural configuration — the settings that govern how apt behaves rather than where packages come from — MUST be reviewed whether it is being added, changed or removed, with the ordinary decision and the permanent machine-specific mark.
   Why: no approved package implies whether such a setting should travel, so the only honest source of that answer is the user, and it is the kind of standing preference someone genuinely holds per machine.
 
 ### Ubuntu Pro and ESM
@@ -212,7 +212,7 @@ Decomposes [snap](package-sync-user-requirements.md#snap).
 - **PKG-FR-SNAP-SIDELOAD**: Sideloaded snaps MUST NOT be replicated. Those on the source MUST be reported and skipped, along with any hold set on them. A sideloaded snap on the target MUST still be offered for removal like any other.
   Why: no store can serve such a revision and nothing carries the file between machines.
 - **PKG-FR-SNAP-FAIL-ITEM**: A snap whose revision the target cannot fetch MUST fail as its own item, and the rest of the run MUST continue.
-- **PKG-FR-SNAP-HOLD**: A snap refresh hold MUST be an item of its own in both directions. A hold recorded for a snap the source no longer has MUST produce no item, and no command a sync issues may set a standing hold as a side effect.
+- **PKG-FR-SNAP-HOLD**: A snap refresh hold MUST be an item of its own, both when it is added and when it is removed. A hold recorded for a snap the source no longer has MUST produce no item, and no command a sync issues may set a standing hold as a side effect.
 - **PKG-FR-SNAP-REFRESH-PAUSE**: Automatic snap refreshes MUST be suspended on both machines for the duration of a run and MUST NOT interfere with the run's own revision convergence. Each machine's prior refresh policy MUST be restored afterwards, including an indefinite hold the user set. Where the prior policy cannot be read on a machine, that machine's policy MUST be left untouched.
   Why: snapd refreshes several times a day and would otherwise move a revision mid-sync.
 - **PKG-FR-SNAP-DATA-BOUNDARY**: Data directories of revisions the target's snapd never installed MUST NOT be synced.
@@ -240,7 +240,7 @@ Decomposes [flatpak](package-sync-user-requirements.md#flatpak).
 - **PKG-FR-FLATPAK-FILTER**: A remote the source restricts with a filter MUST be replicated unfiltered, and the run MUST warn once per such remote and tell the user how to re-apply the filter on the target.
   Why: flatpak stores the filter's path rather than its content and validates neither, so it is not repository-or-key material that can travel; a silent successful add would read as full replication.
 - **PKG-FR-FLATPAK-THIRD-SCOPE**: An installation that is neither the user nor the system one MUST be skipped.
-- **PKG-FR-FLATPAK-MASK**: Mask patterns MUST replicate per scope whether or not anything currently matches them, in both directions. Editing or moving a pattern MUST be reported as found and MUST NOT be normalised.
+- **PKG-FR-FLATPAK-MASK**: Mask patterns MUST replicate per scope, added and removed alike, whether or not anything currently matches them. Editing or moving a pattern MUST be reported as found and MUST NOT be normalised.
 - **PKG-FR-FLATPAK-PRIVILEGE**: A run that touches only the user scope MUST NOT require root on the target.
 
 ## Manual installs
@@ -300,7 +300,7 @@ Requirements the shipped code knowingly does not satisfy are recorded here, veri
 
 Genuinely undecided. An answer invented here would be worse than the question.
 
-How many answers should `PKG-FR-APTCONF` offer? It is required to be reviewed in all three directions, and it currently carries the full decision including the permanent mark, reasoned from the fact that the two-answer questions were justified by consequences an apt configuration file does not have. That reasoning is sound but was never ruled on.
+How many answers should `PKG-FR-APTCONF` offer? It is required to be reviewed whether it is being added, changed or removed, and it currently carries the full decision including the permanent mark, reasoned from the fact that the two-answer questions were justified by consequences an apt configuration file does not have. That reasoning is sound but was never ruled on.
 
 Should `PKG-FR-REPO-DELETE` ever be markable machine-specific? `PKG-FR-NO-MARK-ON-ORIGIN` says no, with consolidation as the remedy. That remedy is real work the user may not want to do, and the alternative was rejected rather than tested against use.
 
