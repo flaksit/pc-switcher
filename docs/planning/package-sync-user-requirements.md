@@ -17,7 +17,7 @@ Work on one machine, sync, resume on the other. That only works if the software 
 
 Package sync replicates *what software is installed*. Application data belongs to folder sync, which must run after it — installing software writes its own stock defaults, and those have to land before the user's synced settings go on top of them.
 
-It replicates by **convergence, not by copying**. Both machines' package managers are asked what they have, and the difference is what the sync acts on; no package database, store or installed file is copied between machines. What travels is a decision — install this, remove that — plus the configuration the target's own package manager needs to carry it out.
+It replicates by **convergence, not by copying**. Both machines' package managers are asked what they have, and the difference is what the sync acts on; no package database, store or installed file is copied between machines. What is synced is a decision — install this, remove that — plus the configuration the target's own package manager needs to carry it out.
 
 Package sync is one job per package manager — apt, snap, flatpak — plus a job for software no package manager can reproduce. Each is enabled separately, reviewed separately, and can fail without stopping the others. Enabling one authorises pc-switcher to install and remove software on the target.
 
@@ -33,7 +33,7 @@ A **decision** is the user's answer about an item: apply it, skip it this run, o
 
 **Machine-specific** describes an item marked "always skip". The job that marked it never touches that item again on that machine, whichever machine the sync runs from — it is neither sent to the other machine nor changed by it.
 
-**Derived** describes plumbing that travels because approved software needs it — the repository a package comes from, its signing key, a pin, a flatpak remote. It is never a question of its own.
+**Derived** describes plumbing that is synced because approved software needs it — the repository a package comes from, its signing key, a pin, a flatpak remote. It is never a question of its own.
 
 An **origin** is where software actually comes from — a repository or remote URL. Not its name: two remotes can share a name and serve different builds.
 
@@ -104,7 +104,7 @@ Report-only findings cannot be marked either — no machine holds a version diff
 
 ## apt
 
-apt sync covers the **manually installed** package set — what the user asked for, not what apt pulled in to satisfy it. With it travel the repositories and pins that decide where those packages come from, apt's own configuration, and apt holds.
+apt sync covers the **manually installed** package set — what the user asked for, not what apt pulled in to satisfy it. With it are synced the repositories and pins that decide where those packages come from, apt's own configuration, and apt holds.
 
 ### Installing
 
@@ -115,7 +115,7 @@ flowchart TD
     B -->|"elsewhere"| D{"Does the target already<br/>offer it from that origin?"}
     D -->|yes| C
     D -->|no| E{"Can the source's origin<br/>be replicated?"}
-    E -->|yes| F["Install, naming the origin.<br/>Its repository, key and pin<br/>travel as a consequence"]
+    E -->|yes| F["Install, naming the origin.<br/>Its repository, key and pin<br/>are synced as a consequence"]
     E -->|no| G["Report it, with origin<br/>and reason. Do not install"]
     F --> H{"After the configuration lands,<br/>what would apt really install?"}
     H -->|"the source's origin"| I["Install"]
@@ -170,7 +170,7 @@ One exception: where this run must itself provision the repository, apt cannot s
 
 ### Repositories, keys and pins
 
-Adding or changing a repository is never a question: it is written because an approved package comes from it, and one that feeds nothing this run syncs does not travel.
+Adding or changing a repository is never a question: it is written because an approved package comes from it, and one that feeds nothing this run syncs is not synced at all.
 
 Deleting one is a question. The question names the URLs the file declares — not just its filename — and the machine-specific packages the deletion would strand.
 
@@ -184,7 +184,7 @@ The distribution's own source files are written and updated, never removed or of
 
 A pin is never read as a statement about the packages it names.
 
-apt's own configuration — proxy settings, recommends policy — is reviewed whether it is being added, changed or removed, with the full decision, because no approved package implies whether such a setting should travel.
+apt's own configuration — proxy settings, recommends policy — is reviewed whether it is being added, changed or removed, with the full decision, because no approved package implies whether such a setting should be synced.
 
 ### ESM repositories — Ubuntu Pro
 
@@ -212,7 +212,7 @@ Removing a snap leaves snapd's own pre-removal snapshot in place — the only re
 
 Refresh holds replicate as their own items, both when added and when removed. A hold recorded for a snap the source no longer has produces no item.
 
-Sideloaded snaps — installed from a local `.snap` file — are out of scope for now (#221). One on the source is reported and skipped, along with the target's copy of the same snap; one only the target has is an ordinary removal candidate.
+Sideloaded snaps — installed from a local `.snap` file — are out of scope (#221). They are ignored on both machines: never installed, never removed, never an item. A run names the ones it found so the user knows they are unmanaged, and does nothing else about them.
 
 ## flatpak
 
@@ -220,9 +220,9 @@ A flatpak application is identified by its **scope** and its **full reference in
 
 Origin is not part of a flatpak application's identity: flatpak refuses to install a reference already present from a different remote, so a difference of origin is reported rather than converged, and takes precedence over a version difference.
 
-There is no distribution remote. A remote travels only because an approved application needs it — including the remote supplying that application's runtime — and is provisioned before the first install.
+There is no distribution remote. A remote is synced only because an approved application needs it — including the remote supplying that application's runtime — and is provisioned before the first install.
 
-**A remote replicates with its trust**, not just its name and URL: its signing key travels byte-for-byte from the source, a verified remote is never replicated as unverified, and an unverified one is replicated as such with a warning.
+**A remote replicates with its trust**, not just its name and URL: its signing key is synced byte-for-byte from the source, a verified remote is never replicated as unverified, and an unverified one is replicated as such with a warning.
 
 A remote both machines have whose URL or verification differs is repointed silently — unless that would move the origin of a machine-specific application, in which case the user is asked, shown both configurations, and declining fails every approved application that needed the source's URL.
 
@@ -236,7 +236,7 @@ Mask patterns replicate per scope, added and removed alike, whether or not anyth
 
 ## Software no manager can reproduce
 
-Software that arrived on the source by a route nothing can replay automatically. Several kinds, one mechanism: the **install snippet**, a shell recipe written once that travels with the software.
+Software that arrived on the source by a route nothing can replay automatically. Several kinds, one mechanism: the **install snippet**, a shell recipe written once that is synced with the software.
 
 - **A hand-downloaded `.deb`** — apt knows the name, but no configured repository offers that version.
 - **Unowned software under `/usr/local` or `/opt`** — dropped there by an install script or a tarball. The scan is deliberately shallow: it names a finding so the user can decide, it does not walk a tree.
@@ -248,7 +248,7 @@ Every detected item ends the run with a snippet, marked machine-specific, or ski
 
 A snippet is **opaque** — stored and replayed exactly as written, never parsed. It runs as the target user with no privilege added around it and no standing input, so a command expecting an answer fails rather than hanging the sync.
 
-Reproducibility is judged by what the **source** holds. The snippet registry travels; if the transfer would lose or change an entry only the target has, the user is asked and declining aborts the run. A snippet written during a review is replayed in that same run.
+Reproducibility is judged by what the **source** holds. The snippet registry is synced; if that would lose or change an entry only the target has, the user is asked and declining aborts the run. A snippet written during a review is replayed in that same run.
 
 ## When something goes wrong
 

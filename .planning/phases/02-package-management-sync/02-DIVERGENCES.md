@@ -33,15 +33,11 @@ The four jobs have materially different prerequisites, all enforced in `validate
 
 This is a user-visible precondition — it decides whether the job can run at all — so it belongs in the requirements. **No conflict, just an omission.** The narrative states it; the articles need an entry.
 
-## DIV-04 — `PKG-NG-SIDELOAD` claims an impossibility that issue #221 contradicts
+## DIV-04 — Sideloaded snaps: resolved by ruling them out of scope
 
-`PKG-NG-SIDELOAD` lists as a knowingly accepted cost: "Sideloaded snaps cannot be reproduced. Nothing carries the file between machines."
+Resolved 2026-07-29. `PKG-NG-SIDELOAD` claimed sideloaded snaps "cannot be reproduced" as an accepted cost, which #221 contradicts — a snippet running `snap install --dangerous` reproduces one. The article is deleted: it described deferred work as a deliberate non-goal.
 
-Issue #221 says otherwise, and gives the mechanism: a snippet running `snap install --dangerous <file>` reproduces one, and the existing snippet machinery already covers it. What actually exists today is an unbuilt handoff — `snap_sync` detects sideloads, warns, drops them, and withholds the target's matching entry (`snap_sync.py:518-533`), and `manual_installs_sync` has no detector for them. So they are replicated by nobody.
-
-#221 also flags the flatpak equivalent (a ref from a local bundle, or from a remote that no longer exists) as unverified.
-
-**Ruling needed:** this is a deferred gap, not a law of nature, and the non-goal should be rewritten to say so. The narrative states it as a current gap pointing at #221.
+The replacement ruling is that sideloaded snaps are out of scope entirely and ignored on both machines, rather than half-handled. `PKG-FR-SNAP-SIDELOAD` now says so, and the code's remaining half — a sideloaded snap only the target has is still an ordinary removal candidate, so the tool can offer to delete a snap it cannot reinstall — is recorded in the criteria's gap register.
 
 ## DIV-05 — Cross-manager review is asserted in one comment and denied everywhere else
 

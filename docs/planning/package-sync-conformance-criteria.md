@@ -42,7 +42,7 @@ The package jobs — `apt_sync`, `snap_sync`, `flatpak_sync`, `manual_installs_s
 Decomposes [The model](package-sync-user-requirements.md#the-model).
 
 - **PKG-FR-SOURCE-INTENT**: The source machine's state MUST be the only statement of intent. A sync MUST NOT modify the source, and the target MUST NOT decide anything: it answers read-only questions while the change is planned and carries out what was approved.
-- **PKG-FR-MANAGER-CONVERGES**: Software MUST be replicated by having the target's own package managers install and remove it. The system MUST NOT copy a package manager's database, store or unpacked files between machines. What travels is the decision, plus the configuration a manager needs in order to obey it.
+- **PKG-FR-MANAGER-CONVERGES**: Software MUST be replicated by having the target's own package managers install and remove it. The system MUST NOT copy a package manager's database, store or unpacked files between machines. What is synced is the decision, plus the configuration a manager needs in order to obey it.
 - **PKG-FR-APT-IDENTITY**: An apt package MUST be identified by name and origin together. The system MUST NOT satisfy an approved install from an origin the source does not use.
   Why: `gh` from a project's own repository and `gh` from the distribution archive are one name and two different pieces of software.
 - **PKG-FR-DISTRO-ORIGIN**: All origins a machine's distribution source files declare MUST count as one origin, computed per machine.
@@ -155,7 +155,7 @@ Decomposes [apt / Collateral damage](package-sync-user-requirements.md#collatera
 
 Decomposes [apt / Repositories, keys and pins](package-sync-user-requirements.md#repositories-keys-and-pins).
 
-- **PKG-FR-REPO-DERIVED**: The user MUST NOT be asked to add or change a repository. A repository MUST be written to the target only because an approved package comes from it. A repository on the source that feeds no package this run syncs MUST NOT travel.
+- **PKG-FR-REPO-DERIVED**: The user MUST NOT be asked to add or change a repository. A repository MUST be written to the target only because an approved package comes from it. A repository on the source that feeds no package this run syncs MUST NOT be synced.
 - **PKG-FR-REPO-OVERWRITE**: A repository present on both machines with differing content MUST be overwritten with the source's version, except as required by `PKG-FR-REPO-CONFLICT`.
 - **PKG-FR-REPO-CONFLICT**: Where overwriting would repoint a repository that software the target marked machine-specific depends on, the system MUST obtain consent first, MUST show both machines' versions of the configuration in full, and MUST NOT record the answer. Declining MUST fail every approved package whose origin depended on it, naming them, rather than installing them from elsewhere.
   Why: machine-specific software produces no review line in any run, so nothing else would tell the user its origin was about to move. Ordinary target-only software already has a removal line of its own.
@@ -165,7 +165,7 @@ Decomposes [apt / Repositories, keys and pins](package-sync-user-requirements.md
   Why: they are what defines "the distribution's own origin" on each machine, which is what makes `PKG-FR-DISTRO-ORIGIN` computable.
 - **PKG-FR-APT-IGNORES**: Files apt itself does not read MUST NOT be treated as repository configuration, in any of add, change or remove.
 - **PKG-FR-KEY-NOT-ITEM**: A signing key MUST NOT be a review item, whether it is being added, refreshed or deleted.
-- **PKG-FR-KEY-COPY**: A key the target lacks MUST be copied byte-for-byte from the source before the repository that names it is written, whatever owns it on the source. Keys MUST NEVER be fetched over the network; they travel only from the source machine.
+- **PKG-FR-KEY-COPY**: A key the target lacks MUST be copied byte-for-byte from the source before the repository that names it is written, whatever owns it on the source. Keys MUST NEVER be fetched over the network; they are only ever synced from the source machine.
   Why: some projects ship packages carrying both the repository entry and its key; refusing to copy a package-owned key would make such a repository permanently untrustable.
 - **PKG-FR-KEY-REFRESH**: A key the target holds with different content MUST be refreshed, except where the target's own distribution packaging owns it, which MUST be left alone. A key that already matches MUST NOT be touched.
   Why: refreshing is what makes a key rotation follow the user even though rotation changes no repository file. Replacing a distribution keyring is not a sync's job.
@@ -177,7 +177,7 @@ Decomposes [apt / Repositories, keys and pins](package-sync-user-requirements.md
 - **PKG-FR-PIN-NOT-INVENTORY**: A pin MUST NOT be read as a statement about the packages it names.
   Why: a machine-wide pin would otherwise report every package on the machine, and would make a target-only package impossible to remove and impossible to silence.
 - **PKG-FR-APTCONF**: apt's own behavioural configuration — the settings that govern how apt behaves rather than where packages come from — MUST be reviewed whether it is being added, changed or removed, with the ordinary decision and the permanent machine-specific mark.
-  Why: no approved package implies whether such a setting should travel, so the only honest source of that answer is the user, and it is the kind of standing preference someone genuinely holds per machine.
+  Why: no approved package implies whether such a setting should be synced, so the only honest source of that answer is the user, and it is the kind of standing preference someone genuinely holds per machine.
 
 ### Ubuntu Pro and ESM
 
@@ -187,7 +187,7 @@ Decomposes [apt / Ubuntu Pro](package-sync-user-requirements.md#esm-repositories
   Why: an unattached target's metadata refresh succeeds because the ESM indexes are public, so the ESM suites enter candidate selection above the ordinary archive and the failure lands later, at install time, on a package the user will not connect to the sync. The system cannot fix this itself: attaching needs a subscription token or an interactive browser flow, the source's own credentials are root-only and not reusable, and carrying a token would put a secret on a command line.
 - **PKG-FR-ESM-VERIFY**: An answer claiming the target is attached MUST be verified against the target rather than believed, and the user MAY answer it any number of times.
 - **PKG-FR-ESM-SKIP-WHOLE-JOB**: Skipping MUST leave the target's apt configuration exactly as it was found, and MUST skip the whole apt job rather than only the ESM repositories.
-  Why: pins always travel (`PKG-FR-PIN-ALWAYS`), so the source's ESM pins would reach a target without the sources they name, leaving a candidate selection matching neither machine. An untouched configuration is a state the user can reason about.
+  Why: pins are always synced (`PKG-FR-PIN-ALWAYS`), so the source's ESM pins would reach a target without the sources they name, leaving a candidate selection matching neither machine. An untouched configuration is a state the user can reason about.
 - **PKG-FR-ESM-NO-ASK**: A non-interactive run MUST take the skip and MUST say why. A dry run MUST NOT ask, and MUST warn that a real run would skip the apt job.
   Why: a rehearsal must not send the user off to attach a machine.
 - **PKG-FR-ESM-PRIVACY**: Only whether the target is attached may be logged or shown. Nothing else the attachment check learns, including the subscriber's identity, may leave it.
@@ -209,7 +209,8 @@ Decomposes [snap](package-sync-user-requirements.md#snap).
 - **PKG-FR-SNAP-CASES**: A snap on the source only MUST be offered for install at the source's revision and channel; a snap on the target only MUST be offered for removal; a difference of revision or channel MUST be offered as a single change naming both values; identical revision and channel MUST produce no item.
 - **PKG-FR-SNAP-CONFINEMENT**: A snap's confinement mode MUST be captured on the source and replicated with the install.
 - **PKG-FR-SNAP-REMOVE-SNAPSHOT**: Removing a snap MUST leave snapd's own pre-removal snapshot in place.
-- **PKG-FR-SNAP-SIDELOAD**: Sideloaded snaps MUST NOT be replicated while they are out of scope (#221). Those on the source MUST be reported and skipped, along with any hold set on them. A sideloaded snap on the target MUST still be offered for removal like any other.
+- **PKG-FR-SNAP-SIDELOAD**: Sideloaded snaps are out of scope (#221) and MUST be ignored on both machines: never installed, never removed, never offered as an item, and never the subject of a hold item. A run MUST name the ones it found so the user knows they are unmanaged, and MUST do nothing else about them.
+  Why: a snap the tool cannot reinstall must not be one it offers to delete. Handling half of the case, and later handling the other half from a different job, is worse than leaving it alone until the whole case is designed.
   Why: no store can serve such a revision and nothing carries the file between machines.
 - **PKG-FR-SNAP-FAIL-ITEM**: A snap whose revision the target cannot fetch MUST fail as its own item, and the rest of the run MUST continue.
 - **PKG-FR-SNAP-HOLD**: A snap refresh hold MUST be an item of its own, both when it is added and when it is removed. A hold recorded for a snap the source no longer has MUST produce no item, and no command a sync issues may set a standing hold as a side effect.
@@ -223,7 +224,7 @@ Decomposes [snap](package-sync-user-requirements.md#snap).
 Decomposes [flatpak](package-sync-user-requirements.md#flatpak).
 
 - **PKG-FR-FLATPAK-CASES**: An application on the source only MUST be offered for install; on the target only, for removal; the same application, scope and branch at different versions MUST be reported only; identical MUST produce no item.
-- **PKG-FR-FLATPAK-REMOTE-DERIVED**: A remote MUST NOT be a review item when it is added or changed. It MUST travel because an application approved this run comes from it, including the remote that supplies an approved application's runtime, and declining the application MUST be the only way to decline the remote. A remote that feeds no application approved this run MUST NOT travel, and no remote is exempt from this rule.
+- **PKG-FR-FLATPAK-REMOTE-DERIVED**: A remote MUST NOT be a review item when it is added or changed. It MUST be synced because an application approved this run comes from it, including the remote that supplies an approved application's runtime, and declining the application MUST be the only way to decline the remote. A remote that feeds no application approved this run MUST NOT be synced, and no remote is exempt from this rule.
   Why: a fresh flatpak installation configures zero remotes, so there is no "distribution" remote the way apt has a distribution archive.
 - **PKG-FR-FLATPAK-REMOTE-FIRST**: Every derived remote MUST be provisioned before the first application installs.
 - **PKG-FR-FLATPAK-REMOTE-TRUST**: A remote MUST replicate with its trust, not only its name and URL: whether the source verifies its signatures and, where it does, its signing key, copied byte-for-byte and never fetched over the network. A verified remote MUST NOT be replicated as an unverified one; a remote the source itself does not verify MUST be replicated unverified and the user MUST be told.
@@ -238,7 +239,7 @@ Decomposes [flatpak](package-sync-user-requirements.md#flatpak).
   Why: flatpak refuses to install a reference already installed from another remote, so the only mechanical convergence would be uninstalling what the user has and reinstalling it from the other origin.
 - **PKG-FR-FLATPAK-REMOTE-FAILURE**: A remote that cannot be provisioned has no item of its own to fail; the failure MUST land on every application that needed it, naming the remote and quoting flatpak's own error.
 - **PKG-FR-FLATPAK-FILTER**: A remote the source restricts with a filter MUST be replicated unfiltered, and the run MUST warn once per such remote and tell the user how to re-apply the filter on the target.
-  Why: flatpak stores the filter's path rather than its content and validates neither, so it is not repository-or-key material that can travel; a silent successful add would read as full replication.
+  Why: flatpak stores the filter's path rather than its content and validates neither, so it is not repository-or-key material that can be synced; a silent successful add would read as full replication.
 - **PKG-FR-FLATPAK-THIRD-SCOPE**: An installation that is neither the user nor the system one MUST be skipped.
 - **PKG-FR-FLATPAK-MASK**: Mask patterns MUST replicate per scope, added and removed alike, whether or not anything currently matches them. Editing or moving a pattern MUST be reported as found and MUST NOT be normalised.
 - **PKG-FR-FLATPAK-PRIVILEGE**: A run that touches only the user scope MUST NOT require root on the target.
@@ -251,8 +252,8 @@ Decomposes [Software no manager can reproduce](package-sync-user-requirements.md
 - **PKG-FR-MANUAL-SOURCE-DECIDES**: Whether an item is reproducible MUST be decided by what the source holds. An item with a snippet only on the target MUST still be treated as unresolved.
 - **PKG-FR-MANUAL-SAME-RUN**: A snippet authored during a review MUST be persisted, transferred and replayed in the same run.
 - **PKG-FR-SNIPPET-VERBATIM**: A snippet MUST be stored and replayed exactly as written. The system MUST NOT parse, interpret or reason about it. It MUST run as the target user with no privilege added around it, and MUST run without standing input so that a command expecting input fails rather than hanging the sync. An empty snippet MUST NOT be accepted as a resolution.
-- **PKG-FR-REGISTRY-TRAVELS**: The snippet registry MUST sync between machines.
-  Why: how to install something is knowledge about the software, not about the machine — unlike the machine-specific marks of `PKG-FR-MACHINE-SPECIFIC`, which must never travel.
+- **PKG-FR-REGISTRY-SYNCS**: The snippet registry MUST sync between machines.
+  Why: how to install something is knowledge about the software, not about the machine — unlike the machine-specific marks of `PKG-FR-MACHINE-SPECIFIC`, which are never synced.
 - **PKG-FR-REGISTRY-CONSENT**: A registry transfer that would lose or change an entry the target holds MUST NOT proceed without consent, and MUST name the affected entries. Declining MUST abort the run, and a non-interactive run MUST abort.
   Why: aborting lets the user consolidate the two registries by hand; the alternative silently drops the target's snippets.
 - **PKG-FR-MANUAL-FAIL-ITEM**: A snippet that has vanished between planning and replay, or whose replay fails, MUST fail as its own item naming the item, and the run MUST continue.
@@ -293,6 +294,8 @@ Each of these is a real cost, given up knowingly.
 
 Requirements the shipped code knowingly does not satisfy are recorded here, verified against the code on the current branch rather than against older documents.
 
+- **PKG-FR-SNAP-SIDELOAD** is only half implemented. `snap_sync` withholds a sideloaded snap the source also has, but one only the target has is still an ordinary removal candidate — so the tool can offer to delete a snap it cannot reinstall.
+
 - **PKG-FR-APT-HOLD-VERSION** is not implemented. `apt_sync` installs every package by name and applies the hold afterwards, so a held package the target lacks is installed at whatever version the target offers and then frozen there. The requirement was ruled on after the code was written.
 
 ## Open questions
@@ -326,7 +329,7 @@ Every article above decomposes exactly one section of [Package sync — user req
 | [apt / Applying apt's changes](package-sync-user-requirements.md#applying-apts-changes) | 3 | `PKG-FR-APT-CONFIG-ATOMIC` `PKG-FR-DERIVED-FAILURE` `PKG-FR-DERIVED-VISIBLE` |
 | [snap](package-sync-user-requirements.md#snap) | 8 | `PKG-FR-SNAP-CASES` `PKG-FR-SNAP-CONFINEMENT` `PKG-FR-SNAP-REMOVE-SNAPSHOT` `PKG-FR-SNAP-SIDELOAD` `PKG-FR-SNAP-FAIL-ITEM` `PKG-FR-SNAP-HOLD` `PKG-FR-SNAP-REFRESH-PAUSE` `PKG-FR-SNAP-DATA-BOUNDARY` |
 | [flatpak](package-sync-user-requirements.md#flatpak) | 14 | `PKG-FR-FLATPAK-CASES` `PKG-FR-FLATPAK-REMOTE-DERIVED` `PKG-FR-FLATPAK-REMOTE-FIRST` `PKG-FR-FLATPAK-REMOTE-TRUST` `PKG-FR-FLATPAK-REPOINT` `PKG-FR-FLATPAK-REMOTE-DELETE` `PKG-FR-FLATPAK-INSTALL-ORIGIN` `PKG-FR-FLATPAK-MISSING-REMOTE` `PKG-FR-FLATPAK-ORIGIN-DIFF` `PKG-FR-FLATPAK-REMOTE-FAILURE` `PKG-FR-FLATPAK-FILTER` `PKG-FR-FLATPAK-THIRD-SCOPE` `PKG-FR-FLATPAK-MASK` `PKG-FR-FLATPAK-PRIVILEGE` |
-| [Software no manager can reproduce](package-sync-user-requirements.md#software-no-manager-can-reproduce) | 7 | `PKG-FR-MANUAL-RESOLUTION` `PKG-FR-MANUAL-SOURCE-DECIDES` `PKG-FR-MANUAL-SAME-RUN` `PKG-FR-SNIPPET-VERBATIM` `PKG-FR-REGISTRY-TRAVELS` `PKG-FR-REGISTRY-CONSENT` `PKG-FR-MANUAL-FAIL-ITEM` |
+| [Software no manager can reproduce](package-sync-user-requirements.md#software-no-manager-can-reproduce) | 7 | `PKG-FR-MANUAL-RESOLUTION` `PKG-FR-MANUAL-SOURCE-DECIDES` `PKG-FR-MANUAL-SAME-RUN` `PKG-FR-SNIPPET-VERBATIM` `PKG-FR-REGISTRY-SYNCS` `PKG-FR-REGISTRY-CONSENT` `PKG-FR-MANUAL-FAIL-ITEM` |
 | [When something goes wrong](package-sync-user-requirements.md#when-something-goes-wrong) | 4 | `PKG-FR-OUTCOME-SUCCESS` `PKG-FR-OUTCOME-SKIPPED` `PKG-FR-OUTCOME-FAILED` `PKG-FR-FAIL-NAMED` |
 | [What this deliberately does not do](package-sync-user-requirements.md#what-this-deliberately-does-not-do) | 14 | `PKG-NG-APT-LINE-CONTROL` `PKG-NG-APT-IDENTICAL` `PKG-NG-PIN-LOCAL` `PKG-NG-COLLATERAL-SOURCE-MANUAL` `PKG-NG-COLLATERAL-MARKS` `PKG-NG-DEB-ORPHANED` `PKG-NG-SNAP-ORIGIN` `PKG-NG-ESM-PARTIAL` `PKG-NG-MARK-ORIGIN` `PKG-NG-MANUAL-REMOVE` `PKG-NG-VERSION-CONVERGE` `PKG-NG-ORIGIN-CONVERGE` `PKG-NG-UNATTENDED` `PKG-NG-MARK-PORTABILITY` |
 
