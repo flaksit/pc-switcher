@@ -1,0 +1,2 @@
+"A remote only the target has is offered for deletion, and the request names the applications that still use it."
+If remote is only on target and still in use by apps on target, it means those apps are not on source and flatpak-sync should just propose to remove these apps. Remote deletion will automatically follow if user indeed chose to remove all the apps.
