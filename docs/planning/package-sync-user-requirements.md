@@ -82,17 +82,15 @@ Each job then plans, reviews, applies and reports.
 
 The two machines are named by hostname wherever the user reads them, and every answer states its effect on a named machine — the skip answer on a removal reads *keep it on MyMachine*, not "skip". The user can abort the whole sync at any question, and aborting is never read as declining one item.
 
-**Apply** converges one item at a time, in the order the job requires, and announces every write. Nothing unapproved is written.
+**Apply** converges one item at a time, in the order the job requires, and announces every write. Nothing unapproved is written, and no write escapes pc-switcher's per-command confirmation — including the decision records, the snippet registry and the snap refresh pause.
 
 **Report** gives the job's outcome: success, skipped with the reason, or failed naming each failed item.
 
-A **dry run** plans and reviews exactly as a real run does, then changes nothing and records nothing. **`--confirm-each-command`** shows every individual modification before it runs, offering proceed or abort only. A run with **no terminal** asks nothing, treats every item as declined, and reports any job with a non-empty review as skipped.
+A **dry run** plans and reviews exactly as a real run does — the questions are still asked — then changes nothing and records nothing. A run with **no terminal** asks nothing, treats every item as declined, and reports any job with a non-empty review as skipped.
 
 ## Decisions and their memory
 
-**Apply** does the thing. **Skip** declines it for this run only. **Always skip** marks the item machine-specific.
-
-The mark is recorded on the **holding machine** — not necessarily the machine the sync was launched from.
+**Apply** does the thing. **Skip** declines it for this run only. **Always skip** marks the item machine-specific. The mark is recorded on the **holding machine** — not necessarily the machine the sync was launched from.
 
 P17 and XPS13, sync launched from P17. XPS13 has `steam`; P17 does not, so the sync offers to remove it from XPS13. Answering "always skip" writes the mark **on XPS13**, because XPS13 holds `steam`. The other direction: P17 has `wireshark`, the sync offers to install it on XPS13, and "always skip" writes the mark on **P17**.
 

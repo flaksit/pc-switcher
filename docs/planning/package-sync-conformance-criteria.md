@@ -82,8 +82,8 @@ Decomposes [The model](package-sync-user-requirements.md#the-model); the review 
 - **PKG-FR-NO-MARK-ON-ORIGIN**: Deleting an apt repository, deleting an apt pin, resolving a repository conflict, and deleting or repointing a flatpak remote MUST NOT be markable machine-specific. Declining them MUST record nothing.
   Why: a permanent machine-local mark on configuration whose whole purpose is to feed software would silently and permanently change where that software comes from. Where the two machines' configurations genuinely differ on purpose, the remedy is consolidating them.
 - **PKG-FR-ABORT**: The user MUST be able to abort the whole sync at any question, and an abort MUST NOT be read as declining a single item.
-- **PKG-FR-CONFIRM-EACH**: The system MUST offer a mode in which every individual modification a package job makes is shown verbatim and applied only after explicit consent, covering every write including decision records, the snippet registry and the refresh pause. That mode MUST offer proceed or abort only, and MUST require an interactive terminal.
-  Why: one reviewed item can span several commands, so skipping one would leave the item half-applied.
+- **PKG-FR-CONFIRM-EACH**: Every modification a package job makes MUST be covered by pc-switcher's per-command confirmation, including the decision records, the snippet registry and the snap refresh pause. No write a package job makes may bypass it.
+  Why: those three are writes the review never showed as items, so without this they would be the only changes a run makes that the user cannot see coming.
 
 ## apt
 
