@@ -70,7 +70,7 @@ flowchart TD
 
 ## What happens during a sync
 
-pc-switcher validates every enabled job before any of them changes anything — core behaviour, not specific to package sync. apt additionally refuses to start while the target's dpkg lock is held.
+In its validation step, pc-switcher checks every enabled job's prerequisites before any of them changes anything — core behaviour, not specific to package sync. apt additionally refuses to start while the target's dpkg lock is held.
 
 Snap auto-refresh is paused on both machines for the run and restored afterwards. The pause is timed, so it expires by itself if the run dies.
 
