@@ -1,0 +1,1 @@
+"empty snipped not accepted" is an obvious user requirement that should not be stated. But it is still entirely valid. Rather a tech detail and good practice.
