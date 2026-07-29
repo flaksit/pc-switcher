@@ -128,11 +128,11 @@ The last step is a real check against the target's own state after the configura
 
 Two machines on different Ubuntu mirrors are not two origins: each machine's own distribution source files define what "the distribution" means for it.
 
-A package from a hand-downloaded `.deb` is not apt's business — see *Software no manager can reproduce*.
+A package from a hand-downloaded `.deb` is not apt's business — see [*Software no manager can reproduce*](#software-no-manager-can-reproduce).
 
 ### Removing, and reporting without acting
 
-A package on the target that the source lacks is offered for removal, with rows starting at skip. Removal does not purge the package's configuration.
+A package on the target that the source lacks is offered for removal, with skip selected by default. Removal does not purge the package's configuration.
 
 Same package, same origin, same version produces nothing at all.
 
