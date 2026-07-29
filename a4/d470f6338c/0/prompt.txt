@@ -1,0 +1,3 @@
+Sideloaded snaps must be OUT OF SCOPE entirely. Very ambiguous behavior if half of it is implemented and half not; and moreover by a different job. Sideloaded snaps are ignored. Period. Or am I making it too simple here?
+
+You often write "travel". Not clear what is meant. This is pc-switcher sync. Sync is the word we use. Use it everywhere "travel" is not strictly necessary.
