@@ -1,0 +1,1 @@
+Why does a user add a hold? To ensure a package is never uninstalled? Or to ensure it sticks at the currently installed version? In the latter case, we MUST ensure that the target gets exactly the same version as the source.
