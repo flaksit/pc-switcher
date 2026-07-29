@@ -1,0 +1,1 @@
+No need to explain "--confirm-each-command": this is standard pc-switcher behavior
