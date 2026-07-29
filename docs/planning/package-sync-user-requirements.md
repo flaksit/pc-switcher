@@ -98,7 +98,7 @@ A marked item is filtered out before the difference is computed, so it never app
 
 Marks never sync between machines. Snippets do, because how to install something is knowledge about the software rather than the machine.
 
-Repositories, pins and flatpak remotes cannot be marked machine-specific, whether they are being added, changed or deleted. Where the two machines disagree about where software comes from, that disagreement keeps surfacing every run instead of being silenced once, and the remedy is to align the two machines. apt's own configuration files *can* be marked, because they say how apt behaves rather than where software comes from.
+Repositories and pins cannot be marked machine-specific, whether they are being added, changed or deleted; a flatpak remote is never asked about at all, so there is nothing to mark. Where the two machines disagree about where software comes from, that disagreement keeps surfacing every run instead of being silenced once, and the remedy is to align the two machines. apt's own configuration files *can* be marked, because they say how apt behaves rather than where software comes from.
 
 Report-only findings cannot be marked either — no machine holds a version difference, and a mark would stop the package syncing rather than stop the report.
 
@@ -226,7 +226,7 @@ There is no distribution remote. A remote is synced only because an approved app
 
 A remote both machines have whose URL or verification differs is repointed silently — unless that would move the origin of a machine-specific application, in which case the user is asked, shown both configurations, and declining fails every approved application that needed the source's URL.
 
-A remote only the target has is offered for deletion, and the request names the applications that still use it. Deleting a remote takes its signing key with it.
+A remote is never a review item in any direction. One the source does not have is deleted once nothing on the target still uses it — after this run's approved removals, counted against what the machine actually has, including applications marked machine-specific. While anything still uses it, it stays. Deleting a remote takes its signing key with it.
 
 An application is installed from the source's remote or not at all, and that remote is identified by **URL and verification setting, never by name** — checked before the install and read back after it. Either failure fails that one application.
 
