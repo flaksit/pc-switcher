@@ -148,9 +148,11 @@ A package held on the target is never proposed for install or upgrade. Its hold 
 
 An apt hold is its own item, decided separately from its package, in both directions.
 
-A hold names no version. It freezes whatever version is installed on that machine, so replicating a hold replicates the intent to freeze, not the version frozen at — and because versions float, the two machines can end up held at different versions.
+A hold blocks everything: apt will not install, upgrade or remove a held package, not even as an unused dependency. So it serves two intents at once — "never lose this" and "never move this off the version that works" — and apt gives no way to tell them apart.
 
-An approved hold is therefore applied after its package is installed, never before: apt refuses to install a held package, so holding first would block the very install the hold is meant to protect.
+That second intent decides how a held package is installed. Everywhere else a version floats, because the user expressed no preference; a hold *is* that preference. So when the source holds a package the target lacks, the target gets the **source's exact version**, not whatever its repositories currently offer. If that version is no longer available on the target, the install fails as its own item naming both versions — better than silently freezing the target on a version the user never chose, which nothing would ever move again.
+
+The hold is applied after the package is installed, never before: apt refuses to install a held package, so holding first would block the very install the hold is meant to protect.
 
 ### Collateral damage
 

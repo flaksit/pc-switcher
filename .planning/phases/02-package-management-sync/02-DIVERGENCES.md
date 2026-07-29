@@ -87,6 +87,18 @@ That is no longer true. Attribution narrows the batch by re-rehearsing each cand
 
 A tester following the runbook as written would report three fixes as regressions and would look for a screen that has been deliberately removed. The runbook and `02-UAT.md` both need updating before UAT runs.
 
+## DIV-10 — A held package is installed at the wrong version, then frozen there
+
+Ruled on 2026-07-29, after the code was written, so this is a known gap rather than a contradiction.
+
+An apt hold blocks install, upgrade and removal alike — measured on `ubuntu:24.04`: `apt-get remove` and `apt-get install` on a held package both refuse with `E: Held packages were changed`, and `autoremove` leaves it alone. It therefore carries the intent "do not move this off the version that works" as well as "do not lose this", and apt offers no way to distinguish them.
+
+`apt_sync` installs every package by name (`_install_args` → `apt-get install --assume-yes --no-install-recommends <name>`) and applies the hold as a separate item afterwards. So where the source holds a package the target lacks, the target installs whatever version its repositories currently offer and then freezes on it — permanently, since nothing will move a held package again. The two machines end up held at different versions with nothing reporting it.
+
+`PKG-FR-APT-HOLD-VERSION` now requires the source's exact version for that case, with failure naming both versions where the target cannot supply it. Recorded in the criteria's gap register.
+
+**Still unruled:** the same package held on *both* machines at different versions. `PKG-FR-APT-HELD-TARGET` suppresses any package-level item for a held target package, and a hold present on both sides produces no hold item either, so that divergence is currently invisible in every run. Converging it would mean unhold → install the source's version → re-hold, which is a larger change than the install case.
+
 ## Ambiguity flagged for the Stage 5 article audit
 
 `PKG-FR-MACHINE-SPECIFIC` says the item is "never to be offered again on that machine. The mark MUST be local to that machine" with no antecedent for either "that machine". The rule the code implements is the holder rule (`sync_core.py:213-223`): install and change diffs record on the source, removal diffs on the target, written through that machine's own executor. The article is unstatable without a name for the holding machine, which the narrative's vocabulary section introduces. Full audit of all 124 articles against that vocabulary follows once the narrative is approved.

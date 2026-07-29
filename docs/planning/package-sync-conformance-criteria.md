@@ -130,6 +130,8 @@ Decomposes [apt / Holds](package-sync-user-requirements.md#holds).
 - **PKG-FR-APT-HOLD-ITEM**: An apt hold MUST be an item separate from the package it applies to, decided separately, in both directions.
 - **PKG-FR-APT-HOLD-ORDER**: An approved hold MUST be applied after the package it names is installed, never before.
   Why: apt refuses to install a held package (`E: Held packages were changed`, measured on Ubuntu 24.04), so setting the hold first blocks the install it is meant to protect and leaves the package `hold ok not-installed`.
+- **PKG-FR-APT-HOLD-VERSION**: Where the source holds a package the target lacks, the target MUST be given the source's exact version, not whatever its repositories currently offer. Where that version cannot be obtained on the target, the install MUST fail as its own item naming both versions, and MUST NOT fall back to another version.
+  Why: a hold blocks install, upgrade and removal alike (measured on Ubuntu 24.04), so it carries the intent "do not move this off the version that works" as well as "do not lose this", and apt cannot distinguish them. Everywhere else a version floats because the user expressed no preference; a hold is that preference. Installing a different version and then freezing it there is worse than ordinary drift, because nothing will move it again.
 - **PKG-FR-APT-HOLD-INERT**: Replicating a hold MUST NOT change the package's version, and a hold whose package install was not approved or failed MUST fail alone.
   Why: a hold carries no version — it freezes whatever is installed on that machine — so what replicates is the intent to freeze. Since versions float, the two machines may end up held at different versions.
 
@@ -290,7 +292,9 @@ Each of these is a real cost, given up knowingly.
 
 ## Where the tool does not yet meet these requirements
 
-Requirements the shipped code knowingly does not satisfy are recorded here, verified against the code on the current branch rather than against older documents. None are currently recorded.
+Requirements the shipped code knowingly does not satisfy are recorded here, verified against the code on the current branch rather than against older documents.
+
+- **PKG-FR-APT-HOLD-VERSION** is not implemented. `apt_sync` installs every package by name and applies the hold afterwards, so a held package the target lacks is installed at whatever version the target offers and then frozen there. The requirement was ruled on after the code was written.
 
 ## Open questions
 
@@ -306,7 +310,7 @@ How often is a package manual on the source and automatic on the target — the 
 
 ## Traceability
 
-Every article above decomposes exactly one section of [Package sync — user requirements](package-sync-user-requirements.md). 124 articles, no orphans in either direction. A new article needs a home here; a narrative section with no articles is either intentionally non-normative or a coverage gap.
+Every article above decomposes exactly one section of [Package sync — user requirements](package-sync-user-requirements.md). 125 articles, no orphans in either direction. A new article needs a home here; a narrative section with no articles is either intentionally non-normative or a coverage gap.
 
 | User-requirements section | Articles | |
 | - | - | - |
@@ -316,7 +320,7 @@ Every article above decomposes exactly one section of [Package sync — user req
 | [Decisions and their memory](package-sync-user-requirements.md#decisions-and-their-memory) | 3 | `PKG-FR-SKIP-ONCE` `PKG-FR-MACHINE-SPECIFIC` `PKG-FR-NO-MARK-ON-ORIGIN` |
 | [apt / Installing](package-sync-user-requirements.md#installing) | 5 | `PKG-FR-DEB-OWNERSHIP` `PKG-FR-APT-ORIGIN-DISCLOSURE` `PKG-FR-APT-ORIGIN-DERIVED` `PKG-FR-APT-ORIGIN-UNREPLICABLE` `PKG-FR-APT-ORIGIN-VERIFY` |
 | [apt / Removing, and reporting without acting](package-sync-user-requirements.md#removing-and-reporting-without-acting) | 5 | `PKG-FR-APT-REMOVE` `PKG-FR-APT-SAME` `PKG-FR-APT-VERSION-DIFF` `PKG-FR-APT-ORIGIN-DIFF` `PKG-FR-APT-HELD-TARGET` |
-| [apt / Holds](package-sync-user-requirements.md#holds) | 3 | `PKG-FR-APT-HOLD-ITEM` `PKG-FR-APT-HOLD-ORDER` `PKG-FR-APT-HOLD-INERT` |
+| [apt / Holds](package-sync-user-requirements.md#holds) | 4 | `PKG-FR-APT-HOLD-ITEM` `PKG-FR-APT-HOLD-ORDER` `PKG-FR-APT-HOLD-VERSION` `PKG-FR-APT-HOLD-INERT` |
 | [apt / Collateral damage](package-sync-user-requirements.md#collateral-damage) | 6 | `PKG-FR-COLLATERAL-AUTO` `PKG-FR-COLLATERAL-MANUAL` `PKG-FR-COLLATERAL-ATTRIBUTION` `PKG-FR-COLLATERAL-KEEPS-MARKS` `PKG-FR-COLLATERAL-TIMING` `PKG-FR-COLLATERAL-NEW-ORIGIN` |
 | [apt / Repositories, keys and pins](package-sync-user-requirements.md#repositories-keys-and-pins) | 14 | `PKG-FR-REPO-DERIVED` `PKG-FR-REPO-OVERWRITE` `PKG-FR-REPO-CONFLICT` `PKG-FR-REPO-DELETE` `PKG-FR-DISTRO-FILES` `PKG-FR-APT-IGNORES` `PKG-FR-KEY-NOT-ITEM` `PKG-FR-KEY-COPY` `PKG-FR-KEY-REFRESH` `PKG-FR-KEY-CLEANUP` `PKG-FR-PIN-ALWAYS` `PKG-FR-PIN-DELETE` `PKG-FR-PIN-NOT-INVENTORY` `PKG-FR-APTCONF` |
 | [apt / Ubuntu Pro](package-sync-user-requirements.md#ubuntu-pro) | 5 | `PKG-FR-ESM-GATE` `PKG-FR-ESM-VERIFY` `PKG-FR-ESM-SKIP-WHOLE-JOB` `PKG-FR-ESM-NO-ASK` `PKG-FR-ESM-PRIVACY` |
