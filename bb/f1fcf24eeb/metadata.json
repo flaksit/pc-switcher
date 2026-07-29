@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "bbf1fcf24eeb",
+  "strategy": "manual-commit",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/02-package-management-sync/02-DIVERGENCES.md",
+    ".planning/phases/02-package-management-sync/02-UAT.md",
+    "docs/planning/package-sync-conformance-criteria.md",
+    "docs/planning/package-sync-user-requirements.md",
+    "docs/system/core.md",
+    "src/pcswitcher/jobs/vscode_state_sync.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/bb/f1fcf24eeb/0/metadata.json",
+      "transcript": "/bb/f1fcf24eeb/0/full.jsonl",
+      "compact_transcript": "/bb/f1fcf24eeb/0/transcript.jsonl",
+      "content_hash": "/bb/f1fcf24eeb/0/content_hash.txt",
+      "prompt": "/bb/f1fcf24eeb/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 24,
+    "cache_creation_tokens": 22928,
+    "cache_read_tokens": 6482148,
+    "output_tokens": 11481,
+    "api_call_count": 13
+  }
+}
