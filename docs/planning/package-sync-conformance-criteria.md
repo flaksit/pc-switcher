@@ -197,7 +197,7 @@ Decomposes [apt / Ubuntu Pro](package-sync-user-requirements.md#esm-repositories
 Decomposes [apt / Applying apt's changes](package-sync-user-requirements.md#applying-apts-changes).
 
 - **PKG-FR-APT-CONFIG-ATOMIC**: All repository-configuration changes a run makes MUST be applied as one unit, backed up beforehand, and followed by a single metadata refresh. If that refresh fails, every file the unit touched MUST be restored. Every approved package whose origin depended on the unit MUST then fail, named, and the run MUST continue with the packages that did not.
-- **PKG-FR-DERIVED-FAILURE**: A derived write has no item of its own to fail; its failure MUST be charged to every approved package that needed it, naming what failed.
+- **PKG-FR-DERIVED-FAILURE**: A derived write has no item of its own to fail; its failure MUST be charged to every approved package that needed it, naming what failed. Every such package MUST fail, including ones that would otherwise have installed. A package's own failure MUST NOT be charged back to the derived write, nor to the other packages that needed the same one.
   Why: the user decided about a package, not about a file.
 - **PKG-FR-DERIVED-VISIBLE**: Every derived write MUST be logged as it lands and MUST appear in a dry run's preview.
   Why: not asking is not the same as hiding.

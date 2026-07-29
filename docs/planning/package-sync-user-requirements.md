@@ -278,7 +278,9 @@ Reproducibility is judged by what the **source** holds. The snippet registry is 
 
 Every approved item is attempted, and all failures are reported together, each naming its item. One failed item does not block the rest of its job; one failed job does not stop the others.
 
-A change with no item of its own — a repository, key, pin or remote — fails against every approved package that needed it, and those packages fail with it.
+A repository, key, pin or remote has no item of its own to fail on. When one of them fails to land, that failure is charged to every approved package that needed it, and all of those packages fail — including ones that would otherwise have installed, because the origin they were approved for is not there.
+
+It does not work the other way round. A package that fails to install leaves the repository it came from in place, and leaves the other packages that share it untouched.
 
 A read that does not answer is different. If a package manager cannot be queried at all, its silence is never read as "this machine has nothing installed", which would propose removing everything on the other machine. It fails once, naming the command. An *empty* answer is ordinary data.
 
