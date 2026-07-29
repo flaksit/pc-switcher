@@ -20,7 +20,7 @@ Line references outside "The review" were taken at `ffa06900` and the branch has
 - Identity per ecosystem: apt = name + origin (`apt_sync.py:1-21`); snap = name alone (`snap_sync.py:20-29`); flatpak = scope + full `<application>/<arch>/<branch>` ref, origin deliberately excluded (`flatpak_sync.py:286-312`); manual = origin-kind + identifier (`manual_installs_sync.py:109-136`).
 - Why flatpak origin is not identity: `flatpak install <other remote> <installed ref>` refuses with `already installed from remote <name>`, so the install-plus-removal pair could never run. `flatpak_sync.py:306-312`
 - Why branch *is* flatpak identity: two branches of one id coexist in one scope, so `(scope, application)` is not a unique key. `flatpak_sync.py:298-305`
-- Distribution origins are computed per machine from that machine's own distribution source files, so two machines on different Ubuntu mirrors are one vendor. `apt_sync.py:1264-1277`
+- Distribution origins are computed per machine from that machine's own distribution source files, so two machines on different Ubuntu mirrors are one origin. `apt_sync.py:1264-1277`
 - Versions float for apt and flatpak — reported with both values, never forced. `apt_sync.py:760-770`, `flatpak_sync.py:663-677`, `items.py:123`
 - Snap converges the source's exact revision *and* channel. `snap_sync.py:285-302`, `snap_sync.py:607-648`
 - Confinement (`classic`/`devmode`) is captured on the source and passed to install/refresh, but is not identity and produces no diff of its own. `snap_sync.py:126-134`, `snap_sync.py:220-240`
@@ -97,7 +97,7 @@ Line references outside "The review" were taken at `ffa06900` and the branch has
 ### Installing
 
 - Classification ladder: no source origin → fall back to the presence question; source origin already served by the target's candidate → ordinary install; origin declared by a writable source file → install with that repository derived; otherwise `REPO_UNAVAILABLE`/report-only. `apt_sync.py:582-604`
-- Vendor disclosure: an install whose origin is not the distribution carries `from <vendor>` in its review detail. `apt_sync.py:433-445`, `apt_sync.py:734`
+- Origin disclosure: an install whose origin is not the distribution carries `from <origin>` in its review detail. `apt_sync.py:433-445`, `apt_sync.py:734`
 - `REPO_UNAVAILABLE` detail names both the origin and the cause. `apt_sync.py:448-457`, `apt_sync.py:618-627`
 - Post-convergence verification: one batched `apt-cache policy` after this run's single `apt-get update` and before the first install; an install apt would satisfy from none of the source's origins fails as its own item naming both. `apt_sync.py:2933-2999`, `apt_sync.py:3029-3031`
 - Packages whose source origins are all distribution origins are exempt from that check. `apt_sync.py:2977-2982`
@@ -107,8 +107,8 @@ Line references outside "The review" were taken at `ffa06900` and the branch has
 ### Removing and reporting
 
 - A package on the target the source lacks is offered for removal (`apt-get remove`, never `--purge`). `apt_sync.py:737-747`, `apt_sync.py:3087`
-- Cross-vendor divergence is checked **before** the version comparison and outranks it. `apt_sync.py:748-759`, `apt_sync.py:644-656`
-- A vendor mismatch is suppressed when either side has no vendor origin — that is what stops mirror differences reporting every package. `apt_sync.py:649-656`
+- A divergence of origin is checked **before** the version comparison and outranks it. `apt_sync.py:748-759`, `apt_sync.py:644-656`
+- An origin mismatch is suppressed when either side has no non-distribution origin — that is what stops mirror differences reporting every package. `apt_sync.py:649-656`
 - A pin says nothing about the packages it names; no per-package "pinned" echo exists. `apt_sync.py:170-176`, `items.py:76-81`
 
 ### Collateral
@@ -133,8 +133,8 @@ Line references outside "The review" were taken at `ffa06900` and the branch has
 - Keys are not items in any direction — no `ItemClass`, no id, no diff, no decision. `apt_sync.py:121-124`
 - Three key directories: `/etc/apt/keyrings`, `/etc/apt/trusted.gpg.d`, `/usr/share/keyrings`. `apt_sync.py:285-293`
 - A key the target lacks is copied whatever owns it on the source; a differing key the target's own dpkg owns is left alone; a matching key is untouched. `apt_sync.py:3648-3717`
-- Keys travel byte-for-byte, never fetched from a vendor. `apt_sync.py:161`, `apt_sync.py:3708-3712`
-- Rotated keys are caught by content, not presence — a vendor's new key changes no source file. `apt_sync.py:3664-3667`
+- Keys travel byte-for-byte, never fetched over the network. `apt_sync.py:161`, `apt_sync.py:3708-3712`
+- Rotated keys are caught by content, not presence — a rotated key changes no source file. `apt_sync.py:3664-3667`
 - Collection is `/etc/apt/keyrings` only, only after an approved repository removal, counted against a fresh scan of the target's real post-write source files. `apt_sync.py:3790-3847`
 - `apt.conf.d` is the one class reviewed in all three directions with the full decision including the permanent mark. `apt_sync.py:1345-1360`, `apt_sync.py:2842-2844`
 
