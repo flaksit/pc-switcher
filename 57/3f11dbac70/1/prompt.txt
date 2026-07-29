@@ -1,0 +1,310 @@
+<task-notification>
+<task-id>bsa4kvn9d</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/1cfb7cbc-0306-41b6-8f82-7ed1281a66dd/tasks/bsa4kvn9d.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for integration CI" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+You had a script on the scratchpad to first test the TUI review/question/ask functionality. Still there? How to run? What can and do you want me to verify?
+
+---
+
+2:[Image #1] title and packages are shown twice: in a block and as a "prompt"
+
+---
+
+2:
+- [Image #1] title and packages are shown twice: in a block and as a "prompt"
+- "<a> to toggle" is not a clear name for what it does: it toggles ALL packages. so "<a> to toggle all"
+- "<i>" seems quite useless to me
+- It is not very clear what is selected and what is unselected. [Image #2] I think to understand now that a line with white background is selected and a line with black background unselected. But that is not clear at all. Would be much nicer UI if the "checkbox" was a real checkbox or similar icon (something that is hollow when not selected and that is filled with a cross or checkmark or something when selected), and no change in background color
+- legend does not say to press "<enter> to confirm selection"
+
+3:
+- I don't like that this is in two steps. Packages should be presented only once and I make the choice at once: install, skip-once, skip-always.
+  This could be by three columns of checkboxes. Or even better and easier: a single column that shows the choice the user made "install", "skip once", "always skip". User chooses by pressing a key for each row. In this case: "<i> Install", "<s> Skip once", "<a> Skip always" (or pick better letters; <a> is standard used for Abort)
+  This would make it much easier to understand the difference between apply/skip-once or apply/skip-once/skip-always questions.
+- "never offer again on this machine" is not a good phrase either. It is not about "this machine". It is about "consider as specific to this machine" or just "skip always".
+
+1-4: When choice made, the answers that appear in bold yellow are not consistent per question: 1 is a description, 2 gives "done (2 selections)", 3 gives "done" (should be explicit that nothing was selected), 4 lists the action with the single package: 3 different behaviors based on the number of items selected (0, 1 or multiple). Not nice. I would propose the simple "n selected" or the long variant listing the selection: "None" / "item1, item2, ... itemN".
+
+4: I selected the package to "never offer again" and it shows "[remove fortunes-min (1:1.99.1-7.3build1)]" as answer. This is the opposite of what I chose!
+
+6:
+- Prompt repeated in block and then again as prompt (same problem with every question)
+- Empty line at end of each block "on the target now" and "on the source" [Image #3]. Actually, this empty line is on EVERY block except the "Ubuntu Pro ..." block.
+- Choice "Skip for now" could be formulated more clearly as "Keep target's version as-is for now."
+
+7:
+- Says "repositorys" (spelling!)
+- Only gives filename, not url. Url is much more interesting to decide upon. Give both.
+
+8: Only gives filename. Show contents of each file, file per file. Just like 6. shows the differences file per file (6 shows 2 blocks; 8 only needs 1 block).
+
+General:
+- Each bluegreen block that lists the items, starts each line with the name of the action ("install", "remove", "overwrite", "delete repository"). This is already clear from the block's title (or should be). No need to repeat on each line.
+- Together with my remark on 3 and the double printing on each question (block and prompt): isn't it possible that I select INSIDE the block and that each item-line has a column with my decision. Then no need to repeat the "decision" afterwards eather: it is still in the scrollback in the block.
+- Do not speak about source and target as I do here, but use the hostnames (like p17 and fleksi)
+- Ctrl-C shows stacktrace on exit. Not needed: abort was user action. Only showing message "Aborted by user" is enough. Maybe it's only this script that shows stacktrace and pc-switcher already handles this well.
+
+9:
+- Is this about "manually-installed package" or about "target's machine-specific package?". I think the latter, no?
+- Message must be more explicit: "fortunes is a machine-specific package on target. However, installing/removing/upgrading package <name> you selected previously, would downgrade/remove fortunes. Choices:
+  - Yes, install/remove/upgrade package <name>. This will collaterally downgrade/remove fortunes on target.
+  - Skip <name>. fortunes will not be touched on target. (You'll need to resolve this conflict.)
+  - Abort the apt sync / Abort the sync completely                        <-- Be specific about if this aborts only apt-sync or the entire pc-switcher sync!
+- When I choose abort, the script exits with a traceback. Maybe this is just this script. pc-switcher should NOT show stacktrace: this is a deliberate user choice to abort; not a bug for which we need the stacktrace for debugging.
+
+10:
+- Option "Record as machine-specific (skip always)" can be more in user language: "This package is specific to <host>. Always skip." General remark: ensure all messages are oriented towards user and in user language: "what does it mean to me / what will be the impact/effect?"
+- Catching Ctrl-D here would be a good signal to finish the snippet input. Better than "Esc then Enter".
+- just a space or newline is accepted as "non-empty" snippet. strip whitespace before deciding a snippet is empty or not
+
+Ending:
+- This is not shown in pc-switcher, right? Only in this script to check if decisions well recorded from questions.
+- gate True: what does this mean? "was_interactive"?
+- Is "unresolved" possible?
+
+---
+
+<task-notification>
+<task-id>ad5f2af17b6a4d003</task-id>
+<tool-use-id>toolu_01GotridnAEcsF66ZohXMDEh</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/1cfb7cbc-0306-41b6-8f82-7ed1281a66dd/tasks/ad5f2af17b6a4d003.output</output-file>
+<status>completed</status>
+<summary>Agent "Rebuild the review as one screen" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done. Commit `9ba0d437`, not pushed. Untracked files left alone (they are not mine).
+
+## Keys chosen
+
+`&lt;y&gt;` apply · `&lt;s&gt;` skip once · `&lt;n&gt;` always skip · `&lt;space&gt;` cycles the focused row · shift of any key sets **every** row · `&lt;enter&gt;` confirm · `&lt;ctrl-c&gt;` abort.
+
+`&lt;y&gt;` because the act word varies per group (`install`, `remove`, `overwrite`, `delete repository`) so no first letter is stable; `&lt;s&gt;`/`&lt;n&gt;` are mnemonic and distinct. `&lt;a&gt;` is not merely avoided — `decision_list.FORBIDDEN_KEY` rejects it at construction (`decision_list.py:59,289`), so no future caller has to remember. Shift-of-key replaces questionary's mislabelled `&lt;a&gt; to toggle` and the legend says what it does. `&lt;space&gt;` exists for a user who did not read the legend.
+
+## What survives of the Rich panel
+
+Nothing on the interactive path, for any group. The control lists items, details and decisions itself, so a panel above it printed the group twice — the double-rendering finding. The panel survives on the **non-interactive** path only (`review.py:405`, printed at `review.py:686`), where nothing is selectable and the panel *is* the D-26 report. The conflict screen's two version panels survive because they are content, not a duplicate row listing (`review.py:643-648`).
+
+**Correction to the brief:** you wrote "`REPORT_ONLY` groups have nothing to select and may still need their panel". They *do* have something to select — ADR-020 D-07: *"Report-only diffs … offer apply or skip only"*, and the shipped code already treated them that way (they were in the checkbox path, absent from `_PROMOTABLE_ACTIONS`). So report-only is a two-answer screen, not an informational one, and it gets no panel. Test: `test_a_report_only_group_offers_two_answers_and_starts_applied`.
+
+Second judgement call: I converted the **repository/remote conflict** from a per-entry `questionary.select` queue to the shared widget, as your two-answer paragraph asks. Its rows default to skip-once (not apply) — an overwrite displaces software the target explicitly marked machine-specific, so it must be chosen. `_default_decision` therefore takes conflict groups as well as removal directions (`review.py:288`).
+
+## Mutation table — real results
+
+26 mutations, each applied to a copy-aside then restored. All RED unless noted.
+
+| # | Mutation | Test | Result |
+|---|---|---|---|
+| M01 | every group starts applied | `test_install_rows_start_applied_and_removal_rows_start_skipped` | RED |
+| M02 | every screen offers the permanent answer | `test_two_answer_screens_omit_the_permanent_option` | RED |
+| M03 | column loses its gap | `test_the_decision_column_sits_a_gap_right_of_the_longest_item` | RED |
+| M04 | items never wrap | `test_an_item_longer_than_the_screen_pins_the_column_at_the_wrap_width` | RED |
+| M05 | column always shows the act word (**the inverted echo**) | `test_an_always_skipped_row_never_echoes_the_action_it_was_not_given` | RED |
+| M06 | one glyph for every state | `test_each_decision_has_its_own_glyph` | RED |
+| M07 | trailing blank line in the row area | `test_the_row_area_ends_without_a_trailing_blank_line` | RED |
+| M08 | legend survives the answer | `test_the_legend_comes_off_once_the_screen_is_answered` | RED |
+| M09 | a key sets every row | `test_a_key_sets_only_the_focused_row` | RED |
+| M10 | down arrow stops moving | `test_a_key_sets_only_the_focused_row` | RED |
+| M11 | abort's letter becomes bindable | `test_a_key_may_not_be_the_abort_letter` | RED |
+| M12 | every row repeats the group verb | `test_a_row_does_not_repeat_the_verb_its_group_title_already_names` | RED |
+| M13 | panel comes back above the screen | `test_an_interactive_group_prints_no_panel_above_its_screen` | RED |
+| M14 | *first attempt* — added a **leading** newline | `test_the_report_panel_ends_on_its_last_item` | **GREEN — ineffective mutation** |
+| M14b | append `"\n"` after the last entry (the real defect) | same test | RED |
+| M15 | version panels regain their trailing blank line | `test_a_version_panel_ends_on_its_last_line_of_content` | RED |
+| M16 | whitespace-only snippet accepted | `test_a_whitespace_only_snippet_is_not_a_resolution` | RED |
+| M17 | snippet editor loses Ctrl-D | `test_the_snippet_editor_finishes_on_ctrl_d` | RED |
+| M18 | permanent choice names the concept again | `test_the_permanent_choice_says_what_it_means_rather_than_naming_the_concept` | RED |
+| M19 | conflicts go back to one prompt per file | `test_one_screen_answers_every_conflicting_file` | RED |
+| M20 | bulk key stops saying what it does | `test_a_bulk_key_says_that_it_sets_every_row` | RED |
+| M21 | legend stops packing to the screen | `test_a_narrow_screen_breaks_the_legend_between_entries_never_mid_word` | RED |
+| M22 | Ctrl-C at a screen is swallowed | `test_ctrl_c_at_a_decision_screen_aborts_the_entire_sync` | RED |
+| M23 | control loses its Ctrl-C binding | `test_ctrl_c_answers_none` | **RED — by hang** (see below) |
+| M24 | shift of a key stops setting every row | `test_shift_of_a_key_sets_every_row` | RED |
+| M25 | space stops cycling | `test_space_cycles_the_focused_row_through_the_options` | RED |
+| M26 | **negative control**: a comment reworded | `test_the_decision_column_sits_a_gap_right_of_the_longest_item` | GREEN — as intended |
+
+Two honest notes. **M14 was my error, not the test's**: `if index:` → `if True:` prepends a newline instead of appending one, so it reproduced a different defect. Re-run as M14b — appending `"\n"` before the `Panel(...)` — the test fails with the panel's blank last line in the assertion message. **M23 does not fail cleanly, it hangs**: with Ctrl-C unbound the pipe input is exhausted but never closes, so the app waits forever. Measured under `timeout 45` → killed, exit 143. It can never go green, but a CI would see a timeout rather than a failure.
+
+## What only a human can verify
+
+Whether the column *reads* as a column at their real terminal width and font; whether `●`/`○`/`⊘` are distinguishable at a glance (I verified they are all wcwidth-1, so alignment holds, not that they are legible); how a group longer than the screen scrolls (the `[SetCursorPosition]` token drives it, tested only for presence); whether the redraw sits correctly under the resumed Rich Live in their terminal; whether resizing mid-answer relays cleanly; whether `&lt;n&gt;` reads as "never" rather than as "no".
+
+I did drive the real harness through a pty end to end: gate → all seven screens → collateral → abort. The columns aligned, two-answer legends were short by exactly `&lt;n&gt;`, the answered frame kept the list and dropped the legend, and the harness printed `Sync aborted: collateral removal of manually-installed fortunes declined…` instead of a traceback. That found one defect I then fixed: at ≥80 columns the decision word could land in the final cell and autowrap (`_RIGHT_MARGIN`, `decision_list.py:78`), and the legend broke mid-word (`legend(..., width=)` now packs between entries, `decision_list.py:221`).
+
+## Gates
+
+`ruff format` (129 unchanged) · `ruff check` clean · `codespell` clean · `basedpyright` 0 errors · `pytest` **1521 passed** (baseline 1469; +52 new, −0 lost, all 28 pre-existing failures were confined to the two rewritten review test files).
+
+## Also changed, not asked for
+
+`docs/jobs/package-sync.md:56` described the two-list flow in user-facing prose and was now false; I rewrote it to the one-screen keymap, and swapped the "ticked/unticked" vocabulary for the new wording there and in `docs/system/package-sync.md`, `docs/system/core.md`, plus the stale docstring in `flatpak_sync._build_review_groups`. Per the project's "update all affected docs" rule.
+
+## Unverified
+
+The `class:detail` / `decision-act` colours are declared but I have not seen them in a colour terminal. The `_MIN_ITEM_WIDTH` degradation path (terminal under ~30 columns) is unit-tested but never rendered. `docs/jobs/package-sync.md` is also in the second agent's likely blast radius — if they touch the same paragraphs you will get a conflict.</result>
+<usage><subagent_tokens>295242</subagent_tokens><tool_uses>138</tool_uses><duration_ms>3028395</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ad5f2af17b6a4d003</task-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/1cfb7cbc-0306-41b6-8f82-7ed1281a66dd/tasks/ad5f2af17b6a4d003.output</output-file>
+<status>completed</status>
+<summary>Agent "Rebuild the review as one screen" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The work is complete and committed — that notification was just my own leftover waiter task being cleaned up after the mutation run had already finished. Nothing outstanding.
+
+Final state: commit `9ba0d437` on `gsd/phase-02-package-management-sync`, not pushed. The three untracked files (`.planning/phases/02-package-management-sync/02-BEHAVIOUR-LEDGER.md`, `02-DIVERGENCES.md`, `docs/planning/Package sync - user requirements.md`) are not mine and were left alone. My full report is in the previous message.</result>
+<usage><subagent_tokens>281681</subagent_tokens><tool_uses>139</tool_uses><duration_ms>5776902</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ae728c0622d4d3ab2</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/1cfb7cbc-0306-41b6-8f82-7ed1281a66dd/tasks/ae728c0622d4d3ab2.output</output-file>
+<status>completed</status>
+<summary>Agent "Hostnames and user-language wording" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done. Two local commits, gates green.
+
+## How the hostnames reach the message builders
+
+Two honest routes, no string threaded through twenty signatures:
+
+- **Into `review.py`** — `review_items(..., *, source_hostname, target_hostname)` and `TerminalUIReviewer(..., source_hostname=, target_hostname=)`, both **required** (no default, no fallback). The orchestrator builds the reviewer at `src/pcswitcher/orchestrator.py:398` from `self._source_hostname` / `self._target_hostname`, the same pair `JobContext` carries. Note this is the target as the *CLI argument*, not `_target_canonical_hostname` (resolved later, in `_establish_connection`) — it is what the user typed and what every job already sees.
+- **Into the job-built details** — new `Machines(source, target)` frozen dataclass in `src/pcswitcher/jobs/packages/items.py:36`, exposed as `PackageSyncJob.machines` (`sync_core.py:212`) off `JobContext`. One value rather than two parameters, built in one place so no call site can pair the names up wrong. Module-level diff helpers (`_diff_apt_packages`, `_diff_apt_configs`, `_diff_snap_items`, `_diff_flatpak_refs/_remotes`, every `build_*_detail`) take it as an argument.
+
+`_OriginPlan.unavailable_cause` had to stop being a `@property` and become `unavailable_cause(machines)` (`apt_sync.py:624`) — it is the only detail fragment built on a dataclass that has no access to the run.
+
+## The collateral prompt, and the abort scope
+
+Printed block: package name, then `You asked for &lt;pkg&gt; on fleksi yourself — apt there has it marked as manually installed, so pc-switcher never takes it away without asking.`, then the detail `Installing sl on fleksi would remove fortunes`.
+
+Question: `What should happen to fortunes on fleksi?`
+
+1. `Go ahead — fortunes changes on fleksi as described above`
+2. `Keep fortunes as it is — the changes that would touch it are dropped from this sync`
+3. `Stop the whole pc-switcher sync now — nothing more is changed on fleksi, and what earlier jobs already did stays done`
+
+**You were right that the premise was wrong** — I did not adopt it. `_protected_manual_set` (`apt_sync.py:2450`) returns `self._target_manual_set`, the target's own `apt-mark showmanual`. The prompt says that, and the ADR/requirements now say explicitly that this is *not* the machine-specific mark.
+
+**Abort scope, established from code**: the whole pc-switcher sync. `SyncAbortedByUser` → `_run_jobs_in_task_group`'s per-job handler re-raises it untouched (`orchestrator.py:1263`) → `_unwrap_taskgroup_error` returns that leaf (`orchestrator.py:176`) → `run()` sets `SessionStatus.ABORTED` and re-raises (`orchestrator.py:523`). No later job runs. `apt_sync` itself has changed nothing at that point (review precedes `apply()`), which is why choice 3 says jobs that already finished keep what they did rather than claiming a rollback.
+
+Wording 2 is true in both attribution cases (plural "the changes"); the detail line carries the specifics, and `_trigger_phrase` now says `the packages listed earlier` for joint causation — pinned by a new test.
+
+## The pin-content read
+
+**A new command was needed** — nothing captured pin content; `_diff_apt_pins` worked off digests alone and its docstring said "No file content is read in either direction". It is now `async`, takes `target_run`, and does one `_read_file_content` (`sudo cat`) per pin file **offered for deletion**. ADR-022 classification: it goes through the existing guarded `_read_file_content` (`require_answer`), so silence fails the job — covered by a new test.
+
+**`tests/unit/test_mutates_audit.py` needed no change and I did not touch it.** The read is issued inside `_read_file_content` as `run(command)` — a plain callable name, which is the audit's own documented blind spot; the enclosing `AptSyncJob._plan_repo_diffs.target_run::run_command` entry stays at 1.
+
+## Corrections to the brief
+
+- `"Record as machine-specific (skip always)"` no longer existed — `9ba0d437` had already replaced it with `"Always skip — it belongs to this machine…"`. I adopted your register on top of the current string.
+- Brief cited `_protected_manual_set` at `apt_sync.py:2434`; correct pre-edit, now `:2450`.
+
+## Mutation table (real results)
+
+| # | Mutation | Test | Result |
+|---|---|---|---|
+| 1 | conflict panel titles → `"on the target now"` | `test_each_version_panel_is_titled_with_the_machine_that_holds_it` | RED |
+| 2 | invert the `content is None` guard (never print) | `test_a_pin_file_is_printed_whole_under_the_machine_that_holds_it` | RED |
+| 3 | drop the guard, tolerate `None` (prints empty panel) | `test_an_entry_with_no_content_prints_no_panel` | RED |
+| 4 | conflict skip word → `SKIP_ONCE_WORD` | `test_only_two_answers_are_offered_and_the_row_starts_skipped` | RED |
+| 5 | removal skip word → `SKIP_ONCE_WORD` | `test_repo_removal_starts_skipped_and_is_never_offered_permanence` | RED |
+| 6 | abort choice → `"Abort the sync"` | `test_the_question_and_every_answer_name_the_machine_and_its_own_effect` | RED |
+| 7 | delete the "why protected" line | `test_the_prompt_says_why_this_package_is_protected` | RED |
+| 8 | abort message → `"collateral removal declined"` | `test_stopping_names_the_package_and_the_machine_in_the_abort` | RED |
+| 9 | unreproducible choice → `"Record as machine-specific (skip always)"` | `test_the_permanent_choice_says_what_it_means_rather_than_naming_the_concept` | RED |
+| 10 | version detail → `source has …, target has …` | `test_version_mismatch_detail_names_the_machines_not_their_roles` | RED |
+| 11 | repo deletion detail drops the URLs | `TestRepoRemovalWording::test_the_urls_come_first_and_the_stranded_packages_second` | RED |
+| 12 | no-URL branch removed | `test_a_file_declaring_no_url_says_so_rather_than_trailing_off` | RED |
+| 13 | pin content set to `""` instead of read | `test_a_pin_offered_for_deletion_carries_its_whole_content` | RED |
+| 14 | drop `require_answer` from `_read_file_content` | `test_a_pin_read_that_did_not_answer_fails_the_job` | RED |
+| 15 | collateral detail → `f"apt would {effect}"` | `test_manual_collateral_removal_becomes_a_collateral_review_item` | RED |
+| 16 | joint-causation phrase → first candidate | `test_joint_causation_names_the_whole_batch_rather_than_one_package` | RED |
+| 17 | ESM proceed label → old "the target" text | `test_the_gate_offers_exactly_two_answers_and_names_both_of_them` | RED |
+| 18 | removal group title → "the source" | `test_each_two_answer_screen_is_titled_in_correct_english` | RED |
+| 19 | orchestrator passes source name as target | `test_the_reviewer_is_built_with_both_machine_names` | RED |
+| 20 | **negative control**: reword a comment | (same as #1) | GREEN — as intended |
+
+One run came back GREEN unexpectedly and I fixed it: my first attempt at #3 replaced `entry.content.rstrip` with `(entry.content or "").rstrip` while leaving the `continue` guard in place — an **ineffective mutation** (behaviour unchanged), not a vacuous test. Re-run with the guard actually removed: RED, on the assertion.
+
+## Gates (repo-wide)
+
+`ruff format` clean · `ruff check` **All checks passed** · `codespell` clean · `basedpyright` **0 errors, 0 warnings, 0 notes** · `pytest` **1537 passed, 84 deselected** (baseline 1521 → +16 new tests).
+
+## Commits
+
+- `6541eae4 feat(review): the screens name the two machines, not their roles in the run`
+- `1db1fc6b docs(packages): the promise is made about a named machine`
+
+Not pushed. Untracked files left untouched.
+
+## Unverified / disclosed
+
+- I did not drive the harness interactively (no TTY here). I rendered its fixture groups through the non-interactive path to check the new shapes compose — output looks right. The interactive screens are covered by unit tests, not by my own eyes.
+- **Gap I chose not to close**: the non-interactive report panel (D-26) prints label + detail only, so a pin file's content and the conflict versions do not appear there. Nothing is being decided on that path, but if you want the report to be complete, that is a separate change.
+- `docs/planning/Package sync - user requirements.md` still carries the old wording ("install anyway…", "never offer again", the two-pass checkbox description). It is the other session's untracked file, so I left it alone — it will need the same pass.</result>
+<usage><subagent_tokens>359797</subagent_tokens><tool_uses>213</tool_uses><duration_ms>1798844</duration_ms></usage>
+</task-notification>
+
+---
+
+Need to update the 02-UAT*.md
+
+---
+
+<task-notification>
+<task-id>ac518d79437430ffb</task-id>
+<tool-use-id>toolu_011x6FNshWVk8ugVbC2NV8Ad</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/1cfb7cbc-0306-41b6-8f82-7ed1281a66dd/tasks/ac518d79437430ffb.output</output-file>
+<status>completed</status>
+<summary>Agent "Update the UAT documents" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done. One commit: `d23bf796` — but it contains only the runbook, for a reason worth flagging.
+
+## Correction to the brief
+
+**`02-UAT.md` is not in my commit.** The concurrent session committed my working-tree rewrite of it as collateral in `0863c37b` ("docs(packages): the other job is folder sync, not user-data sync") at 10:18:48, evidently via `git add -A`/`commit -a`. I verified the diff: my text is in verbatim and unmangled. Since amending and history rewriting are off limits, my commit stages the runbook alone. Nothing is lost, but `02-UAT.md`'s change is filed under a commit message that has nothing to do with it.
+
+## What was stale
+
+`02-UAT.md`: every clause of test 1 — checkboxes, tick state, the two-pass flow, "skip-always" as the answer's name. Test 2 used the old vocabulary and said nothing about hostnames or holding-machine routing. Test 3 was accurate as written (verified `_PROCEED = "p"` / `_ABORT = "a"` in `step_gate.py`, no default, TTY refusal in `cli.py`); I added only a `PKG-FR-CONFIRM-EACH` citation.
+
+`02-UAT-01-RUNBOOK.md`: the prompt inventory, the setup rationales, the whole "what to check on screen" section, and every abort string. Three staleness sources the brief did not name:
+
+- **4b was materially wrong.** It instructed the tester to expect a collateral "Skip" to erase an unrelated always-skip across the whole batch. `402f7067` fixed exactly that — collateral is now narrowed per candidate (`_collateral_trigger_ids`), and a decision the user gave survives a cancellation.
+- **4d told the tester to record a real cosmetic defect** ("Delete repositorys") that `ffa06900` had already fixed. Title is now `Delete repositories pc1 no longer has (apt)`.
+- **Abort messages are no longer fixed strings.** `_review_decision_group` raises `package review aborted at '&lt;group title&gt;' (Ctrl-C)`, so the runbook's five verbatim quotes were all wrong, and the never-offer-again abort no longer exists. Also: Ctrl-Q aborts a decision screen too, `&lt;a&gt;` is actively rejected as a decision key (`decision_list.FORBIDDEN_KEY`), and Ctrl-D now *submits* the snippet editor rather than being undefined.
+
+I rebuilt 4d to declare a real `URIs:` under `Enabled: no`, so the URL disclosure added in `6541eae4` is actually exercised rather than hitting the "declares no repository URL" branch.
+
+## Rehearsal evidence and counts
+
+Recorded as a `note:` block under test 1 — the field 01-UAT.md already uses for exactly this. It states what was driven (`tests/manual/review_harness.py`, real `TerminalUI`/`review_items`/`ask_gate`), lists the twelve findings with the three commits that fixed them, separates the two harness artifacts from the product defects, and closes with what the rehearsal structurally cannot reach.
+
+`result:` stays `[pending]` and the counts stay `total 3 / passed 0 / pending 3`. The rehearsal is evidence, not the test: test 1 *is* a real sync between two machines with decision files written and a snippet replayed, and that has never run. Marking it anything else would misreport phase readiness. `Gaps` says "none open" with the reason rather than staying `[none yet]`.
+
+## Harness listing
+
+Dropped. It had already drifted — the committed file names `p17`/`fleksi`, catches `SyncAbortedByUser`, and carries pin `content=` and hostname-bearing details that the inline copy did not. Two copies of a rehearsal script is exactly the drift that produced this task.
+
+## Unverified
+
+I did not run the harness (no TTY here), so the runbook's expected *rendering* is derived from the code, not observed. Every quoted string, title, key binding, default and abort message was read out of the source. `uv run codespell` clean; pytest not run per instructions.
+
+One nit: the markdown hard-wrap hook flags `expected: |` / `note: |` / `name:` in `02-UAT.md` as continuation lines. Those are the GSD template's YAML block scalars — false positives, unavoidable without abandoning the schema.</result>
+<usage><subagent_tokens>174705</subagent_tokens><tool_uses>52</tool_uses><duration_ms>559392</duration_ms></usage>
+</task-notification>
+
+---
+
+commit this
