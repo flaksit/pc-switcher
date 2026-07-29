@@ -12,7 +12,7 @@ Lineage: 001-US-1
 
 Priority: P1
 
-The system defines a precise contract for how sync jobs integrate with the core orchestration system. Each job (representing a discrete sync capability like package sync, Docker sync, or user data sync) implements a standardized interface covering configuration, validation, execution, logging, progress reporting, and error handling. This contract is detailed enough that all feature jobs can be developed independently and concurrently once the core infrastructure exists.
+The system defines a precise contract for how sync jobs integrate with the core orchestration system. Each job (representing a discrete sync capability like package sync, Docker sync, or folder sync) implements a standardized interface covering configuration, validation, execution, logging, progress reporting, and error handling. This contract is detailed enough that all feature jobs can be developed independently and concurrently once the core infrastructure exists.
 
 **Why this priority**: This is P1 because it's the architectural core. Without a clear, detailed job contract, subsequent features cannot be developed independently or correctly. This user story serves as the specification document for all future job developers. All sync-features (packages, Docker, VMs, k3s, user data) will be implemented as jobs. The btrfs snapshots safety infrastructure (CORE-US-BTRFS) is orchestrator-level infrastructure (not configurable via sync_jobs). Self-installation (CORE-US-SELF-INSTALL) is NOT a job—it is pre-job orchestrator logic that runs before any job execution.
 

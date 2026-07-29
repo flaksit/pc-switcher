@@ -5,8 +5,8 @@ What package synchronisation is for, how it decides what to do, and what it asks
 ## Navigation
 
 - [High level requirements](high-level-requirements.md) — project vision and scope; this document elaborates "installed packages must sync"
-- [Package sync conformance criteria](package-sync-conformance-criteria.md) — the same requirements decomposed into individually checkable obligations, for reviewing an implementation against
-- [Package sync job behaviour](../jobs/package-sync.md) — operator's guide
+- [Package sync conformance criteria](package-sync-conformance-criteria.md) — the same requirements of this document, decomposed into individually checkable obligations, for reviewing an implementation against
+- [Package sync job behaviour](../jobs/package-sync.md) — user guide
 - [ADR-020](../adr/adr-020-declarative-package-convergence.md) — the decision record behind the model
 
 This document states the intent. Where it and any other document disagree, this one is right and the other needs fixing.
@@ -15,9 +15,9 @@ This document states the intent. Where it and any other document disagree, this 
 
 You work on one machine, sync, and resume on the other. That only works if the software is there. Syncing your home directory onto a machine that lacks the applications gives you configuration files for programs that will not start, dotfiles for shells you do not have, and project directories you cannot build.
 
-So package sync replicates *what software is installed*. It does not replicate application data — that is the user-data sync's job, and it runs afterwards, deliberately: installing software writes that software's own stock defaults, and those defaults must land before your synced settings go on top of them. Get that order wrong and every first sync silently overwrites your configuration with the vendor's.
+So package sync replicates *what software is installed*. It does not replicate application data — that is the folder sync's job. Folder sync must run after package sync: installing software writes that software's own stock defaults, and those defaults must land before your synced settings go on top of them. Get that order wrong and every package synced silently overwrites your configuration with the vendor's.
 
-It replicates by **convergence, not by copying**. Nothing reads or writes another machine's package database. What travels between the machines is a decision — "install this", "remove that" — plus the minimum configuration the target's own `apt`, `snap` or `flatpak` needs in order to carry it out. The target's package managers stay in charge of their own state, which is what keeps the target a working machine rather than one carrying another machine's bookkeeping.
+It replicates by **convergence, not by copying**. Nothing reads or writes another machine's package database or installed software. What travels between the machines is a decision — "install this", "remove that" — plus the minimum configuration the target's own `apt`, `snap` or `flatpak` package managers needs in order to carry it out. The target's package managers stay in charge of their own state, which is what keeps the target a working machine rather than one carrying another machine's bookkeeping.
 
 You opt in per ecosystem. Nothing here runs unless you enable it, because enabling it authorises this tool to install and remove software on the other machine. You can sync apt packages and not snaps, or flatpaks and nothing else. The four kinds of software are described in their own sections below and each is independently enableable, independently reviewed, and independently able to fail without taking the others down.
 
@@ -258,7 +258,7 @@ snap is the simple ecosystem with one sharp exception.
 
 There is one store, and a name resolves to one publisher through an assertion snapd validates itself. So there is no origin question, no repository, no key, and no screen for any of them. Nothing about snap provenance is ever put to you.
 
-The exception is that snap converges the source's **exact revision and tracking channel**, where apt and flatpak let versions float. The reason is that snap is the only ecosystem that puts the version number in the data path: per-user application data lives in `~/snap/<app>/<revision>/`. If the two machines are on different revisions, the user-data sync has no correct thing to do — it would either skip the data or plant directories for revisions the target's snapd never installed. Converging the revision is what makes the data sync correct.
+The exception is that snap converges the source's **exact revision and tracking channel**, where apt and flatpak let versions float. The reason is that snap is the only ecosystem that puts the version number in the data path: per-user application data lives in `~/snap/<app>/<revision>/`. If the two machines are on different revisions, folder sync has no correct thing to do — it would either skip the data or plant directories for revisions the target's snapd never installed. Converging the revision is what makes folder sync correct.
 
 A snap on the source only is offered for install at the source's revision and channel; one on the target only is offered for removal; a difference of revision or channel is offered as a single change naming both values; identical produces nothing. Confinement travels with the install, because snapd requires it as explicit confirmation before it will install a classic or devmode revision at all.
 
@@ -372,7 +372,7 @@ Genuinely undecided. An answer invented here would be worse than the question.
 
 Should a failed package-manager read fail only its own ecosystem, or stop the whole sync? Today it stops the sync, which is inconsistent with the rule that one ecosystem's failure does not stop the others. The argument for stopping is that a dead package manager means the machine or the tool is broken, which is not a finding about any item and may well invalidate the rest of the run. The argument against is that a broken `snap` says nothing about whether apt can be synced.
 
-Should the ordering rule — software before user data — cover snippet-installed software as well? It covers the three package managers today. Snippet-installed software writes its own stock defaults exactly as an apt package does, which is the entire reason for the rule; the shipped configuration has it in the right place, but nothing catches a hand-edited configuration that moves it.
+Should the ordering rule — software before folder sync — cover snippet-installed software as well? It covers the three package managers today. Snippet-installed software writes its own stock defaults exactly as an apt package does, which is the entire reason for the rule; the shipped configuration has it in the right place, but nothing catches a hand-edited configuration that moves it.
 
 Should apt's and flatpak's repository-conflict questions cover the same set? apt asks about every differing repository file that feeds machine-specific software, and approving forces the write. flatpak asks only about remotes something approved this run would touch anyway, so answering "overwrite" cannot by itself make a remote travel. The asymmetry follows from flatpak having no always-sync bucket, but it has never been ruled on.
 

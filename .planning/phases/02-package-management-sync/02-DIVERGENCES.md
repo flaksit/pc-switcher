@@ -69,7 +69,7 @@ The reasoning is sound — flatpak has no always-sync bucket to make a remote tr
 
 ## DIV-08 — `manual_installs_sync` is not covered by the job-ordering check
 
-`PKG-FR-JOB-ORDER` says "the three package-manager jobs" must precede the user-data sync, and `orchestrator.py:1073` validates exactly those three. Code and article agree.
+`PKG-FR-JOB-ORDER` says "the three package-manager jobs" must precede `folder_sync`, and `orchestrator.py:1073` validates exactly those three. Code and article agree.
 
 The question is whether the article is right. `manual_installs_sync` also installs software — by replaying a snippet — and that software writes its own stock defaults exactly as an apt package does, which is the whole reason for the ordering rule. The shipped config lists it before `folder_sync` (`default-config.yaml:55`), so the default is correct; nothing catches a user who reorders it.
 

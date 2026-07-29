@@ -27,7 +27,7 @@ Four jobs — `apt_sync`, `snap_sync`, `flatpak_sync`, `manual_installs_sync` �
 - **PKG-FR-OPT-IN**: All four jobs MUST ship disabled and MUST be enabled individually in configuration.
   Why: enabling one authorises the system to install and remove software on the target.
 - **PKG-FR-JOB-INDEPENDENCE**: Each job MUST be enableable, reviewable and failable on its own. Enabling one MUST NOT enable another, and no job's behaviour may depend on whether another is enabled.
-- **PKG-FR-JOB-ORDER**: The three package-manager jobs MUST run before the user-data sync, and the system MUST refuse to start when they are ordered otherwise.
+- **PKG-FR-JOB-ORDER**: The three package-manager jobs MUST run before `folder_sync`, and the system MUST refuse to start when they are ordered otherwise.
   Why: software must exist before data lands on top of it, or an installer's stock defaults overwrite synced configuration.
 - **PKG-FR-APT-SCOPE**: `apt_sync` MUST cover the manually-installed apt package set, the repositories and pins that govern where those packages come from, apt's own behavioural configuration, and apt holds. Packages apt installed automatically to satisfy dependencies MUST NOT be items.
 - **PKG-FR-SNAP-SCOPE**: `snap_sync` MUST cover installed snaps with their revision, tracking channel, confinement mode and per-snap refresh holds.
@@ -35,7 +35,7 @@ Four jobs — `apt_sync`, `snap_sync`, `flatpak_sync`, `manual_installs_sync` �
 - **PKG-FR-MANUAL-SCOPE**: `manual_installs_sync` MUST cover what no package manager can reproduce — apt packages whose installed version comes from no repository the machine has configured, and software under `/usr/local` and `/opt` that no package owns — together with the registry of install snippets that is the only way such software can be reproduced on the other machine.
 - **PKG-FR-DEB-OWNERSHIP**: Software installed from a hand-downloaded `.deb` MUST belong to `manual_installs_sync` alone. `apt_sync` MUST NOT produce an item, a review line or an install for it in any configuration.
   Why: the target's apt has never heard the name; an apt item for it could only fail.
-- **PKG-FR-DATA-BOUNDARY**: No package job may sync application data. Data belongs to the user-data sync.
+- **PKG-FR-DATA-BOUNDARY**: No package job may sync application data. Data belongs to `folder_sync`.
 
 ## Convergence model
 
@@ -54,7 +54,7 @@ Decomposes [The model](package-sync-user-requirements.md#the-model).
 - **PKG-FR-FLATPAK-ORIGIN-NOT-IDENTITY**: A flatpak application's origin remote MUST NOT be part of its identity.
 - **PKG-FR-VERSION-FLOAT**: For apt and flatpak the system MUST install by name and accept whatever the target's own repositories offer. A version difference MUST be reported and MUST NOT be forced, upgraded or downgraded.
 - **PKG-FR-SNAP-REVISION**: For snap the system MUST converge the target to the source's exact revision and tracking channel.
-  Why: snap keeps per-user data in revision-numbered directories, so the data sync is only correct when both machines are on the same revision.
+  Why: snap keeps per-user data in revision-numbered directories, so `folder_sync` is only correct when both machines are on the same revision.
 - **PKG-FR-BLOCKS-REPLICATE**: Blocks the user set by hand — apt holds, snap refresh holds, flatpak masks — MUST replicate, each as an item decided separately from the software it applies to.
 
 ## Consent

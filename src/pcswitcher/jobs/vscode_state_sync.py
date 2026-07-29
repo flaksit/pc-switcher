@@ -17,7 +17,7 @@ SCOPE: this job covers ONLY the invoking user (whoever runs ``pc-switcher``) —
 one whose ``Path.home()`` this process resolves. Other users' VS Code state DBs under a
 synced ``/home`` are deliberately NOT handled (YAGNI; multi-user selective merge would
 need root on both ends, like ``folder_sync``, and is out of scope). This is a property
-of THIS job, not a system-wide single-user assumption — user-data sync itself spans all
+of THIS job, not a system-wide single-user assumption — ``folder_sync`` itself spans all
 users.
 
 This job (a normal-user ``SyncJob``, no sudo) rebuilds each target DB by mirroring
