@@ -1,0 +1,4 @@
+Continue the package sync requirements review. Read .planning/phases/02-package-management-sync/02-HANDOVER-requirements-review.md first.
+
+Entire flatpak section is a list of many seemingly unrelated sentences. Impossible to find out how it behaves by just reading this. Or was it meant as "same as the apt-sync, but with the following specificities"? Then make that clear.
+Same for snap section.
