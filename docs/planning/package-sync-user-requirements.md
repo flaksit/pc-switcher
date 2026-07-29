@@ -17,9 +17,9 @@ Work on one machine, sync, resume on the other. That only works if the software 
 
 Package sync replicates *what software is installed*. Application data belongs to folder sync, which must run after it — installing software writes its own stock defaults, and those have to land before the user's synced settings go on top of them.
 
-It replicates by **convergence, not by copying**. Both machines' package managers are asked what they have, and the difference is what the sync acts on; no package database, store or installed file is ever copied between machines. What travels is a decision — install this, remove that — plus the configuration the target's own package manager needs to carry it out.
+It replicates by **convergence, not by copying**. Both machines' package managers are asked what they have, and the difference is what the sync acts on; no package database, store or installed file is copied between machines. What travels is a decision — install this, remove that — plus the configuration the target's own package manager needs to carry it out.
 
-Package sync is one job per package manager — apt, snap, flatpak — plus one job for software no package manager can reproduce. Each is enabled separately, reviewed separately, and can fail without stopping the others. Enabling one authorises pc-switcher to install and remove software on the target.
+Package sync is one job per package manager — apt, snap, flatpak — plus a job for software no package manager can reproduce. Each is enabled separately, reviewed separately, and can fail without stopping the others. Enabling one authorises pc-switcher to install and remove software on the target.
 
 ## Vocabulary
 
@@ -33,7 +33,7 @@ A **decision** is the user's answer about an item: apply it, skip it this run, o
 
 **Machine-specific** describes an item marked "always skip". The job that marked it never touches that item again on that machine, in either direction — it is neither sent to another machine nor changed by one.
 
-**Derived mechanism** is plumbing that travels because approved software needs it: the repository a package comes from, its signing key, a pin, a flatpak remote. It is never a question of its own.
+**Derived** describes plumbing that travels because approved software needs it — the repository a package comes from, its signing key, a pin, a flatpak remote. It is never a question of its own.
 
 An **origin** is where software actually comes from — a repository or remote URL. Not its name: two remotes can share a name and serve different builds.
 
@@ -47,9 +47,11 @@ A **snippet** is a shell recipe, written once, for software no package manager c
 
 **Identity includes the origin.** `gh` from GitHub's repository and `gh` from Ubuntu's archive share a name and are different software. A package is installed on the target from the same origin it has on the source.
 
-**The user is asked about software; the plumbing is derived.** Approving a package also approves the repository it comes from — a repository without its package does nothing, and a package without its repository cannot be installed. Where an answer follows from something already approved, it is not asked again. Where it does not, it is asked.
+**The user is asked about software; the plumbing is derived.** Approving a package also approves the repository it comes from — a repository without its package does nothing, and a package without its repository cannot be installed.
 
-**Consent precedes every change.** Nothing is written to the target before the user has approved that job's diff.
+**Consent precedes every change.** Nothing is written to the target before the user has approved the changes that job proposes.
+
+Where an answer follows from something already approved, it is not asked again. Where it does not, it is asked.
 
 Asking about every package separately would interrupt the user constantly, so questions are gathered into reviews, and repeated decisions of one kind are presented as a single list settled in one pass. That is a preference, not a rule: applying an approved change can reveal something the plan could not know, and a further question is then correct.
 

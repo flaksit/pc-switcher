@@ -61,7 +61,7 @@ Decomposes [The model](package-sync-user-requirements.md#the-model).
 
 Decomposes [The model](package-sync-user-requirements.md#the-model); the review mechanics it constrains are in [What happens during a sync](package-sync-user-requirements.md#what-happens-during-a-sync) and [Decisions and their memory](package-sync-user-requirements.md#decisions-and-their-memory).
 
-- **PKG-FR-REVIEW-FIRST**: A job MUST NOT modify the target before the user has approved that job's diff.
+- **PKG-FR-REVIEW-FIRST**: A job MUST NOT modify the target before the user has approved the changes that job proposes.
 - **PKG-FR-ONLY-APPROVED**: A job MUST apply only what the user approved.
 - **PKG-FR-BATCHED**: A job's questions SHOULD be gathered into as few reviews as the decisions allow, and where the same kind of decision recurs the items MUST be presented as one list the user can settle in a single pass rather than as a sequence of per-item prompts. A job MUST NOT ask item by item where one screen would do.
   Why: asking about each package separately would interrupt the user constantly, which is the whole reason the review exists.
