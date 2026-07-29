@@ -204,35 +204,59 @@ Every derived change is logged as it lands and appears in a dry run's preview.
 
 ## snap
 
-A snap on the source only is offered for install; on the target only, for removal; a different revision or channel is one change naming both values; identical produces nothing.
+snap follows the shape every job has: what the source has is offered for install, what only the target has for removal, what cannot be converged is reported. What is particular to snap:
+
+### Revision and channel
 
 snap converges the source's **exact revision and channel**, where apt and flatpak let versions float: snap keeps per-user data in `~/snap/<app>/<revision>/`, which folder sync can only mirror correctly when both machines are on the same revision.
 
+So a difference of revision or channel is a change to apply, naming both values, rather than something reported; an install lands the source's revision and channel on the target; and the same revision and channel on both machines produces nothing.
+
+### Removing
+
 Removing a snap leaves snapd's own pre-removal snapshot in place — the only recovery path if the removal was a mistake.
+
+### Refresh holds
 
 Refresh holds replicate as their own items, both when added and when removed. A hold recorded for a snap the source no longer has produces no item.
 
-Sideloaded snaps — installed from a local `.snap` file — are out of scope (#221). They are ignored on both machines: never installed, never removed, never an item. A run names the ones it found so the user knows they are unmanaged, and does nothing else about them.
+### Sideloaded snaps
+
+Snaps installed from a local `.snap` file are out of scope (#221). They are ignored on both machines: never installed, never removed, never an item. A run names the ones it found so the user knows they are unmanaged, and does nothing else about them.
 
 ## flatpak
 
+flatpak follows the shape every job has: what the source has is offered for install, what only the target has for removal, what cannot be converged is reported. What is particular to flatpak:
+
+### Identity
+
 A flatpak application is identified by its **scope** and its **full reference including branch**. The same application in both scopes, or on two branches, is two independent items — one install and one removal — reported as found.
 
-Origin is not part of a flatpak application's identity: flatpak refuses to install a reference already present from a different remote, so a difference of origin is reported rather than converged, and takes precedence over a version difference.
+Origin is not part of that identity: flatpak refuses to install a reference already present from a different remote, so a difference of origin is reported rather than converged, and takes precedence over a version difference.
 
-There is no distribution remote. A remote is synced only because an approved application needs it — including the remote supplying that application's runtime — and is provisioned before the first install.
+### Installing an application
+
+An application is installed from the source's remote or not at all, and that remote is identified by **URL and verification setting, never by name** — checked before the install and read back after it. Either failure fails that one application.
+
+### Remotes
+
+A remote is never a review item, whether it is being added, changed or deleted. It is plumbing, derived from the applications the user approved.
+
+There is no distribution remote to start from: a remote is synced only because an approved application needs it — including the remote supplying that application's runtime — and is provisioned before the first install.
 
 **A remote replicates with its trust**, not just its name and URL: its signing key is synced byte-for-byte from the source, a verified remote is never replicated as unverified, and an unverified one is replicated as such with a warning.
 
 A remote both machines have whose URL or verification differs is repointed silently — unless that would move the origin of a machine-specific application, in which case the user is asked, shown both configurations, and declining fails every approved application that needed the source's URL.
 
-A remote is never a review item in any direction. One the source does not have is deleted once nothing on the target still uses it — after this run's approved removals, counted against what the machine actually has, including applications marked machine-specific. While anything still uses it, it stays. Deleting a remote takes its signing key with it.
-
-An application is installed from the source's remote or not at all, and that remote is identified by **URL and verification setting, never by name** — checked before the install and read back after it. Either failure fails that one application.
+One the source does not have is deleted once nothing on the target still uses it — after this run's approved removals, counted against what the machine actually has, including applications marked machine-specific. While anything still uses it, it stays. Deleting a remote takes its signing key with it.
 
 A remote the source restricts with a filter is replicated **unfiltered**, with a warning and the command to re-apply it: the filter's content lives outside flatpak's store.
 
-Mask patterns replicate per scope, added and removed alike, whether or not anything currently matches them, and land after the applications. A flatpak installation that is neither the user nor the system one is skipped.
+### Masks and scopes
+
+Mask patterns replicate per scope, added and removed alike, whether or not anything currently matches them, and land after the applications.
+
+A flatpak installation that is neither the user nor the system one is skipped.
 
 ## Software no manager can reproduce
 
@@ -244,7 +268,7 @@ Software that arrived on the source by a route nothing can replay automatically.
 
 Detection runs on the **source** only, so there is no record of what was installed this way on the target and **nothing here is ever removed**.
 
-Every detected item ends the run with a snippet, marked machine-specific, or skipped for this run. Skipping is a real resolution; an empty snippet is not accepted.
+Every detected item ends the run with a snippet, marked machine-specific, or skipped for this run.
 
 A snippet is **opaque** — stored and replayed exactly as written, never parsed. It runs as the target user with no privilege added around it and no standing input, so a command expecting an answer fails rather than hanging the sync.
 
