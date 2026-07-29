@@ -63,7 +63,7 @@ Decomposes [The model](package-sync-user-requirements.md#the-model); the review 
 
 - **PKG-FR-REVIEW-FIRST**: A job MUST NOT modify the target before the user has approved the changes that job proposes.
 - **PKG-FR-ONLY-APPROVED**: A job MUST apply only what the user approved.
-- **PKG-FR-BATCHED**: A job's questions SHOULD be gathered into as few reviews as the decisions allow, and where the same kind of decision recurs the items MUST be presented as one list the user can settle in a single pass rather than as a sequence of per-item prompts. A job MUST NOT ask item by item where one screen would do.
+- **PKG-FR-BATCHED**: A job's questions SHOULD be gathered into as few reviews as the decisions allow, and where the same kind of decision recurs the items MUST be presented together and be settleable in a single pass rather than as a sequence of per-item prompts.
   Why: asking about each package separately would interrupt the user constantly, which is the whole reason the review exists.
 - **PKG-FR-ASK-AGAIN**: A job MAY ask again, including after it has begun changing the target, where the answer it needs rests on facts this run's own changes invalidated or that could not be established before the first change.
   Why: correctness outranks batching, and some things are knowable only once an action has landed. What this permits is a second question, never a queue of them.
@@ -71,7 +71,7 @@ Decomposes [The model](package-sync-user-requirements.md#the-model); the review 
 - **PKG-FR-ASK-ABOUT-SOFTWARE**: The user MUST be asked about software, and MUST NOT be asked separately about machinery whose necessity follows from an approved package: the repository a package comes from, the key that makes that repository trusted, the pin that makes that origin's build win, the remote a flatpak application is installed from.
   Why: the test is derivability. Approving the package answers the question; asking it separately would ask for an answer the user cannot give independently of the package, and the pairing was never expressible — a repository approved without its package does nothing, a package approved without its repository cannot be installed.
 - **PKG-FR-ASK-WHEN-NOT-DERIVABLE**: Where the answer does not follow from any approved package, the system MUST ask. The questions this requires are each specified below: apt's own behavioural configuration (`PKG-FR-APTCONF`), an unattached Ubuntu Pro target (`PKG-FR-ESM-GATE`), collateral damage to software the user installed by hand on the target (`PKG-FR-COLLATERAL-MANUAL`), and repointing an origin that machine-specific software depends on (`PKG-FR-REPO-CONFLICT`, `PKG-FR-FLATPAK-REPOINT`).
-- **PKG-FR-NAME-THE-MACHINES**: Everything the user reads while deciding — screen titles, item details, warnings, prompts and their answers — MUST identify each machine by its hostname. "Source" and "target" MUST NOT appear in any of it.
+- **PKG-FR-NAME-THE-MACHINES**: Everything the user reads while deciding — titles, item details, warnings, prompts and their answers — MUST identify each machine by its hostname. "Source" and "target" MUST NOT appear in any of it.
   Why: source and target are roles this run assigns, not names of the user's computers. A line saying "the target loses this package" makes the reader work out which machine that is before they can answer, and the whole point of the question is which of their two machines is affected.
 - **PKG-FR-EFFECT-NOT-MECHANISM**: Every answer offered MUST state its own effect on a named machine rather than the mechanism that produces it, and every question MUST state what the change would do before it is answered.
   Why: the user is deciding about their machines, not operating the tool's internals. An answer labelled with the name of an internal concept asks them to translate before they can choose.
@@ -294,7 +294,7 @@ Requirements the shipped code knowingly does not satisfy are recorded here, veri
 
 Genuinely undecided. An answer invented here would be worse than the question.
 
-How many answers should `PKG-FR-APTCONF` offer? It is required to be reviewed in all three directions, and it currently carries the full decision including the permanent mark, reasoned from the fact that the restricted screens were justified by consequences an apt configuration file does not have. That reasoning is sound but was never ruled on.
+How many answers should `PKG-FR-APTCONF` offer? It is required to be reviewed in all three directions, and it currently carries the full decision including the permanent mark, reasoned from the fact that the two-answer questions were justified by consequences an apt configuration file does not have. That reasoning is sound but was never ruled on.
 
 Should `PKG-FR-REPO-DELETE` ever be markable machine-specific? `PKG-FR-NO-MARK-ON-ORIGIN` says no, with consolidation as the remedy. That remedy is real work the user may not want to do, and the alternative was rejected rather than tested against use.
 

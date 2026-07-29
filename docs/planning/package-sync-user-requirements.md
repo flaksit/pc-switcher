@@ -76,11 +76,11 @@ Snap auto-refresh is paused on both machines for the run and restored afterwards
 
 Each job then plans, reviews, applies and reports.
 
-**Plan** issues read commands only: what each machine has, filtered by the standing machine-specific marks, and the difference between them. A question that cannot be derived is asked here rather than in the review — apt's Ubuntu Pro question is one, because one of its answers ends the job before there is anything to review.
+**Plan** issues read commands only: what each machine has, filtered by the standing machine-specific marks, and the difference between them. A question that cannot be derived is asked here rather than in the review — [apt's Ubuntu Pro question (see below)](#ubuntu-pro) is one, because one of its answers ends the job before there is anything to review.
 
-**Review** is one screen per group of same-kind, same-direction items. Every item is a row carrying its own decision; arrows move, one key sets the focused row, Enter confirms. Rows start where confirming unread does no harm: installs at *apply*, anything that removes or overwrites at *skip*. Screens offer three answers, or two where a permanent decision is not meaningful.
+**Review** presents one group of same-kind, same-direction items at a time, each item carrying its own decision, all of them settled in a single pass. The default choice for each item is the action that does no harm: *apply* for an install, *skip* for anything that removes or overwrites. Three answers are offered, or two where a permanent decision is not meaningful.
 
-Every screen names the two machines by hostname, and every answer states its effect on a named machine — on a removal screen the skip answer reads *keep it on XPS13*. Ctrl-C anywhere aborts the whole sync.
+The two machines are named by hostname wherever the user reads them, and every answer states its effect on a named machine — the skip answer on a removal reads *keep it on MyMachine*, not "skip". The user can abort the whole sync at any question, and aborting is never read as declining one item.
 
 **Apply** converges one item at a time, in the order the job requires, and announces every write. Nothing unapproved is written.
 
@@ -96,7 +96,7 @@ The mark is recorded on the **holding machine** — not necessarily the machine 
 
 P17 and XPS13, sync launched from P17. XPS13 has `steam`; P17 does not, so the sync offers to remove it from XPS13. Answering "always skip" writes the mark **on XPS13**, because XPS13 holds `steam`. The other direction: P17 has `wireshark`, the sync offers to install it on XPS13, and "always skip" writes the mark on **P17**.
 
-A marked item is filtered out before the difference is computed, so it never appears in a later review. Because of that, two screens have to disclose it explicitly: repository deletion and repository conflict, both below.
+A marked item is filtered out before the difference is computed, so it never appears in a later review. Because of that, two questions have to disclose it explicitly: repository deletion and repository conflict, both below.
 
 Marks never travel between machines. Snippets do, because how to install something is knowledge about the software rather than the machine.
 
@@ -174,7 +174,7 @@ The distribution's own source files are written and updated, never removed or of
 
 **Signing keys are never a review item.** A key the target lacks is copied byte-for-byte from the source before the repository naming it is written; one that differs is refreshed, unless the target's own distribution packaging owns it. Keys travel only from the source, never over the network. An approved repository deletion may take an unreferenced key with it.
 
-**Every** pin the source has is written to the target, always, without review: a pin decides which origin wins, and one naming an absent origin does nothing. Deleting a pin only the target has *is* reviewed, and the screen prints the file whole — a filename says neither which origin it favours nor at what priority.
+**Every** pin the source has is written to the target, always, without review: a pin decides which origin wins, and one naming an absent origin does nothing. Deleting a pin only the target has *is* reviewed, and the file is shown whole — a filename says neither which origin it favours nor at what priority.
 
 A pin is never read as a statement about the packages it names.
 
@@ -182,7 +182,7 @@ apt's own configuration — proxy settings, recommends policy — is reviewed in
 
 ### Ubuntu Pro
 
-If the source carries ESM repositories and the target reports no Ubuntu Pro attachment, the user is asked before anything is written and before any other apt question. Two answers: attach the target now, or skip apt for this run while everything else proceeds. The screen gives the commands to attach it.
+If the source carries ESM repositories and the target reports no Ubuntu Pro attachment, the user is asked before anything is written and before any other apt question. Two answers: attach the target now, or skip apt for this run while everything else proceeds. The user is told what to run on the target to attach it.
 
 Writing them to an unattached target fails invisibly: `apt-get update` succeeds and the failure surfaces later, as a 401 during some unrelated install. pc-switcher cannot attach the target itself.
 
