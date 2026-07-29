@@ -19,7 +19,7 @@ So package sync replicates *what software is installed*. It does not replicate a
 
 It replicates by **convergence, not by copying**. Nothing reads or writes another machine's package database or installed software. What travels between the machines is a decision — "install this", "remove that" — plus the minimum configuration the target's own `apt`, `snap` or `flatpak` package managers needs in order to carry it out. The target's package managers stay in charge of their own state, which is what keeps the target a working machine rather than one carrying another machine's bookkeeping.
 
-You opt in per ecosystem. Nothing here runs unless you enable it, because enabling it authorises this tool to install and remove software on the other machine. You can sync apt packages and not snaps, or flatpaks and nothing else. The four kinds of software are described in their own sections below and each is independently enableable, independently reviewed, and independently able to fail without taking the others down.
+You opt in per ecosystem. Nothing here runs unless you enable it, because enabling it authorises pc-switcher to install and remove software on the other machine. You can sync apt packages and not snaps, or flatpaks and nothing else. The four kinds of software are described in their own sections below and each is independently enableable, independently reviewed, and independently able to fail without taking the others down.
 
 Which internal component owns which kind of software is an implementation detail and is expected to change. Nothing in this document depends on it.
 
