@@ -86,7 +86,7 @@ The two machines are named by hostname wherever the user reads them, and every a
 
 **Report** gives the job's outcome: success, skipped with the reason, or failed naming each failed item.
 
-A **dry run** plans and reviews exactly as a real run does — the questions are still asked — then changes nothing and records nothing. A run with **no terminal** asks nothing, treats every item as declined, and reports any job with a non-empty review as skipped.
+A **dry run** plans and reviews exactly as a real run does — the questions are still asked — then changes nothing and records nothing. A **non-interactive run** — one with no terminal to answer at, such as from cron or a script — asks nothing, treats every item as declined, and reports any job with a non-empty review as skipped.
 
 ## Decisions and their memory
 
@@ -192,7 +192,7 @@ If the source carries ESM repositories and the target reports no Ubuntu Pro atta
 
 Writing them to an unattached target fails invisibly: `apt-get update` succeeds and the failure surfaces later, as a 401 during some unrelated install. pc-switcher cannot attach the target itself.
 
-"I have attached it" re-probes rather than taking the answer on trust, and may be answered any number of times. Skipping skips the whole apt job, not just the ESM files, leaving apt's configuration untouched. A run with nobody to ask takes the skip; a dry run warns instead.
+"I have attached it" re-probes rather than taking the answer on trust, and may be answered any number of times. Skipping skips the whole apt job, not just the ESM files, leaving apt's configuration untouched. A non-interactive run takes the skip; a dry run warns instead.
 
 Only whether the target is attached is ever logged or shown.
 
@@ -271,7 +271,7 @@ A read that does not answer is different. If a package manager cannot be queried
 - **Hand-installed software is never removed from the target.**
 - **Sideloaded snaps are replicated by nobody today.**
 - **A target with no Ubuntu Pro attachment costs the whole apt job for that run.**
-- **A review cannot be answered without a terminal.** There is no file of standing answers and no assume-yes option.
+- **A non-interactive run can answer no review.** There is no file of standing answers and no assume-yes option.
 - **Machine-specific marks are per job, per machine, and never synced.**
 
 ## Open questions

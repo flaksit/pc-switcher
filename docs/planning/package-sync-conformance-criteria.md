@@ -188,7 +188,7 @@ Decomposes [apt / Ubuntu Pro](package-sync-user-requirements.md#esm-repositories
 - **PKG-FR-ESM-VERIFY**: An answer claiming the target is attached MUST be verified against the target rather than believed, and the user MAY answer it any number of times.
 - **PKG-FR-ESM-SKIP-WHOLE-JOB**: Skipping MUST leave the target's apt configuration exactly as it was found, and MUST skip the whole apt job rather than only the ESM repositories.
   Why: pins always travel (`PKG-FR-PIN-ALWAYS`), so the source's ESM pins would reach a target without the sources they name, leaving a candidate selection matching neither machine. An untouched configuration is a state the user can reason about.
-- **PKG-FR-ESM-NO-ASK**: A run with nobody to ask MUST take the skip and MUST say why. A dry run MUST NOT ask, and MUST warn that a real run would skip the apt job.
+- **PKG-FR-ESM-NO-ASK**: A non-interactive run MUST take the skip and MUST say why. A dry run MUST NOT ask, and MUST warn that a real run would skip the apt job.
   Why: a rehearsal must not send the user off to attach a machine.
 - **PKG-FR-ESM-PRIVACY**: Only whether the target is attached may be logged or shown. Nothing else the attachment check learns, including the subscriber's identity, may leave it.
 
@@ -253,7 +253,7 @@ Decomposes [Software no manager can reproduce](package-sync-user-requirements.md
 - **PKG-FR-SNIPPET-VERBATIM**: A snippet MUST be stored and replayed exactly as written. The system MUST NOT parse, interpret or reason about it. It MUST run as the target user with no privilege added around it, and MUST run without standing input so that a command expecting input fails rather than hanging the sync. An empty snippet MUST NOT be accepted as a resolution.
 - **PKG-FR-REGISTRY-TRAVELS**: The snippet registry MUST sync between machines.
   Why: how to install something is knowledge about the software, not about the machine — unlike the machine-specific marks of `PKG-FR-MACHINE-SPECIFIC`, which must never travel.
-- **PKG-FR-REGISTRY-CONSENT**: A registry transfer that would lose or change an entry the target holds MUST NOT proceed without consent, and MUST name the affected entries. Declining MUST abort the run, and a run that cannot ask MUST abort.
+- **PKG-FR-REGISTRY-CONSENT**: A registry transfer that would lose or change an entry the target holds MUST NOT proceed without consent, and MUST name the affected entries. Declining MUST abort the run, and a non-interactive run MUST abort.
   Why: aborting lets the user consolidate the two registries by hand; the alternative silently drops the target's snippets.
 - **PKG-FR-MANUAL-FAIL-ITEM**: A snippet that has vanished between planning and replay, or whose replay fails, MUST fail as its own item naming the item, and the run MUST continue.
 
@@ -264,7 +264,7 @@ Decomposes [When something goes wrong](package-sync-user-requirements.md#when-so
 - **PKG-FR-OUTCOME-SUCCESS**: A job MUST report success when it did what its review approved, including when its review was empty because the target already matches.
 - **PKG-FR-OUTCOME-SKIPPED**: A job that deliberately did nothing MUST report skipped rather than success, MUST say why, MUST record no decision, MUST transfer no registry and MUST leave the target untouched. The run MUST continue and the exit code MUST be unaffected.
 - **PKG-FR-OUTCOME-FAILED**: A job MUST report failure when at least one approved item could not be applied. Every approved item MUST be attempted, failures MUST be collected and reported together naming each item, one failed item MUST NOT block the rest of its job, and one failed job MUST NOT stop the others.
-- **PKG-FR-NO-TERMINAL**: A run with no interactive terminal MUST ask nothing, MUST treat every reviewable item as declined for this run, and MUST report every package job with a non-empty review as skipped. Nothing may be recorded, no snippet written and no registry transferred.
+- **PKG-FR-NO-TERMINAL**: A non-interactive run — one with no interactive terminal — MUST ask nothing, MUST treat every reviewable item as declined for this run, and MUST report every package job with a non-empty review as skipped. Nothing may be recorded, no snippet written and no registry transferred.
 - **PKG-FR-DRY-RUN**: A rehearsal MUST produce the same plan and the same review as a real run and MUST issue no command that changes either machine. The preview MUST include the derived changes that have no review line of their own. A rehearsal on a terminal MUST report success; without one it MUST report skipped, for the same reason a real run does.
 - **PKG-FR-FAIL-NAMED**: Every failure MUST name the item, package or file it concerns.
 
@@ -287,7 +287,7 @@ Each of these is a real cost, given up knowingly.
 - **PKG-NG-MANUAL-REMOVE**: Manual installs cannot be removed. The job keeps no record of what it put on the target.
 - **PKG-NG-VERSION-CONVERGE**: Version drift is reported, never resolved, for apt and flatpak. Aligning two machines' versions is the user's job.
 - **PKG-NG-ORIGIN-CONVERGE**: A divergence of origin is reported, never resolved, for apt packages and flatpak applications alike. Where both machines have the same software from different origins, the system will not pick one.
-- **PKG-NG-UNATTENDED**: A package job's review cannot be answered without a terminal. There is no file of standing answers and no assume-yes option.
+- **PKG-NG-UNATTENDED**: A package job's review cannot be answered by a non-interactive run. There is no file of standing answers and no assume-yes option.
 - **PKG-NG-MARK-PORTABILITY**: Machine-specific marks are per manager and per machine and are deliberately never synced. A new machine means deciding again.
 
 ## Where the tool does not yet meet these requirements
