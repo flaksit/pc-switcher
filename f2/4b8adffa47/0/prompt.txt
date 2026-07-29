@@ -1,0 +1,3 @@
+Leave git history.
+
+"Deleting a repository or a pin, resolving a repository conflict, and deleting or repointing a flatpak remote each take two answers": not very clear, nor precise, nor complete I think. Is "apt repos, apt pins and flatpak remotes can not be marked as machine-specific so that important incompatbilities between machine config keep surfacing instead of being silenced. User should remedy and align them." correct?
