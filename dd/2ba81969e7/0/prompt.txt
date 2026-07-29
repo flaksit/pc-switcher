@@ -1,0 +1,1 @@
+"pc-switcher validates every enabled job": reads as if pc-switcher reviews the code/logic/origin/... of the job. During validation step, pc-switcher checks every enabled job's prerequisites
