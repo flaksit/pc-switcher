@@ -1,0 +1,37 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "a00eaec72182",
+  "session_id": "c8f94480-6a9f-4854-b200-5d428cf16c8f",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-29T11:49:12.223254665Z",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/02-package-management-sync/02-HANDOVER-requirements-review.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "ce040c427a83",
+  "checkpoint_transcript_start": 141,
+  "transcript_lines_at_start": 141,
+  "compact_transcript_start": 33,
+  "token_usage": {
+    "input_tokens": 5,
+    "cache_creation_tokens": 1913,
+    "cache_read_tokens": 317019,
+    "output_tokens": 1418,
+    "api_call_count": 3
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-29T11:49:12.19505022Z",
+    "agent_lines": 5,
+    "agent_removed": 2,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 5,
+    "total_lines_changed": 7,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
