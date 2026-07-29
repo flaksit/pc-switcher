@@ -181,7 +181,7 @@ Decomposes [apt / Repositories, keys and pins](package-sync-user-requirements.md
 
 ### Ubuntu Pro and ESM
 
-Decomposes [apt / Ubuntu Pro](package-sync-user-requirements.md#esm-repositories-ubuntu-pro).
+Decomposes [apt / Ubuntu Pro](package-sync-user-requirements.md#esm-repositories--ubuntu-pro).
 
 - **PKG-FR-ESM-GATE**: Where the source carries ESM repositories that would be written to a target reporting no Ubuntu Pro attachment, the system MUST obtain the user's decision before writing anything and before asking that job's other questions, with exactly two outcomes: attach the target, or skip the apt job for this run while the other jobs proceed. The user MUST be told what to do on the target to attach it.
   Why: an unattached target's metadata refresh succeeds because the ESM indexes are public, so the ESM suites enter candidate selection above the ordinary archive and the failure lands later, at install time, on a package the user will not connect to the sync. The system cannot fix this itself: attaching needs a subscription token or an interactive browser flow, the source's own credentials are root-only and not reusable, and carrying a token would put a secret on a command line.
@@ -323,7 +323,7 @@ Every article above decomposes exactly one section of [Package sync — user req
 | [apt / Holds](package-sync-user-requirements.md#holds) | 4 | `PKG-FR-APT-HOLD-ITEM` `PKG-FR-APT-HOLD-ORDER` `PKG-FR-APT-HOLD-VERSION` `PKG-FR-APT-HOLD-INERT` |
 | [apt / Collateral damage](package-sync-user-requirements.md#collateral-damage) | 6 | `PKG-FR-COLLATERAL-AUTO` `PKG-FR-COLLATERAL-MANUAL` `PKG-FR-COLLATERAL-ATTRIBUTION` `PKG-FR-COLLATERAL-KEEPS-MARKS` `PKG-FR-COLLATERAL-TIMING` `PKG-FR-COLLATERAL-NEW-ORIGIN` |
 | [apt / Repositories, keys and pins](package-sync-user-requirements.md#repositories-keys-and-pins) | 14 | `PKG-FR-REPO-DERIVED` `PKG-FR-REPO-OVERWRITE` `PKG-FR-REPO-CONFLICT` `PKG-FR-REPO-DELETE` `PKG-FR-DISTRO-FILES` `PKG-FR-APT-IGNORES` `PKG-FR-KEY-NOT-ITEM` `PKG-FR-KEY-COPY` `PKG-FR-KEY-REFRESH` `PKG-FR-KEY-CLEANUP` `PKG-FR-PIN-ALWAYS` `PKG-FR-PIN-DELETE` `PKG-FR-PIN-NOT-INVENTORY` `PKG-FR-APTCONF` |
-| [apt / Ubuntu Pro](package-sync-user-requirements.md#esm-repositories-ubuntu-pro) | 5 | `PKG-FR-ESM-GATE` `PKG-FR-ESM-VERIFY` `PKG-FR-ESM-SKIP-WHOLE-JOB` `PKG-FR-ESM-NO-ASK` `PKG-FR-ESM-PRIVACY` |
+| [apt / Ubuntu Pro](package-sync-user-requirements.md#esm-repositories--ubuntu-pro) | 5 | `PKG-FR-ESM-GATE` `PKG-FR-ESM-VERIFY` `PKG-FR-ESM-SKIP-WHOLE-JOB` `PKG-FR-ESM-NO-ASK` `PKG-FR-ESM-PRIVACY` |
 | [apt / Applying apt's changes](package-sync-user-requirements.md#applying-apts-changes) | 3 | `PKG-FR-APT-CONFIG-ATOMIC` `PKG-FR-DERIVED-FAILURE` `PKG-FR-DERIVED-VISIBLE` |
 | [snap](package-sync-user-requirements.md#snap) | 8 | `PKG-FR-SNAP-CASES` `PKG-FR-SNAP-CONFINEMENT` `PKG-FR-SNAP-REMOVE-SNAPSHOT` `PKG-FR-SNAP-SIDELOAD` `PKG-FR-SNAP-FAIL-ITEM` `PKG-FR-SNAP-HOLD` `PKG-FR-SNAP-REFRESH-PAUSE` `PKG-FR-SNAP-DATA-BOUNDARY` |
 | [flatpak](package-sync-user-requirements.md#flatpak) | 14 | `PKG-FR-FLATPAK-CASES` `PKG-FR-FLATPAK-REMOTE-DERIVED` `PKG-FR-FLATPAK-REMOTE-FIRST` `PKG-FR-FLATPAK-REMOTE-TRUST` `PKG-FR-FLATPAK-REPOINT` `PKG-FR-FLATPAK-REMOTE-DELETE` `PKG-FR-FLATPAK-INSTALL-ORIGIN` `PKG-FR-FLATPAK-MISSING-REMOTE` `PKG-FR-FLATPAK-ORIGIN-DIFF` `PKG-FR-FLATPAK-REMOTE-FAILURE` `PKG-FR-FLATPAK-FILTER` `PKG-FR-FLATPAK-THIRD-SCOPE` `PKG-FR-FLATPAK-MASK` `PKG-FR-FLATPAK-PRIVILEGE` |

@@ -76,7 +76,7 @@ Snap auto-refresh is paused on both machines for the run and restored afterwards
 
 Each job then plans, reviews, applies and reports.
 
-**Plan** issues read commands only: what each machine has, filtered by the standing machine-specific marks, and the difference between them. A question that cannot be derived is asked here rather than in the review — [apt's Ubuntu Pro question (see below)](#esm-repositories-ubuntu-pro) is one, because one of its answers ends the job before there is anything to review.
+**Plan** issues read commands only: what each machine has, filtered by the standing machine-specific marks, and the difference between them. A question that cannot be derived is asked here rather than in the review — [apt's Ubuntu Pro question (see below)](#esm-repositories--ubuntu-pro) is one, because one of its answers ends the job before there is anything to review.
 
 **Review** presents one group at a time: items of one kind, all doing the same thing, each carrying its own decision and all settled in a single pass. The default choice for each item is the action that does no harm: *apply* for an install, *skip* for anything that removes or overwrites. Three answers are offered, or two where a permanent decision is not meaningful.
 
