@@ -128,8 +128,10 @@ Decomposes [apt / Removing, and reporting without acting](package-sync-user-requ
 Decomposes [apt / Holds](package-sync-user-requirements.md#holds).
 
 - **PKG-FR-APT-HOLD-ITEM**: An apt hold MUST be an item separate from the package it applies to, decided separately, in both directions.
-- **PKG-FR-APT-HOLD-ORDER**: An approved hold MUST be applied after the package it names exists.
+- **PKG-FR-APT-HOLD-ORDER**: An approved hold MUST be applied after the package it names is installed, never before.
+  Why: apt refuses to install a held package (`E: Held packages were changed`, measured on Ubuntu 24.04), so setting the hold first blocks the install it is meant to protect and leaves the package `hold ok not-installed`.
 - **PKG-FR-APT-HOLD-INERT**: Replicating a hold MUST NOT change the package's version, and a hold whose package install was not approved or failed MUST fail alone.
+  Why: a hold carries no version — it freezes whatever is installed on that machine — so what replicates is the intent to freeze. Since versions float, the two machines may end up held at different versions.
 
 ### Collateral damage
 

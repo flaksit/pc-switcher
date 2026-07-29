@@ -138,7 +138,7 @@ Same package, same origin, same version produces nothing at all.
 
 Three situations are reported and never acted on:
 
-- **different versions** — both named; versions float, and pinning is the way to hold one
+- **different versions** — both named; versions float — package managers handle updates, not pc-switcher
 - **different origins** — both named; takes precedence over a version difference, and is never raised for a mirror difference
 - **an origin that cannot be replicated** — reported with the reason, never installed from somewhere else
 
@@ -146,7 +146,11 @@ A package held on the target is never proposed for install or upgrade. Its hold 
 
 ### Holds
 
-An apt hold is its own item, decided separately from its package, in both directions. An approved hold is applied after the package exists, and never changes the package's version.
+An apt hold is its own item, decided separately from its package, in both directions.
+
+A hold names no version. It freezes whatever version is installed on that machine, so replicating a hold replicates the intent to freeze, not the version frozen at — and because versions float, the two machines can end up held at different versions.
+
+An approved hold is therefore applied after its package is installed, never before: apt refuses to install a held package, so holding first would block the very install the hold is meant to protect.
 
 ### Collateral damage
 
