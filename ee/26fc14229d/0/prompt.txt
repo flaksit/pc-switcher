@@ -1,0 +1,2 @@
+## snap
+Sideloaded snaps: just tell that not in scope now. There is a gh issue for it. We'll pick it up. Not need for text here.
