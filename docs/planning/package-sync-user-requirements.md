@@ -284,8 +284,6 @@ It does not work the other way round. A package that fails to install leaves the
 
 A read that does not answer is different. If a package manager cannot be queried at all, its silence is never read as "this machine has nothing installed", which would propose removing everything on the other machine. It fails once, naming the command. An *empty* answer is ordinary data.
 
-**Today a failed read ends the whole run**, not just its own job. See the open questions.
-
 ## What this deliberately does not do
 
 - **The target's apt configuration is not under line-by-line control.** Repositories, keys and pins appear because a package was approved; declining the package is the only way to decline them.
