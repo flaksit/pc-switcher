@@ -1,0 +1,34 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "6352f6739978",
+  "strategy": "manual-commit",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 4,
+  "files_touched": [
+    ".planning/phases/02-package-management-sync/02-BEHAVIOUR-LEDGER.md",
+    ".planning/phases/02-package-management-sync/02-DIVERGENCES.md",
+    "docs/README.md",
+    "docs/adr/adr-020-declarative-package-convergence.md",
+    "docs/jobs/package-sync.md",
+    "docs/planning/high-level-requirements.md",
+    "docs/planning/package-sync-conformance-criteria.md",
+    "docs/planning/package-sync-user-requirements.md",
+    "docs/system/package-sync.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/63/52f6739978/0/metadata.json",
+      "transcript": "/63/52f6739978/0/full.jsonl",
+      "compact_transcript": "/63/52f6739978/0/transcript.jsonl",
+      "content_hash": "/63/52f6739978/0/content_hash.txt",
+      "prompt": "/63/52f6739978/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 2748,
+    "cache_creation_tokens": 871961,
+    "cache_read_tokens": 30044933,
+    "output_tokens": 131562,
+    "api_call_count": 90
+  }
+}
