@@ -28,8 +28,8 @@ from pcswitcher.ui import TerminalUI
 
 # Stand-ins for the two machines, so the rehearsal reads the way a real run does — every
 # screen names a machine rather than its role in the run.
-SOURCE_HOST = "p17"
-TARGET_HOST = "fleksi"
+SOURCE_HOST = "atlas"
+TARGET_HOST = "nomad"
 
 # One group per interaction shape the review supports. The action strings are load-bearing:
 # "install" rows start applied and "remove" rows at skip-once (_REMOVAL_ACTIONS);

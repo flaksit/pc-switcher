@@ -92,13 +92,13 @@ A **dry run** plans and reviews exactly as a real run does — the questions are
 
 **Apply** does the thing. **Skip** declines it for this run only. **Always skip** marks the item machine-specific. The mark is recorded on the **holding machine** — not necessarily the machine the sync was launched from.
 
-P17 and XPS13, sync launched from P17. XPS13 has `steam`; P17 does not, so the sync offers to remove it from XPS13. Answering "always skip" writes the mark **on XPS13**, because XPS13 holds `steam`. The other direction: P17 has `wireshark`, the sync offers to install it on XPS13, and "always skip" writes the mark on **P17**.
+Example: two machines Atlas and Vega, sync launched from Atlas. Vega has `steam`; Atlas does not, so the sync offers to remove it from Vega. Answering "always skip" writes the mark **on Vega**, because Vega holds `steam`. The other direction: Atlas has `wireshark`, the sync offers to install it on Vega, and "always skip" writes the mark on **Atlas**.
 
 A marked item is filtered out before the difference is computed, so it never appears in a later review. Because of that, two questions have to disclose it explicitly: repository deletion and repository conflict, both below.
 
-Marks never travel between machines. Snippets do, because how to install something is knowledge about the software rather than the machine.
+Marks never sync between machines. Snippets do, because how to install something is knowledge about the software rather than the machine.
 
-Some things cannot be marked. Deleting a repository or a pin, resolving a repository conflict, and deleting or repointing a flatpak remote each take two answers and record nothing: a permanent mark on configuration that feeds software would silently change where that software comes from. Report-only findings cannot be marked either — no machine holds a version difference, and a mark would stop the package syncing rather than stop the report.
+Some things cannot be marked. Deleting a repository or a pin, resolving a repository conflict, and deleting or repointing a flatpak remote each take two answers (apply or skip-once) and record nothing: a permanent mark on configuration that feeds software would silently change where that software comes from. Report-only findings cannot be marked either — no machine holds a version difference, and a mark would stop the package syncing rather than stop the report.
 
 ## apt
 

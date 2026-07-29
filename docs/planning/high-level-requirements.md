@@ -16,8 +16,8 @@ A synchronization system for seamless switching between Linux desktop machines (
 Keep pc's in sync with minimal friction. We aim at almost full system-state replication rather than as simple sync of user data.
 
 The concrete use case involves two laptops:
-- **P17** (primary, stationary): Heavy laptop at home, primary work machine
-- **XPS13** (secondary, mobile): Light laptop for travel, offline capable
+- **Atlas** (primary, stationary): Heavy laptop at home, primary work machine
+- **Vega** (secondary, mobile): Light laptop for travel, offline capable
 However, the solution should be generic to support any number of machines.
 
 Enable a simple workflow: work on one machine, sync before switching, resume on the other — all without manual file management or real-time cloud syncing overhead.  
@@ -128,7 +128,7 @@ This repository will NOT serve for configuration management. It should be possib
 
 - Parallel run of sync jobs (e.g. user data and system state in parallel)
 - Partial sync (e.g. only user data, no system state, skip docker/k3s/VMs)
-- Machines can be in use in parallel, but only by different users. E.g. User A works on P17, User B on XPS13. Changes will be mainly in user data. For user data, uni-directional sync from one machine to the other is still possible. System state changes on the target machine must be avoided in this mode.
+- Machines can be in use in parallel, but only by different users. E.g. User A works on Atlas, User B on Vega. Changes will be mainly in user data. For user data, uni-directional sync from one machine to the other is still possible. System state changes on the target machine must be avoided in this mode.
 - Bi-directional sync with conflict resolution for user data
 - Bi-directional sync with conflict resolution for system state
 - Sync over WiFi

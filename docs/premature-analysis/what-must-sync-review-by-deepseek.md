@@ -48,7 +48,7 @@ This is as important as the "Must Sync" list.
     * `/etc/hosts` (or at least, the entry for `127.0.1.1`)
     * `/etc/machine-id`
     * `/etc/netplan/*` (network configuration)
-* **Systemd `system` services** that manage hardware (e.g., `fprintd` for fingerprint reader, specific touchpad drivers) as they may differ between P17 and XPS.
+* **Systemd `system` services** that manage hardware (e.g., `fprintd` for fingerprint reader, specific touchpad drivers) as they may differ between Atlas and XPS.
 * **Cryptographic Material for encrypted disks** (e.g., LUKS headers in `/etc/crypttab`), as this is tied to the specific disk.
 * **Transient Files**: `/tmp`, `/var/tmp`, and caches (unless you explicitly want to, like the apt cache).
 * **Cloud Mounts (like rclone, davfs2)**: Don't sync the mount points themselves. Sync the configuration so both machines can mount the same remote storage.

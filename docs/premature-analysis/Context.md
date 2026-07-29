@@ -2,7 +2,7 @@
 
 ## System Overview
 Currently, two Ubuntu 24.04 laptops need synchronization:
-- **P17**: Heavy laptop, stays at home, primary work machine
+- **Atlas**: Heavy laptop, stays at home, primary work machine
 - **XPS 13**: Light laptop, for travel (once a week), used offline when on the road
 
 **Sync Pattern**: Uni-directional workflow (work on ONE machine at a time, sync between uses). Manual trigger, no real-time sync required. Both machines on same LAN (1Gb ethernet) during sync.

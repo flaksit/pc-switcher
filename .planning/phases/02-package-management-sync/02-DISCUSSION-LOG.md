@@ -11,7 +11,7 @@
 
 ## Area selection
 
-The user selected all eight proposed gray areas and added two: the overlap with folder_sync (pointing at the snap-revision comment on issue #118), and an explicit decision on whether individual `.deb` and manual/script installs are in scope — to be made *after* an inventory existed. A live inventory of P17 was taken before continuing, and it shaped several answers.
+The user selected all eight proposed gray areas and added two: the overlap with folder_sync (pointing at the snap-revision comment on issue #118), and an explicit decision on whether individual `.deb` and manual/script installs are in scope — to be made *after* an inventory existed. A live inventory of Atlas was taken before continuing, and it shaped several answers.
 
 ## Replication model
 
@@ -243,6 +243,6 @@ Snippet registry, as decided:
 - Source-cache reuse for LAN-speed, internet-free installs.
 - Snippets for snap and flatpak items.
 - Replicating `/usr/local` and `/opt` trees as files.
-- Normalizing the flatpak system/user scope split (several runtimes are installed in both scopes on P17).
+- Normalizing the flatpak system/user scope split (several runtimes are installed in both scopes on Atlas).
 - Migrating legacy `/etc/apt/trusted.gpg.d` keys to per-repo keyrings.
 - Relaxing one-module-one-Job (issue #30) and a real job dependency graph (issue #28).

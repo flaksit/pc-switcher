@@ -601,7 +601,7 @@ class Orchestrator:
 
         The source records its peer using `get_local_hostname()`; without this the
         target would be recorded under the user-typed CLI argument instead, so the
-        two ends store the same machine under different names (e.g. `p17` vs `P17`)
+        two ends store the same machine under different names (e.g. `atlas` vs `Atlas`)
         and the topology check misreads a clean back-sync as a foreign one. On any
         failure (non-zero exit, empty output) the CLI-argument fallback set in
         __init__ is kept — a resolved hostname is a refinement, not a hard gate.

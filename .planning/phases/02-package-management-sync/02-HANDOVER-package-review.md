@@ -51,7 +51,7 @@ Expect this to invalidate several C-section rows of `02-SCENARIO-COVERAGE.md` th
 
 Measured on the user's machine: `code`, `brscan3`, `cnpg`, `falco-app`, `brother-udev-rule-type1` all report `Candidate: <installed version>`. The detector matches none of them, so `manual_installs_sync`'s primary detection finds nothing, no snippet is ever offered, and `apt_sync` proposes those packages as ordinary installs that fail on the target with "Unable to locate package".
 
-D-18's calibration ("4 apt packages have no repo candidate on P17") came from a rule that does not match reality.
+D-18's calibration ("4 apt packages have no repo candidate on Atlas") came from a rule that does not match reality.
 
 Correct test, already implemented for C26 in `43a52fa3`: a package whose installed version's **only origin is `/var/lib/dpkg/status`** came from no repo. `gh` shows `500 https://cli.github.com/packages` alongside it; `code` shows only the dpkg line. Reuse `_installed_origins_by_package`.
 

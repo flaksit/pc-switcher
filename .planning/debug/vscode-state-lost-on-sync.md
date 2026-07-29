@@ -15,24 +15,24 @@ DATA_START
 Source: GitHub issue #190 (labels: comp:sync:folders, type:bug)
 
 Sequence:
-1. First sync p17 → fleksi.
-2. Worked in VSCode on fleksi in one project (~/dev/pc-switcher).
-3. Sync back fleksi → p17.
-4. Back on p17, opened project: `janfr@P17:~/dev/pc-switcher$ code .`
+1. First sync atlas → nomad.
+2. Worked in VSCode on nomad in one project (~/dev/pc-switcher).
+3. Sync back nomad → atlas.
+4. Back on atlas, opened project: `janfr@Atlas:~/dev/pc-switcher$ code .`
 
 Symptom A — Folder trust:
-- Back on P17, VSCode says the folder is not trusted.
+- Back on Atlas, VSCode says the folder is not trusted.
 - After trusting it, the trusted-folders list shows ONLY that one folder just trusted.
-- All previously trusted folders on P17 are gone (user had trusted hundreds of
+- All previously trusted folders on Atlas are gone (user had trusted hundreds of
   folders, possibly entire ~/dev or ~/).
-- User does not recall having to trust the folder on fleksi.
+- User does not recall having to trust the folder on nomad.
 - Conclusion by reporter: the sync broke the trusted-folders list.
 - Ask: if "trusted folders" is machine-specific, can it be excluded from sync so
   trust isn't required after each sync?
 
 Symptom B — GitHub login:
-- After sync, VSCode forgets GitHub login. Had to log in on fleksi; after syncing
-  back, must log in on p17 too. Auth creds apparently can't be shared → should be
+- After sync, VSCode forgets GitHub login. Had to log in on nomad; after syncing
+  back, must log in on atlas too. Auth creds apparently can't be shared → should be
   excluded so re-login isn't needed after every sync.
 - Not the "general" GitHub login. Two extensions re-auth: (believed) GitHub Pull
   Requests and GitHub Actions.
@@ -94,7 +94,7 @@ reasoning_checkpoint:
     are arguably wanted cross-machine (e.g. terminal.history.entries.commands,
     per-language session counters, workbench panel visibility) — not individually
     verified as unwanted, just accepted as the cost of file-granularity excludes.
-    Have not verified behavior on a second real machine (fleksi) end-to-end; fix is
+    Have not verified behavior on a second real machine (nomad) end-to-end; fix is
     verified via the filter-rule test suite and manual sqlite/rsync-dry-run
     inspection on this machine only. VSCode Settings Sync (separate, cloud-based
     built-in feature) was not fully ruled out as a contributor — checked
@@ -186,7 +186,7 @@ next_action: apply fix — add state.vscdb excludes to home.filter, update inlin
 - hypothesis: machine-binding — a hash/id ties trust entries to a machine and
   invalidates foreign entries.
   refuted_by: trust JSON has only authority/external/fsPath/path/scheme/trusted
-  fields (no host/id), AND behavior was asymmetric — fleksi (newer) accepted p17's
+  fields (no host/id), AND behavior was asymmetric — nomad (newer) accepted atlas's
   incoming list with no prompt. Machine-binding would break symmetrically.
 
 - hypothesis: live-DB torn copy — rsync copied an open SQLite DB mid-transaction.
@@ -195,20 +195,20 @@ next_action: apply fix — add state.vscdb excludes to home.filter, update inlin
 
 - hypothesis: clean full-mirror overwrite — target inherits the source's trust array
   wholesale (the ORIGINAL applied-fix premise).
-  refuted_by: if true, p17 would have inherited fleksi's list incl. the trusted
+  refuted_by: if true, atlas would have inherited nomad's list incl. the trusted
   /home/janfr and shown pc-switcher trusted. It showed nothing. Snapshot forensics
-  show the trust key was ABSENT (deleted on fleksi), not transferred.
+  show the trust key was ABSENT (deleted on nomad), not transferred.
 
 ## Resolution
 
 root_cause: Two independent problems, previously conflated.
-  (A) Trusted-folders reset = VS Code version skew (p17 1.110.0 vs fleksi 1.129.1),
+  (A) Trusted-folders reset = VS Code version skew (atlas 1.110.0 vs nomad 1.129.1),
   NOT a pc-switcher sync bug. Snapshot byte-comparison of state.vscdb across the round
-  trip: p17's file arrived on fleksi byte-identical (5 uriTrustInfo entries incl.
+  trip: atlas's file arrived on nomad byte-identical (5 uriTrustInfo entries incl.
   /home/janfr, which recursively covers everything — the reporter's "hundreds"); after
-  live 1.129 use, `content.trust.model.key` was DELETED from fleksi's state.vscdb with
+  live 1.129 use, `content.trust.model.key` was DELETED from nomad's state.vscdb with
   no replacement in ItemTable or ~/.config/Code/User (depth 2); rsync faithfully
-  mirrored the emptied state back to p17, where 1.110 correctly showed nothing trusted.
+  mirrored the emptied state back to atlas, where 1.110 correctly showed nothing trusted.
   VS Code 1.129 migrated trust out of state.vscdb at write-time and did not persist it
   where the old format kept it. Resolved by keeping fleet VS Code versions aligned.
   OPEN: where 1.129 now stores workspace trust (only ItemTable + Code/User depth 2
@@ -225,6 +225,6 @@ direction: Selective, SQLite-aware pre/post-sync handling of state.vscdb — str
   machine-bound keys (`secret://...` for B; workspace-trust keys for A once their 1.129
   location is known) while syncing the rest. To be designed/built in a fresh session.
   Decision + findings posted as comment on issue #190.
-verification: Root cause confirmed via btrfs snapshot forensics on p17 + fleksi
+verification: Root cause confirmed via btrfs snapshot forensics on atlas + nomad
   (subagent, this session). No code fix applied; working tree clean.
 files_changed: none (fix reverted)

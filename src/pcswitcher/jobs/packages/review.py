@@ -87,7 +87,7 @@ collateral entry `SKIP_ONCE` like every other item, so the change it gates is si
 approved (D-26).
 
 Every screen here names the two machines by hostname. `review_items` takes both and they
-are required: what an answer costs is "fleksi loses this package", never "the target loses
+are required: what an answer costs is "nomad loses this package", never "the target loses
 this package", and no wording in this module may fall back to the tool's own vocabulary for
 the user's computers. Source and target survive as the names of the ROLES in code,
 docstrings and logs, which is where they belong.

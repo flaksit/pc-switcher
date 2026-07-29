@@ -74,7 +74,7 @@ Progress: [██████████] 100%
 | Phase 01 P13 | 20min | 3 tasks | 6 files |
 | Phase 01 P14 | 6min | 3 tasks | 3 files |
 | Phase 01 P15 | 6min | 3 tasks | 6 files |
-| Phase 01 P17 | 8min | 3 tasks | 7 files |
+| Phase 01 Atlas | 8min | 3 tasks | 7 files |
 | Phase 01 P16 | 8min | 3 tasks | 5 files |
 | Phase 01 P18 | 10min | 3 tasks | 4 files |
 **Per-Plan Metrics:**
@@ -97,7 +97,7 @@ Progress: [██████████] 100%
 | Phase 02 P14 | 3m | 2 tasks | 2 files |
 | Phase 02 P15 | 45min | 2 tasks | 11 files |
 | Phase 02 P16 | 55min | 2 tasks | 4 files |
-| Phase 02 P17 | 45min | 2 tasks | 13 files |
+| Phase 02 Atlas | 45min | 2 tasks | 13 files |
 | Phase 02 P18 | 40min | 2 tasks | 9 files |
 | Phase 02 P19 | 10min | 2 tasks | 26 files |
 | Phase 02 P20 | 8min | 2 tasks | 8 files |

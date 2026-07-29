@@ -1,7 +1,7 @@
 ---
 status: resolved
 trigger: |
-  Ran `pc-switcher sync fleksi --dry-run`. Log shows:
+  Ran `pc-switcher sync nomad --dry-run`. Log shows:
   "Completed sync of '/home/janfr': 1119279 files transferred, 7 bytes, 18514 deletions".
   Only 7 bytes reported for 1.1M files — is that right?
 created: 2026-07-19
@@ -16,8 +16,8 @@ resolution: "Root cause: `_PROGRESS2_RE` captured only the fragment of rsync's b
 - expected: bytes_transferred figure roughly proportional to 1.1M files (many GB), or a clear reason it's tiny.
 - actual: `7 bytes` reported alongside `1119279 files transferred` and `18514 deletions`.
 - error_messages: none — sync completed, this is a summary log line.
-- timeline: observed on a `--dry-run` to target `fleksi`.
-- reproduction: `pc-switcher sync fleksi --dry-run`; read the per-folder "Completed sync of '/home/janfr'" INFO line.
+- timeline: observed on a `--dry-run` to target `nomad`.
+- reproduction: `pc-switcher sync nomad --dry-run`; read the per-folder "Completed sync of '/home/janfr'" INFO line.
 
 ## Current Focus
 
@@ -62,11 +62,11 @@ reasoning_checkpoint:
     chunk-splitting/buffering logic is untouched (directly tested, not
     implicated).
   blind_spots: >
-    Not verified against the real fleksi machine's raw output (no SSH access
+    Not verified against the real nomad machine's raw output (no SSH access
     from this sandbox) — the exact real trailing digit group for the "7 bytes"
     report is inferred to end in "...,007", not directly observed. Comma-grouping
     behavior confirmed on rsync 3.2.7 (locally installed version) under C and
-    en_US locales; if fleksi runs a materially different rsync version the exact
+    en_US locales; if nomad runs a materially different rsync version the exact
     formatting could in principle differ, though the fix is a strict superset
     (accepts dot-grouped, comma-grouped, and ungrouped forms) so it is safe
     either way. The separately-confirmed ir-chk/to-chk gap (regex never matches
@@ -89,7 +89,7 @@ reasoning_checkpoint:
 - timestamp: 2026-07-19
   finding: LOCAL REPRO 2 — C-locale dry-run, `-aAXHS --numeric-ids --delete --info=progress2`, METADATA-ONLY diff (identical content, only perms+mtime differ) + 2 deletions: final progress2 line still shows the FULL file size (10,000,000). Falsifies "metadata-only diff reports ~0 bytes". rsync's progress2 size column reflects total size of files it considers transferred, regardless of dry-run or metadata-only.
 - timestamp: 2026-07-19
-  finding: Because both easy explanations are falsified, a final figure of exactly `7` is anomalous. Candidate mechanisms still open: (a) the last regex-matching progress2 line was an EARLY line (~7 bytes into the first file) and later progress2 lines failed to match / were mangled by the `[\r\n]` chunk-splitting in `_stream_rsync`; (b) rsync incremental-recursion behavior over a 1.1M-file tree emits a final progress2 line differing from the small-tree case; (c) something folder/target-specific to fleksi.
+  finding: Because both easy explanations are falsified, a final figure of exactly `7` is anomalous. Candidate mechanisms still open: (a) the last regex-matching progress2 line was an EARLY line (~7 bytes into the first file) and later progress2 lines failed to match / were mangled by the `[\r\n]` chunk-splitting in `_stream_rsync`; (b) rsync incremental-recursion behavior over a 1.1M-file tree emits a final progress2 line differing from the small-tree case; (c) something folder/target-specific to nomad.
 - timestamp: 2026-07-19
   finding: LOCAL REPRO 3 — real `rsync 3.2.7` under `LC_ALL=C` at 300k-file scale (local paths and genuine SSH-loopback transport): raw progress2 byte figures are COMMA-GROUPED (e.g. "29,958,458", "30,140,148") even though C locale was forced. Confirmed via `man rsync` and by testing `LC_ALL=nl_BE.UTF-8` for comparison (groups with '.' instead) that locale changes only the grouping CHARACTER, never whether grouping happens — falsifies the code's own comment/docstring assumption that C locale gives "an ungrouped integer".
   implication: This is a NEW angle not previously tested — earlier LOCAL REPRO 1/2 examined raw rsync text output directly and never actually exercised the production `_stream_rsync`/`_PROGRESS2_RE` code path against it, so the regex's handling of comma-grouped numbers was never checked.
@@ -149,7 +149,7 @@ verification: >
   non-vacuous against the pre-fix regex in isolation. Full unit suite (547
   tests), ruff check, ruff format --check, basedpyright, and codespell all
   pass on the changed files. NOT yet verified end-to-end against the real
-  fleksi machine (no SSH access from this sandbox) — awaiting human
+  nomad machine (no SSH access from this sandbox) — awaiting human
   confirmation that a real dry-run sync now reports a plausible
   bytes_transferred figure.
 files_changed:

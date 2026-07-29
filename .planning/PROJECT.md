@@ -45,7 +45,7 @@ Current scope. Each item is a modular sync job built on the finished framework, 
 
 ## Context
 
-- Solo developer plus Claude workflow. Concrete case is two laptops (P17 primary, XPS13 mobile); the design is generic to N machines.
+- Solo developer plus Claude workflow. Concrete case is two laptops (Atlas primary, Vega mobile); the design is generic to N machines.
 - The orchestration framework (specs 001-004) is complete with ZERO sync jobs implemented. This project builds the modular sync jobs, not the framework.
 - Transport for user-data sync is rsync-over-SSH, chosen over btrfs send/receive. This direction is set but NOT yet captured in an ADR — formalize it as an ADR before or during Phase 1 (ADR-002 mandates SSH as the channel but does not fix the file-sync protocol choice).
 - ADR-011 living-spec model is in force: `docs/system/*.md` is current-state authority; `specs/00x` folders are frozen history/provenance.

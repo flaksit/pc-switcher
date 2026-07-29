@@ -78,7 +78,7 @@ This section refines the Decision above; where they differ, this section takes p
 The topology check compares recorded `last_peer` values against the machines involved. For that comparison to be reliable, both peers must name the same machine the same way. Two rules make this hold:
 
 - Both ends record a machine's *own* hostname. The source records its peer as the target's `socket.gethostname()` queried over SSH (not the user-typed CLI argument, which may be an SSH alias or IP), the same way the source obtains its own hostname locally. This keeps the SSH/rsync connection address (the CLI argument) separate from the recorded identity.
-- Peer comparisons are case-insensitive. DNS hostnames are case-insensitive, and history written before symmetric acquisition (or via a differently-cased alias) can hold either casing. Matching case-folded prevents a clean back-sync from being misread as a machine-C (W2) sync — e.g. a target that recorded its peer as `fleksi` still matches a source whose hostname is `Fleksi`.
+- Peer comparisons are case-insensitive. DNS hostnames are case-insensitive, and history written before symmetric acquisition (or via a differently-cased alias) can hold either casing. Matching case-folded prevents a clean back-sync from being misread as a machine-C (W2) sync — e.g. a target that recorded its peer as `nomad` still matches a source whose hostname is `Nomad`.
 
 ## References
 

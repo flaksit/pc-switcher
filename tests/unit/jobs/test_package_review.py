@@ -55,7 +55,7 @@ class _Hosts(TypedDict):
 
 # The two machine names every screen says out loud. Deliberately concrete and distinct, so
 # an assertion that a message names the right one cannot pass on the other's text.
-HOSTS: _Hosts = {"source_hostname": "p17", "target_hostname": "fleksi"}
+HOSTS: _Hosts = {"source_hostname": "atlas", "target_hostname": "nomad"}
 
 
 def _mock_isatty(interactive: bool) -> MagicMock:
@@ -428,7 +428,7 @@ class TestInteractive:
             outcome = await review_items([group], console=console, ui=ui, **HOSTS)
 
         assert _screen_defaults(decision_list.call_args) == {"apt:source:vendor.list": Decision.SKIP_ONCE}
-        assert _screen_words(decision_list.call_args) == ["delete repository", "keep it on fleksi"]
+        assert _screen_words(decision_list.call_args) == ["delete repository", "keep it on nomad"]
         assert outcome.decisions == {"apt:source:vendor.list": Decision.SKIP_ONCE}
 
     async def test_a_report_only_group_offers_two_answers_and_starts_applied(self) -> None:
@@ -912,15 +912,15 @@ class TestUnreproducibleGroupResolution:
 
         titles = {choice.value: choice.title for choice in select.call_args.kwargs["choices"]}
         assert titles["skip_always"] == (
-            "This one is specific to p17. Always skip it — fleksi never gets it, and you are not asked again"
+            "This one is specific to atlas. Always skip it — nomad never gets it, and you are not asked again"
         )
         assert titles["skip_once"] == (
-            "Skip for now — fleksi does not get it this sync, and you are asked again next sync"
+            "Skip for now — nomad does not get it this sync, and you are asked again next sync"
         )
         assert titles["add_snippet"] == (
-            "Write the commands that install it — fleksi runs them, now and on every future sync"
+            "Write the commands that install it — nomad runs them, now and on every future sync"
         )
-        assert select.call_args.args[0] == "How should fleksi get brscan3?"
+        assert select.call_args.args[0] == "How should nomad get brscan3?"
 
     async def test_ui_resumed_when_snippet_capture_raises(self) -> None:
         console = _interactive_console()
@@ -1098,7 +1098,7 @@ def _conflict_entry(
         label="vendor.list",
         action_label="overwrite",
         detail=(
-            "vendor.list is different on the two machines, and fleksi installs curl from it — packages you set "
+            "vendor.list is different on the two machines, and nomad installs curl from it — packages you set "
             "to always skip, so a sync normally leaves them alone"
         ),
         versions=(target_version, source_version),
@@ -1140,7 +1140,7 @@ class TestRepoConflictGroupResolution:
             outcome = await review_items([_conflict_group([_conflict_entry()])], console=console, ui=ui, **HOSTS)
 
         assert outcome.decisions == {"apt:conflict:vendor.list": Decision.SKIP_ONCE}
-        assert _screen_words(decision_list.call_args) == ["overwrite", "keep fleksi's version"]
+        assert _screen_words(decision_list.call_args) == ["overwrite", "keep nomad's version"]
         assert _screen_defaults(decision_list.call_args) == {"apt:conflict:vendor.list": Decision.SKIP_ONCE}
 
     async def test_one_screen_answers_every_conflicting_file(self) -> None:
@@ -1210,8 +1210,8 @@ class TestRepoConflictGroupResolution:
             await review_items([_conflict_group([_conflict_entry()])], console=console, ui=ui, **HOSTS)
 
         printed = out.getvalue()
-        assert "On fleksi now" in printed
-        assert "On p17" in printed
+        assert "On nomad now" in printed
+        assert "On atlas" in printed
         assert "the target" not in printed
         assert "the source" not in printed
 
@@ -1381,7 +1381,7 @@ def _pin_removal_group(entries: Sequence[ReviewEntry]) -> ReviewGroup:
     return ReviewGroup(
         manager="apt",
         action=REPO_REMOVAL_REVIEW_ACTION,
-        title="Delete pin files p17 no longer has (apt)",
+        title="Delete pin files atlas no longer has (apt)",
         entries=tuple(entries),
     )
 
@@ -1416,7 +1416,7 @@ class TestRemovalGroupContent:
         printed = out.getvalue()
         assert "Pin-Priority: 900" in printed
         assert "origin vendor.example.com" in printed
-        assert "On fleksi" in printed
+        assert "On nomad" in printed
         assert "the target" not in printed
 
     async def test_an_entry_with_no_content_prints_no_panel(self) -> None:
@@ -1464,7 +1464,7 @@ class TestCollateralPromptWording:
                     item_id="apt:package:pkg-a",
                     label="fortunes",
                     action_label="resolve",
-                    detail="Installing sl on fleksi would remove fortunes",
+                    detail="Installing sl on nomad would remove fortunes",
                 )
             ]
         )
@@ -1481,14 +1481,14 @@ class TestCollateralPromptWording:
     async def test_the_question_and_every_answer_name_the_machine_and_its_own_effect(self) -> None:
         select, _printed = await self._titles()
 
-        assert select.call_args.args[0] == "What should happen to fortunes on fleksi?"
+        assert select.call_args.args[0] == "What should happen to fortunes on nomad?"
         titles = {choice.value: choice.title for choice in select.call_args.kwargs["choices"]}
-        assert titles["proceed"] == "Go ahead — fortunes changes on fleksi as described above"
+        assert titles["proceed"] == "Go ahead — fortunes changes on nomad as described above"
         assert titles["protect"] == (
             "Keep fortunes as it is — the changes that would touch it are dropped from this sync"
         )
         assert titles["abort"] == (
-            "Stop the whole pc-switcher sync now — nothing more is changed on fleksi, and what earlier jobs "
+            "Stop the whole pc-switcher sync now — nothing more is changed on nomad, and what earlier jobs "
             "already did stays done"
         )
         assert "the target" not in " ".join(titles.values())
@@ -1498,17 +1498,16 @@ class TestCollateralPromptWording:
         user asked for this package, which is a different fact and the true one."""
         _select, printed = await self._titles()
 
-        assert "You asked for fortunes on fleksi yourself" in printed
+        assert "You asked for fortunes on nomad yourself" in printed
         assert "manually installed" in printed
-        assert "Installing sl on fleksi would remove fortunes" in printed
+        assert "Installing sl on nomad would remove fortunes" in printed
 
     async def test_stopping_names_the_package_and_the_machine_in_the_abort(self) -> None:
         with pytest.raises(SyncAbortedByUser) as excinfo:
             await self._titles("abort")
 
         assert str(excinfo.value) == (
-            "fortunes on fleksi would have been removed or downgraded; the whole sync was stopped in the "
-            "package review"
+            "fortunes on nomad would have been removed or downgraded; the whole sync was stopped in the package review"
         )
 
 
@@ -1525,8 +1524,8 @@ class TestTheOrchestratorNamesBothMachines:
         config.btrfs_snapshots = MagicMock(subvolumes=["@"])
         config.disk = MagicMock(preflight_minimum="10%")
 
-        with patch("pcswitcher.orchestrator.get_local_hostname", return_value="p17"):
-            orchestrator = Orchestrator(target="fleksi", config=config)
+        with patch("pcswitcher.orchestrator.get_local_hostname", return_value="atlas"):
+            orchestrator = Orchestrator(target="nomad", config=config)
         # `run()` builds it, along with the console and the live UI it wraps; everything
         # after the construction reaches a machine, so only that first slice is exercised.
         with (
@@ -1537,5 +1536,5 @@ class TestTheOrchestratorNamesBothMachines:
 
         reviewer = orchestrator._reviewer  # pyright: ignore[reportPrivateUsage]
         assert isinstance(reviewer, TerminalUIReviewer)
-        assert reviewer._source_hostname == "p17"  # pyright: ignore[reportPrivateUsage]
-        assert reviewer._target_hostname == "fleksi"  # pyright: ignore[reportPrivateUsage]
+        assert reviewer._source_hostname == "atlas"  # pyright: ignore[reportPrivateUsage]
+        assert reviewer._target_hostname == "nomad"  # pyright: ignore[reportPrivateUsage]

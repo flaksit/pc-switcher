@@ -40,7 +40,7 @@ class _Hosts(TypedDict):
 
 # Concrete and distinct, so an assertion that a screen names the right machine cannot pass
 # on the other one's text.
-HOSTS: _Hosts = {"source_hostname": "p17", "target_hostname": "fleksi"}
+HOSTS: _Hosts = {"source_hostname": "atlas", "target_hostname": "nomad"}
 
 
 def _mock_isatty(interactive: bool) -> MagicMock:

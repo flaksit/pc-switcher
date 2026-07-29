@@ -2715,11 +2715,11 @@ class TestFlatpakRemoteItem:
 class TestOrphanedRefsDetail:
     def test_names_the_remote_and_every_dependent(self) -> None:
         detail = build_orphaned_refs_detail(
-            "customremote", ["org.example.One", "org.example.Two"], Machines(source="p17", target="fleksi")
+            "customremote", ["org.example.One", "org.example.Two"], Machines(source="atlas", target="nomad")
         )
 
         assert detail == (
-            "fleksi still installs org.example.One, org.example.Two from customremote — they would stay "
+            "nomad still installs org.example.One, org.example.Two from customremote — they would stay "
             "installed but never get another update"
         )
 

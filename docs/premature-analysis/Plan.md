@@ -96,7 +96,7 @@ Prepare for first sync to avoid conflicts:
 1. **Pre-flight checks (on both machines)**:
    ```bash
    # Identify what will conflict
-   rsync -avnc --delete p17:/home/<user>/ /home/<user>/ > ~/sync-preview.txt
+   rsync -avnc --delete atlas:/home/<user>/ /home/<user>/ > ~/sync-preview.txt
    # Review preview - look for important files
    grep -E '\.(bashrc|gitconfig|ssh)' ~/sync-preview.txt
    ```
@@ -115,12 +115,12 @@ Prepare for first sync to avoid conflicts:
 
 4. **Configure Syncthing carefully**:
    - Install on both machines (see Phase 1)
-   - On P17: Configure folder as "Send & Receive"
+   - On Atlas: Configure folder as "Send & Receive"
    - On XPS: Configure folder as "Receive Only" initially
      - In Web UI: Folder → Edit → Advanced → Folder Type: "Receive Only"
    - Enable "Ignore Delete" during initial sync (both machines)
 
-5. **Let P17 content populate XPS** and wait for sync completion
+5. **Let Atlas content populate XPS** and wait for sync completion
 
 6. **Review conflicts on XPS**:
    ```bash
@@ -138,7 +138,7 @@ Prepare for first sync to avoid conflicts:
 7. **Switch XPS to bidirectional**:
    - Change folder type from "Receive Only" to "Send & Receive"
    - Disable "Ignore Delete" on both machines
-   - Remaining conflict files will sync to P17 as backups
+   - Remaining conflict files will sync to Atlas as backups
 
 ### Phase 1: Syncthing Setup
 Install and configure on both machines:
@@ -229,7 +229,7 @@ Install and configure on both machines:
 ### Phase 2: System State Repository
 Create git-tracked state management
 
-1. Initialize on primary machine (e.g., P17):
+1. Initialize on primary machine (e.g., Atlas):
    ```bash
    mkdir -p ~/system-state/{packages,services,users,scripts,vscode,docker,k3s,vm}
    cd ~/system-state
@@ -359,19 +359,19 @@ kubectl exec <pod> -- tar czf - /data > k3s/volumes/<pvc>.tar.gz
 `sync-vm-to-xps.sh`:
 ```bash
 #!/bin/bash
-# Sync VM images from P17 to XPS
+# Sync VM images from Atlas to XPS
 rsync -aAXHv --info=progress2 --sparse --inplace \
     /var/lib/libvirt/images/ \
     xps:/var/lib/libvirt/images/
 ```
 
-`sync-vm-to-p17.sh`:
+`sync-vm-to-atlas.sh`:
 ```bash
 #!/bin/bash
-# Sync VM images from XPS to P17
+# Sync VM images from XPS to Atlas
 rsync -aAXHv --info=progress2 --sparse --inplace \
     /var/lib/libvirt/images/ \
-    p17:/var/lib/libvirt/images/
+    atlas:/var/lib/libvirt/images/
 ```
 
 **How it works**:
@@ -470,13 +470,13 @@ echo "Ready for travel!"
 ## Testing and Validation Plan
 
 ### Test 1: Basic Syncthing
-1. Create test file on P17: `echo "test" > ~/sync-test.txt`
+1. Create test file on Atlas: `echo "test" > ~/sync-test.txt`
 2. Wait for sync, verify on XPS
 3. Modify on XPS, verify syncs back
 4. Test conflict: modify same file offline on both, verify `.sync-conflict` creation
 
 ### Test 2: Package Management
-1. On P17: Install test package `sudo apt install htop`
+1. On Atlas: Install test package `sudo apt install htop`
 2. Run `capture-state.sh`
 3. Wait for Syncthing
 4. On XPS: Run `diff-state.sh` (should show htop addition)
@@ -484,39 +484,39 @@ echo "Ready for travel!"
 6. Reverse test: remove on XPS, sync, verify diff shows removal
 
 ### Test 3: /etc Tracking
-1. Modify `/etc/hosts` on P17
+1. Modify `/etc/hosts` on Atlas
 2. Capture state (should prompt to track if not already)
 3. Sync to XPS
 4. Diff and apply, verify `/etc/hosts` updates
 5. Test "always" and "never" rules persist
 
 ### Test 4: Cache Sync
-1. On P17: `pip install requests` (creates cache)
+1. On Atlas: `pip install requests` (creates cache)
 2. Wait for Syncthing
 3. On XPS: Verify `.cache/pip/` contains cached packages
 4. Install same package, should use cache (no download)
 
 ### Test 5: VM Sync
-1. Create/modify file in Windows VM on P17
+1. Create/modify file in Windows VM on Atlas
 2. Shutdown VM, run `sync-vm-to-xps.sh`
 3. Start VM on XPS, verify file exists
-4. Reverse sync back to P17
+4. Reverse sync back to Atlas
 
 ### Test 6: Docker Workflow
-1. Create test volume on P17: `docker volume create test-vol`
+1. Create test volume on Atlas: `docker volume create test-vol`
 2. Add data: `docker run --rm -v test-vol:/data ubuntu sh -c "echo hello > /data/test.txt"`
 3. Export volume with script
 4. Sync to XPS
 5. Import volume, verify data
 
 ### Test 7: k3s Manifests
-1. Deploy test app on P17 k3s
+1. Deploy test app on Atlas k3s
 2. Manifests in `~/projects/k3s-manifests/` sync automatically
 3. On XPS: `kubectl apply -f ~/projects/k3s-manifests/`
 4. Verify app deploys
 
 ### Test 8: VS Code Settings Sync
-1. Install extension on P17
+1. Install extension on Atlas
 2. Wait for Settings Sync
 3. Open VS Code on XPS, verify extension auto-installs
 

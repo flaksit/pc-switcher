@@ -5971,11 +5971,11 @@ class TestRepoUnavailableWording:
 
     def test_build_repo_unavailable_detail_names_the_package_its_origin_and_the_cause(self) -> None:
         detail = build_repo_unavailable_detail(
-            "brscan3", ["https://gone.example.com/apt"], "no repository file on p17 declares it", MACHINES
+            "brscan3", ["https://gone.example.com/apt"], "no repository file on atlas declares it", MACHINES
         )
 
         assert detail == (
-            "target-host cannot install brscan3 from gone.example.com/apt: no repository file on p17 declares it"
+            "target-host cannot install brscan3 from gone.example.com/apt: no repository file on atlas declares it"
         )
 
 

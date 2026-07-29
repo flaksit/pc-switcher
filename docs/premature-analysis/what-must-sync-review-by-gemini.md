@@ -30,12 +30,12 @@ Many files in `/etc` are **strictly machine-specific** and *must not* be synced.
 
 Your item #2 ("Installed packages") has a similar machine-specific problem.
 
-The P17 (heavy) and XPS 13 (light) likely have very different hardware.
+The Atlas (heavy) and XPS 13 (light) likely have very different hardware.
 
-* **Example:** The P17 might require the proprietary **NVIDIA driver package**. The XPS 13 might require Intel graphics drivers and specific touchpad firmware.
-* **The Risk:** If you sync the *entire* package list from the P17 to the XPS 13, you might install the NVIDIA driver on the XPS 13, which could prevent its graphical desktop (GNOME) from starting. Conversely, syncing from the XPS to the P17 might try to *remove* the NVIDIA driver.
+* **Example:** The Atlas might require the proprietary **NVIDIA driver package**. The XPS 13 might require Intel graphics drivers and specific touchpad firmware.
+* **The Risk:** If you sync the *entire* package list from the Atlas to the XPS 13, you might install the NVIDIA driver on the XPS 13, which could prevent its graphical desktop (GNOME) from starting. Conversely, syncing from the XPS to the Atlas might try to *remove* the NVIDIA driver.
 
-**What's missing:** A way to define a **"base" list of packages** to sync (like `vim`, `git`, `docker-ce`) while maintaining a **"per-machine" list** of packages (like `nvidia-driver-550` for the P17, `intel-media-va-driver` for the XPS).
+**What's missing:** A way to define a **"base" list of packages** to sync (like `vim`, `git`, `docker-ce`) while maintaining a **"per-machine" list** of packages (like `nvidia-driver-550` for the Atlas, `intel-media-va-driver` for the XPS).
 
 ---
 

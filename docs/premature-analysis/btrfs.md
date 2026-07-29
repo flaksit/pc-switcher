@@ -1,6 +1,6 @@
 # btrfs Architecture Review and Opportunities
 
-**Context**: Both laptops (P17 and XPS 13) run Ubuntu 24.04 with btrfs as the filesystem. This document explores how btrfs-specific capabilities could improve the pc-switcher architecture.
+**Context**: Both laptops (Atlas and XPS 13) run Ubuntu 24.04 with btrfs as the filesystem. This document explores how btrfs-specific capabilities could improve the pc-switcher architecture.
 
 ---
 
@@ -109,9 +109,9 @@ fstab
 
 **Example workflow**:
 ```bash
-# On P17: Install package that modifies /etc
+# On Atlas: Install package that modifies /etc
 sudo apt install foo
-# → etckeeper auto-commits to /etc/.git (local on P17)
+# → etckeeper auto-commits to /etc/.git (local on Atlas)
 
 # apply-state.sh installs foo on XPS
 # → etckeeper auto-commits to /etc/.git (local on XPS)
@@ -119,10 +119,10 @@ sudo apt install foo
 # Syncthing syncs /etc/foo.conf to XPS (via .stignore allowlist)
 
 # On XPS: etckeeper sees the change
-sudo etckeeper commit "synced from P17"
+sudo etckeeper commit "synced from Atlas"
 # → XPS git log shows the file appeared from sync
 
-# Later on P17: Review what changed
+# Later on Atlas: Review what changed
 git -C /etc log --since="1 week ago"
 git -C /etc diff HEAD~5 hosts
 
@@ -318,7 +318,7 @@ sudo btrfs subvolume create ~/.local/share/AppWithManyFiles
 
 **Implementation**:
 ```bash
-# Setup (one-time on P17)
+# Setup (one-time on Atlas)
 sudo chattr +C /var/lib/libvirt/images  # Set NOCOW
 qemu-img create -f qcow2 base-windows.qcow2 50G
 # Install Windows into base-windows.qcow2, configure fully
@@ -331,7 +331,7 @@ qemu-img create -f qcow2 -F qcow2 \
 # Update VM XML to use windows-overlay.qcow2
 virsh edit windows-vm
 
-# Weekly sync (before travel: P17 → XPS)
+# Weekly sync (before travel: Atlas → XPS)
 virsh shutdown windows-vm
 rsync -aAXHv --info=progress2 --sparse --inplace \
     /var/lib/libvirt/images/ \

@@ -376,12 +376,12 @@ class TestHostnamesEqual:
     @pytest.mark.parametrize(
         ("a", "b", "expected"),
         [
-            ("P17", "p17", True),
-            ("Fleksi", "fleksi", True),
+            ("Atlas", "atlas", True),
+            ("Nomad", "nomad", True),
             ("host", "host", True),
             ("host-a", "host-b", False),
-            ("P17", None, False),
-            (None, "p17", False),
+            ("Atlas", None, False),
+            (None, "atlas", False),
             (None, None, False),
             ("", "", True),
         ],

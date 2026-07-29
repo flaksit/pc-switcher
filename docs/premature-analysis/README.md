@@ -7,7 +7,7 @@ A synchronization system for seamless switching between Ubuntu user machines (la
 Keep Ubuntu 24.04 pc's in sync with minimal friction. We aim at almost full system-state replication rather than as simple sync of user data.
 
 The concrete use case involves two laptops:
-- **P17** (primary, stationary): Heavy laptop at home, primary work machine
+- **Atlas** (primary, stationary): Heavy laptop at home, primary work machine
 - **XPS 13** (secondary, mobile): Light laptop for travel, offline capable
 
 Enable a simple workflow: work on one machine, sync before switching, resume on the other — all without manual file management or real-time cloud syncing overhead.
@@ -108,7 +108,7 @@ systemctl --user enable --now syncthing
 ### Pre-Travel Workflow
 ```bash
 ./scripts/prepare-for-travel.sh
-# 1. Capture P17 state → export packages, services, /etc
+# 1. Capture Atlas state → export packages, services, /etc
 # 2. Wait for Syncthing sync
 # 3. Review diff → interactive decisions on /etc tracking
 # 4. Apply changes → install packages, update configs on XPS
@@ -118,7 +118,7 @@ systemctl --user enable --now syncthing
 ### Post-Travel Workflow
 ```bash
 ./scripts/post-travel-sync.sh
-# Same flow in reverse (XPS → P17)
+# Same flow in reverse (XPS → Atlas)
 ```
 
 ## Key Design Principles

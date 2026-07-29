@@ -6,7 +6,7 @@ Synthesized from PRD-tier docs: `docs/planning/high-level-requirements.md` (prec
 
 ### REQ-near-full-state-replication
 - source: /home/janfr/dev/pc-switcher/docs/planning/high-level-requirements.md
-- description: Keep multiple Linux desktop machines in sync with minimal friction, aiming at near-full system-state replication (not just user-data sync). Generic to N machines; concrete case is two laptops (P17 primary, XPS13 mobile). Only one machine actively used at a time; no bi-directional sync.
+- description: Keep multiple Linux desktop machines in sync with minimal friction, aiming at near-full system-state replication (not just user-data sync). Generic to N machines; concrete case is two laptops (Atlas primary, Vega mobile). Only one machine actively used at a time; no bi-directional sync.
 
 ### REQ-sync-scope-user-data
 - source: docs/planning/high-level-requirements.md
