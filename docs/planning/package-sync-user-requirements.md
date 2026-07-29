@@ -74,11 +74,9 @@ In its validation step, pc-switcher checks every enabled job's prerequisites bef
 
 Snap auto-refresh is paused on both machines for the run and restored afterwards. The pause is timed, so it expires by itself if the run dies.
 
-Each job then plans, asks, reviews and applies.
+Each job then plans, reviews, applies and reports.
 
-**Plan** issues read commands only: what each machine has, filtered by the standing machine-specific marks, and the difference between them.
-
-**Ask** covers anything that cannot be derived. apt's Ubuntu Pro question comes here, before the review, because one of its answers ends the job.
+**Plan** issues read commands only: what each machine has, filtered by the standing machine-specific marks, and the difference between them. A question that cannot be derived is asked here rather than in the review — apt's Ubuntu Pro question is one, because one of its answers ends the job before there is anything to review.
 
 **Review** is one screen per group of same-kind, same-direction items. Every item is a row carrying its own decision; arrows move, one key sets the focused row, Enter confirms. Rows start where confirming unread does no harm: installs at *apply*, anything that removes or overwrites at *skip*. Screens offer three answers, or two where a permanent decision is not meaningful.
 
@@ -86,7 +84,7 @@ Every screen names the two machines by hostname, and every answer states its eff
 
 **Apply** converges one item at a time, in the order the job requires, and announces every write. Nothing unapproved is written.
 
-Each job then reports success, skipped (with the reason) or failed (naming each failed item).
+**Report** gives the job's outcome: success, skipped with the reason, or failed naming each failed item.
 
 A **dry run** plans and reviews exactly as a real run does, then changes nothing and records nothing. **`--confirm-each-command`** shows every individual modification before it runs, offering proceed or abort only. A run with **no terminal** asks nothing, treats every item as declined, and reports any job with a non-empty review as skipped.
 
