@@ -1984,7 +1984,7 @@ class TestPackageSyncWholeRunContracts:
             # asserts the mismatch reached the ORIGIN_MISMATCH group specifically rather
             # than any report group at all — which is the distinction the version-mismatch
             # check below is here to make.
-            assert "Installed from different repositories (flatpak packages)" in collapsed, (
+            assert "Installed from different remotes (flatpak applications)" in collapsed, (
                 f"the mismatch reached no origin-mismatch review group.\n{combined_output}"
             )
             assert ref in combined_output, f"the report does not name the ref {ref}.\n{combined_output}"

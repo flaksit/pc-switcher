@@ -2249,7 +2249,7 @@ class TestMaskReviewVerbs:
 
         group = self._group_holding(plan, "flatpak:mask:user:org.example.MaskNew")
 
-        assert group.title == "Mask flatpak packages"
+        assert group.title == "Mask flatpak applications"
         assert [e.action_label for e in group.entries] == ["mask"]
         assert {e.item_id for e in group.entries} == {"flatpak:mask:user:org.example.MaskNew"}
 
@@ -2259,7 +2259,7 @@ class TestMaskReviewVerbs:
 
         group = self._group_holding(plan, "flatpak:mask:user:org.example.MaskOld")
 
-        assert group.title == "Unmask flatpak packages"
+        assert group.title == "Unmask flatpak applications"
         assert [e.action_label for e in group.entries] == ["unmask"]
         assert _is_removal_direction(group.action)
 
@@ -2270,8 +2270,8 @@ class TestMaskReviewVerbs:
         ref_install = self._group_holding(plan, "flatpak:ref:user:org.example.SourceOnly/x86_64/stable")
         ref_remove = self._group_holding(plan, "flatpak:ref:user:org.example.TargetOnly/x86_64/stable")
 
-        assert ref_install.title == "Install flatpak packages"
-        assert ref_remove.title == "Remove flatpak packages"
+        assert ref_install.title == "Install flatpak applications"
+        assert ref_remove.title == "Remove flatpak applications"
         # Refs have no vocabulary entry of their own, so they fall back to the bare
         # DiffAction verb — which is exactly the verb a mask must NOT inherit.
         assert {e.action_label for e in ref_install.entries} == {"install"}

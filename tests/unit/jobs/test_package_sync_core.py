@@ -180,6 +180,16 @@ class FakeSyncJob(PackageSyncJob):
         return CommandResult(0, "", "")
 
 
+def _job_for_manager(manager_id: str) -> FakeSyncJob:
+    """A `FakeSyncJob` wearing a real manager's id, for the strings keyed on it."""
+
+    class _Named(FakeSyncJob):
+        pass
+
+    _Named.manager_id = manager_id
+    return _Named(make_context())
+
+
 def _accept(job: PackageSyncJob, diffs: tuple[ItemDiff, ...], decisions: dict[str, Decision]) -> PackagePlan:
     plan = PackagePlan(manager=job.manager_id, diffs=diffs, groups=job._build_review_groups(diffs))
     job.accept_review(plan, ReviewOutcome(decisions=decisions, was_interactive=True))
@@ -341,6 +351,28 @@ class TestReviewGroupsByAction:
         assert "remove" in remove_group.title.lower()
         assert "apply" not in remove_group.title.lower()
         assert "apply" not in install_group.title.lower()
+
+    def test_each_manager_names_its_own_software_and_its_own_origins(self) -> None:
+        """`PKG-NG-ORIGIN-CONVERGE` covers apt packages and flatpak applications alike, and
+        the narrative calls what a flatpak comes from a remote, never a repository. One
+        `ORIGIN_MISMATCH` title said "repositories" and "packages" for both, so the flatpak
+        group named two things flatpak does not have.
+        """
+        diffs = [_diff("o1", DiffAction.REPORT_ONLY, DiffClass.ORIGIN_MISMATCH)]
+
+        apt_group = _job_for_manager("apt")._build_review_groups(diffs)[0]
+        flatpak_group = _job_for_manager("flatpak")._build_review_groups(diffs)[0]
+
+        assert apt_group.title == "Installed from different repositories (apt packages)"
+        assert flatpak_group.title == "Installed from different remotes (flatpak applications)"
+
+    def test_a_flatpak_action_group_says_applications_too(self) -> None:
+        """The noun is the manager's, not the report group's: an install screen names the
+        same things the report does.
+        """
+        groups = _job_for_manager("flatpak")._build_review_groups([_diff("i1", DiffAction.INSTALL)])
+
+        assert groups[0].title == "Install flatpak applications"
 
 
 class TestConvergeDispatchByAction:

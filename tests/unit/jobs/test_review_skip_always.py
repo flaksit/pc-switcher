@@ -197,7 +197,7 @@ class TestBlockStateItemsArePromotable:
             "remove",
             [_entry("flatpak:mask:user:org.gimp.GIMP", label="org.gimp.GIMP (user)", action_label="unmask")],
             manager="flatpak",
-            title="Unmask flatpak packages",
+            title="Unmask flatpak applications",
         )
         screen = _fake_prompt(ask_return={"flatpak:mask:user:org.gimp.GIMP": "skip_always"})
 

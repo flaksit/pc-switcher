@@ -137,10 +137,20 @@ _ACTION_VOCABULARY: dict[tuple[ItemClass, DiffAction], str] = {
 # What a group's title calls the things it lists, when they are not packages. A verb alone
 # cannot make an apt-config title true: the title reads "<verb> <manager> packages", so
 # every `/etc/apt/apt.conf.d` group would still end in "apt packages". Hold and mask items
-# are absent on purpose — they ARE about packages, so the default noun is already right.
+# are absent on purpose — they ARE about the software, so the manager's own noun is right.
 _ITEM_CLASS_NOUN: dict[ItemClass, str] = {
     ItemClass.APT_CONFIG: "apt configuration files",
 }
+
+# What a manager calls the software it syncs, where "packages" is not that word. flatpak
+# syncs applications (the narrative's own term) and apt and snap sync packages, so only
+# flatpak is listed. Keyed on the manager rather than the item class so one entry covers
+# every flatpak group — refs and masks alike.
+_MANAGER_NOUN: dict[str, str] = {"flatpak": "applications"}
+
+# What a manager calls the place software comes from, for the `ORIGIN_MISMATCH` title.
+# Never "vendor" (the user's ruling): apt has repositories, flatpak has remotes.
+_MANAGER_ORIGIN_NOUN: dict[str, str] = {"flatpak": "remotes"}
 
 # Fixed emission order for review groups: install before change before remove keeps
 # the most common/least-destructive action first; report_only trails since it needs a
@@ -152,11 +162,12 @@ _ACTION_ORDER: tuple[DiffAction, ...] = (
     DiffAction.REPORT_ONLY,
 )
 
-# What a report group is called, per cause. Never "vendor" (the user's ruling): for apt the
-# thing a package comes from is a repository, and that is the word everywhere.
+# What a report group is called, per cause. `{origins}` is the manager's own word for where
+# software comes from (`_MANAGER_ORIGIN_NOUN`), so a flatpak group says "remotes" where an
+# apt one says "repositories".
 _REPORT_TITLES: dict[DiffClass, str] = {
     DiffClass.VERSION_MISMATCH: "Version differences",
-    DiffClass.ORIGIN_MISMATCH: "Installed from different repositories",
+    DiffClass.ORIGIN_MISMATCH: "Installed from different {origins}",
     DiffClass.REPO_UNAVAILABLE: "Origins {target} cannot reproduce",
 }
 
@@ -331,11 +342,16 @@ class PackageSyncJob(SyncJob):
                 # `action.value`, unchanged.
                 default_verb = "report" if action == DiffAction.REPORT_ONLY else action.value
                 verb = _ACTION_VOCABULARY.get((item_class, action), default_verb)
-                noun = _ITEM_CLASS_NOUN.get(item_class, f"{self.manager_id} packages")
+                default_noun = f"{self.manager_id} {_MANAGER_NOUN.get(self.manager_id, 'packages')}"
+                noun = _ITEM_CLASS_NOUN.get(item_class, default_noun)
                 title = f"{verb.capitalize()} {noun}"
                 note = None
                 if cause is not None:
-                    title = f"{_REPORT_TITLES.get(cause, 'Reported').format(target=self.machines.target)} ({noun})"
+                    cause_title = _REPORT_TITLES.get(cause, "Reported").format(
+                        target=self.machines.target,
+                        origins=_MANAGER_ORIGIN_NOUN.get(self.manager_id, "repositories"),
+                    )
+                    title = f"{cause_title} ({noun})"
                     # A manager with no upgrade command of its own gets no note rather than
                     # a sentence with a hole in it.
                     upgrade = _UPGRADE_COMMANDS.get(self.manager_id)
