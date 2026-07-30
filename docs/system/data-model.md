@@ -255,7 +255,7 @@ class ItemDiff:
 
 `answer_hints` and `act_word` exist for a screen that asks about one item alone, where a screen-wide legend cannot say what the answers cost: a group's items can be removals and downgrades at once, so the group's verb would be wrong for half of them.
 
-`__post_init__` runs `redaction.redact_credentials` over `label`, `detail` and `answer_hints`, so every URL a user reads while deciding is redacted once at construction rather than at each of the dozen places that build a detail string. `item_id` is left alone — it is written to the decision file, and rewriting it would make a recorded decision unfindable.
+`__post_init__` runs `redaction.redact_credentials` over `label`, `detail` and `answer_hints`, so a URL a job composes into its own text is redacted once at construction rather than at each of the dozen places that build a detail string, and the label a recorded decision keeps on disk carries no credential. `item_id` is left alone — it is what a recorded decision is keyed on, and rewriting it would make that decision unfindable. What a review PRINTS is redacted at `packages.review.ReviewEntry`, which is the shape every review line and every whole file body a question shows is built from (ADR-021).
 
 ### Machine-local decision file (never synced)
 

@@ -1,11 +1,12 @@
 """Withholding a credential embedded in a URL (`PKG-FR-CREDENTIAL-PRIVACY`).
 
 A private PPA or a commercial repository carries its credential in its own address —
-`https://bearer:TOKEN@esm.ubuntu.com/...` — so the URL *is* the secret. It reaches the user
-and the log through four routes, and one rule has to cover all four: the command trace and
-the per-command confirmation (`executor`), every log line and its structured context
-(`logger`), and the review's own text, where a repository file is shown whole for a decision
-(`ItemDiff`).
+`https://bearer:TOKEN@esm.ubuntu.com/...` — so the URL *is* the secret. It reaches the user,
+the log and the disk through four routes, and one rule has to cover all four: the command
+trace and the per-command confirmation (`executor`), every log line and its structured
+context (`logger`), everything a review shows while the user decides, including the files it
+prints whole (`packages.review.ReviewEntry`), and the label a recorded decision keeps
+(`packages.items.ItemDiff`).
 
 The whole userinfo component goes, not just the part after the colon. A repository that
 authenticates with a bearer token puts the token where a username belongs, so keeping "the

@@ -159,7 +159,7 @@ Logs are written to `~/.local/share/pc-switcher/logs` with mode `rw-rw-r--`, so 
 
 `PKG-FR-CREDENTIAL-PRIVACY` now requires the embedded credential to be withheld wherever a URL is written or shown.
 
-**Closed 2026-07-30 (U2).** `redaction.redact_credentials` replaces every absolute URL's whole userinfo, applied at the three exits: `logger.CredentialRedactionFilter` on both queue handlers, the confirmation prompt in `executor._announce`, and `ItemDiff.__post_init__` for the review's own text.
+**Closed 2026-07-30 (U2).** `redaction.redact_credentials` replaces every absolute URL's whole userinfo, applied at four exits: `logger.CredentialRedactionFilter` on both queue handlers, the confirmation prompt in `executor._announce`, `ReviewEntry.__post_init__` for everything a review shows including the files it prints whole, and `ItemDiff.__post_init__` for the label a recorded decision keeps.
 
 Related, and already satisfied: `PKG-FR-ESM-PRIVACY` is honoured by construction rather than by filtering — `pro status --format json` is parsed and only the `attached` boolean escapes (`apt_sync.py:113-114`, `278-281`).
 

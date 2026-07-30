@@ -122,6 +122,7 @@ from rich.text import Text
 from pcswitcher.jobs.packages import prompt_navigation
 from pcswitcher.jobs.packages.decision_list import DecisionOption, DecisionRow, decision_list
 from pcswitcher.models import SyncAbortedByUser
+from pcswitcher.redaction import redact_credentials
 from pcswitcher.terminal import is_interactive
 
 __all__ = [
@@ -244,6 +245,12 @@ class ReviewEntry:
     from nomad, so fortunes is removed as well" is not something a screen-wide hint can say,
     and the same screen's next item may be a downgrade rather than a removal. Only the
     caller knows the change that causes the item, so only the caller can phrase it.
+
+    Every string here is redacted at construction (`PKG-FR-CREDENTIAL-PRIVACY`, ADR-021):
+    this is the shape every review line is built from, and the only one carrying the whole
+    file bodies a question prints — a repository file, a remote's fields, a pin file — each
+    of which can hold `https://user:token@host/` inside it. `item_id` is left alone: it keys
+    a recorded decision across runs, so rewriting it would make that decision unfindable.
     """
 
     item_id: str
@@ -253,6 +260,17 @@ class ReviewEntry:
     versions: tuple[str, str] | None = None
     content: str | None = None
     answer_hints: tuple[str, str] | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "label", redact_credentials(self.label))
+        if self.detail is not None:
+            object.__setattr__(self, "detail", redact_credentials(self.detail))
+        if self.versions is not None:
+            object.__setattr__(self, "versions", tuple(redact_credentials(body) for body in self.versions))
+        if self.content is not None:
+            object.__setattr__(self, "content", redact_credentials(self.content))
+        if self.answer_hints is not None:
+            object.__setattr__(self, "answer_hints", tuple(redact_credentials(hint) for hint in self.answer_hints))
 
 
 @dataclass(frozen=True)

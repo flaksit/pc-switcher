@@ -131,12 +131,13 @@ class ItemDiff:
     `packages.review.review_items()` only ever see `ItemDiff`/`ReviewEntry` shapes.
 
     Being the one shape is also why the credential rule lands here
-    (`PKG-FR-CREDENTIAL-PRIVACY`): every URL the user reads while deciding arrives as this
-    object's own text — a repository's URLs, a flatpak remote's, a repository file shown
-    whole for a conflict — so redacting at construction covers all of them once instead of
-    at each of the dozen places that build a detail string. `item_id` is left alone: it is
-    the item's stable identity across runs and is written to the decision file, so
-    rewriting it would make a recorded decision unfindable.
+    (`PKG-FR-CREDENTIAL-PRIVACY`): a URL a job composes into its own text — a repository's,
+    a flatpak remote's — is redacted at construction instead of at each of the dozen places
+    that build a detail string, and `label` reaches the decision file on disk already
+    redacted. A file body shown whole for a decision never passes through here;
+    `packages.review.ReviewEntry` is that exit. `item_id` is left alone: it is the item's
+    stable identity across runs and is what a recorded decision is keyed on, so rewriting it
+    would make that decision unfindable.
     """
 
     item_class: ItemClass

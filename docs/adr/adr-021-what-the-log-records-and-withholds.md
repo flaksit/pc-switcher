@@ -15,7 +15,7 @@ The log is the record of what pc-switcher did and why, so it names every item a 
 - Every change a tool made on its own behalf that no review showed — a package manager resolving its own dependencies is the case that exists today — MUST be logged.
 - A command's own output MUST be recorded verbatim at DEBUG, alongside the command text the executor already traces there.
 - A credential embedded in a URL MUST be withheld wherever pc-switcher writes or shows that URL: the executor's command trace, a command's recorded output, anything the user reads while deciding, and a configuration file displayed in full for a decision.
-- Redaction MUST sit at each point a path leaves the process, never at each call site that builds a string. There are three: every log record, the per-command confirmation prompt, and the text a review shows while the user decides.
+- Redaction MUST sit at each point a path leaves the process, never at each call site that builds a string. There are four: every log record, the per-command confirmation prompt, everything a review shows while the user decides, and the label a recorded decision keeps on disk.
 
 **Forbidden:**
 - No aggregate standing in for the record: "3 of 5 applied" does not say which two did not, and a count is not a decision.
@@ -48,7 +48,7 @@ Each command's own output is recorded as the command produced it. A summary is a
 
 Repository credentials live inside the URL, so every place a URL appears is a place the secret appears: the command trace, recorded output, a review line, a configuration file shown whole for a decision. Withholding it in the log alone would leave it on screen; withholding it on screen alone would leave it in a world-readable file.
 
-There is no single point. `Executor` covers the command trace and each command's output, but a job's own log lines never pass through it, and the text a review shows — a repository file printed whole for a conflict — is built in-process and goes to the screen, not through a command. So the rule is applied at each of the three exits instead: a logging filter on the queue handlers, which is every route into the log; the confirmation prompt in `Executor`, the one thing there that never becomes a log record; and `ItemDiff`, which is the single shape every review line is built from. Three points, each of which every path of its kind passes through — not a rule repeated at each call site that happens to build a URL.
+There is no single point. `Executor` covers the command trace and each command's output, but a job's own log lines never pass through it, and what a review shows — a review line, and a repository file printed whole for a conflict — is built in-process and goes to the terminal, not through a command. So the rule is applied at each of the four exits instead: a logging filter on the queue handlers, which is every route into the log; the confirmation prompt in `Executor`, the one thing there that never becomes a log record; `ReviewEntry`, the single shape every review line and every file body a question prints is built from; and `ItemDiff`, whose label a permanent answer writes to the decision file. Four points, each of which every path of its kind passes through — not a rule repeated at each call site that happens to build a URL.
 
 ### The precedent this generalises
 
@@ -59,7 +59,7 @@ ADR-020's Ubuntu Pro rule already withholds content by construction: `pro status
 **Positive:**
 - A run is reconstructable from its log alone: what was proposed, what was decided, what the tool did unasked, and what each command said.
 - The exposure that already existed in the command trace closes with the same change that widens the record.
-- Three redaction points and no fourth, so a new job, a new command or a new review line inherits the rule instead of re-implementing it.
+- Four redaction points and no fifth, so a new job, a new command or a new review line inherits the rule instead of re-implementing it.
 
 **Negative (costly to reverse):**
 - Log volume grows, and the current several-hundred-megabyte runs are the floor rather than the ceiling.

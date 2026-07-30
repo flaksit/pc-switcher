@@ -1544,6 +1544,56 @@ class TestRemovalGroupContent:
         assert "[bold red]not-markup[/]" in out.getvalue()
 
 
+_SECRET_URL = "https://bearer:s3cr3t-token@packages.example.com/apt"
+_SAFE_URL = "https://***@packages.example.com/apt"
+
+
+@pytest.mark.asyncio
+class TestCredentialsInPrintedFileBodies:
+    """`PKG-FR-CREDENTIAL-PRIVACY`: a whole file body a question prints is printed redacted.
+
+    A private PPA or a commercial repository carries its credential inside its own address,
+    and these two bodies reach the terminal without passing any other redaction exit
+    (ADR-021).
+    """
+
+    @staticmethod
+    async def _printed(group: ReviewGroup) -> str:
+        out = io.StringIO()
+        console = Console(file=out, force_terminal=True, no_color=True, width=200)
+        screen = _fake_prompt(ask_return={entry.item_id: "skip_once" for entry in group.entries})
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen),
+        ):
+            await review_items([group], console=console, ui=MagicMock(), **HOSTS)
+        return out.getvalue()
+
+    async def test_neither_version_of_a_conflicting_repository_shows_the_credential(self) -> None:
+        entry = _conflict_entry(
+            target_version=f"deb {_SECRET_URL} stable main\n", source_version=f"URIs: {_SECRET_URL}\n"
+        )
+
+        printed = await self._printed(_conflict_group([entry]))
+
+        assert "s3cr3t-token" not in printed
+        assert printed.count(_SAFE_URL) == 2
+
+    async def test_a_pin_file_offered_for_deletion_shows_no_credential(self) -> None:
+        entry = ReviewEntry(
+            item_id="apt:pin:99-vendor.pref",
+            label="99-vendor.pref",
+            action_label="delete pin file",
+            content=f"Package: *\nPin: origin {_SECRET_URL}\nPin-Priority: 900\n",
+        )
+
+        printed = await self._printed(_pin_removal_group([entry]))
+
+        assert "s3cr3t-token" not in printed
+        assert _SAFE_URL in printed
+
+
 _COLLATERAL_DETAIL = (
     "Installing sl on nomad would remove fortunes\n"
     "apt on nomad has fortunes marked as manually installed: something asked for it there directly, rather "

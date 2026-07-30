@@ -178,7 +178,7 @@ The report tells you what a job did. The log is where you reconstruct why, month
 - Every change a package manager made on its own behalf. Dependencies apt resolves for itself are never a question, but each one is named.
 - At `log.file: DEBUG`, every command pc-switcher ran and everything that command printed, verbatim. That is what makes a post-mortem read the tool's own words rather than a paraphrase. It is also why debug runs produce log files of several hundred megabytes.
 
-One thing never reaches any of it. A private PPA or a commercial repository carries its credential inside its own address, so `https://user:token@host/...` is printed as `https://***@host/...` — in the log, in the `--confirm-each-command` prompt, and in every review line. Log files are readable by anyone with an account on the machine that wrote them. The rule covers credentials in URLs and nothing else: a secret that reaches a command another way is not withheld.
+One thing never reaches any of it. A private PPA or a commercial repository carries its credential inside its own address, so `https://user:token@host/...` is printed as `https://***@host/...` — in the log, in the `--confirm-each-command` prompt, in every review line, and inside the repository, remote or pin file a question prints whole. Log files are readable by anyone with an account on the machine that wrote them. The rule covers credentials in URLs and nothing else: a secret that reaches a command another way is not withheld.
 
 ## Machine-specific packages
 
