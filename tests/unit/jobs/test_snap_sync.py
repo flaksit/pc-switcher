@@ -803,10 +803,10 @@ SNAP_LIST_SOURCE_SIDELOADED_HELD = (
 
 
 class TestSideloadedSnaps:
-    """E17 — a snap installed from a local file (`snap install --dangerous`, `snap try`)
-    sits at a store-less `x<N>` revision no store can serve. Reproducing it is not
-    implemented, so every source-side diff it could produce is dropped at plan time and
-    reported once as a warning instead of failing at converge on every run.
+    """E17, `PKG-FR-SNAP-SIDELOAD` — a snap installed from a local file (`snap install
+    --dangerous`, `snap try`) sits at a store-less `x<N>` revision no store can serve.
+    Such snaps are out of scope (#221) and ignored on both machines: every diff the name
+    could produce is dropped at plan time, and a warning per machine names them.
     """
 
     @pytest.mark.asyncio
@@ -877,9 +877,11 @@ class TestSideloadedSnaps:
         assert not any("homemade" in c for c in commands)
 
     @pytest.mark.asyncio
-    async def test_target_only_sideloaded_snap_is_still_offered_for_removal(self) -> None:
-        """Only the SOURCE side is filtered: a sideloaded snap the source does not have is
-        an ordinary extra-on-target removal candidate, which `snap remove` handles fine.
+    async def test_target_only_sideloaded_snap_is_not_offered_for_removal(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The tool must not offer to delete a snap it cannot reinstall: a sideloaded snap
+        only the target has is named and left alone, not turned into a removal candidate.
         """
         target = _HEADER + "orphan    9.0        x3     -               -            try\n"
         context, _source, _target = make_context(
@@ -888,10 +890,28 @@ class TestSideloadedSnaps:
         )
         job = SnapSyncJob(context)
 
+        with caplog.at_level(logging.WARNING, logger="pcswitcher.jobs.base"):
+            plan = await job.plan()
+
+        assert plan.diffs == ()
+        assert "orphan" in caplog.records[0].message
+
+    @pytest.mark.asyncio
+    async def test_store_snap_the_target_sideloaded_under_the_same_name_produces_no_diff(self) -> None:
+        """The target's sideloaded copy is what `snap install` would have to displace, so
+        the name is withheld on both machines rather than offered as an install.
+        """
+        source = _HEADER + "beta      2.0        20     latest/stable   pub✓         -\n"
+        target = _HEADER + "beta      1.0        x1     -               -            try\n"
+        context, _source, _target = make_context(
+            source_responses={"snap list --all": CommandResult(0, source, "")},
+            target_responses={"snap list --all": CommandResult(0, target, "")},
+        )
+        job = SnapSyncJob(context)
+
         plan = await job.plan()
 
-        orphan = next(d for d in plan.diffs if d.item_id == "snap:orphan")
-        assert orphan.action == DiffAction.REMOVE
+        assert plan.diffs == ()
 
     @pytest.mark.asyncio
     async def test_sideloaded_snap_present_on_both_is_not_proposed_for_removal(self) -> None:

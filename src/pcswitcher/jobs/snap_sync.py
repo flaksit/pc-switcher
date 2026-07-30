@@ -496,6 +496,18 @@ class SnapSyncJob(PackageSyncJob):
         require_answer(command, result, Host.TARGET)
         return _parse_snap_list(result.stdout)
 
+    def _warn_sideloaded(self, host: Host, sideloaded: Sequence[SnapItem]) -> None:
+        """Name what this machine holds that the run leaves unmanaged, once per machine."""
+        if not sideloaded:
+            return
+        self._log(
+            host,
+            LogLevel.WARNING,
+            "Ignoring snap(s) installed from a local file: their revision exists in no store, so pc-switcher "
+            "neither installs nor removes them — "
+            + ", ".join(f"{item.name} (revision {item.revision})" for item in sideloaded),
+        )
+
     @override
     async def plan(self) -> PackagePlan:
         """Load decision files -> capture -> query -> diff -> build review groups.
@@ -505,12 +517,12 @@ class SnapSyncJob(PackageSyncJob):
         Caches the filtered source/target items by id for `converge()` (see
         `__init__`), since `ItemDiff.item_id` alone carries no revision/channel data.
 
-        Sideloaded source snaps are reported once and dropped from the diff input:
-        reproducing them is not implemented (there is no mechanism to carry the `.snap`
-        bytes to the target), so every diff they could produce — install, revision/channel
-        change, and the `snap:hold:` diff `_diff_snap_holds` derives from a source snap —
-        would be an item that can only fail at converge, every run. A warning states that
-        once; no review item is emitted, since the user has no action to take on it.
+        Sideloaded snaps on either machine are named in a warning and dropped from the
+        diff input: their revision exists in no store and nothing carries the `.snap`
+        bytes between machines, so the run can neither reproduce one nor replace one it
+        removes. Every diff they could produce — install, revision/channel change, the
+        `snap:hold:` diff `_diff_snap_holds` derives from a source snap, and removal — is
+        withheld; the warning is all the user gets, since there is no action to take.
         """
         source_decisions = await DecisionFile(self.manager_id, self.source).load()
         target_decisions = await DecisionFile(self.manager_id, self.target).load()
@@ -518,22 +530,18 @@ class SnapSyncJob(PackageSyncJob):
         source_items = await filter_inert(await self.capture_source_items(), source_decisions)
         target_items = await filter_inert(await self.query_target_items(), target_decisions)
 
-        source_items, sideloaded = _partition_sideloaded(source_items)
-        if sideloaded:
-            self._log(
-                Host.SOURCE,
-                LogLevel.WARNING,
-                "Skipping snap(s) installed from a local file: their revision exists in no store, so they "
-                "cannot be reproduced on the target — "
-                + ", ".join(f"{item.name} (revision {item.revision})" for item in sideloaded),
-            )
-            # The target's own entry for those names goes with them. Dropping only the
-            # source side would leave the target's copy unmatched, and an unmatched target
-            # snap is an EXTRA_ON_TARGET removal — turning "cannot reproduce this" into
-            # "propose deleting it there". A sideloaded snap the source does NOT have stays
-            # an ordinary removal candidate: its name is not in this set.
-            withheld = {item.name for item in sideloaded}
-            target_items = [item for item in target_items if item.name not in withheld]
+        source_items, source_sideloaded = _partition_sideloaded(source_items)
+        target_items, target_sideloaded = _partition_sideloaded(target_items)
+        self._warn_sideloaded(Host.SOURCE, source_sideloaded)
+        self._warn_sideloaded(Host.TARGET, target_sideloaded)
+        # A name sideloaded on ONE machine leaves the diff on BOTH. Dropping only the
+        # machine holding the sideloaded copy would leave the other machine's entry
+        # unmatched, and an unmatched entry is an item: a source-only install whose
+        # target already holds a sideloaded copy of that name, or an EXTRA_ON_TARGET
+        # removal of a snap nothing can reinstall.
+        withheld = {item.name for item in (*source_sideloaded, *target_sideloaded)}
+        source_items = [item for item in source_items if item.name not in withheld]
+        target_items = [item for item in target_items if item.name not in withheld]
 
         self._source_items_by_id = {item.item_id: item for item in source_items}
         self._target_items_by_id = {item.item_id: item for item in target_items}

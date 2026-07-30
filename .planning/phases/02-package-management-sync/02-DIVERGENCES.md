@@ -36,7 +36,9 @@ This is a user-visible precondition — it decides whether the job can run at al
 
 Resolved 2026-07-29. `PKG-NG-SIDELOAD` claimed sideloaded snaps "cannot be reproduced" as an accepted cost, which #221 contradicts — a snippet running `snap install --dangerous` reproduces one. The article is deleted: it described deferred work as a deliberate non-goal.
 
-The replacement ruling is that sideloaded snaps are out of scope entirely and ignored on both machines, rather than half-handled. `PKG-FR-SNAP-SIDELOAD` now says so, and the code's remaining half — a sideloaded snap only the target has is still an ordinary removal candidate, so the tool can offer to delete a snap it cannot reinstall — is recorded in the criteria's gap register.
+The replacement ruling is that sideloaded snaps are out of scope entirely and ignored on both machines, rather than half-handled. `PKG-FR-SNAP-SIDELOAD` now says so.
+
+**Closed 2026-07-30 (U6).** `SnapSyncJob.plan` partitions both machines' listings, warns per machine naming what it found, and withholds every name sideloaded on either machine from both — so a target-only sideloaded snap is no longer a removal candidate, and a store snap the target sideloaded under the same name is no longer an install.
 
 ## DIV-05 — Cross-manager review is asserted in one comment and denied everywhere else
 

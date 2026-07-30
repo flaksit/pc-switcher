@@ -37,9 +37,9 @@ The consequence is worth knowing: the two jobs have separate enable flags, and `
 
 ## Job ordering is enforced
 
-The three package-manager jobs **must** be listed before `folder_sync` in `sync_jobs`. This is not a convention: pc-switcher validates the order and aborts the run with a config error if any of `apt_sync`, `snap_sync` or `flatpak_sync` is enabled but sits after `folder_sync` (`orchestrator._check_package_jobs_precede_folder_sync`).
+All four package jobs **must** be listed before `folder_sync` in `sync_jobs`. This is not a convention: pc-switcher validates the order and aborts the run with a config error if any of `apt_sync`, `snap_sync`, `flatpak_sync` or `manual_installs_sync` is enabled but sits after `folder_sync` (`orchestrator._check_package_jobs_precede_folder_sync`).
 
-The reason is the "defaults, then your data" layering. Installing software usually writes its own default config and data files on first appearance. If `folder_sync` ran first, the target would have your synced versions of those files, and then the fresh install would overwrite them with stock defaults. Running the package jobs first means the software (and its defaults) already exists when `folder_sync` lands your versions on top — so your tweaks win, not the installer's defaults.
+The reason is the "defaults, then your data" layering. Installing software usually writes its own default config and data files on first appearance. If `folder_sync` ran first, the target would have your synced versions of those files, and then the fresh install would overwrite them with stock defaults. Running the package jobs first means the software (and its defaults) already exists when `folder_sync` lands your versions on top — so your tweaks win, not the installer's defaults. `manual_installs_sync` is in the rule for the same reason: your snippet installs software, and that software writes its own defaults too.
 
 ## Batched review
 
@@ -233,7 +233,7 @@ A package sync compares what the source has with what the target has. If one of 
 
 An empty *answer* is different and is left alone: a machine with no snaps, no flatpaks, no held packages and no pins is an ordinary machine, and syncing it is ordinary work.
 
-Today a job stopping this way ends the whole sync, including jobs that had nothing to do with the failure. That is a known limitation and is being addressed separately.
+Only that job stops. The run continues with the others and reports the failed one by name, because a read that went dark on one package manager says nothing about the work another one has already had approved.
 
 ## Non-interactive runs
 
@@ -253,7 +253,7 @@ snap is the exception: it converges the source's exact **revision and channel**.
 
 With both machines on the same revision, snap application data now follows you: `folder_sync` mirrors the current-revision data directory (`~/snap/<app>/<current-rev>/`, resolved through snapd's `current` symlink) plus the revision-independent `~/snap/<app>/common`. Retained older-revision directories — revisions the target's snapd never installed — stay excluded to avoid leaving orphan data behind.
 
-A snap installed from a local `.snap` file (`snap install --dangerous`, `snap try`) is the one thing snap sync leaves alone. Such a snap has a revision no store can serve — `snap list` shows it with an `x` prefix, `x1`, `x2` — and pc-switcher has no way to carry the file itself to the other machine. Sideloaded snaps on the source are therefore named in a warning and skipped: they produce no review item, and neither does a hold set on one. Reproducing one on the other machine is manual work. A sideloaded snap that exists only on the *target* is unaffected — it is still offered for removal like any other snap the source does not have.
+A snap installed from a local `.snap` file (`snap install --dangerous`, `snap try`) is the one thing snap sync leaves alone. Such a snap has a revision no store can serve — `snap list` shows it with an `x` prefix, `x1`, `x2` — and pc-switcher has no way to carry the file itself to the other machine. Sideloaded snaps are named in a warning and otherwise left alone, on whichever machine they sit: they are never installed, never removed, and produce no review item, nor does a hold set on one. A snap only the target has is no exception — the run will not offer to delete something it could not put back. Reproducing one on the other machine is manual work.
 
 To keep the revision from changing mid-sync, snapd's **automatic** refresh is briefly paused on both machines for the duration of the run (snapd auto-refreshes several times a day, even for closed apps). The pause blocks only automatic refreshes; snap_sync's own `--revision` convergence still works. Each machine's prior refresh policy is read before the pause and written back when the run ends, so a hold you set yourself — including an indefinite one — survives the sync. If that prior value cannot be read on a machine, its refresh policy is left untouched rather than cleared; the pause pc-switcher set expires on its own a few hours later.
 

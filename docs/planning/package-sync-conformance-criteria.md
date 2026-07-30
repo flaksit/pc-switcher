@@ -335,10 +335,6 @@ Every article above was read against the code at `0abe7670`. What is listed here
 - **PKG-FR-APT-HOLD-INERT** is unverified. `packages.PackageConverger.hold` runs `apt-mark hold` whatever happened to the package, so a hold whose install was skipped or failed fails alone only if `apt-mark` refuses a package the target does not have. That has not been measured.
 - **PKG-FR-DERIVED-VISIBLE** is not met for signing keys. `etc_apt.EtcApt._write_derived` logs each repository, pin and distribution file as it lands and `AptSyncJob.apply` previews the same set, but `keyrings.Keyrings.provision` logs only on failure, `remove_unused` logs only on failure, and `derived.DerivedWrites.all_writes` excludes both — so a key copied onto the target, or deleted from it, appears in no log line and in no dry run.
 
-### snap
-
-- **PKG-FR-SNAP-SIDELOAD** is half implemented. `SnapSyncJob.plan` withholds a sideloaded snap the source also has and names it, but one only the target has is an ordinary removal candidate and is named nowhere — so the tool can offer to delete a snap it cannot reinstall.
-
 ### flatpak
 
 - **PKG-FR-FLATPAK-REMOTE-DELETE** is not implemented. `flatpak_sync._diff_flatpak_remotes` offers a target-only remote for deletion as a two-answer review item, so the user can delete a remote that machine-specific or origin-diverged applications still depend on.
