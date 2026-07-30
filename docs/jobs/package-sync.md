@@ -239,6 +239,8 @@ A run without a TTY prompts for nothing, so every review item comes back skip-no
 
 A skipped package job applies nothing, records no decision, and pushes no install-snippet registry. The session still completes and the exit code is unchanged, so a headless run says plainly that it converged nothing rather than reporting four successful package syncs.
 
+No run without a terminal pushes the registry, not even the one that reports SUCCESS because its review was empty. An empty review says this run's scan found nothing to ask about; the registry on disk still holds every snippet you have ever authored, and sending it over the target's copy is a change nobody approved.
+
 One environment variable overrides all of that, and it is not a feature: `PCSWITCHER_PACKAGE_REVIEW_AUTOMATION` carries a JSON map of item id to decision and answers a package review without asking. It exists so the integration tests can exercise a review with no terminal to answer at, and it appears in no help text and no configuration key. Its answers count as yours — a permanent one writes a machine-specific mark or an install snippet — so anything that sets it on a real run makes silent, unreviewed, permanent decisions on your machines.
 
 ## Versions

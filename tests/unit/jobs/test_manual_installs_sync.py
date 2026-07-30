@@ -1062,6 +1062,32 @@ class TestSnippetPush:
         target.send_file.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_a_run_with_no_terminal_pushes_nothing_even_with_nothing_to_review(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`PKG-FR-NO-TERMINAL`: a non-interactive run transfers no registry. A scan that
+        finds nothing raises no `JobSkipped` — the target already matches, so the job
+        succeeds (`PKG-FR-OUTCOME-SUCCESS`) — and the push must still not happen: the
+        registry on disk holds entries from earlier runs that nobody approved sending
+        tonight.
+        """
+        self._write_source_registry(tmp_path)
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        context, _source, target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "gh\n", ""),
+                "apt-cache policy": CommandResult(0, _POLICY_REPO_INSTALLED, ""),
+                "find ": CommandResult(0, "", ""),
+            },
+            reviewer=FakeReviewer(was_interactive=False),
+        )
+        job = ManualInstallsSyncJob(context)
+
+        await job.execute()  # no JobSkipped: the plan is empty
+
+        target.send_file.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_dry_run_pushes_nothing(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         self._write_source_registry(tmp_path)
         monkeypatch.setattr(Path, "home", lambda: tmp_path)

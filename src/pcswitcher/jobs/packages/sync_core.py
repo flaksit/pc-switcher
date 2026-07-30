@@ -27,7 +27,8 @@ review-before-any-change ordering checkable and testable per job:
   outcome, then applies. A `plan()` failure propagates naturally out of `execute()` and
   lands in this job's own `JobResult` through the orchestrator's per-job exception handling.
   A non-interactive run with a NON-EMPTY plan raises `JobSkipped` there instead of applying
-  nothing and reporting SUCCESS; an empty plan on the same path stays SUCCESS.
+  nothing and reporting SUCCESS; an empty plan on the same path stays SUCCESS, and either
+  way `after_review()` is skipped so nothing is transferred without an answer.
 """
 
 from __future__ import annotations
@@ -387,7 +388,8 @@ class PackageSyncJob(SyncJob):
 
     async def after_review(self) -> None:
         """Hook: work that must run AFTER this job's review returns but BEFORE any
-        mutation on the target (`apply()`).
+        mutation on the target (`apply()`). Called only when the review was interactive
+        (`execute()`), since everything this seam exists for acts on an answer.
 
         No-op on the base — the three managers that produce no unreproducible items (apt,
         snap, flatpak) need nothing between review and converge. Only `manual_installs_sync`
@@ -605,10 +607,16 @@ class PackageSyncJob(SyncJob):
 
         A non-interactive run with a non-empty plan raises `JobSkipped`: D-26 forces every
         item to SKIP_ONCE with nobody present to decide, so continuing would converge
-        nothing and report SUCCESS. It is raised before `after_review()`, so
-        `manual_installs_sync` does not push its registry either, and before any mutating
-        command, as `JobSkipped` requires. An EMPTY plan on the same path stays SUCCESS —
-        the target already matches the source, which is the goal met.
+        nothing and report SUCCESS. It is raised before any mutating command, as
+        `JobSkipped` requires. An EMPTY plan on the same path stays SUCCESS — the target
+        already matches the source, which is the goal met.
+
+        `after_review()` runs only when a human answered (`PKG-FR-NO-TERMINAL`: a
+        non-interactive run transfers no registry). The empty-plan case is exactly where
+        that matters: `manual_installs_sync`'s hook pushes the SOURCE's whole snippet
+        registry, which carries entries from earlier runs, so "this run found nothing to
+        review" is not "this run has nothing to transfer". Gated here rather than in the
+        hook so the rule holds for any job that ever needs the seam.
         """
         assert self.context.reviewer is not None, (
             f"{self.manager_id} sync has no reviewer; the orchestrator must inject one "
@@ -622,5 +630,6 @@ class PackageSyncJob(SyncJob):
                 f"non-interactive run left every {self.manager_id} review item undecided",
             )
         self.accept_review(plan, outcome)
-        await self.after_review()
+        if outcome.was_interactive:
+            await self.after_review()
         await self.apply()

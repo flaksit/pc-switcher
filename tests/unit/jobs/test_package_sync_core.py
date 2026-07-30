@@ -805,12 +805,27 @@ class TestExecuteSelfContained:
         assert job.converge_calls == []
 
     @pytest.mark.asyncio
-    async def test_an_empty_plan_is_still_a_success(self) -> None:
+    async def test_an_empty_plan_is_still_a_success_and_transfers_nothing(self) -> None:
         """Same non-interactive path, nothing to decide: the target already matches the
         source, which is the goal met — not a skip.
+
+        The `after_review` seam is still skipped (`PKG-FR-NO-TERMINAL`). An empty plan says
+        this run's scan found nothing to review, not that there is nothing to transfer:
+        `manual_installs_sync` pushes the source's whole snippet registry there, entries
+        from earlier runs included.
         """
         events: list[str] = []
         reviewer = _RecordingReviewer(events, was_interactive=False)
+        job = _OrderRecordingJob(make_context(reviewer=reviewer), events)
+
+        await job.execute()
+
+        assert events == ["plan", "review", "accept_review", "apply"]
+
+    @pytest.mark.asyncio
+    async def test_the_after_review_seam_runs_when_a_human_answered(self) -> None:
+        events: list[str] = []
+        reviewer = _RecordingReviewer(events, was_interactive=True)
         job = _OrderRecordingJob(make_context(reviewer=reviewer), events)
 
         await job.execute()
