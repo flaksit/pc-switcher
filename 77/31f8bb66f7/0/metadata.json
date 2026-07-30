@@ -1,0 +1,69 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "7731f8bb66f7",
+  "session_id": "354077f7-8171-4dc7-8e2f-e2c4e73a7888",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-30T23:46:56.977014468Z",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 1,
+  "save_step_count": 2,
+  "files_touched": [
+    "docs/jobs/package-sync.md",
+    "docs/system/package-sync.md",
+    "src/pcswitcher/jobs/flatpak_sync.py",
+    "tests/unit/jobs/test_flatpak_sync.py"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "ceb9fabeda2a",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 394,
+    "cache_creation_tokens": 454112,
+    "cache_read_tokens": 52967010,
+    "output_tokens": 157518,
+    "api_call_count": 208
+  },
+  "session_metrics": {
+    "turn_count": 22
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-30T23:46:56.774398925Z",
+    "agent_lines": 0,
+    "agent_removed": 1,
+    "human_added": 215,
+    "human_modified": 6,
+    "human_removed": 0,
+    "total_committed": 215,
+    "total_lines_changed": 222,
+    "agent_percentage": 0.45045045045045046,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 409,
+      "user_lines_removed": 95,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9,
+        "docs/jobs/package-sync.md": 2,
+        "src/pcswitcher/jobs/flatpak_sync.py": 84,
+        "src/pcswitcher/jobs/packages/sync_core.py": 16,
+        "src/pcswitcher/orchestrator.py": 12,
+        "tests/unit/jobs/test_flatpak_sync.py": 135,
+        "tests/unit/orchestrator/test_job_failure_isolation.py": 149,
+        "tests/unit/orchestrator/test_session_status_from_job_results.py": 2
+      },
+      "user_removed_per_file": {
+        "src/pcswitcher/jobs/flatpak_sync.py": 3,
+        "src/pcswitcher/jobs/packages/sync_core.py": 7,
+        "src/pcswitcher/orchestrator.py": 3,
+        "tests/unit/jobs/test_flatpak_sync.py": 3,
+        "tests/unit/orchestrator/test_probe_failure_isolation.py": 78,
+        "tests/unit/orchestrator/test_session_status_from_job_results.py": 1
+      }
+    }
+  ]
+}
