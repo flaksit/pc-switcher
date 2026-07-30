@@ -1,0 +1,100 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "3894f4fe4350",
+  "session_id": "a0fc14c1-6e48-4642-8170-4cbe4a8ffcec",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-30T16:50:31.729948345Z",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 2,
+  "save_step_count": 3,
+  "files_touched": [
+    "docs/adr/adr-020-declarative-package-convergence.md",
+    "docs/jobs/package-sync.md",
+    "src/pcswitcher/jobs/apt_sync/collateral.py",
+    "src/pcswitcher/jobs/apt_sync/diffing.py",
+    "src/pcswitcher/jobs/apt_sync/items.py",
+    "src/pcswitcher/jobs/apt_sync/job.py",
+    "src/pcswitcher/jobs/apt_sync/messages.py",
+    "src/pcswitcher/jobs/flatpak_sync.py",
+    "src/pcswitcher/jobs/packages/decision_list.py",
+    "src/pcswitcher/jobs/packages/items.py",
+    "src/pcswitcher/jobs/packages/prompt_navigation.py",
+    "src/pcswitcher/jobs/packages/review.py",
+    "src/pcswitcher/jobs/packages/sync_core.py",
+    "tests/manual/review_harness.py",
+    "tests/unit/jobs/test_apt_sync.py",
+    "tests/unit/jobs/test_decision_list.py",
+    "tests/unit/jobs/test_package_review.py",
+    "tests/unit/jobs/test_package_sync_core.py",
+    "tests/unit/jobs/test_review_skip_always.py"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "1338d9ae340e",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 609,
+    "cache_creation_tokens": 953572,
+    "cache_read_tokens": 80441067,
+    "output_tokens": 224646,
+    "api_call_count": 323
+  },
+  "session_metrics": {
+    "turn_count": 12
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-30T16:50:31.596072554Z",
+    "agent_lines": 0,
+    "agent_removed": 70,
+    "human_added": 2200,
+    "human_modified": 426,
+    "human_removed": 0,
+    "total_committed": 2421,
+    "total_lines_changed": 2696,
+    "agent_percentage": 2.596439169139466,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 205,
+      "user_lines_removed": 81,
+      "agent_lines_added": 417,
+      "agent_lines_removed": 127,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9,
+        "src/pcswitcher/jobs/apt_sync/items.py": 6,
+        "src/pcswitcher/jobs/packages/decision_list.py": 5,
+        "src/pcswitcher/jobs/packages/review.py": 112,
+        "tests/manual/review_harness.py": 53,
+        "tests/unit/jobs/test_apt_sync.py": 6,
+        "tests/unit/jobs/test_package_review.py": 14
+      },
+      "user_removed_per_file": {
+        "src/pcswitcher/jobs/apt_sync/items.py": 2,
+        "src/pcswitcher/jobs/packages/decision_list.py": 1,
+        "src/pcswitcher/jobs/packages/review.py": 65,
+        "tests/manual/review_harness.py": 5,
+        "tests/unit/jobs/test_apt_sync.py": 2,
+        "tests/unit/jobs/test_package_review.py": 6
+      }
+    },
+    {
+      "checkpoint_number": 4,
+      "user_lines_added": 9,
+      "user_lines_removed": 0,
+      "agent_lines_added": 1040,
+      "agent_lines_removed": 382,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9
+      }
+    }
+  ]
+}
