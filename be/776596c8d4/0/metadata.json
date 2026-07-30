@@ -1,0 +1,74 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "be776596c8d4",
+  "session_id": "354077f7-8171-4dc7-8e2f-e2c4e73a7888",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-30T21:43:57.261527258Z",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 1,
+  "save_step_count": 2,
+  "files_touched": [
+    ".planning/phases/02-package-management-sync/02-DOC-DEBT.md",
+    "docs/adr/adr-022-broken-tool-fails-fast-bad-data-is-handled.md",
+    "docs/planning/package-sync-conformance-criteria.md",
+    "docs/system/package-sync.md",
+    "src/pcswitcher/jobs/packages/probes.py",
+    "src/pcswitcher/orchestrator.py",
+    "tests/unit/orchestrator/test_config_system.py"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "e1f4833b2ac3",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 296,
+    "cache_creation_tokens": 318600,
+    "cache_read_tokens": 31664629,
+    "output_tokens": 95963,
+    "api_call_count": 156
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-30T21:43:57.152650459Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 106,
+    "human_modified": 31,
+    "human_removed": 0,
+    "total_committed": 106,
+    "total_lines_changed": 137,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 155,
+      "user_lines_removed": 41,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9,
+        "docs/adr/adr-022-broken-tool-fails-fast-bad-data-is-handled.md": 5,
+        "docs/system/package-sync.md": 2,
+        "src/pcswitcher/jobs/flatpak_sync.py": 9,
+        "src/pcswitcher/jobs/packages/probes.py": 5,
+        "src/pcswitcher/orchestrator.py": 20,
+        "tests/unit/orchestrator/test_config_system.py": 27,
+        "tests/unit/orchestrator/test_probe_failure_isolation.py": 78
+      },
+      "user_removed_per_file": {
+        ".planning/phases/02-package-management-sync/02-DOC-DEBT.md": 2,
+        "docs/adr/adr-022-broken-tool-fails-fast-bad-data-is-handled.md": 3,
+        "docs/planning/package-sync-conformance-criteria.md": 5,
+        "docs/system/package-sync.md": 2,
+        "src/pcswitcher/jobs/flatpak_sync.py": 10,
+        "src/pcswitcher/jobs/packages/probes.py": 3,
+        "src/pcswitcher/orchestrator.py": 12,
+        "tests/unit/orchestrator/test_config_system.py": 4
+      }
+    }
+  ]
+}

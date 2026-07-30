@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "be776596c8d4",
+  "strategy": "manual-commit",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/02-package-management-sync/02-DOC-DEBT.md",
+    "docs/adr/adr-022-broken-tool-fails-fast-bad-data-is-handled.md",
+    "docs/planning/package-sync-conformance-criteria.md",
+    "docs/system/package-sync.md",
+    "src/pcswitcher/jobs/packages/probes.py",
+    "src/pcswitcher/orchestrator.py",
+    "tests/unit/orchestrator/test_config_system.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/be/776596c8d4/0/metadata.json",
+      "transcript": "/be/776596c8d4/0/full.jsonl",
+      "compact_transcript": "/be/776596c8d4/0/transcript.jsonl",
+      "content_hash": "/be/776596c8d4/0/content_hash.txt",
+      "prompt": "/be/776596c8d4/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 296,
+    "cache_creation_tokens": 318600,
+    "cache_read_tokens": 31664629,
+    "output_tokens": 95963,
+    "api_call_count": 156
+  }
+}
