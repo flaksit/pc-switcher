@@ -488,10 +488,10 @@ class AptSyncJob(PackageSyncJob):
 
     @override
     def _build_review_groups(self, diffs: Sequence[ItemDiff]) -> tuple[ReviewGroup, ...]:
-        """Carve apt's two non-standard screens out of the ordinary checkbox groups.
+        """Carve apt's two non-standard screens out of the ordinary decision groups.
 
         Repository and pin DELETIONS (ADR-020 D-07) become
-        `REPO_REMOVAL_REVIEW_ACTION` groups: still checkbox lists, still unticked, but
+        `REPO_REMOVAL_REVIEW_ACTION` groups: the same decision screen starting at skip-once, but
         offered only two answers because a permanent machine-local mark on a file whose
         purpose is to feed packages would silently change where those packages come from
         forever. Manual-collateral diffs (D-30) become a `COLLATERAL_REVIEW_ACTION` group

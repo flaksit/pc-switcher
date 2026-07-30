@@ -43,15 +43,12 @@ review spanning two managers (D-15, D-24).
 
 Revision AND channel differences share one `DiffAction.CHANGE` diff per snap, tagged
 `ItemClass.SNAP` in both cases (never `ItemClass.SNAP_CHANNEL`) even though a
-same-revision retrack is conceptually "just" a channel change: `PackageSyncJob.
-_build_review_groups` derives one action_label verb per REVIEW GROUP from its first
-entry's `item_class` (its own docstring flags this as unhandled for "a manager mixing
-item classes under one action"), so tagging some CHANGE diffs `SNAP` and others
-`SNAP_CHANNEL` would risk one of the two kinds getting the other's verb whenever both
-occur in the same run. Using one item_class for every CHANGE diff avoids that
-mislabeling entirely; the diff's `detail` text still names both revisions or both
-channels, satisfying D-07's "review names the concrete action" without depending on a
-shared-core behavior this plan does not own.
+same-revision retrack is conceptually "just" a channel change: one change can move both
+at once, so no per-facet class can name it, and `PackageSyncJob._build_review_groups`
+keys its groups on `(action, item_class)` — tagging some CHANGE diffs `SNAP_CHANNEL`
+would put one snap's convergence on one screen or another according to which facets
+happened to differ, for a decision that is the same either way. The diff's `detail` names
+every value that differs, satisfying D-07's "review names the concrete action".
 """
 
 from __future__ import annotations
