@@ -844,18 +844,41 @@ class TestPackageJobsBeforeFolderSyncStructuralCheck:
         assert errors[0].job == "flatpak_sync"
         assert "folder_sync" in errors[0].message
 
-    def test_all_three_package_jobs_after_folder_sync_yields_three_errors(self) -> None:
+    def test_all_four_package_jobs_after_folder_sync_yield_four_errors(self) -> None:
         orchestrator = self._orchestrator(
-            {"folder_sync": True, "apt_sync": True, "snap_sync": True, "flatpak_sync": True}
+            {
+                "folder_sync": True,
+                "apt_sync": True,
+                "snap_sync": True,
+                "flatpak_sync": True,
+                "manual_installs_sync": True,
+            }
         )
 
         errors = orchestrator._check_package_jobs_precede_folder_sync()  # pyright: ignore[reportPrivateUsage]
 
-        assert {e.job for e in errors} == {"apt_sync", "snap_sync", "flatpak_sync"}
+        assert {e.job for e in errors} == {"apt_sync", "snap_sync", "flatpak_sync", "manual_installs_sync"}
+
+    def test_manual_installs_after_folder_sync_yields_a_config_error(self) -> None:
+        """Replaying an install snippet puts software on the target, and that software
+        writes its own stock defaults exactly as a package's postinst does — so the
+        ordering rule covers all four package jobs, not only the three managers.
+        """
+        orchestrator = self._orchestrator({"folder_sync": True, "manual_installs_sync": True})
+
+        errors = orchestrator._check_package_jobs_precede_folder_sync()  # pyright: ignore[reportPrivateUsage]
+
+        assert [e.job for e in errors] == ["manual_installs_sync"]
 
     def test_package_jobs_before_folder_sync_yields_no_error(self) -> None:
         orchestrator = self._orchestrator(
-            {"apt_sync": True, "snap_sync": True, "flatpak_sync": True, "folder_sync": True}
+            {
+                "apt_sync": True,
+                "snap_sync": True,
+                "flatpak_sync": True,
+                "manual_installs_sync": True,
+                "folder_sync": True,
+            }
         )
 
         errors = orchestrator._check_package_jobs_precede_folder_sync()  # pyright: ignore[reportPrivateUsage]

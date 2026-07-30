@@ -87,9 +87,11 @@ The measured evidence behind `answers=`: `apt-cache policy <unknown-name>` exits
 
 `apt-mark showmanual` with `/var/lib/dpkg/status` absent exits **0** and prints **nothing** (measured in a stock `ubuntu:24.04`). That is a broken machine whose answer is byte-identical to a machine with no manually-installed packages, and no `answers=` guard is applied to it, because an empty manual set is a legitimate — if strange — state and failing on it would be a false failure. It is accepted knowingly: every other way apt fails to read its status exits 100 and is caught, and a machine whose dpkg status file has been deleted has larger problems than a sync.
 
-### D-06: Job-level failure is the floor, not the ceiling, and today it is also the ceiling
+### D-06: Job-level failure is the ceiling
 
-Today a `ProbeFailed` escaping a job aborts the entire run: the orchestrator's default `except Exception` arm records the job FAILED and re-raises. So a transient apt lock currently stops `folder_sync` too. That is known, deliberate for now, and tracked as **GitHub issue #220** (job failure independence), which is the accepted follow-up: the four package jobs, `folder_sync` and `vscode_state_sync` are independent enough that one failing should not stop the others, while a core/system job failing must still abort. Until #220 lands, "fail the job" and "fail the run" are the same event for these reads. Nothing in this ADR depends on which of the two it is — the requirement is that the failure is loud, attributed to the command, and not silently absorbed into a manifest.
+A `ProbeFailed` escaping a job fails that job and no more: the orchestrator records it FAILED on the same non-aborting arm as `PackageItemFailures` and runs the rest, so a transient apt lock no longer stops `folder_sync`. The four package jobs are independent by D-15/D-16, which is what makes one manager's dead read no evidence about another's already-approved work.
+
+This is the package half of **GitHub issue #220** (job failure independence). The issue stays open for the rest: every other exception out of a job still aborts the run, so a `folder_sync` or `vscode_state_sync` failure remains terminal, and deciding which core jobs must stay terminal belongs there.
 
 ### D-07: One shared mechanism, no shared base class
 
@@ -106,7 +108,7 @@ The guard lives in `src/pcswitcher/jobs/packages/probes.py` as free functions, a
 - The classification is written down per call site, so the next read added to these jobs has to state which category it is in rather than defaulting to the dangerous one.
 
 **Negative:**
-- Until #220, one broken read in one package job aborts the whole run, including jobs that had nothing to do with it. This is a real regression in availability, taken deliberately in exchange for not shipping wrong changes.
+- One broken read costs its whole job, including the items that had nothing to do with it. This is a real loss of availability, taken deliberately in exchange for not shipping wrong changes.
 - Two commands are now shaped for their exit code rather than for the shortest expression of the query, and a future edit that "simplifies" the `test -d` wrapper or the `-path` selectors back to the obvious form silently reintroduces the ambiguity. The comments at both sites say so.
 - The `answers=` judgement (D-04) can fail a run that had nothing wrong with it, on the three `apt-cache policy` probes that carry it. Known, and preferred to the alternative.
 - The classification is per command and cannot be derived mechanically, so it is only as good as the measurement behind each call site. A tool that changes its exit-code behaviour in a future release breaks the classification silently.

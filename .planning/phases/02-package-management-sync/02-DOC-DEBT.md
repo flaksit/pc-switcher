@@ -6,8 +6,6 @@ Documentation that is accurate about the code at `0abe7670` and stops being accu
 
 | Where | What it says now | Unit |
 | - | - | - |
-| `docs/jobs/package-sync.md` § Job ordering is enforced; `docs/system/package-sync.md` intro | three package-manager jobs must precede `folder_sync` | U3 (`PKG-FR-JOB-ORDER`) |
-| `docs/jobs/package-sync.md` § When a package manager cannot be read, last paragraph; `docs/system/package-sync.md` shared-core bullet ("Until GitHub issue #220 lands") | a failed read ends the whole sync | U3 (`PKG-FR-READ-FAILS-JOB`) |
 | `docs/jobs/package-sync.md` § apt collateral | collateral is "remove or downgrade"; nothing said about which removals exempt a package | U1 (`PKG-FR-COLLATERAL-MANUAL`, `PKG-FR-COLLATERAL-MARKED`, `PKG-FR-COLLATERAL-AUTO`) |
 | `docs/jobs/package-sync.md` §§ Batched review, Deletions; `docs/system/package-sync.md` apt item-classes bullet; `docs/system/data-model.md` item table | an apt repository the source no longer has is offered for deletion whatever still uses it | U4 (`PKG-FR-REPO-DELETE`) |
 | `docs/jobs/package-sync.md` §§ Batched review, Deletions, Flatpak remotes; `docs/system/package-sync.md` flatpak item-classes bullet; `docs/system/data-model.md` item table | a flatpak remote is a two-answer review item in the removal case | U5 (`PKG-FR-FLATPAK-REMOTE-DELETE`) |

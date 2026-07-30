@@ -29,6 +29,7 @@ from pcswitcher.jobs.btrfs import BtrfsSnapshotJob
 from pcswitcher.jobs.context import JobContext
 from pcswitcher.jobs.disk_space_monitor import DiskSpaceMonitorJob
 from pcswitcher.jobs.install_on_target import InstallOnTargetJob
+from pcswitcher.jobs.packages.probes import ProbeFailed
 from pcswitcher.jobs.packages.review import Reviewer, TerminalUIReviewer
 from pcswitcher.jobs.packages.sync_core import PackageItemFailures
 from pcswitcher.lock import (
@@ -1053,10 +1054,15 @@ class Orchestrator:
         return jobs, unresolved
 
     def _check_package_jobs_precede_folder_sync(self) -> list[ConfigError]:
-        """D-17: apt_sync/snap_sync/flatpak_sync must run before folder_sync — apps are
-        provisioned first, then their data lands on top (decisive for flatpak, where
-        `flatpak install` must create `~/.local/share/flatpak` before folder_sync would
-        otherwise land `~/.var/app` on top).
+        """D-17: all four package jobs must run before folder_sync — apps are provisioned
+        first, then their data lands on top (decisive for flatpak, where `flatpak install`
+        must create `~/.local/share/flatpak` before folder_sync would otherwise land
+        `~/.var/app` on top).
+
+        `manual_installs_sync` is in the rule for the same reason as the three package
+        managers: replaying an install snippet puts software on the target, and that
+        software writes its own stock defaults on first appearance exactly as a package's
+        postinst does.
 
         The shipped `default-config.yaml` encodes this ordering only by key order
         (jobs run in `self._config.sync_jobs.items()` order) — a user who hand-edits
@@ -1079,7 +1085,7 @@ class Orchestrator:
                     "provision apps before folder_sync lands their data on top. Move it above folder_sync."
                 ),
             )
-            for job_name in ("apt_sync", "snap_sync", "flatpak_sync")
+            for job_name in ("apt_sync", "snap_sync", "flatpak_sync", "manual_installs_sync")
             if job_name in enabled_order and enabled_order.index(job_name) > folder_sync_index
         ]
 
@@ -1298,13 +1304,15 @@ class Orchestrator:
                             e.reason,
                             extra={"job": "orchestrator", "host": "source"},
                         )
-                    except PackageItemFailures as e:
-                        # The user approved changes across several package managers in
-                        # ONE batched review (D-24); letting one manager's failed items
-                        # cancel another manager's already-approved work would silently
-                        # break that promise. Record this job's FAILED result (D-27) but
-                        # deliberately do NOT re-raise, so the remaining jobs still run —
-                        # every other exception keeps today's abort-the-run behavior.
+                    except (PackageItemFailures, ProbeFailed) as e:
+                        # Each package job reviews and applies its own work; nothing
+                        # coordinates them (D-15/D-16). So one manager's failed items, and
+                        # one manager's read that went dark (ADR-022), say nothing about
+                        # another manager's already-approved work — cancelling it would
+                        # throw away consent the user gave for a job that is still fine.
+                        # Record this job's FAILED result (D-27) but deliberately do NOT
+                        # re-raise, so the remaining jobs still run — every other exception
+                        # keeps today's abort-the-run behavior.
                         ended_at = datetime.now(UTC)
                         results.append(
                             JobResult(

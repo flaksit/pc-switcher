@@ -38,14 +38,16 @@ class ProbeFailed(RuntimeError):
     """A package-manager READ this run's correctness depends on did not answer at all.
 
     Deliberately NOT a `ConvergeItemFailed`. That type means "what we asked for is wrong",
-    which is under our control, belongs to one item, and lets the run continue (ADR-020
+    which is under our control, belongs to one item, and lets the job continue (ADR-020
     D-27). This one means the tool or the machine is broken — a transient network failure,
     a package-manager lock, an interrupted dpkg, a daemon that is not running — which no
-    item's own state explains. It escapes the per-item loops on purpose, so the run fails
+    item's own state explains. It escapes the per-item loops on purpose, so the job fails
     ONCE naming the command that failed rather than N times naming N items.
 
     One type across all four package jobs, because the caller that must react to it is the
-    orchestrator, which has no reason to care which manager's read went dark.
+    orchestrator, which has no reason to care which manager's read went dark. It records
+    this job FAILED and runs the remaining jobs: a dead read in one manager is no evidence
+    about another manager's work.
     """
 
 

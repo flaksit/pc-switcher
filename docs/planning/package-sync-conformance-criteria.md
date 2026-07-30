@@ -342,11 +342,6 @@ Every article above was read against the code at `0abe7670`. What is listed here
 - **PKG-FR-FLATPAK-REMOTE-TRUST** is half implemented. `_remote_trust_flags` replicates an unverified remote as unverified, but the only place that says so is `_trust_mutation_phrase`, which reaches the user under `--confirm-each-command` and in the command trace — an ordinary run is not told.
 - **PKG-FR-FLATPAK-ORIGIN-DIFF** compares by name where no URL exists. `_same_vendor` falls back to comparing remote names when either machine's application names a remote it no longer configures. Ruled: an absent URL is a value of its own and matches nothing, not even another absent one, so those two applications come from different origins and the divergence is reported. `_origin_display` must then say the URL is missing — otherwise both sides print the same remote name and the report states no difference at all.
 
-### Reporting and the log
-
-- **PKG-FR-READ-FAILS-JOB** is not implemented. `PackageItemFailures` is the only exception the orchestrator's job loop records and continues from; `probes.ProbeFailed` falls into the `except Exception` arm, which records FAILED and re-raises, ending the run.
-- **PKG-FR-JOB-ORDER** covers three jobs, not four. `Orchestrator._check_package_jobs_precede_folder_sync` validates `apt_sync`, `snap_sync` and `flatpak_sync`; `manual_installs_sync` may be ordered after `folder_sync` without an error.
-
 ## Traceability
 
 Every article above decomposes exactly one section of [Package sync — user requirements](package-sync-user-requirements.md). 129 articles, no orphans on either side. A new article needs a home here; a narrative section with no articles is either intentionally non-normative or a coverage gap.
