@@ -9,8 +9,8 @@ its own row, the decision it currently carries in a column to the right, one key
 Nothing is echoed afterwards — the answered list stays in the scrollback, and the decision
 column is the record. That also removes the Rich panel that used to precede each screen:
 the control lists the items itself, so a panel above it said everything twice. The panel
-survives only where there is nothing to answer, on the non-interactive path (D-26), where it
-IS the report.
+survives where there is nothing to answer: a report group, and the whole non-interactive
+path (D-26), where it IS the report.
 
 This composes with the single persistent Live display (Phase 1 plans 01-17/01-18) exactly
 as `TerminalUIConfirmer.confirm` (`pcswitcher.confirmer`) does: pause the live region before
@@ -40,9 +40,8 @@ remove direction, which includes the block-state items): apply, skip now, or ski
 treat the item as specific to one machine, which makes it inert here in both roles (D-08a).
 Those are the decisions; what each screen CALLS them is `_options_for` and the hints beside
 them, which say the act, the machine it happens to, and how long the answer lasts.
-`REPORT_ONLY` groups offer the first two only: an informational item has no machine that
-holds it, so a permanent mark would silently stop the underlying package syncing rather than
-stop reporting the condition.
+A `REPORT_ONLY` group is not answerable at all: nothing converges either way and no machine
+holds an informational item, so `_print_report_group` prints it and the review moves on.
 
 `PACKAGE_REVIEW_AUTOMATION_ENV`: undocumented escape hatch for integration tests, which run
 without a TTY and cannot drive a real terminal prompt. When set, its value is trusted JSON
@@ -167,11 +166,7 @@ _REMOVAL_ACTIONS = frozenset({"remove", "delete", "disable", REPO_REMOVAL_REVIEW
 
 # `ReviewGroup.action` values whose items carry a converge verb AND may be recorded
 # machine-specific, and are therefore the only ones whose screen offers the third answer
-# (D-07). A `REPORT_ONLY` group is excluded on purpose: a version mismatch,
-# an unreplicable origin or a cross-vendor mismatch has no machine that HOLDS the item for D-08a to
-# record against, and recording one would stop the package syncing altogether rather than
-# stop reporting the condition. Those are resolved by fixing the underlying condition, not
-# by a machine-specific mark.
+# (D-07).
 #
 # Enumerated independently of `_REMOVAL_ACTIONS` rather than derived from it: "starts at
 # skip-once" and "is offered permanence" are two different questions about a group, and
@@ -179,11 +174,11 @@ _REMOVAL_ACTIONS = frozenset({"remove", "delete", "disable", REPO_REMOVAL_REVIEW
 # is in the first set and deliberately absent from this one.
 _PROMOTABLE_ACTIONS = frozenset({"install", "add", "enable", "change", "remove", "delete", "disable"})
 
-# The two `ReviewGroup.action` values whose screens need their own answer sentences: an
-# item the two machines both have at different versions is neither arriving nor leaving, and
-# a reported condition changes nothing on either machine whatever the user answers. Spelled
-# as the `DiffAction` values rather than imported: `sync_core` imports this module, not the
-# other way round.
+# An item the two machines both have at different versions is neither arriving nor leaving,
+# so its permanent answer names a different holder from an install's (`_hints`). A reported
+# condition is not answered at all, and `review_items` routes it away before any screen is
+# built. Spelled as the `DiffAction` values rather than imported: `sync_core` imports this
+# module, not the other way round.
 _CHANGE_ACTION = "change"
 _REPORT_ACTION = "report_only"
 
@@ -357,14 +352,11 @@ _SKIP_ALWAYS_KEY = "x"
 # The words the decision column shows for the answers that are not the act. They are short
 # because they share a column with the act verb, past the longest item on the screen; what
 # each one commits the user to is said in the legend hint beside it, which has room for a
-# sentence.
+# sentence. `SKIP_NOW_WORD` is that word on every screen whatever the direction, so the key
+# means one thing across a review — including the conflict screen, whose version-keeping is
+# stated in its hint rather than in the word.
 SKIP_NOW_WORD = "skip now"
 KEEP_FOR_GOOD_WORD = "keep for good"
-
-# A reported condition is not converged in either direction, so neither of its answers is an
-# act: one says the user has read it, the other that it should come back.
-ACKNOWLEDGED_WORD = "acknowledged"
-REPORT_AGAIN_WORD = "report again"
 
 # Verbs whose sentences take "from" rather than "on": "remove from nomad", against "hold on
 # nomad" and "change on nomad". A verb missing from the set reads correctly with "on", which
@@ -405,25 +397,6 @@ def _default_decision(group: ReviewGroup) -> Decision:
     return Decision.APPLY
 
 
-def _act_word(group: ReviewGroup) -> str:
-    """The word for the answer that acts — the group's own verb, except where nothing acts."""
-    if group.action == _REPORT_ACTION:
-        return ACKNOWLEDGED_WORD
-    return _group_act_word(group)
-
-
-def _skip_now_word(group: ReviewGroup) -> str:
-    """The word for the answer that lasts one sync.
-
-    "skip now" on every screen, whatever the direction, so the key means one thing across a
-    review — including the conflict screen, whose version-keeping is stated in its hint
-    rather than in the word. The report screen is the exception in substance, not in
-    phrasing: its second answer asks for the condition to be raised again, which is not a
-    skip of anything.
-    """
-    return REPORT_AGAIN_WORD if group.action == _REPORT_ACTION else SKIP_NOW_WORD
-
-
 def _skip_always_word(group: ReviewGroup) -> str:
     """The word for the answer that is recorded and never asked about again.
 
@@ -450,19 +423,11 @@ def _hints(group: ReviewGroup, source_hostname: str, target_hostname: str) -> tu
     later runs is what the permanent answer states; what the mark stops pc-switcher doing
     is machinery the user cannot weigh a permanent answer against.
 
-    Four shapes, because the answers genuinely differ by direction. A reported condition
-    converges nothing either way; a conflict is a choice between two versions of one file;
-    an item already on the target is kept rather than refused; everything else arrives or
-    does not.
+    Three shapes, because the answers genuinely differ by direction. A conflict is a choice
+    between two versions of one file; an item already on the target is kept rather than
+    refused; everything else arrives or does not.
     """
     verb = _group_act_word(group)
-    if group.action == _REPORT_ACTION:
-        # Third element unused: a report group is never promotable, so no screen shows it.
-        return (
-            f"nothing on {target_hostname} changes; you have read it",
-            f"nothing on {target_hostname} changes; raise it again next sync",
-            "",
-        )
     if _is_repo_conflict_group(group.action):
         return (
             f"{target_hostname} changes this sync",
@@ -501,7 +466,7 @@ def _options_for(group: ReviewGroup, *, source_hostname: str, target_hostname: s
         DecisionOption(
             value=Decision.APPLY,
             key=_APPLY_KEY,
-            word=_act_word(group),
+            word=_group_act_word(group),
             glyph=_APPLY_GLYPH,
             is_act=True,
             hint=act_hint,
@@ -509,7 +474,7 @@ def _options_for(group: ReviewGroup, *, source_hostname: str, target_hostname: s
         DecisionOption(
             value=Decision.SKIP_ONCE,
             key=_SKIP_NOW_KEY,
-            word=_skip_now_word(group),
+            word=SKIP_NOW_WORD,
             glyph=_SKIP_ONCE_GLYPH,
             hint=now_hint,
         ),

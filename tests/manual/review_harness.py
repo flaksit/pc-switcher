@@ -36,7 +36,8 @@ TARGET_HOST = "nomad"
 # One group per interaction shape the review supports. The action strings are load-bearing:
 # "install" rows start applied and "remove" rows at skip-once (_REMOVAL_ACTIONS);
 # "install"/"remove" are promotable so their screens offer the third answer, while
-# "report_only" and REPO_REMOVAL_REVIEW_ACTION are two-answer screens (_PROMOTABLE_ACTIONS).
+# REPO_REMOVAL_REVIEW_ACTION is a two-answer screen (_PROMOTABLE_ACTIONS) and "report_only"
+# is printed rather than answered.
 GROUPS = [
     ReviewGroup(
         "apt",
