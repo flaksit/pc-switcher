@@ -307,6 +307,20 @@ class TestDecisionFileRecord:
         assert executor.run_command.await_count == 2
 
     @pytest.mark.asyncio
+    async def test_header_is_prose_the_user_can_read(self) -> None:
+        """The header ships to every user's config directory and is read by people, not by
+        the tool, so a module symbol running into a sentence there is a defect (`filter_inert`
+        once did, mid-word).
+        """
+        shell = FakeShellExecutor()
+
+        await DecisionFile("apt", shell).record(_entry())
+
+        comments = [line for line in next(iter(shell.files.values())).splitlines() if line.startswith("#")]
+        assert "# This file is machine-local and is never synced to any peer. Remove" in comments
+        assert not any("filter_inert" in line for line in comments)
+
+    @pytest.mark.asyncio
     async def test_recording_same_item_id_twice_does_not_duplicate(self) -> None:
         shell = FakeShellExecutor()
         store = DecisionFile("apt", shell)

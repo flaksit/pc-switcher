@@ -9,6 +9,8 @@ Two seeds from the planning stage were checked and did **not** hold up: dry run 
 
 Whether this is wrong depends on which reading is intended. `probes.py:42-48` argues a probe failure means the machine or the tool is broken, which is not a finding about any item and arguably *should* stop everything. `PKG-FR-OUTCOME-FAILED` does not distinguish the two. **Ruling needed:** does a dead package-manager read fail its own job and let the others run, or stop the sync?
 
+**Closed 2026-07-30 (U3).** Ruled: it fails its own job only. `ProbeFailed` shares the orchestrator's non-aborting arm with `PackageItemFailures`, so the run records that job FAILED and continues. ADR-022 D-06 carries the reason; issue #220 stays open for every other job-level exception, which still aborts.
+
 ## DIV-02 — The automation escape hatch writes permanent state and is documented nowhere
 
 `PCSWITCHER_PACKAGE_REVIEW_AUTOMATION` takes a JSON `item_id → decision` map and bypasses every prompt, returning `was_interactive=True` (`review.py:580-582`). Because the permanence guards test exactly that flag (`sync_core.py:454`, `manual_installs_sync.py:583`), this path **writes machine-specific marks and install snippets** — the two things `PKG-FR-SKIP-ONCE` and `PKG-FR-MACHINE-SPECIFIC` describe as coming from an explicit human choice.
@@ -46,6 +48,8 @@ The replacement ruling is that sideloaded snaps are out of scope entirely and ig
 
 The behaviour the comment guards is still right (one manager's failures should not cancel another's approved work); only the stated reason is wrong. Code comment fix, no behaviour change.
 
+**Closed 2026-07-30 (U3).** The arm's comment now cites D-15/D-16 job independence: nothing coordinates the four jobs, so one manager's failure is no evidence about another's approved work.
+
 ## DIV-06 — The generated decision-file header contains a leaked identifier
 
 `state.py:93` writes, into every user's `~/.config/pc-switcher/<manager>.decisions.yaml`:
@@ -53,6 +57,8 @@ The behaviour the comment guards is still right (one manager's failures should n
 > This file is machine-local and is never synced to any peerfilter_inert. Remove…
 
 `peerfilter_inert` is a function name that ran into the sentence. Cosmetic, but it ships to users' machines in a file the requirements describe as the record of their explicit decisions.
+
+**Closed 2026-07-30 (U8).** The sentence ends at "peer", and `TestDecisionFileRecord` asserts the written header line so a symbol cannot reach it again unnoticed.
 
 ## DIV-07 — apt and flatpak apply the conflict screen to different candidate sets
 
@@ -69,6 +75,8 @@ The reasoning is sound — flatpak has no always-sync bucket to make a remote tr
 `PKG-FR-JOB-ORDER` says "the three package-manager jobs" must precede `folder_sync`, and `orchestrator.py:1073` validates exactly those three. Code and article agree.
 
 The question is whether the article is right. `manual_installs_sync` also installs software — by replaying a snippet — and that software writes its own stock defaults exactly as an apt package does, which is the whole reason for the ordering rule. The shipped config lists it before `folder_sync` (`default-config.yaml:55`), so the default is correct; nothing catches a user who reorders it.
+
+**Closed 2026-07-30 (U3).** Ruled: the rule covers all four. `Orchestrator._check_package_jobs_precede_folder_sync` validates `manual_installs_sync` alongside the three managers.
 
 **Ruling needed:** extend the rule to all four, or state explicitly why snippet-installed software does not need it.
 
@@ -133,7 +141,7 @@ So: a package offered for removal, kept by answering *skip*, is excluded from co
 ## Rulings that close earlier divergences
 
 - **DIV-07** (apt's repository-conflict question is wider than flatpak's) is ruled: both ask only what the approved changes need. `PKG-FR-REPO-CONFLICT` now gates on the repository being one this run writes for an approved package. The code still asks more widely.
-- **DIV-08** (`manual_installs_sync` outside the job-ordering check) is ruled: the rule covers all four package jobs. `orchestrator.py:1082` validates three.
+- **DIV-08** (`manual_installs_sync` outside the job-ordering check) is ruled: the rule covers all four package jobs. Closed in U3; see the entry above.
 - The ESM cost question behind `PKG-FR-ESM-GATE` is answered by measurement rather than ruling: on an attached Ubuntu 24.04 desktop, 60 of 2297 installed packages resolve their candidate to `esm.ubuntu.com`, including `ffmpeg`, `gimp` and `imagemagick`. The container's zero was an artefact of its package set.
 
 ## DIV-13 — A repository credential reaches the log

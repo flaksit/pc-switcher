@@ -90,7 +90,7 @@ _FILE_HEADER = (
     "# never pushed to a peer when this machine is the source, never installed or\n"
     "# removed here when this machine is the target.\n"
     "#\n"
-    "# This file is machine-local and is never synced to any peerfilter_inert. Remove\n"
+    "# This file is machine-local and is never synced to any peer. Remove\n"
     "# an entry (or delete the whole file) to make that item eligible again on the\n"
     "# next sync.\n"
 )
