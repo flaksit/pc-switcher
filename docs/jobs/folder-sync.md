@@ -2,7 +2,7 @@
 
 `folder_sync` mirrors whole directory trees (by default `/home` and `/root`) from the source to the target via rsync-over-SSH, running as root on both ends to preserve ownership, permissions, ACLs, and xattrs.
 
-Configuration for this job — the `folders` list and each folder's `filter_file` — lives in the [configuration reference](../configuration.md#folder_sync). This document covers what the job does with those settings.
+Configuration for this job — the `folders` list and each folder's `filter_file` — lives in the [configuration reference](../configuration.md#folder_sync). This document covers what the job does with those settings. `folder_sync` must be listed after every enabled package job; pc-switcher refuses to start a run ordered otherwise (see [Package Sync](package-sync.md#job-ordering-is-enforced)).
 
 Each folder is mirrored to the target, minus the paths its filter rules exclude. Set `enabled: false` to skip a folder. A filtered-out file is left untouched on the target if it already exists there, so machine-specific files (SSH keys, Tailscale config) can stay independent on each machine.
 
@@ -95,12 +95,17 @@ Otherwise it matches gitignore (basenames, a trailing `/` for directories, `*`/`
 
 ## Always excluded
 
-Several groups are excluded from the mirror and cannot be re-included by any filter rule. Two are unconditional; three more are conditional on another job being enabled:
+Several groups are excluded from the mirror and cannot be re-included by any filter rule. Three are unconditional; two more apply only when the job that owns the path is enabled.
+
+Unconditional:
 
 - pc-switcher's own runtime state — `~/.local/share/pc-switcher/` (lock file, sync history, logs) — so a sync never disturbs the target's sync state or per-machine logs (ADR-017); its install itself (uv tool venv and `~/.local/bin` shim) mirrors like any other file, so it stays consistent with the interpreter it depends on.
-- pc-switcher's machine-specific package decision files — `~/.config/pc-switcher/*.decisions.yaml` (one file per package manager) — excluded unconditionally, regardless of which package jobs are enabled, so a machine-specific package list is never accidentally pushed to a peer (D-09; see [Package Sync](package-sync.md#machine-specific-packages)).
-- If `vscode_state_sync` is enabled, the VS Code state DBs (`state.vscdb` and `state.vscdb.backup` for Code, Antigravity, Cursor, VSCodium, plus the install-shared `~/.vscode-shared/sharedStorage/`) — these are handed to `vscode_state_sync`, which merges them selectively so machine-bound account rows are never clobbered (ADR-018; see [VS Code state sync](vscode-state-sync.md)).
-- If `snap_sync` is enabled, every `~/snap/<app>/<revision>` directory (never `common` or `current`) — `snap_sync` itself converges these via `snap install`/`snap refresh --revision`, so `folder_sync` stops mirroring the ones it manages (see [Package Sync](package-sync.md)).
-- If `flatpak_sync` is enabled, `~/.local/share/flatpak` (never `~/.var/app`, which stays `folder_sync`'s territory) — `flatpak_sync` itself provisions this store (see [Package Sync](package-sync.md)).
+- pc-switcher's machine-specific package decision files — `~/.config/pc-switcher/*.decisions.yaml` (one file per package manager) — regardless of which package jobs are enabled, so a machine-specific package list is never accidentally pushed to a peer (D-09; see [Package Sync](package-sync.md#machine-specific-packages)).
+- the VS Code state DBs (`state.vscdb` and `state.vscdb.backup` for Code, Antigravity, Cursor, VSCodium, plus the install-shared `~/.vscode-shared/sharedStorage/`) — `vscode_state_sync` merges them selectively so machine-bound account entries are never clobbered, and hiding them from the mirror is what makes that merge authoritative (ADR-018; see [VS Code state sync](vscode-state-sync.md)).
+
+Conditional — excluding a path nobody manages would strand it rather than protect it, so these apply only with their owning job enabled:
+
+- If `snap_sync` is enabled, each app's *retained older* `~/snap/<app>/<revision>` directories: every revision directory except the one that app's `current` symlink resolves to, and never `common` or `current` themselves. `snap_sync` puts both machines on the same revision before `folder_sync` runs, so the active revision's data directory is mirrored like any other file, while an older one would plant data for a revision the target's snapd never installed. When `current` is missing or dangling the active revision cannot be determined, so all of that app's revision directories are excluded (see [Package Sync](package-sync.md#versions)).
+- If `flatpak_sync` is enabled, `~/.local/share/flatpak` (never `~/.var/app`, which stays `folder_sync`'s territory) — `flatpak_sync` itself provisions this store (see [Package Sync](package-sync.md#flatpak-remotes)).
 
 Enabling `snap_sync` or `flatpak_sync` supplies its exclusion automatically; any hand-written filter rule for those paths in a personal filter file can be deleted once the corresponding job is enabled.
