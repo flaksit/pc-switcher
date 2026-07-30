@@ -35,6 +35,31 @@ class TestRedactCredentials:
     def test_it_is_idempotent(self) -> None:
         assert redact_credentials(redact_credentials(_SECRET_URL)) == _SAFE_URL
 
+    def test_every_character_rfc_3986_allows_in_a_userinfo_is_matched(self) -> None:
+        """Sub-delimiters `!$&'()*+,;=`, unreserved `-._~` and `:` are all legal in
+        userinfo, so a generated password carrying one is still the secret."""
+        for char in "!$&'()*+,;=-._~:":
+            assert redact_credentials(f"https://user:pa{char}ss@example.test/repo") == (
+                "https://***@example.test/repo"
+            ), char
+
+    def test_a_userinfo_of_nothing_but_legal_punctuation_is_matched(self) -> None:
+        assert redact_credentials("https://!$&'()*+,;=-._~:@example.test/x") == "https://***@example.test/x"
+
+    def test_a_percent_encoded_userinfo_is_matched(self) -> None:
+        assert redact_credentials("https://us%40er:p%3Ass@example.test/x") == "https://***@example.test/x"
+
+    def test_a_quoted_url_does_not_swallow_a_later_address(self) -> None:
+        """`/` and whitespace are illegal in userinfo, which is what stops the match from
+        running out of a shell command into the address after it."""
+        line = "sudo sh -c 'echo deb https://ppa.example.test/ubuntu noble main' && mail ops@example.test"
+        assert redact_credentials(line) == line
+
+    def test_an_at_sign_in_a_query_string_is_left_alone(self) -> None:
+        """`?` ends the authority, so nothing past it is a credential."""
+        url = "https://example.test?notify=ops@example.test"
+        assert redact_credentials(url) == url
+
     def test_a_credential_inside_a_longer_line_redacts_only_the_url(self) -> None:
         line = f"Types: deb\nURIs: {_SECRET_URL}\nSuites: noble\nSigned-By: /etc/apt/keyrings/k.gpg"
         assert _SECRET_URL not in redact_credentials(line)
