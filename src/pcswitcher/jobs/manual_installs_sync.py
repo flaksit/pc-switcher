@@ -80,6 +80,7 @@ from pcswitcher.models import (
     SyncAbortedByUser,
     ValidationError,
 )
+from pcswitcher.redaction import redact_credentials
 
 __all__ = ["ManualInstallsSyncJob"]
 
@@ -343,6 +344,12 @@ class ManualInstallsSyncJob(PackageSyncJob):
         Every snippet field is untrusted package-manager/user text, so each is
         `rich.markup.escape`d before it reaches the confirmer's `Panel` — a body or label
         containing `[...]` must not be parsed as console markup (T-02-02).
+
+        This question is the fifth credential exit (ADR-021): a snippet body is opaque to
+        the tool and a `curl` of a private `.deb` is a documented shape, so the composed
+        text is redacted here, where it becomes the question. Only the rendering is
+        rewritten — the registry on disk and the body replayed on the target stay the bytes
+        their author wrote (`PKG-FR-SNIPPET-VERBATIM`).
         """
 
         def body_lines(body: str, indent: str) -> list[str]:
@@ -366,7 +373,7 @@ class ManualInstallsSyncJob(PackageSyncJob):
             f"Continuing overwrites {self.machines.target}'s registry wholesale. Decline to abort and "
             "consolidate the two registries by hand.",
         ]
-        return "\n".join(lines)
+        return redact_credentials("\n".join(lines))
 
     # -- Detection (D-18/D-19), all on the source ---------------------------------------
 

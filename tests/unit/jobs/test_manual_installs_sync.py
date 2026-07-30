@@ -1169,6 +1169,24 @@ TARGET_WITH_EXTRA_YAML = BRSCAN3_REGISTRY_YAML + (
     "    authored_on: workstation\n"
 )
 
+# Two registries holding the same item with different bodies, each a `curl` of a private
+# `.deb` — the documented shape of a snippet whose body carries a credential.
+SOURCE_WITH_CREDENTIAL_YAML = BRSCAN3_REGISTRY_YAML + (
+    "  unreproducible:apt-no-candidate:acme-agent:\n"
+    "    label: acme-agent (no apt candidate)\n"
+    "    body: curl --output /tmp/a.deb https://bearer:s0urce-token@dl.example.test/acme-2.deb\n"
+    "    authored_at: '2026-01-01T00:00:00+00:00'\n"
+    "    authored_on: laptop\n"
+)
+
+TARGET_WITH_CREDENTIAL_YAML = BRSCAN3_REGISTRY_YAML + (
+    "  unreproducible:apt-no-candidate:acme-agent:\n"
+    "    label: acme-agent (no apt candidate)\n"
+    "    body: curl --output /tmp/a.deb https://bearer:t4rget-token@dl.example.test/acme-1.deb\n"
+    "    authored_at: '2026-01-01T00:00:00+00:00'\n"
+    "    authored_on: workstation\n"
+)
+
 # A target registry whose brscan3 body DIFFERS from the source's.
 TARGET_CHANGED_BODY_YAML = (
     "snippets:\n"
@@ -1298,6 +1316,36 @@ class TestSnippetRegistryOverwriteGuard:
 
         assert len(confirmer.calls) == 1
         assert "CHANGED" in str(confirmer.calls[0]["message"])
+        target.send_file.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_a_credential_in_a_snippet_body_is_withheld_from_the_question(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """ADR-021's fifth credential exit: the question displays two whole snippet bodies,
+        and a body may legitimately fetch a private `.deb`. Only what is displayed is
+        rewritten — the file the push sends keeps its author's bytes
+        (`PKG-FR-SNIPPET-VERBATIM`)."""
+        source = self._write_source_registry(tmp_path, SOURCE_WITH_CREDENTIAL_YAML)
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        confirmer = FakeConfirmer(approve=True)
+        context, _source, target = make_context(
+            target_responses={
+                "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, TARGET_WITH_CREDENTIAL_YAML, ""),
+                "echo $HOME": CommandResult(0, "/home/user\n", ""),
+            },
+            confirmer=confirmer,
+        )
+        job = ManualInstallsSyncJob(context)
+
+        await job._push_snippet_registry()  # pyright: ignore[reportPrivateUsage]
+
+        message = str(confirmer.calls[0]["message"])
+        assert "s0urce-token" not in message
+        assert "t4rget-token" not in message
+        assert "***@dl.example.test/acme-2.deb" in message
+        assert "***@dl.example.test/acme-1.deb" in message
+        assert "s0urce-token" in source.read_text(encoding="utf-8")
         target.send_file.assert_called_once()
 
     @pytest.mark.asyncio

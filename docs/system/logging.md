@@ -176,7 +176,7 @@ As a pc-switcher user, I want TUI and file log output to carry timestamps, colou
 - **LOG-FR-CONTEXT**: System MUST preserve structured context (key=value pairs) in log output.  
   Lineage: 004-FR-011
 
-- **LOG-FR-CREDENTIAL-REDACTION**: System MUST withhold the userinfo component of every absolute URL from a log record's message, its formatting arguments and its structured context, applied once per record before any formatter sees it (`logger.CredentialRedactionFilter`, installed on both `QueueHandler`s). Two routes never become log records and carry the same rule at their own point: the `--confirm-each-command` prompt (`executor._announce`) and everything a review shows while the user decides, including the files it prints whole (`jobs.packages.review.ReviewEntry`).
+- **LOG-FR-CREDENTIAL-REDACTION**: System MUST withhold the userinfo component of every absolute URL from a log record's message, its formatting arguments and its structured context, applied once per record before any formatter sees it (`logger.CredentialRedactionFilter`, installed on both `QueueHandler`s). Three routes never become log records and carry the same rule at their own point: the `--confirm-each-command` confirmation (`executor._announce`), everything a review shows while the user decides, including the files it prints whole (`jobs.packages.review.ReviewEntry`), and the snippet bodies the registry-overwrite question displays (`jobs.manual_installs_sync.ManualInstallsSyncJob._render_overwrite_diff`), which are redacted where they are rendered and nowhere else — a snippet is stored and replayed verbatim.
   Lineage: ADR-021, `PKG-FR-CREDENTIAL-PRIVACY`
 
 #### Log Aggregation

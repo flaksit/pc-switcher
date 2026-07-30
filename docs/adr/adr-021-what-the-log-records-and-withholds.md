@@ -14,8 +14,9 @@ The log is the record of what pc-switcher did and why, so it names every item a 
 - Every item a review presented MUST be logged with the decision it received, including items the user skipped — an item that produced no change MUST still produce a line.
 - Every change a tool made on its own behalf that no review showed — a package manager resolving its own dependencies is the case that exists today — MUST be logged.
 - A command's own output MUST be recorded verbatim at DEBUG, alongside the command text the executor already traces there.
-- A credential embedded in a URL MUST be withheld wherever pc-switcher writes or shows that URL: the executor's command trace, a command's recorded output, anything the user reads while deciding, and a configuration file displayed in full for a decision.
-- Redaction MUST sit at each point a path leaves the process, never at each call site that builds a string. There are four: every log record, the per-command confirmation prompt, everything a review shows while the user decides, and the label a recorded decision keeps on disk.
+- A credential embedded in a URL MUST be withheld wherever pc-switcher writes or shows that URL: the executor's command trace, a command's recorded output, anything the user reads while deciding, a configuration file displayed in full for a decision, and an install-snippet body displayed for one.
+- Redaction MUST sit at each point a path leaves the process, never at each call site that builds a string. There are five: every log record, the per-command confirmation, everything a review shows while the user decides, the label a recorded decision keeps on disk, and the body of a question a job composes itself and puts straight to `Confirmer`.
+- A snippet body MUST be redacted only where it is displayed. It is stored and replayed as its author wrote it (`PKG-FR-SNIPPET-VERBATIM`), so redacting the file or the replay would break the item it installs.
 
 **Forbidden:**
 - No aggregate standing in for the record: "3 of 5 applied" does not say which two did not, and a count is not a decision.
@@ -46,9 +47,11 @@ Each command's own output is recorded as the command produced it. A summary is a
 
 ### A credential in a URL is withheld everywhere
 
-Repository credentials live inside the URL, so every place a URL appears is a place the secret appears: the command trace, recorded output, a review line, a configuration file shown whole for a decision. Withholding it in the log alone would leave it on screen; withholding it on screen alone would leave it in a world-readable file.
+Repository credentials live inside the URL, so every place a URL appears is a place the secret appears: the command trace, recorded output, a review line, a configuration file shown whole for a decision, an install snippet whose body fetches a private `.deb`. Withholding it in the log alone would leave it in front of the user; withholding it there alone would leave it in a world-readable file.
 
-There is no single point. `Executor` covers the command trace and each command's output, but a job's own log lines never pass through it, and what a review shows — a review line, and a repository file printed whole for a conflict — is built in-process and goes to the terminal, not through a command. So the rule is applied at each of the four exits instead: a logging filter on the queue handlers, which is every route into the log; the confirmation prompt in `Executor`, the one thing there that never becomes a log record; `ReviewEntry`, the single shape every review line and every file body a question prints is built from; and `ItemDiff`, whose label a permanent answer writes to the decision file. Four points, each of which every path of its kind passes through — not a rule repeated at each call site that happens to build a URL.
+There is no single point. `Executor` covers the command trace and each command's output, but a job's own log lines never pass through it, and what a review shows — a review line, and a repository file printed whole for a conflict — is built in-process and goes to the terminal, not through a command. So the rule is applied at each of the five exits instead: a logging filter on the queue handlers, which is every route into the log; the confirmation in `Executor`, the one thing there that never becomes a log record; `ReviewEntry`, the single shape every review line and every file body a question prints is built from; `ItemDiff`, whose label a permanent answer writes to the decision file; and the one question a job composes itself rather than through a review — `manual_installs_sync`'s snippet-registry overwrite, which displays two whole snippet bodies and reaches the terminal through `Confirmer`. Five points, each of which every path of its kind passes through — not a rule repeated at each call site that happens to build a URL.
+
+The snippet exit redacts the rendering and nothing else. A snippet is opaque to the tool and is stored and replayed exactly as written (`PKG-FR-SNIPPET-VERBATIM`), so rewriting the registry or the replayed command would break the install it exists to reproduce — a worse defect than the disclosure it would close.
 
 ### The precedent this generalises
 
@@ -59,7 +62,7 @@ ADR-020's Ubuntu Pro rule already withholds content by construction: `pro status
 **Positive:**
 - A run is reconstructable from its log alone: what was proposed, what was decided, what the tool did unasked, and what each command said.
 - The exposure that already existed in the command trace closes with the same change that widens the record.
-- Four redaction points and no fifth, so a new job, a new command or a new review line inherits the rule instead of re-implementing it.
+- A new job, a new command or a new review line inherits the rule instead of re-implementing it.
 
 **Negative (costly to reverse):**
 - Log volume grows, and the current several-hundred-megabyte runs are the floor rather than the ceiling.
@@ -80,4 +83,4 @@ ADR-020's Ubuntu Pro rule already withholds content by construction: `pro status
 - ADR-010: Standard library logging infrastructure — the mechanism this ADR states the content rules for. Not superseded: infrastructure and content evolve independently.
 - ADR-020: Declarative package convergence — the requirements that forced these rules, and the Ubuntu Pro withholding precedent this generalises.
 - ADR-022: A read that did not answer fails the job — the other half of "the log names what went wrong".
-- `docs/planning/package-sync-conformance-criteria.md`: `PKG-FR-LOG-DECISIONS`, `PKG-FR-LOG-VERBATIM`, `PKG-FR-CREDENTIAL-PRIVACY`, `PKG-FR-COLLATERAL-AUTO` and `PKG-FR-ESM-PRIVACY` — the same rules as individually checkable articles.
+- `docs/planning/package-sync-conformance-criteria.md`: `PKG-FR-LOG-DECISIONS`, `PKG-FR-LOG-VERBATIM`, `PKG-FR-CREDENTIAL-PRIVACY`, `PKG-FR-COLLATERAL-AUTO`, `PKG-FR-ESM-PRIVACY` and `PKG-FR-SNIPPET-VERBATIM` — the same rules as individually checkable articles.
