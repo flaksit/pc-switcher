@@ -18,3 +18,7 @@ A few examples: look at my edits to the handover (just done where my eye rested;
 Can step 1 and 2 be done in parallel?
 
 Show the prompt(s) that I should give to the next session(s).
+
+---
+
+I'd do step 2 first and then step 1. Give step 2 a bit more liberty to possibly change names or restructure functions/classes, without breaking the step 1 analysis. So inverse their order. Agree?
