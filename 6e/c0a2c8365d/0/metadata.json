@@ -1,0 +1,51 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "6ec0a2c8365d",
+  "session_id": "354077f7-8171-4dc7-8e2f-e2c4e73a7888",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-30T22:29:27.837749007Z",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "aff370435976",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 316,
+    "cache_creation_tokens": 355904,
+    "cache_read_tokens": 35218147,
+    "output_tokens": 109687,
+    "api_call_count": 166
+  },
+  "session_metrics": {
+    "turn_count": 6
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 123,
+      "user_lines_removed": 575,
+      "agent_lines_added": 25,
+      "agent_lines_removed": 27,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9,
+        ".planning/phases/02-package-management-sync/02-UAT-01-RUNBOOK.md": 81,
+        ".planning/phases/02-package-management-sync/02-UAT.md": 18,
+        "README.md": 2,
+        "docs/planning/high-level-requirements.md": 3,
+        "docs/system/core.md": 2,
+        "docs/system/package-sync.md": 8
+      },
+      "user_removed_per_file": {
+        ".planning/phases/02-package-management-sync/02-UAT-01-RUNBOOK.md": 507,
+        ".planning/phases/02-package-management-sync/02-UAT.md": 52,
+        "README.md": 3,
+        "docs/planning/high-level-requirements.md": 3,
+        "docs/system/core.md": 2,
+        "docs/system/package-sync.md": 8
+      }
+    }
+  ]
+}
