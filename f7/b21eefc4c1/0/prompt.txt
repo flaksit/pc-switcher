@@ -18,3 +18,7 @@ don't give line numbers but the context: when is this shown to user?
 ---
 
 "packages/apps you set to always skip" > "package(s)/app(s) you marked as specific to nomad"
+
+---
+
+"shift+key sets every row" > "<shift+key> sets every row"
