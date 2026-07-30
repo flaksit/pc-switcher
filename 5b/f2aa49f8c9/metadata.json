@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "5bf2aa49f8c9",
+  "strategy": "manual-commit",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "src/pcswitcher/jobs/flatpak_sync.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/5b/f2aa49f8c9/0/metadata.json",
+      "transcript": "/5b/f2aa49f8c9/0/full.jsonl",
+      "compact_transcript": "/5b/f2aa49f8c9/0/transcript.jsonl",
+      "content_hash": "/5b/f2aa49f8c9/0/content_hash.txt",
+      "prompt": "/5b/f2aa49f8c9/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 298,
+    "cache_creation_tokens": 320445,
+    "cache_read_tokens": 32004848,
+    "output_tokens": 96225,
+    "api_call_count": 157
+  }
+}
