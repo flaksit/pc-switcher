@@ -21,7 +21,7 @@ The source captures a manifest of package-related items; the target diffs its ow
 - `ubuntu.sources`, `/etc/apt/sources.list` and the `ubuntu-esm-*` source files MUST be written when missing and overwritten when different, and MUST NEVER be offered for removal or removed. When an `ubuntu-esm-*` file would be written and the target reports no Ubuntu Pro attachment, `apt_sync` MUST ask the user before its first mutating command, with exactly two answers: attach now (pc-switcher re-probes the target and continues) or skip `apt_sync` for this run while every other job runs. A run with nobody to ask MUST take the skip.
 - Only files under `/etc/apt/sources.list.d` carrying an extension apt itself reads (`.sources`, `.list`) may be captured, compared or written; anything else in that directory MUST be left alone.
 - A derived write that fails MUST fail every package or ref that depended on it, naming the file or the remote — not an item of its own.
-- A run's log MUST name every item a job presented with the decision it received, and every change a package manager made on its own behalf that no review showed. A package manager's own output MUST be kept verbatim in the debug log. A credential embedded in a URL MUST be withheld wherever a URL is written or shown — this one crosses into ADR-010's territory and the executor's own command trace, so it is stated here as a requirement and owned there.
+- What a package job's log must name, and what it must withhold, is ADR-021's — including the collateral no review shows and the credentials a repository URL can carry.
 - The `/etc/apt` convergence group MUST be transactional: a group whose metadata refresh fails MUST leave the target's `/etc/apt` as it found it.
 - A package manager's own transaction MUST be constrained to what the review approved: what it would change beyond the approved item MUST be determined at plan time and classified there, because apt's own rehearsal states that transaction in advance and there is nothing left to discover once the apply runs. Collateral protection keys on the TARGET's `apt-mark showmanual` set. An install the target's package manager cannot yet resolve MUST NOT enter the plan-time rehearsal at all, and MUST be protected by the apply-time guard alone.
 - `apt_sync`, `snap_sync`, `flatpak_sync` and `manual_installs_sync` MUST be four separate `SyncJob`s, each with its own enable flag, validation, progress reporting and `JobResult` — never merged into one `package_sync` job. `manual_installs_sync` MUST carry its own `sync_jobs` enable flag so disabling apt cannot silently disable manual-install detection.
@@ -271,7 +271,6 @@ The provenance variable that remains is which revision of that one snap is insta
 - Origin capture adds work to every run: source-side installed origins, source-side and target-side repository URI scans, target-side candidate origins, and one more batched policy call before installing. All batched, none measured.
 - A filtered flatpak remote replicates WITH its filter. flatpak records the filter's path rather than its content (measured), so the content is an ordinary file the run carries byte-for-byte exactly as it carries a keyring: written to the same absolute path on the target and re-applied there after that remote's refs land. The cost is that the job writes one path per filtered remote that it does not otherwise own.
 - Sideloaded snaps sit outside the model entirely (#221), so a machine can hold software package sync will neither replicate nor remove — it only names it.
-- The log grows: every item with its decision, every self-directed change a manager made, and every manager's output verbatim at debug level. Runs on the maintainer's desktop already produce 350-378 MB logs.
 
 ## Alternatives Considered
 
@@ -293,6 +292,7 @@ The provenance variable that remains is which revision of that one snap is insta
 - ADR-002: SSH as communication channel — package-manager invocations run through the same executor protocol.
 - ADR-005: Asyncio concurrency — all package-manager invocations are async subprocesses.
 - ADR-010: Logging infrastructure — per-item detail at FULL, per-job summaries at INFO.
+- ADR-021: What the log records and withholds — the content rules these jobs' reviews and collateral forced, and the credential redaction they need.
 - ADR-014: Unified dry-run contract — each job's batched review doubles as its dry-run output.
 - ADR-015: Topology-based sync-safety model — the warn-and-confirm precedent D-25/D-26 follow; this ADR's review is never a hard abort.
 - ADR-018: Selective VS Code state sync — the path-export mechanism D-29 reuses for `flatpak_sync` and `snap_sync`.
