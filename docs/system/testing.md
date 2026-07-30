@@ -12,11 +12,11 @@ As a pc-switcher developer, I can run unit tests locally to verify my changes be
 
 **Why this priority**: P1 because fast local testing is essential for development velocity. Unit tests catch logic errors early without requiring VM infrastructure.
 
-**Independent Test**: Can be fully tested by running `uv run pytest tests/unit tests/contract --verbose` on any developer machine.
+**Independent Test**: Can be fully tested by running `uv run pytest tests/unit tests/contract` on any developer machine.
 
 **Acceptance Scenarios**:
 
-1. **Given** I have cloned the repository, **When** I run `uv run pytest tests/unit tests/contract --verbose`, **Then** all unit tests execute within 30 seconds without requiring any external services or configuration
+1. **Given** I have cloned the repository, **When** I run `uv run pytest tests/unit tests/contract`, **Then** all unit tests execute within 30 seconds without requiring any external services or configuration
 
 2. **Given** I modify business logic code, **When** I run unit tests, **Then** any logic errors are detected through failing assertions before code is pushed
 
@@ -32,7 +32,7 @@ As a pc-switcher developer, I can run integration tests that exercise real syste
 
 **Why this priority**: P1 because pc-switcher performs destructive system operations. Testing with mocks would hide real-world issues. VM isolation provides safety while enabling realistic testing.
 
-**Independent Test**: Can be fully tested by running `uv run pytest tests/integration --verbose -m integration`.
+**Independent Test**: Can be fully tested by running `tests/run-integration-tests.sh`, which acquires the lock, resets both VMs to baseline and then invokes pytest. Calling pytest directly skips all three.
 
 **Acceptance Scenarios**:
 
@@ -40,7 +40,7 @@ As a pc-switcher developer, I can run integration tests that exercise real syste
 
 2. **Given** I start an integration test session, **When** the test framework initializes, **Then** all test VMs are reset to a clean baseline state, removing any artifacts from previous sessions; if baseline snapshots are missing or invalid, the reset fails with an actionable error message
 
-3. **Given** I start integration tests while another run is in progress, **When** I attempt to run, **Then** the framework either waits for the lock or fails with a clear message identifying the current holder
+3. **Given** I start integration tests while another run is in progress, **When** I attempt to run, **Then** the framework fails immediately with a message naming the current holder — it never waits
 
 4. **Given** integration tests exist for a feature, **When** I run them, **Then** both success paths and failure paths (error handling, edge cases) are tested
 
@@ -56,9 +56,9 @@ As a pc-switcher developer, I can rely on CI to automatically run tests on my co
 
 **Acceptance Scenarios**:
 
-1. **Given** I push to any branch, **When** CI triggers, **Then** type checks, lint checks and unit tests run automatically
+1. **Given** I push code to any branch, **When** CI triggers, **Then** type checks, lint checks, spell checks and unit tests run automatically; a push touching only documentation reports green without running them
 
-2. **Given** I open a PR targeting main branch, **When** CI triggers, **Then** both unit tests and integration tests run
+2. **Given** I mark a PR targeting main ready for review, **When** CI triggers, **Then** unit tests run, and integration tests run once the unit tests pass — scoped to the areas the diff touches
 
 3. **Given** I'm working on a feature branch that requires integration testing, **When** I manually trigger the integration test workflow, **Then** integration tests run against my feature branch
 
@@ -150,7 +150,7 @@ As a pc-switcher developer or maintainer, I have architecture documentation that
 
 #### Test Structure
 
-- **TST-FR-THREE-TIER**: System MUST provide three-tier test structure: unit tests (fast, no external dependencies), integration tests (require isolated VMs), and manual playbook (visual verification and feature tour)  
+- **TST-FR-THREE-TIER**: System MUST provide three-tier test structure: unit tests (fast, no external dependencies), integration tests (require isolated VMs), and manual playbook (visual verification and feature tour). On disk that is `tests/unit/` and `tests/contract/`, `tests/integration/`, and `tests/manual-playbook.md`; `tests/local_rsync/` holds the one further group, tests that shell out to a real local `rsync` binary and skip when it is absent.  
   Lineage: 002-FR-001
 
 - **TST-FR-UNIT-SAFE**: Unit tests MUST be safe to run on any machine; they MUST NOT execute real system-modifying commands, require network access to external services, or depend on specific filesystem types  
@@ -159,13 +159,13 @@ As a pc-switcher developer or maintainer, I have architecture documentation that
 - **TST-FR-INT-ISOLATED**: Integration tests MUST run on isolated test infrastructure that is separate from developer machines and CI runners, preventing any possibility of damaging production systems  
   Lineage: 002-FR-003
 
-- **TST-FR-CONTRACT**: Contract tests MUST verify that MockExecutor and real executor implementations (LocalExecutor, RemoteExecutor) adhere to the same behavioral interface, ensuring mocks remain reliable representations of production behavior  
+- **TST-FR-CONTRACT**: Contract tests MUST verify that the mock executors unit tests use and the real `LocalExecutor` adhere to the same behavioral interface, ensuring mocks remain reliable representations of production behavior. `RemoteExecutor`'s half of that contract needs a VM and lives in `tests/integration/`.  
   Lineage: 002-FR-003a
 
 - **TST-FR-RESET**: Test VMs MUST be reset to a clean baseline state before each integration test session, ensuring test isolation and reproducibility; reset MUST fail with an actionable error if baseline snapshots are missing or invalid  
   Lineage: 002-FR-004
 
-- **TST-FR-LOCK**: Concurrent test runs MUST be prevented via a locking mechanism that stores holder identity and acquisition time; stuck locks require manual cleanup (documented in operational guide)  
+- **TST-FR-LOCK**: Concurrent test runs MUST be prevented via a locking mechanism that stores holder identity and acquisition time (`lock_holder` and `lock_acquired` labels on a Hetzner server); acquisition fails immediately when the lock is held, and stuck locks require manual cleanup (documented in operational guide). Clearing a stuck lock MUST stay manual — an automated release cannot tell a crashed holder from a live one.  
   Lineage: 002-FR-005
 
 - **TST-FR-PROVISION**: Test VMs MUST be automatically provisioned when integration tests are run and VMs do not exist; provisioning includes cloud VM creation and OS installation with btrfs filesystem; baseline snapshots MUST be created at provisioning time; concurrent provisioning is prevented by CI concurrency controls (local concurrent provisioning is not supported and not checked)  
@@ -176,16 +176,16 @@ As a pc-switcher developer or maintainer, I have architecture documentation that
 
 #### Unit Test Requirements
 
-- **TST-FR-UNIT-CMD**: Unit tests MUST be runnable with single command `uv run pytest tests/unit tests/contract --verbose`  
+- **TST-FR-UNIT-CMD**: Unit tests MUST be runnable with single command `uv run pytest tests/unit tests/contract` — the same command CI runs. `-v` needs no flag; `addopts` in `pyproject.toml` already sets it.  
   Lineage: 002-FR-007
 
-- **TST-FR-INT-MARKER**: Integration tests MUST be selectable via pytest marker (`-m integration`) for running separately from unit tests  
+- **TST-FR-INT-MARKER**: Integration tests MUST be selectable via pytest marker (`-m integration`), applied automatically at collection to every test under `tests/integration/`. Alongside it the suite declares `local_rsync`, `benchmark`, `ci_skip`, `smoke` and the topic markers `area_package`, `area_install`, `area_btrfs`, `area_folder`, `area_core`; collection FAILS for an integration test carrying none of `smoke`/`area_*`/`benchmark`, so a new test file cannot fall outside CI's topic selection unnoticed.  
   Lineage: 002-FR-008
 
-- **TST-FR-INT-DEFAULT**: Integration tests MUST NOT run by default; `uv run pytest` (without explicit `-m integration` marker) MUST NOT run integration tests even if VM environment variables are configured  
+- **TST-FR-INT-DEFAULT**: Integration tests MUST NOT run by default; `uv run pytest` (without explicit `-m integration` marker) MUST NOT run integration tests even if VM environment variables are configured. `addopts` carries `-m "not integration"` for this.  
   Lineage: 002-FR-008a
 
-- **TST-FR-INT-SKIP**: When integration tests are explicitly requested (`-m integration`) but VM environment variables are not configured, tests MUST be skipped (not failed) with a clear message  
+- **TST-FR-INT-SKIP**: When integration tests are collected but VM environment variables are not configured, the session MUST end immediately, naming every missing variable and the unit-test command to run instead. It exits rather than skipping, because a silent green run of zero integration tests reads as a pass.  
   Lineage: 002-FR-008b
 
 #### Test VM Requirements
@@ -207,28 +207,28 @@ As a pc-switcher developer or maintainer, I have architecture documentation that
 
 #### CI/CD Requirements
 
-- **TST-FR-CI-PUSH**: CI MUST run type checks (basedpyright), lint checks (ruff), and unit tests (pytest) on every push to any branch  
+- **TST-FR-CI-PUSH**: CI MUST run type checks (basedpyright), lint checks (ruff check, ruff format --check), spell checks (codespell) and unit tests (pytest) on every push to any branch whose diff touches `src/`, `tests/unit/`, `tests/contract/`, `pyproject.toml`, `uv.lock`, `ruff.toml` or the workflow itself. A push touching nothing in that set reports the aggregate "CI Status" check green without running them.  
   Lineage: 002-FR-013
 
-- **TST-FR-CI-PR**: CI MUST run integration tests on PRs to main branch (from the main repository only)  
+- **TST-FR-CI-PR**: CI MUST run integration tests on non-draft PRs to main branch (from the main repository only), plus a nightly full-suite run on main. A PR run is topic-scoped: `select-ci-tests.sh` maps the diff to `smoke`/`area_*` markers, and the nightly run is the backstop that keeps no area unexercised.  
   Lineage: 002-FR-014
 
-- **TST-FR-CI-MANUAL**: CI MUST support manual trigger for running integration tests on any branch  
+- **TST-FR-CI-MANUAL**: CI MUST support manual trigger (`workflow_dispatch`) for running integration tests on any branch  
   Lineage: 002-FR-015
 
-- **TST-FR-CI-CONCUR**: CI MUST prevent parallel integration test runs through concurrency control  
+- **TST-FR-CI-CONCUR**: CI MUST prevent parallel integration test runs through concurrency control (one `pc-switcher-integration` group, queued rather than cancelled)  
   Lineage: 002-FR-016
 
 - **TST-FR-CI-RESET**: CI MUST reset test VMs before running integration tests  
   Lineage: 002-FR-017
 
-- **TST-FR-CI-SKIP-FORK**: CI MUST skip integration tests with a clear notice when secrets are unavailable (e.g., forked PRs); unit tests MUST still run in this case  
+- **TST-FR-CI-GATE**: The integration job MUST block until the head commit's "CI Status" check passes, so the long-running VM job never starts on a red build.  
   Lineage: 002-FR-017a
 
-- **TST-FR-FORK-NOTICE**: Integration tests on forked PRs are NOT supported; CI MUST skip (not fail) integration tests and clearly indicate this when a fork PR is detected  
+- **TST-FR-FORK-NOTICE**: Integration tests on forked PRs are NOT supported. Secrets are unavailable to forks, and the workflow FAILS with an explicit error naming the missing secrets rather than passing silently; unit tests still run.  
   Lineage: 002-FR-017b
 
-- **TST-FR-CI-ARTIFACTS**: CI MUST preserve test logs and artifacts (pytest output, provisioning logs, reset logs) to enable debugging of failed runs  
+- **TST-FR-CI-ARTIFACTS**: CI MUST preserve test logs and artifacts (`pytest-output.log`, `provision-output.log`) for 14 days to enable debugging of failed runs  
   Lineage: 002-FR-017c
 
 #### Manual Playbook Requirements
@@ -285,26 +285,25 @@ As a pc-switcher developer or maintainer, I have architecture documentation that
 
 #### Test Fixture Requirements
 
-- **TST-FR-FIXTURES**: Testing framework MUST provide minimal pytest fixtures for VM command execution, enabling integration tests to run commands on test VMs via a RemoteExecutor-like interface  
+- **TST-FR-FIXTURES**: Testing framework MUST provide minimal pytest fixtures for VM command execution, enabling integration tests to run commands on test VMs via a RemoteExecutor-like interface. SSH connections and executors are module-scoped, so a test MUST clean up its own artifacts rather than rely on per-test isolation.  
   Lineage: 002-FR-034
 
 ### Key Entities
 
 Lineage: 002-Key-Entities
 
-- **TestVM**: Represents an isolated VM for integration testing; has network identity, SSH access, required filesystem and subvolume configuration, and baseline state for reset
-- **TestLock**: Represents the mechanism preventing concurrent test runs; has holder identity and acquisition time
-- **TestSession**: Represents a single test run; has session ID, lock holder, VM reset status, and test results
-- **MockExecutor**: Represents a mocked executor for unit tests; provides predictable command responses without real execution
-- **TestFixture**: Represents a pytest fixture providing test resources; includes VM connections, event buses, temporary files, and cleanup logic
-- **VMExecutor**: Represents a fixture for executing commands on test VMs; provides a RemoteExecutor-like interface for integration tests to run commands on source/target VMs
+- **TestVM**: An isolated VM for integration testing (`pc1`, `pc2`); has network identity, SSH access, required filesystem and subvolume configuration, and baseline state for reset
+- **TestLock**: The mechanism preventing concurrent test runs, held as Hetzner server labels; has holder identity and acquisition time
+- **TestSession**: A single test run; has session ID, lock holder, VM reset status, and test results
+- **mock executor**: The `mock_executor` / `mock_remote_executor` fixtures in `tests/conftest.py` — `MagicMock`s whose `run_command` returns a real `CommandResult`. There is no `MockExecutor` class; `tests/contract/` is what keeps the mock's shape honest against `LocalExecutor`
+- **VM executor**: The `pc1_executor` / `pc2_executor` fixtures in `tests/integration/conftest.py`, each a real `BashLoginRemoteExecutor` over a module-scoped SSH connection — the interface integration tests run commands on the VMs through
 
 ## Success Criteria
 
 - **TST-SC-FAST-RESET**: VM reset to clean baseline is fast due to btrfs snapshot rollback (no cloud VM snapshot restore or reprovisioning required)
   Lineage: 002-SC-001
 
-- **TST-SC-CI-100**: CI pipeline executes unit tests on 100% of pushes and integration tests on 100% of PRs to main (from main repository)
+- **TST-SC-CI-100**: CI pipeline executes unit tests on 100% of pushes that touch code, and integration tests on 100% of non-draft PRs to main (from main repository) that touch code
   Lineage: 002-SC-002
 
 - **TST-SC-LOCK**: Lock mechanism successfully prevents concurrent test runs in 100% of contention scenarios
@@ -335,16 +334,16 @@ Lineage: 002-Key-Entities
 
 - **VM reset fails**: Reset process exits with error; tests do not proceed on dirty state; framework provides instructions to destroy VMs (re-provisioning will be automatic)
 
-- **Lock cannot be acquired after timeout**: Test run fails with "Failed to acquire lock" error showing current holder identity; stuck locks require manual cleanup
+- **Lock already held**: Test run fails at once with "Lock held by \<holder\>" / "Failed to acquire lock"; there is no wait or retry
 
-- **Test run crashes without releasing the lock**: Lock remains held; subsequent runs fail after timeout; manual cleanup is required (documented in operational guide)
+- **Test run crashes without releasing the lock**: Lock remains held; every subsequent run fails immediately; manual cleanup is required (documented in operational guide)
 
-- **CI secrets misconfigured or missing**: Integration tests are skipped with clear notice; unit tests still run and pass
+- **CI secrets misconfigured or missing**: The integration workflow fails at its "Check secrets" step, naming `HCLOUD_TOKEN` and `HETZNER_SSH_PRIVATE_KEY`; unit tests still run and pass
 
-- **PR from a forked repository**: Integration tests are skipped with clear notice (secrets are not available to forks); unit tests still run
+- **PR from a forked repository**: Same as above — secrets are not available to forks, so the integration workflow fails rather than passing without having tested anything; unit tests still run
 
 - **VM environment variables not set locally**:
-  - If integration tests are explicitly requested (`-m integration`), they are skipped with clear message: "Skipping integration tests: VM environment not configured"
+  - If integration tests are collected, the session exits immediately naming every missing variable
   - If running `uv run pytest` without markers, integration tests are never run regardless of env var state
 
 Lineage: 002-Edge-Cases

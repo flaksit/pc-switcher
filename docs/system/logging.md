@@ -19,13 +19,13 @@ The system implements a six-level logging hierarchy (DEBUG, FULL, INFO, WARNING,
 
 **Acceptance Scenarios**:
 
-1. **Given** user configures `log.file: FULL` and `log.tui: INFO`, **When** sync runs and a job logs at DEBUG level, **Then** the message does NOT appear in the log file nor in the terminal UI (DEBUG is excluded by FULL)
+1. **Given** user configures `logging.file: FULL` and `logging.tui: INFO`, **When** sync runs and a job logs at DEBUG level, **Then** the message does NOT appear in the log file nor in the terminal UI (DEBUG is excluded by FULL)
 
-2. **Given** user configures `log.file: INFO`, **When** sync runs and a job logs at FULL level (e.g., "Copying /home/user/file.txt"), **Then** the message does not appear in either log file or terminal UI
+2. **Given** user configures `logging.file: INFO`, **When** sync runs and a job logs at FULL level (e.g., "Copying /home/user/file.txt"), **Then** the message does not appear in either log file or terminal UI
 
 3. *(Removed)*
 
-4. **Given** sync operation completes, **When** user inspects log file at `~/.local/share/pc-switcher/logs/sync-<timestamp>.log`, **Then** the file contains structured log entries in JSON Lines format (one JSON object per line) with fields: timestamp (ISO8601), level, job, host (enum: "source"/"target"), event, plus additional context fields as needed, for all operations from both source and target machines. The hostname mapping (source hostname and target hostname) is logged once at session start, not in every entry.
+4. **Given** sync operation completes, **When** user inspects log file at `~/.local/share/pc-switcher/logs/sync-<timestamp>-<session_id>.log`, **Then** the file contains structured log entries in JSON Lines format (one JSON object per line) with fields: timestamp (ISO8601), level, event, plus `job` and `host` (`"source"`/`"target"`) when the call supplied them, plus additional context fields as needed, for all operations from both source and target machines. The hostname mapping (source hostname and target hostname) is logged once at session start, not in every entry.
    Lineage: 001-US-4-AS-4 → #140
 
 5. *(Removed - target-side logging is Job implementation detail, not a spec-level concern)*
@@ -42,9 +42,9 @@ As a pc-switcher user, I want to specify log levels in my configuration file so 
 
 **Acceptance Scenarios**:
 
-1. **Given** a config file with `log.file` level set to `DEBUG` and `log.tui` level set to `INFO`, **When** I run a sync, **Then** the log file contains debug messages but the TUI only shows info and above.
-2. **Given** a config file with `log.external` level set to `WARNING`, **When** asyncssh logs an INFO message, **Then** that message is not displayed in TUI or written to the log file (regardless of `file`/`tui` settings).
-3. **Given** `log.file: DEBUG`, `log.tui: INFO`, `log.external: WARNING`, **When** pcswitcher logs a DEBUG message, **Then** it appears in the file but not in the TUI.
+1. **Given** a config file with `logging.file` level set to `DEBUG` and `logging.tui` level set to `INFO`, **When** I run a sync, **Then** the log file contains debug messages but the TUI only shows info and above.
+2. **Given** a config file with `logging.external` level set to `WARNING`, **When** asyncssh logs an INFO message, **Then** that message is not displayed in TUI or written to the log file (regardless of `file`/`tui` settings).
+3. **Given** `logging.file: DEBUG`, `logging.tui: INFO`, `logging.external: WARNING`, **When** pcswitcher logs a DEBUG message, **Then** it appears in the file but not in the TUI.
 
 ### View External Library Logs (LOG-US-EXTERNAL)
 
@@ -56,9 +56,9 @@ As a pc-switcher user, I want to see log messages from external libraries (e.g. 
 
 **Acceptance Scenarios**:
 
-1. **Given** asyncssh emits a WARNING log, **When** `log.external` is set to WARNING or lower, **Then** the message appears in outputs that meet both the `external` level and their respective `file`/`tui` levels.
-2. **Given** `log.external` is set to ERROR, **When** asyncssh emits a WARNING, **Then** the message does not appear in either file or TUI.
-3. **Given** `log.external: INFO`, `log.file: DEBUG`, `log.tui: WARNING`, **When** asyncssh emits an INFO, **Then** it appears in the file but not in the TUI.
+1. **Given** asyncssh emits a WARNING log, **When** `logging.external` is set to WARNING or lower, **Then** the message appears in outputs that meet both the `external` level and their respective `file`/`tui` levels.
+2. **Given** `logging.external` is set to ERROR, **When** asyncssh emits a WARNING, **Then** the message does not appear in either file or TUI.
+3. **Given** `logging.external: INFO`, `logging.file: DEBUG`, `logging.tui: WARNING`, **When** asyncssh emits an INFO, **Then** it appears in the file but not in the TUI.
 
 ### Migrate Internal Logging to Standard Library (LOG-US-STDLIB)
 
@@ -70,23 +70,23 @@ As a developer, I want pc-switcher's internal logging to use Python's standard `
 
 **Acceptance Scenarios**:
 
-1. **Given** the current custom `Logger` class is replaced with standard logging, **When** a module logs a message, **Then** it goes through Python's logging infrastructure.
+1. **Given** a module holds a `logging.getLogger("pcswitcher...")`, **When** it logs a message, **Then** the message goes through Python's logging infrastructure — there is no pc-switcher logger class.
 2. **Given** a module is configured with a specific log level, **When** that module logs a message below its threshold, **Then** the message is filtered out.
 3. **Given** different handlers (file, TUI) have different levels, **When** a message is logged, **Then** each handler applies its own filter.
 
-### Preserve Current Log Format and Features (LOG-US-PRESERVE)
+### Log Format and Features (LOG-US-PRESERVE)
 
 Lineage: 004-US-4
 
-As a pc-switcher user, I want the TUI and file log output to maintain the current format (timestamps, colors, structured context) so that the migration doesn't degrade my user experience.
+As a pc-switcher user, I want TUI and file log output to carry timestamps, colours and structured context so that I can read a run without opening the JSON file.
 
-**Independent Test**: Can be tested by comparing log output before and after migration for visual consistency.
+**Independent Test**: Can be tested by running a sync and inspecting one terminal line and one file line for the fields below.
 
 **Acceptance Scenarios**:
 
 1. **Given** a log event with structured context (e.g., `file=/path/to/file`), **When** written to file, **Then** it includes the same JSON structure as before.
-2. **Given** a log event at ERROR level, **When** displayed in TUI, **Then** it has the same red coloring as before.
-3. **Given** a log event with host/job context, **When** displayed, **Then** the format remains `HH:MM:SS [LEVEL   ] [job] (host) message`.
+2. **Given** a log event at ERROR level, **When** displayed on the stderr fallback handler, **Then** it is coloured red.
+3. **Given** a log event with host/job context, **When** displayed, **Then** the format is `HH:MM:SS [LEVEL   ] [job] (host) message key=value` on the stderr fallback and `HH:MM:SS [LEVEL] [job] (host) message` in the interactive UI's log panel.
 
 ### Edge Cases
 
@@ -125,13 +125,13 @@ As a pc-switcher user, I want the TUI and file log output to maintain the curren
 
 #### Level Configuration
 
-- **LOG-FR-FILE-LEVEL**: System MUST allow configuring the log level floor for file output (`log.file`).  
+- **LOG-FR-FILE-LEVEL**: System MUST allow configuring the log level floor for file output (`logging.file`).  
   Lineage: 001-FR-020 -> 004-FR-001
 
-- **LOG-FR-TUI-LEVEL**: System MUST allow configuring the log level floor for TUI output (`log.tui`).  
+- **LOG-FR-TUI-LEVEL**: System MUST allow configuring the log level floor for TUI output (`logging.tui`).  
   Lineage: 001-FR-020 -> 004-FR-002
 
-- **LOG-FR-EXT-LEVEL**: System MUST allow configuring an additional log level floor for external libraries (`log.external`) that applies to both file and TUI output.  
+- **LOG-FR-EXT-LEVEL**: System MUST allow configuring an additional log level floor for external libraries (`logging.external`) that applies to both file and TUI output.  
   Lineage: 004-FR-003
 
 - **LOG-FR-DEFAULTS**: System MUST apply sensible defaults when log levels are not specified in config (file: DEBUG, tui: INFO, external: WARNING).  
@@ -150,22 +150,28 @@ As a pc-switcher user, I want the TUI and file log output to maintain the curren
 - **LOG-FR-STDLIB**: System MUST use Python's standard `logging` module as the foundation for all logging.  
   Lineage: 004-FR-005
 
-- **LOG-FR-EXCEPTION**: When a job raises an exception, the orchestrator MUST log the error at CRITICAL level, request termination of the currently-executing job (queued jobs never execute and do not receive termination requests), and halt sync immediately.  
+- **LOG-FR-EXCEPTION**: When a job raises an exception, the orchestrator MUST log the error at CRITICAL level with the job's name, record a FAILED `JobResult`, request termination of the currently-executing job (queued jobs never execute and do not receive termination requests), and halt sync immediately. These exceptions are excluded from that halt, each reported exactly once:
+  - `PackageItemFailures` and `ProbeFailed` — logged CRITICAL and recorded FAILED as above, but NOT re-raised: each package job reviews and applies its own work, so one manager's failed items say nothing about another's already-approved work, and the remaining jobs still run.
+  - `JobSkipped` — logged at WARNING, recorded SKIPPED, not re-raised.
+  - `SyncAbortedByUser` and `SyncLockedError` — passed through untouched to `Orchestrator.run()`, which logs each once at WARNING (never CRITICAL) and re-raises for the CLI.
+
   Lineage: 001-FR-019
 
 #### Output Format
 
-- **LOG-FR-FILE-PATH**: System MUST write all logs at configured file level or above to timestamped file in `~/.local/share/pc-switcher/logs/sync-<timestamp>.log`.  
+- **LOG-FR-FILE-PATH**: System MUST write all logs at configured file level or above to a per-session file at `~/.local/share/pc-switcher/logs/sync-<timestamp>-<session_id>.log`.  
   Lineage: 001-FR-021
 
-- **LOG-FR-JSON**: System MUST preserve the current log file format: JSON Lines format (one JSON object per line with keys: timestamp in ISO8601 format, level, job, host, event, plus any additional context fields) for machine-readability. ~~hostname~~ removed from per-entry requirements; see LOG-FR-SESSION-HOSTNAMES.
+- **LOG-FR-JSON**: System MUST preserve the current log file format: JSON Lines format (one JSON object per line with keys: timestamp in ISO8601 format, level, event, plus any additional context fields) for machine-readability. `job` and `host` are emitted when the call supplied them and omitted when it did not (e.g. during startup and shutdown). ~~hostname~~ removed from per-entry requirements; see LOG-FR-SESSION-HOSTNAMES.
   Lineage: 001-FR-022 → 004-FR-007 → #140
 
 - **LOG-FR-SESSION-HOSTNAMES**: System MUST log the source and target hostnames at session start, establishing the mapping between host roles ("source"/"target") and actual machine names.
   Lineage: #140
 
-- **LOG-FR-TUI-FORMAT**: System MUST preserve the current TUI format (colored, timestamped, structured) for human-readability. Format: `HH:MM:SS [LEVEL   ] [job] (host) message`.  
+- **LOG-FR-TUI-FORMAT**: System MUST render each record for the terminal as `HH:MM:SS [LEVEL   ] [job] (host) message key=value`, level-coloured, on the stderr handler used for non-interactive runs. In an interactive run records go to the UI's log panel instead, as plain text (`HH:MM:SS [LEVEL] [job] (host) message`) with no ANSI codes and no Rich markup, so arbitrary message content can neither render as markup nor corrupt the Live display.  
   Lineage: 001-FR-022 -> 004-FR-008
+
+- **LOG-FR-WARNING-RESURFACE**: In an interactive run the system MUST capture every `>=WARNING` record into a persistent buffer independently of the TUI level floor, backing a live counter in the status bar and a summary reprinted into scrollback once the Live display stops. Without it a warning is overwritten in the rolling panel within a few frames and never read.
 
 - **LOG-FR-CONTEXT**: System MUST preserve structured context (key=value pairs) in log output.  
   Lineage: 004-FR-011
@@ -180,17 +186,22 @@ As a pc-switcher user, I want the TUI and file log output to maintain the curren
 
 ### Key Entities
 
-- **LogConfig**: Configuration entity holding three log level settings: `file`, `tui`, `external`.
+All of these live in `src/pcswitcher/logger.py` unless another module is named.
+
+- **LogConfig** (`config.py`): the three log level settings `file`, `tui`, `external`, parsed from the config file's `logging:` section.
   Lineage: 004-entities
 
-- **LogHandler**: Abstraction for output destinations (file, TUI) with their own level filtering.
+- **LogRecord**: standard Python logging record, carrying pc-switcher context (`job`, `host`, arbitrary structured data) in its `extra` dict.
   Lineage: 004-entities
 
-- **LogRecord**: Standard Python logging record with additional pc-switcher context (host, job, structured data).
+- **Queue pipeline**: one `Queue` plus a `QueueListener` on a background thread, fed by a `QueueHandler` on the `pcswitcher` logger (`propagate=False`, so the external floor never applies to it) and a second on the root logger (external libraries only). This is what keeps a log call from blocking on I/O.
   Lineage: 004-entities
 
-- **LogEntry**: Represents a logged event with timestamp, level, job name, message, and structured context data.
-  Lineage: 001-entities
+- **Handlers**: `FileHandler` + `JsonFormatter` at the `file` floor; at the `tui` floor either `UILogHandler` (interactive: hands each line to the UI's log panel on the event loop) or `StreamHandler(stderr)` + `RichFormatter`; and, interactive only, `WarningCaptureHandler` pinned to WARNING. `respect_handler_level=True` makes each apply its own floor.
+  Lineage: 004-entities
+
+- **CredentialRedactionFilter**: installed on both `QueueHandler`s; see LOG-FR-CREDENTIAL-REDACTION.
+  Lineage: ADR-021
 
 ## Success Criteria
 
@@ -200,20 +211,17 @@ As a pc-switcher user, I want the TUI and file log output to maintain the curren
 - **LOG-SC-EXT-APPEAR**: Log messages from asyncssh and other external libraries appear in log output when their level meets both the `external` threshold and the destination's (`file`/`tui`) threshold.
   Lineage: 004-SC-002
 
-- **LOG-SC-FILE-DEBUG**: Setting `log.file` to DEBUG and `log.tui` to INFO results in file containing debug messages that don't appear in TUI.
+- **LOG-SC-FILE-DEBUG**: Setting `logging.file` to DEBUG and `logging.tui` to INFO results in file containing debug messages that don't appear in TUI.
   Lineage: 004-SC-003
 
-- **LOG-SC-EXT-FILTER**: Setting `log.external` to WARNING filters out INFO/DEBUG messages from external libraries regardless of `file`/`tui` settings.
+- **LOG-SC-EXT-FILTER**: Setting `logging.external` to WARNING filters out INFO/DEBUG messages from external libraries regardless of `file`/`tui` settings.
   Lineage: 004-SC-004
 
-- **LOG-SC-TUI-VISUAL**: TUI log output maintains identical visual format (colors, layout, timestamps) before and after migration.
+- **LOG-SC-TUI-VISUAL**: TUI log output carries the colours, layout and timestamps LOG-FR-TUI-FORMAT specifies, in both the interactive and the stderr path.
   Lineage: 004-SC-005
 
-- **LOG-SC-JSON-STRUCT**: File log output maintains identical JSON structure before and after migration.
+- **LOG-SC-JSON-STRUCT**: Every file log line parses as one JSON object with the LOG-FR-JSON keys.
   Lineage: 004-SC-006
-
-- **LOG-SC-NO-REGRESS**: No regression in existing test suite after migration.
-  Lineage: 004-SC-007
 
 - **LOG-SC-INVALID-FAIL**: Invalid log level in config causes startup failure with clear error message (consistent with other config errors).
   Lineage: 004-SC-008
