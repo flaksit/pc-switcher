@@ -71,7 +71,7 @@ while IFS= read -r f; do
             fi
             add_area "$marker"
             ;;
-        src/pcswitcher/jobs/apt_sync.py | src/pcswitcher/jobs/snap_sync.py | \
+        src/pcswitcher/jobs/apt_sync/* | src/pcswitcher/jobs/snap_sync.py | \
         src/pcswitcher/jobs/flatpak_sync.py | src/pcswitcher/jobs/manual_installs_sync.py | \
         src/pcswitcher/jobs/packages/* | src/pcswitcher/machine-packages.example.yaml)
             add_area area_package
