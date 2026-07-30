@@ -13,8 +13,7 @@ Documentation that is accurate about the code at `0abe7670` and stops being accu
 | `docs/jobs/package-sync.md` §§ Batched review, Deletions, Flatpak remotes; `docs/system/package-sync.md` flatpak item-classes bullet; `docs/system/data-model.md` item table | a flatpak remote is a two-answer review item in the removal case | U5 (`PKG-FR-FLATPAK-REMOTE-DELETE`) |
 | `docs/jobs/package-sync.md` § Flatpak remotes, last paragraph; `docs/system/package-sync.md` flatpak converges-by bullet | a remote's filter does not replicate and the run warns instead | U5 (`PKG-FR-FLATPAK-FILTER`) |
 | `docs/jobs/package-sync.md` § Versions, last sentence of the sideload paragraph | a sideloaded snap only the target has is still offered for removal | U6 (`PKG-FR-SNAP-SIDELOAD`) |
-| `docs/jobs/package-sync.md` § Batched review, the paragraph listing what is asked one item at a time | four kinds of item are asked one at a time | U0 ruling on `PKG-FR-BATCHED` |
-| `docs/jobs/package-sync.md` §§ Flatpak refs, Flatpak remotes; `docs/system/package-sync.md` flatpak covers bullet | remote names decide when a machine no longer configures the remote | U0 ruling on `PKG-FR-FLATPAK-ORIGIN-DIFF` |
+| `docs/jobs/package-sync.md` §§ Flatpak refs, Flatpak remotes; `docs/system/package-sync.md` flatpak covers bullet | remote names decide when a machine no longer configures the remote | U5 (`PKG-FR-FLATPAK-ORIGIN-DIFF`) |
 
 ## Already written for the finished behaviour
 

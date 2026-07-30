@@ -2,15 +2,13 @@
 
 From the sweep of all 127 articles and the whole doc surface against `0abe7670`. One commit per unit: fix, tests, every doc it affects, and its entries struck from the criteria's gap register and from `02-DIVERGENCES.md`. `02-DOC-DEBT.md` names the documentation each unit owes.
 
-## U0 — Rulings owed before the rest can be planned
+## U0 — What the rulings changed in the documents
 
-Ask as one set. Nothing here is a code change until it is answered.
+Documentation only, one commit. The rulings themselves are already folded into the register and into the units below.
 
-- `PKG-FR-BATCHED` against the five one-item-at-a-time questions (repository deletion, pin deletion, repository or remote conflict, collateral, unreproducible item). Each was ruled that way because its own content has to be read immediately before the question. Either the article gains that exception or the code re-gathers them.
-- `PKG-FR-HARMLESS-DEFAULT` for a snap whose revision or channel would change: is converging it an overwrite that must start at skip? The `/etc/apt/apt.conf.d` case needs no ruling — the article's own Why names it.
-- `PKG-FR-FLATPAK-ORIGIN-DIFF` where an application names a remote its machine no longer configures: keep the code's name comparison as a documented fallback, or report nothing.
-- DIV-02: `PCSWITCHER_PACKAGE_REVIEW_AUTOMATION` reports the review as interactive, so it writes machine-specific marks and snippets. Accept and document, report it as non-interactive, or gate it on a test-only signal.
-- DIV-03: the per-job passwordless-sudo preconditions are enforced in `validate()` and stated in no article. Which article covers them.
+- **Batched** means the questions come one after another with no pause and in whatever shape answers them best — not that one shape fits every item. The five one-item-at-a-time questions conform, and the register entry against them is gone. Say what the word means, in the narrative and in `PKG-FR-BATCHED`, so the next reader does not re-open it.
+- The per-job passwordless-sudo preconditions (DIV-03) are enforced in each `validate()` and stated in no article. Add one under *Preconditions and defaults* carrying DIV-03's table — apt both machines, snap both machines, flatpak the target and only for a system-scope item, manual neither — and correct the traceability count.
+- `PCSWITCHER_PACKAGE_REVIEW_AUTOMATION` (DIV-02) stays as it is, recorded as an accepted cost: anything that can set it gets silent permanent decisions. It needs an entry among the non-goals and a line in the job guide.
 
 ## U1 — Collateral
 
@@ -38,9 +36,9 @@ A repository still in use is withheld rather than disclosed; the conflict questi
 
 ## U5 — flatpak remotes and the filter
 
-`PKG-FR-FLATPAK-REMOTE-DELETE`, `PKG-FR-FLATPAK-FILTER`, `PKG-FR-FLATPAK-REMOTE-TRUST`. Closes DIV-11.
+`PKG-FR-FLATPAK-REMOTE-DELETE`, `PKG-FR-FLATPAK-FILTER`, `PKG-FR-FLATPAK-REMOTE-TRUST`, `PKG-FR-FLATPAK-ORIGIN-DIFF`. Closes DIV-11.
 
-The largest unit: reading the filter widens the remote capture to four columns, which reshapes every remote fixture in the suite. A remote stops being a review item in every case and is deleted once nothing on the target uses it. An unverified remote is reported to an ordinary run, not only under `--confirm-each-command`.
+The largest unit: reading the filter widens the remote capture to four columns, which reshapes every remote fixture in the suite. A remote stops being a review item in every case and is deleted once nothing on the target uses it. An unverified remote is reported to an ordinary run, not only under `--confirm-each-command`. An application whose remote its machine no longer configures has no origin URL, which matches no other origin, so it reports a divergence and the text says the URL is missing.
 
 ## U6 — snap sideloads
 
@@ -48,9 +46,9 @@ The largest unit: reading the filter widens the remote capture to four columns, 
 
 ## U7 — The answers and their defaults
 
-`PKG-FR-HARMLESS-DEFAULT`, `PKG-FR-EFFECT-NOT-MECHANISM`, `PKG-FR-NAME-THE-MACHINES`. Follows U0's ruling on the snap case.
+`PKG-FR-HARMLESS-DEFAULT`, `PKG-FR-EFFECT-NOT-MECHANISM`, `PKG-FR-NAME-THE-MACHINES`.
 
-An overwrite starts at skip; the permanent answer says the user will not be asked again; every failure, warning and `mutates=` phrase names the machines by hostname instead of by their role in the run.
+An `/etc/apt/apt.conf.d` overwrite starts at skip, a snap change keeps *apply*; the permanent answer says the user will not be asked again; every failure, warning and `mutates=` phrase names the machines by hostname instead of by their role in the run.
 
 ## U8 — The leaked identifier
 
