@@ -63,8 +63,8 @@ Decomposes [The model](package-sync-user-requirements.md#the-model); the review 
 
 - **PKG-FR-REVIEW-FIRST**: A job MUST NOT modify the target before the user has approved the changes that job proposes.
 - **PKG-FR-ONLY-APPROVED**: A job MUST apply only what the user approved.
-- **PKG-FR-BATCHED**: A job's questions SHOULD be gathered into as few reviews as the decisions allow, and where the same kind of decision recurs the items MUST be presented together and be settleable in a single pass rather than as a sequence of one-item questions.
-  Why: asking about each package separately would interrupt the user constantly, which is the whole reason the review exists.
+- **PKG-FR-BATCHED**: A job's questions MUST come one after another with no work between them. Where the same kind of decision recurs, the items MUST be presented together and be settleable in a single pass; a question that must show the user something before it can be answered MAY take a screen of its own.
+  Why: what interrupts the user is work resuming between questions, not their number. Batching constrains when a question is asked, not what shape it takes.
 - **PKG-FR-ASK-AGAIN**: A job MAY ask again, including after it has begun changing the target, where the answer it needs rests on facts this run's own changes invalidated or that could not be established before the first change.
   Why: correctness outranks batching, and some things are knowable only once an action has landed. What this permits is a second question, never a queue of them.
 - **PKG-FR-CONSENT-BEFORE-CHANGE**: Every consent a job needs for a change MUST be obtained before that change is made.
@@ -93,6 +93,16 @@ Decomposes [The model](package-sync-user-requirements.md#the-model); the review 
 
 Decomposes the validation and review paragraphs of [What happens during a sync](package-sync-user-requirements.md#what-happens-during-a-sync).
 
+- **PKG-FR-SUDO-PRECONDITION**: Each package job MUST establish in the validation step that it has passwordless sudo wherever it needs it, and MUST fail validation naming the machine that lacks it rather than degrading. What each needs:
+
+  | | source | target |
+  | - | - | - |
+  | `apt_sync` | required | required |
+  | `snap_sync` | required | required |
+  | `flatpak_sync` | none | only where a system-scope item exists on either machine |
+  | `manual_installs_sync` | none | none |
+
+  Why: it decides whether the job can run at all, so the user must learn it before the run starts changing things. Degrading is not an option for the source side of apt: without it the `/etc/apt` capture returns empty digests and the run reports success having replicated no repository configuration.
 - **PKG-FR-APT-DPKG-LOCK**: `apt_sync` MUST refuse to start while the target's dpkg lock is held, and MUST NOT wait on it silently.
   Why: another package operation is already changing the machine this run is about to change, so a review answered against that machine's state would be answered against state something else is moving.
 - **PKG-FR-HARMLESS-DEFAULT**: Every reviewed item's default answer MUST be the action that does no harm — apply for an install, skip for anything that removes or overwrites.
@@ -304,6 +314,7 @@ Each of these is a real cost, given up knowingly.
 - **PKG-NG-ORIGIN-CONVERGE**: A divergence of origin is reported, never resolved, for apt packages and flatpak applications alike. Where both machines have the same software from different origins, the system will not pick one.
 - **PKG-NG-UNATTENDED**: A package job's review cannot be answered by a non-interactive run. There is no file of standing answers and no assume-yes option.
 - **PKG-NG-MARK-PORTABILITY**: Machine-specific marks are per manager and per machine and are deliberately never synced. A new machine means deciding again.
+- **PKG-NG-AUTOMATION-ENV**: The environment variable `PCSWITCHER_PACKAGE_REVIEW_AUTOMATION` answers a package review from a JSON map of item id to decision, and its answers count as the user's own — a permanent one writes a machine-specific mark or an install snippet. It exists for the integration tests, which have no terminal to answer at, and MUST stay out of `--help` and the configuration schema so nothing offers it as a way of running the tool. Anything able to set it in the environment of a real run therefore gets silent, unreviewed, permanent decisions. This is the accepted cost of testing the review at all; `PKG-NG-UNATTENDED` still holds for every documented path.
 
 ## Where the tool does not yet meet these requirements
 
@@ -347,13 +358,13 @@ Every article above was read against the code at `0abe7670`. What is listed here
 
 ## Traceability
 
-Every article above decomposes exactly one section of [Package sync — user requirements](package-sync-user-requirements.md). 127 articles, no orphans on either side. A new article needs a home here; a narrative section with no articles is either intentionally non-normative or a coverage gap.
+Every article above decomposes exactly one section of [Package sync — user requirements](package-sync-user-requirements.md). 129 articles, no orphans on either side. A new article needs a home here; a narrative section with no articles is either intentionally non-normative or a coverage gap.
 
 | User-requirements section | Articles | |
 | - | - | - |
 | [What package sync is for](package-sync-user-requirements.md#what-package-sync-is-for) | 8 | `PKG-FR-OPT-IN` `PKG-FR-JOB-INDEPENDENCE` `PKG-FR-JOB-ORDER` `PKG-FR-APT-SCOPE` `PKG-FR-SNAP-SCOPE` `PKG-FR-FLATPAK-SCOPE` `PKG-FR-MANUAL-SCOPE` `PKG-FR-DATA-BOUNDARY` |
 | [The model](package-sync-user-requirements.md#the-model) | 18 | `PKG-FR-SOURCE-INTENT` `PKG-FR-MANAGER-CONVERGES` `PKG-FR-APT-IDENTITY` `PKG-FR-DISTRO-ORIGIN` `PKG-FR-SNAP-IDENTITY` `PKG-FR-FLATPAK-IDENTITY` `PKG-FR-FLATPAK-ORIGIN-NOT-IDENTITY` `PKG-FR-VERSION-FLOAT` `PKG-FR-SNAP-REVISION` `PKG-FR-BLOCKS-REPLICATE` `PKG-FR-REVIEW-FIRST` `PKG-FR-ONLY-APPROVED` `PKG-FR-BATCHED` `PKG-FR-ASK-AGAIN` `PKG-FR-CONSENT-BEFORE-CHANGE` `PKG-FR-ASK-ABOUT-SOFTWARE` `PKG-FR-ASK-WHEN-NOT-DERIVABLE` `PKG-FR-REMOVAL-DISTINCT` |
-| [What happens during a sync](package-sync-user-requirements.md#what-happens-during-a-sync) | 12 | `PKG-FR-NAME-THE-MACHINES` `PKG-FR-EFFECT-NOT-MECHANISM` `PKG-FR-ANSWERS-AS-A-SET` `PKG-FR-ABORT` `PKG-FR-CONFIRM-EACH` `PKG-FR-NO-TERMINAL` `PKG-FR-DRY-RUN` `PKG-FR-LOG-DECISIONS` `PKG-FR-LOG-VERBATIM` `PKG-FR-CREDENTIAL-PRIVACY` `PKG-FR-APT-DPKG-LOCK` `PKG-FR-HARMLESS-DEFAULT` |
+| [What happens during a sync](package-sync-user-requirements.md#what-happens-during-a-sync) | 13 | `PKG-FR-NAME-THE-MACHINES` `PKG-FR-EFFECT-NOT-MECHANISM` `PKG-FR-ANSWERS-AS-A-SET` `PKG-FR-ABORT` `PKG-FR-CONFIRM-EACH` `PKG-FR-NO-TERMINAL` `PKG-FR-DRY-RUN` `PKG-FR-LOG-DECISIONS` `PKG-FR-LOG-VERBATIM` `PKG-FR-CREDENTIAL-PRIVACY` `PKG-FR-SUDO-PRECONDITION` `PKG-FR-APT-DPKG-LOCK` `PKG-FR-HARMLESS-DEFAULT` |
 | [Decisions and their memory](package-sync-user-requirements.md#decisions-and-their-memory-machine-specific) | 4 | `PKG-FR-SKIP-ONCE` `PKG-FR-MACHINE-SPECIFIC` `PKG-FR-NO-MARK-ON-ORIGIN` `PKG-FR-NO-MARK-ON-REPORT` |
 | [apt / Installing](package-sync-user-requirements.md#installing) | 5 | `PKG-FR-DEB-OWNERSHIP` `PKG-FR-APT-ORIGIN-DISCLOSURE` `PKG-FR-APT-ORIGIN-DERIVED` `PKG-FR-APT-ORIGIN-UNREPLICABLE` `PKG-FR-APT-ORIGIN-VERIFY` |
 | [apt / Removing a package](package-sync-user-requirements.md#removing-a-package) | 1 | `PKG-FR-APT-REMOVE` |
@@ -367,7 +378,7 @@ Every article above decomposes exactly one section of [Package sync — user req
 | [flatpak](package-sync-user-requirements.md#flatpak) | 14 | `PKG-FR-FLATPAK-CASES` `PKG-FR-FLATPAK-REMOTE-DERIVED` `PKG-FR-FLATPAK-REMOTE-FIRST` `PKG-FR-FLATPAK-REMOTE-TRUST` `PKG-FR-FLATPAK-REPOINT` `PKG-FR-FLATPAK-REMOTE-DELETE` `PKG-FR-FLATPAK-INSTALL-ORIGIN` `PKG-FR-FLATPAK-MISSING-REMOTE` `PKG-FR-FLATPAK-ORIGIN-DIFF` `PKG-FR-FLATPAK-REMOTE-FAILURE` `PKG-FR-FLATPAK-FILTER` `PKG-FR-FLATPAK-THIRD-SCOPE` `PKG-FR-FLATPAK-MASK` `PKG-FR-FLATPAK-PRIVILEGE` |
 | [Software no manager can reproduce](package-sync-user-requirements.md#software-no-manager-can-reproduce) | 7 | `PKG-FR-MANUAL-RESOLUTION` `PKG-FR-MANUAL-SOURCE-DECIDES` `PKG-FR-MANUAL-SAME-RUN` `PKG-FR-SNIPPET-VERBATIM` `PKG-FR-REGISTRY-SYNCS` `PKG-FR-REGISTRY-CONSENT` `PKG-FR-MANUAL-FAIL-ITEM` |
 | [When something goes wrong](package-sync-user-requirements.md#when-something-goes-wrong) | 5 | `PKG-FR-OUTCOME-SUCCESS` `PKG-FR-OUTCOME-SKIPPED` `PKG-FR-OUTCOME-FAILED` `PKG-FR-READ-FAILS-JOB` `PKG-FR-FAIL-NAMED` |
-| [What this deliberately does not do](package-sync-user-requirements.md#what-this-deliberately-does-not-do) | 11 | `PKG-NG-APT-LINE-CONTROL` `PKG-NG-APT-IDENTICAL` `PKG-NG-PIN-LOCAL` `PKG-NG-SNAP-ORIGIN` `PKG-NG-ESM-PARTIAL` `PKG-NG-MARK-ORIGIN` `PKG-NG-MANUAL-REMOVE` `PKG-NG-VERSION-CONVERGE` `PKG-NG-ORIGIN-CONVERGE` `PKG-NG-UNATTENDED` `PKG-NG-MARK-PORTABILITY` |
+| [What this deliberately does not do](package-sync-user-requirements.md#what-this-deliberately-does-not-do) | 12 | `PKG-NG-APT-LINE-CONTROL` `PKG-NG-APT-IDENTICAL` `PKG-NG-PIN-LOCAL` `PKG-NG-SNAP-ORIGIN` `PKG-NG-ESM-PARTIAL` `PKG-NG-MARK-ORIGIN` `PKG-NG-MANUAL-REMOVE` `PKG-NG-VERSION-CONVERGE` `PKG-NG-ORIGIN-CONVERGE` `PKG-NG-UNATTENDED` `PKG-NG-MARK-PORTABILITY` `PKG-NG-AUTOMATION-ENV` |
 
 It also runs the other way: an article can state an obligation its section deliberately does not spell out. `PKG-FR-SNIPPET-VERBATIM` refusing an empty snippet is one — a real requirement, and too obvious to spend the narrative reader's attention on. Such an article is not an orphan, and the remedy is never to add the sentence back.
 

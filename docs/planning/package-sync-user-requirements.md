@@ -53,7 +53,9 @@ A **snippet** is a shell recipe, written once, for software no package manager c
 
 Where an answer follows from something already approved, it is not asked again. Where it does not, it is asked.
 
-Asking about every package separately would interrupt the user constantly, so questions are gathered into reviews, and repeated decisions of one kind are presented as a single list settled in one pass. That is a preference, not a rule: applying an approved change can reveal something the plan could not know, and a further question is then correct.
+Asking about every package separately would interrupt the user constantly, so a job's questions are **batched**: they come one after another with no work between them, each in whatever shape answers it best. Repeated decisions of one kind are one list settled in a single pass; a question that has to show the user something first — a file, a transaction — takes a screen of its own. Batching is about when the questions come, not about one shape fitting every item.
+
+That is a preference, not a rule: applying an approved change can reveal something the plan could not know, and a further question is then correct.
 
 Approving a removal takes a gesture distinct from approving an install, and is never the default.
 
@@ -299,3 +301,4 @@ A read that does not answer is different. If a package manager cannot be queried
 - **A target with no Ubuntu Pro attachment costs the whole apt job for that run.**
 - **A non-interactive run can answer no review.** There is no file of standing answers and no assume-yes option.
 - **Machine-specific marks are per job, per machine, and never synced.**
+- **An environment variable can answer a review, and its answers count as the user's own.** `PCSWITCHER_PACKAGE_REVIEW_AUTOMATION` exists so the integration tests, which have no terminal, can answer one; it appears in no help text and no configuration key. Anything able to set it on a real run gets silent, unreviewed, permanent decisions.

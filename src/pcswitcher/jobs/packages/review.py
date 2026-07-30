@@ -46,7 +46,9 @@ stop reporting the condition.
 without a TTY and cannot drive a real terminal prompt. When set, its value is trusted JSON
 (no schema validation) mapping item_id -> decision, applied instead of prompting. It never
 widens what the review offers (D-25 items are still exactly what the caller passed in) and
-is deliberately absent from `--help`, the config schema and user docs (D-26).
+is deliberately absent from `--help` and the config schema (D-26, `PKG-NG-AUTOMATION-ENV`), so
+nothing offers it as a way of running the tool. It is named in the docs as an accepted cost,
+because its answers count as the user's own: a permanent one writes a machine-specific mark.
 
 A `ReviewGroup` whose `action` is `UNREPRODUCIBLE_REVIEW_ACTION` gets a different
 interaction shape from every other group (D-21): instead of a row on a decision screen, each

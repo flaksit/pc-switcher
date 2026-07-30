@@ -13,9 +13,9 @@ Whether this is wrong depends on which reading is intended. `probes.py:42-48` ar
 
 `PCSWITCHER_PACKAGE_REVIEW_AUTOMATION` takes a JSON `item_id → decision` map and bypasses every prompt, returning `was_interactive=True` (`review.py:580-582`). Because the permanence guards test exactly that flag (`sync_core.py:454`, `manual_installs_sync.py:583`), this path **writes machine-specific marks and install snippets** — the two things `PKG-FR-SKIP-ONCE` and `PKG-FR-MACHINE-SPECIFIC` describe as coming from an explicit human choice.
 
-It is deliberately absent from `--help`, the config schema and every doc (`review.py:35-39`), and is intended for integration tests that have no TTY. But an environment variable is not a test-only mechanism: anything that can set it on a real run gets silent, unreviewed, permanent decisions.
+It is intended for integration tests that have no TTY. But an environment variable is not a test-only mechanism: anything that can set it on a real run gets silent, unreviewed, permanent decisions.
 
-**Ruling needed:** leave as is and document it as an accepted cost; make the automation path report `was_interactive=False` so nothing permanent is written; or gate it on a test-only signal. Note the second option would change what the integration tests can assert.
+**Closed 2026-07-30 (U0).** Ruled: leave the behaviour, record the cost. `PKG-NG-AUTOMATION-ENV` states it, the narrative's non-goals carry it, and the job guide names it. It stays out of `--help` and the config schema.
 
 ## DIV-03 — Passwordless-sudo preconditions differ per manager and are stated in no requirement
 
@@ -30,7 +30,7 @@ The four jobs have materially different prerequisites, all enforced in `validate
 
 `apt_sync.py:3876-3891` records why source-side sudo is a hard failure rather than a degradation: without it the `/etc/apt` capture silently returns empty digests and the sync reports success having replicated no repository configuration. `snap_sync.py:701-706` records that the source needs it because the refresh pause writes there, and `snap_sync.py:743-745` that snapd admin-gates even *reading* snap config.
 
-This is a user-visible precondition — it decides whether the job can run at all — so it belongs in the requirements. **No conflict, just an omission.** The narrative states it; the articles need an entry.
+This is a user-visible precondition — it decides whether the job can run at all — so it belongs in the requirements. **Closed 2026-07-30 (U0):** `PKG-FR-SUDO-PRECONDITION` carries the table. The code already conforms.
 
 ## DIV-04 — Sideloaded snaps: resolved by ruling them out of scope
 
