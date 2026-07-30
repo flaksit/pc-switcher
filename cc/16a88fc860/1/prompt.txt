@@ -1,0 +1,2 @@
+I still think (not your fault) that ADR-020 in many places reads more like a detailed parts of technical analysis/design and architecture description rather than a Decision Record. Ok if that doesn't bother you. At least avoid to keep the same info in different places.
+For me, as product owner, project manager, tech lead, it is way too long and unreadable because composed of 100s of tiny thingies instead of a decision record with a coherent "story". But I can ask you later, if need be (YAGNI) to construct a version that is understandable to me.
