@@ -1,0 +1,3 @@
+02-BEHAVIOUR-LEDGER.md can be removed, no? Was artefact to construct the user req doc.
+
+If nothing on todo-list anymore, what's next? Make concise plan (just list of steps) of how we will get all docs and code to be in line with the user req doc.
