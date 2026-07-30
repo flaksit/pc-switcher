@@ -67,8 +67,8 @@ Each answer is listed with a sentence of its own, naming the machine it happens 
 
 ```plain
 ? Remove apt packages
-  <y> remove          go ahead — nomad changes this sync
-  <s> skip now        leave nomad alone; you are asked again next sync
+  <y> remove          remove from nomad
+  <s> skip now        keep on nomad for now; will be asked again next sync
   <x> keep for good   nomad's own — keep it, and never be asked again
   <space> cycles   <shift+key> sets every row   <enter> confirm
 
