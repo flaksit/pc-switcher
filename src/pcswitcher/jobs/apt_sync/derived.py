@@ -33,7 +33,7 @@ from pcswitcher.jobs.apt_sync.items import (
 )
 from pcswitcher.jobs.apt_sync.origins import OriginClassifier
 from pcswitcher.jobs.apt_sync.probe import OriginFacts, RepoFacts
-from pcswitcher.jobs.packages.items import DiffAction, ItemClass, ItemDiff
+from pcswitcher.jobs.packages.items import DiffAction, ItemClass, ItemDiff, Machines
 from pcswitcher.jobs.packages.review import Decision
 
 
@@ -48,7 +48,9 @@ class DerivedWrites:
         source_repo_facts: RepoFacts,
         target_repo_facts: RepoFacts,
         origins: OriginClassifier,
+        machines: Machines,
     ) -> None:
+        self._machines = machines
         self._source_origin = source_origin_facts
         self._target_origin = target_origin_facts
         self._source_repo = source_repo_facts
@@ -137,7 +139,7 @@ class DerivedWrites:
         # the wrong vendor's software on the target — the one outcome D-34 exists to prevent.
         skipped = {
             source_file_destination(filename): (
-                "the user chose to keep the target's version of this file for now (ADR-020 D-37)"
+                f"the user chose to keep {self._machines.target}'s version of this file for now (ADR-020 D-37)"
             )
             for filename in conflicts
             if decisions.get(f"{CONFLICT_ID_PREFIX}{filename}") != Decision.APPLY

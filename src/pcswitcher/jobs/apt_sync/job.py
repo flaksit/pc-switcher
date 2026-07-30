@@ -174,6 +174,7 @@ class AptSyncJob(PackageSyncJob):
             source_repo_facts=source_repo,
             target_repo_facts=target_repo,
             origins=origins,
+            machines=self.machines,
         )
         keyrings = Keyrings(
             source_keys=source_facts.keys,
@@ -184,6 +185,7 @@ class AptSyncJob(PackageSyncJob):
             probe=self._probe,
             files=self._files,
             log=self._log,
+            machines=self.machines,
         )
         return _Work(
             source_facts=source_facts,
@@ -199,6 +201,7 @@ class AptSyncJob(PackageSyncJob):
                 derived=derived,
                 refresh=self._refresh,
                 log=self._log,
+                machines=self.machines,
             ),
             packages=PackageConverger(
                 target=self.target,
@@ -675,13 +678,17 @@ class AptSyncJob(PackageSyncJob):
         if self.context.dry_run:
             work = self._work
             for dest in work.derived.all_writes():
-                self._log(Host.TARGET, LogLevel.FULL, f"[dry-run] Would write {dest} from the source")
+                self._log(Host.TARGET, LogLevel.FULL, f"[dry-run] Would write {dest} from {self.machines.source}")
             if self._accepted_plan is not None and self._accepted_outcome is not None:
                 diffs = self._accepted_plan.diffs
                 decisions = self._accepted_outcome.decisions
                 surviving = work.keyrings.surviving_refs(diffs, decisions, work.derived.written_source_filenames)
                 for _local, dest in work.keyrings.writes(surviving):
-                    self._log(Host.TARGET, LogLevel.FULL, f"[dry-run] Would write signing key {dest} from the source")
+                    self._log(
+                        Host.TARGET,
+                        LogLevel.FULL,
+                        f"[dry-run] Would write signing key {dest} from {self.machines.source}",
+                    )
                 if any(
                     diff.item_class is ItemClass.APT_SOURCE
                     and diff.item_id != METADATA_REFRESH_ITEM_ID

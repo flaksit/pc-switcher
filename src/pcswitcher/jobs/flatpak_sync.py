@@ -1001,15 +1001,15 @@ def _remote_trust_flags(item: FlatpakRemoteItem, staged_key: str | None, *, rest
     return flags
 
 
-def _trust_mutation_phrase(item: FlatpakRemoteItem) -> str:
+def _trust_mutation_phrase(item: FlatpakRemoteItem, source_hostname: str) -> str:
     """Trailing clause for the `mutates=` phrase, so the confirm-each-command prompt and
     the trace state what a remote command does to TRUST, not only to the URL.
     """
     if not item.gpg_verify:
-        return ", with gpg verification disabled (as on the source)"
+        return f", with gpg verification disabled (as on {source_hostname})"
     if item.key_digest is None:
         return ""
-    return ", importing the source's signing key"
+    return f", importing {source_hostname}'s signing key"
 
 
 def _target_refs_by_origin_remote(target_refs: Sequence[FlatpakItem]) -> dict[str, list[str]]:
@@ -1361,7 +1361,7 @@ class FlatpakSyncJob(PackageSyncJob):
         which a MACHINE-SPECIFIC target ref takes as its origin in that same scope.
 
         Machine-specific means recorded skip-always in the TARGET's decision file, exactly as
-        `AptSyncJob._machine_specific_packages_by_source_file` reads it — not "a ref the
+        `AptProbe.packages_by_source_file` reads it — not "a ref the
         target has and the source does not". The narrower set is the point: a skip-always ref
         is structurally invisible (`filter_inert` drops it before the diff, so it can never
         produce an `ItemDiff` of its own in any run) and the user's explicit "this machine
@@ -1481,7 +1481,7 @@ class FlatpakSyncJob(PackageSyncJob):
             self._source_runtime_by_ref_id,
         )
         skipped = {
-            remote_id: "the user chose to keep the target's own version of it for now (ADR-020 D-41)"
+            remote_id: f"the user chose to keep {self.machines.target}'s own version of it for now (ADR-020 D-41)"
             for remote_id in self._remote_conflicts
             if outcome.decisions.get(_conflict_id(remote_id)) != Decision.APPLY
         }
@@ -1598,7 +1598,7 @@ class FlatpakSyncJob(PackageSyncJob):
         source_item = self._source_remotes_by_id.get(derived.remote_id)
         if source_item is None:
             self._failed_derived_remotes[derived.remote_id] = (
-                f"the source reports no {derived.scope}-scope remote named {derived.name!r}"
+                f"{self.machines.source} reports no {derived.scope}-scope remote named {derived.name!r}"
             )
             return
         target_item = self._target_remotes_by_id.get(derived.remote_id)
@@ -1632,7 +1632,7 @@ class FlatpakSyncJob(PackageSyncJob):
                 # says which facets of the remote were actually out of step.
                 self._log(Host.TARGET, LogLevel.FULL, _remote_change_detail(source_item, target_item))
             result = await self.target.run_command(
-                cmd, login_shell=False, mutates=f"{phrase}{_trust_mutation_phrase(source_item)}"
+                cmd, login_shell=False, mutates=f"{phrase}{_trust_mutation_phrase(source_item, self.machines.source)}"
             )
             self._target_remotes_now_by_id = None
             if result.success:
@@ -1652,7 +1652,10 @@ class FlatpakSyncJob(PackageSyncJob):
             reason = self._failed_derived_remotes.get(remote_id)
             if reason is not None:
                 scope, name = _split_flatpak_item_id(remote_id, "remote")
-                return f"the {scope} remote {name!r} it needs could not be provisioned: {reason}"
+                return (
+                    f"the {scope} remote {name!r} it needs could not be provisioned on "
+                    f"{self.machines.target}: {reason}"
+                )
         return None
 
     async def _apply_remote_filters(self, already_failed: frozenset[str]) -> list[tuple[ItemDiff, str]]:
@@ -1721,7 +1724,7 @@ class FlatpakSyncJob(PackageSyncJob):
             mkdir = await self.target.run_command(
                 f"{sudo}mkdir --parents {parent}",
                 login_shell=False,
-                mutates=f"create {local_path.parent} on the target for the {derived.name} ref filter",
+                mutates=f"create {local_path.parent} on {self.machines.target} for the {derived.name} ref filter",
             )
             if not mkdir.success:
                 return mkdir.stderr.strip() or f"{local_path.parent} could not be created"
@@ -1970,7 +1973,7 @@ class FlatpakSyncJob(PackageSyncJob):
         local_path = _source_keyring_path(item)
         if not local_path.is_file():
             raise ConvergeItemFailed(
-                f"signing key for {item.label()} is missing on the source at {local_path} "
+                f"signing key for {item.label()} is missing on {self.machines.source} at {local_path} "
                 "(it existed when the plan was captured); refusing to provision a remote whose key cannot be synced"
             )
         return await self._stage_source_file(local_path, f"{remote_id}.gpg", f"the signing key for {item.label()}")
@@ -1993,10 +1996,12 @@ class FlatpakSyncJob(PackageSyncJob):
             mutates="create the flatpak staging directory",
         )
         if not mkdir.success:
-            raise ConvergeItemFailed(f"failed to create {staging_dir} on the target: {mkdir.stderr.strip()}")
+            raise ConvergeItemFailed(
+                f"failed to create {staging_dir} on {self.machines.target}: {mkdir.stderr.strip()}"
+            )
 
         staged = f"{staging_dir}/{staged_name.replace(':', '_').replace('/', '_')}"
-        await self.target.send_file(local_path, staged, mutates=f"stage {what} into the target's cache")
+        await self.target.send_file(local_path, staged, mutates=f"stage {what} into {self.machines.target}'s cache")
         return staged
 
     async def _discard_staged_file(self, staged: str | None, what: str) -> None:
@@ -2072,22 +2077,22 @@ class FlatpakSyncJob(PackageSyncJob):
         source_remote = self._source_remotes_by_id.get(remote_id)
         if source_remote is None:
             return (
-                f"the source has no {scope}-scope remote named {origin!r}, so the ref's own origin "
+                f"{self.machines.source} has no {scope}-scope remote named {origin!r}, so the ref's own origin "
                 "cannot be replicated (ADR-020 D-41)"
             )
         target_remote = (await self._target_remotes_now()).get(remote_id)
         if target_remote is None:
-            return f"origin remote {origin!r} ({scope}) is not configured on the target (D-14)"
+            return f"origin remote {origin!r} ({scope}) is not configured on {self.machines.target} (D-14)"
         if target_remote.url != source_remote.url:
             return (
-                f"the target's {scope}-scope remote {origin!r} points at {target_remote.url}, "
-                f"but the source takes this ref from {source_remote.url} — same name, different "
+                f"{self.machines.target}'s {scope}-scope remote {origin!r} points at {target_remote.url}, "
+                f"but {self.machines.source} takes this ref from {source_remote.url} — same name, different "
                 "repository, so installing would replicate the name and invert the provenance"
             )
         if target_remote.gpg_verify != source_remote.gpg_verify:
             return (
-                f"the target's {scope}-scope remote {origin!r} has gpg verification "
-                f"{_verification_word(target_remote)} while the source's has it "
+                f"{self.machines.target}'s {scope}-scope remote {origin!r} has gpg verification "
+                f"{_verification_word(target_remote)} while {self.machines.source}'s has it "
                 f"{_verification_word(source_remote)}"
             )
         return None
@@ -2114,15 +2119,19 @@ class FlatpakSyncJob(PackageSyncJob):
             (item for item in _parse_flatpak_list(result.stdout) if item.scope == scope and item.ref == ref), None
         )
         if landed is None:
-            return f"flatpak exited 0 but the target does not list {ref} in the {scope} installation"
+            return f"flatpak exited 0 but {self.machines.target} does not list {ref} in the {scope} installation"
         source_url = self._source_remotes_by_id[f"flatpak:remote:{scope}:{expected_origin}"].url
         target_remotes = await self._target_remotes_now()
         landed_remote = target_remotes.get(f"flatpak:remote:{scope}:{landed.origin}")
         if landed_remote is None:
-            return f"{ref} reports origin {landed.origin!r}, which the target does not configure in {scope} scope"
+            return (
+                f"{ref} reports origin {landed.origin!r}, which {self.machines.target} does not configure "
+                f"in {scope} scope"
+            )
         if landed_remote.url != source_url:
             return (
-                f"{ref} came from {landed.origin!r} at {landed_remote.url}, but the source takes it from {source_url}"
+                f"{ref} came from {landed.origin!r} at {landed_remote.url}, but {self.machines.source} takes it "
+                f"from {source_url}"
             )
         return None
 

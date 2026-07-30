@@ -1698,9 +1698,9 @@ class TestPackageSyncWholeRunContracts:
         provisions the remote first (D-06, D-14): `flatpak install` refuses outright
         when its remote is not yet configured in that scope.
 
-        The remote is DERIVED (ADR-020 D-37): the add direction is no review entry at all
-        (`_diff_flatpak_remotes` emits REMOVE only), so the review below decides the ref
-        alone and the remote travels as a consequence of that one approval.
+        The remote is DERIVED (ADR-020 D-41): a remote is no review entry in any
+        direction, so the review below decides the ref alone and the remote travels as a
+        consequence of that one approval.
 
         The subject is a real Flathub app, present on pc1 only (`vm-test-fixtures.sh`), and
         the real Flathub remote. Nothing on pc2 trusts Flathub once this test deletes the

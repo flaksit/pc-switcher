@@ -1257,7 +1257,7 @@ class TestARepointThatMovesAMachineSpecificRefIsAsked:
         assert ("user", "org.example.App/x86_64/stable") not in target.refs
         with pytest.raises(ConvergeItemFailed) as excinfo:
             await job.converge(next(d for d in plan.diffs if d.item_id == _APP_ID))
-        assert "chose to keep the target's own version" in str(excinfo.value)
+        assert "chose to keep target-host's own version" in str(excinfo.value)
         assert "flathub" in str(excinfo.value)
 
     @pytest.mark.asyncio
@@ -1907,7 +1907,7 @@ class TestOriginIsReplicatedNotJustNamed:
         job = FlatpakSyncJob(context)
         plan = await job.plan()
 
-        with pytest.raises(ConvergeItemFailed, match="not configured on the target"):
+        with pytest.raises(ConvergeItemFailed, match="not configured on target-host"):
             await job.converge(self._ref_install(plan))
         job.accept_review(
             plan, ReviewOutcome(decisions={d.item_id: Decision.APPLY for d in plan.diffs}, was_interactive=True)

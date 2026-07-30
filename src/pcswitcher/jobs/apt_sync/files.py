@@ -139,7 +139,7 @@ class TargetFiles:
         staged_dest = f"{staging_dir}/{staged_name}"
         try:
             await self._target.send_file(
-                Path(local), staged_dest, mutates=f"stage {dest} into the target's cache before promotion"
+                Path(local), staged_dest, mutates=f"stage {dest} into {staging_dir} before promotion"
             )
             promote = await self._target.run_command(
                 f"sudo install --owner=root --group=root --mode=0644 {shlex.quote(staged_dest)} {shlex.quote(dest)}",

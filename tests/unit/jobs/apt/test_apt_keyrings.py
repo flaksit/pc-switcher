@@ -759,7 +759,7 @@ class TestKeyWritesAreVisible:
         with caplog.at_level(1):
             await job.execute()
 
-        assert "wrote signing key /etc/apt/keyrings/foo.gpg from the source" in caplog.text
+        assert "wrote signing key /etc/apt/keyrings/foo.gpg from source-host" in caplog.text
 
     @pytest.mark.asyncio
     async def test_a_collected_key_is_logged_as_it_goes(self, caplog: pytest.LogCaptureFixture) -> None:
@@ -786,7 +786,7 @@ class TestKeyWritesAreVisible:
         with caplog.at_level(1):
             await job.execute()
 
-        assert "[dry-run] Would write signing key /etc/apt/keyrings/foo.gpg from the source" in caplog.text
+        assert "[dry-run] Would write signing key /etc/apt/keyrings/foo.gpg from source-host" in caplog.text
         assert key_writes(target) == []
 
     @pytest.mark.asyncio

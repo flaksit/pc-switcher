@@ -39,7 +39,7 @@ from pcswitcher.jobs.apt_sync.items import (
 from pcswitcher.jobs.apt_sync.keyrings import Keyrings
 from pcswitcher.jobs.apt_sync.packages import MetadataRefresh
 from pcswitcher.jobs.apt_sync.reporting import Log
-from pcswitcher.jobs.packages.items import DiffAction, ItemClass, ItemDiff
+from pcswitcher.jobs.packages.items import DiffAction, ItemClass, ItemDiff, Machines
 from pcswitcher.jobs.packages.review import Decision
 from pcswitcher.jobs.packages.sync_core import ConvergeItemFailed
 from pcswitcher.models import CommandResult, Host, LogLevel
@@ -57,7 +57,9 @@ class EtcApt:
         derived: DerivedWrites,
         refresh: MetadataRefresh,
         log: Log,
+        machines: Machines,
     ) -> None:
+        self._machines = machines
         self._target = target
         self._files = files
         self._keyrings = keyrings
@@ -245,8 +247,9 @@ class EtcApt:
             self._log(
                 Host.TARGET,
                 LogLevel.WARNING,
-                f"Repository-group rollback incomplete; the backup is kept at {backup_dir} on the target "
-                f"so the affected file(s) can be restored by hand: {'; '.join(rollback_failures)}",
+                f"Repository-group rollback incomplete; the backup is kept at {backup_dir} on "
+                f"{self._machines.target} so the affected file(s) can be restored by hand: "
+                f"{'; '.join(rollback_failures)}",
             )
         else:
             await self._files.discard_backup(
@@ -347,7 +350,7 @@ class EtcApt:
             self._derived.record_failure(dest, str(exc))
             self._log(Host.TARGET, LogLevel.ERROR, f"failed to write {dest}: {exc}", stderr=str(exc))
             return
-        self._log(Host.TARGET, LogLevel.FULL, f"wrote {dest} from the source")
+        self._log(Host.TARGET, LogLevel.FULL, f"wrote {dest} from {self._machines.source}")
 
     async def _write_or_remove(self, diff: ItemDiff, staging_dir: str) -> None:
         """Converge one REVIEWED repository-group diff: `sudo rm --force` for a REMOVE, or

@@ -145,13 +145,13 @@ class EsmGate:
             if answer is None:
                 raise JobSkipped(
                     self._job_name,
-                    f"the source carries {named} and the target reports no Ubuntu Pro attachment; "
+                    f"{self._machines.source} carries {named} and {target} reports no Ubuntu Pro attachment; "
                     "no TTY was available to ask whether to attach it or skip",
                 )
             if not answer:
                 raise JobSkipped(
                     self._job_name,
-                    f"the source carries {named}, the target reports no Ubuntu Pro attachment, "
+                    f"{self._machines.source} carries {named}, {target} reports no Ubuntu Pro attachment, "
                     "and the user chose to skip rather than attach it",
                 )
             if await self.attached():

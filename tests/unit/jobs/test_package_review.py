@@ -309,6 +309,82 @@ class TestInteractive:
         assert _screen_defaults(decision_list.call_args_list[0]) == {"a": Decision.APPLY}
         assert _screen_defaults(decision_list.call_args_list[1]) == {"b": Decision.SKIP_ONCE}
 
+    async def test_a_change_that_overwrites_what_the_user_wrote_starts_skipped(self) -> None:
+        """`PKG-FR-HARMLESS-DEFAULT`: an `/etc/apt/apt.conf.d` file the target already holds
+        is the user's own work, and confirming the screen unread must not replace it. A snap
+        moved to another revision starts applied on the same action — converging software
+        the user asked for overwrites nothing they authored.
+        """
+        console = _interactive_console()
+        ui = MagicMock()
+        config_group = ReviewGroup(
+            manager="apt",
+            action="change",
+            title="Update apt configuration files",
+            entries=[_entry("cfg", action_label="update")],
+            overwrites_authored_content=True,
+        )
+        snap_group = ReviewGroup(
+            manager="snap", action="change", title="Change snaps", entries=[_entry("snp", action_label="change")]
+        )
+        prompt = _fake_prompt(ask_side_effect=[{"cfg": "skip_once"}, {"snp": "apply"}])
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=prompt) as decision_list,
+        ):
+            await review_items([config_group, snap_group], console=console, ui=ui, **HOSTS)
+
+        assert _screen_defaults(decision_list.call_args_list[0]) == {"cfg": Decision.SKIP_ONCE}
+        assert _screen_defaults(decision_list.call_args_list[1]) == {"snp": Decision.APPLY}
+
+    async def test_the_permanent_answer_says_the_user_will_not_be_asked_again(self) -> None:
+        """`PKG-FR-EFFECT-NOT-MECHANISM`: what the mark stops pc-switcher doing is machinery.
+        What it costs to choose is never being asked about the item again, and the two skips
+        read as one set — the same act clause, then the duration.
+        """
+        console = _interactive_console()
+        ui = MagicMock()
+        groups = [
+            ReviewGroup(manager="apt", action="install", title="Install packages", entries=[_entry("a")]),
+            ReviewGroup(
+                manager="apt", action="remove", title="Remove packages", entries=[_entry("b", action_label="remove")]
+            ),
+            ReviewGroup(
+                manager="apt",
+                action="change",
+                title="Update apt configuration files",
+                entries=[_entry("c", action_label="update")],
+                overwrites_authored_content=True,
+            ),
+        ]
+        prompt = _fake_prompt(ask_side_effect=[{"a": "apply"}, {"b": "skip_once"}, {"c": "skip_once"}])
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=prompt) as decision_list,
+        ):
+            await review_items(groups, console=console, ui=ui, **HOSTS)
+
+        install_hints = [option.hint for option in decision_list.call_args_list[0].kwargs["options"]]
+        removal_hints = [option.hint for option in decision_list.call_args_list[1].kwargs["options"]]
+        change_hints = [option.hint for option in decision_list.call_args_list[2].kwargs["options"]]
+        assert install_hints[1:] == [
+            "do not install on nomad for now; will be asked again next sync",
+            "do not install on nomad for good; it is atlas's own, and will not be asked again",
+        ]
+        assert removal_hints[1:] == [
+            "keep on nomad for now; will be asked again next sync",
+            "keep on nomad for good; it is nomad's own, and will not be asked again",
+        ]
+        # A change is the one direction whose item is on BOTH machines: the mark lands on
+        # the machine that keeps its own version, which is the target.
+        assert change_hints[1:] == [
+            "do not update on nomad for now; will be asked again next sync",
+            "do not update on nomad for good; it is nomad's own, and will not be asked again",
+        ]
+        assert not any("pc-switcher" in hint for hint in install_hints + removal_hints + change_hints)
+
     async def test_no_group_mixes_install_and_removal_entries_in_one_prompt(self) -> None:
         """Removals never share a screen with installs (D-07/D-24)."""
         console = _interactive_console()
@@ -924,9 +1000,7 @@ class TestUnreproducibleGroupResolution:
         ]
         assert options[0].hint == "write a command snippet that installs it; nomad runs it"
         assert options[1].hint == "do not install on nomad for now; will be asked again next sync"
-        assert options[2].hint == (
-            "this is specific to atlas; pc-switcher will never install it to nomad or other machines"
-        )
+        assert options[2].hint == "do not install on nomad for good; it is atlas's own, and will not be asked again"
         assert decision_list.call_args.args[0] == "How should nomad get brscan3?"
 
     async def test_ui_resumed_when_snippet_capture_raises(self) -> None:

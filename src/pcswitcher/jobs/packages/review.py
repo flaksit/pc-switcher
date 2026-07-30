@@ -21,10 +21,12 @@ handed back even if the prompt raises.
 Removals get their own group, never sharing a screen with installs (D-07/D-24): a bulk
 confirm that also deleted software would be exactly the silent-destruction failure D-07
 exists to prevent, which is also why a removal-direction row starts at skip-once while an
-install-direction row starts applied. Which of a caller's `ReviewGroup`s are
-"removal-direction" is decided by `ReviewGroup.action`; grouping itself (turning an
-`ItemDiff` into `ReviewGroup`s keyed by manager+action) belongs to
-`PackageSyncJob._build_review_groups`, and this module only consumes already-grouped input.
+install-direction row starts applied. A group whose change replaces content the target's
+own user wrote starts at skip-once too (`ReviewGroup.overwrites_authored_content`). Which
+of a caller's `ReviewGroup`s are "removal-direction" is decided by `ReviewGroup.action`;
+grouping itself (turning an `ItemDiff` into `ReviewGroup`s keyed by manager+action) belongs
+to `PackageSyncJob._build_review_groups`, and this module only consumes already-grouped
+input.
 
 `ask_gate` is the one question here that is NOT a review item: a two-answer yes/no about the
 target's environment, asked before any group is built, whose "no" answer means there is no
@@ -268,6 +270,13 @@ class ReviewGroup:
 
     `note` is a line printed under a group that is reported rather than asked about: what
     to do about the condition, when the answer is not a decision on this screen.
+
+    `overwrites_authored_content` starts this group's rows at skip-once even though its
+    action is not a removal (`PKG-FR-HARMLESS-DEFAULT`): an `/etc/apt/apt.conf.d` file the
+    target already holds is content the user wrote there, and replacing it unread is as
+    irreversible as a deletion. A snap the run moves to another revision or channel is not —
+    converging software the user asked for overwrites nothing they authored — so the caller
+    decides this per group rather than every CHANGE starting skipped.
     """
 
     manager: str
@@ -275,6 +284,7 @@ class ReviewGroup:
     title: str
     entries: Sequence[ReviewEntry]
     note: str | None = None
+    overwrites_authored_content: bool = False
 
 
 class Decision(StrEnum):
@@ -283,9 +293,11 @@ class Decision(StrEnum):
     APPLY = "apply"
     SKIP_ONCE = "skip_once"
     # "Treat this item as specific to this machine": it goes inert here in BOTH roles
-    # (D-08a), so it is neither pushed from here nor converged onto here. Deliberately not
-    # worded "never offer again on this machine" — what the user records is a fact about
-    # the item, and never being asked again is the consequence, not the request.
+    # (D-08a), so it is neither pushed from here nor converged onto here. The sentence the
+    # user reads beside this answer says the consequence — they will not be asked again
+    # (`PKG-FR-EFFECT-NOT-MECHANISM`) — because "pc-switcher stops touching the item" is
+    # the machinery, and what it costs to choose permanence is what a permanent answer has
+    # to be chosen on.
     SKIP_ALWAYS = "skip_always"
 
 
@@ -353,12 +365,10 @@ KEEP_FOR_GOOD_WORD = "keep for good"
 ACKNOWLEDGED_WORD = "acknowledged"
 REPORT_AGAIN_WORD = "report again"
 
-# Verbs whose sentences take a preposition other than "on". "remove from nomad" and "never
-# install it to nomad" are the two the English wants; "hold on nomad", "change on nomad" and
-# "never hold it on nomad" take the default. A verb missing from both sets reads correctly
-# with "on", which is why they are enumerated rather than derived.
+# Verbs whose sentences take "from" rather than "on": "remove from nomad", against "hold on
+# nomad" and "change on nomad". A verb missing from the set reads correctly with "on", which
+# is why they are enumerated rather than derived.
 _VERBS_TAKING_FROM = frozenset({"remove", "delete"})
-_VERBS_TAKING_TO = frozenset({"install", "add"})
 
 
 # Filled / hollow / crossed. The glyph is what carries the row's state, so the screen stays
@@ -378,15 +388,18 @@ def _group_act_word(group: ReviewGroup) -> str:
     return counts.most_common(1)[0][0] if counts else "apply"
 
 
-def _default_decision(action: str) -> Decision:
+def _default_decision(group: ReviewGroup) -> Decision:
     """Where a group's rows start before the user touches anything.
 
     Install-direction rows start applied; anything that removes, deletes or disables starts
     at skip-once — and so does the repository/remote overwrite, which moves software the
-    target explicitly marked machine-specific. Confirming a screen unread must never destroy
-    or displace something the user did not choose.
+    target explicitly marked machine-specific, and any group that replaces content the
+    target's own user wrote (`ReviewGroup.overwrites_authored_content`). Confirming a screen
+    unread must never destroy or displace something the user did not choose.
     """
-    if _is_removal_direction(action) or _is_repo_conflict_group(action):
+    if group.overwrites_authored_content:
+        return Decision.SKIP_ONCE
+    if _is_removal_direction(group.action) or _is_repo_conflict_group(group.action):
         return Decision.SKIP_ONCE
     return Decision.APPLY
 
@@ -430,6 +443,12 @@ def _hints(group: ReviewGroup, source_hostname: str, target_hostname: str) -> tu
     "leave nomad alone": a neutral word for the act is the same non-answer as "apply", and
     the user is reading these to find out what the key does, not to be reassured.
 
+    The two skips share the act's own clause and differ only in the duration that follows —
+    "for now, will be asked again next sync" against "for good, will not be asked again"
+    (`PKG-FR-EFFECT-NOT-MECHANISM`, `PKG-FR-ANSWERS-AS-A-SET`). The mark's own effect on
+    later runs is what the permanent answer states; what the mark stops pc-switcher doing
+    is machinery the user cannot weigh a permanent answer against.
+
     Four shapes, because the answers genuinely differ by direction. A reported condition
     converges nothing either way; a conflict is a choice between two versions of one file;
     an item already on the target is kept rather than refused; everything else arrives or
@@ -457,18 +476,17 @@ def _hints(group: ReviewGroup, source_hostname: str, target_hostname: str) -> tu
         if takes_from
         else f"do not {verb} on {target_hostname} for now; will be asked again next sync"
     )
-    if _is_removal_direction(group.action) or group.action == _CHANGE_ACTION:
-        # The item is already on the target, so the recorded answer protects what is there
-        # rather than refusing an arrival — and it protects it in both directions, which is
-        # what "never touch it" says and "never remove it" would not.
-        return act, now, f"this is specific to {target_hostname}; pc-switcher will never touch it"
-    preposition = "to" if verb in _VERBS_TAKING_TO else "on"
-    return (
-        act,
-        now,
-        f"this is specific to {source_hostname}; pc-switcher will never {verb} it {preposition} "
-        f"{target_hostname} or other machines",
-    )
+    # The permanent sentence takes the skip-now clause and swaps its duration, so each
+    # branch here mirrors `_skip_always_word`'s own choice of verb. Whose machine the item
+    # becomes is the second half: an item already on the target belongs to the target, and
+    # one that has not arrived belongs to the machine it came from.
+    if _is_removal_direction(group.action):
+        holder = target_hostname
+        permanent = f"keep on {target_hostname} for good"
+    else:
+        holder = target_hostname if group.action == _CHANGE_ACTION else source_hostname
+        permanent = f"do not {verb} on {target_hostname} for good"
+    return act, now, f"{permanent}; it is {holder}'s own, and will not be asked again"
 
 
 def _options_for(group: ReviewGroup, *, source_hostname: str, target_hostname: str) -> tuple[DecisionOption, ...]:
@@ -518,7 +536,7 @@ def _rows_for(group: ReviewGroup) -> tuple[DecisionRow, ...]:
     item, and as its own word in the decision column.
     """
     act_word = _group_act_word(group)
-    default = _default_decision(group.action)
+    default = _default_decision(group)
     return tuple(
         DecisionRow(
             row_id=entry.item_id,
@@ -649,8 +667,8 @@ def _unreproducible_options(source_hostname: str, target_hostname: str) -> tuple
             word="never install",
             glyph=_SKIP_ALWAYS_GLYPH,
             is_permanent=True,
-            hint=f"this is specific to {source_hostname}; pc-switcher will never install it to "
-            f"{target_hostname} or other machines",
+            hint=f"do not install on {target_hostname} for good; it is {source_hostname}'s own, "
+            "and will not be asked again",
         ),
     )
 
@@ -950,9 +968,7 @@ async def _review_removal_group(
                 Panel(Text(entry.content.rstrip("\n")), title=Text(f"On {target_hostname}"), border_style="yellow")
             )
         decisions[entry.item_id] = Decision(
-            await _ask_about_one_item(
-                entry, title=group.title, options=options, default=_default_decision(group.action)
-            )
+            await _ask_about_one_item(entry, title=group.title, options=options, default=_default_decision(group))
         )
 
 
@@ -1011,9 +1027,7 @@ async def _review_repo_conflict_group(
                 Panel(Text(source_version.rstrip("\n")), title=Text(f"On {source_hostname}"), border_style="cyan")
             )
         decisions[entry.item_id] = Decision(
-            await _ask_about_one_item(
-                entry, title=group.title, options=options, default=_default_decision(group.action)
-            )
+            await _ask_about_one_item(entry, title=group.title, options=options, default=_default_decision(group))
         )
 
 

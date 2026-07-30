@@ -47,13 +47,13 @@ Because an enabled package job can install or remove software on the target, eac
 
 Every screen names the two machines by their **hostnames** — `atlas`, `nomad` — never as "the source" and "the target". Those are the tool's names for the two ends of a run, and the question a review asks is always about one of your computers: which machine loses the package, which machine's version of a file wins, which machine an install snippet runs on.
 
-The review lists every difference the job found between the two machines, grouped by action, and installs are always kept separate from removals: a group that would install software is never mixed with one that would remove it, and a removal group names the removal explicitly (for example "Remove packages") rather than saying "apply". Removal rows start at **skip now**, so a bulk approval can never silently delete something.
+The review lists every difference the job found between the two machines, grouped by action, and installs are always kept separate from removals: a group that would install software is never mixed with one that would remove it, and a removal group names the removal explicitly (for example "Remove packages") rather than saying "apply". Removal rows start at **skip now**, so a bulk approval can never silently delete something. So do rows that would replace an `apt.conf.d` file the target already holds — that file is your own work, and overwriting it unread is as irreversible as a deletion. A snap the run moves to another revision or channel still starts applied: converging software you asked for overwrites nothing you wrote.
 
 Most items that would actually change something — packages, holds, masks and `apt.conf.d` files — offer the same three-way choice:
 
 - **Apply** it — make this change on the target.
 - **Skip now** — leave it alone this sync; it comes back next sync. The repository-conflict screen is the one exception to the wording, because there the answer picks between two versions of one file: it reads `keep <target>'s version`.
-- **Skip for good** — mark it as belonging to one machine only, so no future sync touches it and you are not asked again (see [Machine-specific packages](#machine-specific-packages)). Said as this screen's own act: `never install` where the item is not on the target, `keep for good` where it already is.
+- **Skip for good** — mark it as belonging to one machine only, so no future sync touches it and you are not asked again (see [Machine-specific packages](#machine-specific-packages)). Said as this screen's own act: `keep for good` on a removal screen, `never <verb>` on every other.
 
 You give those answers on **one screen per group**, not with a question per item and not in two passes. Every item is a row; the decision it currently carries is shown in a column to the right of the longest item; the arrow keys move between rows — the first and last rows are walls, not a way round to the other end — and one key sets the focused row:
 
@@ -63,13 +63,13 @@ You give those answers on **one screen per group**, not with a question per item
 - `<space>` steps the focused row through the answers, and the shift of any key sets **every** row at once
 - `<enter>` confirms the whole screen; `<ctrl-c>` aborts the whole sync (the screen does not offer this — it is not one of the answers)
 
-Each answer is listed with a sentence of its own, naming the machine it happens to and how long it lasts, because the column word is too short to say either:
+Each answer is listed with a sentence of its own, naming the machine it happens to and how long it lasts, because the column word is too short to say either. The two skips share the act's own words and differ in the duration that follows, so the permanent one is chosen on what it costs you — never being asked about the item again — rather than on what it stops pc-switcher doing:
 
 ```plain
 ? Remove apt packages
   <y> remove          remove from nomad
   <s> skip now        keep on nomad for now; will be asked again next sync
-  <x> keep for good   nomad's own — keep it, and never be asked again
+  <x> keep for good   keep on nomad for good; it is nomad's own, and will not be asked again
   <space> cycles   <shift+key> sets every row   <enter> confirm
 
  » ● fortunes-min  remove
@@ -107,7 +107,7 @@ Two kinds of package are protected instead of let go: one you installed by hand 
 
 - `<y>` — the act, named as what happens to the package: `remove`, `downgrade` or `upgrade`. Its line reads, for example, `install sl on nomad, so fortunes is removed as well`.
 - `<s>` `skip now` — `keep fortunes on nomad; sl will not be installed; will be asked again next sync`. Everything else you approved is applied as you decided.
-- `<q>` `stop the sync` — not just `apt_sync`. No further job runs, nothing more is changed on the target, and what jobs that already finished did stays done. `apt_sync` itself has changed nothing at this point: the review runs before its first mutating command.
+- `<q>` `stop the sync` — not just `apt_sync`. Its line reads `nothing more is changed on nomad; what earlier jobs already did stays done`: no further job runs, and what jobs that already finished did stays done. `apt_sync` itself has changed nothing at this point: the review runs before its first mutating command.
 
 Being offered for removal is not the same as being given up. A package you were offered for removal and kept — by skipping it, or by marking it as this machine's own — keeps its protection, so an unrelated install that would take it still asks you first. Only a removal you actually approved is exempt, and a mark you made earlier in the same review counts from the moment you made it.
 
@@ -202,9 +202,9 @@ A machine-specific apt package never appears in a review again, so an apt reposi
 
 Some installed things no package manager can reproduce — a bare `.deb` downloaded and installed by hand, or software dropped under `/usr/local` or `/opt` by an install script. `manual_installs_sync` detects these and surfaces them in its review as items needing a resolution. Each gets a decision screen of its own — one item per screen, because answering `<y>` opens an editor for that item — with the review's usual three answers in the usual order:
 
-- `<y>` `install` — write a command snippet that installs it; the target runs it, now and on every future sync.
-- `<s>` `skip now` — the target does not get it this sync, and you are asked again next sync.
-- `<x>` `never install` — this one is the source machine's own; the target never gets it and you are not asked again.
+- `<y>` `install` — `write a command snippet that installs it; nomad runs it`, now and on every future sync.
+- `<s>` `skip now` — `do not install on nomad for now; will be asked again next sync`.
+- `<x>` `never install` — `do not install on nomad for good; it is atlas's own, and will not be asked again`.
 
 An install snippet is a shell command that reproduces the item — the tool never parses, interprets, or reasons about it. It is **stored and replayed verbatim**, and it runs **non-interactively**: no stdin is supplied during replay, so a command that prompts (for example a debconf question) fails rather than hanging the sync. A typical shape:
 

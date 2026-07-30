@@ -276,7 +276,8 @@ class ManualInstallsSyncJob(PackageSyncJob):
         await self._guard_registry_overwrite(source_path)
 
         mkdir = await self.target.run_command(
-            f"mkdir --parents {CONFIG_REMOTE_DIR}", mutates="create the pc-switcher config directory on the target"
+            f"mkdir --parents {CONFIG_REMOTE_DIR}",
+            mutates=f"create the pc-switcher config directory on {self.machines.target}",
         )
         if not mkdir.success:
             raise RuntimeError(f"Failed to create config directory on target: {mkdir.stderr}")
@@ -287,7 +288,7 @@ class ManualInstallsSyncJob(PackageSyncJob):
             raise RuntimeError("Failed to get home directory on target")
         absolute_remote_path = f"{home.stdout.strip()}/{SNIPPET_REGISTRY_RELPATH}"
         await self.target.send_file(
-            source_path, absolute_remote_path, mutates="push the install-snippet registry to the target"
+            source_path, absolute_remote_path, mutates=f"push the install-snippet registry to {self.machines.target}"
         )
 
     async def _guard_registry_overwrite(self, source_path: Path) -> None:
@@ -331,13 +332,12 @@ class ManualInstallsSyncJob(PackageSyncJob):
         )
         if not approved:
             raise SyncAbortedByUser(
-                "snippet registry overwrite declined: the target holds snippet entries "
-                "absent from or differing in the source that a wholesale push would lose "
+                f"snippet registry overwrite declined: {self.machines.target} holds snippet entries "
+                f"absent from or differing in {self.machines.source}'s that a wholesale push would lose "
                 "or change; consolidate the two registries by hand and re-run"
             )
 
-    @staticmethod
-    def _render_overwrite_diff(lost: list[Snippet], changed: list[tuple[Snippet, Snippet]]) -> str:
+    def _render_overwrite_diff(self, lost: list[Snippet], changed: list[tuple[Snippet, Snippet]]) -> str:
         """Rich-markup body naming every target entry a wholesale push would lose or change.
 
         Every snippet field is untrusted package-manager/user text, so each is
@@ -348,19 +348,22 @@ class ManualInstallsSyncJob(PackageSyncJob):
         def body_lines(body: str, indent: str) -> list[str]:
             return [f"{indent}{escape(line)}" for line in (body.splitlines() or [""])]
 
-        lines = ["The target's snippet registry holds entries this overwrite would discard or replace:", ""]
+        lines = [
+            f"{self.machines.target}'s snippet registry holds entries this overwrite would discard or replace:",
+            "",
+        ]
         for snippet in lost:
             lines.append(f"  LOST     {escape(snippet.label)}  ({escape(snippet.item_id)})")
             lines.extend(body_lines(snippet.body, "             "))
         for target_snippet, source_snippet in changed:
             lines.append(f"  CHANGED  {escape(target_snippet.label)}  ({escape(target_snippet.item_id)})")
-            lines.append("             target (to be replaced):")
+            lines.append(f"             on {self.machines.target} (to be replaced):")
             lines.extend(body_lines(target_snippet.body, "               "))
-            lines.append("             source (incoming):")
+            lines.append(f"             from {self.machines.source} (incoming):")
             lines.extend(body_lines(source_snippet.body, "               "))
         lines += [
             "",
-            "Continuing overwrites the target's registry wholesale. Decline to abort and "
+            f"Continuing overwrites {self.machines.target}'s registry wholesale. Decline to abort and "
             "consolidate the two registries by hand.",
         ]
         return "\n".join(lines)

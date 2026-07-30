@@ -287,6 +287,48 @@ class TestReviewGroupsByAction:
             assert verb in groups[0].title.lower()
             assert [entry.item_id for entry in groups[0].entries] == ["x1"]
 
+    def test_only_an_apt_config_change_is_flagged_as_overwriting_the_users_own_content(self) -> None:
+        """`PKG-FR-HARMLESS-DEFAULT`: replacing an `/etc/apt/apt.conf.d` file the target
+        already holds destroys something the user wrote there, so it must not be the answer
+        confirming a screen unread produces. Every other CHANGE converges software the user
+        asked for and stays preselected.
+        """
+        job = FakeSyncJob(make_context())
+        diffs = [
+            ItemDiff(
+                item_class=item_class,
+                diff_class=DiffClass.VERSION_MISMATCH,
+                action=DiffAction.CHANGE,
+                item_id=f"{item_class.value}:c1",
+                label="c1",
+                detail=None,
+            )
+            for item_class in (ItemClass.APT_CONFIG, ItemClass.SNAP, ItemClass.APT_PACKAGE)
+        ]
+
+        groups = job._build_review_groups(diffs)
+
+        flagged = {g.entries[0].item_id for g in groups if g.overwrites_authored_content}
+        assert flagged == {"apt_config:c1"}
+
+    def test_an_apt_config_install_is_not_an_overwrite(self) -> None:
+        """A file the target does not have yet displaces nothing."""
+        job = FakeSyncJob(make_context())
+        diffs = [
+            ItemDiff(
+                item_class=ItemClass.APT_CONFIG,
+                diff_class=DiffClass.MISSING_ON_TARGET,
+                action=DiffAction.INSTALL,
+                item_id="apt:config:99proxy",
+                label="99proxy",
+                detail=None,
+            )
+        ]
+
+        groups = job._build_review_groups(diffs)
+
+        assert [g.overwrites_authored_content for g in groups] == [False]
+
     def test_removal_group_title_names_a_removal_verb_never_apply(self) -> None:
         job = FakeSyncJob(make_context())
         diffs = [_diff("i1", DiffAction.INSTALL), _diff("r1", DiffAction.REMOVE, DiffClass.EXTRA_ON_TARGET)]
@@ -827,8 +869,9 @@ class TestOrchestratorPackageItemFailuresContinuation:
 
     @pytest.mark.asyncio
     async def test_other_exception_types_still_abort_the_run(self, wired_orchestrator: Orchestrator) -> None:
-        """Regression guard: only PackageItemFailures gets the non-aborting branch —
-        every other exception must still stop the remaining jobs from running.
+        """Regression guard: only `PackageItemFailures` and `ProbeFailed` get the
+        non-aborting branch — every other exception must still stop the remaining jobs from
+        running.
         """
         orchestrator = wired_orchestrator
         failing_job = _StubOtherFailureJob(make_context())

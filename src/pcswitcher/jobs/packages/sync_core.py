@@ -348,6 +348,12 @@ class PackageSyncJob(SyncJob):
                         action=action.value,
                         title=title,
                         note=note or None,
+                        # `PKG-FR-HARMLESS-DEFAULT`: an `/etc/apt/apt.conf.d` file the target
+                        # already holds says how the user's own apt behaves there, so
+                        # replacing it is an overwrite of their work and starts at skip-once.
+                        # A snap moved to another revision or channel does not: converging
+                        # software the user asked for overwrites nothing they authored.
+                        overwrites_authored_content=item_class is ItemClass.APT_CONFIG and action is DiffAction.CHANGE,
                         entries=tuple(
                             ReviewEntry(item_id=diff.item_id, label=diff.label, action_label=verb, detail=diff.detail)
                             for diff in entries

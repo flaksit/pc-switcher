@@ -320,12 +320,6 @@ Each of these is a real cost, given up knowingly.
 
 Every article above was read against the code at `0abe7670`. What is listed here is what the code does not satisfy; every other article was found satisfied. Evidence is symbol names, because the code moves.
 
-### Consent and the review
-
-- **PKG-FR-HARMLESS-DEFAULT** is not met for an overwrite. `review._default_decision` starts an item at skip-once only for a removal or a repository conflict, so an `/etc/apt/apt.conf.d` file the target already holds is offered with *apply* preselected and a user who confirms without reading overwrites it. A snap whose revision or channel the run would change keeps *apply*, by ruling: converging software the user asked for is not an overwrite of something they authored.
-- **PKG-FR-EFFECT-NOT-MECHANISM** is not met by the permanent answer. `review._hints` and `_unreproducible_options` say what the mark stops pc-switcher doing ("pc-switcher will never touch it") and not that the user will not be asked again; `Decision.SKIP_ALWAYS`'s own comment records the omission as deliberate.
-- **PKG-FR-NAME-THE-MACHINES** is not met outside the review text. The item details, questions and answers name both machines, but the per-item failures, warnings and `mutates=` phrases the same user reads say "the source" and "the target": `flatpak_sync._origin_refusal`, `_installed_origin_refusal`, `_derived_remote_failure`, `_stage_source_key` and `_warn_if_filtered`; `esm_gate.EsmGate.allow`'s two `JobSkipped` reasons; `keyrings.Keyrings.gap`; `etc_apt.EtcApt._write_derived` and `_rollback`; `derived.DerivedWrites.build`'s declined-conflict reason; `AptSyncJob.apply`'s preview line. `packages.PackageConverger.install` and `remove` name neither machine at all.
-
 ### apt
 
 - **PKG-FR-COLLATERAL-MANUAL** is met except inside the removal batch. `collateral.Collateral.plan_time` exempts the removal candidates from the removal simulation alone — every one of them is in that transaction by construction — so a candidate the user skips can still be carried off by another approved removal's cascade. `packages.PackageConverger.remove`'s guard refuses that transaction and names the package, so nothing is lost, but the user is told rather than asked. Closing it needs one `apt-get --dry-run` per candidate on every run with removals, which is the cost the batched simulation exists to avoid.

@@ -27,7 +27,7 @@ from pcswitcher.jobs.apt_sync.items import (
 )
 from pcswitcher.jobs.apt_sync.probe import AptProbe, KeyDigests, SourceFileRefs, scan_source_file_references
 from pcswitcher.jobs.apt_sync.reporting import Log
-from pcswitcher.jobs.packages.items import DiffAction, ItemClass, ItemDiff
+from pcswitcher.jobs.packages.items import DiffAction, ItemClass, ItemDiff, Machines
 from pcswitcher.jobs.packages.review import Decision
 from pcswitcher.jobs.packages.sync_core import ConvergeItemFailed
 from pcswitcher.models import Host, LogLevel
@@ -70,7 +70,9 @@ class Keyrings:
         probe: AptProbe,
         files: TargetFiles,
         log: Log,
+        machines: Machines,
     ) -> None:
+        self._machines = machines
         self._source_keys = source_keys
         self._target_keys = target_keys
         self._source_refs = source_refs
@@ -240,8 +242,9 @@ class Keyrings:
             if self.manages(ref):
                 continue
             return (
-                f"it references keyring {ref!r}, which is neither already present on the target with "
-                "the source's own bytes nor among the keys this run provisioned (D-12/T-02-16)"
+                f"it references keyring {ref!r}, which is neither already present on {self._machines.target} "
+                f"with {self._machines.source}'s own bytes nor among the keys this run provisioned "
+                "(D-12/T-02-16)"
             )
         return None
 
@@ -267,7 +270,7 @@ class Keyrings:
                 )
                 continue
             self._provisioned.add(dest)
-            self._log(Host.TARGET, LogLevel.FULL, f"wrote signing key {dest} from the source")
+            self._log(Host.TARGET, LogLevel.FULL, f"wrote signing key {dest} from {self._machines.source}")
 
     async def remove_unused(self, backup_dir: str, existed_before: dict[str, bool]) -> None:
         """Delete every `/etc/apt/keyrings` file on the target that no surviving source

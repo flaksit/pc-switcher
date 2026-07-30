@@ -183,7 +183,9 @@ class PackageConverger:
             )
 
         real_cmd = f"sudo DEBIAN_FRONTEND=noninteractive apt-get {args}"
-        return await self._target.run_command(real_cmd, login_shell=False, mutates=f"install apt package {name}")
+        return await self._target.run_command(
+            real_cmd, login_shell=False, mutates=f"install apt package {name} on {self._machines.target}"
+        )
 
     async def _held_version_refusal(self, name: str, held: str, exc: ConvergeItemFailed) -> str:
         """Why a held package could not be installed at the source's version, naming BOTH
@@ -203,7 +205,7 @@ class PackageConverger:
         )
         return (
             f"install of {name} refused: {self._machines.source} holds it at {held} and "
-            f"{instead}. A held package is installed at the source's version or not at all, "
+            f"{instead}. A held package is installed at {self._machines.source}'s version or not at all, "
             f"because a hold freezes whatever version lands ({exc})"
         )
 
@@ -233,7 +235,9 @@ class PackageConverger:
             )
 
         real_cmd = f"sudo DEBIAN_FRONTEND=noninteractive apt-get {args}"
-        return await self._target.run_command(real_cmd, login_shell=False, mutates=f"remove apt package {name}")
+        return await self._target.run_command(
+            real_cmd, login_shell=False, mutates=f"remove apt package {name} from {self._machines.target}"
+        )
 
     async def hold(
         self, diff: ItemDiff, diffs: Sequence[ItemDiff], decisions: Mapping[str, Decision]
@@ -284,11 +288,17 @@ class PackageConverger:
             return None
         why = f"hold on {name} refused"
         if package_diff.diff_class is DiffClass.REPO_UNAVAILABLE:
-            return f"{why}: {name} is not on the target and this run cannot reproduce the repository it comes from"
+            return (
+                f"{why}: {name} is not on {self._machines.target} and this run cannot reproduce the repository "
+                "it comes from"
+            )
         if package_diff.action is not DiffAction.INSTALL:
             return None
         if decisions.get(package_diff.item_id) != Decision.APPLY:
-            return f"{why}: its install was not approved, and holding a package the target lacks blocks installing it"
+            return (
+                f"{why}: its install was not approved, and holding a package {self._machines.target} lacks "
+                "blocks installing it"
+            )
         failure = self._install_outcome.get(name, "the install did not run")
         if failure is None:
             return None

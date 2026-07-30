@@ -771,7 +771,7 @@ class TestWhatAptItselfReads:
         with caplog.at_level(1):
             await job.execute()
 
-        assert "[dry-run] Would write /etc/apt/preferences.d/mozilla from the source" in caplog.text
+        assert "[dry-run] Would write /etc/apt/preferences.d/mozilla from source-host" in caplog.text
         assert not any(c.startswith("sudo install") for c in all_calls(target))
         target.send_file.assert_not_called()
 
