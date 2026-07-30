@@ -113,6 +113,9 @@ _READ_ONLY_CALLS: dict[str, int] = {
     # `test -f`/`echo $HOME` are queries, and validate() only probes for capabilities.
     "jobs/apt_sync/commands.py::simulate_apt_transaction::run_command": 1,
     "jobs/apt_sync/commands.py::compare_deb_versions::run_command": 2,
+    # The version a held package's failed install names alongside the source's
+    # (`PKG-FR-APT-HOLD-VERSION`): one `apt-cache policy`, on the refusal path only.
+    "jobs/apt_sync/packages.py::PackageConverger._held_version_refusal::run_command": 1,
     # `AptProbe` holds every read this job issues, so the two per-host wrappers below carry
     # all of them that go through a `run` callable: the five `/etc/apt` directory digest
     # listings, `/etc/apt/sources.list`, the two source-file reference scans (including the

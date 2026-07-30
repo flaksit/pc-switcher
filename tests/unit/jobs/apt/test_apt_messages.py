@@ -84,20 +84,15 @@ class TestRepoRemovalWording:
     """A repository deletion is decided from the URLs it serves, not from its filename —
     which is whatever whoever created the file happened to call it."""
 
-    def test_the_urls_come_first_and_the_stranded_packages_second(self) -> None:
-        detail = build_repo_removal_detail(
-            ["https://cli.github.com/packages"],
-            "target-host installs gh from 99-github.list",
-            MACHINES,
-        )
+    def test_the_urls_are_the_whole_detail(self) -> None:
+        """Nothing about stranded software: a file still feeding anything the target keeps
+        never reaches this text (`PKG-FR-REPO-DELETE`)."""
+        detail = build_repo_removal_detail(["https://cli.github.com/packages"], MACHINES)
 
-        assert detail == (
-            "target-host would stop getting software from https://cli.github.com/packages; "
-            "target-host installs gh from 99-github.list"
-        )
+        assert detail == "target-host would stop getting software from https://cli.github.com/packages"
 
     def test_every_url_the_file_declares_is_named(self) -> None:
-        detail = build_repo_removal_detail(["https://a.example.com/apt", "https://b.example.com/deb"], None, MACHINES)
+        detail = build_repo_removal_detail(["https://a.example.com/apt", "https://b.example.com/deb"], MACHINES)
 
         assert detail == (
             "target-host would stop getting software from https://a.example.com/apt, https://b.example.com/deb"
@@ -105,6 +100,6 @@ class TestRepoRemovalWording:
 
     def test_a_file_declaring_no_url_says_so_rather_than_trailing_off(self) -> None:
         """A commented-out leftover parses to no URI. Half a sentence would read as a bug."""
-        detail = build_repo_removal_detail([], None, MACHINES)
+        detail = build_repo_removal_detail([], MACHINES)
 
         assert detail == "target-host would stop getting software from nowhere — it declares no repository URL"

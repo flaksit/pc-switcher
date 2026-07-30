@@ -68,7 +68,9 @@ apt raises the conflict screen for **every** differing repository file that feed
 
 flatpak additionally gates on the remote being in the set `_derive_remotes` would provision if the review approved everything — so a remote no approved ref needs is never a question, and answering "overwrite" cannot by itself make a remote travel (`flatpak_sync.py:1420-1429`). The code names this as a deliberate divergence from apt.
 
-The reasoning is sound — flatpak has no always-sync bucket to make a remote travel independently — but the articles state the two as symmetric. **Ruling needed:** is the asymmetry intended, and should the articles say so?
+The reasoning is sound — flatpak has no always-sync bucket to make a remote travel independently — but the articles state the two as symmetric.
+
+**Closed 2026-07-30 (U4).** Ruled: both ask only what the approved changes need, so the asymmetry was apt's alone. `AptSyncJob._files_an_approval_would_write` computes the repository files this run would derive if the review approved every install it proposes, and `_plan_repo_diffs` intersects the differing files with that set before the conflict question is raised.
 
 ## DIV-08 — `manual_installs_sync` is not covered by the job-ordering check
 
@@ -100,9 +102,11 @@ An apt hold blocks install, upgrade and removal alike — measured on `ubuntu:24
 
 `apt_sync` installs every package by name (`_install_args` → `apt-get install --assume-yes --no-install-recommends <name>`) and applies the hold as a separate item afterwards. So where the source holds a package the target lacks, the target installs whatever version its repositories currently offer and then freezes on it — permanently, since nothing will move a held package again. The two machines end up held at different versions with nothing reporting it.
 
-`PKG-FR-APT-HOLD-VERSION` now requires the source's exact version for that case, with failure naming both versions where the target cannot supply it. Recorded in the criteria's gap register.
+`PKG-FR-APT-HOLD-VERSION` now requires the source's exact version for that case, with failure naming both versions where the target cannot supply it.
 
-**Still unruled:** the same package held on *both* machines at different versions. `PKG-FR-APT-HELD-TARGET` suppresses any package-level item for a held target package, and a hold present on both sides produces no hold item either, so that divergence is currently invisible in every run. Converging it would mean unhold → install the source's version → re-hold, which is a larger change than the install case.
+**Closed 2026-07-30 (U4).** The install asks for `<name>=<version>` from `AptSyncJob._held_versions`, and `PackageConverger._held_version_refusal` turns apt's refusal into a failure naming the source's version and the target's candidate, with no fallback. `PKG-FR-APT-HOLD-INERT` closes with it, on a measurement that showed apt does not enforce it: on `ubuntu:24.04`, `apt-mark hold` exits 0 and records the hold for a package that is merely NOT INSTALLED, and exits 100 only for a name apt has never heard of. `PackageConverger._hold_refusal` is therefore this job's own guard — a hold whose package item was skipped, failed, or only reported the package missing fails alone before any command.
+
+**Still open:** the same package held on *both* machines at different versions. `PKG-FR-APT-HELD-TARGET` suppresses any package-level item for a held target package, and a hold present on both sides produces no hold item either, so that divergence is still invisible in every run and this unit did not change it. Converging it would mean unhold → install the source's version → re-hold, which is a larger change than the install case.
 
 ## Ambiguity flagged for the Stage 5 article audit — done 2026-07-30
 
@@ -126,6 +130,8 @@ The original reading was that this makes the filter unsyncable — "not reposito
 
 **Open within this ruling:** the ordering rule is stated as a design requirement, not from measurement. Whether flatpak actually refuses to install a ref its own filter excludes has not been tested.
 
+**Closed 2026-07-30 (U5).** The capture asks for `name,url,options,filter`; `_apply_remote_filters` copies the filter to the same absolute path and re-applies it after the converge loop, failing every approved ref whose own origin is that remote if it cannot land. `_delete_unused_remotes` replaces the removal review item, counting use against the target's own post-loop ref listing. `_warn_if_unverified` tells an ordinary run, and `_same_vendor` treats an absent URL as matching nothing. What survives, recorded in the criteria's gap register: the ordering rule's premise is still unmeasured.
+
 ## DIV-12 — A skipped removal loses its collateral protection
 
 Found on 2026-07-30 while checking the narrative's collateral claim against the code. This is a shipped bug, not a requirement that moved.
@@ -140,7 +146,6 @@ So: a package offered for removal, kept by answering *skip*, is excluded from co
 
 ## Rulings that close earlier divergences
 
-- **DIV-07** (apt's repository-conflict question is wider than flatpak's) is ruled: both ask only what the approved changes need. `PKG-FR-REPO-CONFLICT` now gates on the repository being one this run writes for an approved package. The code still asks more widely.
 - **DIV-08** (`manual_installs_sync` outside the job-ordering check) is ruled: the rule covers all four package jobs. Closed in U3; see the entry above.
 - The ESM cost question behind `PKG-FR-ESM-GATE` is answered by measurement rather than ruling: on an attached Ubuntu 24.04 desktop, 60 of 2297 installed packages resolve their candidate to `esm.ubuntu.com`, including `ffmpeg`, `gimp` and `imagemagick`. The container's zero was an artefact of its package set.
 

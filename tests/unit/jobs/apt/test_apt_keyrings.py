@@ -5,6 +5,7 @@ Split out of the former single `test_apt_sync.py`.
 
 from __future__ import annotations
 
+import dataclasses
 import shlex
 from collections.abc import Callable
 from pathlib import Path
@@ -741,3 +742,69 @@ class TestInlineArmoredSignedBy:
         assert any(
             "sudo install" in c and c.endswith("/etc/apt/sources.list.d/ppa.sources") for c in all_calls(target)
         )
+
+
+class TestKeyWritesAreVisible:
+    """`PKG-FR-DERIVED-VISIBLE`: a key is never a review entry, so the log and the dry-run
+    preview are the only places its arrival or departure is observable at all.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_provisioned_key_is_logged_as_it_lands(self, caplog: pytest.LogCaptureFixture) -> None:
+        context, _source, target = _repo_context(source_responses=foo_source_responses())
+        target.run_command = AsyncMock(side_effect=foo_target_side_effect())
+        job = AptSyncJob(context)
+        install_reviewer(job, _APPROVE_PKG_A)
+
+        with caplog.at_level(1):
+            await job.execute()
+
+        assert "wrote signing key /etc/apt/keyrings/foo.gpg from the source" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_a_collected_key_is_logged_as_it_goes(self, caplog: pytest.LogCaptureFixture) -> None:
+        context, _source, _target = TestUnusedKeyringCollection._context(
+            target_sources={"going.list": _GOING_LIST},
+            target_source_digests=sha256_line("d9", "going.list"),
+            target_keyrings=sha256_line("k9", "shared.gpg"),
+        )
+        job = AptSyncJob(context)
+        install_reviewer(job, {"apt:source:going.list": Decision.APPLY})
+
+        with caplog.at_level(1):
+            await job.execute()
+
+        assert "deleted signing key /etc/apt/keyrings/shared.gpg, which no repository references" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_a_dry_run_previews_the_key_it_would_write(self, caplog: pytest.LogCaptureFixture) -> None:
+        context, _source, target = _repo_context(source_responses=foo_source_responses(), dry_run=True)
+        target.run_command = AsyncMock(side_effect=foo_target_side_effect())
+        job = AptSyncJob(context)
+        install_reviewer(job, _APPROVE_PKG_A)
+
+        with caplog.at_level(1):
+            await job.execute()
+
+        assert "[dry-run] Would write signing key /etc/apt/keyrings/foo.gpg from the source" in caplog.text
+        assert key_writes(target) == []
+
+    @pytest.mark.asyncio
+    async def test_a_dry_run_previews_the_key_it_would_collect(self, caplog: pytest.LogCaptureFixture) -> None:
+        context, _source, target = TestUnusedKeyringCollection._context(
+            target_sources={"going.list": _GOING_LIST},
+            target_source_digests=sha256_line("d9", "going.list"),
+            target_keyrings=sha256_line("k9", "shared.gpg"),
+        )
+        context = dataclasses.replace(context, dry_run=True)
+        job = AptSyncJob(context)
+        install_reviewer(job, {"apt:source:going.list": Decision.APPLY})
+
+        with caplog.at_level(1):
+            await job.execute()
+
+        assert (
+            "[dry-run] Would delete signing key /etc/apt/keyrings/shared.gpg, which no repository would reference"
+            in caplog.text
+        )
+        assert _key_deletions(target) == []

@@ -469,6 +469,150 @@ class TestHoldOnAnAbsentPackage:
         )
 
 
+_HELD_SOURCE = {
+    "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+    "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+    "apt-mark showhold": CommandResult(0, "pkg-a\n", ""),
+}
+_PINNED_SIMULATION = "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a=1.0"
+_PINNED_INSTALL = "sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes --no-install-recommends pkg-a=1.0"
+
+
+def _target_offering(candidate: str) -> str:
+    """`apt-cache policy pkg-a` on a target that lacks the package and offers `candidate`."""
+    return (
+        f"pkg-a:\n  Installed: (none)\n  Candidate: {candidate}\n  Version table:\n"
+        f"     {candidate} 500\n        500 http://ftp.belnet.be/ubuntu stable/main amd64 Packages\n"
+    )
+
+
+class TestAHeldPackageIsInstalledAtTheSourcesVersion:
+    """`PKG-FR-APT-HOLD-VERSION`: apt offers no way to say "hold this, but at whatever you
+    have", so a hold replicated onto a package installed at the target's own version freezes
+    the two machines apart permanently — nothing moves a held package again.
+    """
+
+    @pytest.mark.asyncio
+    async def test_the_install_names_the_sources_version(self) -> None:
+        context, _source, target = make_context(
+            source_responses=_HELD_SOURCE,
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "", ""),
+                "apt-mark showhold": CommandResult(0, "", ""),
+                "apt-cache policy": CommandResult(0, _target_offering("1.0"), ""),
+                _PINNED_SIMULATION: CommandResult(0, "Inst pkg-a (1.0)\n", ""),
+                _PINNED_INSTALL: CommandResult(0, "", ""),
+                "sudo apt-mark hold pkg-a": CommandResult(0, "pkg-a set on hold.\n", ""),
+                "sudo apt-get update": CommandResult(0, "", ""),
+            },
+        )
+        job = AptSyncJob(context)
+        install_reviewer(job, {"apt:package:pkg-a": Decision.APPLY, "apt:hold:pkg-a": Decision.APPLY})
+
+        await job.execute()
+
+        commands = all_calls(target)
+        assert any(cmd == _PINNED_INSTALL for cmd in commands)
+        assert "sudo apt-mark hold pkg-a" in commands
+
+    @pytest.mark.asyncio
+    async def test_a_version_the_target_cannot_supply_fails_naming_both(self) -> None:
+        """Never a fallback to the target's own version: that is the outcome the hold would
+        then make permanent, so the item fails and says which two versions are in play.
+        """
+        context, _source, target = make_context(
+            source_responses=_HELD_SOURCE,
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "", ""),
+                "apt-mark showhold": CommandResult(0, "", ""),
+                "apt-cache policy": CommandResult(0, _target_offering("2.0"), ""),
+                _PINNED_SIMULATION: CommandResult(100, "", "E: Version '1.0' for 'pkg-a' was not found"),
+                "sudo apt-get update": CommandResult(0, "", ""),
+            },
+        )
+        job = AptSyncJob(context)
+        install_reviewer(job, {"apt:package:pkg-a": Decision.APPLY, "apt:hold:pkg-a": Decision.APPLY})
+
+        with pytest.raises(PackageItemFailures) as exc_info:
+            await job.execute()
+
+        failures = {diff.item_id: message for diff, message in exc_info.value.failures}
+        assert "source-host holds it at 1.0" in failures["apt:package:pkg-a"]
+        assert "target-host offers 2.0" in failures["apt:package:pkg-a"]
+        assert not any(cmd == _PINNED_INSTALL for cmd in all_calls(target))
+
+
+class TestAHoldNeedsItsPackage:
+    """`PKG-FR-APT-HOLD-INERT`: measured on `ubuntu:24.04`, `apt-mark hold` exits 0 and
+    records the hold for a package that is merely NOT INSTALLED — it refuses only a name apt
+    has never heard of. So the guard is this job's, not apt's, and a hold whose install did
+    not happen fails alone before any command.
+    """
+
+    @staticmethod
+    def _target(**overrides: CommandResult) -> dict[str, CommandResult]:
+        return {
+            "apt-mark showmanual": CommandResult(0, "", ""),
+            "apt-mark showhold": CommandResult(0, "", ""),
+            "apt-cache policy": CommandResult(0, _target_offering("1.0"), ""),
+            _PINNED_SIMULATION: CommandResult(0, "Inst pkg-a (1.0)\n", ""),
+            "sudo apt-get update": CommandResult(0, "", ""),
+            **overrides,
+        }
+
+    @pytest.mark.asyncio
+    async def test_a_hold_whose_install_was_skipped_fails_alone(self) -> None:
+        context, _source, target = make_context(source_responses=_HELD_SOURCE, target_responses=self._target())
+        job = AptSyncJob(context)
+        install_reviewer(job, {"apt:hold:pkg-a": Decision.APPLY})
+
+        with pytest.raises(PackageItemFailures) as exc_info:
+            await job.execute()
+
+        failures = {diff.item_id: message for diff, message in exc_info.value.failures}
+        assert set(failures) == {"apt:hold:pkg-a"}
+        assert "was not approved" in failures["apt:hold:pkg-a"]
+        assert not any("apt-mark hold" in cmd for cmd in all_calls(target))
+
+    @pytest.mark.asyncio
+    async def test_a_hold_whose_install_failed_fails_too(self) -> None:
+        context, _source, target = make_context(
+            source_responses=_HELD_SOURCE,
+            target_responses=self._target(**{_PINNED_INSTALL: CommandResult(100, "", "E: dpkg was interrupted")}),
+        )
+        job = AptSyncJob(context)
+        install_reviewer(job, {"apt:package:pkg-a": Decision.APPLY, "apt:hold:pkg-a": Decision.APPLY})
+
+        with pytest.raises(PackageItemFailures) as exc_info:
+            await job.execute()
+
+        failures = {diff.item_id: message for diff, message in exc_info.value.failures}
+        assert set(failures) == {"apt:package:pkg-a", "apt:hold:pkg-a"}
+        assert "its install failed" in failures["apt:hold:pkg-a"]
+        assert not any("apt-mark hold" in cmd for cmd in all_calls(target))
+
+    @pytest.mark.asyncio
+    async def test_a_hold_on_a_package_the_target_already_has_still_runs(self) -> None:
+        """No install item at all: the package is on the target and the hold is the whole
+        change, which is the ordinary case this guard must not touch.
+        """
+        context, _source, target = make_context(
+            source_responses=_HELD_SOURCE,
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+                "apt-mark showhold": CommandResult(0, "", ""),
+                "sudo apt-mark hold pkg-a": CommandResult(0, "pkg-a set on hold.\n", ""),
+            },
+        )
+        job = AptSyncJob(context)
+        install_reviewer(job, {"apt:hold:pkg-a": Decision.APPLY})
+
+        await job.execute()
+
+        assert "sudo apt-mark hold pkg-a" in all_calls(target)
+
+
 class TestHoldsDriveNoSimulation:
     """#208 D4: a hold is dpkg selection state, not an apt transaction — so it drives no
     `apt-get --dry-run` preview at plan time and none at converge time.

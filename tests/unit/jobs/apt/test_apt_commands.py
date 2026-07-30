@@ -11,8 +11,27 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from pcswitcher.executor import LocalExecutor
-from pcswitcher.jobs.apt_sync.commands import compare_deb_versions
+from pcswitcher.jobs.apt_sync.commands import candidate_version, compare_deb_versions
 from pcswitcher.models import CommandResult
+
+_TWO_BLOCKS = (
+    "pkg-a:\n  Installed: (none)\n  Candidate: 2.0\n  Version table:\n"
+    "     2.0 500\n        500 http://example.com stable/main amd64 Packages\n"
+    "pkg-b:\n  Installed: 1.0\n  Candidate: (none)\n  Version table:\n *** 1.0 100\n"
+)
+
+
+class TestCandidateVersion:
+    """The version a held package's refusal names beside the source's."""
+
+    def test_the_named_blocks_own_candidate_and_not_a_neighbours(self) -> None:
+        assert candidate_version(_TWO_BLOCKS, "pkg-a") == "2.0"
+
+    def test_apt_saying_it_will_install_nothing_reads_as_no_version(self) -> None:
+        assert candidate_version(_TWO_BLOCKS, "pkg-b") is None
+
+    def test_a_name_apt_printed_no_block_for_reads_as_no_version(self) -> None:
+        assert candidate_version(_TWO_BLOCKS, "pkg-c") is None
 
 
 def _stub_executor(responses: dict[str, CommandResult]) -> MagicMock:

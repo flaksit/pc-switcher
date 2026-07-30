@@ -25,7 +25,6 @@ for diffs a rollback retroactively marks as failed even though their own write s
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from pathlib import Path
 from uuid import uuid4
 
 from pcswitcher.executor import RemoteExecutor
@@ -116,8 +115,9 @@ class EtcApt:
 
         # Every keyring write this run owes, decided from the decisions and derivations the
         # run already made — never from a decision about a key, which does not exist.
-        written = frozenset(Path(dest).name for dest in (*self._derived.distro_writes, *self._derived.repo_writes))
-        keyring_writes = self._keyrings.writes(self._keyrings.surviving_refs(diffs, decisions, written))
+        keyring_writes = self._keyrings.writes(
+            self._keyrings.surviving_refs(diffs, decisions, self._derived.written_source_filenames)
+        )
         # "Remove keys after removing sources" is literal: with no source deletion in this
         # run nothing can have become unused, so the collection pass does not run at all.
         collect_unused = any(

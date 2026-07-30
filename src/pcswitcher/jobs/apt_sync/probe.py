@@ -30,7 +30,6 @@ from pcswitcher.executor import Executor, RemoteExecutor
 from pcswitcher.jobs.apt_sync.commands import lines, policy_command, require_apt_answer
 from pcswitcher.jobs.apt_sync.items import (
     APT_CONF_DIR,
-    APT_PACKAGE_ID_PREFIX,
     APT_PREFERENCES_DIR,
     APT_ROOT_DIR,
     APT_SOURCE_EXTENSIONS,
@@ -39,7 +38,6 @@ from pcswitcher.jobs.apt_sync.items import (
     DISTRIBUTION_ORIGIN_FILENAMES,
     KEY_DIRS,
     AptPackageItem,
-    package_name,
     source_file_destination,
 )
 from pcswitcher.jobs.packages.apt_policy import (
@@ -49,7 +47,6 @@ from pcswitcher.jobs.packages.apt_policy import (
     packages_installed_from_no_repository,
 )
 from pcswitcher.jobs.packages.probes import require_answer
-from pcswitcher.jobs.packages.state import DecisionEntry
 from pcswitcher.models import CommandResult, Host
 
 _SIGNED_BY_RE = re.compile(r"^Signed-By:\s*(?P<path>\S+)", re.IGNORECASE)
@@ -750,57 +747,49 @@ class AptProbe:
                 owned.add(path.strip())
         return frozenset(owned)
 
-    async def machine_specific_packages_by_source_file(
-        self, filenames: frozenset[str], target_decisions: Mapping[str, DecisionEntry], target_refs: SourceFileRefs
+    async def packages_by_source_file(
+        self, filenames: frozenset[str], names: Sequence[str], target_refs: SourceFileRefs
     ) -> dict[str, list[str]]:
-        """`{filename: machine-specific packages the target installs from it}`, for the
-        files in `filenames` that feed at least one — the shared computation behind both
-        `/etc/apt` follow-ups (`02-SPEC-package-review-model.md` §4.1).
+        """`{filename: the `names` the target installs from it}`, for the files in
+        `filenames` that feed at least one — the shared computation behind both `/etc/apt`
+        follow-ups (`02-SPEC-package-review-model.md` §4.1).
 
-        Two callers, two prompts, one question. A repository the source no longer has
-        discloses what its deletion would strand (C26/N7); a repository whose two copies
-        differ becomes the conflict screen instead of a silent overwrite (ADR-020 D-37).
-        Both turn on the same fact: which packages this machine keeps that only this file
-        feeds.
+        Two callers, two questions, one read. A repository the source no longer has is
+        withheld from the review entirely while anything the target keeps still comes from
+        it (`PKG-FR-REPO-DELETE`); a repository whose two copies differ becomes the conflict
+        screen instead of a silent overwrite (`PKG-FR-REPO-CONFLICT`). Both turn on which of
+        the target's packages this file feeds, so `names` carries the union of the two
+        populations and each caller reads its own subset back out.
 
-        Scope is deliberately the target's MACHINE-SPECIFIC packages, not every installed
-        package from the repository. A skip-always package is structurally invisible:
-        `filter_inert` drops it from the target manifest before diffing, so it can never
-        produce an `ItemDiff` of its own in any run, and the user's explicit "this machine
-        keeps this, syncs never touch it" is exactly the promise a silent repository change
-        breaks. An ordinary package is at least eligible for its own diff, and keying off
-        the whole manual set would make the answer's length a property of the machine — a
-        base-repository change would name a hundred packages and inform nobody. The
-        limitation is documented in `docs/jobs/package-sync.md`.
+        The withholding caller counts the target's manually-installed set plus its
+        machine-specific marks; the conflict caller counts the marks alone. Marks are in both
+        because a machine-specific package is structurally invisible — `filter_inert` drops
+        it from the target manifest before anything is diffed, so it can never produce an
+        `ItemDiff` of its own — and the user's explicit "this machine keeps this" is exactly
+        the promise a silent deletion or repoint breaks. Automatically-installed packages are
+        in neither: apt pulled them in for something else and removes them as unused once
+        that something goes.
 
         There is no key counterpart: a signing key is never offered for deletion or change,
         so there is no review text for one to carry. The user approves the REPOSITORY;
         whichever keyring that leaves unused is collected afterwards with no decision.
 
-        Costs one batched `apt-cache policy` over the recorded package names (never one per
-        package, the `collect_target_policy` shape), gated on `filenames` being non-empty so
-        an ordinary run pays nothing; the source-file scan it also needs was already
-        captured for keyring correctness, so this adds no second scan.
+        Costs one batched `apt-cache policy` over `names` (never one per package, the
+        `collect_target_policy` shape), gated on `filenames` being non-empty so an ordinary
+        run pays nothing; the source-file scan it also needs was already captured for keyring
+        correctness, so this adds no second scan.
 
         Guarded on the exit code (ADR-022): an unanswered probe answers "this repository
-        strands nothing", which is the answer that turns the conflict screen off and lets a
-        repository feeding machine-specific packages be overwritten silently — the exact
-        disclosure this method exists to make. Without the `blocks` half, because these
-        names come from a decision FILE and a package recorded there may since have been
-        removed, so an empty answer is reachable without anything being broken.
+        feeds nothing", which is the answer that offers a repository still in use for
+        deletion and lets one feeding machine-specific packages be overwritten silently —
+        the exact two failures this method exists to prevent. Without the `blocks` half,
+        because a name may come from a decision FILE and a package recorded there may since
+        have been removed, so an empty answer is reachable without anything being broken.
         """
-        if not filenames:
+        if not filenames or not names:
             return {}
 
-        # Identity by id prefix, not by `DecisionEntry.item_class`: the collateral
-        # report items share `ItemClass.APT_PACKAGE` but are `REPORT_ONLY` and carry an
-        # `apt:collateral:` id, so the prefix is what isolates real package decisions.
-        names = sorted(
-            package_name(item_id) for item_id in target_decisions if item_id.startswith(APT_PACKAGE_ID_PREFIX)
-        )
-        if not names:
-            return {}
-
+        names = sorted(set(names))
         command = policy_command(names)
         policy = await self.target_run(command)
         require_apt_answer(command, policy, Host.TARGET)

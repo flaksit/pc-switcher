@@ -201,6 +201,21 @@ class Keyrings:
         """
         return bool(self.writes(self._target_refs.all_refs() | self._source_refs.all_refs()))
 
+    def unreferenced(self, surviving_refs: frozenset[str]) -> list[str]:
+        """The `/etc/apt/keyrings` files `remove_unused` would collect, given the references
+        that survive this run — the dry-run counterpart of that pass
+        (`PKG-FR-DERIVED-VISIBLE`).
+
+        Predicted from `surviving_refs` rather than from the fresh target scan the real pass
+        takes, because a dry run has not made the source removals that scan would observe.
+        The two agree whenever the run does what it planned, which is what a preview claims.
+        """
+        candidates = frozenset(self._target_keys.in_dir(APT_KEYRINGS_DIR)) - frozenset(
+            self._source_keys.in_dir(APT_KEYRINGS_DIR)
+        )
+        referenced = {Path(ref).name for ref in surviving_refs}
+        return [f"{APT_KEYRINGS_DIR}/{filename}" for filename in sorted(candidates - referenced)]
+
     def gap(self, dest: str) -> str | None:
         """Why writing this derived source file would leave apt with a repository it cannot
         verify, or `None` when every keyring it names is in place (D-12).
@@ -238,6 +253,10 @@ class Keyrings:
         destination is simply left out of the provisioned set, which makes every source
         file referencing that keyring refuse its own write with a message naming the key.
         That is the D-12 outcome either way, reported against the thing the user reviewed.
+
+        Each key that lands gets its own FULL line, the same one a derived `/etc/apt` file
+        gets (`PKG-FR-DERIVED-VISIBLE`): a key is never a review entry, so the log is the only
+        record that one reached the target at all.
         """
         for local, dest in writes:
             try:
@@ -248,6 +267,7 @@ class Keyrings:
                 )
                 continue
             self._provisioned.add(dest)
+            self._log(Host.TARGET, LogLevel.FULL, f"wrote signing key {dest} from the source")
 
     async def remove_unused(self, backup_dir: str, existed_before: dict[str, bool]) -> None:
         """Delete every `/etc/apt/keyrings` file on the target that no surviving source
@@ -303,3 +323,5 @@ class Keyrings:
                     f"could not delete unused signing key {dest}: {result.stderr.strip()}",
                     stderr=result.stderr,
                 )
+                continue
+            self._log(Host.TARGET, LogLevel.FULL, f"deleted signing key {dest}, which no repository references")

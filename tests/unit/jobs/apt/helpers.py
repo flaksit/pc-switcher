@@ -351,10 +351,17 @@ _CHANGED_VENDOR = "deb [signed-by=/etc/apt/keyrings/vendor.gpg] https://vendor.e
 
 def differing_repo_context(*, recorded: str) -> tuple[JobContext, MagicMock, MagicMock]:
     """`vendor.list` on both machines with different bytes, declaring the origin the
-    target's `curl` is installed from. `recorded` is the target's decision file."""
+    target's `curl` is installed from. `recorded` is the target's decision file.
+
+    The source's `vendor-tool` comes from that same origin and the target lacks it, which is
+    what makes `vendor.list` a file this run would write for an approved package — the gate
+    `PKG-FR-REPO-CONFLICT` puts in front of the question.
+    """
     return _repo_context(
         source_responses={
-            **_NO_PACKAGES,
+            "apt-mark showmanual": CommandResult(0, "vendor-tool\n", ""),
+            "dpkg-query": CommandResult(0, "vendor-tool\t1.0\n", ""),
+            "apt-cache policy": CommandResult(0, _policy_block("vendor-tool", "https://vendor.example.com/apt"), ""),
             _SOURCE_SCAN_CMD: CommandResult(0, _scan_line("vendor.list", _CHANGED_VENDOR), ""),
             "find /etc/apt/sources.list.d": CommandResult(0, sha256_line("d-new", "vendor.list"), ""),
             "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "vendor.gpg"), ""),

@@ -131,7 +131,9 @@ Pins are the reason the check can fail even when the repository landed. Ubuntu's
 
 The distribution's own files — `ubuntu.sources`, `/etc/apt/sources.list`, `ubuntu-esm-apps.sources` and `ubuntu-esm-infra.sources` — are written when missing and overwritten when different, and are never removed or offered for removal. They are what defines "the distribution's own origin" on each machine, which is what stops two machines on different Ubuntu mirrors from disagreeing about every package. Files apt itself does not read are ignored: only `.list` and `.sources` under `sources.list.d` are ever captured, compared or written, so the `.save` and `.orig` copies apt tooling leaves behind are left alone.
 
-A repository present on both machines with different content is overwritten with the source's version silently — unless it feeds a package you marked machine-specific on the target, in which case you are shown both file contents whole, side by side and never as a diff, and asked to overwrite or leave it for now. Leaving it fails every approved package whose origin depended on that file, by name, rather than installing it from somewhere else.
+A repository present on both machines with different content is overwritten with the source's version silently. You are asked about exactly one case: a file this run would write because a package on the review comes from it, which also feeds a package you marked machine-specific on the target. Then you are shown both file contents whole, side by side and never as a diff, and asked to overwrite or leave it for now. Leaving it fails every approved package whose origin depended on that file, by name, rather than installing it from somewhere else.
+
+Both halves of that trigger matter. A file no approved package needs is not going to be written, so answering "overwrite" would change nothing — and a file whose packages are all ordinary ones is a file whose changes you can already see, item by item, in the rest of the review.
 
 ### Ubuntu Pro and ESM
 
@@ -299,6 +301,10 @@ The review verbs match the mechanism: apt and snap holds read *hold* / *unhold*,
 
 ## Deletions
 
+There is one case where the version is not the target's own to choose: an apt package the source holds and the target does not have at all. apt gives a hold no way to say "at whatever version you happen to get", so installing the target's version and then holding it would freeze the two machines apart for good — nothing moves a held package again. That install therefore asks for the source's exact version. If the target cannot supply it, the install fails as its own item naming both versions, and the hold fails with it rather than pinning a package that is not there.
+
+A hold whose package this run did not put on the target fails on its own for the same reason. `apt-mark hold` accepts a package that is merely not installed, and a hold recorded that way blocks every later attempt to install it.
+
 Removals propagate for the three package managers. A package removed from the source's `apt-mark showmanual` set, a snap uninstalled on the source, or a flatpak ref or remote removed on the source becomes a removal review item on the target — starting at skip-this-run, so you approve deletions deliberately.
 
 Removal is the one direction in which an apt repository file, an apt pin file and a flatpak remote are still review lines, and all three take **two** answers rather than three: delete it, or leave it on the target.
@@ -309,11 +315,9 @@ A pin file is shown **whole**: its content is printed in a block above the scree
 
 The distribution's own source files are never offered for removal at all.
 
-A flatpak remote offered for removal names, in the review item's detail, the refs installed on the target that still have it as their origin in that same scope. The removal is still offered — deleting a remote whose refs are going in the same run is normal cleanup — but you see what it would orphan before approving it. Deleting a remote also drops its signing key, since flatpak stores that key with the remote.
+An apt repository file takes the opposite approach: one the target still gets software from is **not offered at all**. Deleting it would leave those packages installed and never updated again, which is not a trade you can make usefully — and the packages most at risk are the ones you marked machine-specific, which are invisible in the review by design. A repository is offered only once nothing on the target needs it, and then its detail is just the URLs. The run logs the repositories it kept back and why.
 
-An apt repository file offered for removal does the same for **machine-specific** packages: after the URLs, its detail names the packages you marked as this machine's own that are installed from that repository, and says they would stay installed but never get another update. The removal is still offered and still starts at skip-now — you decide. This matters because a machine-specific package is invisible in the review by design: it is filtered out before any diff is computed, so nothing else in the run would tell you the repository feeding it is about to go.
-
-The link comes from `apt-cache policy`: pc-switcher matches the origin of each machine-specific package's installed version against the URIs in the repository files. A package installed from a bare `.deb`, or one whose repository was already gone, has no resolvable origin and is not named. Ordinary (non-machine-specific) packages are out of scope — they can still surface as removal items of their own, and naming every installed package from, say, the Ubuntu archive would list hundreds.
+"Still gets software from it" is counted over the target's manually-installed packages plus the ones you marked machine-specific, minus the packages this run proposes to remove — so removing a repository together with the software it feeds, the ordinary cleanup case, still works. The link comes from `apt-cache policy`: pc-switcher matches the origin of each of those packages' installed version against the URIs in the repository files. A package installed from a bare `.deb`, or one whose repository was already gone, has no resolvable origin and holds nothing back. Packages apt pulled in automatically are not counted: apt removes them as unused once whatever needed them goes.
 
 `manual_installs_sync` is **install-only**: it has no target-side manifest of what it installed, so it never proposes removals. Removing a hand-installed item on the target is manual work today (tracking removal for manual installs is deferred to a future issue).
 

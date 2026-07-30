@@ -126,37 +126,22 @@ def build_repo_conflict_detail(filename: str, packages: Sequence[str], machines:
     )
 
 
-def build_repo_removal_detail(uris: Sequence[str], orphaned: str | None, machines: Machines) -> str:
-    """Detail for a repository-file DELETION: what the machine stops getting software from,
-    then what that costs (`build_orphaned_packages_detail`) when it costs anything.
+def build_repo_removal_detail(uris: Sequence[str], machines: Machines) -> str:
+    """Detail for a repository-file DELETION: what the machine stops getting software from.
 
     The URLs, not just the filename. A filename is whatever whoever created the file decided
     to call it, and two machines' `/etc/apt/sources.list.d` routinely name the same vendor
     differently; the URL is the thing the user recognises and the thing the deletion actually
     removes. A file declaring none (a commented-out leftover, an unparsable stanza) says so
     rather than silently dropping the first half of the sentence.
+
+    Nothing about stranded software is said here, because a file still feeding anything the
+    target keeps is never offered for deletion in the first place
+    (`PKG-FR-REPO-DELETE`) — every entry that reaches this text is one the deletion costs
+    the machine nothing but the URLs.
     """
     where = ", ".join(uris) if uris else "nowhere — it declares no repository URL"
-    stops = f"{machines.target} would stop getting software from {where}"
-    return f"{stops}; {orphaned}" if orphaned else stops
-
-
-def build_orphaned_packages_detail(source_filename: str, packages: Sequence[str], machines: Machines) -> str:
-    """Detail string for an apt source-file REMOVE diff whose removal would leave
-    machine-specific packages on the target without the repository that feeds them (C26).
-
-    Those packages are the ones a review can never show by itself: recorded skip-always,
-    they are filtered out of the target manifest before diffing (D-08), so they produce no
-    `ItemDiff` in any run. Naming them here is the only place the user learns that
-    approving the source deletion strands software they explicitly told this tool to keep.
-    Disclosure, not refusal — D-30's placement, the same as flatpak's orphaned refs.
-    """
-    one = len(packages) == 1
-    return (
-        f"{machines.target} installs {', '.join(packages)} from {source_filename} — "
-        f"{'package' if one else 'packages'} you marked as specific to {machines.target}, so "
-        f"{'it' if one else 'they'} would stay installed but never get another update"
-    )
+    return f"{machines.target} would stop getting software from {where}"
 
 
 def build_esm_gate_message(esm_files: Sequence[str], machines: Machines, job_name: str) -> str:

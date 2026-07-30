@@ -303,7 +303,7 @@ async def diff_apt_sources(
     source_digests: Mapping[str, str],
     target_digests: Mapping[str, str],
     machines: Machines,
-    removal_details: Mapping[str, str] | None = None,
+    in_use: frozenset[str] = frozenset(),
 ) -> list[ItemDiff]:
     """Source-file diffs — the REMOVAL direction only (ADR-020 D-37).
 
@@ -314,27 +314,26 @@ async def diff_apt_sources(
     built in `derived.DerivedWrites` instead, from the packages that need them.
 
     Removal survives because nothing derives it: a repository the source no longer has
-    is not implied by any approved package, and deleting it strands whatever the target
-    still installs from it. `removal_details` carries the C26 impact text for a file
-    whose deletion would strand machine-specific packages, keyed by filename —
-    disclosure, not refusal, since removing a repository whose packages are also going
-    is legitimate.
+    is not implied by any approved package. `in_use` names the files the target still
+    installs something from once this run's proposed removals are counted out, and they are
+    withheld outright rather than offered with a disclosure of what the deletion would
+    strand (`PKG-FR-REPO-DELETE`): a repository feeding software the machine keeps is not a
+    decision the user can usefully take, and the packages it feeds are the ones no review
+    can show — recorded machine-specific, they are filtered out before anything is diffed.
 
-    The URLs the file declares are named ahead of that impact text, because they are what
-    the decision is actually about: a filename is somebody's naming convention, while
-    `https://cli.github.com/packages` is the thing the machine would stop getting software
-    from. They cost nothing — the file is already read here for its format, and
-    `parse_source_file` returns the URIs from the same parse.
+    The URLs the file declares are what the remaining decision is actually about: a filename
+    is somebody's naming convention, while `https://cli.github.com/packages` is the thing the
+    machine would stop getting software from. They cost nothing — the file is already read
+    here for its format, and `parse_source_file` returns the URIs from the same parse.
 
     The distribution's own files are excluded outright (D-38): they are written and
     updated but never removed, so a target that has `ubuntu.sources` and a source that
     somehow does not must not turn into an offer to delete the target's archive.
     """
-    details = removal_details or {}
     names = diff_filenames(source_digests, target_digests)
     diffs: list[ItemDiff] = []
 
-    for filename in sorted(names.extra - DISTRO_SOURCE_FILENAMES):
+    for filename in sorted(names.extra - DISTRO_SOURCE_FILENAMES - in_use):
         content = await read_file_content(target_run, f"{APT_SOURCES_DIR}/{filename}", Host.TARGET)
         fmt, _refs, uris = parse_source_file(filename, content)
         item = AptSourceItem(filename=filename, digest=target_digests[filename], fmt=fmt)
@@ -345,7 +344,7 @@ async def diff_apt_sources(
                 action=DiffAction.REMOVE,
                 item_id=item.item_id,
                 label=item.label(),
-                detail=build_repo_removal_detail(uris, details.get(filename), machines),
+                detail=build_repo_removal_detail(uris, machines),
             )
         )
 

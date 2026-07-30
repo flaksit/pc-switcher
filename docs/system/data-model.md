@@ -171,19 +171,19 @@ Every item class computes a stable `item_id` string rather than reusing the mana
 | Item class | `item_id` format | Disambiguating fact folded into identity |
 | - | - | - |
 | `AptPackageItem` | `apt:package:<name>` | — (origin is compared, never folded into identity: two vendors' copies of one name are one item reporting a divergence, not an install plus a removal) |
-| `AptSourceItem` | `apt:source:<filename>` | filename (a legacy `.list` and a deb822 `.sources` file for the same repo stay two entries). Reviewed in the REMOVAL direction only |
+| `AptSourceItem` | `apt:source:<filename>` | filename (a legacy `.list` and a deb822 `.sources` file for the same repo stay two entries). Reviewed in the REMOVAL direction only, and only once nothing on the target still installs from the file |
 | `AptPinItem` | `apt:pin:<filename>` | — . Reviewed in the REMOVAL direction only |
 | `AptConfigItem` | `apt:config:<filename>` | — |
 | apt hold | `apt:hold:<name>` | — . The identity first exists on the `ItemDiff`, not on a captured item |
 | `SnapItem` | `snap:<name>` | — (channel and revision are fields, not part of identity) |
 | snap hold | `snap:hold:<name>` | — . Same shape as the apt hold |
 | `FlatpakItem` (ref) | `flatpak:ref:<scope>:<application>/<arch>/<branch>` | `scope`: `user` or `system`, and the ref's own arch and branch — the same application in both scopes, or on two branches in one scope, is two distinct items. Origin is deliberately excluded: `flatpak install <other remote> <ref>` on an already-installed ref refuses, so the install half of an origin "move" could never run |
-| `FlatpakRemoteItem` | `flatpak:remote:<scope>:<name>` | `scope` — `flathub` commonly exists in both scopes with an identical URL but needs independent provisioning. Reviewed in the REMOVAL direction only |
+| `FlatpakRemoteItem` | `flatpak:remote:<scope>:<name>` | `scope` — `flathub` commonly exists in both scopes with an identical URL but needs independent provisioning. Never reviewed: captured state only, derived in every direction |
 | flatpak remote conflict | `flatpak:conflict:<scope>:<name>` | not an item at all — a two-answer review entry for a derived repoint that would move a machine-specific ref's origin |
 | `FlatpakMaskItem` | `flatpak:mask:<scope>:<pattern>` | `scope`, and the pattern itself: masks are patterns, not references to installed refs |
 | `UnreproducibleItem` | `unreproducible:<origin>:<identifier>` | `origin`: `apt-no-candidate` or `unowned-path` — the same identifier string can coincidentally collide across origins |
 
-A signing key, an apt repository or pin the run WRITES, and a flatpak remote the run adds or repoints have no `item_id` in any form: they are derived from the packages and refs approved from them, so there is nothing for the review or a decision file to key on.
+A signing key, an apt repository or pin the run WRITES, and a flatpak remote the run adds, repoints, filters or deletes have no `item_id` in any form: they are derived from the packages and refs approved from them, so there is nothing for the review or a decision file to key on.
 
 Every item class also exposes a `label()` (or, for `UnreproducibleItem`, a plain `label` field) — the human-readable text the review and logs show; `item_id` is never shown to a user directly.
 

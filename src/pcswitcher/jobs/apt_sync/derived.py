@@ -21,6 +21,7 @@ on the thing the user actually decided about, naming the file.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from pathlib import Path
 
 from pcswitcher.jobs.apt_sync.items import (
     APT_PREFERENCES_DIR,
@@ -86,8 +87,20 @@ class DerivedWrites:
     def all_writes(self) -> tuple[str, ...]:
         """Every derived destination, in the order the repository unit writes them: pins
         before sources (so a pin is in place the moment its origin becomes fetchable), the
-        distribution's files before the vendors'."""
+        distribution's files before the vendors'.
+
+        Signing keys are not here and must not be: this set is what the unit backs up, rolls
+        back and charges a failed install to, and a key has none of those relationships to a
+        package item. `Keyrings` computes its own writes from the same decisions, and both
+        sets are logged and previewed (`PKG-FR-DERIVED-VISIBLE`).
+        """
         return (*self._pin_writes, *self._distro_writes, *self._repo_writes)
+
+    @property
+    def written_source_filenames(self) -> frozenset[str]:
+        """The basenames of the repository files this run writes — what decides which
+        machine's keyring references survive on the target (`Keyrings.surviving_refs`)."""
+        return frozenset(Path(dest).name for dest in (*self._distro_writes, *self._repo_writes))
 
     def build(
         self,

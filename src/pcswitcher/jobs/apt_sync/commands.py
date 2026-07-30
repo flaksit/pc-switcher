@@ -86,6 +86,28 @@ def remove_args(names: Sequence[str]) -> str:
     return f"remove --assume-yes {' '.join(shlex.quote(name) for name in names)}"
 
 
+def candidate_version(policy_output: str, name: str) -> str | None:
+    """The version `apt-cache policy` says it would install for `name`, or `None` when the
+    output holds no block for it or apt answers `(none)`.
+
+    Only the version string, deliberately: the origin rows beside it are what
+    `packages/apt_policy.py` parses, and the one place a version is needed is the refusal
+    naming both versions of a held package (`PKG-FR-APT-HOLD-VERSION`). `None` covers "apt
+    printed nothing about this name" and "apt will install no version of it" alike, because
+    the refusal says the same thing for both.
+    """
+    in_block = False
+    for line in policy_output.splitlines():
+        if line and not line[0].isspace() and line.endswith(":"):
+            in_block = line[:-1] == name
+            continue
+        stripped = line.strip()
+        if in_block and stripped.startswith("Candidate:"):
+            value = stripped.removeprefix("Candidate:").strip()
+            return None if value == "(none)" else value
+    return None
+
+
 def policy_command(names: Sequence[str]) -> str:
     """One batched `apt-cache policy` over `names` — never one call per package, and never
     one call per question the output answers."""

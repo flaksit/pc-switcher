@@ -337,15 +337,15 @@ _VENDOR_SOURCES = (
 )
 
 
-class TestRepoRemovalNamesMachineSpecificPackages:
-    """C26/N7 — a source or key offered for removal names what the TARGET still needs.
+class TestRepoRemovalWithheldWhileInUse:
+    """`PKG-FR-REPO-DELETE` — a repository the target still gets software from is not a
+    review item at all, rather than an item disclosing what its deletion would strand.
 
-    The package is recorded skip-always on the target, so `filter_inert` drops it from
-    the target manifest and it produces no `ItemDiff` in any run: without this detail the
-    review shows a bare file deletion and the user has no way to learn that approving it
-    strands software they explicitly told the tool to keep. Disclosure, not refusal — the
-    REMOVE action is untouched, as for flatpak's orphaned refs (#214) and apt's own
-    transaction collateral (D-30).
+    Usage counts the target's manually-installed set plus the packages it marked
+    machine-specific, minus this run's own removal candidates. A marked package is why the
+    rule cannot be left to the user's judgement: `filter_inert` drops it from the target
+    manifest, so it produces no `ItemDiff` in any run and nothing else in the review would
+    connect it to the file about to go.
     """
 
     @staticmethod
@@ -377,7 +377,7 @@ class TestRepoRemovalNamesMachineSpecificPackages:
         }
 
     @pytest.mark.asyncio
-    async def test_source_removal_names_the_machine_specific_package_it_would_strand(self) -> None:
+    async def test_a_repository_a_machine_specific_package_uses_is_not_raised_at_all(self) -> None:
         context, _source, _target = make_context(
             source_responses=_NO_PACKAGES,
             target_responses=self._target_responses(
@@ -391,15 +391,62 @@ class TestRepoRemovalNamesMachineSpecificPackages:
 
         plan = await job.plan()
 
-        diff = next(d for d in plan.diffs if d.item_id == "apt:source:vendor.list")
-        assert diff.action == DiffAction.REMOVE
-        # Both halves, in the order the decision needs them: what the machine stops getting,
-        # then what that costs. The user's ruling — the URL is what the choice is about.
-        assert diff.detail == (
-            "target-host would stop getting software from https://vendor.example.com/apt; "
-            "target-host installs vendor-tool from vendor.list — package you marked as specific to target-host, "
-            "so it would stay installed but never get another update"
+        assert "apt:source:vendor.list" not in {d.item_id for d in plan.diffs}
+
+    @pytest.mark.asyncio
+    async def test_a_repository_an_ordinary_target_package_uses_is_withheld_too(self) -> None:
+        """Usage is not only about marks: a package present on both machines is invisible to
+        the review for a different reason (nothing about it differs) and still needs its
+        repository.
+        """
+        context, _source, _target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "vendor-tool\n", ""),
+                "dpkg-query": CommandResult(0, "vendor-tool\t1.0\n", ""),
+            },
+            target_responses={
+                **self._target_responses(
+                    source_files={"vendor.list": _VENDOR_LIST},
+                    source_digests=sha256_line("d1", "vendor.list"),
+                    decisions="machine_specific: {}\n",
+                    policy=_policy_block("vendor-tool", "https://vendor.example.com/apt"),
+                ),
+                "apt-mark showmanual": CommandResult(0, "vendor-tool\n", ""),
+                "dpkg-query": CommandResult(0, "vendor-tool\t1.0\n", ""),
+            },
         )
+        job = AptSyncJob(context)
+
+        plan = await job.plan()
+
+        assert "apt:source:vendor.list" not in {d.item_id for d in plan.diffs}
+
+    @pytest.mark.asyncio
+    async def test_a_repository_only_this_runs_removals_use_is_offered(self) -> None:
+        """Removing a repository together with the packages it feeds is the legitimate case
+        the withholding rule must not swallow, so usage is counted after this run's own
+        removal candidates.
+        """
+        context, _source, _target = make_context(
+            source_responses=_NO_PACKAGES,
+            target_responses={
+                **self._target_responses(
+                    source_files={"vendor.list": _VENDOR_LIST},
+                    source_digests=sha256_line("d1", "vendor.list"),
+                    decisions="machine_specific: {}\n",
+                    policy=_policy_block("vendor-tool", "https://vendor.example.com/apt"),
+                ),
+                "apt-mark showmanual": CommandResult(0, "vendor-tool\n", ""),
+                "dpkg-query": CommandResult(0, "vendor-tool\t1.0\n", ""),
+            },
+        )
+        job = AptSyncJob(context)
+
+        plan = await job.plan()
+
+        by_id = {d.item_id: d for d in plan.diffs}
+        assert by_id["apt:package:vendor-tool"].action == DiffAction.REMOVE
+        assert by_id["apt:source:vendor.list"].action == DiffAction.REMOVE
 
     @pytest.mark.asyncio
     async def test_the_machine_specific_package_itself_still_produces_no_diff(self) -> None:
@@ -429,7 +476,8 @@ class TestRepoRemovalNamesMachineSpecificPackages:
     async def test_deb822_uris_match_the_policy_origin_despite_the_trailing_slash(self) -> None:
         """A `.sources` file writes `URIs: https://.../apt/` while `apt-cache policy`
         prints the origin without the trailing slash. Verbatim comparison would find no
-        link at all for every repository written the first way.
+        link at all, and every repository written the first way would be offered for
+        deletion with its packages still installed from it.
         """
         context, _source, _target = make_context(
             source_responses=_NO_PACKAGES,
@@ -444,13 +492,13 @@ class TestRepoRemovalNamesMachineSpecificPackages:
 
         plan = await job.plan()
 
-        diff = next(d for d in plan.diffs if d.item_id == "apt:source:vendor.sources")
-        assert diff.detail is not None and "vendor-tool" in diff.detail
+        assert "apt:source:vendor.sources" not in {d.item_id for d in plan.diffs}
 
     @pytest.mark.asyncio
-    async def test_source_removal_with_no_dependent_package_keeps_detail_none(self) -> None:
+    async def test_a_repository_nothing_installs_from_is_offered_with_its_urls(self) -> None:
         """`other-tool` is machine-specific but was installed from a local `.deb`, so its
-        only origin is dpkg's own record: no link, no noise.
+        only origin is dpkg's own record: nothing uses the repository, so it is offered —
+        and the URLs are the whole detail.
         """
         context, _source, _target = make_context(
             source_responses=_NO_PACKAGES,
@@ -467,8 +515,6 @@ class TestRepoRemovalNamesMachineSpecificPackages:
 
         diff = next(d for d in plan.diffs if d.item_id == "apt:source:vendor.list")
         assert diff.action == DiffAction.REMOVE
-        # The URL half is unconditional (it is what the deletion is about); only the
-        # stranded-packages half is omitted when nothing would be stranded.
         assert diff.detail == "target-host would stop getting software from https://vendor.example.com/apt"
 
     @pytest.mark.asyncio
@@ -481,8 +527,8 @@ class TestRepoRemovalNamesMachineSpecificPackages:
             target_responses=self._target_responses(
                 source_files={"vendor.list": _VENDOR_LIST},
                 source_digests=sha256_line("d1", "vendor.list"),
-                decisions=decision_file("apt:package:vendor-tool"),
-                policy=_policy_block("vendor-tool", "https://vendor.example.com/apt"),
+                decisions=decision_file("apt:package:other-tool"),
+                policy=_policy_block("other-tool", None),
             ),
         )
         job = AptSyncJob(context)
@@ -491,11 +537,11 @@ class TestRepoRemovalNamesMachineSpecificPackages:
 
         group = next(g for g in plan.groups if g.action in _REMOVAL_ACTIONS)
         entry = next(e for e in group.entries if e.item_id == "apt:source:vendor.list")
-        assert entry.detail is not None and "vendor-tool" in entry.detail
+        assert entry.detail is not None and "https://vendor.example.com/apt" in entry.detail
 
     @pytest.mark.asyncio
     async def test_one_apt_cache_policy_call_regardless_of_package_count(self) -> None:
-        """The phase-wide batching rule: origins for every recorded package come from ONE
+        """The phase-wide batching rule: origins for every counted package come from ONE
         `apt-cache policy` run, never one per package.
         """
         names = [f"vendor-tool-{i}" for i in range(12)]
@@ -515,8 +561,7 @@ class TestRepoRemovalNamesMachineSpecificPackages:
         policy_calls = [cmd for cmd in all_calls(target) if "apt-cache policy" in cmd]
         assert len(policy_calls) == 1
         assert all(name in policy_calls[0] for name in names)
-        diff = next(d for d in plan.diffs if d.item_id == "apt:source:vendor.list")
-        assert diff.detail is not None and all(name in diff.detail for name in names)
+        assert "apt:source:vendor.list" not in {d.item_id for d in plan.diffs}
 
     @pytest.mark.asyncio
     async def test_no_policy_call_when_nothing_is_offered_for_removal(self) -> None:
@@ -945,12 +990,17 @@ class TestRepositoryConflicts:
 
     @pytest.mark.asyncio
     async def test_the_conflict_computation_costs_one_batched_policy_call(self) -> None:
-        """Both `/etc/apt` follow-ups share one computation (§4.4): a run offering a removal
-        AND a conflict asks the target's apt once, not twice.
+        """Both `/etc/apt` follow-ups share one computation (§4.4): a run whose repository
+        deletion has to be judged AND whose conflict has to be triggered asks the target's
+        apt about its own packages once, not twice.
         """
         context, _source, target = _repo_context(
             source_responses={
-                **_NO_PACKAGES,
+                "apt-mark showmanual": CommandResult(0, "vendor-tool\n", ""),
+                "dpkg-query": CommandResult(0, "vendor-tool\t1.0\n", ""),
+                "apt-cache policy": CommandResult(
+                    0, _policy_block("vendor-tool", "https://vendor.example.com/apt"), ""
+                ),
                 _SOURCE_SCAN_CMD: CommandResult(0, _scan_line("vendor.list", _CHANGED_VENDOR), ""),
                 "find /etc/apt/sources.list.d": CommandResult(0, sha256_line("d-new", "vendor.list"), ""),
                 "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "vendor.gpg"), ""),
@@ -975,7 +1025,9 @@ class TestRepositoryConflicts:
         plan = await AptSyncJob(context).plan()
 
         assert any(g.action == REPO_CONFLICT_REVIEW_ACTION for g in plan.groups)
-        assert sum(1 for c in all_calls(target) if "apt-cache policy" in c) == 1
+        # The call over the TARGET's own packages. The other policy call this run makes asks
+        # about the SOURCE's names (`collect_target_policy`) and answers a different question.
+        assert sum(1 for c in all_calls(target) if "apt-cache policy" in c and "curl" in c) == 1
 
 
 class TestOneReviewPerRun:

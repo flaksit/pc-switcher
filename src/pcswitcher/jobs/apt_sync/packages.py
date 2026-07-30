@@ -17,14 +17,16 @@ from collections.abc import Mapping, Sequence
 from pcswitcher.executor import RemoteExecutor
 from pcswitcher.jobs.apt_sync.collateral import Collateral
 from pcswitcher.jobs.apt_sync.commands import (
+    candidate_version,
     install_args,
+    policy_command,
     remove_args,
     simulate_apt_transaction,
 )
 from pcswitcher.jobs.apt_sync.derived import DerivedWrites
-from pcswitcher.jobs.apt_sync.items import hold_name, package_name
+from pcswitcher.jobs.apt_sync.items import APT_PACKAGE_ID_PREFIX, hold_name, package_name
 from pcswitcher.jobs.apt_sync.origins import OriginClassifier
-from pcswitcher.jobs.packages.items import DiffAction, ItemDiff
+from pcswitcher.jobs.packages.items import DiffAction, DiffClass, ItemClass, ItemDiff, Machines
 from pcswitcher.jobs.packages.review import Decision
 from pcswitcher.jobs.packages.sync_core import ConvergeItemFailed
 from pcswitcher.models import CommandResult
@@ -96,17 +98,26 @@ class PackageConverger:
         *,
         target: RemoteExecutor,
         manager_id: str,
+        machines: Machines,
         collateral: Collateral,
         derived: DerivedWrites,
         origins: OriginClassifier,
         refresh: MetadataRefresh,
+        held_versions: Mapping[str, str] | None = None,
     ) -> None:
         self._target = target
         self._manager_id = manager_id
+        self._machines = machines
         self._collateral = collateral
         self._derived = derived
         self._origins = origins
         self._refresh = refresh
+        # `{package name: the version the SOURCE holds it at}` (`PKG-FR-APT-HOLD-VERSION`).
+        self._held_versions = dict(held_versions or {})
+        # `{package name: why its install failed}`, and `None` for one that succeeded. Read
+        # by `hold`, which converges after every install (`accept_review` orders holds last)
+        # and may not register a hold for a package that never landed.
+        self._install_outcome: dict[str, str | None] = {}
 
     async def install(
         self, diff: ItemDiff, diffs: Sequence[ItemDiff], decisions: Mapping[str, Decision]
@@ -118,9 +129,24 @@ class PackageConverger:
         unless the user let it go ahead in the review; the decision was made at plan time,
         and this guard only verifies the real transaction has not drifted to touch a
         protected package nobody saw.
+
+        Every outcome is recorded against the package name, because the hold that may follow
+        it must not be registered for a package that never landed
+        (`PKG-FR-APT-HOLD-INERT`).
         """
         name = package_name(diff.item_id)
+        try:
+            result = await self._install(name, diff, diffs, decisions)
+        except ConvergeItemFailed as exc:
+            self._install_outcome[name] = str(exc)
+            raise
+        self._install_outcome[name] = None if result.success else result.stderr.strip()
+        return result
 
+    async def _install(
+        self, name: str, diff: ItemDiff, diffs: Sequence[ItemDiff], decisions: Mapping[str, Decision]
+    ) -> CommandResult:
+        """`install`'s guard chain and command, without the outcome bookkeeping."""
         # A derived `/etc/apt` write this package needed and that failed refuses it first
         # (D-39), before any command at all: the file is named, which the origin check could
         # only say the consequence of.
@@ -137,8 +163,16 @@ class PackageConverger:
         if refusal is not None:
             raise ConvergeItemFailed(refusal)
 
-        args = install_args([name])
-        preview = await simulate_apt_transaction(self._target, args, login_shell=False)
+        # A held package is requested as `<name>=<version>` — apt's own way of asking for one
+        # version and refusing rather than substituting another (`PKG-FR-APT-HOLD-VERSION`).
+        held = self._held_versions.get(name)
+        args = install_args([name if held is None else f"{name}={held}"])
+        try:
+            preview = await simulate_apt_transaction(self._target, args, login_shell=False)
+        except ConvergeItemFailed as exc:
+            if held is None:
+                raise
+            raise ConvergeItemFailed(await self._held_version_refusal(name, held, exc)) from exc
 
         refused = await self._collateral.unapproved(preview, exempt=frozenset(), verb="Installing", subject=name)
         if refused:
@@ -150,6 +184,28 @@ class PackageConverger:
 
         real_cmd = f"sudo DEBIAN_FRONTEND=noninteractive apt-get {args}"
         return await self._target.run_command(real_cmd, login_shell=False, mutates=f"install apt package {name}")
+
+    async def _held_version_refusal(self, name: str, held: str, exc: ConvergeItemFailed) -> str:
+        """Why a held package could not be installed at the source's version, naming BOTH
+        versions (`PKG-FR-APT-HOLD-VERSION`).
+
+        Naming only the version that was asked for tells the user nothing they can act on:
+        the whole finding is that the target offers a DIFFERENT one, and whether the remedy
+        is a missing repository or a version the vendor has withdrawn turns on which one it
+        offers. Costs one `apt-cache policy` on the refusal path alone — the version is not
+        worth a command on the runs that succeed, and apt's own error does not carry it.
+        """
+        command = policy_command([name])
+        result = await self._target.run_command(command, login_shell=False)
+        offered = candidate_version(result.stdout, name) if result.success else None
+        instead = (
+            f"{self._machines.target} offers {offered}" if offered else f"{self._machines.target} offers no other"
+        )
+        return (
+            f"install of {name} refused: {self._machines.source} holds it at {held} and "
+            f"{instead}. A held package is installed at the source's version or not at all, "
+            f"because a hold freezes whatever version lands ({exc})"
+        )
 
     async def remove(
         self, diff: ItemDiff, diffs: Sequence[ItemDiff], decisions: Mapping[str, Decision]
@@ -179,16 +235,61 @@ class PackageConverger:
         real_cmd = f"sudo DEBIAN_FRONTEND=noninteractive apt-get {args}"
         return await self._target.run_command(real_cmd, login_shell=False, mutates=f"remove apt package {name}")
 
-    async def hold(self, diff: ItemDiff) -> CommandResult:
+    async def hold(
+        self, diff: ItemDiff, diffs: Sequence[ItemDiff], decisions: Mapping[str, Decision]
+    ) -> CommandResult:
         """Converge one `apt:hold:<name>` membership item (#208, D4/D5): `apt-mark hold`
         for the add direction (INSTALL), `apt-mark unhold` for the remove direction
         (REMOVE). Selection state only — no `apt-get --dry-run` simulation and no transaction
         guard (a hold changes nothing about the installed package set, D4). The command's
-        exit code alone decides pass/fail (D-27); a hold on an absent or unknown package
-        that `apt-mark` rejects is a normal per-item failure (D6), not a gated abort.
+        exit code alone decides pass/fail (D-27); a hold on an unknown package that
+        `apt-mark` rejects is a normal per-item failure (D6), not a gated abort.
+
+        A hold whose package this run did not put on the target fails alone before any
+        command (`PKG-FR-APT-HOLD-INERT`). apt-mark cannot be relied on for this: measured on
+        `ubuntu:24.04`, `apt-mark hold` exits 100 only for a name apt has never heard of and
+        exits 0 for a package that is merely NOT INSTALLED, recording the hold in dpkg's
+        selections. So a skipped or failed install would otherwise leave the target holding a
+        package it does not have, which then blocks every later attempt to install it.
         """
         name = hold_name(diff.item_id)
+        if diff.action == DiffAction.INSTALL:
+            blocked = self._hold_refusal(name, diffs, decisions)
+            if blocked is not None:
+                raise ConvergeItemFailed(blocked)
         verb = "hold" if diff.action == DiffAction.INSTALL else "unhold"
         return await self._target.run_command(
             f"sudo apt-mark {verb} {shlex.quote(name)}", login_shell=False, mutates=f"{verb} apt package {name}"
         )
+
+    def _hold_refusal(self, name: str, diffs: Sequence[ItemDiff], decisions: Mapping[str, Decision]) -> str | None:
+        """Why this hold may not be registered, or `None` when the package is on the target.
+
+        Judged from the package's OWN item in this run, which is the only thing that can say
+        it. No item means the target already has the package and the hold is the whole
+        change. An item that installs it must have been approved and must have succeeded; an
+        item that only reports the package missing (its origin cannot be reproduced) never
+        put it there at all.
+        """
+        package_diff = next(
+            (
+                candidate
+                for candidate in diffs
+                if candidate.item_class is ItemClass.APT_PACKAGE
+                and candidate.item_id == f"{APT_PACKAGE_ID_PREFIX}{name}"
+            ),
+            None,
+        )
+        if package_diff is None:
+            return None
+        why = f"hold on {name} refused"
+        if package_diff.diff_class is DiffClass.REPO_UNAVAILABLE:
+            return f"{why}: {name} is not on the target and this run cannot reproduce the repository it comes from"
+        if package_diff.action is not DiffAction.INSTALL:
+            return None
+        if decisions.get(package_diff.item_id) != Decision.APPLY:
+            return f"{why}: its install was not approved, and holding a package the target lacks blocks installing it"
+        failure = self._install_outcome.get(name, "the install did not run")
+        if failure is None:
+            return None
+        return f"{why}: its install failed ({failure})"

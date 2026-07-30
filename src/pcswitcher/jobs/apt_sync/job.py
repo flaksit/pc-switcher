@@ -48,8 +48,8 @@ from pcswitcher.jobs.apt_sync.items import (
     pin_filename,
 )
 from pcswitcher.jobs.apt_sync.keyrings import Keyrings
-from pcswitcher.jobs.apt_sync.messages import build_orphaned_packages_detail, build_repo_conflict_detail
-from pcswitcher.jobs.apt_sync.origins import OriginClassifier
+from pcswitcher.jobs.apt_sync.messages import build_repo_conflict_detail
+from pcswitcher.jobs.apt_sync.origins import OriginClassifier, OriginPlan
 from pcswitcher.jobs.apt_sync.packages import MetadataRefresh, PackageConverger
 from pcswitcher.jobs.apt_sync.probe import AptProbe, OriginFacts, RepoConflict, RepoFacts
 from pcswitcher.jobs.context import JobContext
@@ -127,6 +127,9 @@ class AptSyncJob(PackageSyncJob):
         # `diff_apt_pins` and shown whole on that screen — a pin filename alone gives the
         # user nothing to decide from.
         self._pin_contents: dict[str, str] = {}
+        # `{package name: the version the SOURCE holds it at}` for the packages this run
+        # proposes to install and the source holds (`PKG-FR-APT-HOLD-VERSION`).
+        self._held_versions: dict[str, str] = {}
         self._work = self._assemble_work(
             source_facts=OriginFacts.empty(),
             target_facts=OriginFacts.empty(),
@@ -200,10 +203,12 @@ class AptSyncJob(PackageSyncJob):
             packages=PackageConverger(
                 target=self.target,
                 manager_id=self.manager_id,
+                machines=self.machines,
                 collateral=collateral,
                 derived=derived,
                 origins=origins,
                 refresh=self._refresh,
+                held_versions=self._held_versions,
             ),
         )
 
@@ -251,17 +256,20 @@ class AptSyncJob(PackageSyncJob):
         )
         base_plan = await self._plan_packages(origins)
 
+        target_manual_set = await self._probe.capture_target_manual_set()
         collateral = Collateral(
             target=self.target,
             machines=self.machines,
-            target_manual_set=await self._probe.capture_target_manual_set(),
+            target_manual_set=target_manual_set,
             origins=origins,
             marked=self._target_marked_packages(),
             log=self._log,
         )
         collateral_diffs = await collateral.plan_time(base_plan.diffs)
 
-        repo_diffs = await self._plan_repo_diffs(source_facts, target_facts, origins, collateral)
+        repo_diffs = await self._plan_repo_diffs(
+            source_facts, target_facts, origins, collateral, base_plan.diffs, target_manual_set
+        )
 
         if not collateral_diffs and not repo_diffs and not self._conflicts:
             return base_plan
@@ -327,6 +335,19 @@ class AptSyncJob(PackageSyncJob):
             source_decisions,
             target_decisions,
         )
+        # `PKG-FR-APT-HOLD-VERSION`: a package the source HOLDS and the target lacks must be
+        # installed at the source's own version, because the hold that follows would
+        # otherwise freeze the target permanently on whatever its repositories happened to
+        # offer, and nothing moves a held package again. Read off the surviving diffs so a
+        # package `filter_inert` dropped cannot pin a version nothing will install.
+        source_versions = {item.name: item.version for item in source_items if item.version}
+        self._held_versions = {
+            name: source_versions[name]
+            for diff in diffs
+            if diff.item_class is ItemClass.APT_PACKAGE and diff.action is DiffAction.INSTALL
+            for name in [package_name(diff.item_id)]
+            if name in source_hold_names and name in source_versions
+        }
         return PackagePlan(manager=self.manager_id, diffs=diffs, groups=self._build_review_groups(diffs))
 
     def _target_marked_packages(self) -> frozenset[str]:
@@ -342,12 +363,31 @@ class AptSyncJob(PackageSyncJob):
             package_name(item_id) for item_id in target_decisions if item_id.startswith(APT_PACKAGE_ID_PREFIX)
         )
 
+    @staticmethod
+    def _files_an_approval_would_write(package_diffs: Sequence[ItemDiff], origins: OriginClassifier) -> frozenset[str]:
+        """The repository filenames this run would derive if the review approved every
+        install it proposes — a superset of what `DerivedWrites.build` finally writes, since
+        the review has not happened yet.
+
+        Gating the conflict question on it is what keeps D-37's rule intact: a repository
+        travels because an approved package comes from it, so a file no install needs is not
+        a question, and answering "overwrite" cannot by itself make one travel.
+        """
+        return frozenset(
+            filename
+            for diff in package_diffs
+            if diff.item_class is ItemClass.APT_PACKAGE and diff.action is DiffAction.INSTALL
+            for filename in origins.plans.get(diff.item_id, OriginPlan()).derived_files
+        )
+
     async def _plan_repo_diffs(
         self,
         source_facts: OriginFacts,
         target_facts: OriginFacts,
         origins: OriginClassifier,
         collateral: Collateral,
+        package_diffs: Sequence[ItemDiff],
+        target_manual_set: frozenset[str],
     ) -> list[ItemDiff]:
         """Capture the two remaining `/etc/apt` directories and diff the item classes that
         still HAVE a review direction (D-11/D-13, ADR-020 D-37), by whole-file digest.
@@ -357,9 +397,19 @@ class AptSyncJob(PackageSyncJob):
         question; apt config keeps all three directions, because no package implies whether
         a proxy or a `no-install-recommends` policy should be replicated (D-37).
 
-        A source offered for REMOVAL is additionally classified against what the TARGET
-        still needs (C26) before the diff is built, so the review names the consequence
-        rather than presenting a bare presence difference.
+        Both surviving repository questions are narrowed here, against what the TARGET still
+        installs, before any diff is built:
+
+        - a repository the source no longer has is WITHHELD outright while the target still
+          gets software from it (`PKG-FR-REPO-DELETE`). Usage is counted after this run's own
+          removal candidates, which is the approve-everything reading the review has not
+          happened yet to improve on, and machine-specific marks count as usage always —
+          they are never removal candidates.
+        - a repository the two machines disagree about becomes a question only when it is
+          also one this run would write for an approved package (`PKG-FR-REPO-CONFLICT`), the
+          same gate `flatpak_sync._capture_remote_conflicts` applies. Every other differing
+          file is overwritten silently under D-37, so asking about it would put a decision to
+          the user that changes nothing.
 
         This is also where the collaborators that need the full `/etc/apt` picture are
         assembled, since every fact they decide over exists by the end of it.
@@ -376,20 +426,38 @@ class AptSyncJob(PackageSyncJob):
             and source_facts.sources_list_digest != target_facts.sources_list_digest
         ):
             changed |= {Path(APT_SOURCES_LIST).name}
-        # ONE batched policy call answers both follow-ups (§4.4): the removal direction's
-        # disclosure text and the conflict screen's trigger are the same computation over two
-        # different filename sets.
-        _source_decisions, target_decisions = self._plan_decisions
-        machine_specific = await self._probe.machine_specific_packages_by_source_file(
-            extra | changed, target_decisions, target_facts.refs
+        marked = self._target_marked_packages()
+        # ONE batched policy call answers both follow-ups (§4.4): withholding a repository
+        # still in use and triggering the conflict question are the same computation over two
+        # filename sets and two package populations.
+        conflict_candidates = changed & self._files_an_approval_would_write(package_diffs, origins)
+        by_file = await self._probe.packages_by_source_file(
+            extra | conflict_candidates, sorted(target_manual_set | marked), target_facts.refs
         )
-        removal_details = {
-            filename: build_orphaned_packages_detail(filename, packages, self.machines)
-            for filename, packages in machine_specific.items()
-            if filename in extra
+        going = {
+            package_name(diff.item_id)
+            for diff in package_diffs
+            if diff.item_class is ItemClass.APT_PACKAGE
+            and diff.action is DiffAction.REMOVE
+            and diff.item_id.startswith(APT_PACKAGE_ID_PREFIX)
         }
+        in_use: dict[str, list[str]] = {}
+        for filename in sorted(extra):
+            keeping = [name for name in by_file.get(filename, []) if name not in going]
+            if keeping:
+                in_use[filename] = keeping
+                self._log(
+                    Host.TARGET,
+                    LogLevel.FULL,
+                    f"keeping repository {filename}: {self.machines.target} still installs "
+                    f"{', '.join(keeping)} from it, so its deletion is not offered",
+                )
         self._conflicts = await self._probe.capture_repo_conflicts(
-            {f: p for f, p in machine_specific.items() if f in changed}
+            {
+                filename: [name for name in by_file.get(filename, []) if name in marked]
+                for filename in sorted(conflict_candidates)
+                if any(name in marked for name in by_file.get(filename, []))
+            }
         )
 
         self._work = self._assemble_work(
@@ -405,7 +473,7 @@ class AptSyncJob(PackageSyncJob):
         diffs: list[ItemDiff] = []
         diffs.extend(
             await diff_apt_sources(
-                self._probe.target_run, source_sources, target_sources, self.machines, removal_details
+                self._probe.target_run, source_sources, target_sources, self.machines, frozenset(in_use)
             )
         )
         pin_diffs, self._pin_contents = await diff_apt_pins(
@@ -593,17 +661,40 @@ class AptSyncJob(PackageSyncJob):
 
     @override
     async def apply(self) -> None:
-        """The base converge loop, preceded under dry-run by the derived `/etc/apt` writes.
+        """The base converge loop, preceded under dry-run by the derived `/etc/apt` writes
+        and the signing keys that travel with them.
 
         A derived write is not a diff, so the base loop has nothing to say about it, and
         ADR-014 makes the preview the whole report of a rehearsal: without this, a run whose
         entire `/etc/apt` work is derived would preview an `apt-get update` and no reason
-        for it. On a real run the same facts are logged by the repository unit as each file
-        lands, which is the honest place for them — the write may still fail.
+        for it. Keys are here for the stronger version of the same reason — a key has no diff
+        in ANY run, so without this line a rotated key would reach a real target having been
+        previewed nowhere (`PKG-FR-DERIVED-VISIBLE`). On a real run the same facts are logged
+        as each file lands, which is the honest place for them — the write may still fail.
         """
         if self.context.dry_run:
-            for dest in self._work.derived.all_writes():
+            work = self._work
+            for dest in work.derived.all_writes():
                 self._log(Host.TARGET, LogLevel.FULL, f"[dry-run] Would write {dest} from the source")
+            if self._accepted_plan is not None and self._accepted_outcome is not None:
+                diffs = self._accepted_plan.diffs
+                decisions = self._accepted_outcome.decisions
+                surviving = work.keyrings.surviving_refs(diffs, decisions, work.derived.written_source_filenames)
+                for _local, dest in work.keyrings.writes(surviving):
+                    self._log(Host.TARGET, LogLevel.FULL, f"[dry-run] Would write signing key {dest} from the source")
+                if any(
+                    diff.item_class is ItemClass.APT_SOURCE
+                    and diff.item_id != METADATA_REFRESH_ITEM_ID
+                    and diff.action is DiffAction.REMOVE
+                    and decisions.get(diff.item_id) == Decision.APPLY
+                    for diff in diffs
+                ):
+                    for dest in work.keyrings.unreferenced(surviving):
+                        self._log(
+                            Host.TARGET,
+                            LogLevel.FULL,
+                            f"[dry-run] Would delete signing key {dest}, which no repository would reference",
+                        )
         await super().apply()
 
     @override
@@ -626,7 +717,7 @@ class AptSyncJob(PackageSyncJob):
         work = self._work
 
         if diff.item_id.startswith(APT_HOLD_ID_PREFIX):
-            return await work.packages.hold(diff)
+            return await work.packages.hold(diff, diffs, decisions)
         if diff.item_class in REPO_GROUP_CLASSES or diff.item_id == METADATA_REFRESH_ITEM_ID:
             return await work.etc_apt.converge_item(diff, diffs, decisions)
         if diff.action == DiffAction.INSTALL:
