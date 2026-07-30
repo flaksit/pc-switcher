@@ -1,0 +1,1 @@
+review_harness.py still doesn't show instructions for user on how to "Ubuntu Pro attachment". If concrete instructions are not a good idea (if they are not stable and would require us to update apt-sync code each time ubuntu changes their procedure), then at least a link to instruction page.
