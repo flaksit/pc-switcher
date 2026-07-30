@@ -142,3 +142,21 @@ Logs are written to `~/.local/share/pc-switcher/logs` with mode `rw-rw-r--`, so 
 `PKG-FR-CREDENTIAL-PRIVACY` now requires the embedded credential to be withheld wherever a URL is written or shown. Recorded in the criteria's gap register.
 
 Related, and already satisfied: `PKG-FR-ESM-PRIVACY` is honoured by construction rather than by filtering — `pro status --format json` is parsed and only the `attached` boolean escapes (`apt_sync.py:113-114`, `278-281`).
+
+## DIV-14 — The log records counts, not decisions, and no manager output at all
+
+Verified on 2026-07-30 against the current head, after the logging requirements were ruled on.
+
+`PKG-FR-LOG-DECISIONS` asks for every item a job presented together with the decision it received. What the code writes is:
+
+- one FULL line per item that was actually applied — `f"{diff.action.value} {diff.label}"` (`sync_core.py:493`) — or, in a dry run, one `Would …` line per item (`sync_core.py:397`);
+- INFO counts around them: how many changes are being applied, how many succeeded, how many failed with a joined summary (`sync_core.py:385-416`);
+- in a non-interactive run, a WARNING carrying the COUNT of unresolved items (`review.py:822`) and one line per group that was not asked (`review.py:914`).
+
+So an item the user skipped produces no line at all, and no line anywhere pairs an item with its decision. Auto-collateral is likewise absent — `_classify_collateral` deliberately produces "nothing, not even a report line the user cannot act on" (`apt_sync.py:2655-2656`), which `PKG-FR-COLLATERAL-AUTO` now overrides.
+
+`PKG-FR-LOG-VERBATIM` asks for the manager's own output verbatim in the debug log. `Executor._announce` traces the command TEXT at DEBUG before running it (`executor.py:154`); nothing traces what came back. The only output that reaches the log is `stderr` attached as structured context on error paths (`sync_core.py:489`, `apt_sync.py:3551-3557`). No stdout, at any level.
+
+Both are recorded in the criteria's gap register. Note the interaction with `PKG-FR-CREDENTIAL-PRIVACY` (DIV-13): implementing verbatim output without the redaction point puts repository credentials in a world-readable file, so the two land together or not at all.
+
+Log volume is a known consequence, not an objection: runs on the maintainer's desktop already produce 350-378 MB logs, and the ruling was "all of it, as written".
