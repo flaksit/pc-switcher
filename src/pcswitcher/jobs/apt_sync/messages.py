@@ -118,9 +118,11 @@ def build_repo_conflict_detail(filename: str, packages: Sequence[str], machines:
     without this line the user sees a file they are asked to overwrite and no indication that
     doing so moves software they explicitly told this tool to leave alone.
     """
+    one = len(packages) == 1
     return (
         f"{filename} is different on the two machines, and {machines.target} installs "
-        f"{', '.join(packages)} from it — packages you set to always skip, so a sync normally leaves them alone"
+        f"{', '.join(packages)} from it — {'package' if one else 'packages'} you marked as specific to "
+        f"{machines.target}, so a sync normally leaves {'it' if one else 'them'} alone"
     )
 
 
@@ -149,9 +151,11 @@ def build_orphaned_packages_detail(source_filename: str, packages: Sequence[str]
     approving the source deletion strands software they explicitly told this tool to keep.
     Disclosure, not refusal — D-30's placement, the same as flatpak's orphaned refs.
     """
+    one = len(packages) == 1
     return (
-        f"{machines.target} installs {', '.join(packages)} from {source_filename} — packages you set to always "
-        f"skip, so they would stay installed but never get another update"
+        f"{machines.target} installs {', '.join(packages)} from {source_filename} — "
+        f"{'package' if one else 'packages'} you marked as specific to {machines.target}, so "
+        f"{'it' if one else 'they'} would stay installed but never get another update"
     )
 
 

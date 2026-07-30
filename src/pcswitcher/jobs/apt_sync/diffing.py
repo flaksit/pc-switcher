@@ -369,7 +369,9 @@ def metadata_refresh_diff() -> ItemDiff:
     )
 
 
-def collateral_diff(name: str, detail: str) -> ItemDiff:
+def collateral_diff(
+    name: str, detail: str, *, act_word: str = "resolve", answer_hints: tuple[str, str] | None = None
+) -> ItemDiff:
     """One manual-collateral item (D-30): a package the TARGET's apt has marked manually
     installed that the pending transaction would remove or downgrade. Stays `REPORT_ONLY` so
     `apply()` never converges it directly — its decision governs the changes that cause it,
@@ -387,4 +389,5 @@ def collateral_diff(name: str, detail: str) -> ItemDiff:
         item_id=f"{COLLATERAL_ID_PREFIX}{name}",
         label=name,
         detail=detail,
+        answer_hints=answer_hints,
     )

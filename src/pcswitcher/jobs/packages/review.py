@@ -34,8 +34,10 @@ Ctrl-C-aborts-the-sync rule; it returns `None` when nobody could be asked, and t
 owns what that means.
 
 D-07's three answers are all on the one screen for an actionable group (install / change /
-remove direction, which includes the block-state items): apply, skip once, or always skip —
-treat the item as specific to this machine, which makes it inert here in both roles (D-08a).
+remove direction, which includes the block-state items): apply, skip now, or skip for good —
+treat the item as specific to one machine, which makes it inert here in both roles (D-08a).
+Those are the decisions; what each screen CALLS them is `_options_for` and the hints beside
+them, which say the act, the machine it happens to, and how long the answer lasts.
 `REPORT_ONLY` groups offer the first two only: an informational item has no machine that
 holds it, so a permanent mark would silently stop the underlying package syncing rather than
 stop reporting the condition.
@@ -108,6 +110,7 @@ from typing import Protocol, runtime_checkable
 import questionary
 from prompt_toolkit.key_binding import KeyBindings, KeyPressEvent
 from prompt_toolkit.keys import Keys
+from prompt_toolkit.styles import Style
 from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
@@ -171,6 +174,14 @@ _REMOVAL_ACTIONS = frozenset({"remove", "delete", "disable", REPO_REMOVAL_REVIEW
 # is in the first set and deliberately absent from this one.
 _PROMOTABLE_ACTIONS = frozenset({"install", "add", "enable", "change", "remove", "delete", "disable"})
 
+# The two `ReviewGroup.action` values whose screens need their own answer sentences: an
+# item the two machines both have at different versions is neither arriving nor leaving, and
+# a reported condition changes nothing on either machine whatever the user answers. Spelled
+# as the `DiffAction` values rather than imported: `sync_core` imports this module, not the
+# other way round.
+_CHANGE_ACTION = "change"
+_REPORT_ACTION = "report_only"
+
 # Sentinel `ReviewGroup.action` a caller (today, only `AptSyncJob`) uses to mark a group
 # of unreproducible items (D-18/D-21) as needing the three-way per-entry resolution flow
 # below, rather than an ordinary decision screen. Not a `DiffAction` value — this is a
@@ -227,6 +238,12 @@ class ReviewEntry:
     `content` is the one-block counterpart, for a screen that offers to DELETE a file the
     only machine holding it still has: there is no second version to compare it against, and
     a filename alone is not something anyone can decide a deletion from.
+
+    `answer_hints` is `(act, skip now)` for the screens that ask about one item at a time,
+    where the sentences beside the keys name THIS item's own change — "remove fortunes-min
+    from nomad, so fortunes is removed as well" is not something a screen-wide hint can say,
+    and the same screen's next item may be a downgrade rather than a removal. Only the
+    caller knows the change that causes the item, so only the caller can phrase it.
     """
 
     item_id: str
@@ -235,6 +252,7 @@ class ReviewEntry:
     detail: str | None = None
     versions: tuple[str, str] | None = None
     content: str | None = None
+    answer_hints: tuple[str, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -245,12 +263,16 @@ class ReviewGroup:
     "install"/"remove"/"change") but stays a plain string here so this module carries no
     dependency on that type yet. `title` must name the concrete verb for the item class
     ("Remove packages", not "Apply") — the caller building the group owns that wording.
+
+    `note` is a line printed under a group that is reported rather than asked about: what
+    to do about the condition, when the answer is not a decision on this screen.
     """
 
     manager: str
     action: str
     title: str
     entries: Sequence[ReviewEntry]
+    note: str | None = None
 
 
 class Decision(StrEnum):
@@ -308,29 +330,33 @@ def _is_promotable_group(action: str) -> bool:
     return action in _PROMOTABLE_ACTIONS
 
 
-# The keys that set a decision, and the words the decision column shows. `a` is deliberately
-# absent: it is conventionally Abort in a terminal prompt (`decision_list` rejects it), and
-# the answer it would most naturally name here is the only one that outlives this run.
+# The keys that set a decision. `y` for the act, `s` for the answer that lasts one sync, and
+# `x` — a cross, read as "exclude" — for the one that is recorded. NOT `n`: `y` and `n` read
+# as a yes/no pair, so `n` invited "no, not now" from the answer that actually means never
+# again. `a` is unavailable: it is conventionally Abort in a terminal prompt, and
+# `decision_list` rejects it.
 _APPLY_KEY = "y"
-_SKIP_ONCE_KEY = "s"
-_SKIP_ALWAYS_KEY = "n"
-SKIP_ONCE_WORD = "skip once"
-SKIP_ALWAYS_WORD = "always skip"
+_SKIP_NOW_KEY = "s"
+_SKIP_ALWAYS_KEY = "x"
 
+# The words the decision column shows for the answers that are not the act. They are short
+# because they share a column with the act verb, past the longest item on the screen; what
+# each one commits the user to is said in the legend hint beside it, which has room for a
+# sentence.
+SKIP_NOW_WORD = "skip now"
+KEEP_FOR_GOOD_WORD = "keep for good"
 
-def _skip_once_word(group: ReviewGroup, target_hostname: str) -> str:
-    """What "skip once" DOES on this screen, said as the effect rather than the mechanism.
+# A reported condition is not converged in either direction, so neither of its answers is an
+# act: one says the user has read it, the other that it should come back.
+ACKNOWLEDGED_WORD = "acknowledged"
+REPORT_AGAIN_WORD = "report again"
 
-    On the two screens whose act option changes a file the target already has, "skip once"
-    is not "do nothing" but "the machine keeps what it has", and that is the half of the
-    answer the user is actually weighing. Everywhere else the item is not yet on the target
-    at all, so there is no state to keep and the plain word is the honest one.
-    """
-    if _is_repo_conflict_group(group.action):
-        return f"keep {target_hostname}'s version"
-    if _is_removal_direction(group.action):
-        return f"keep it on {target_hostname}"
-    return SKIP_ONCE_WORD
+# Verbs whose sentences take a preposition other than "on". "remove from nomad" and "never
+# install it to nomad" are the two the English wants; "hold on nomad", "change on nomad" and
+# "never hold it on nomad" take the default. A verb missing from both sets reads correctly
+# with "on", which is why they are enumerated rather than derived.
+_VERBS_TAKING_FROM = frozenset({"remove", "delete"})
+_VERBS_TAKING_TO = frozenset({"install", "add"})
 
 
 # Filled / hollow / crossed. The glyph is what carries the row's state, so the screen stays
@@ -363,27 +389,119 @@ def _default_decision(action: str) -> Decision:
     return Decision.APPLY
 
 
-def _options_for(group: ReviewGroup, *, target_hostname: str) -> tuple[DecisionOption, ...]:
+def _act_word(group: ReviewGroup) -> str:
+    """The word for the answer that acts — the group's own verb, except where nothing acts."""
+    if group.action == _REPORT_ACTION:
+        return ACKNOWLEDGED_WORD
+    return _group_act_word(group)
+
+
+def _skip_now_word(group: ReviewGroup) -> str:
+    """The word for the answer that lasts one sync.
+
+    "skip now" on every screen, whatever the direction, so the key means one thing across a
+    review — including the conflict screen, whose version-keeping is stated in its hint
+    rather than in the word. The report screen is the exception in substance, not in
+    phrasing: its second answer asks for the condition to be raised again, which is not a
+    skip of anything.
+    """
+    return REPORT_AGAIN_WORD if group.action == _REPORT_ACTION else SKIP_NOW_WORD
+
+
+def _skip_always_word(group: ReviewGroup) -> str:
+    """The word for the answer that is recorded and never asked about again.
+
+    Said as this screen's own act, not as a generic "always skip": on a removal screen the
+    item is on the target and the answer keeps it, while everywhere else the item is not
+    there at all and the answer is that it never arrives. One word cannot be both.
+    """
+    if _is_removal_direction(group.action):
+        return KEEP_FOR_GOOD_WORD
+    return f"never {_group_act_word(group)}"
+
+
+def _hints(group: ReviewGroup, source_hostname: str, target_hostname: str) -> tuple[str, str, str]:
+    """The act / skip-now / skip-always sentences for this screen's legend.
+
+    Each says what the answer DOES — the act named as itself on the machine it happens to,
+    and each skip as the state it leaves behind plus how long that lasts. Not "go ahead" or
+    "leave nomad alone": a neutral word for the act is the same non-answer as "apply", and
+    the user is reading these to find out what the key does, not to be reassured.
+
+    Four shapes, because the answers genuinely differ by direction. A reported condition
+    converges nothing either way; a conflict is a choice between two versions of one file;
+    an item already on the target is kept rather than refused; everything else arrives or
+    does not.
+    """
+    verb = _group_act_word(group)
+    if group.action == _REPORT_ACTION:
+        # Third element unused: a report group is never promotable, so no screen shows it.
+        return (
+            f"nothing on {target_hostname} changes; you have read it",
+            f"nothing on {target_hostname} changes; raise it again next sync",
+            "",
+        )
+    if _is_repo_conflict_group(group.action):
+        return (
+            f"{target_hostname} changes this sync",
+            f"keep {target_hostname}'s version; will be asked again next sync",
+            "",
+        )
+
+    takes_from = verb in _VERBS_TAKING_FROM
+    act = f"{verb} {'from' if takes_from else 'on'} {target_hostname}"
+    now = (
+        f"keep on {target_hostname} for now; will be asked again next sync"
+        if takes_from
+        else f"do not {verb} on {target_hostname} for now; will be asked again next sync"
+    )
+    if _is_removal_direction(group.action) or group.action == _CHANGE_ACTION:
+        # The item is already on the target, so the recorded answer protects what is there
+        # rather than refusing an arrival — and it protects it in both directions, which is
+        # what "never touch it" says and "never remove it" would not.
+        return act, now, f"this is specific to {target_hostname}; pc-switcher will never touch it"
+    preposition = "to" if verb in _VERBS_TAKING_TO else "on"
+    return (
+        act,
+        now,
+        f"this is specific to {source_hostname}; pc-switcher will never {verb} it {preposition} "
+        f"{target_hostname} or other machines",
+    )
+
+
+def _options_for(group: ReviewGroup, *, source_hostname: str, target_hostname: str) -> tuple[DecisionOption, ...]:
     """The answers one group's screen offers — three, or two where D-07 records nothing.
 
     The same widget either way: the user sees a missing option in the legend rather than a
     differently-shaped prompt.
     """
+    act_hint, now_hint, always_hint = _hints(group, source_hostname, target_hostname)
     options = [
         DecisionOption(
-            value=Decision.APPLY, key=_APPLY_KEY, word=_group_act_word(group), glyph=_APPLY_GLYPH, is_act=True
+            value=Decision.APPLY,
+            key=_APPLY_KEY,
+            word=_act_word(group),
+            glyph=_APPLY_GLYPH,
+            is_act=True,
+            hint=act_hint,
         ),
         DecisionOption(
             value=Decision.SKIP_ONCE,
-            key=_SKIP_ONCE_KEY,
-            word=_skip_once_word(group, target_hostname),
+            key=_SKIP_NOW_KEY,
+            word=_skip_now_word(group),
             glyph=_SKIP_ONCE_GLYPH,
+            hint=now_hint,
         ),
     ]
     if _is_promotable_group(group.action):
         options.append(
             DecisionOption(
-                value=Decision.SKIP_ALWAYS, key=_SKIP_ALWAYS_KEY, word=SKIP_ALWAYS_WORD, glyph=_SKIP_ALWAYS_GLYPH
+                value=Decision.SKIP_ALWAYS,
+                key=_SKIP_ALWAYS_KEY,
+                word=_skip_always_word(group),
+                glyph=_SKIP_ALWAYS_GLYPH,
+                is_permanent=True,
+                hint=always_hint,
             )
         )
     return tuple(options)
@@ -451,6 +569,12 @@ def _snippet_submit_bindings() -> KeyBindings:
 
 _SNIPPET_SUBMIT_BINDINGS = _snippet_submit_bindings()
 
+# questionary styles a prompt's ANSWER bold orange, which for a one-line answer is a
+# highlight and for a multi-line editor is the whole thing the user is typing. A shell
+# snippet is not an answer to be echoed back; it is text being written, and it reads as
+# text.
+_SNIPPET_STYLE = Style([("answer", "noinherit")])
+
 
 def _render_group_panel(group: ReviewGroup) -> Panel:
     """Build the REPORT panel for one group — the non-interactive path only, where there is
@@ -488,6 +612,77 @@ def _decisions_from_automation(groups: Sequence[ReviewGroup], raw: str) -> dict[
     }
 
 
+# The unreproducible screen's own act: not a `Decision` at all, because answering it opens
+# an editor and only what comes back decides whether the item is resolved.
+_ADD_SNIPPET_VALUE = "add_snippet"
+_ADD_SNIPPET_GLYPH = "◆"
+
+
+def _unreproducible_options(source_hostname: str, target_hostname: str) -> tuple[DecisionOption, ...]:
+    """The three answers for an item no package manager can install (D-21).
+
+    In the review's own order — act, skip now, never — so the keys mean here what they mean
+    on every other screen, and the act is the one that resolves the item rather than the one
+    that is listed first because it is the interesting case.
+    """
+    return (
+        DecisionOption(
+            value=_ADD_SNIPPET_VALUE,
+            key=_APPLY_KEY,
+            word="install",
+            glyph=_ADD_SNIPPET_GLYPH,
+            is_act=True,
+            hint=f"write a command snippet that installs it; {target_hostname} runs it",
+        ),
+        DecisionOption(
+            value=Decision.SKIP_ONCE,
+            key=_SKIP_NOW_KEY,
+            word=SKIP_NOW_WORD,
+            glyph=_SKIP_ONCE_GLYPH,
+            hint=f"do not install on {target_hostname} for now; will be asked again next sync",
+        ),
+        DecisionOption(
+            value=Decision.SKIP_ALWAYS,
+            key=_SKIP_ALWAYS_KEY,
+            word="never install",
+            glyph=_SKIP_ALWAYS_GLYPH,
+            is_permanent=True,
+            hint=f"this is specific to {source_hostname}; pc-switcher will never install it to "
+            f"{target_hostname} or other machines",
+        ),
+    )
+
+
+async def _ask_about_one_item(
+    entry: ReviewEntry,
+    *,
+    title: str,
+    options: Sequence[DecisionOption],
+    default: str,
+    detail: str | None = None,
+) -> str:
+    """Put ONE item on a decision screen and return the answer's value.
+
+    Some questions cannot be batched: a collateral package's answers name the change that
+    causes it, and an unreproducible item's "install" answer opens an editor. Both were
+    plain pickers of sentence-long choices, which made them the two screens in the review
+    that looked nothing like the rest of it. The shape is what is shared here, not the
+    batching — one row, the same glyphs, colours, keys and hint column.
+
+    Ctrl-C (`ask` returns `None`) is the caller's to interpret: what stopping means differs
+    between an item that can be left undecided and one that cannot.
+    """
+    prompt = decision_list(
+        title,
+        rows=[DecisionRow(row_id=entry.item_id, label=entry.label, default=default, detail=detail or entry.detail)],
+        options=options,
+    )
+    answered: Mapping[str, str] | None = await asyncio.to_thread(prompt.ask)
+    if answered is None:
+        raise SyncAbortedByUser(f"package review aborted at {entry.label!r} (Ctrl-C)")
+    return answered[entry.item_id]
+
+
 async def _review_unreproducible_group(
     group: ReviewGroup,
     *,
@@ -498,17 +693,16 @@ async def _review_unreproducible_group(
     snippets: dict[str, str],
 ) -> None:
     """Resolve one `UNREPRODUCIBLE_REVIEW_ACTION` group's entries, one at a time, with
-    the three-way choice D-21 requires: add an install snippet, always skip it as specific
-    to this machine, or skip for now. Never a row on the decision screen — that screen
-    answers "should this apply", but an unreproducible item's question is "how does this
-    get resolved", which is not the same question.
+    the three-way choice D-21 requires: write an install snippet, skip for now, or never
+    install it here. One item per screen, because answering "install" opens an editor for
+    that item — but a decision screen like every other, so the review has one shape.
 
     All three choices are VALID resolutions (D-21): a snippet, a skip-always, and an
     explicit skip-once. There is no fourth "genuinely undecided" outcome (decision 10 —
     unresolved must be unrepresentable in an interactive flow):
 
-    - Ctrl-C at the resolution choice (`select` returns `None`) means the user wants
-      to stop, so it aborts the ENTIRE sync with `SyncAbortedByUser` — never a per-item
+    - Ctrl-C at the resolution screen means the user wants to stop, so `_ask_about_one_item`
+      aborts the ENTIRE sync with `SyncAbortedByUser` — never a per-item
       skip-and-mark-unresolved.
     - Choosing "add an install snippet" and then submitting an empty body (or abandoning
       the editor) is NOT accepted and does NOT fall through: the three-way choice is
@@ -520,63 +714,37 @@ async def _review_unreproducible_group(
     all, so accepting it would record a snippet that resolves the item without installing
     anything.
     """
+    options = _unreproducible_options(source_hostname, target_hostname)
     for entry in group.entries:
-        console.print()
-        console.print(Text(entry.label, style="bold"))
-        if entry.detail:
-            console.print(Text(entry.detail, style="dim"))
-
         # Re-prompt until the entry is resolved by a real snippet or an explicit skip. An
         # empty snippet capture loops back here rather than manufacturing an unresolved
-        # item (decision 10); a cancelled choice breaks out by aborting the whole sync.
+        # item (decision 10); a cancelled screen breaks out by aborting the whole sync.
         while True:
-            choice_prompt = prompt_navigation.select(
-                f"How should {target_hostname} get {entry.label}?",
-                choices=[
-                    questionary.Choice(
-                        title=f"Write the commands that install it — {target_hostname} runs them, now and on "
-                        "every future sync",
-                        value="add_snippet",
-                    ),
-                    questionary.Choice(
-                        title=f"This one is specific to {source_hostname}. Always skip it — {target_hostname} "
-                        "never gets it, and you are not asked again",
-                        value="skip_always",
-                    ),
-                    questionary.Choice(
-                        title=f"Skip for now — {target_hostname} does not get it this sync, and you are asked "
-                        "again next sync",
-                        value="skip_once",
-                    ),
-                ],
+            selected = await _ask_about_one_item(
+                entry,
+                title=f"How should {target_hostname} get {entry.label}?",
+                options=options,
+                default=_ADD_SNIPPET_VALUE,
             )
-            selected = await asyncio.to_thread(choice_prompt.ask)
 
-            if selected is None:
-                # Ctrl-C: the user wants to abort, not skip this one item (decision
-                # 10). Raise the clean-stop control-flow exception the orchestrator and CLI
-                # already catch once at WARNING, so the whole sync stops here.
-                raise SyncAbortedByUser(
-                    f"package review aborted while resolving unreproducible item {entry.label!r} (Ctrl-C)"
-                )
-
-            if selected == "skip_always":
+            if selected == Decision.SKIP_ALWAYS:
                 decisions[entry.item_id] = Decision.SKIP_ALWAYS
                 break
 
-            if selected == "skip_once":
-                # An explicit "Skip for now" is a real decision (D-21): the item is
-                # resolved for this run.
+            if selected == Decision.SKIP_ONCE:
+                # An explicit "skip now" is a real decision (D-21): the item is resolved
+                # for this run.
                 decisions[entry.item_id] = Decision.SKIP_ONCE
                 break
 
-            # selected == "add_snippet"
+            # selected == _ADD_SNIPPET_VALUE
             console.print(Text(_snippet_authoring_note(target_hostname), style="dim"))
             body_prompt = questionary.text(
                 f"Install snippet for {entry.label}:",
                 multiline=True,
                 instruction=_SNIPPET_INSTRUCTION,
                 key_bindings=_SNIPPET_SUBMIT_BINDINGS,
+                style=_SNIPPET_STYLE,
             )
             body = await asyncio.to_thread(body_prompt.ask)
             if body and body.strip():
@@ -590,7 +758,27 @@ async def _review_unreproducible_group(
             )
 
 
-async def _review_decision_group(group: ReviewGroup, *, target_hostname: str, decisions: dict[str, Decision]) -> None:
+def _print_report_group(group: ReviewGroup, *, console: Console, target_hostname: str) -> None:
+    """Print one report group — the conditions this manager found and cannot converge.
+
+    A report, not a question: it is followed by the next screen, not by a prompt. The panel
+    is the same one a non-interactive run prints, so a condition reads identically whether
+    or not anyone was there.
+    """
+    console.print()
+    console.print(_render_group_panel(group))
+    console.print(Text(f"Nothing on {target_hostname} changes for these.", style="dim"))
+    if group.note:
+        console.print(Text(group.note, style="dim"))
+
+
+async def _review_decision_group(
+    group: ReviewGroup,
+    *,
+    source_hostname: str,
+    target_hostname: str,
+    decisions: dict[str, Decision],
+) -> None:
     """Present one actionable group as a single screen and record every row's answer.
 
     The whole of D-07 in one pass: each row starts at `_default_decision` and ends wherever
@@ -602,7 +790,9 @@ async def _review_decision_group(group: ReviewGroup, *, target_hostname: str, de
     never a silent fallthrough that leaves this and every later group undecided.
     """
     prompt = decision_list(
-        group.title, rows=_rows_for(group), options=_options_for(group, target_hostname=target_hostname)
+        group.title,
+        rows=_rows_for(group),
+        options=_options_for(group, source_hostname=source_hostname, target_hostname=target_hostname),
     )
     answered: Mapping[str, str] | None = await asyncio.to_thread(prompt.ask)
 
@@ -611,6 +801,54 @@ async def _review_decision_group(group: ReviewGroup, *, target_hostname: str, de
 
     for entry in group.entries:
         decisions[entry.item_id] = Decision(answered[entry.item_id])
+
+
+# The collateral screen's third answer. Not a decision about the item — it ends the run —
+# so it carries a value no `Decision` has, and `q` for quit rather than a letter the other
+# screens spend on an answer.
+_STOP_SYNC_VALUE = "stop_sync"
+_STOP_SYNC_KEY = "q"
+_STOP_SYNC_GLYPH = "■"
+
+
+def _collateral_options(entry: ReviewEntry, target_hostname: str) -> tuple[DecisionOption, ...]:
+    """The three answers D-30 requires for one collateral package.
+
+    The act and skip sentences come from the entry (`answer_hints`), because they name the
+    change that causes the collateral and what it does — "remove fortunes-min from nomad, so
+    fortunes is removed as well" — which differs per item and will differ more as removals
+    stop being the only cause. A caller that supplies none gets sentences that are true of
+    every collateral item and specific to none.
+    """
+    act_hint, skip_hint = entry.answer_hints or (
+        f"the change described above goes ahead on {target_hostname}",
+        f"keep {entry.label} on {target_hostname}; the change that would touch it is dropped from this sync; "
+        "will be asked again next sync",
+    )
+    return (
+        DecisionOption(
+            value=Decision.APPLY,
+            key=_APPLY_KEY,
+            word=entry.action_label,
+            glyph=_APPLY_GLYPH,
+            is_act=True,
+            hint=act_hint,
+        ),
+        DecisionOption(
+            value=Decision.SKIP_ONCE,
+            key=_SKIP_NOW_KEY,
+            word=SKIP_NOW_WORD,
+            glyph=_SKIP_ONCE_GLYPH,
+            hint=skip_hint,
+        ),
+        DecisionOption(
+            value=_STOP_SYNC_VALUE,
+            key=_STOP_SYNC_KEY,
+            word="stop the sync",
+            glyph=_STOP_SYNC_GLYPH,
+            hint=f"nothing more is changed on {target_hostname}; what earlier jobs already did stays done",
+        ),
+    )
 
 
 async def _review_collateral_group(
@@ -648,52 +886,33 @@ async def _review_collateral_group(
     phase already guards against (T-02-02).
     """
     for entry in group.entries:
-        console.print()
-        console.print(Text(entry.label, style="bold"))
-        console.print(
-            Text(
-                f"You asked for {entry.label} on {target_hostname} yourself — apt there has it marked as "
-                f"manually installed, so pc-switcher never takes it away without asking.",
-                style="dim",
-            )
+        # The finding first, the reason second, both on the row itself. The finding —
+        # which change, on which machine, and what it does to this package — is what the
+        # answer is about; the reason is why this package gets a question at all when apt's
+        # other casualties do not, and it means nothing before the reader knows what is
+        # happening to it.
+        reason = (
+            f"apt on {target_hostname} has {entry.label} marked as manually installed: something asked for it "
+            "there directly, rather than it arriving as another package's dependency."
         )
-        if entry.detail:
-            console.print(Text(entry.detail, style="dim"))
-
-        choice_prompt = prompt_navigation.select(
-            f"What should happen to {entry.label} on {target_hostname}?",
-            choices=[
-                questionary.Choice(
-                    title=f"Go ahead — {entry.label} changes on {target_hostname} as described above",
-                    value="proceed",
-                ),
-                questionary.Choice(
-                    title=(
-                        f"Keep {entry.label} as it is — the changes that would touch it are dropped from this sync"
-                    ),
-                    value="protect",
-                ),
-                questionary.Choice(
-                    title=(
-                        f"Stop the whole pc-switcher sync now — nothing more is changed on {target_hostname}, "
-                        "and what earlier jobs already did stays done"
-                    ),
-                    value="abort",
-                ),
-            ],
+        selected = await _ask_about_one_item(
+            entry,
+            title=group.title,
+            options=_collateral_options(entry, target_hostname),
+            default=Decision.SKIP_ONCE,
+            detail=f"{entry.detail}\n{reason}" if entry.detail else reason,
         )
-        selected = await asyncio.to_thread(choice_prompt.ask)
 
-        if selected == "proceed":
+        if selected == Decision.APPLY:
             decisions[entry.item_id] = Decision.APPLY
-        elif selected == "abort":
+        elif selected == _STOP_SYNC_VALUE:
             raise SyncAbortedByUser(
                 f"{entry.label} on {target_hostname} would have been removed or downgraded; the whole sync was "
                 "stopped in the package review"
             )
         else:
-            # "protect", None (the select was cancelled): leave the causing changes
-            # unapproved for this run, so the collateral is not removed.
+            # Skip now: leave the causing changes unapproved for this run, so the collateral
+            # is not removed.
             decisions[entry.item_id] = Decision.SKIP_ONCE
 
 
@@ -701,31 +920,38 @@ async def _review_removal_group(
     group: ReviewGroup,
     *,
     console: Console,
+    source_hostname: str,
     target_hostname: str,
     decisions: dict[str, Decision],
 ) -> None:
-    """The two-answer deletion screen (`REPO_REMOVAL_REVIEW_ACTION`), preceded by the whole
-    content of every entry that carries one.
+    """The two-answer deletion screen (`REPO_REMOVAL_REVIEW_ACTION`), one file at a time:
+    the file's own content, then the question about that file.
 
-    A pin file's name says nothing about what it does, and its name is all a decision screen
-    row can show, so the file that is being offered for deletion is printed first — one block
-    per file, the same shape the repository conflict uses for two. An entry with no `content`
-    (a repository file, whose URLs are in its detail line) prints nothing extra and the screen
-    is exactly what it was.
+    Ruled by the user, and the reason is the printing. A pin file's name says nothing about
+    what it does, so the file being offered for deletion is printed whole — and a batch
+    printed three or four bodies in a row and then asked about all of them at once, by which
+    point the first file was off the screen and the row said only its name. The decision now
+    follows the thing it is about.
+
+    An entry with no `content` (a repository file, whose URLs are in its detail line) prints
+    nothing extra; its row's detail carries the finding as on any other screen.
 
     The body's own trailing newline is dropped: inside a panel border it renders as an empty
     last line. Wrapped in `Text` like every other untrusted string (T-02-02).
     """
+    options = _options_for(group, source_hostname=source_hostname, target_hostname=target_hostname)
     for entry in group.entries:
-        if entry.content is None:
-            continue
         console.print()
         console.print(Text(entry.label, style="bold"))
-        console.print(
-            Panel(Text(entry.content.rstrip("\n")), title=Text(f"On {target_hostname}"), border_style="yellow")
+        if entry.content is not None:
+            console.print(
+                Panel(Text(entry.content.rstrip("\n")), title=Text(f"On {target_hostname}"), border_style="yellow")
+            )
+        decisions[entry.item_id] = Decision(
+            await _ask_about_one_item(
+                entry, title=group.title, options=options, default=_default_decision(group.action)
+            )
         )
-
-    await _review_decision_group(group, target_hostname=target_hostname, decisions=decisions)
 
 
 async def _review_repo_conflict_group(
@@ -739,11 +965,11 @@ async def _review_repo_conflict_group(
     """Resolve one `REPO_CONFLICT_REVIEW_ACTION` group with the two-way choice ADR-020 D-37
     requires: overwrite the target's version with the source's, or skip for now.
 
-    Both versions of every entry are printed first, the target's first, never a unified
-    diff — the user's own position is that a diff of two repository definitions is not
-    readable, and the question is which of two configurations the machine should have, not
-    what changed between them. The answer itself is then the ordinary decision screen, so
-    this stays a batch (D-24) rather than a queue of per-file prompts.
+    Both versions are printed, the target's first, never a unified diff — the user's own
+    position is that a diff of two repository definitions is not readable, and the question
+    is which of two configurations the machine should have, not what changed between them.
+    One file at a time, also ruled by the user: two whole file bodies are long enough that a
+    batched screen asked about definitions that had already scrolled away.
 
     Ecosystem-neutral wording throughout, because two managers raise this screen about two
     different subjects: `apt_sync` about a repository file, whose versions are the two whole
@@ -766,11 +992,10 @@ async def _review_repo_conflict_group(
     cannot trigger the Rich markup crash (T-02-02). A file body's own trailing newline is
     dropped for display: inside a panel border it renders as an empty last line.
     """
+    options = _options_for(group, source_hostname=source_hostname, target_hostname=target_hostname)
     for entry in group.entries:
         console.print()
         console.print(Text(entry.label, style="bold"))
-        if entry.detail:
-            console.print(Text(entry.detail, style="dim"))
         if entry.versions is not None:
             target_version, source_version = entry.versions
             console.print(
@@ -783,9 +1008,11 @@ async def _review_repo_conflict_group(
             console.print(
                 Panel(Text(source_version.rstrip("\n")), title=Text(f"On {source_hostname}"), border_style="cyan")
             )
-
-    console.print()
-    await _review_decision_group(group, target_hostname=target_hostname, decisions=decisions)
+        decisions[entry.item_id] = Decision(
+            await _ask_about_one_item(
+                entry, title=group.title, options=options, default=_default_decision(group.action)
+            )
+        )
 
 
 async def review_items(
@@ -838,6 +1065,16 @@ async def review_items(
         for group in groups:
             console.print()
 
+            if group.action == _REPORT_ACTION:
+                # Nothing to answer (ruled by the user): a reported condition converges in
+                # neither direction and records nothing, so both answers it used to offer
+                # left the machines and the next run identical. Printing it and moving on
+                # is what it always was.
+                _print_report_group(group, console=console, target_hostname=target_hostname)
+                for entry in group.entries:
+                    decisions[entry.item_id] = Decision.SKIP_ONCE
+                continue
+
             if _is_unreproducible_group(group.action):
                 await _review_unreproducible_group(
                     group,
@@ -867,11 +1104,17 @@ async def review_items(
 
             if _is_repo_removal_group(group.action):
                 await _review_removal_group(
-                    group, console=console, target_hostname=target_hostname, decisions=decisions
+                    group,
+                    console=console,
+                    source_hostname=source_hostname,
+                    target_hostname=target_hostname,
+                    decisions=decisions,
                 )
                 continue
 
-            await _review_decision_group(group, target_hostname=target_hostname, decisions=decisions)
+            await _review_decision_group(
+                group, source_hostname=source_hostname, target_hostname=target_hostname, decisions=decisions
+            )
     finally:
         ui.resume()
 

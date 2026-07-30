@@ -993,9 +993,11 @@ def build_remote_conflict_detail(name: str, scope: str, refs: Sequence[str], mac
     without this line the user sees a remote they are asked to overwrite and no indication
     that doing so changes where software they told this tool to leave alone comes from.
     """
+    one = len(refs) == 1
     return (
         f"the {scope}-scope remote {name} is different on the two machines, and {machines.target} installs "
-        f"{', '.join(refs)} from it — apps you set to always skip, so a sync normally leaves them alone"
+        f"{', '.join(refs)} from it — {'app' if one else 'apps'} you marked as specific to {machines.target}, "
+        f"so a sync normally leaves {'it' if one else 'them'} alone"
     )
 
 

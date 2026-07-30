@@ -2,7 +2,7 @@
 
 questionary moves its cursor with `(pointed_at ± 1) % choice_count`, so UP on the first
 answer lands on the last one. On a review screen the answers are not interchangeable — the
-last one is routinely "always skip" or "abort the sync" — and a wrap puts the cursor on a
+last one is routinely the recorded-for-good answer or "abort the sync" — and a wrap puts the cursor on a
 consequential answer the user was moving AWAY from. There is no knob for it: `select_next`
 and `select_previous` hardcode the modulo (questionary 2.1.1, latest at the time of
 writing), and the movement keys are bound inside `questionary.prompts.select`.

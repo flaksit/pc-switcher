@@ -25,7 +25,9 @@ Two deliberate departures from `checkbox`:
   scrollback is what makes an echo unnecessary — an echo could only restate it less
   precisely, which is how the inverted "remove" echo happened.
 - State is carried by a glyph per decision, never by background colour alone: a reversed
-  background is invisible in some terminals and unreadable in others.
+  background is invisible in some terminals and unreadable in others. Foreground colour is
+  emphasis on top of that — green for the act, dark rose for the answer that outlives the
+  run — so a terminal with no colour at all loses nothing but the emphasis.
 """
 
 from __future__ import annotations
@@ -56,7 +58,7 @@ __all__ = [
 ]
 
 # `a` is conventionally Abort in a terminal prompt, so it may never be the key that sets a
-# decision — least of all the irreversible-feeling "always skip". `decision_list` rejects
+# decision — least of all the one that is recorded and never asked again. `decision_list` rejects
 # it rather than trusting every future caller to remember.
 FORBIDDEN_KEY = "a"
 
@@ -86,10 +88,26 @@ _FALLBACK_WIDTH = 80
 _LEGEND_SEPARATOR = "   "
 _LEGEND_INDENT = "  "
 
+# Between an answer's key+word and the sentence explaining it, and the narrowest that
+# sentence's column may be squeezed to before it stops wrapping and runs off the edge.
+_HINT_GAP = "   "
+_MIN_HINT_WIDTH = 20
+
 _DECISION_STYLE = Style(
     [
-        ("decision-act", "fg:#5fd75f bold"),
+        # Light blue, deliberately NOT green: the act is as often "remove" or "delete" as
+        # it is "install", and green reads as the safe answer on a screen where acting is
+        # the destructive one. Blue is the answer that DOES something, without a verdict on
+        # whether doing it is a good idea.
+        ("decision-act", "fg:#5fafff bold"),
         ("decision-skip", ""),
+        # Dark rose, and the only other emphasis on the screen: the recorded answer is the
+        # one that outlives the run, and it read as the least conspicuous of the three
+        # because it was the one word on the screen with no styling at all. Not yellow,
+        # which this TUI already spends on warnings and gates, and not hard red — the
+        # destructive answer here is routinely the green one ("remove", "delete
+        # repository"), so red would point at the wrong row.
+        ("decision-permanent", "fg:#d75f87 bold"),
         ("detail", "fg:#8a8a8a"),
     ]
 )
@@ -103,6 +121,14 @@ class DecisionOption:
     it is the group's own verb ("install", "delete repository"), which a row may override
     through `DecisionRow.act_word` when its own action genuinely differs from the group's.
     `glyph` carries the state on its own, without colour.
+
+    `is_permanent` marks an answer that is recorded and never asked about again, which is
+    what earns it its own emphasis in the column. It is independent of `is_act`: an act is
+    a change to the machine, a permanent answer is a change to what pc-switcher will ask.
+
+    `hint` is the sentence beside this answer in the legend, naming the machine it happens
+    to and how long it lasts. The column `word` has to stay short enough to align three of
+    them past the longest item on the screen, which is not enough room to say either.
     """
 
     value: str
@@ -110,6 +136,8 @@ class DecisionOption:
     word: str
     glyph: str
     is_act: bool = False
+    is_permanent: bool = False
+    hint: str = ""
 
 
 @dataclass(frozen=True)
@@ -166,6 +194,14 @@ def wrap_label(label: str, width: int) -> list[str]:
     return textwrap.wrap(label, width, break_long_words=True, break_on_hyphens=False) or [""]
 
 
+def _decision_class(option: DecisionOption) -> str:
+    """The style class for a chosen answer's glyph and column word — one per state, so the
+    glyph and the word always agree and a colourless terminal loses nothing but the tint."""
+    if option.is_act:
+        return "decision-act"
+    return "decision-permanent" if option.is_permanent else "decision-skip"
+
+
 def render_rows(
     rows: Sequence[DecisionRow],
     options: Sequence[DecisionOption],
@@ -186,7 +222,7 @@ def render_rows(
 
     for index, row in enumerate(rows):
         option = by_value[decisions[row.row_id]]
-        decision_style = "class:decision-act" if option.is_act else "class:decision-skip"
+        decision_style = f"class:{_decision_class(option)}"
         is_focused = index == focused
 
         tokens.append(("class:pointer", f" {_POINTER} ") if is_focused else ("class:text", " " * _POINTER_WIDTH))
@@ -207,10 +243,14 @@ def render_rows(
             tokens.append(("", "\n"))
 
         if row.detail:
-            for line in wrap_label(row.detail, item_width):
-                tokens.append(("class:text", " " * PREFIX_WIDTH))
-                tokens.append(("class:detail", line))
-                tokens.append(("", "\n"))
+            # Newlines in a detail are paragraph breaks, wrapped independently: a row that
+            # states a finding and then why it is being asked about must not run the two
+            # sentences together into one block.
+            for paragraph in row.detail.split("\n"):
+                for line in wrap_label(paragraph, item_width):
+                    tokens.append(("class:text", " " * PREFIX_WIDTH))
+                    tokens.append(("class:detail", line))
+                    tokens.append(("", "\n"))
 
     if tokens:
         # No trailing newline: prompt_toolkit would render it as an empty final line.
@@ -219,32 +259,55 @@ def render_rows(
 
 
 def legend(options: Sequence[DecisionOption], *, width: int = 0) -> str:
-    """The instruction line(s) under the title.
+    """The instruction block under the title: one line per ANSWER, then the editing keys.
 
-    Every key the screen accepts, said as what it does — a two-answer screen's legend is
-    shorter by exactly the option it does not offer, which is how the user sees that the
-    permanent answer is unavailable rather than merely unmentioned.
+    An answer gets a line of its own because the column word cannot carry what the answer
+    commits the user to. A word short enough to align in that column cannot also say that
+    the decision is recorded and never asked again, and a packed one-line legend has no room
+    to say it — which left the difference between the second and third answers to be
+    inferred from two words that look interchangeable. `DecisionOption.hint` is that sentence, aligned into a
+    second column so the three read as a set.
 
-    `width` packs the entries onto lines no wider than that, breaking BETWEEN entries.
-    Left to the terminal, the wrap lands mid-word ("shift+key sets / every row"). 0 keeps
-    it on one line.
+    A two-answer screen's block is shorter by exactly the option it does not offer, which is
+    how the user sees that the permanent answer is unavailable rather than merely unmentioned.
+
+    The editing keys stay packed on one line and up/down is not among them: a list with a
+    pointer on it does not need to be told it can be moved. Ctrl-C still aborts and is also
+    unlisted — a legend is what to do with the screen in front of you, and offering "abandon
+    the sync" beside the answers gives an escape equal billing with the decision.
+
+    `width` wraps: an answer's hint continues under itself, and the editing keys break
+    BETWEEN entries (left to the terminal that wrap lands mid-phrase, "shift+key sets /
+    every row"). 0 means no wrapping at all.
     """
-    parts = ["up/down move"]
-    parts.extend(f"<{option.key}> {option.word}" for option in options)
-    parts.extend(
-        (
-            "<space> cycles",
-            "shift+key sets every row",
-            "<enter> confirm",
-            "<ctrl-c> abort",
-        )
-    )
-    if width <= 0:
-        return _LEGEND_SEPARATOR.join(parts)
-
+    keyed = [f"<{option.key}> {option.word}" for option in options]
+    hint_column = max((len(text) for text in keyed), default=0) + len(_HINT_GAP)
     lines: list[str] = []
+    for text, option in zip(keyed, options, strict=True):
+        if not option.hint:
+            lines.append(text)
+            continue
+        answer = f"{text.ljust(hint_column)}{option.hint}"
+        # A hint is a sentence, so it wraps rather than truncates, and its continuation
+        # lines sit under the hint column — never under the key, which would read as a
+        # further answer.
+        if width > 0 and len(answer) > width:
+            lines.extend(
+                textwrap.wrap(
+                    answer,
+                    max(width, hint_column + _MIN_HINT_WIDTH),
+                    subsequent_indent=" " * hint_column,
+                )
+            )
+        else:
+            lines.append(answer)
+
+    editing = ["<space> cycles", "<shift+key> sets every row", "<enter> confirm"]
+    if width <= 0:
+        return "\n".join([*lines, _LEGEND_SEPARATOR.join(editing)])
+
     current = ""
-    for part in parts:
+    for part in editing:
         candidate = f"{current}{_LEGEND_SEPARATOR}{part}" if current else part
         if current and len(candidate) > width:
             lines.append(current)
@@ -273,7 +336,10 @@ class _DecisionListControl(FormattedTextControl):
         self.decisions: dict[str, str] = {row.row_id: row.default for row in rows}
         self.focused = 0
         self._width_of_screen = width_of_screen
-        super().__init__(self._tokens)
+        # The pointer marks the focused row; a terminal cursor blinking on top of the glyph
+        # would be a second, competing marker. `[SetCursorPosition]` is still emitted — it
+        # is what scrolls a list longer than the screen — it is simply not drawn.
+        super().__init__(self._tokens, show_cursor=False)
 
     def _tokens(self) -> list[tuple[str, str]]:
         return render_rows(
@@ -384,7 +450,15 @@ def decision_list(
     layout = Layout(
         HSplit(
             [
-                Window(FormattedTextControl(header_tokens), dont_extend_height=True, wrap_lines=True),
+                # prompt_toolkit focuses the FIRST window when nothing is focusable, and a
+                # focused control that shows its cursor parks the terminal's blinking block
+                # on the header's first character — the `?`, which is the one thing on the
+                # screen the user has no reason to look at.
+                Window(
+                    FormattedTextControl(header_tokens, show_cursor=False),
+                    dont_extend_height=True,
+                    wrap_lines=True,
+                ),
                 Window(control, dont_extend_height=True),
             ]
         )

@@ -44,7 +44,7 @@ GROUPS = [
         "Install apt packages",
         [
             ReviewEntry("apt:package:sl", "sl (5.02-1)", "install"),
-            ReviewEntry("apt:package:cmatrix", "cmatrix (2.0-6)", "install", "from a vendor repository"),
+            ReviewEntry("apt:package:cmatrix", "cmatrix (2.0-6)", "install", "from download.example.com"),
             # Brackets in untrusted text: Rich would parse these as markup if the label
             # were not wrapped in Text. A crash here is the bug this entry exists to catch.
             ReviewEntry("apt:package:weird", "weird [bold red]name[/] 1.0", "install"),
@@ -56,19 +56,32 @@ GROUPS = [
         "Remove apt packages",
         [ReviewEntry("apt:package:fortunes-min", "fortunes-min (1:1.99.1-7.3build1)", "remove")],
     ),
+    # Reported, not asked: this group is printed and the review moves straight on. Its
+    # note is the whole point of showing it here — a version difference is the one reported
+    # condition with a remedy, and the remedy is not a decision on any screen.
     ReviewGroup(
         "apt",
         "report_only",
-        "Report apt packages",
+        "Version differences (apt packages)",
         [
             ReviewEntry(
                 "apt:package:tree",
                 "tree (2.1.1-2ubuntu3)",
                 "report",
                 f"{SOURCE_HOST} has 2.1.1-2ubuntu3.24.04.2, {TARGET_HOST} has 2.1.1-2ubuntu3",
-            )
+            ),
+            ReviewEntry(
+                "apt:package:curl",
+                "curl (8.5.0-2ubuntu10.6)",
+                "report",
+                f"{SOURCE_HOST} has 8.5.0-2ubuntu10.6, {TARGET_HOST} has 8.5.0-2ubuntu10.4",
+            ),
         ],
+        note=f"These converge on their own: run `sudo apt update && sudo apt upgrade` on {TARGET_HOST}.",
     ),
+    # TWO conflicting files, because one screen answers a whole batch and the shape of that
+    # is the thing a rehearsal has to show: both files' versions are printed first, in pairs,
+    # and the single screen underneath carries a row per file.
     ReviewGroup(
         "apt",
         REPO_CONFLICT_REVIEW_ACTION,
@@ -79,12 +92,25 @@ GROUPS = [
                 "ubuntu.sources",
                 "overwrite",
                 f"ubuntu.sources is different on the two machines, and {TARGET_HOST} installs cowsay from it — "
-                "packages you set to always skip, so a sync normally leaves them alone",
+                f"package you marked as specific to {TARGET_HOST}, so a sync normally leaves it alone",
                 versions=(
                     "# pcsw-uat marker\nTypes: deb\nURIs: http://example/ubuntu\n",
                     "Types: deb\nURIs: http://example/ubuntu\n",
                 ),
-            )
+            ),
+            ReviewEntry(
+                "apt:conflict:vendor.sources",
+                "vendor.sources",
+                "overwrite",
+                f"vendor.sources is different on the two machines, and {TARGET_HOST} installs brscan3, "
+                f"brscan-skey from it — packages you marked as specific to {TARGET_HOST}, so a sync normally "
+                "leaves them alone",
+                versions=(
+                    "Types: deb\nURIs: https://vendor.example.com/apt\nSuites: stable\nComponents: main\n",
+                    "Types: deb\nURIs: https://vendor.example.com/apt\nSuites: testing\nComponents: main\n"
+                    "Signed-By: /usr/share/keyrings/vendor.gpg\n",
+                ),
+            ),
         ],
     ),
     ReviewGroup(
@@ -95,11 +121,22 @@ GROUPS = [
             ReviewEntry(
                 "apt:source:99-pcsw-uat.list",
                 "99-pcsw-uat.list (list)",
-                "delete repository",
+                "remove",
                 f"{TARGET_HOST} would stop getting software from https://vendor.example.com/apt",
-            )
+            ),
+            ReviewEntry(
+                "apt:source:98-old-ppa.sources",
+                "98-old-ppa.sources (sources)",
+                "remove",
+                f"{TARGET_HOST} would stop getting software from https://ppa.launchpadcontent.net/example/ppa; "
+                f"{TARGET_HOST} installs example-tool from 98-old-ppa.sources — package you marked as specific "
+                f"to {TARGET_HOST}, so it would stay installed but never get another update",
+            ),
         ],
     ),
+    # THREE pin files, each printed whole above the one screen that answers all three. The
+    # rehearsal exists to show what several file bodies in a row do to the screen: how far
+    # the decision column ends up, and whether the pointer is still findable after them.
     ReviewGroup(
         "apt",
         REPO_REMOVAL_REVIEW_ACTION,
@@ -108,11 +145,35 @@ GROUPS = [
             ReviewEntry(
                 "apt:pin:99-pcsw-uat.pref",
                 "99-pcsw-uat.pref",
-                "delete pin file",
+                "remove",
                 content="Package: *\nPin: origin vendor.example.com\nPin-Priority: 900\n",
-            )
+            ),
+            ReviewEntry(
+                "apt:pin:70-no-recommends.pref",
+                "70-no-recommends.pref",
+                "remove",
+                content="Package: firefox\nPin: release o=Ubuntu\nPin-Priority: -1\n",
+            ),
+            ReviewEntry(
+                "apt:pin:60-backports.pref",
+                "60-backports.pref",
+                "remove",
+                f"{TARGET_HOST} would stop preferring backports for postgresql-client",
+                content=(
+                    "Package: postgresql-*\n"
+                    "Pin: release a=noble-backports\n"
+                    "Pin-Priority: 500\n"
+                    "\n"
+                    "Package: *\n"
+                    "Pin: release a=noble-backports\n"
+                    "Pin-Priority: 100\n"
+                ),
+            ),
         ],
     ),
+    # Two collateral packages with DIFFERENT causes and different effects — one removal,
+    # one downgrade — which is why they are asked one screen at a time: no single legend
+    # could phrase both.
     ReviewGroup(
         "apt",
         COLLATERAL_REVIEW_ACTION,
@@ -121,16 +182,33 @@ GROUPS = [
             ReviewEntry(
                 "apt:collateral:fortunes",
                 "fortunes",
-                "resolve",
+                "remove",
                 f"Removing fortunes-min on {TARGET_HOST} would remove fortunes",
-            )
+                answer_hints=(
+                    f"remove fortunes-min from {TARGET_HOST}, so fortunes is removed as well",
+                    f"keep fortunes on {TARGET_HOST}; fortunes-min will not be removed; will be asked again next sync",
+                ),
+            ),
+            ReviewEntry(
+                "apt:collateral:libgimp2",
+                "libgimp2",
+                "downgrade",
+                f"Installing gimp on {TARGET_HOST} would downgrade libgimp2 from 2.10.38 to 2.10.36",
+                answer_hints=(
+                    f"install gimp on {TARGET_HOST}, so libgimp2 is downgraded from 2.10.38 to 2.10.36 as well",
+                    f"keep libgimp2 on {TARGET_HOST}; gimp will not be installed; will be asked again next sync",
+                ),
+            ),
         ],
     ),
     ReviewGroup(
         "manual",
         UNREPRODUCIBLE_REVIEW_ACTION,
         f"{SOURCE_HOST} has these and no package manager can install them on {TARGET_HOST} (manual)",
-        [ReviewEntry("unreproducible:unowned-path:/opt/pcsw-uat-app", "/opt/pcsw-uat-app", "resolve")],
+        [
+            ReviewEntry("unreproducible:unowned-path:/opt/pcsw-uat-app", "/opt/pcsw-uat-app", "resolve"),
+            ReviewEntry("unreproducible:unowned-path:/usr/local/bin/mytool", "/usr/local/bin/mytool", "resolve"),
+        ],
     ),
 ]
 

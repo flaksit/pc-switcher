@@ -22,6 +22,7 @@ from typing import Any
 import pytest
 from prompt_toolkit.application import create_app_session
 from prompt_toolkit.input import create_pipe_input
+from prompt_toolkit.layout import Window
 from prompt_toolkit.output import DummyOutput
 from prompt_toolkit.output.plain_text import PlainTextOutput
 
@@ -36,9 +37,20 @@ from pcswitcher.jobs.packages.decision_list import (
     wrap_label,
 )
 
-_ACT = DecisionOption(value="apply", key="y", word="install", glyph="●", is_act=True)
-_SKIP_ONCE = DecisionOption(value="skip_once", key="s", word="skip once", glyph="○")
-_SKIP_ALWAYS = DecisionOption(value="skip_always", key="n", word="always skip", glyph="⊘")
+_ACT = DecisionOption(
+    value="apply", key="y", word="install", glyph="●", is_act=True, hint="go ahead — nomad changes this sync"
+)
+_SKIP_ONCE = DecisionOption(
+    value="skip_once", key="s", word="skip now", glyph="○", hint="leave nomad alone; you are asked again next sync"
+)
+_SKIP_ALWAYS = DecisionOption(
+    value="skip_always",
+    key="x",
+    word="never install",
+    glyph="⊘",
+    is_permanent=True,
+    hint="atlas's own — nomad never gets it, never asked again",
+)
 
 THREE_ANSWERS = (_ACT, _SKIP_ONCE, _SKIP_ALWAYS)
 TWO_ANSWERS = (_ACT, _SKIP_ONCE)
@@ -80,15 +92,15 @@ class TestLayout:
         rows = [_row("a", "sl"), _row("b", "cmatrix-longer")]
         item_width, column = layout_widths(rows, THREE_ANSWERS, total_width=80)
 
-        # 80 - prefix(5) - gap(2) - len("always skip")(11) - right margin(1).
-        assert item_width == 61
+        # 80 - prefix(5) - gap(2) - len("never install")(13) - right margin(1).
+        assert item_width == 59
         assert column == PREFIX_WIDTH + len("cmatrix-longer") + 2
 
     def test_an_item_longer_than_the_screen_pins_the_column_at_the_wrap_width(self) -> None:
         rows = [_row("a", "x" * 200)]
         item_width, column = layout_widths(rows, THREE_ANSWERS, total_width=80)
 
-        assert item_width == 61
+        assert item_width == 59
         assert column == PREFIX_WIDTH + item_width + 2
 
     def test_two_answer_screens_reserve_less_because_their_widest_word_is_shorter(self) -> None:
@@ -96,7 +108,7 @@ class TestLayout:
         three, _ = layout_widths(rows, THREE_ANSWERS, total_width=80)
         two, _ = layout_widths(rows, TWO_ANSWERS, total_width=80)
 
-        assert two - three == len("always skip") - len("skip once")
+        assert two - three == len("never install") - len("skip now")
 
     def test_a_narrow_terminal_keeps_a_usable_item_column(self) -> None:
         item_width, _ = layout_widths([_row("a", "x" * 40)], THREE_ANSWERS, total_width=20)
@@ -117,7 +129,7 @@ class TestRenderRows:
 
         lines = _lines(render_rows(rows, THREE_ANSWERS, decisions=decisions, focused=0, total_width=100))
 
-        assert [line[column:] for line in lines] == ["install", "skip once", "always skip"]
+        assert [line[column:] for line in lines] == ["install", "skip now", "never install"]
 
     def test_an_always_skipped_row_never_echoes_the_action_it_was_not_given(self) -> None:
         """The bug the rebuild had to make unrepresentable: the old second screen asked
@@ -137,7 +149,7 @@ class TestRenderRows:
             )
         )[0]
 
-        assert line.endswith("always skip")
+        assert line.endswith(_SKIP_ALWAYS.word)
         assert "remove" not in line
 
     def test_each_decision_has_its_own_glyph(self) -> None:
@@ -150,6 +162,29 @@ class TestRenderRows:
 
         assert glyphs == ["●", "○", "⊘"]
         assert len(set(glyphs)) == 3
+
+    def test_the_permanent_answer_is_emphasised_apart_from_the_other_skip(self) -> None:
+        """ "Always skip" outlives the run, and it used to be the one word on the screen
+        with no styling at all. Skip-once stays plain — it is the answer that changes
+        nothing, here or later.
+        """
+        rows = [_row("a"), _row("b"), _row("c")]
+        decisions = {"a": "apply", "b": "skip_once", "c": "skip_always"}
+
+        tokens = render_rows(rows, THREE_ANSWERS, decisions=decisions, focused=-1, total_width=100)
+        words = {option.word for option in THREE_ANSWERS}
+        styles = {text.strip(): style for style, text in tokens if text.strip() in words}
+
+        assert styles == {
+            _ACT.word: "class:decision-act",
+            _SKIP_ONCE.word: "class:decision-skip",
+            _SKIP_ALWAYS.word: "class:decision-permanent",
+        }
+
+    def test_a_glyph_carries_the_same_emphasis_as_the_word_it_belongs_to(self) -> None:
+        tokens = render_rows([_row("a")], THREE_ANSWERS, decisions={"a": "skip_always"}, focused=-1, total_width=100)
+
+        assert ("class:decision-permanent", "⊘ ") in tokens
 
     def test_no_row_repeats_the_group_verb_it_shares_with_its_title(self) -> None:
         rows = [_row("a", "sl (5.02-1)")]
@@ -184,7 +219,7 @@ class TestRenderRows:
 
         assert lines[0][column:] == "install"
         assert lines[0][PREFIX_WIDTH:column].strip() == "y" * item_width
-        assert lines[1].strip() == "y" * (120 - item_width)
+        assert "".join(line.strip() for line in lines[1:]) == "y" * (120 - item_width)
 
     def test_the_focused_row_is_the_only_one_carrying_a_pointer(self) -> None:
         rows = [_row("a"), _row("b")]
@@ -214,33 +249,88 @@ class TestLegend:
         text = legend(THREE_ANSWERS)
 
         assert "<y> install" in text
-        assert "<s> skip once" in text
-        assert "<n> always skip" in text
+        assert "<s> skip now" in text
+        assert "<x> never install" in text
         assert "<enter> confirm" in text
-        assert "up/down move" in text
+
+    def test_every_answer_gets_its_own_line_and_its_own_explanation(self) -> None:
+        """The user's finding: three answers whose column words look interchangeable leave
+        the difference between "this sync" and "for good" to be guessed. The hint is where
+        each one says what it commits you to, so it may not share a line with another answer.
+        """
+        lines = legend(THREE_ANSWERS).split("\n")
+
+        assert lines[0].startswith("<y> install") and lines[0].endswith("changes this sync")
+        assert lines[1].startswith("<s> skip now") and lines[1].endswith("asked again next sync")
+        assert lines[2].startswith("<x> never install") and lines[2].endswith("never asked again")
+
+    def test_the_hints_start_at_one_column_for_the_whole_screen(self) -> None:
+        answers = legend(THREE_ANSWERS).split("\n")[: len(THREE_ANSWERS)]
+
+        starts = {line.index(option.hint) for line, option in zip(answers, THREE_ANSWERS, strict=True)}
+        assert len(starts) == 1, f"hints do not share a column: {answers}"
+
+    def test_an_answer_with_no_hint_is_still_listed(self) -> None:
+        """`hint` is optional, and a caller that omits it loses the sentence, not the answer."""
+        bare = DecisionOption(value="apply", key="y", word="install", glyph="●", is_act=True)
+
+        assert "<y> install" in legend((bare,))
+
+    def test_up_and_down_are_not_mentioned(self) -> None:
+        """A list with a pointer on it does not need to be told it can be moved — and the
+        keys that are listed are the ones a user would not guess."""
+        assert "up/down" not in legend(THREE_ANSWERS)
 
     def test_a_bulk_key_says_that_it_sets_every_row(self) -> None:
         """The old legend said "<a> to toggle" for a key that toggled ALL of them."""
         assert "sets every row" in legend(THREE_ANSWERS)
 
     def test_a_two_answer_screen_is_short_by_exactly_the_answer_it_does_not_offer(self) -> None:
-        assert "always skip" not in legend(TWO_ANSWERS)
-        assert "<s> skip once" in legend(TWO_ANSWERS)
+        assert "never install" not in legend(TWO_ANSWERS)
+        assert "<s> skip now" in legend(TWO_ANSWERS)
 
-    def test_a_narrow_screen_breaks_the_legend_between_entries_never_mid_word(self) -> None:
+    def test_a_narrow_screen_breaks_the_editing_keys_between_entries_never_mid_word(self) -> None:
         lines = legend(THREE_ANSWERS, width=40).split("\n")
 
         assert len(lines) > 1
-        assert all(len(line) <= 40 for line in lines)
-        for entry in ("shift+key sets every row", "<n> always skip", "<ctrl-c> abort"):
+        for entry in ("<shift+key> sets every row", "<x> never install", "<enter> confirm"):
             assert any(entry in line for line in lines)
 
-    def test_a_wide_screen_keeps_the_legend_on_one_line(self) -> None:
-        assert "\n" not in legend(THREE_ANSWERS, width=500)
+    def test_a_narrow_screen_wraps_a_hint_under_itself(self) -> None:
+        """Never under the key column, where a continuation would read as a further answer."""
+        lines = legend(THREE_ANSWERS, width=44).split("\n")
+        continuations = [line for line in lines if line.startswith(" ")]
+
+        assert continuations, f"nothing wrapped at width 44: {lines}"
+        assert all(not line.strip().startswith("<") for line in continuations)
+
+    def test_the_legend_does_not_offer_abandoning_the_sync(self) -> None:
+        """Ctrl-C still aborts; the legend is what to do with this screen, and an escape
+        listed beside the answers gives it equal billing with the decision."""
+        assert "ctrl" not in legend(THREE_ANSWERS).lower()
+        assert "abort" not in legend(THREE_ANSWERS).lower()
+
+    def test_a_wide_screen_keeps_the_editing_keys_on_one_line(self) -> None:
+        """One line per answer plus one for the editing keys, and nothing wrapped."""
+        assert len(legend(THREE_ANSWERS, width=500).split("\n")) == len(THREE_ANSWERS) + 1
 
     def test_the_invert_instruction_is_gone(self) -> None:
         """Deliberate negative control: questionary's `<i> to invert` was not useful here."""
         assert "invert" not in legend(THREE_ANSWERS)
+
+
+class TestCursor:
+    def test_no_control_draws_the_terminal_cursor(self) -> None:
+        """prompt_toolkit focuses the first window when nothing is focusable, so a control
+        that shows its cursor parks a blinking block on the header's `?`. The pointer is
+        the only marker of where the user is.
+        """
+        with create_pipe_input() as pipe, create_app_session(input=pipe, output=DummyOutput()):
+            question = decision_list("t", rows=[_row("a"), _row("b")], options=THREE_ANSWERS)
+            controls = [w.content for w in question.application.layout.walk() if isinstance(w, Window)]
+
+            assert len(controls) == 2
+            assert not any(control.create_content(80, 24).show_cursor for control in controls)
 
 
 class TestConstruction:
@@ -271,7 +361,7 @@ class TestKeyHandling:
     def test_a_key_sets_only_the_focused_row(self) -> None:
         rows = [_row("a"), _row("b"), _row("c")]
 
-        assert _drive(f"{_DOWN}n{_ENTER}", rows=rows) == {"a": "apply", "b": "skip_always", "c": "apply"}
+        assert _drive(f"{_DOWN}x{_ENTER}", rows=rows) == {"a": "apply", "b": "skip_always", "c": "apply"}
 
     def test_the_ends_of_the_list_are_walls(self) -> None:
         """Ruled by the user, replacing the wrap this screen shipped with: UP on the first
@@ -321,10 +411,10 @@ class TestTheAnsweredFrame:
         return rendered[rendered.rindex("? Install apt packages") :]
 
     def test_the_answered_list_stays_on_screen_as_the_record(self) -> None:
-        frame = self._final_frame(f"s{_DOWN}n{_ENTER}", [_row("a", "sl"), _row("b", "cmatrix")])
+        frame = self._final_frame(f"s{_DOWN}x{_ENTER}", [_row("a", "sl"), _row("b", "cmatrix")])
 
         assert "sl" in frame and "cmatrix" in frame
-        assert "skip once" in frame and "always skip" in frame
+        assert _SKIP_ONCE.word in frame and _SKIP_ALWAYS.word in frame
 
     def test_nothing_is_echoed_after_the_question(self) -> None:
         """questionary's checkbox echoed one of four shapes ("done", "done (2 selections)",

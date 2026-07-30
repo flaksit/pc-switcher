@@ -14,6 +14,7 @@ and only on a run that actually found manual collateral.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
+from typing import NamedTuple
 
 from pcswitcher.executor import RemoteExecutor
 from pcswitcher.jobs.apt_sync.commands import (
@@ -34,6 +35,18 @@ from pcswitcher.jobs.apt_sync.messages import build_trigger_phrase
 from pcswitcher.jobs.apt_sync.origins import OriginClassifier
 from pcswitcher.jobs.packages.items import DiffAction, ItemClass, ItemDiff, Machines
 from pcswitcher.jobs.packages.review import Decision, ReviewOutcome
+
+
+class CollateralEffect(NamedTuple):
+    """One package the pending transaction would take out from under the user, and the three
+    ways the review has to say so: the verb for the decision column, the phrase that goes
+    inside the finding sentence, and the clause the act answer ends with.
+    """
+
+    package: str
+    act_word: str
+    phrase: str
+    sentence: str
 
 
 class Collateral:
@@ -158,26 +171,27 @@ class Collateral:
         if not found:
             return []
 
-        triggers = {name: frozenset(candidates) for name, _ in found}
+        triggers = {item.package: frozenset(candidates) for item in found}
         if len(candidates) > 1:
-            narrowed: dict[str, set[str]] = {name: set() for name, _ in found}
+            narrowed: dict[str, set[str]] = {item.package: set() for item in found}
             for candidate in candidates:
                 alone = await simulate_apt_transaction(self._target, args_for([candidate]), login_shell=False)
-                for name, _ in await self.classify(alone, reviewed_names):
-                    if name in narrowed:
-                        narrowed[name].add(candidate)
+                for item in await self.classify(alone, reviewed_names):
+                    if item.package in narrowed:
+                        narrowed[item.package].add(candidate)
             triggers = {name: frozenset(blamed) or frozenset(candidates) for name, blamed in narrowed.items()}
 
         return [
             self._item(
-                name,
-                f"{verb} {build_trigger_phrase(triggers[name], candidates)} on {self._machines.target} would {effect}",
-                frozenset(f"{APT_PACKAGE_ID_PREFIX}{trigger}" for trigger in triggers[name]),
+                item,
+                build_trigger_phrase(triggers[item.package], candidates),
+                verb,
+                frozenset(f"{APT_PACKAGE_ID_PREFIX}{trigger}" for trigger in triggers[item.package]),
             )
-            for name, effect in found
+            for item in found
         ]
 
-    async def classify(self, preview: AptTransactionPreview, reviewed_names: frozenset[str]) -> list[tuple[str, str]]:
+    async def classify(self, preview: AptTransactionPreview, reviewed_names: frozenset[str]) -> list[CollateralEffect]:
         """Partition a simulation's would-remove/would-downgrade packages by origin
         (D-30): a package in the TARGET's manual set becomes a manual-collateral review
         item (ADR-020 D-40); one outside it is auto-installed — apt's own dependency — and
@@ -186,30 +200,54 @@ class Collateral:
         A downgrade is detected exactly as before: an `install_versions` entry with a
         non-`None` old version and `compare_deb_versions(target, new, old) < 0`.
 
-        Returns `(package, effect)` pairs rather than `ItemDiff`s because the caller must
-        attribute them before the effect can be phrased: `effect` is the verb phrase the
-        change would perform ("remove fortunes", "downgrade x from 1 to 0"), and only the
-        caller knows which candidates to put in front of it.
+        Returns `CollateralEffect`s rather than `ItemDiff`s because the caller must
+        attribute them before any of it can be phrased: only the caller knows which
+        candidates to put in front of the effect.
         """
         protected = self.protected()
-        collateral: list[tuple[str, str]] = []
+        collateral: list[CollateralEffect] = []
 
         for pkg in preview.removals:
             if pkg in reviewed_names or pkg not in protected:
                 continue
-            collateral.append((pkg, f"remove {pkg}"))
+            collateral.append(CollateralEffect(pkg, "remove", f"remove {pkg}", f"{pkg} is removed as well"))
 
         for pkg, (old_version, new_version) in preview.install_versions.items():
             if pkg in reviewed_names or old_version is None or pkg not in protected:
                 continue
             if await compare_deb_versions(self._target, new_version, old_version) < 0:
-                collateral.append((pkg, f"downgrade {pkg} from {old_version} to {new_version}"))
+                collateral.append(
+                    CollateralEffect(
+                        pkg,
+                        "downgrade",
+                        f"downgrade {pkg} from {old_version} to {new_version}",
+                        f"{pkg} is downgraded from {old_version} to {new_version} as well",
+                    )
+                )
 
         return collateral
 
-    def _item(self, name: str, detail: str, trigger_ids: frozenset[str]) -> ItemDiff:
-        """Build one manual-collateral `ItemDiff` and record the candidates it gates."""
-        diff = collateral_diff(name, detail)
+    def _item(self, effect: CollateralEffect, trigger: str, verb: str, trigger_ids: frozenset[str]) -> ItemDiff:
+        """Build one manual-collateral `ItemDiff` and record the candidates it gates.
+
+        The screen's two answers are phrased HERE because this is the only layer that knows
+        what causes the collateral: the act answer reads "install sl on nomad, so fortunes
+        is removed as well", and the next item's cause may be a removal instead. `verb` is
+        the direction of the change under review ("Installing"/"Removing"), not what happens
+        to the collateral package.
+        """
+        target = self._machines.target
+        causing = "install" if verb == "Installing" else "remove"
+        diff = collateral_diff(
+            effect.package,
+            f"{verb} {trigger} on {target} would {effect.phrase}",
+            act_word=effect.act_word,
+            answer_hints=(
+                f"{causing} {trigger} {'on' if causing == 'install' else 'from'} {target}, so {effect.sentence}",
+                f"keep {effect.package} on {target}; {trigger} will not be "
+                f"{'installed' if causing == 'install' else 'removed'}; will be asked again next sync",
+            ),
+        )
         self._trigger_ids[diff.item_id] = trigger_ids
         return diff
 

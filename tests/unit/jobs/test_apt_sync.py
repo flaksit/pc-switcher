@@ -4365,8 +4365,8 @@ class TestRepoRemovalNamesMachineSpecificPackages:
         # then what that costs. The user's ruling — the URL is what the choice is about.
         assert diff.detail == (
             "target-host would stop getting software from https://vendor.example.com/apt; "
-            "target-host installs vendor-tool from vendor.list — packages you set to always skip, so they "
-            "would stay installed but never get another update"
+            "target-host installs vendor-tool from vendor.list — package you marked as specific to target-host, "
+            "so it would stay installed but never get another update"
         )
 
     @pytest.mark.asyncio
@@ -5414,8 +5414,12 @@ class TestTwoAnswerRemovals:
         by_action = {(group.action, group.entries[0].item_id.split(":")[1]): group for group in plan.groups}
         assert (REPO_REMOVAL_REVIEW_ACTION, "source") in by_action
         assert (REPO_REMOVAL_REVIEW_ACTION, "pin") in by_action
-        assert by_action[(REPO_REMOVAL_REVIEW_ACTION, "source")].entries[0].action_label == "delete repository"
-        assert by_action[(REPO_REMOVAL_REVIEW_ACTION, "pin")].entries[0].action_label == "delete pin file"
+        # Both read "remove" in the decision column; what is being removed is the group
+        # title's job, which is why the two classes still get two screens.
+        assert by_action[(REPO_REMOVAL_REVIEW_ACTION, "source")].entries[0].action_label == "remove"
+        assert by_action[(REPO_REMOVAL_REVIEW_ACTION, "pin")].entries[0].action_label == "remove"
+        assert "repositories" in by_action[(REPO_REMOVAL_REVIEW_ACTION, "source")].title
+        assert "pin files" in by_action[(REPO_REMOVAL_REVIEW_ACTION, "pin")].title
         # Ruling 11: the config file is an ordinary removal, in an ordinary group.
         assert (DiffAction.REMOVE.value, "config") in by_action
 

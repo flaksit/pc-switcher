@@ -40,7 +40,7 @@ from typing import ClassVar
 
 from pcswitcher.jobs.base import SyncJob
 from pcswitcher.jobs.context import JobContext
-from pcswitcher.jobs.packages.items import DiffAction, ItemClass, ItemDiff, Machines
+from pcswitcher.jobs.packages.items import DiffAction, DiffClass, ItemClass, ItemDiff, Machines
 from pcswitcher.jobs.packages.review import Decision, ReviewEntry, ReviewGroup, ReviewOutcome
 from pcswitcher.jobs.packages.state import DecisionEntry, DecisionFile
 from pcswitcher.models import CommandResult, Host, JobSkipped, LogLevel, ProgressUpdate
@@ -151,6 +151,26 @@ _ACTION_ORDER: tuple[DiffAction, ...] = (
     DiffAction.REMOVE,
     DiffAction.REPORT_ONLY,
 )
+
+# What a report group is called, per cause. Never "vendor" (the user's ruling): for apt the
+# thing a package comes from is a repository, and that is the word everywhere.
+_REPORT_TITLES: dict[DiffClass, str] = {
+    DiffClass.VERSION_MISMATCH: "Version differences",
+    DiffClass.ORIGIN_MISMATCH: "Installed from different repositories",
+    DiffClass.REPO_UNAVAILABLE: "Origins {target} cannot reproduce",
+}
+
+# The line under a report group, where the condition has a remedy that is not a decision.
+# Only version drift has one today: it is the one reported condition that resolves itself.
+_REPORT_NOTES: dict[DiffClass, str] = {
+    DiffClass.VERSION_MISMATCH: "These converge on their own: run `{upgrade}` on {target}.",
+}
+
+_UPGRADE_COMMANDS: dict[str, str] = {
+    "apt": "sudo apt update && sudo apt upgrade",
+    "snap": "sudo snap refresh",
+    "flatpak": "flatpak update",
+}
 
 
 class PackageSyncJob(SyncJob):
@@ -277,19 +297,25 @@ class PackageSyncJob(SyncJob):
         `_diff_apt_packages` emits package diffs before hold diffs, keeps a package group
         ahead of its hold group.
         """
-        by_key: dict[tuple[DiffAction, ItemClass], list[ItemDiff]] = {}
-        class_order: dict[DiffAction, list[ItemClass]] = {}
+        # A reported condition is keyed by its CAUSE as well (ruled by the user): version
+        # drift, an origin the target cannot reproduce and a package installed from two
+        # different repositories were one group called "Report apt packages", which named
+        # none of them. `DiffClass` is that cause, and report-only is the one action whose
+        # members carry different ones.
+        by_key: dict[tuple[DiffAction, ItemClass, DiffClass | None], list[ItemDiff]] = {}
+        class_order: dict[DiffAction, list[tuple[ItemClass, DiffClass | None]]] = {}
         for diff in diffs:
-            key = (diff.action, diff.item_class)
+            cause = diff.diff_class if diff.action is DiffAction.REPORT_ONLY else None
+            key = (diff.action, diff.item_class, cause)
             if key not in by_key:
                 by_key[key] = []
-                class_order.setdefault(diff.action, []).append(diff.item_class)
+                class_order.setdefault(diff.action, []).append((diff.item_class, cause))
             by_key[key].append(diff)
 
         groups: list[ReviewGroup] = []
         for action in _ACTION_ORDER:
-            for item_class in class_order.get(action, []):
-                entries = by_key[(action, item_class)]
+            for item_class, cause in class_order.get(action, []):
+                entries = by_key[(action, item_class, cause)]
                 # REPORT_ONLY has no more-specific per-item-class meaning for any current
                 # manager (IN-01): fall back to "report" rather than the raw enum value
                 # ("report_only"), which read awkwardly in review text like "Report_only
@@ -298,11 +324,22 @@ class PackageSyncJob(SyncJob):
                 default_verb = "report" if action == DiffAction.REPORT_ONLY else action.value
                 verb = _ACTION_VOCABULARY.get((item_class, action), default_verb)
                 noun = _ITEM_CLASS_NOUN.get(item_class, f"{self.manager_id} packages")
+                title = f"{verb.capitalize()} {noun}"
+                note = None
+                if cause is not None:
+                    title = f"{_REPORT_TITLES.get(cause, 'Reported').format(target=self.machines.target)} ({noun})"
+                    # A manager with no upgrade command of its own gets no note rather than
+                    # a sentence with a hole in it.
+                    upgrade = _UPGRADE_COMMANDS.get(self.manager_id)
+                    template = _REPORT_NOTES.get(cause)
+                    if template and upgrade:
+                        note = template.format(target=self.machines.target, upgrade=upgrade)
                 groups.append(
                     ReviewGroup(
                         manager=self.manager_id,
                         action=action.value,
-                        title=f"{verb.capitalize()} {noun}",
+                        title=title,
+                        note=note or None,
                         entries=tuple(
                             ReviewEntry(item_id=diff.item_id, label=diff.label, action_label=verb, detail=diff.detail)
                             for diff in entries

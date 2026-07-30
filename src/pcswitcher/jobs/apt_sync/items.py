@@ -310,9 +310,13 @@ class RemovalVocabulary(NamedTuple):
 # the words each reads with (ADR-020 D-37, rulings 5 and 12). Both take two answers — delete
 # or leave it for now — so both carry `REPO_REMOVAL_REVIEW_ACTION`; keeping them as two
 # entries is what gives the user two separate screens rather than one mixed list.
+# `remove`, not "delete repository"/"delete pin file": the action label is also the word in
+# the decision column, where the group title above it already says what is being deleted, so
+# the longer phrase said the noun once per row and pushed the column halfway across the
+# screen. The title keeps the noun; the answer keeps the verb.
 REPO_REMOVAL_VERBS: dict[ItemClass, RemovalVocabulary] = {
-    ItemClass.APT_SOURCE: RemovalVocabulary("delete repository", "repositories"),
-    ItemClass.APT_PIN: RemovalVocabulary("delete pin file", "pin files"),
+    ItemClass.APT_SOURCE: RemovalVocabulary("remove", "repositories"),
+    ItemClass.APT_PIN: RemovalVocabulary("remove", "pin files"),
 }
 
 

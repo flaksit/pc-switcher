@@ -19,9 +19,9 @@ from rich.console import Console
 
 from pcswitcher.jobs.packages.review import (
     COLLATERAL_REVIEW_ACTION,
+    KEEP_FOR_GOOD_WORD,
     REPO_CONFLICT_REVIEW_ACTION,
     REPO_REMOVAL_REVIEW_ACTION,
-    SKIP_ALWAYS_WORD,
     UNREPRODUCIBLE_REVIEW_ACTION,
     Decision,
     ReviewEntry,
@@ -78,6 +78,17 @@ def _values(call: Any) -> list[str]:
     return [option.value for option in call.kwargs["options"]]
 
 
+def _permanent(call: Any) -> str | None:
+    """The word of the screen's recorded-forever answer, or None where it offers none.
+
+    By the flag rather than by the word: the word is direction-specific ("never install" on
+    one screen, "keep for good" on another), and a test that hunted for one literal would
+    read as absent on every screen that legitimately says the other.
+    """
+    words = [option.word for option in call.kwargs["options"] if option.is_permanent]
+    return words[0] if words else None
+
+
 @pytest.mark.asyncio
 class TestThePermanentAnswer:
     async def test_answering_always_skip_records_skip_always(self) -> None:
@@ -100,9 +111,11 @@ class TestThePermanentAnswer:
         ui.pause.assert_called_once()
         ui.resume.assert_called_once()
 
-    async def test_the_screen_calls_it_always_skip_not_never_offer_again(self) -> None:
-        """The user's correction: the answer is not about being asked again on this machine,
-        it is about the item belonging to this machine.
+    async def test_the_screen_names_the_permanent_answer_as_this_screen_s_own_act(self) -> None:
+        """The user's correction, twice over: the answer is not about being asked again on
+        this machine but about the item belonging to it, and one generic "always skip" could
+        not say that in both directions — an install screen refuses an arrival, a removal
+        screen keeps what is already there.
         """
         console = _interactive_console()
         ui = MagicMock()
@@ -115,8 +128,7 @@ class TestThePermanentAnswer:
         ):
             await review_items([group], console=console, ui=ui, **HOSTS)
 
-        assert SKIP_ALWAYS_WORD == "always skip"
-        assert SKIP_ALWAYS_WORD in _words(decision_list.call_args)
+        assert _permanent(decision_list.call_args) == "never install"
         assert "never offer again" not in " ".join(_words(decision_list.call_args))
 
     async def test_no_group_is_ever_asked_about_permanence_a_second_time(self) -> None:
@@ -175,7 +187,7 @@ class TestBlockStateItemsArePromotable:
         ):
             outcome = await review_items([group], console=console, ui=ui, **HOSTS)
 
-        assert SKIP_ALWAYS_WORD in _words(decision_list.call_args)
+        assert _permanent(decision_list.call_args) == "never hold"
         assert outcome.decisions == {"apt:hold:firefox": Decision.SKIP_ALWAYS}
 
     async def test_mask_removal_direction_can_be_made_permanent(self) -> None:
@@ -196,6 +208,9 @@ class TestBlockStateItemsArePromotable:
             outcome = await review_items([group], console=console, ui=ui, **HOSTS)
 
         assert _words(decision_list.call_args)[0] == "unmask"
+        # A removal-direction screen keeps what the machine already has, so its permanent
+        # answer is the same word whatever the act verb is.
+        assert _permanent(decision_list.call_args) == KEEP_FOR_GOOD_WORD
         assert outcome.decisions == {"flatpak:mask:user:org.gimp.GIMP": Decision.SKIP_ALWAYS}
 
 
@@ -208,8 +223,7 @@ class TestGroupsNeverOfferedPermanence:
     @pytest.mark.parametrize(
         ("action", "title", "action_label"),
         [
-            ("report_only", "Report apt packages", "report"),
-            (REPO_REMOVAL_REVIEW_ACTION, "Delete repositories (apt)", "delete repository"),
+            (REPO_REMOVAL_REVIEW_ACTION, "Delete repositories (apt)", "remove"),
             (REPO_CONFLICT_REVIEW_ACTION, "Resolve apt repository conflicts", "overwrite"),
         ],
     )
@@ -228,10 +242,13 @@ class TestGroupsNeverOfferedPermanence:
             outcome = await review_items([group], console=console, ui=ui, **HOSTS)
 
         assert _values(decision_list.call_args) == [Decision.APPLY, Decision.SKIP_ONCE]
-        assert SKIP_ALWAYS_WORD not in _words(decision_list.call_args)
+        assert _permanent(decision_list.call_args) is None
         assert outcome.decisions == {"a": Decision.SKIP_ONCE}
 
-    async def test_unreproducible_group_keeps_its_own_flow(self) -> None:
+    async def test_unreproducible_group_offers_its_own_three_answers(self) -> None:
+        """Its permanent answer is offered, but by its own flow — one screen per item, and
+        an act that opens an editor rather than converging anything.
+        """
         console = _interactive_console()
         ui = MagicMock()
         group = _group(
@@ -239,19 +256,22 @@ class TestGroupsNeverOfferedPermanence:
             [_entry("u1", label="brscan3")],
             title="Resolve apt items with no reproducible install",
         )
-        select_prompt = _fake_prompt(ask_return="skip_once")
+        screen = _fake_prompt(ask_return={"u1": "skip_once"})
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
-            patch("pcswitcher.jobs.packages.review.prompt_navigation.select", return_value=select_prompt),
-            patch("pcswitcher.jobs.packages.review.decision_list") as decision_list,
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen) as decision_list,
         ):
             outcome = await review_items([group], console=console, ui=ui, **HOSTS)
 
-        decision_list.assert_not_called()
+        assert _permanent(decision_list.call_args) == "never install"
+        assert _words(decision_list.call_args)[0] == "install"
         assert outcome.decisions == {"u1": Decision.SKIP_ONCE}
 
-    async def test_collateral_group_keeps_its_own_flow(self) -> None:
+    async def test_collateral_group_is_never_offered_permanence(self) -> None:
+        """Its third answer stops the sync; nothing about a collateral package is recorded,
+        because nobody expressed a preference about it — apt's manual mark is not one.
+        """
         console = _interactive_console()
         ui = MagicMock()
         group = _group(
@@ -259,16 +279,16 @@ class TestGroupsNeverOfferedPermanence:
             [_entry("apt:package:pkg-a", label="other-manual")],
             title="Resolve apt manual-collateral removals",
         )
-        select_prompt = _fake_prompt(ask_return="skip")
+        screen = _fake_prompt(ask_return={"apt:package:pkg-a": "skip_once"})
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
-            patch("pcswitcher.jobs.packages.review.prompt_navigation.select", return_value=select_prompt),
-            patch("pcswitcher.jobs.packages.review.decision_list") as decision_list,
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen) as decision_list,
         ):
             outcome = await review_items([group], console=console, ui=ui, **HOSTS)
 
-        decision_list.assert_not_called()
+        assert _permanent(decision_list.call_args) is None
+        assert _values(decision_list.call_args) == [Decision.APPLY, Decision.SKIP_ONCE, "stop_sync"]
         assert outcome.decisions == {"apt:package:pkg-a": Decision.SKIP_ONCE}
 
     async def test_non_interactive_run_prompts_nothing(self) -> None:

@@ -401,15 +401,17 @@ class TestInteractive:
             outcome = await review_items(groups, console=console, ui=ui, **HOSTS)
 
         for call in decision_list.call_args_list:
-            assert "always skip" in _screen_words(call)
+            # A removal screen keeps what the machine has; "always skip" said neither
+            # what happened nor to which machine.
+            assert "keep for good" in _screen_words(call)
             assert _screen_defaults(call) == dict.fromkeys(_screen_defaults(call), Decision.SKIP_ONCE)
         assert outcome.decisions == dict.fromkeys(("remove", "delete", "disable"), Decision.SKIP_ALWAYS)
 
     async def test_repo_removal_starts_skipped_and_is_never_offered_permanence(self) -> None:
         """The two-answer screen (ADR-020 D-07). It is a removal direction, so it starts at
-        skip-once like any other; it is NOT promotable, so "always skip" is absent from its
-        options and `SKIP_ALWAYS` is unreachable — which is what "no registry entry" means
-        at this layer.
+        skip-once like any other; it is NOT promotable, so the permanent answer is absent
+        from its options and `SKIP_ALWAYS` is unreachable — which is what "no registry entry"
+        means at this layer.
         """
         console = _interactive_console()
         ui = MagicMock()
@@ -428,14 +430,16 @@ class TestInteractive:
             outcome = await review_items([group], console=console, ui=ui, **HOSTS)
 
         assert _screen_defaults(decision_list.call_args) == {"apt:source:vendor.list": Decision.SKIP_ONCE}
-        assert _screen_words(decision_list.call_args) == ["delete repository", "keep it on nomad"]
+        assert _screen_words(decision_list.call_args) == ["delete repository", "skip now"]
         assert outcome.decisions == {"apt:source:vendor.list": Decision.SKIP_ONCE}
 
-    async def test_a_report_only_group_offers_two_answers_and_starts_applied(self) -> None:
-        """D-07: report-only diffs offer apply or skip only — there is no holder machine to
-        record a permanent decision against.
+    async def test_a_report_only_group_is_printed_and_asks_nothing(self) -> None:
+        """Ruled by the user: both answers it used to offer changed nothing on either
+        machine and recorded nothing, so the condition came back next sync whichever was
+        chosen. A report is printed and the review moves on.
         """
-        console = _interactive_console()
+        out = io.StringIO()
+        console = Console(file=out, force_terminal=True)
         ui = MagicMock()
         group = ReviewGroup(
             manager="apt",
@@ -443,17 +447,17 @@ class TestInteractive:
             title="Report apt packages",
             entries=[_entry("apt:package:tree", action_label="report")],
         )
-        prompt = _fake_prompt(ask_return={"apt:package:tree": "apply"})
-
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
-            patch("pcswitcher.jobs.packages.review.decision_list", return_value=prompt) as decision_list,
+            patch("pcswitcher.jobs.packages.review.decision_list") as decision_list,
         ):
             outcome = await review_items([group], console=console, ui=ui, **HOSTS)
 
-        assert _screen_words(decision_list.call_args) == ["report", "skip once"]
-        assert _screen_defaults(decision_list.call_args) == {"apt:package:tree": Decision.APPLY}
-        assert outcome.decisions == {"apt:package:tree": Decision.APPLY}
+        decision_list.assert_not_called()
+        printed = out.getvalue()
+        assert "Report apt packages" in printed and "pkg" in printed
+        assert "Nothing on nomad changes" in printed
+        assert outcome.decisions == {"apt:package:tree": Decision.SKIP_ONCE}
 
 
 @pytest.mark.asyncio
@@ -746,13 +750,13 @@ class TestUnreproducibleGroupResolution:
         console = _interactive_console()
         ui = MagicMock()
         group = _unreproducible_group([_entry("u1", label="brscan3")])
-        select_prompt = _fake_prompt(ask_return="add_snippet")
+        screen = _fake_prompt(ask_return={"u1": "add_snippet"})
         body = "  sudo dpkg --install /tmp/x.deb\n\nsudo apt-get install --fix-broken --assume-yes\n"
         text_prompt = _fake_prompt(ask_return=body)
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
-            patch("pcswitcher.jobs.packages.review.prompt_navigation.select", return_value=select_prompt),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen),
             patch("pcswitcher.jobs.packages.review.questionary.text", return_value=text_prompt),
         ):
             outcome = await review_items([group], console=console, ui=ui, **HOSTS)
@@ -764,11 +768,11 @@ class TestUnreproducibleGroupResolution:
         console = _interactive_console()
         ui = MagicMock()
         group = _unreproducible_group([_entry("u1", label="brscan3")])
-        select_prompt = _fake_prompt(ask_return="skip_always")
+        screen = _fake_prompt(ask_return={"u1": "skip_always"})
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
-            patch("pcswitcher.jobs.packages.review.prompt_navigation.select", return_value=select_prompt),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen),
         ):
             outcome = await review_items([group], console=console, ui=ui, **HOSTS)
 
@@ -782,11 +786,11 @@ class TestUnreproducibleGroupResolution:
         console = _interactive_console()
         ui = MagicMock()
         group = _unreproducible_group([_entry("u1", label="brscan3")])
-        select_prompt = _fake_prompt(ask_return="skip_once")
+        screen = _fake_prompt(ask_return={"u1": "skip_once"})
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
-            patch("pcswitcher.jobs.packages.review.prompt_navigation.select", return_value=select_prompt),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen),
         ):
             outcome = await review_items([group], console=console, ui=ui, **HOSTS)
 
@@ -799,11 +803,11 @@ class TestUnreproducibleGroupResolution:
         console = _interactive_console()
         ui = MagicMock()
         group = _unreproducible_group([_entry("u1", label="brscan3")])
-        select_prompt = _fake_prompt(ask_return=None)
+        screen = _fake_prompt(ask_return=None)
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
-            patch("pcswitcher.jobs.packages.review.prompt_navigation.select", return_value=select_prompt),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen),
             pytest.raises(SyncAbortedByUser, match="brscan3"),
         ):
             await review_items([group], console=console, ui=ui, **HOSTS)
@@ -819,12 +823,12 @@ class TestUnreproducibleGroupResolution:
         ui = MagicMock()
         group = _unreproducible_group([_entry("u1", label="brscan3")])
         # First select -> add_snippet (empty body), second select -> skip_once.
-        select_prompt = _fake_prompt(ask_side_effect=["add_snippet", "skip_once"])
+        screen = _fake_prompt(ask_side_effect=[{"u1": "add_snippet"}, {"u1": "skip_once"}])
         text_prompt = _fake_prompt(ask_return="")  # empty submission
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
-            patch("pcswitcher.jobs.packages.review.prompt_navigation.select", return_value=select_prompt),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen),
             patch("pcswitcher.jobs.packages.review.questionary.text", return_value=text_prompt),
         ):
             outcome = await review_items([group], console=console, ui=ui, **HOSTS)
@@ -841,12 +845,12 @@ class TestUnreproducibleGroupResolution:
         ui = MagicMock()
         group = _unreproducible_group([_entry("u1", label="brscan3")])
         body = "sudo dpkg --install /tmp/x.deb"
-        select_prompt = _fake_prompt(ask_side_effect=["add_snippet", "add_snippet"])
+        screen = _fake_prompt(ask_side_effect=[{"u1": "add_snippet"}, {"u1": "add_snippet"}])
         text_prompt = _fake_prompt(ask_side_effect=["", body])  # empty, then real
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
-            patch("pcswitcher.jobs.packages.review.prompt_navigation.select", return_value=select_prompt),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen),
             patch("pcswitcher.jobs.packages.review.questionary.text", return_value=text_prompt),
         ):
             outcome = await review_items([group], console=console, ui=ui, **HOSTS)
@@ -860,12 +864,12 @@ class TestUnreproducibleGroupResolution:
         console = _interactive_console()
         ui = MagicMock()
         group = _unreproducible_group([_entry("u1", label="brscan3")])
-        select_prompt = _fake_prompt(ask_side_effect=["add_snippet", "skip_once"])
+        screen = _fake_prompt(ask_side_effect=[{"u1": "add_snippet"}, {"u1": "skip_once"}])
         text_prompt = _fake_prompt(ask_return="   \n\t\n  ")
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
-            patch("pcswitcher.jobs.packages.review.prompt_navigation.select", return_value=select_prompt),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen),
             patch("pcswitcher.jobs.packages.review.questionary.text", return_value=text_prompt),
         ):
             outcome = await review_items([group], console=console, ui=ui, **HOSTS)
@@ -880,12 +884,12 @@ class TestUnreproducibleGroupResolution:
         console = _interactive_console()
         ui = MagicMock()
         group = _unreproducible_group([_entry("u1", label="brscan3")])
-        select_prompt = _fake_prompt(ask_return="add_snippet")
+        screen = _fake_prompt(ask_return={"u1": "add_snippet"})
         text_prompt = _fake_prompt(ask_return="sudo dpkg --install /tmp/x.deb")
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
-            patch("pcswitcher.jobs.packages.review.prompt_navigation.select", return_value=select_prompt),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen),
             patch("pcswitcher.jobs.packages.review.questionary.text", return_value=text_prompt) as text,
         ):
             await review_items([group], console=console, ui=ui, **HOSTS)
@@ -895,43 +899,44 @@ class TestUnreproducibleGroupResolution:
         bound = {key for binding in text.call_args.kwargs["key_bindings"].bindings for key in binding.keys}
         assert Keys.ControlD in bound
 
-    async def test_the_permanent_choice_says_what_it_means_rather_than_naming_the_concept(self) -> None:
-        """The user's correction: not "record as machine-specific", and not about being
-        offered again on this machine — what it MEANS and what will happen.
+    async def test_the_three_answers_read_as_they_do_on_every_other_screen(self) -> None:
+        """Same keys, same order, same words as an install screen — the act first, then the
+        one that lasts a sync, then the one that is recorded.
         """
         console = _interactive_console()
         ui = MagicMock()
         group = _unreproducible_group([_entry("u1", label="brscan3")])
-        select_prompt = _fake_prompt(ask_return="skip_once")
+        screen = _fake_prompt(ask_return={"u1": "skip_once"})
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
-            patch("pcswitcher.jobs.packages.review.prompt_navigation.select", return_value=select_prompt) as select,
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen) as decision_list,
         ):
             await review_items([group], console=console, ui=ui, **HOSTS)
 
-        titles = {choice.value: choice.title for choice in select.call_args.kwargs["choices"]}
-        assert titles["skip_always"] == (
-            "This one is specific to atlas. Always skip it — nomad never gets it, and you are not asked again"
+        options = decision_list.call_args.kwargs["options"]
+        assert [(option.key, option.word) for option in options] == [
+            ("y", "install"),
+            ("s", "skip now"),
+            ("x", "never install"),
+        ]
+        assert options[0].hint == "write a command snippet that installs it; nomad runs it"
+        assert options[1].hint == "do not install on nomad for now; will be asked again next sync"
+        assert options[2].hint == (
+            "this is specific to atlas; pc-switcher will never install it to nomad or other machines"
         )
-        assert titles["skip_once"] == (
-            "Skip for now — nomad does not get it this sync, and you are asked again next sync"
-        )
-        assert titles["add_snippet"] == (
-            "Write the commands that install it — nomad runs them, now and on every future sync"
-        )
-        assert select.call_args.args[0] == "How should nomad get brscan3?"
+        assert decision_list.call_args.args[0] == "How should nomad get brscan3?"
 
     async def test_ui_resumed_when_snippet_capture_raises(self) -> None:
         console = _interactive_console()
         ui = MagicMock()
         group = _unreproducible_group([_entry("u1", label="brscan3")])
-        select_prompt = _fake_prompt(ask_return="add_snippet")
+        screen = _fake_prompt(ask_return={"u1": "add_snippet"})
         text_prompt = _fake_prompt(ask_side_effect=KeyboardInterrupt)
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
-            patch("pcswitcher.jobs.packages.review.prompt_navigation.select", return_value=select_prompt),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen),
             patch("pcswitcher.jobs.packages.review.questionary.text", return_value=text_prompt),
             pytest.raises(KeyboardInterrupt),
         ):
@@ -947,35 +952,35 @@ class TestUnreproducibleGroupResolution:
 
         with (
             patch.object(sys, "stdin", _mock_isatty(False)),
-            patch("pcswitcher.jobs.packages.review.prompt_navigation.select") as select_mock,
+            patch("pcswitcher.jobs.packages.review.decision_list") as screen_mock,
             patch("pcswitcher.jobs.packages.review.questionary.text") as text_mock,
         ):
             outcome = await review_items([group], console=console, ui=ui, **HOSTS)
 
-        select_mock.assert_not_called()
+        screen_mock.assert_not_called()
         text_mock.assert_not_called()
         assert outcome.snippets == {}
         assert set(outcome.unresolved) == {"u1", "u2"}
         assert outcome.was_interactive is False
 
-    async def test_unreproducible_group_never_offered_as_a_decision_screen(self) -> None:
-        """The group's action is a sentinel `review_items` special-cases, not a normal
-        install/remove verb — asserting the checkbox path is never taken guards against
-        the sentinel silently falling through to the generic tick-list flow.
+    async def test_each_item_gets_a_decision_screen_of_its_own(self) -> None:
+        """Ruled by the user: one question per item, because answering "install" opens an
+        editor for that item and a later item may need different words — but in the format
+        every other screen uses, not a picker of sentences.
         """
         console = _interactive_console()
         ui = MagicMock()
-        group = _unreproducible_group([_entry("u1", label="brscan3")])
-        select_prompt = _fake_prompt(ask_return="skip_once")
+        group = _unreproducible_group([_entry("u1", label="brscan3"), _entry("u2", label="cnpg")])
+        screen = _fake_prompt(ask_side_effect=[{"u1": "skip_once"}, {"u2": "skip_once"}])
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
-            patch("pcswitcher.jobs.packages.review.prompt_navigation.select", return_value=select_prompt),
-            patch("pcswitcher.jobs.packages.review.decision_list") as decision_list,
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen) as decision_list,
         ):
             await review_items([group], console=console, ui=ui, **HOSTS)
 
-        decision_list.assert_not_called()
+        assert decision_list.call_count == 2
+        assert [len(call.kwargs["rows"]) for call in decision_list.call_args_list] == [1, 1]
 
 
 @pytest.mark.asyncio
@@ -989,11 +994,11 @@ class TestCollateralGroupResolution:
         console = _interactive_console()
         ui = MagicMock()
         group = _collateral_group([_entry("apt:package:pkg-a", label="other-manual")])
-        select_prompt = _fake_prompt(ask_return="proceed")
+        screen = _fake_prompt(ask_return={"apt:package:pkg-a": "apply"})
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
-            patch("pcswitcher.jobs.packages.review.prompt_navigation.select", return_value=select_prompt),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen),
         ):
             outcome = await review_items([group], console=console, ui=ui, **HOSTS)
 
@@ -1003,11 +1008,11 @@ class TestCollateralGroupResolution:
         console = _interactive_console()
         ui = MagicMock()
         group = _collateral_group([_entry("apt:package:pkg-a", label="other-manual")])
-        select_prompt = _fake_prompt(ask_return="skip")
+        screen = _fake_prompt(ask_return={"apt:package:pkg-a": "skip_once"})
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
-            patch("pcswitcher.jobs.packages.review.prompt_navigation.select", return_value=select_prompt),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen),
         ):
             outcome = await review_items([group], console=console, ui=ui, **HOSTS)
 
@@ -1017,11 +1022,11 @@ class TestCollateralGroupResolution:
         console = _interactive_console()
         ui = MagicMock()
         group = _collateral_group([_entry("apt:package:pkg-a", label="other-manual")])
-        select_prompt = _fake_prompt(ask_return="abort")
+        screen = _fake_prompt(ask_return={"apt:package:pkg-a": "stop_sync"})
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
-            patch("pcswitcher.jobs.packages.review.prompt_navigation.select", return_value=select_prompt),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen),
             pytest.raises(SyncAbortedByUser, match="other-manual"),
         ):
             await review_items([group], console=console, ui=ui, **HOSTS)
@@ -1036,30 +1041,35 @@ class TestCollateralGroupResolution:
         console = _interactive_console()
         ui = MagicMock()
         group = _collateral_group([_entry("apt:package:pkg-a", label="pkg[weird]name")])
-        select_prompt = _fake_prompt(ask_return="skip")
+        screen = _fake_prompt(ask_return={"apt:package:pkg-a": "skip_once"})
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
-            patch("pcswitcher.jobs.packages.review.prompt_navigation.select", return_value=select_prompt),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen),
         ):
             outcome = await review_items([group], console=console, ui=ui, **HOSTS)
 
         assert outcome.decisions["apt:package:pkg-a"] == Decision.SKIP_ONCE
 
-    async def test_collateral_group_never_offered_as_a_decision_screen(self) -> None:
+    async def test_each_package_gets_a_decision_screen_of_its_own(self) -> None:
+        """One question per package — the causes and effects differ per item, so one legend
+        could not phrase them — in the format every other screen uses.
+        """
         console = _interactive_console()
         ui = MagicMock()
-        group = _collateral_group([_entry("apt:package:pkg-a", label="other-manual")])
-        select_prompt = _fake_prompt(ask_return="skip")
+        group = _collateral_group(
+            [_entry("apt:package:pkg-a", label="other-manual"), _entry("apt:package:pkg-b", label="second-manual")]
+        )
+        screen = _fake_prompt(ask_side_effect=[{"apt:package:pkg-a": "skip_once"}, {"apt:package:pkg-b": "skip_once"}])
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
-            patch("pcswitcher.jobs.packages.review.prompt_navigation.select", return_value=select_prompt),
-            patch("pcswitcher.jobs.packages.review.decision_list") as decision_list,
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen) as decision_list,
         ):
             await review_items([group], console=console, ui=ui, **HOSTS)
 
-        decision_list.assert_not_called()
+        assert decision_list.call_count == 2
+        assert [len(call.kwargs["rows"]) for call in decision_list.call_args_list] == [1, 1]
 
     async def test_non_interactive_collateral_entries_skip_once_and_are_not_unresolved(self) -> None:
         """D-26: without a TTY a collateral entry comes back SKIP_ONCE like every other
@@ -1072,11 +1082,11 @@ class TestCollateralGroupResolution:
 
         with (
             patch.object(sys, "stdin", _mock_isatty(False)),
-            patch("pcswitcher.jobs.packages.review.prompt_navigation.select") as select_mock,
+            patch("pcswitcher.jobs.packages.review.decision_list") as screen_mock,
         ):
             outcome = await review_items([group], console=console, ui=ui, **HOSTS)
 
-        select_mock.assert_not_called()
+        screen_mock.assert_not_called()
         assert outcome.decisions["apt:package:pkg-a"] == Decision.SKIP_ONCE
         assert outcome.unresolved == ()
 
@@ -1098,8 +1108,8 @@ def _conflict_entry(
         label="vendor.list",
         action_label="overwrite",
         detail=(
-            "vendor.list is different on the two machines, and nomad installs curl from it — packages you set "
-            "to always skip, so a sync normally leaves them alone"
+            "vendor.list is different on the two machines, and nomad installs curl from it — package you "
+            "marked as specific to nomad, so a sync normally leaves it alone"
         ),
         versions=(target_version, source_version),
     )
@@ -1140,11 +1150,15 @@ class TestRepoConflictGroupResolution:
             outcome = await review_items([_conflict_group([_conflict_entry()])], console=console, ui=ui, **HOSTS)
 
         assert outcome.decisions == {"apt:conflict:vendor.list": Decision.SKIP_ONCE}
-        assert _screen_words(decision_list.call_args) == ["overwrite", "keep nomad's version"]
+        # `<s>` means "skip now" on every screen of the review; which version survives is
+        # said in the answer's hint, not by giving this one screen its own second word.
+        assert _screen_words(decision_list.call_args) == ["overwrite", "skip now"]
         assert _screen_defaults(decision_list.call_args) == {"apt:conflict:vendor.list": Decision.SKIP_ONCE}
 
-    async def test_one_screen_answers_every_conflicting_file(self) -> None:
-        """D-24: the conflicts are a batch, not a queue of one prompt per file."""
+    async def test_each_conflicting_file_is_answered_right_after_it_is_shown(self) -> None:
+        """Ruled by the user, replacing the batch: two whole file bodies per entry meant a
+        batched screen asked about definitions that had already scrolled off.
+        """
         console = _interactive_console()
         ui = MagicMock()
         first = _conflict_entry()
@@ -1154,7 +1168,9 @@ class TestRepoConflictGroupResolution:
             action_label="overwrite",
             versions=("a\n", "b\n"),
         )
-        screen = _fake_prompt(ask_return={"apt:conflict:vendor.list": "apply", "apt:conflict:other.list": "skip_once"})
+        screen = _fake_prompt(
+            ask_side_effect=[{"apt:conflict:vendor.list": "apply"}, {"apt:conflict:other.list": "skip_once"}]
+        )
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
@@ -1162,7 +1178,8 @@ class TestRepoConflictGroupResolution:
         ):
             outcome = await review_items([_conflict_group([first, second])], console=console, ui=ui, **HOSTS)
 
-        decision_list.assert_called_once()
+        assert decision_list.call_count == 2
+        assert [len(call.kwargs["rows"]) for call in decision_list.call_args_list] == [1, 1]
         assert outcome.decisions == {
             "apt:conflict:vendor.list": Decision.APPLY,
             "apt:conflict:other.list": Decision.SKIP_ONCE,
@@ -1272,7 +1289,7 @@ class TestRepoConflictGroupResolution:
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
             patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen),
-            pytest.raises(SyncAbortedByUser, match="Resolve apt repository conflicts"),
+            pytest.raises(SyncAbortedByUser, match=r"vendor\.list"),
         ):
             await review_items([_conflict_group([_conflict_entry()])], console=console, ui=ui, **HOSTS)
 
@@ -1430,7 +1447,9 @@ class TestRemovalGroupContent:
         with isatty, screen:
             await review_items([group], console=console, ui=MagicMock(), **HOSTS)
 
-        assert out.getvalue().strip() == ""
+        # Its name, and nothing else: no panel where there is no file body to show.
+        assert "vendor.list (list)" in out.getvalue()
+        assert "╭" not in out.getvalue()
 
     async def test_a_bracketed_pin_body_renders_without_markup_error(self) -> None:
         out = io.StringIO()
@@ -1455,7 +1474,7 @@ class TestCollateralPromptWording:
     what each of the three answers costs — and how far "stop" reaches."""
 
     @staticmethod
-    async def _titles(selected: str = "protect") -> tuple[MagicMock, str]:
+    async def _titles(selected: str = "skip_once") -> tuple[MagicMock, str]:
         out = io.StringIO()
         console = Console(file=out, force_terminal=True, no_color=True, width=200)
         group = _collateral_group(
@@ -1463,48 +1482,63 @@ class TestCollateralPromptWording:
                 ReviewEntry(
                     item_id="apt:package:pkg-a",
                     label="fortunes",
-                    action_label="resolve",
+                    action_label="remove",
                     detail="Installing sl on nomad would remove fortunes",
+                    answer_hints=(
+                        "install sl on nomad, so fortunes is removed as well",
+                        "keep fortunes on nomad; sl will not be installed; will be asked again next sync",
+                    ),
                 )
             ]
         )
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
             patch(
-                "pcswitcher.jobs.packages.review.prompt_navigation.select",
-                return_value=_fake_prompt(ask_return=selected),
-            ) as select,
+                "pcswitcher.jobs.packages.review.decision_list",
+                return_value=_fake_prompt(ask_return={"apt:package:pkg-a": selected}),
+            ) as decision_list,
         ):
             await review_items([group], console=console, ui=MagicMock(), **HOSTS)
-        return select, out.getvalue()
+        return decision_list, out.getvalue()
 
-    async def test_the_question_and_every_answer_name_the_machine_and_its_own_effect(self) -> None:
-        select, _printed = await self._titles()
+    async def test_every_answer_names_the_machine_and_its_own_effect(self) -> None:
+        """The act and skip sentences come from the ENTRY: they name the change that causes
+        the collateral, which differs per item — an install here, a removal on the next
+        screen — so no screen-wide legend could state them.
+        """
+        decision_list, _printed = await self._titles()
 
-        assert select.call_args.args[0] == "What should happen to fortunes on nomad?"
-        titles = {choice.value: choice.title for choice in select.call_args.kwargs["choices"]}
-        assert titles["proceed"] == "Go ahead — fortunes changes on nomad as described above"
-        assert titles["protect"] == (
-            "Keep fortunes as it is — the changes that would touch it are dropped from this sync"
+        options = {option.value: option for option in decision_list.call_args.kwargs["options"]}
+        assert options["apply"].word == "remove"
+        assert options["apply"].hint == "install sl on nomad, so fortunes is removed as well"
+        assert options["skip_once"].word == "skip now"
+        assert options["skip_once"].hint == (
+            "keep fortunes on nomad; sl will not be installed; will be asked again next sync"
         )
-        assert titles["abort"] == (
-            "Stop the whole pc-switcher sync now — nothing more is changed on nomad, and what earlier jobs "
-            "already did stays done"
+        assert options["stop_sync"].word == "stop the sync"
+        assert options["stop_sync"].hint == (
+            "nothing more is changed on nomad; what earlier jobs already did stays done"
         )
-        assert "the target" not in " ".join(titles.values())
+        assert "the target" not in " ".join(option.hint for option in options.values())
 
-    async def test_the_prompt_says_why_this_package_is_protected(self) -> None:
-        """Not "machine-specific" — nobody recorded anything. The target's own apt says the
-        user asked for this package, which is a different fact and the true one."""
-        _select, printed = await self._titles()
+    async def test_the_finding_is_stated_before_the_reason_this_package_is_protected(self) -> None:
+        """The user could not tell what "You asked for fortunes on nomad yourself" meant.
+        It is apt's manual-install mark — nobody recorded a pc-switcher preference — and it
+        answers "why am I being asked about this one", which is a question the reader only
+        has after being told what would happen to it.
+        """
+        decision_list, printed = await self._titles()
 
-        assert "You asked for fortunes on nomad yourself" in printed
+        printed += " ".join(row.detail or "" for row in decision_list.call_args.kwargs["rows"])
         assert "manually installed" in printed
         assert "Installing sl on nomad would remove fortunes" in printed
+        assert printed.index("would remove fortunes") < printed.index("manually installed")
+        assert "You asked for" not in printed
+        assert "without asking" not in printed
 
     async def test_stopping_names_the_package_and_the_machine_in_the_abort(self) -> None:
         with pytest.raises(SyncAbortedByUser) as excinfo:
-            await self._titles("abort")
+            await self._titles("stop_sync")
 
         assert str(excinfo.value) == (
             "fortunes on nomad would have been removed or downgraded; the whole sync was stopped in the package review"

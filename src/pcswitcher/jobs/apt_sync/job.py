@@ -476,7 +476,13 @@ class AptSyncJob(PackageSyncJob):
                         f"remove or downgrade ({self.manager_id})"
                     ),
                     entries=tuple(
-                        ReviewEntry(item_id=diff.item_id, label=diff.label, action_label="resolve", detail=diff.detail)
+                        ReviewEntry(
+                            item_id=diff.item_id,
+                            label=diff.label,
+                            action_label=diff.act_word or "resolve",
+                            detail=diff.detail,
+                            answer_hints=diff.answer_hints,
+                        )
                         for diff in collateral
                     ),
                 )

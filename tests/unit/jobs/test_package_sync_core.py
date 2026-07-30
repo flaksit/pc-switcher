@@ -220,11 +220,11 @@ class TestReviewGroupsByAction:
 
         assert [g.action for g in groups] == ["install", "change", "remove", "report_only"]
 
-    def test_report_only_falls_back_to_report_for_a_class_with_no_vocabulary_entry(self) -> None:
-        """IN-01 regression: `_ACTION_VOCABULARY` only lists an explicit REPORT_ONLY
-        entry for APT_PACKAGE. Every other item class's REPORT_ONLY diff must still
-        fall back to the word "report", not the raw enum value "report_only" (which
-        produced a title like "Report_only fake packages").
+    def test_a_report_group_is_titled_by_its_cause_not_by_the_word_report(self) -> None:
+        """Ruled by the user: "Report apt packages" named none of the three conditions it
+        could hold. The title is the cause — the `DiffClass` — and the raw enum value
+        ("report_only", which once produced "Report_only fake packages") reaches no title
+        in either shape.
         """
         job = FakeSyncJob(make_context())
         diffs = [
@@ -242,8 +242,11 @@ class TestReviewGroupsByAction:
 
         assert len(groups) == 1
         assert groups[0].entries[0].action_label == "report"
+        assert groups[0].title == "Version differences (fake packages)"
         assert "report_only" not in groups[0].title.lower()
-        assert "report" in groups[0].title.lower()
+        # No upgrade command is known for a made-up manager, so the note is empty and is
+        # dropped rather than printed as a sentence with a hole in it.
+        assert groups[0].note is None
 
     def test_every_pair_without_a_vocabulary_entry_still_produces_a_usable_group(self) -> None:
         """I5b: `_ACTION_VOCABULARY` covers only the (item_class, action) pairs the four

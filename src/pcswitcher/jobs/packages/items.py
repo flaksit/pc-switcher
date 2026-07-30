@@ -135,6 +135,14 @@ class ItemDiff:
     item_id: str
     label: str
     detail: str | None = None
+    # `(act, skip now)` for a screen that asks about this item alone, where the answers name
+    # THIS item's own change. A collateral package is the case: "install sl on nomad, so
+    # fortunes is removed as well" is not something a screen-wide legend can say, and the
+    # next item may be a downgrade caused by something else entirely. `act_word` is that
+    # screen's verb for the same reason — one group's items can be removals and downgrades
+    # at once, so the group's own verb would be wrong for half of them.
+    answer_hints: tuple[str, str] | None = None
+    act_word: str | None = None
 
 
 def build_version_mismatch_detail(source_version: str, target_version: str, machines: Machines) -> str:
