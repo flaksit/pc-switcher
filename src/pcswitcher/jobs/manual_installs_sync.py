@@ -55,7 +55,7 @@ from pcswitcher.jobs.packages.items import (
     ItemClass,
     ItemDiff,
 )
-from pcswitcher.jobs.packages.probes import require_answer
+from pcswitcher.jobs.packages.probes import ProbeFailed, require_answer
 from pcswitcher.jobs.packages.review import (
     UNREPRODUCIBLE_REVIEW_ACTION,
     Decision,
@@ -85,9 +85,10 @@ from pcswitcher.redaction import redact_credentials
 __all__ = ["ManualInstallsSyncJob"]
 
 # D-19's bounded unowned-install scan: top-level entries of `/usr/local` and `/opt`, plus
-# the immediate children of `/usr/local/bin` and `/usr/local/lib` — one batched
-# `find <dir...> -mindepth 1 -maxdepth 1` covers all four, since `find` applies the same
-# depth options to every starting path it is given. Enough to NAME a finding (D-18), never
+# the immediate children of `/usr/local/bin` and `/usr/local/lib` — one shell loop runs
+# `find <root> -mindepth 1 -maxdepth 1` over each of the four, skipping any that is not
+# there so a missing root is not an error to tell apart from a broken one
+# (`_scan_unowned_installs`). Enough to NAME a finding (D-18), never
 # enough to walk an entire tree — the item is decided on, not replicated (deferred ideas,
 # CONTEXT.md). Owned by this job now, no longer shared with apt_sync (D-18).
 _UNOWNED_SCAN_ROOTS = ("/usr/local", "/opt", "/usr/local/bin", "/usr/local/lib")
@@ -99,6 +100,13 @@ _UNOWNED_SCAN_ROOTS = ("/usr/local", "/opt", "/usr/local/bin", "/usr/local/lib")
 # keeps ownership clean by NOT importing apt_sync, and this parser is small enough that
 # one duplicated line is cheaper than a shared-core coupling.
 _DPKG_S_OWNED_RE = re.compile(r"^[^:]+:\s+(?P<path>/\S.*)$")
+
+# One extra path handed to the unowned scan's `dpkg --search`, whose "owned" line is the
+# proof that dpkg answered at all (`_scan_unowned_installs`). dpkg owns its own binary by
+# construction — the package is Essential and ships it — so a batch that comes back without
+# this line came back from a dpkg that did not answer, whatever it exited. It is filtered
+# out of the candidates before anything is reported.
+_DPKG_OWNERSHIP_WITNESS = "/usr/bin/dpkg"
 
 
 # -- manual-install item shape --------------------------------------------------------
@@ -431,21 +439,46 @@ class ManualInstallsSyncJob(PackageSyncJob):
         `dpkg --search` output is unowned. Both steps run on the SOURCE (D-18) — a fact about
         what the source machine has installed, not the target.
 
-        Neither step is guarded, and both are ADR-022 counter-examples rather than
-        omissions. `dpkg --search` exits 1 as soon as ONE queried path is unowned, which is
-        precisely the finding this scan is looking for, so a non-zero exit here carries no
-        information about whether dpkg answered. The `find` already discards its own stderr
-        and tolerates an absent scan root by design.
+        Both are guarded, and neither by its bare exit code (ADR-022, `PKG-FR-READ-FAILS-JOB`):
+
+        - `find` is driven from a shell loop that SKIPS a scan root that is not there, so
+          the one tolerated error is gone from the exit code rather than hidden behind the
+          `2>/dev/null` this used to carry. What is left — an unreadable root, a missing
+          binary — exits non-zero and reaches `require_answer`. Empty output on a clean exit
+          stays an ordinary answer: a machine with nothing under `/opt` is an ordinary
+          machine. Silence, on the other hand, is not "nothing is installed by hand here":
+          it would drop every finding this job exists to make.
+        - `dpkg --search` exits 1 as soon as ONE queried path is unowned, which is precisely
+          the finding this scan is looking for, so its exit code says nothing about whether
+          it answered. `_DPKG_OWNERSHIP_WITNESS` supplies the answer the exit code cannot: a
+          path dpkg must claim rides along in the same batch, and its absence from the reply
+          means dpkg did not answer. Without it a dead `dpkg --search` prints nothing, every
+          candidate looks unowned, and the user is asked to write an install snippet for
+          every entry under `/opt` and `/usr/local`.
         """
         quoted_roots = " ".join(shlex.quote(root) for root in _UNOWNED_SCAN_ROOTS)
-        listing = await self.source.run_command(f"find {quoted_roots} -mindepth 1 -maxdepth 1 2>/dev/null")
+        # One line, never a multi-line script: the command is echoed verbatim into the debug
+        # trace and the `--confirm-each-command` gate.
+        listing_command = (
+            f'for root in {quoted_roots}; do [ -d "$root" ] || continue; '
+            'find "$root" -mindepth 1 -maxdepth 1 || exit 1; done'
+        )
+        listing = await self.source.run_command(listing_command)
+        require_answer(listing_command, listing, Host.SOURCE)
         candidates = _lines(listing.stdout)
         if not candidates:
             return []
 
-        quoted_paths = " ".join(shlex.quote(path) for path in candidates)
-        ownership = await self.source.run_command(f"dpkg --search {quoted_paths}")
+        quoted_paths = " ".join(shlex.quote(path) for path in [*candidates, _DPKG_OWNERSHIP_WITNESS])
+        ownership_command = f"dpkg --search {quoted_paths}"
+        ownership = await self.source.run_command(ownership_command)
         owned = _owned_paths_from_dpkg_s(ownership.stdout)
+        if _DPKG_OWNERSHIP_WITNESS not in owned:
+            raise ProbeFailed(
+                f"probe on the {Host.SOURCE.value} did not answer — `{ownership_command}` reported no owner for "
+                f"{_DPKG_OWNERSHIP_WITNESS}, which dpkg owns on every machine, so its silence about the other "
+                f"paths is not an answer about them: {ownership.stderr.strip()}"
+            )
 
         return [
             UnreproducibleItem(origin="unowned-path", identifier=path, label=path)

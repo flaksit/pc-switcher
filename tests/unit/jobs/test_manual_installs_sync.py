@@ -106,6 +106,11 @@ _POLICY_AUTO_DEP = """7zip:
         500 http://ftp.belnet.be/ubuntu noble/universe amd64 Packages
 """
 
+# The unowned scan hands `dpkg --search` one path dpkg is certain to own, and reads its
+# "owned" line as the proof that dpkg answered at all. Every stub of that command must
+# therefore reply with it, exactly as a working dpkg would.
+DPKG_WITNESS_LINE = "dpkg: /usr/bin/dpkg\n"
+
 # A `package-snippets.yaml` registry holding one snippet for the brscan3 no-candidate item.
 BRSCAN3_REGISTRY_YAML = (
     "snippets:\n"
@@ -446,12 +451,14 @@ class TestUnownedScan:
     async def test_scan_unowned_installs_yields_two_items_from_four_candidates(self) -> None:
         context, _source, _target = make_context(
             source_responses={
-                "find /usr/local": CommandResult(
+                "for root in": CommandResult(
                     0,
                     "/usr/local/flux\n/usr/local/bin/talosctl\n/usr/local/bin/kubectl-cnpg\n/opt/az\n",
                     "",
                 ),
-                "dpkg --search": CommandResult(0, "cnpg: /usr/local/bin/kubectl-cnpg\nazure-cli: /opt/az\n", ""),
+                "dpkg --search": CommandResult(
+                    0, f"cnpg: /usr/local/bin/kubectl-cnpg\nazure-cli: /opt/az\n{DPKG_WITNESS_LINE}", ""
+                ),
             }
         )
         job = ManualInstallsSyncJob(context)
@@ -469,11 +476,99 @@ class TestUnownedScan:
 
         await job._scan_unowned_installs()  # pyright: ignore[reportPrivateUsage]
 
-        find_calls = [c.args[0] for c in source.run_command.call_args_list if c.args[0].startswith("find ")]
+        find_calls = [c.args[0] for c in source.run_command.call_args_list if "find " in c.args[0]]
         assert len(find_calls) == 1
-        assert (
-            find_calls[0] == "find /usr/local /opt /usr/local/bin /usr/local/lib -mindepth 1 -maxdepth 1 2>/dev/null"
+        assert find_calls[0] == (
+            'for root in /usr/local /opt /usr/local/bin /usr/local/lib; do [ -d "$root" ] || continue; '
+            'find "$root" -mindepth 1 -maxdepth 1 || exit 1; done'
         )
+        assert "\n" not in find_calls[0], "a multi-line command is mangled in the trace and the confirm gate"
+
+    @pytest.mark.asyncio
+    async def test_a_find_that_could_not_run_fails_the_job_rather_than_reporting_nothing(self) -> None:
+        """`PKG-FR-READ-FAILS-JOB`: an unreadable scan root, a missing binary, a shell that
+        could not start — none of them mean this machine installed nothing by hand.
+        """
+        context, _source, _target = make_context(
+            source_responses={"for root in": CommandResult(1, "", "find: '/opt': Permission denied")}
+        )
+        job = ManualInstallsSyncJob(context)
+
+        with pytest.raises(ProbeFailed) as excinfo:
+            await job._scan_unowned_installs()  # pyright: ignore[reportPrivateUsage]
+
+        assert "Permission denied" in str(excinfo.value)
+
+    @pytest.mark.asyncio
+    async def test_a_scan_root_that_is_not_there_is_skipped_not_an_error(self) -> None:
+        """The loop tests each root before listing it, so the one tolerated failure never
+        reaches the exit code — which is what lets the guard above trust that exit code.
+        """
+        context, source, _target = make_context(
+            source_responses={
+                "for root in": CommandResult(0, "/opt/az\n", ""),
+                "dpkg --search": CommandResult(1, DPKG_WITNESS_LINE, ""),
+            }
+        )
+        job = ManualInstallsSyncJob(context)
+
+        items = await job._scan_unowned_installs()  # pyright: ignore[reportPrivateUsage]
+
+        assert [item.identifier for item in items] == ["/opt/az"]
+        assert '[ -d "$root" ] || continue' in all_calls(source)[0]
+
+    @pytest.mark.asyncio
+    async def test_a_dpkg_that_did_not_answer_does_not_make_every_path_unowned(self) -> None:
+        """A dead `dpkg --search` prints nothing and exits 1 — the same shape as a batch
+        where every path is genuinely unowned. Without the witness, every entry under
+        `/opt` and `/usr/local` would become an item demanding an install snippet.
+        """
+        context, _source, _target = make_context(
+            source_responses={
+                "for root in": CommandResult(0, "/usr/local/flux\n/opt/az\n", ""),
+                "dpkg --search": CommandResult(1, "", "dpkg-query: error: unable to open files list file"),
+            }
+        )
+        job = ManualInstallsSyncJob(context)
+
+        with pytest.raises(ProbeFailed) as excinfo:
+            await job._scan_unowned_installs()  # pyright: ignore[reportPrivateUsage]
+
+        assert "/usr/bin/dpkg" in str(excinfo.value)
+        assert "unable to open files list file" in str(excinfo.value)
+
+    @pytest.mark.asyncio
+    async def test_a_batch_where_every_path_is_unowned_is_an_ordinary_answer(self) -> None:
+        """The legitimate exit-1 case dpkg cannot distinguish by exit code: the witness is
+        answered, so every other path really is unowned.
+        """
+        context, _source, _target = make_context(
+            source_responses={
+                "for root in": CommandResult(0, "/usr/local/flux\n/opt/az\n", ""),
+                "dpkg --search": CommandResult(
+                    1, DPKG_WITNESS_LINE, "dpkg-query: no path found matching pattern /opt/az"
+                ),
+            }
+        )
+        job = ManualInstallsSyncJob(context)
+
+        items = await job._scan_unowned_installs()  # pyright: ignore[reportPrivateUsage]
+
+        assert [item.identifier for item in items] == ["/opt/az", "/usr/local/flux"]
+
+    @pytest.mark.asyncio
+    async def test_the_witness_is_never_reported_as_a_finding(self) -> None:
+        context, _source, _target = make_context(
+            source_responses={
+                "for root in": CommandResult(0, "/opt/az\n", ""),
+                "dpkg --search": CommandResult(0, DPKG_WITNESS_LINE, ""),
+            }
+        )
+        job = ManualInstallsSyncJob(context)
+
+        items = await job._scan_unowned_installs()  # pyright: ignore[reportPrivateUsage]
+
+        assert [item.identifier for item in items] == ["/opt/az"]
 
 
 class TestSnippetResolution:
@@ -612,13 +707,13 @@ class TestInstallOnly:
             source_responses={
                 "apt-mark showmanual": CommandResult(0, "brscan3\n", ""),
                 "apt-cache policy": CommandResult(0, _hand_deb_policy("brscan3"), ""),
-                "find /usr/local": CommandResult(0, "/usr/local/flux\n", ""),
-                "dpkg --search": CommandResult(0, "", ""),
+                "for root in": CommandResult(0, "/usr/local/flux\n", ""),
+                "dpkg --search": CommandResult(0, DPKG_WITNESS_LINE, ""),
             },
             target_responses={
                 "apt-mark showmanual": CommandResult(0, "brscan3\ntarget-only-tool\n", ""),
-                "find /usr/local": CommandResult(0, "/usr/local/flux\n/usr/local/target-only\n", ""),
-                "dpkg --search": CommandResult(0, "", ""),
+                "for root in": CommandResult(0, "/usr/local/flux\n/usr/local/target-only\n", ""),
+                "dpkg --search": CommandResult(0, DPKG_WITNESS_LINE, ""),
             },
         )
         job = ManualInstallsSyncJob(context)
@@ -629,7 +724,7 @@ class TestInstallOnly:
         assert all(diff.action != DiffAction.REMOVE for diff in plan.diffs)
         assert all(group.action != DiffAction.REMOVE.value for group in plan.groups)
         # ...and no target-side detection ran at all, so nothing target-only can surface.
-        assert not [cmd for cmd in all_calls(target) if "showmanual" in cmd or cmd.startswith("find ")]
+        assert not [cmd for cmd in all_calls(target) if "showmanual" in cmd or "find " in cmd]
 
 
 class TestInertFiltering:
@@ -730,8 +825,8 @@ class TestTracerEndToEnd:
             source_responses={
                 "apt-mark showmanual": CommandResult(0, "brscan3\n", ""),
                 "apt-cache policy": CommandResult(0, _hand_deb_policy("brscan3"), ""),
-                "find /usr/local": CommandResult(0, "/usr/local/flux\n/opt/az\n", ""),
-                "dpkg --search": CommandResult(0, "azure-cli: /opt/az\n", ""),
+                "for root in": CommandResult(0, "/usr/local/flux\n/opt/az\n", ""),
+                "dpkg --search": CommandResult(0, f"azure-cli: /opt/az\n{DPKG_WITNESS_LINE}", ""),
                 # Source registry holds only brscan3 -> it plans INSTALL, flux plans REPORT_ONLY.
                 "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, BRSCAN3_REGISTRY_YAML, ""),
             },
@@ -1077,7 +1172,7 @@ class TestSnippetPush:
             source_responses={
                 "apt-mark showmanual": CommandResult(0, "gh\n", ""),
                 "apt-cache policy": CommandResult(0, _POLICY_REPO_INSTALLED, ""),
-                "find ": CommandResult(0, "", ""),
+                "for root in": CommandResult(0, "", ""),
             },
             reviewer=FakeReviewer(was_interactive=False),
         )
