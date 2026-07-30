@@ -1,0 +1,36 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "e40dddd0d3cd",
+  "strategy": "manual-commit",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "src/pcswitcher/jobs/apt_sync/collateral.py",
+    "src/pcswitcher/jobs/apt_sync/commands.py",
+    "src/pcswitcher/jobs/apt_sync/diffing.py",
+    "src/pcswitcher/jobs/apt_sync/job.py",
+    "src/pcswitcher/jobs/apt_sync/packages.py",
+    "src/pcswitcher/jobs/apt_sync/probe.py",
+    "tests/unit/jobs/apt/helpers.py",
+    "tests/unit/jobs/apt/test_apt_collateral.py",
+    "tests/unit/jobs/apt/test_apt_diffing.py",
+    "tests/unit/jobs/apt/test_apt_packages.py",
+    "tests/unit/jobs/test_block_state_decisions.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/e4/0dddd0d3cd/0/metadata.json",
+      "transcript": "/e4/0dddd0d3cd/0/full.jsonl",
+      "compact_transcript": "/e4/0dddd0d3cd/0/transcript.jsonl",
+      "content_hash": "/e4/0dddd0d3cd/0/content_hash.txt",
+      "prompt": "/e4/0dddd0d3cd/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 397,
+    "cache_creation_tokens": 460622,
+    "cache_read_tokens": 53923535,
+    "output_tokens": 158673,
+    "api_call_count": 210
+  }
+}
