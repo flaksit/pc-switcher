@@ -1,0 +1,61 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "3894f4fe4350",
+  "session_id": "c8f94480-6a9f-4854-b200-5d428cf16c8f",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-30T16:50:32.487622918Z",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    "docs/adr/adr-020-declarative-package-convergence.md",
+    "docs/jobs/package-sync.md",
+    "src/pcswitcher/jobs/apt_sync/messages.py",
+    "src/pcswitcher/jobs/flatpak_sync.py",
+    "src/pcswitcher/jobs/packages/decision_list.py",
+    "src/pcswitcher/jobs/packages/prompt_navigation.py",
+    "src/pcswitcher/jobs/packages/review.py",
+    "tests/manual/review_harness.py",
+    "tests/unit/jobs/test_apt_sync.py",
+    "tests/unit/jobs/test_decision_list.py",
+    "tests/unit/jobs/test_package_review.py",
+    "tests/unit/jobs/test_review_skip_always.py"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "34b801659738",
+  "checkpoint_transcript_start": 910,
+  "transcript_lines_at_start": 910,
+  "compact_transcript_start": 245,
+  "token_usage": {
+    "input_tokens": 2,
+    "cache_creation_tokens": 664,
+    "cache_read_tokens": 422454,
+    "output_tokens": 428,
+    "api_call_count": 1
+  },
+  "session_metrics": {
+    "turn_count": 17
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-30T16:50:32.360962981Z",
+    "agent_lines": 86,
+    "agent_removed": 127,
+    "human_added": 416,
+    "human_modified": 331,
+    "human_removed": 0,
+    "total_committed": 833,
+    "total_lines_changed": 998,
+    "agent_percentage": 21.34268537074148,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    }
+  ]
+}
