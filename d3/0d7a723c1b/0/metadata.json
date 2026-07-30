@@ -1,0 +1,67 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "d30d7a723c1b",
+  "session_id": "354077f7-8171-4dc7-8e2f-e2c4e73a7888",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-30T21:38:02.802102124Z",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    "src/pcswitcher/jobs/packages/review.py"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "934ce3bb96f9",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 289,
+    "cache_creation_tokens": 304652,
+    "cache_read_tokens": 30344662,
+    "output_tokens": 85785,
+    "api_call_count": 152
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-30T21:38:02.71437084Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 368,
+    "human_modified": 22,
+    "human_removed": 0,
+    "total_committed": 368,
+    "total_lines_changed": 413,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 373,
+      "user_lines_removed": 20,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9,
+        "docs/adr/adr-021-what-the-log-records-and-withholds.md": 5,
+        "docs/system/logging.md": 3,
+        "src/pcswitcher/executor.py": 44,
+        "src/pcswitcher/jobs/packages/items.py": 17,
+        "src/pcswitcher/jobs/packages/review.py": 5,
+        "src/pcswitcher/jobs/packages/sync_core.py": 31,
+        "src/pcswitcher/logger.py": 32,
+        "src/pcswitcher/redaction.py": 40,
+        "tests/unit/jobs/test_package_review.py": 5,
+        "tests/unit/jobs/test_package_sync_core.py": 43,
+        "tests/unit/test_redaction.py": 100,
+        "tests/unit/test_step_gate.py": 39
+      },
+      "user_removed_per_file": {
+        "docs/adr/adr-021-what-the-log-records-and-withholds.md": 5,
+        "src/pcswitcher/executor.py": 7,
+        "src/pcswitcher/jobs/packages/review.py": 2,
+        "src/pcswitcher/logger.py": 3,
+        "tests/unit/jobs/test_package_review.py": 3
+      }
+    }
+  ]
+}
