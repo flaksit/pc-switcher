@@ -3,7 +3,7 @@
   "checkpoint_id": "c7b2be11af45",
   "strategy": "manual-commit",
   "branch": "gsd/phase-02-package-management-sync",
-  "checkpoints_count": 4,
+  "checkpoints_count": 6,
   "files_touched": [
     "docs/jobs/package-sync.md",
     "src/pcswitcher/jobs/packages/decision_list.py",
@@ -28,13 +28,20 @@
       "compact_transcript": "/c7/b2be11af45/1/transcript.jsonl",
       "content_hash": "/c7/b2be11af45/1/content_hash.txt",
       "prompt": "/c7/b2be11af45/1/prompt.txt"
+    },
+    {
+      "metadata": "/c7/b2be11af45/2/metadata.json",
+      "transcript": "/c7/b2be11af45/2/full.jsonl",
+      "compact_transcript": "/c7/b2be11af45/2/transcript.jsonl",
+      "content_hash": "/c7/b2be11af45/2/content_hash.txt",
+      "prompt": "/c7/b2be11af45/2/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 1957,
-    "cache_creation_tokens": 3460725,
-    "cache_read_tokens": 116764444,
-    "output_tokens": 321277,
-    "api_call_count": 363
+    "input_tokens": 1974,
+    "cache_creation_tokens": 3472792,
+    "cache_read_tokens": 119523888,
+    "output_tokens": 330314,
+    "api_call_count": 372
   }
 }

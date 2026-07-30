@@ -1,0 +1,11 @@
+First ADR-020.
+Then check if 123 articles are the complete set to translate user req to articles, so that sweep can uncover ALL violations of user reqs.
+Then sweep.
+Then code and tests. You already named 3-8, but there will be more. So that is too early to detail.
+Would you do docs after the code? I prefer having docs in line with code, so doing docs as code+tests go. Challenge if you don't agree.
+
+What is "re-run the three checks"?
+
+I'd like to avoid GSD. Very much overhead (planning and execution phases taking extremely much time and tokens for often simple changes).
+
+I see apt_sync.md has > 4000 lines. That makes me worry about code structure (not only of apt-sync; of all of package sync). Do we have spaghetti, onto which we will apply even more patches? How to remediate and build that into the plan. Or are my worries not justified?
