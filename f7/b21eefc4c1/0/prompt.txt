@@ -1,0 +1,20 @@
+make "always skip" dark rose or reddish color (not hard red, if possible), so it is different from the yellow that is used elsewhere in the TUI and questionnaires
+
+---
+
+"Remove apt packages" (and other where similar): choices are "<y> remove   <s> keep it on nomad   <n> always skip". These three are named inconsistently. It is very unclear that <s> means "skip once" and the other way around that <n> means "register as machine-specific on nomad". And does <y> mean "remove on nomad"? Why "on nomad" said only for that single option? Are the others not about nomad?
+I understand what the choices mean. But a user wouldn't or would get confused or unsure.
+
+What do you propose?
+
+---
+
+only Install and Remove questions impacted? Or applicable to any other questions, too?
+
+---
+
+don't give line numbers but the context: when is this shown to user?
+
+---
+
+"packages/apps you set to always skip" > "package(s)/app(s) you marked as specific to nomad"
