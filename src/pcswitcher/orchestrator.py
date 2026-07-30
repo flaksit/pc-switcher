@@ -31,7 +31,7 @@ from pcswitcher.jobs.disk_space_monitor import DiskSpaceMonitorJob
 from pcswitcher.jobs.install_on_target import InstallOnTargetJob
 from pcswitcher.jobs.packages.probes import ProbeFailed
 from pcswitcher.jobs.packages.review import Reviewer, TerminalUIReviewer
-from pcswitcher.jobs.packages.sync_core import PackageItemFailures
+from pcswitcher.jobs.packages.sync_core import PackageItemFailures, PackageSyncJob
 from pcswitcher.lock import (
     SyncLock,
     get_hostname_command,
@@ -201,6 +201,30 @@ def _failure_already_logged(exc: BaseException) -> bool:
     return getattr(exc, _FAILURE_LOGGED_ATTR, False)
 
 
+def _failure_stays_in_its_job(job: Job, exc: Exception) -> bool:
+    """Whether `exc` fails only `job` and leaves the remaining jobs to run.
+
+    What isolates a failure is the JOB it came out of, not the exception class. The rule
+    package sync states is unqualified — one failed job does not stop the others
+    (`PKG-FR-JOB-INDEPENDENCE`, `PKG-FR-OUTCOME-FAILED`) — and a package job can fail in
+    ways that are not a converge failure or a dead read: a registry transfer, a filesystem
+    error, a parser defect. Each package job plans, reviews and applies its own work with
+    nothing coordinating them (D-15/D-16), so none of those say anything about the consent
+    the user already gave to another manager; cancelling it would discard approved work for
+    a job that is still fine. `PackageItemFailures` and `ProbeFailed` isolate wherever they
+    are raised, because both are by construction one manager's trouble (D-27, ADR-022).
+
+    A lock conflict is the exception to the exception: it means this machine is no longer
+    entitled to be syncing at all, so it ends the run whichever job surfaced it.
+
+    Jobs outside package sync — `folder_sync`, `vscode_state_sync`, the core jobs — still
+    abort the run. Which of those may survive a failure is GitHub issue #220.
+    """
+    if isinstance(exc, SyncLockedError):
+        return False
+    return isinstance(job, PackageSyncJob) or isinstance(exc, (PackageItemFailures, ProbeFailed))
+
+
 def _summarize_job_outcomes(job_results: list[JobResult]) -> tuple[SessionStatus, str | None]:
     """Derive the session outcome from the collected job results.
 
@@ -295,7 +319,8 @@ class Orchestrator:
         # in _cleanup. `_snap_hold_engaged` gates the restore so it is a no-op on runs that
         # never set a hold, and idempotent if _cleanup were entered twice. `_readable_` records
         # whether the pre-sync READ succeeded, which "no prior hold" (None) alone cannot express;
-        # it defaults False so an unread host is never cleared (see `_restore_snap_hold`).
+        # it defaults False so an unread host is neither written (`_hold_snap_autorefresh`) nor
+        # cleared (`_restore_snap_hold`).
         self._snap_hold_engaged = False
         self._snap_hold_prior_source: str | None = None
         self._snap_hold_prior_target: str | None = None
@@ -1293,8 +1318,8 @@ class Orchestrator:
                     except JobSkipped as e:
                         # The job did nothing and said so before touching anything
                         # (see JobSkipped). Record the honest status and carry on with
-                        # the next job — deliberately NOT re-raised, like the item-failure
-                        # arm below, because a skip is not a failure of the run.
+                        # the next job — deliberately NOT re-raised, like an isolated failure
+                        # below, because a skip is not a failure of the run.
                         ended_at = datetime.now(UTC)
                         results.append(
                             JobResult(
@@ -1309,31 +1334,6 @@ class Orchestrator:
                             "Job %s skipped: %s",
                             job.name,
                             e.reason,
-                            extra={"job": "orchestrator", "host": "source"},
-                        )
-                    except (PackageItemFailures, ProbeFailed) as e:
-                        # Each package job reviews and applies its own work; nothing
-                        # coordinates them (D-15/D-16). So one manager's failed items, and
-                        # one manager's read that went dark (ADR-022), say nothing about
-                        # another manager's already-approved work — cancelling it would
-                        # throw away consent the user gave for a job that is still fine.
-                        # Record this job's FAILED result (D-27) but deliberately do NOT
-                        # re-raise, so the remaining jobs still run — every other exception
-                        # keeps today's abort-the-run behavior.
-                        ended_at = datetime.now(UTC)
-                        results.append(
-                            JobResult(
-                                job_name=job.name,
-                                status=JobStatus.FAILED,
-                                started_at=started_at,
-                                ended_at=ended_at,
-                                error_message=str(e),
-                            )
-                        )
-                        self._logger.critical(
-                            "Job %s failed: %s",
-                            job.name,
-                            e,
                             extra={"job": "orchestrator", "host": "source"},
                         )
                     except Exception as e:
@@ -1353,6 +1353,8 @@ class Orchestrator:
                             e,
                             extra={"job": "orchestrator", "host": "source"},
                         )
+                        if _failure_stays_in_its_job(job, e):
+                            continue
                         # Already reported with the job name; stop run()'s top-level
                         # handler from logging the identical cause a second time.
                         _mark_failure_logged(e)
@@ -1471,9 +1473,16 @@ class Orchestrator:
         Gated on `sync_jobs.snap_sync` being enabled and skipped in dry-run (writing
         `refresh.hold` is a system mutation; ADR-014/D-12). Captures each host's prior
         `refresh.hold` first so `_cleanup` can restore it exactly, marks the hold engaged,
-        then applies a timed hold on both hosts. Only touches the system-wide `refresh.hold`
-        option — never per-snap holds — and never blocks the manual `--revision` convergence
-        snap_sync performs.
+        then applies a timed hold on each host WHOSE PRIOR POLICY IT COULD READ. Only touches
+        the system-wide `refresh.hold` option — never per-snap holds — and never blocks the
+        manual `--revision` convergence snap_sync performs.
+
+        A host whose capture failed is left untouched (`PKG-FR-SNAP-REFRESH-PAUSE`). The
+        capture is what makes the write reversible: without a pre-sync value there is nothing
+        to put back, so setting the option would replace an unknown policy — possibly the
+        user's own indefinite hold — with a timed one that expires into "no hold at all". The
+        cost is running unpaused on that host, which risks a mid-run auto-refresh; that trade
+        is the criterion's, and it is the same one `_restore_snap_hold` makes on the way out.
         """
         if self._dry_run or not self._config.sync_jobs.get("snap_sync", False):
             return
@@ -1486,8 +1495,19 @@ class Orchestrator:
             "Pausing snapd auto-refresh on both hosts for the sync window",
             extra={"job": "orchestrator", "host": "source"},
         )
-        await self._apply_snap_hold(Host.SOURCE, self._snap_hold_prior_source)
-        await self._apply_snap_hold(Host.TARGET, self._snap_hold_prior_target)
+        for host, prior, readable in (
+            (Host.SOURCE, self._snap_hold_prior_source, self._snap_hold_readable_source),
+            (Host.TARGET, self._snap_hold_prior_target, self._snap_hold_readable_target),
+        ):
+            if not readable:
+                self._logger.warning(
+                    "Not pausing snapd auto-refresh on %s: its refresh.hold could not be read, so a hold "
+                    "written here could not be put back. The sync continues unpaused on that machine.",
+                    host.value,
+                    extra={"job": "orchestrator", "host": host.value},
+                )
+                continue
+            await self._apply_snap_hold(host, prior)
 
     async def _restore_snap_hold(self, host: Host, prior: str | None, *, readable: bool) -> None:
         """Restore `host`'s `refresh.hold` to its pre-sync value, or unset it (best-effort).
@@ -1497,11 +1517,9 @@ class Orchestrator:
         no hold — leaving any unrelated per-snap holds untouched.
 
         A failed capture (`readable=False`) is NOT treated as "there was no hold": the option
-        is left alone instead of cleared. The two outcomes are not comparable — clearing an
-        option whose pre-sync value is unknown permanently destroys a hold the user may have
-        set (including `forever`), while skipping the clear leaves at worst the timed hold
-        this run set, which expires on its own after `_SNAP_AUTOREFRESH_HOLD_DURATION`. That
-        self-expiry is the same crash backstop the mechanism already relies on.
+        is left alone instead of cleared. `_hold_snap_autorefresh` never wrote it on such a
+        host, so there is nothing to undo, and clearing an option whose pre-sync value is
+        unknown would destroy a hold the user may have set (including `forever`).
 
         Gated by `--confirm-each-command` like every other modification. Restoring is not
         merely lifting: when a prior hold was captured, skipping this write means the timed
@@ -1518,10 +1536,9 @@ class Orchestrator:
             description = f"restore this machine's own snapd refresh.hold ({prior}), which this run overwrote"
         elif not readable:
             self._logger.warning(
-                "Leaving snapd refresh.hold alone on %s: its pre-sync value could not be read, so clearing it "
-                "could destroy a hold set on that machine. Any hold this run set expires after %s.",
+                "Leaving snapd refresh.hold alone on %s: its pre-sync value could not be read, so this run "
+                "never paused auto-refresh there and clearing it now could destroy a hold set on that machine.",
                 host.value,
-                _SNAP_AUTOREFRESH_HOLD_DURATION,
                 extra={"job": "orchestrator", "host": host.value},
             )
             return
