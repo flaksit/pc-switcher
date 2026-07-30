@@ -25,7 +25,7 @@ from pcswitcher.jobs.packages.review import Decision, ReviewOutcome
 from pcswitcher.jobs.packages.sync_core import PackagePlan, PackageSyncJob
 from pcswitcher.jobs.snap_sync import SnapSyncJob
 from pcswitcher.models import CommandResult
-from tests.unit.jobs.test_apt_sync import all_calls, make_context, sha256_line
+from tests.unit.jobs.apt.helpers import all_calls, make_context, sha256_line
 
 _SNAP_HEADER = "Name      Version    Rev    Tracking        Publisher    Notes\n"
 SNAP_ALPHA_HELD = _SNAP_HEADER + "alpha     1.0        10     latest/stable   pub✓         held\n"
