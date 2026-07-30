@@ -1,0 +1,97 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "c383f5c00d7a",
+  "session_id": "354077f7-8171-4dc7-8e2f-e2c4e73a7888",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-30T23:05:09.088135732Z",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 4,
+  "save_step_count": 5,
+  "files_touched": [
+    "docs/jobs/folder-sync.md",
+    "docs/jobs/package-sync.md",
+    "docs/system/package-sync.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "bf2af18774b8",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 360,
+    "cache_creation_tokens": 406127,
+    "cache_read_tokens": 44961312,
+    "output_tokens": 133434,
+    "api_call_count": 190
+  },
+  "session_metrics": {
+    "turn_count": 17
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-30T23:05:08.930719611Z",
+    "agent_lines": 0,
+    "agent_removed": 18,
+    "human_added": 0,
+    "human_modified": 19,
+    "human_removed": 8,
+    "total_committed": 15,
+    "total_lines_changed": 45,
+    "agent_percentage": 40,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 93,
+      "user_lines_removed": 62,
+      "agent_lines_added": 200,
+      "agent_lines_removed": 240,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9,
+        "docs/dev/testing-guide.md": 78,
+        "docs/jobs/package-sync.md": 6
+      },
+      "user_removed_per_file": {
+        "docs/dev/testing-guide.md": 56,
+        "docs/jobs/package-sync.md": 6
+      }
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 19,
+      "user_lines_removed": 10,
+      "agent_lines_added": 14,
+      "agent_lines_removed": 15,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9,
+        "docs/jobs/package-sync.md": 10
+      },
+      "user_removed_per_file": {
+        "docs/jobs/package-sync.md": 10
+      }
+    },
+    {
+      "checkpoint_number": 4,
+      "user_lines_added": 12,
+      "user_lines_removed": 11,
+      "agent_lines_added": 26,
+      "agent_lines_removed": 27,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9,
+        "docs/jobs/package-sync.md": 3
+      },
+      "user_removed_per_file": {
+        "docs/jobs/package-sync.md": 11
+      }
+    },
+    {
+      "checkpoint_number": 5,
+      "user_lines_added": 9,
+      "user_lines_removed": 0,
+      "agent_lines_added": 41,
+      "agent_lines_removed": 44,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9
+      }
+    }
+  ]
+}
