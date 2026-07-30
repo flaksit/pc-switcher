@@ -1,0 +1,11 @@
+Read .planning/phases/02-package-management-sync/02-HANDOVER-conformance.md and
+follow it. Steps 1 and 2 are done — 02-WORK-UNITS.md, 02-DOC-DEBT.md and the
+criteria's gap register are their output, and the four rulings step 2 asked for
+have been given and are already folded into both.
+
+Do steps 3, 4 and 5, in one go, then stop. Do not do step 6.
+
+Step 5 budget: 02-UAT-01-RUNBOOK.md is 576 lines and nobody will read it. The
+rewrite is at most 150, and 02-UAT.md at most 60: per check, the copy-paste
+commands and one sentence saying what the tester should see. No reasoning, no
+history, no restating the requirement it covers.
