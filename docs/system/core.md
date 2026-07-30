@@ -681,7 +681,7 @@ Lineage: 001-core Key Entities, 003-core-tests Key Entities
 
 `--confirm-each-command` inserts one prompt before every individual modification. It exists because what a job asks about is an outcome, not the commands that produce it: one approved line can expand into a simulation, the real command, a file backup, a staged transfer, a privileged promotion and a metadata refresh. The flag is for the run where that expansion itself needs auditing.
 
-What the prompt shows is the operation verbatim: the literal string handed to the shell, or `send_file <local> -> <remote>` for a transfer. Nothing is paraphrased, because a display string that can differ from what executes is worse than no display.
+What the prompt shows is the job and the hostname of the machine about to be changed, then what the change does, then the operation itself: the literal string handed to the shell, or `send_file <local> -> <remote>` for a transfer. Naming the machine once in the heading is why the `mutates=` phrase below it does not repeat it (`PKG-FR-NAME-THE-MACHINES`). Nothing is paraphrased, because a display string that can differ from what executes is worse than no display. The one thing withheld is the userinfo of any URL in it (`LOG-FR-CREDENTIAL-REDACTION`), since this is the one route out of the executor that never becomes a log record for the logging filter to catch.
 
 Two outcomes, no default — the user types one:
 
@@ -700,7 +700,7 @@ One consequence of "no skip" shapes the code beyond the gate itself:
 
 The mechanism lives in `executor.py`, the one funnel every command, transfer and background process already passes through, so it is caller-agnostic rather than job-specific: any call that passes `mutates="<phrase>"` declares itself a modification and is gated, on either machine. Reads pass no `mutates` and are never gated — that is what keeps the prompts worth reading. The trade-off is that the marker is opt-in, so a forgotten `mutates=` is an unannounced write; `tests/unit/test_mutates_audit.py` enumerates every ungated call site so an omission fails a test instead of shipping.
 
-The same seam carries the verbatim `DEBUG` trace of every executor operation — reads included, since a trace that omits them cannot answer "what did the tool actually do". The job a line belongs to comes from the `active_job` context variable the orchestrator sets around each job, which `asyncio` copies per task so a concurrently running background job cannot clobber the label.
+The same seam carries the verbatim `DEBUG` trace of every executor operation — reads included, since a trace that omits them cannot answer "what did the tool actually do" — and, on the way back, each command's own stdout and stderr as separate records (`_trace_output`). The job a line belongs to comes from the `active_job` context variable the orchestrator sets around each job, which `asyncio` copies per task so a concurrently running background job cannot clobber the label.
 
 ## Job outcomes
 

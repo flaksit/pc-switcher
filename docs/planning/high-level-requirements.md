@@ -5,11 +5,11 @@ A synchronization system for seamless switching between Linux desktop machines (
 ## Navigation
 
 **Related Documentation:**
-- [Architecture Decision Records (ADRs)](adr/_index.md) - Architectural decisions with rationale
+- [Architecture Decision Records (ADRs)](../adr/_index.md) - Architectural decisions with rationale
 - [Package sync — user requirements](package-sync-user-requirements.md) - What "installed packages must sync" means concretely: the convergence model, what the user is asked, and what the tool will not do
 - [Package sync conformance criteria](package-sync-conformance-criteria.md) - The same requirements as checkable articles: `PKG-FR-*` obligations, `PKG-NG-*` non-goals
-- [Feature Specifications](../specs/) - Feature-level specs, plans, and implementation details
-  - [001-core](../specs/001-core/) - Core sync engine architecture
+- [Feature Specifications](../../specs/) - Feature-level specs, plans, and implementation details
+  - [001-core](../../specs/001-core/) - Core sync engine architecture
 
 ## Vision
 

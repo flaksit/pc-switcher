@@ -98,7 +98,7 @@ The twelve steps are listed below. Step 10 (run jobs) is a single logical step. 
 7. **Pre-sync snapshots.** Create btrfs snapshots on both hosts. This is the rollback point; every mutating step below happens after it.
 8. **Install/upgrade pc-switcher on target.** Ensures the target has a compatible version to back-sync later.
 9. **Sync config to target.** Copy this machine's config to the target (prompting on diff unless `--yes`), so both ends run jobs and future back-sync with identical settings.
-10. **Run sync jobs sequentially.** The actual data movement. Which jobs are run is defined in `config.yaml`. See [Configuration Reference](docs/configuration.md#package-sync). A background disk-space monitor runs concurrently and aborts the sync if free space crosses `runtime_minimum`. First job failure stops the run.
+10. **Run sync jobs sequentially.** The actual data movement. Which jobs are run is defined in `config.yaml`. See [Configuration Reference](docs/configuration.md#package-sync). A background disk-space monitor runs concurrently and aborts the sync if free space crosses `runtime_minimum`. A job failure stops the run, except in a package job, where failed items or an unreadable package manager fail that job alone and the remaining jobs still run.
 11. **Post-sync snapshots.** Snapshot both hosts again, capturing the synced state.
 12. **Record sync history.** Write the sync-history record on both machines, enabling step 4's out-of-order check next time.
 
@@ -249,7 +249,6 @@ This project used **[SpecKit](https://github.com/github/spec-kit)**—a specific
 /speckit.implement                      # Execute implementation
 ```
 
-After that, we switched to **[GSD (Get Shit Done)](https://github.com/open-gsd/gsd-core)**, a bit more lightweight and with stricter validation that the implementation matches the spec.
-However, still much overhead, with research, planning and execution steps taking much more time and not necessarily more reliable than pure claude code with Opus or Fable.
+After that, we switched to **[GSD (Get Shit Done)](https://github.com/open-gsd/gsd-core)**, a bit more lightweight and with stricter validation that the implementation matches the spec. However, still much overhead, with research, planning and execution steps taking much more time and not necessarily more reliable than pure claude code with Opus or Fable.
 
 Now, considering more simple workflow: **[Matt Pocock's Skills](https://github.com/mattpocock/skills)**: keeping the essentials spec, TDD, validation, but leaving more to the AI agents that are really capable now.
