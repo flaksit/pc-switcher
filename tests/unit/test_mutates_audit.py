@@ -111,34 +111,31 @@ _READ_ONLY_CALLS: dict[str, int] = {
     "disk.py::check_disk_space::run_command": 1,
     # apt_sync: `apt-get --dry-run` is a simulation, `apt-mark show*`/`apt-cache policy`/`find`/
     # `test -f`/`echo $HOME` are queries, and validate() only probes for capabilities.
-    "jobs/apt_sync.py::simulate_apt_transaction::run_command": 1,
-    "jobs/apt_sync.py::compare_deb_versions::run_command": 2,
-    "jobs/apt_sync.py::AptSyncJob.capture_source_items::run_command": 1,
-    "jobs/apt_sync.py::AptSyncJob._source_policy::run_command": 1,
-    "jobs/apt_sync.py::AptSyncJob.query_target_items::run_command": 1,
-    "jobs/apt_sync.py::AptSyncJob.query_target_items.run::run_command": 1,
-    "jobs/apt_sync.py::AptSyncJob.collect_hold_sets::run_command": 2,
-    "jobs/apt_sync.py::AptSyncJob.collect_target_policy::run_command": 1,
+    "jobs/apt_sync/commands.py::simulate_apt_transaction::run_command": 1,
+    "jobs/apt_sync/commands.py::compare_deb_versions::run_command": 2,
+    # `AptProbe` holds every read this job issues, so the two per-host wrappers below carry
+    # all of them that go through a `run` callable: the five `/etc/apt` directory digest
+    # listings, `/etc/apt/sources.list`, the two source-file reference scans (including the
+    # post-write re-scan keyring collection counts against), the `cat` of a file a diff
+    # implicates, `dpkg --search` over the key files, and the `dpkg-query` version resolution.
+    "jobs/apt_sync/probe.py::AptProbe.source_run::run_command": 1,
+    "jobs/apt_sync/probe.py::AptProbe.target_run::run_command": 1,
+    "jobs/apt_sync/probe.py::AptProbe.source_manual_names::run_command": 1,
+    "jobs/apt_sync/probe.py::AptProbe.source_policy::run_command": 1,
+    "jobs/apt_sync/probe.py::AptProbe.query_target_items::run_command": 1,
+    "jobs/apt_sync/probe.py::AptProbe.collect_hold_sets::run_command": 2,
+    "jobs/apt_sync/probe.py::AptProbe.collect_target_policy::run_command": 1,
+    "jobs/apt_sync/probe.py::AptProbe.capture_target_manual_set::run_command": 1,
+    # `pro status --format json` on the target — a read, and the only thing that leaves
+    # `esm_gate` is the parsed `attached` boolean (ADR-020 D-38).
+    "jobs/apt_sync/probe.py::AptProbe.target_pro_attached::run_command": 1,
     # The post-`apt-get update` origin verification (ADR-020 D-35): one batched
     # `apt-cache policy` re-read of the converged target, which refuses installs but
     # changes nothing itself.
-    "jobs/apt_sync.py::AptSyncJob._verify_approved_origins::run_command": 1,
-    "jobs/apt_sync.py::AptSyncJob._plan_repo_diffs.source_run::run_command": 1,
-    "jobs/apt_sync.py::AptSyncJob._plan_repo_diffs.target_run::run_command": 1,
-    # The key-directory digests and the two source-file reference scans, captured ahead of
-    # the package diff because the origin classification consumes them (ADR-020 D-34).
-    "jobs/apt_sync.py::AptSyncJob._capture_origin_state.source_run::run_command": 1,
-    "jobs/apt_sync.py::AptSyncJob._capture_origin_state.target_run::run_command": 1,
-    # `pro status --format json` on the target — a read, and the only thing that leaves it
-    # is the parsed `attached` boolean (ADR-020 D-38).
-    "jobs/apt_sync.py::AptSyncJob._target_pro_attached::run_command": 1,
-    # The post-write re-scan of the target's source files that keyring collection counts
-    # references against — a `find ... -exec awk` read, no different from the plan-time one.
-    "jobs/apt_sync.py::AptSyncJob._remove_unused_keyrings.target_run::run_command": 1,
-    "jobs/apt_sync.py::AptSyncJob._capture_target_manual_set::run_command": 1,
-    "jobs/apt_sync.py::AptSyncJob._backup_destination::run_command": 1,
-    "jobs/apt_sync.py::AptSyncJob._target_home_dir::run_command": 1,
-    "jobs/apt_sync.py::AptSyncJob.validate::run_command": 5,
+    "jobs/apt_sync/origins.py::OriginClassifier._verify::run_command": 1,
+    "jobs/apt_sync/files.py::TargetFiles.backup::run_command": 1,
+    "jobs/apt_sync/files.py::TargetFiles.home::run_command": 1,
+    "jobs/apt_sync/job.py::AptSyncJob.validate::run_command": 5,
     "jobs/disk_space_monitor.py::DiskSpaceMonitorJob.validate::run_command": 1,
     # Demo jobs: a `seq`/`echo`/`sleep` loop used to exercise the progress UI.
     "jobs/dummy_fail.py::DummyFailJob._run_target_phase::start_process": 1,

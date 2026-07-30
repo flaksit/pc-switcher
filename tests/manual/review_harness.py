@@ -13,7 +13,7 @@ import asyncio
 
 from rich.console import Console
 
-from pcswitcher.jobs.apt_sync import build_esm_gate_message
+from pcswitcher.jobs.apt_sync.messages import build_esm_gate_message
 from pcswitcher.jobs.packages.items import Machines
 from pcswitcher.jobs.packages.review import (
     COLLATERAL_REVIEW_ACTION,

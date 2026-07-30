@@ -73,7 +73,7 @@ from uuid import uuid4
 import pytest
 
 from pcswitcher.executor import BashLoginRemoteExecutor
-from pcswitcher.jobs.apt_sync import AptHoldItem, AptPackageItem
+from pcswitcher.jobs.apt_sync.items import AptHoldItem, AptPackageItem
 from pcswitcher.jobs.flatpak_sync import FlatpakItem
 from pcswitcher.jobs.manual_installs_sync import UnreproducibleItem
 from pcswitcher.jobs.packages.review import PACKAGE_REVIEW_AUTOMATION_ENV, Decision

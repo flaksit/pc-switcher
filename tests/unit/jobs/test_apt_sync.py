@@ -24,26 +24,20 @@ import pytest
 from pcswitcher.config import Configuration
 from pcswitcher.executor import LocalExecutor
 from pcswitcher.jobs import JobContext
-from pcswitcher.jobs.apt_sync import (
-    _APT_PREFERENCES_DIR,
-    _PRO_STATUS_COMMAND,
-    _TARGET_SUDO_COMMANDS,
-    AptPackageItem,
-    AptSyncJob,
-    _diff_apt_packages,
-    _distribution_origins,
-    _OriginOutcome,
-    _OriginPlan,
-    _parse_source_file,
-    _source_files_serving,
+from pcswitcher.jobs.apt_sync import AptSyncJob, simulate_apt_transaction
+from pcswitcher.jobs.apt_sync.commands import TARGET_SUDO_COMMANDS, compare_deb_versions
+from pcswitcher.jobs.apt_sync.diffing import diff_apt_packages
+from pcswitcher.jobs.apt_sync.esm_gate import PRO_STATUS_COMMAND
+from pcswitcher.jobs.apt_sync.items import APT_PREFERENCES_DIR, AptPackageItem
+from pcswitcher.jobs.apt_sync.messages import (
     build_origin_detail,
     build_origin_mismatch_detail,
     build_origin_refusal_detail,
     build_repo_removal_detail,
     build_repo_unavailable_detail,
-    compare_deb_versions,
-    simulate_apt_transaction,
 )
+from pcswitcher.jobs.apt_sync.origins import OriginOutcome, OriginPlan
+from pcswitcher.jobs.apt_sync.probe import AptProbe, SourceFileRefs, parse_source_file
 from pcswitcher.jobs.packages.items import DiffAction, DiffClass, ItemClass, ItemDiff, Machines
 from pcswitcher.jobs.packages.probes import ProbeFailed
 from pcswitcher.jobs.packages.review import (
@@ -207,9 +201,9 @@ class TestCapture:
                 "dpkg-query": CommandResult(0, DPKG_QUERY_3, ""),
             }
         )
-        job = AptSyncJob(context)
+        probe = AptProbe(context.source, context.target)
 
-        items = await job.capture_source_items()
+        items, _origins = await probe.capture_source_items()
 
         assert [item.name for item in items] == ["pkg-a", "pkg-b", "pkg-c"]
         assert [item.version for item in items] == ["1.0", "2.0", "3.0"]
@@ -223,9 +217,9 @@ class TestCapture:
                 "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
             }
         )
-        job = AptSyncJob(context)
+        probe = AptProbe(context.source, context.target)
 
-        await job.capture_source_items()
+        await probe.capture_source_items()
 
         commands = all_calls(source)
         assert any("dpkg-query" in cmd for cmd in commands)
@@ -247,11 +241,11 @@ class TestDiff:
                 "dpkg-query": CommandResult(0, "pkg-b\t2.0\n", ""),
             },
         )
-        job = AptSyncJob(context)
+        probe = AptProbe(context.source, context.target)
 
-        source_items = await job.capture_source_items()
-        target_items = await job.query_target_items()
-        diffs = _diff_apt_packages(source_items, target_items, {}, MACHINES)
+        source_items, _origins = await probe.capture_source_items()
+        target_items = await probe.query_target_items()
+        diffs = diff_apt_packages(source_items, target_items, {}, MACHINES)
 
         assert len(diffs) == 2
         assert {d.item_id for d in diffs} == {"apt:package:pkg-a", "apt:package:pkg-c"}
@@ -265,7 +259,7 @@ class TestDiff:
             AptPackageItem(name="pkg-a", version="1.0"),
             AptPackageItem(name="pkg-extra", version="9.9"),
         ]
-        diffs = _diff_apt_packages(source_items, target_items, {}, MACHINES)
+        diffs = diff_apt_packages(source_items, target_items, {}, MACHINES)
 
         assert len(diffs) == 1
         assert diffs[0].item_id == "apt:package:pkg-extra"
@@ -658,9 +652,9 @@ class TestHoldPinCapture:
             source_responses={"apt-mark showhold": CommandResult(0, "pkg-src-held\n", "")},
             target_responses={"apt-mark showhold": CommandResult(0, "pkg-tgt-held\n", "")},
         )
-        job = AptSyncJob(context)
+        probe = AptProbe(context.source, context.target)
 
-        source_holds, target_holds = await job.collect_hold_sets()
+        source_holds, target_holds = await probe.collect_hold_sets()
 
         assert source_holds == frozenset({"pkg-src-held"})
         assert target_holds == frozenset({"pkg-tgt-held"})
@@ -792,7 +786,7 @@ class TestAptHold:
         assert any("mv --force" in cmd and "apt.decisions" in cmd for cmd in source_cmds)
 
     def test_apt_mark_is_in_the_target_sudo_command_list(self) -> None:
-        assert "/usr/bin/apt-mark" in _TARGET_SUDO_COMMANDS
+        assert "/usr/bin/apt-mark" in TARGET_SUDO_COMMANDS
 
 
 class TestHoldReviewVerbs:
@@ -1078,7 +1072,7 @@ class TestUnavailableCapture:
         # pkg-b: the target has no candidate, but the source declares the origin in a file
         # that can travel -> still an install, with that repository derived from it.
         assert by_id["apt:package:pkg-b"].diff_class == DiffClass.MISSING_ON_TARGET
-        assert job._origin_plan["apt:package:pkg-b"].derived_files == frozenset({"vendor.list"})  # pyright: ignore[reportPrivateUsage]
+        assert job._work.origins.plans["apt:package:pkg-b"].derived_files == frozenset({"vendor.list"})  # pyright: ignore[reportPrivateUsage]
 
 
 class TestNoUnreproducibleDetectionInApt:
@@ -2163,7 +2157,7 @@ class TestValidate:
 
         target_sudo_errors = [e for e in errors if e.host is Host.TARGET and "sudo" in e.message]
         assert len(target_sudo_errors) == 1
-        assert all(command in target_sudo_errors[0].message for command in _TARGET_SUDO_COMMANDS)
+        assert all(command in target_sudo_errors[0].message for command in TARGET_SUDO_COMMANDS)
 
 
 class TestJobDiscovery:
@@ -2396,8 +2390,8 @@ class TestWhatAptItselfReads:
 
         plan = await job.plan()
 
-        assert job._source_sources_list_digest == "s1"  # pyright: ignore[reportPrivateUsage]
-        assert job._target_sources_list_digest == "s2"  # pyright: ignore[reportPrivateUsage]
+        assert job._work.source_facts.sources_list_digest == "s1"  # pyright: ignore[reportPrivateUsage]
+        assert job._work.target_facts.sources_list_digest == "s2"  # pyright: ignore[reportPrivateUsage]
         assert sum(1 for cmd in all_calls(source) if _SOURCES_LIST_DIGEST_CMD in cmd) == 1
         assert sum(1 for cmd in all_calls(target) if _SOURCES_LIST_DIGEST_CMD in cmd) == 1
         assert not any(d.item_id.endswith(":sources.list") for d in plan.diffs)
@@ -2418,7 +2412,7 @@ class TestWhatAptItselfReads:
 
         await job.plan()
 
-        assert job._source_sources_list_digest is None  # pyright: ignore[reportPrivateUsage]
+        assert job._work.source_facts.sources_list_digest is None  # pyright: ignore[reportPrivateUsage]
 
     @pytest.mark.asyncio
     async def test_ubuntu_sources_is_never_offered_for_removal(self) -> None:
@@ -2518,7 +2512,7 @@ class TestWhatAptItselfReads:
 
         assert sum(1 for cmd in all_calls(source) if _SOURCE_SCAN_CMD in cmd) == 1
         assert sum(1 for cmd in all_calls(target) if _SOURCE_SCAN_CMD in cmd) == 1
-        refs, uris = job._source_source_refs["vendor.list"]  # pyright: ignore[reportPrivateUsage]
+        refs, uris = job._work.source_facts.refs.by_filename["vendor.list"]  # pyright: ignore[reportPrivateUsage]
         assert uris == ("https://vendor.example.com/apt",)
         assert refs == ("/etc/apt/keyrings/vendor.gpg",)
 
@@ -2539,8 +2533,8 @@ class TestOriginCapture:
             "unrelated.list": ((), ("https://elsewhere.example.com/apt",)),
         }
 
-        serving = _source_files_serving(
-            refs, frozenset({"https://vendor.example.com/apt", "https://mirror.example.com/apt"})
+        serving = SourceFileRefs(by_filename=refs).files_serving(
+            frozenset({"https://vendor.example.com/apt", "https://mirror.example.com/apt"})
         )
 
         assert serving == frozenset({"vendor.list", "mirror.sources"})
@@ -2551,7 +2545,9 @@ class TestOriginCapture:
         """
         refs = {"vendor.list": ((), ("https://vendor.example.com/apt",))}
 
-        assert _source_files_serving(refs, frozenset({"https://gone.example.com/apt"})) == frozenset()
+        serving = SourceFileRefs(by_filename=refs).files_serving(frozenset({"https://gone.example.com/apt"}))
+
+        assert serving == frozenset()
 
     def test_distribution_origins_come_from_the_machines_own_distribution_files(self) -> None:
         """Per machine, from that machine's `ubuntu.sources`/`sources.list`/ESM files — not
@@ -2565,7 +2561,7 @@ class TestOriginCapture:
             "vendor.list": ((), ("https://vendor.example.com/apt",)),
         }
 
-        assert _distribution_origins(refs) == frozenset(
+        assert SourceFileRefs(by_filename=refs).distribution_origins() == frozenset(
             {
                 "http://ftp.belnet.be/ubuntu",
                 "http://security.ubuntu.com/ubuntu",
@@ -2581,7 +2577,7 @@ class TestOriginCapture:
         """
         refs = {"ubuntu-esm-mine.sources": ((), ("https://mine.example.com/apt",))}
 
-        assert _distribution_origins(refs) == frozenset()
+        assert SourceFileRefs(by_filename=refs).distribution_origins() == frozenset()
 
     @pytest.mark.asyncio
     async def test_the_source_policy_call_answers_both_questions_asked_of_it(self) -> None:
@@ -2604,7 +2600,9 @@ class TestOriginCapture:
         plan = await job.plan()
 
         assert sum(1 for cmd in all_calls(source) if "apt-cache policy" in cmd) == 1
-        assert job._source_origins["pkg-a"] == frozenset({"https://vendor.example.com/apt"})  # pyright: ignore[reportPrivateUsage]
+        assert job._work.origins.plans["apt:package:pkg-a"].source_origins == frozenset(
+            {"https://vendor.example.com/apt"}
+        )  # pyright: ignore[reportPrivateUsage]
         # `code` came from no repository, so it is dropped at capture and never diffed.
         assert [diff.item_id for diff in plan.diffs] == ["apt:package:pkg-a"]
 
@@ -2625,7 +2623,9 @@ class TestOriginCapture:
 
         await job.plan()
 
-        assert job._source_origins["gh"] == frozenset({"https://cli.github.com/packages"})  # pyright: ignore[reportPrivateUsage]
+        assert job._work.origins.plans["apt:package:gh"].source_origins == frozenset(
+            {"https://cli.github.com/packages"}
+        )  # pyright: ignore[reportPrivateUsage]
 
 
 _MOZILLA_SOURCES = (
@@ -2666,7 +2666,7 @@ class TestOriginClassification:
 
         diff = next(d for d in plan.diffs if d.item_id == "apt:package:pkg-a")
         assert diff.action == DiffAction.INSTALL
-        assert job._origin_plan["apt:package:pkg-a"].derived_files == frozenset()  # pyright: ignore[reportPrivateUsage]
+        assert job._work.origins.plans["apt:package:pkg-a"].derived_files == frozenset()  # pyright: ignore[reportPrivateUsage]
 
     @pytest.mark.asyncio
     async def test_different_origin_install_derives_the_sources_own_repository(self) -> None:
@@ -2696,7 +2696,7 @@ class TestOriginClassification:
         assert diff.detail == "from packages.mozilla.org/apt"
         # The keyring half of the write set is derived at write time from this file's own
         # `Signed-By:`; what the plan owes is the file.
-        assert job._origin_plan["apt:package:firefox"].derived_files == frozenset({"mozilla.sources"})  # pyright: ignore[reportPrivateUsage]
+        assert job._work.origins.plans["apt:package:firefox"].derived_files == frozenset({"mozilla.sources"})  # pyright: ignore[reportPrivateUsage]
 
     @pytest.mark.asyncio
     async def test_unreplicable_origin_is_report_only_naming_the_origin(self) -> None:
@@ -2881,7 +2881,7 @@ class TestOriginDetailWording:
 
 
 class TestOriginOutcome:
-    """`_OriginPlan.outcome` in isolation, for the branches a whole-plan test cannot reach
+    """`OriginPlan.outcome` in isolation, for the branches a whole-plan test cannot reach
     cheaply."""
 
     def test_apt_silence_on_the_target_does_not_condemn_a_package(self) -> None:
@@ -2889,19 +2889,19 @@ class TestOriginOutcome:
         block for the name answered nothing, and a run whose probe failed must not report a
         repository problem it never established.
         """
-        plan = _OriginPlan(target_candidate_known=False)
+        plan = OriginPlan(target_candidate_known=False)
 
-        assert plan.outcome() is not _OriginOutcome.UNREPLICABLE
+        assert plan.outcome() is not OriginOutcome.UNREPLICABLE
 
     def test_an_explicit_no_candidate_with_no_origin_to_replicate_is_unreplicable(self) -> None:
         """The other half of the same distinction: apt answered, and its answer was no."""
-        plan = _OriginPlan(target_candidate_known=True)
+        plan = OriginPlan(target_candidate_known=True)
 
-        assert plan.outcome() is _OriginOutcome.UNREPLICABLE
+        assert plan.outcome() is OriginOutcome.UNREPLICABLE
 
     def test_a_plan_with_no_origin_fact_at_all_still_installs(self) -> None:
         """The degenerate case: nothing captured, nothing to hold the install to."""
-        assert _OriginPlan().outcome() is _OriginOutcome.SAME_ORIGIN
+        assert OriginPlan().outcome() is OriginOutcome.SAME_ORIGIN
 
 
 def respond_with_policy_sequence(
@@ -3767,7 +3767,7 @@ class TestRepoGroupTransaction:
         # The reviewed half fails as an item; the derived pin has no item to fail, so the
         # rollback records it against its destination instead (D-39) — without which a
         # package depending on it would install against the pre-run `/etc/apt`.
-        assert "/etc/apt/preferences.d/curl-pin" in job._failed_derived_writes  # pyright: ignore[reportPrivateUsage]
+        assert "/etc/apt/preferences.d/curl-pin" in job._work.derived.failed  # pyright: ignore[reportPrivateUsage]
 
         commands = all_calls(target)
         # Restore: the pre-existing pin file is put back from its backup.
@@ -3957,7 +3957,7 @@ class TestRepoGroupBackupFailure:
         # attempted before the loop aborted — and no KeyError escapes.
         failed_ids = {diff.item_id for diff, _ in exc_info.value.failures}
         assert {"apt:config:conf-a", "apt:config:conf-b"} <= failed_ids
-        assert "/etc/apt/preferences.d/pin-a" in job._failed_derived_writes  # pyright: ignore[reportPrivateUsage]
+        assert "/etc/apt/preferences.d/pin-a" in job._work.derived.failed  # pyright: ignore[reportPrivateUsage]
 
         commands = all_calls(target)
         # Nothing was written at all: the group aborts before any write once backing up
@@ -4759,7 +4759,7 @@ class TestKeysAreNotItems:
         and continuation lines. It must yield no reference at all: not a bogus dependency
         on some file, and not a match that makes a real keyring look referenced.
         """
-        _fmt, refs, _uris = _parse_source_file("inline.sources", _INLINE_SOURCES)
+        _fmt, refs, _uris = parse_source_file("inline.sources", _INLINE_SOURCES)
 
         assert refs == ()
 
@@ -5096,7 +5096,7 @@ class TestSharedKeyringsDirectory:
         # make the package REPO_UNAVAILABLE instead.
         diff = next(d for d in plan.diffs if d.item_id == "apt:package:pkg-a")
         assert diff.action == DiffAction.INSTALL
-        assert job._origin_plan["apt:package:pkg-a"].derived_files == frozenset({"vendor.sources"})  # pyright: ignore[reportPrivateUsage]
+        assert job._work.origins.plans["apt:package:pkg-a"].derived_files == frozenset({"vendor.sources"})  # pyright: ignore[reportPrivateUsage]
 
     @pytest.mark.asyncio
     async def test_a_hand_placed_key_the_target_lacks_is_provisioned(self) -> None:
@@ -5224,7 +5224,7 @@ class TestInlineArmoredSignedBy:
     """
 
     def test_the_armor_first_line_on_the_field_line_yields_no_ref(self) -> None:
-        _fmt, refs, _uris = _parse_source_file("ppa.sources", _INLINE_ON_FIELD_LINE)
+        _fmt, refs, _uris = parse_source_file("ppa.sources", _INLINE_ON_FIELD_LINE)
 
         assert refs == ()
 
@@ -6010,12 +6010,12 @@ class TestRepoRemovalWording:
 
 
 class TestDiffEngine:
-    """`_diff_apt_packages` produces every D-25 diff class."""
+    """`diff_apt_packages` produces every D-25 diff class."""
 
     def test_missing_on_target_yields_install(self) -> None:
         source_items = [AptPackageItem(name="pkg-a", version="1.0")]
 
-        diffs = _diff_apt_packages(source_items, [], {}, MACHINES)
+        diffs = diff_apt_packages(source_items, [], {}, MACHINES)
 
         assert len(diffs) == 1
         assert diffs[0].diff_class == DiffClass.MISSING_ON_TARGET
@@ -6024,7 +6024,7 @@ class TestDiffEngine:
     def test_extra_on_target_yields_remove(self) -> None:
         target_items = [AptPackageItem(name="pkg-a", version="1.0")]
 
-        diffs = _diff_apt_packages([], target_items, {}, MACHINES)
+        diffs = diff_apt_packages([], target_items, {}, MACHINES)
 
         assert len(diffs) == 1
         assert diffs[0].diff_class == DiffClass.EXTRA_ON_TARGET
@@ -6034,7 +6034,7 @@ class TestDiffEngine:
         source_items = [AptPackageItem(name="pkg-a", version="1.0")]
         target_items = [AptPackageItem(name="pkg-a", version="2.0")]
 
-        diffs = _diff_apt_packages(source_items, target_items, {}, MACHINES)
+        diffs = diff_apt_packages(source_items, target_items, {}, MACHINES)
 
         assert len(diffs) == 1
         assert diffs[0].diff_class == DiffClass.VERSION_MISMATCH
@@ -6047,7 +6047,7 @@ class TestDiffEngine:
         source_items = [AptPackageItem(name="pkg-a", version="1.0")]
         target_items = [AptPackageItem(name="pkg-a", version="1.0")]
 
-        diffs = _diff_apt_packages(source_items, target_items, {}, MACHINES)
+        diffs = diff_apt_packages(source_items, target_items, {}, MACHINES)
 
         assert diffs == []
 
@@ -6058,7 +6058,7 @@ class TestDiffEngine:
         source_items = [AptPackageItem(name="pkg-a", version="1.0")]
         target_items = [AptPackageItem(name="pkg-a", version="1.0")]
 
-        diffs = _diff_apt_packages(source_items, target_items, {}, MACHINES, frozenset({"pkg-a"}), frozenset())
+        diffs = diff_apt_packages(source_items, target_items, {}, MACHINES, frozenset({"pkg-a"}), frozenset())
 
         assert len(diffs) == 1
         assert diffs[0].item_class == ItemClass.APT_HOLD
@@ -6074,7 +6074,7 @@ class TestDiffEngine:
         source_items = [AptPackageItem(name="pkg-a", version="2.0")]
         target_items = [AptPackageItem(name="pkg-a", version="1.0")]
 
-        diffs = _diff_apt_packages(source_items, target_items, {}, MACHINES, frozenset(), frozenset({"pkg-a"}))
+        diffs = diff_apt_packages(source_items, target_items, {}, MACHINES, frozenset(), frozenset({"pkg-a"}))
 
         assert len(diffs) == 1
         assert diffs[0].item_class == ItemClass.APT_HOLD
@@ -6084,9 +6084,7 @@ class TestDiffEngine:
         source_items = [AptPackageItem(name="pkg-a", version="1.0")]
         target_items = [AptPackageItem(name="pkg-a", version="1.0")]
 
-        diffs = _diff_apt_packages(
-            source_items, target_items, {}, MACHINES, frozenset({"pkg-a"}), frozenset({"pkg-a"})
-        )
+        diffs = diff_apt_packages(source_items, target_items, {}, MACHINES, frozenset({"pkg-a"}), frozenset({"pkg-a"}))
 
         assert diffs == []
 
@@ -6094,7 +6092,7 @@ class TestDiffEngine:
         """The signature is the deletion, made structural: with no pin argument there is no
         way to reintroduce the echo without changing every caller (ADR-020 D-25).
         """
-        parameters = inspect.signature(_diff_apt_packages).parameters
+        parameters = inspect.signature(diff_apt_packages).parameters
 
         assert not any("pin" in name for name in parameters)
 
@@ -6104,9 +6102,9 @@ class TestDiffEngine:
         source's own `/etc/apt`, so the origin cannot be handed to the target at all.
         """
         source_items = [AptPackageItem(name="brscan3", version="")]
-        plan = {"apt:package:brscan3": _OriginPlan(source_origins=frozenset({"https://gone.example.com/apt"}))}
+        plan = {"apt:package:brscan3": OriginPlan(source_origins=frozenset({"https://gone.example.com/apt"}))}
 
-        diffs = _diff_apt_packages(source_items, [], plan, MACHINES)
+        diffs = diff_apt_packages(source_items, [], plan, MACHINES)
 
         assert len(diffs) == 1
         assert diffs[0].diff_class == DiffClass.REPO_UNAVAILABLE
@@ -6359,7 +6357,7 @@ class TestAReadThatDidNotAnswer:
 
         assert plan.diffs == ()
         assert any(
-            c.startswith(f"if sudo test -d {_APT_PREFERENCES_DIR}; then sudo find {_APT_PREFERENCES_DIR}")
+            c.startswith(f"if sudo test -d {APT_PREFERENCES_DIR}; then sudo find {APT_PREFERENCES_DIR}")
             for c in all_calls(_source)
         )
 
@@ -6547,7 +6545,7 @@ def _esm_job(
     state = {"probes": 0}
 
     def _target(cmd: str, **_: object) -> CommandResult:
-        if cmd == _PRO_STATUS_COMMAND:
+        if cmd == PRO_STATUS_COMMAND:
             index = min(state["probes"], len(probes) - 1)
             state["probes"] += 1
             return probes[index]
@@ -6571,7 +6569,7 @@ def _esm_job(
 
 
 def _pro_probe_count(target: MagicMock) -> int:
-    return sum(1 for cmd in all_calls(target) if cmd == _PRO_STATUS_COMMAND)
+    return sum(1 for cmd in all_calls(target) if cmd == PRO_STATUS_COMMAND)
 
 
 def _promoted_files(target: MagicMock) -> list[str]:
@@ -6713,7 +6711,7 @@ class TestTheESMAttachmentGate:
         listing = sha256_line("d0", "ubuntu.sources") + sha256_line("e0", _ESM_APPS)
 
         def _target(cmd: str, **_: object) -> CommandResult:
-            if cmd == _PRO_STATUS_COMMAND:
+            if cmd == PRO_STATUS_COMMAND:
                 return CommandResult(0, _PRO_UNATTACHED, "")
             if "find /etc/apt/sources.list.d" in cmd:
                 return CommandResult(0, listing, "")
