@@ -1,0 +1,79 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "f7b21eefc4c1",
+  "session_id": "c8f94480-6a9f-4854-b200-5d428cf16c8f",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-30T15:11:56.558523298Z",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 2,
+  "save_step_count": 3,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "34b801659738",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 433,
+    "cache_creation_tokens": 1084213,
+    "cache_read_tokens": 54238483,
+    "output_tokens": 225861,
+    "api_call_count": 224
+  },
+  "session_metrics": {
+    "turn_count": 16
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 9,
+      "user_lines_removed": 0,
+      "agent_lines_added": 97,
+      "agent_lines_removed": 12,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9
+      }
+    },
+    {
+      "checkpoint_number": 4,
+      "user_lines_added": 688,
+      "user_lines_removed": 194,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9,
+        "docs/adr/adr-020-declarative-package-convergence.md": 4,
+        "docs/jobs/package-sync.md": 30,
+        "src/pcswitcher/jobs/apt_sync/messages.py": 201,
+        "src/pcswitcher/jobs/flatpak_sync.py": 3,
+        "src/pcswitcher/jobs/packages/decision_list.py": 91,
+        "src/pcswitcher/jobs/packages/prompt_navigation.py": 1,
+        "src/pcswitcher/jobs/packages/review.py": 123,
+        "tests/manual/review_harness.py": 2,
+        "tests/unit/jobs/test_apt_sync.py": 69,
+        "tests/unit/jobs/test_decision_list.py": 113,
+        "tests/unit/jobs/test_package_review.py": 19,
+        "tests/unit/jobs/test_review_skip_always.py": 23
+      },
+      "user_removed_per_file": {
+        "docs/adr/adr-020-declarative-package-convergence.md": 2,
+        "docs/jobs/package-sync.md": 16,
+        "src/pcswitcher/jobs/flatpak_sync.py": 1,
+        "src/pcswitcher/jobs/packages/decision_list.py": 25,
+        "src/pcswitcher/jobs/packages/prompt_navigation.py": 1,
+        "src/pcswitcher/jobs/packages/review.py": 32,
+        "tests/manual/review_harness.py": 2,
+        "tests/unit/jobs/test_apt_sync.py": 71,
+        "tests/unit/jobs/test_decision_list.py": 23,
+        "tests/unit/jobs/test_package_review.py": 13,
+        "tests/unit/jobs/test_review_skip_always.py": 8
+      }
+    }
+  ]
+}
