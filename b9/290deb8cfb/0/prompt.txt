@@ -6,3 +6,10 @@ Then stop for approval.
 
 I don't understand directly the difference between option 1 and 3. Explain in max 3 sentences.
 Don't set a "line floor".
+
+---
+
+Still didn't grasp the detail, but I don't have to.
+Sounds like apt-sync needs to fight with or hack around a strict flow/scheme set by the general package-sync design. An abstraction or general design that doesn't serve its users, is not good. So do whatever needed to accomodate the needs of apt-sync.
+
+Take into account that apt (and others?) can't follow a strict read > review > apply flow: there are (or will be when the user requirements will be fully/correctly implemented) cases where apt-sync needs to come back to the user with one or more questions after a first round of actions has been executed on target, or with feedback from that execution and user decision needed.
