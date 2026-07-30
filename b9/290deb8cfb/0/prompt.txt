@@ -1,0 +1,8 @@
+Read .planning/phases/02-package-management-sync/02-HANDOVER-conformance.md.
+Plan mode: map every AptSyncJob method and attribute to its destination module or collaborator. One table, no prose.
+Then stop for approval.
+
+---
+
+I don't understand directly the difference between option 1 and 3. Explain in max 3 sentences.
+Don't set a "line floor".
