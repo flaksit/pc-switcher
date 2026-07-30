@@ -17,7 +17,6 @@ from collections.abc import Mapping, Sequence
 from pcswitcher.executor import RemoteExecutor
 from pcswitcher.jobs.apt_sync.collateral import Collateral
 from pcswitcher.jobs.apt_sync.commands import (
-    compare_deb_versions,
     install_args,
     remove_args,
     simulate_apt_transaction,
@@ -114,11 +113,11 @@ class PackageConverger:
     ) -> CommandResult:
         """Simulate, then apply, one apt install — the last line of defence behind the
         plan-time collateral classification (D-30). Auto-installed collateral (a package
-        apt pulls in that is outside the target's `apt-mark showmanual` set) proceeds
-        silently — apt resolving its own dependencies. A manually-installed collateral
-        removal or downgrade (manual on the TARGET, ADR-020 D-40) is refused unless the user
-        let it go ahead in the review; the decision was made at plan time, and this guard only
-        verifies the real transaction has not drifted to touch a manual package nobody saw.
+        apt pulls in that `Collateral.protected` does not cover) proceeds silently but is
+        logged. A protected package's collateral removal, downgrade or upgrade is refused
+        unless the user let it go ahead in the review; the decision was made at plan time,
+        and this guard only verifies the real transaction has not drifted to touch a
+        protected package nobody saw.
         """
         name = package_name(diff.item_id)
 
@@ -141,24 +140,13 @@ class PackageConverger:
         args = install_args([name])
         preview = await simulate_apt_transaction(self._target, args, login_shell=False)
 
-        protected = self._collateral.protected()
-        approved_collateral = self._collateral.approved
-        refused = [pkg for pkg in preview.removals if pkg in protected and pkg not in approved_collateral]
+        refused = await self._collateral.unapproved(preview, exempt=frozenset(), verb="Installing", subject=name)
         if refused:
-            removed = ", ".join(refused)
+            effects = ", ".join(effect.phrase for effect in refused)
             raise ConvergeItemFailed(
-                f"install of {name} refused: apt-get --dry-run would remove manually-installed {removed}, "
+                f"install of {name} refused: apt-get --dry-run would {effects}, "
                 "which was not approved as collateral in this run (D-30)"
             )
-
-        for pkg, (old_version, new_version) in preview.install_versions.items():
-            if old_version is None or pkg not in protected or pkg in approved_collateral:
-                continue
-            if await compare_deb_versions(self._target, new_version, old_version) < 0:
-                raise ConvergeItemFailed(
-                    f"install of {name} refused: apt-get --dry-run would downgrade manually-installed {pkg} "
-                    f"from {old_version} to {new_version}, which was not approved as collateral (D-30, D-04)"
-                )
 
         real_cmd = f"sudo DEBIAN_FRONTEND=noninteractive apt-get {args}"
         return await self._target.run_command(real_cmd, login_shell=False, mutates=f"install apt package {name}")
@@ -167,30 +155,24 @@ class PackageConverger:
         self, diff: ItemDiff, diffs: Sequence[ItemDiff], decisions: Mapping[str, Decision]
     ) -> CommandResult:
         """Simulate, then apply, one apt remove — the same last line of defence the
-        install guard is (D-30). A collateral removal of an auto-installed package (outside
-        the target's `apt-mark showmanual` set) proceeds — removing a package legitimately
-        removes the now-orphaned dependencies apt pulled in for it. A collateral removal of a
-        manually-installed package (manual on the TARGET, ADR-020 D-40) is refused unless it
-        was itself an approved removal this run or approved let go ahead as collateral; that
-        decision was made at plan time, and this guard only catches a real transaction that
-        drifted to touch a manual package nobody reviewed.
+        install guard is (D-30). A collateral removal of an auto-installed package proceeds
+        and is logged: removing a package legitimately removes the now-orphaned dependencies
+        apt pulled in for it. A collateral change to a package `Collateral.protected` covers
+        is refused unless it was itself an approved removal this run or was let go ahead as
+        collateral. This is also where the removal batch's own known gap lands: a candidate
+        the user skipped, carried off by another approved removal's cascade, is refused here
+        by name rather than asked about at plan time (see `collateral`).
         """
         name = package_name(diff.item_id)
         args = remove_args([name])
 
         preview = await simulate_apt_transaction(self._target, args, login_shell=False)
         approved = self._collateral.approved_removals(diffs, decisions)
-        protected = self._collateral.protected()
-        approved_collateral = self._collateral.approved
-        refused = [
-            pkg
-            for pkg in preview.removals
-            if pkg != name and pkg not in approved and pkg not in approved_collateral and pkg in protected
-        ]
+        refused = await self._collateral.unapproved(preview, exempt=approved | {name}, verb="Removing", subject=name)
         if refused:
-            removed = ", ".join(refused)
+            effects = ", ".join(effect.phrase for effect in refused)
             raise ConvergeItemFailed(
-                f"removal of {name} refused: apt-get --dry-run would also remove manually-installed {removed}, "
+                f"removal of {name} refused: apt-get --dry-run would also {effects}, "
                 "which was neither an approved removal nor approved as collateral in this run (D-30)"
             )
 

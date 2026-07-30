@@ -16,9 +16,10 @@ from pcswitcher.jobs.packages.review import (
     COLLATERAL_REVIEW_ACTION,
     Decision,
 )
-from pcswitcher.models import CommandResult
+from pcswitcher.models import CommandResult, LogLevel
 from tests.unit.jobs.apt.helpers import (
     all_calls,
+    decision_file,
     install_reviewer,
     make_context,
     target_offers,
@@ -535,3 +536,221 @@ class TestSourceOnlyCollateral:
 
         commands = all_calls(target)
         assert any("sudo DEBIAN_FRONTEND=noninteractive apt-get install" in c and "pkg-a" in c for c in commands)
+
+
+class TestRemovalCandidateKeepsItsProtection:
+    """`PKG-FR-COLLATERAL-MANUAL`: being offered for removal is not consent to be removed.
+    Only a removal the user APPROVED exempts a package, and no answer exists at plan time —
+    so a removal candidate is protected from every OTHER transaction.
+    """
+
+    @staticmethod
+    def _context() -> tuple[JobContext, MagicMock, MagicMock]:
+        """`old-tool` is on the target alone, manually installed there, so it is both a
+        removal candidate and a protected package. Installing `pkg-a` would take it.
+        """
+        return make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "old-tool\n", ""),
+                "dpkg-query": CommandResult(0, "old-tool\t1.0\n", ""),
+                "apt-cache policy": CommandResult(0, target_offers("pkg-a"), ""),
+                "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": CommandResult(
+                    0, "Inst pkg-a (1.0)\nRemv old-tool [1.0]\n", ""
+                ),
+                "apt-get --dry-run remove --assume-yes old-tool": CommandResult(0, "Remv old-tool [1.0]\n", ""),
+            },
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_removal_candidate_taken_by_an_install_is_still_asked_about(self) -> None:
+        context, _source, _target = self._context()
+        job = AptSyncJob(context)
+
+        plan = await job.plan()
+
+        collateral = next(d for d in plan.diffs if d.item_id == "apt:collateral:old-tool")
+        assert collateral.detail == "Installing pkg-a on target-host would remove old-tool"
+        # Its own removal item is untouched: the two questions are about different things.
+        assert "apt:package:old-tool" in {d.item_id for d in plan.diffs}
+
+    @pytest.mark.asyncio
+    async def test_skipping_that_removal_leaves_the_install_unapplied(self) -> None:
+        """The whole point: the user kept `old-tool`, so the install that would have taken
+        it is cancelled rather than attempted and refused.
+        """
+        context, _source, target = self._context()
+        job = AptSyncJob(context)
+        install_reviewer(
+            job,
+            {
+                "apt:package:pkg-a": Decision.APPLY,
+                "apt:package:old-tool": Decision.SKIP_ONCE,
+                "apt:collateral:old-tool": Decision.SKIP_ONCE,
+            },
+        )
+
+        await job.execute()
+
+        commands = all_calls(target)
+        assert not any("sudo DEBIAN_FRONTEND=noninteractive apt-get install" in cmd for cmd in commands)
+        assert not any("sudo DEBIAN_FRONTEND=noninteractive apt-get remove" in cmd for cmd in commands)
+
+    @pytest.mark.asyncio
+    async def test_a_removal_candidate_is_not_collateral_of_its_own_batch(self) -> None:
+        """The removal batch's own candidates are what the batch is about: every one of them
+        is in `preview.removals` by construction, and none is a question about itself.
+        """
+        context, _source, _target = self._context()
+        job = AptSyncJob(context)
+
+        plan = await job.plan()
+
+        removal_batch_items = [
+            d
+            for d in plan.diffs
+            if d.item_id == "apt:collateral:old-tool" and d.detail is not None and d.detail.startswith("Removing")
+        ]
+        assert removal_batch_items == []
+
+
+class TestMarkedCollateral:
+    """`PKG-FR-COLLATERAL-MARKED`: a machine-specific package is invisible in every other
+    review line, so the collateral question is the only place the mark can be named.
+    """
+
+    @staticmethod
+    def _context() -> tuple[JobContext, MagicMock, MagicMock]:
+        """`vendor-tool` is marked machine-specific on the target and is NOT in the target's
+        `apt-mark showmanual` set, so the mark alone is what protects it.
+        """
+        return make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "", ""),
+                "apt.decisions.yaml": CommandResult(0, decision_file("apt:package:vendor-tool"), ""),
+                "apt-cache policy": CommandResult(0, target_offers("pkg-a"), ""),
+                "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": CommandResult(
+                    0, "Inst pkg-a (1.0)\nRemv vendor-tool [1.0]\n", ""
+                ),
+            },
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_marked_package_is_protected_and_the_question_says_it_is_marked(self) -> None:
+        context, _source, _target = self._context()
+        job = AptSyncJob(context)
+
+        plan = await job.plan()
+
+        collateral = next(d for d in plan.diffs if d.item_id == "apt:collateral:vendor-tool")
+        assert collateral.detail == (
+            "Installing pkg-a on target-host would remove vendor-tool — a package marked as target-host's own"
+        )
+
+    @pytest.mark.asyncio
+    async def test_an_unmarked_manual_package_says_nothing_about_a_mark(self) -> None:
+        context, _source, _target = _manual_collateral_context()
+        job = AptSyncJob(context)
+
+        plan = await job.plan()
+
+        collateral = next(d for d in plan.diffs if d.item_id == "apt:collateral:other-manual")
+        assert collateral.detail is not None
+        assert "marked as" not in collateral.detail
+
+
+class TestCollateralUpgrade:
+    """`PKG-FR-COLLATERAL-MANUAL` covers an upgrade too: moving a package the user chose off
+    the version it was on is the same imposition a downgrade is.
+    """
+
+    @pytest.mark.asyncio
+    async def test_manual_upgrade_becomes_a_collateral_item(self) -> None:
+        context, _source, _target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\nmanual-up\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\nmanual-up\t1.0\n", ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "manual-up\n", ""),
+                "dpkg-query": CommandResult(0, "manual-up\t1.0\n", ""),
+                "apt-cache policy": CommandResult(0, target_offers("pkg-a"), ""),
+                "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": CommandResult(
+                    0, "Inst pkg-a (1.0)\nInst manual-up [1.0] (2.0)\n", ""
+                ),
+                "dpkg --compare-versions 2.0 lt 1.0": CommandResult(1, "", ""),
+                "dpkg --compare-versions 2.0 gt 1.0": CommandResult(0, "", ""),
+            },
+        )
+        job = AptSyncJob(context)
+
+        plan = await job.plan()
+
+        collateral = next(d for d in plan.diffs if d.item_id == "apt:collateral:manual-up")
+        assert collateral.detail == "Installing pkg-a on target-host would upgrade manual-up from 1.0 to 2.0"
+
+
+class TestAutoCollateralIsLogged:
+    """`PKG-FR-COLLATERAL-AUTO`: a change nobody is asked about still has to be a change
+    somebody can see afterwards.
+    """
+
+    @pytest.mark.asyncio
+    async def test_auto_collateral_removal_is_named_in_the_log(self, caplog: pytest.LogCaptureFixture) -> None:
+        context, _source, _target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "", ""),
+                "apt-cache policy": CommandResult(0, target_offers("pkg-a"), ""),
+                "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": CommandResult(
+                    0, "Inst pkg-a (1.0)\nRemv auto-dep [1.0]\n", ""
+                ),
+            },
+        )
+        job = AptSyncJob(context)
+
+        with caplog.at_level(LogLevel.FULL):
+            await job.plan()
+
+        assert any(
+            "would remove auto-dep" in record.message and "installed automatically" in record.message
+            for record in caplog.records
+        )
+
+    @pytest.mark.asyncio
+    async def test_an_auto_version_change_is_logged_without_a_version_comparison(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The log line names both versions, so nothing has to run `dpkg --compare-versions`
+        to say which way an unasked-about change goes.
+        """
+        context, _source, target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "", ""),
+                "apt-cache policy": CommandResult(0, target_offers("pkg-a"), ""),
+                "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": CommandResult(
+                    0, "Inst pkg-a (1.0)\nInst auto-dep [1.0] (2.0)\n", ""
+                ),
+            },
+        )
+        job = AptSyncJob(context)
+
+        with caplog.at_level(LogLevel.FULL):
+            await job.plan()
+
+        assert any("change auto-dep from 1.0 to 2.0" in record.message for record in caplog.records)
+        assert not any("dpkg --compare-versions" in cmd for cmd in all_calls(target))

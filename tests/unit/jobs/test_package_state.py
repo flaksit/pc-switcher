@@ -631,22 +631,20 @@ _TARGET_POLICY_PKG_A = (
 )
 
 
-class TestDecisionScopeIsDiffFilteringOnly:
-    """D20 / decision 8: a machine-local decision makes an item inert in the DIFF, and
-    nothing else. It is deliberately NOT consulted by apt's collateral protection, whose
-    protected set is the TARGET's `apt-mark showmanual` set (ADR-020 D-40) — an accepted
-    limitation, on the grounds that a package a user records "skip always" is normally in
-    `showmanual` anyway, so the extra lookup would buy nothing.
+class TestDecisionScopeReachesCollateral:
+    """D20 / decision 8: a machine-local decision makes an item inert in the DIFF — and,
+    per `PKG-FR-COLLATERAL-MARKED`, protects it from collateral as well. The two inputs are
+    independent: the TARGET's `apt-mark showmanual` set (ADR-020 D-40) and that machine's
+    own marks, either of which alone protects a package.
 
-    Both tests share one decision file and differ only in the target's manual set, which
-    is what makes the limitation visible: membership of `showmanual` decides protection,
-    the decision file never does.
+    Both tests share one decision file and differ only in the target's manual set, which is
+    what makes that independence visible.
     """
 
     _DECISIONS = _decision_file_contents("apt:package:ghost-tool")
 
     @pytest.mark.asyncio
-    async def test_recorded_item_outside_both_manual_sets_gets_no_collateral_protection(self) -> None:
+    async def test_a_mark_protects_a_package_apt_considers_auto_installed(self) -> None:
         context = _apt_context(
             source_responses={
                 "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
@@ -655,8 +653,9 @@ class TestDecisionScopeIsDiffFilteringOnly:
                 _SOURCE_SCAN_CMD: CommandResult(0, _SOURCE_SCAN_UBUNTU, ""),
             },
             target_responses={
-                # ghost-tool is recorded machine-specific below but is manual on NEITHER
-                # machine — apt considers it an auto-installed package.
+                # ghost-tool is recorded machine-specific below and is manual on NEITHER
+                # machine — apt considers it an auto-installed package, so the mark is the
+                # only thing standing between it and a silent removal.
                 "apt-mark showmanual": CommandResult(0, "", ""),
                 "apt-cache policy": CommandResult(0, _TARGET_POLICY_PKG_A, ""),
                 "apt.decisions.yaml": CommandResult(0, self._DECISIONS, ""),
@@ -667,16 +666,17 @@ class TestDecisionScopeIsDiffFilteringOnly:
 
         plan = await job.plan()
 
-        assert not [d for d in plan.diffs if d.item_id == "apt:collateral:ghost-tool"]
-        assert not [g for g in plan.groups if g.action == COLLATERAL_REVIEW_ACTION]
-        # The install proceeds silently despite the recorded decision on its collateral.
+        collateral = [d for d in plan.diffs if d.item_id == "apt:collateral:ghost-tool"]
+        assert len(collateral) == 1
+        assert collateral[0].detail is not None
+        assert "marked as target-host's own" in collateral[0].detail
+        assert [g for g in plan.groups if g.action == COLLATERAL_REVIEW_ACTION]
         assert "apt:package:pkg-a" in {d.item_id for d in plan.diffs}
 
     @pytest.mark.asyncio
-    async def test_manual_set_membership_alone_decides_protection_even_for_a_recorded_item(self) -> None:
-        """Control for the limitation above: the SAME recorded item IS protected once it
-        is in the target's manual set — so the decision file changes nothing in either
-        direction, and `showmanual` is the only input.
+    async def test_manual_set_membership_protects_the_same_item_on_its_own(self) -> None:
+        """The other input, alone: the SAME recorded item is also protected by being in the
+        target's manual set. Either source of protection is sufficient.
         """
         context = _apt_context(
             source_responses={

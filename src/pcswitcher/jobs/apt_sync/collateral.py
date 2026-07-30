@@ -1,14 +1,21 @@
-"""What else apt would do (D-30): the packages an approved change would remove or downgrade
-without anybody having asked for it.
+"""What else apt would do (D-30): the packages an approved change would remove, downgrade or
+upgrade without anybody having asked for it.
 
 Split by origin, which is the whole ruling: a collateral package apt installed
-automatically is apt resolving its own dependencies and proceeds silently, while one the
-user installed by hand on the TARGET is something they chose to have, so it becomes its own
-three-way review item — go ahead, keep the package, or stop the sync.
+automatically is apt resolving its own dependencies and proceeds silently — named in the log
+and nowhere else (`PKG-FR-COLLATERAL-AUTO`) — while one the user installed by hand on the
+TARGET, or marked as that machine's own, is something they chose to have, so it becomes its
+own three-way review item: go ahead, keep the package, or stop the sync.
 
-Two batched simulations per run, not one per package: a per-package rehearsal over a
+Two batched simulations per run, not one per package: a per-package simulation over a
 150-package manual set would cost more than the sync itself. Attribution is what costs extra,
 and only on a run that actually found manual collateral.
+
+Known gap, deliberately left: in the removal batch a candidate is exempt from its own
+transaction, so a removal the user skips can still be carried off by ANOTHER approved
+removal's cascade. The apply-time guard refuses that transaction and names the package, so
+nothing is lost — the user is told rather than asked. Closing it needs a per-candidate
+simulation on every run with removals, which is the cost this module exists to avoid.
 """
 
 from __future__ import annotations
@@ -33,8 +40,10 @@ from pcswitcher.jobs.apt_sync.items import (
 )
 from pcswitcher.jobs.apt_sync.messages import build_trigger_phrase
 from pcswitcher.jobs.apt_sync.origins import OriginClassifier
+from pcswitcher.jobs.apt_sync.reporting import Log
 from pcswitcher.jobs.packages.items import DiffAction, ItemClass, ItemDiff, Machines
 from pcswitcher.jobs.packages.review import Decision, ReviewOutcome
+from pcswitcher.models import Host, LogLevel
 
 
 class CollateralEffect(NamedTuple):
@@ -47,6 +56,18 @@ class CollateralEffect(NamedTuple):
     act_word: str
     phrase: str
     sentence: str
+
+
+class CollateralSplit(NamedTuple):
+    """One simulation's collateral, split the way D-30 splits it.
+
+    Both halves are returned because both have to be reported: `manual` becomes a review
+    item, and `auto` becomes a log line (`PKG-FR-COLLATERAL-AUTO`) — a change nobody is
+    asked about still has to be a change somebody can see afterwards.
+    """
+
+    manual: list[CollateralEffect]
+    auto: list[CollateralEffect]
 
 
 class Collateral:
@@ -64,9 +85,20 @@ class Collateral:
         machines: Machines,
         target_manual_set: frozenset[str],
         origins: OriginClassifier,
+        marked: frozenset[str] = frozenset(),
+        log: Log | None = None,
     ) -> None:
         self._target = target
         self._machines = machines
+        # Package names the TARGET has marked machine-specific (`PKG-FR-COLLATERAL-MARKED`).
+        # They are filtered out before any diff is computed, so no review line anywhere else
+        # in the run mentions them — which makes the collateral question the only place the
+        # user can be told the mark is about to be overrun.
+        self._marked = marked
+        self._log = log
+        # Marks this run's own review recorded, added by `resolve` so the apply-time guard
+        # honours a "never offer again" answer given minutes earlier in the same review.
+        self._run_marked: frozenset[str] = frozenset()
         # The target's `apt-mark showmanual` set: the single source of the auto-versus-manual
         # split (D-30). A collateral package the simulation would remove or downgrade is
         # manual (the user chose it -> a review item) if it is in this set, auto (apt's own
@@ -91,8 +123,10 @@ class Collateral:
         return self._approved
 
     def protected(self) -> frozenset[str]:
-        """Packages a collateral removal/downgrade must not silently touch: the TARGET's
-        `apt-mark showmanual` set alone (ADR-020 D-40).
+        """Packages a collateral removal, downgrade or upgrade must not silently touch: the
+        TARGET's `apt-mark showmanual` set (ADR-020 D-40) plus the packages that machine
+        marked machine-specific, this run's own marks included
+        (`PKG-FR-COLLATERAL-MANUAL`, `PKG-FR-COLLATERAL-MARKED`).
 
         The source's manual set is deliberately NOT unioned in, and the case that gives up
         is knowingly accepted rather than overlooked: a package the user installed by hand
@@ -102,11 +136,8 @@ class Collateral:
         strength of the OTHER machine's bookkeeping is a guess. The narrower set is also
         the set apt itself consults, so "manually installed" means the same thing to
         pc-switcher and to apt on the machine being changed.
-
-        The machine-specific decision list is still not consulted (D-30, accepted
-        limitation, unchanged).
         """
-        return self._target_manual_set
+        return self._target_manual_set | self._marked | self._run_marked
 
     async def plan_time(self, diffs: Sequence[ItemDiff]) -> list[ItemDiff]:
         """One BATCHED simulation per direction — the whole install candidate set, the whole
@@ -125,20 +156,29 @@ class Collateral:
         # collateral simulation and its id is not a package id (#208).
         pkg = [d for d in diffs if d.item_class == ItemClass.APT_PACKAGE]
         install_diffs = [d for d in pkg if d.action == DiffAction.INSTALL]
-        install_names = [package_name(d.item_id) for d in install_diffs]
         remove_names = [package_name(d.item_id) for d in pkg if d.action == DiffAction.REMOVE]
-        # Every package this run already asks about, resolvable or not: one of them turning up
-        # in another's transaction is a decision the user is taking anyway, not collateral.
-        reviewed_names = frozenset(install_names) | frozenset(remove_names)
         rehearsed = [package_name(d.item_id) for d in install_diffs if self._origins.target_resolvable(d.item_id)]
 
-        # A removal candidate is by definition installed on the target, so apt can always
-        # resolve it and that set is never narrowed.
+        # What each direction may exempt from its own simulation, and nothing else
+        # (`PKG-FR-COLLATERAL-MANUAL`). Being offered for removal is not consent to be
+        # removed, and no answer exists yet at plan time — so the removal candidates are
+        # exempt ONLY from the removal batch, where every one of them is in
+        # `preview.removals` by construction and is the very thing under review. In the
+        # install direction they are ordinary protected packages: an approved install whose
+        # transaction takes one out has to be asked about, not silently allowed on the
+        # strength of a removal the user may yet skip.
+        #
+        # The install candidates need no exemption at all: a package this run installs is
+        # absent from the target, so it is outside `protected()` and cannot be collateral.
         collateral: list[ItemDiff] = []
         if rehearsed:
-            collateral.extend(await self.for_direction(rehearsed, reviewed_names, install_args, verb="Installing"))
+            collateral.extend(await self.for_direction(rehearsed, frozenset(), install_args, verb="Installing"))
         if remove_names:
-            collateral.extend(await self.for_direction(remove_names, reviewed_names, remove_args, verb="Removing"))
+            # A removal candidate is by definition installed on the target, so apt can
+            # always resolve it and that set is never narrowed.
+            collateral.extend(
+                await self.for_direction(remove_names, frozenset(remove_names), remove_args, verb="Removing")
+            )
         return collateral
 
     async def for_direction(
@@ -167,7 +207,9 @@ class Collateral:
         conservative answer, and the only true one.
         """
         preview = await simulate_apt_transaction(self._target, args_for(candidates), login_shell=False)
-        found = await self.classify(preview, reviewed_names)
+        split = await self.classify(preview, reviewed_names)
+        self._log_auto(split.auto, verb, candidates)
+        found = split.manual
         if not found:
             return []
 
@@ -176,7 +218,7 @@ class Collateral:
             narrowed: dict[str, set[str]] = {item.package: set() for item in found}
             for candidate in candidates:
                 alone = await simulate_apt_transaction(self._target, args_for([candidate]), login_shell=False)
-                for item in await self.classify(alone, reviewed_names):
+                for item in (await self.classify(alone, reviewed_names)).manual:
                     if item.package in narrowed:
                         narrowed[item.package].add(candidate)
             triggers = {name: frozenset(blamed) or frozenset(candidates) for name, blamed in narrowed.items()}
@@ -191,41 +233,96 @@ class Collateral:
             for item in found
         ]
 
-    async def classify(self, preview: AptTransactionPreview, reviewed_names: frozenset[str]) -> list[CollateralEffect]:
-        """Partition a simulation's would-remove/would-downgrade packages by origin
-        (D-30): a package in the TARGET's manual set becomes a manual-collateral review
-        item (ADR-020 D-40); one outside it is auto-installed — apt's own dependency — and
-        produces nothing, not even a report line the user cannot act on.
+    async def classify(self, preview: AptTransactionPreview, reviewed_names: frozenset[str]) -> CollateralSplit:
+        """Partition a simulation's would-remove, would-downgrade and would-upgrade packages
+        by origin (D-30): a package `protected()` covers becomes a manual-collateral review
+        item (ADR-020 D-40); one outside it is apt's own dependency and proceeds silently —
+        but is still returned, so `PKG-FR-COLLATERAL-AUTO`'s log line can name it.
 
-        A downgrade is detected exactly as before: an `install_versions` entry with a
-        non-`None` old version and `compare_deb_versions(target, new, old) < 0`.
+        A version change is an `install_versions` entry with a non-`None` old version; the
+        `compare_deb_versions` sign says which way it goes. Both directions are collateral:
+        an upgrade nobody asked for moves a package the user chose off the version it was on,
+        which is the same imposition a downgrade is (`PKG-FR-COLLATERAL-MANUAL`).
 
         Returns `CollateralEffect`s rather than `ItemDiff`s because the caller must
         attribute them before any of it can be phrased: only the caller knows which
         candidates to put in front of the effect.
         """
         protected = self.protected()
-        collateral: list[CollateralEffect] = []
+        manual: list[CollateralEffect] = []
+        auto: list[CollateralEffect] = []
 
         for pkg in preview.removals:
-            if pkg in reviewed_names or pkg not in protected:
+            if pkg in reviewed_names:
                 continue
-            collateral.append(CollateralEffect(pkg, "remove", f"remove {pkg}", f"{pkg} is removed as well"))
+            effect = CollateralEffect(pkg, "remove", f"remove {pkg}", f"{pkg} is removed as well")
+            (manual if pkg in protected else auto).append(effect)
 
         for pkg, (old_version, new_version) in preview.install_versions.items():
-            if pkg in reviewed_names or old_version is None or pkg not in protected:
+            if pkg in reviewed_names or old_version is None:
                 continue
-            if await compare_deb_versions(self._target, new_version, old_version) < 0:
-                collateral.append(
+            if pkg not in protected:
+                # No `dpkg --compare-versions` for an auto package: the log line names both
+                # versions, so the direction is on the page without a command per package.
+                # Only a protected package needs the word, because the word goes in a
+                # question.
+                auto.append(
                     CollateralEffect(
                         pkg,
-                        "downgrade",
-                        f"downgrade {pkg} from {old_version} to {new_version}",
-                        f"{pkg} is downgraded from {old_version} to {new_version} as well",
+                        "change",
+                        f"change {pkg} from {old_version} to {new_version}",
+                        f"{pkg} is changed from {old_version} to {new_version} as well",
                     )
                 )
+                continue
+            order = await compare_deb_versions(self._target, new_version, old_version)
+            if order == 0:
+                continue
+            word = "downgrade" if order < 0 else "upgrade"
+            manual.append(
+                CollateralEffect(
+                    pkg,
+                    word,
+                    f"{word} {pkg} from {old_version} to {new_version}",
+                    f"{pkg} is {word}d from {old_version} to {new_version} as well",
+                )
+            )
 
-        return collateral
+        return CollateralSplit(manual=manual, auto=auto)
+
+    async def unapproved(
+        self, preview: AptTransactionPreview, *, exempt: frozenset[str], verb: str, subject: str
+    ) -> list[CollateralEffect]:
+        """The apply-time half of the same split, and the last line of defence behind
+        plan-time classification (D-30): the protected packages this real transaction would
+        take that nobody let go ahead.
+
+        Runs the identical `classify` the review ran, so the package the user was asked about
+        and the package the guard enforces cannot drift apart. Auto collateral is logged here
+        too, because this is the transaction that actually happens
+        (`PKG-FR-COLLATERAL-AUTO`).
+        """
+        split = await self.classify(preview, exempt)
+        self._log_auto(split.auto, verb, [subject])
+        return [effect for effect in split.manual if effect.package not in self._approved]
+
+    def _log_auto(self, auto: Sequence[CollateralEffect], verb: str, candidates: Sequence[str]) -> None:
+        """One line per collateral change nobody will be asked about
+        (`PKG-FR-COLLATERAL-AUTO`).
+
+        Logged from the BATCH simulation only — the per-candidate narrowing re-derives the
+        same effects and would print each of them once per candidate.
+        """
+        if self._log is None:
+            return
+        trigger = ", ".join(sorted(candidates))
+        for effect in auto:
+            self._log(
+                Host.TARGET,
+                LogLevel.FULL,
+                f"{verb} {trigger} on {self._machines.target} would {effect.phrase} "
+                f"({effect.package} is installed automatically on {self._machines.target}; not asked)",
+            )
 
     def _item(self, effect: CollateralEffect, trigger: str, verb: str, trigger_ids: frozenset[str]) -> ItemDiff:
         """Build one manual-collateral `ItemDiff` and record the candidates it gates.
@@ -235,12 +332,17 @@ class Collateral:
         is removed as well", and the next item's cause may be a removal instead. `verb` is
         the direction of the change under review ("Installing"/"Removing"), not what happens
         to the collateral package.
+
+        A marked package says so in the same sentence (`PKG-FR-COLLATERAL-MARKED`): the mark
+        is why nothing else in the review mentions this package, so this is the only line the
+        user gets about it.
         """
         target = self._machines.target
         causing = "install" if verb == "Installing" else "remove"
+        marked = f" — a package marked as {target}'s own" if effect.package in self._marked else ""
         diff = collateral_diff(
             effect.package,
-            f"{verb} {trigger} on {target} would {effect.phrase}",
+            f"{verb} {trigger} on {target} would {effect.phrase}{marked}",
             act_word=effect.act_word,
             answer_hints=(
                 f"{causing} {trigger} {'on' if causing == 'install' else 'from'} {target}, so {effect.sentence}",
@@ -287,6 +389,17 @@ class Collateral:
         Returns the outcome with any triggering decisions overridden; leaves the
         decisions map untouched when there is no collateral to resolve.
         """
+        # A "never offer again" answer given in THIS review counts from here on
+        # (`PKG-FR-COLLATERAL-MARKED`): the apply-time guard runs after `resolve`, so a mark
+        # the user made minutes ago protects the package from the transactions that follow.
+        self._run_marked = frozenset(
+            package_name(diff.item_id)
+            for diff in diffs
+            if diff.item_class == ItemClass.APT_PACKAGE
+            and diff.action == DiffAction.REMOVE
+            and outcome.decisions.get(diff.item_id) == Decision.SKIP_ALWAYS
+        )
+
         approved: set[str] = set()
         overrides: dict[str, Decision] = {}
         for diff in diffs:

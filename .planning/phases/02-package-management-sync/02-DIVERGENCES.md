@@ -124,7 +124,9 @@ Found on 2026-07-30 while checking the narrative's collateral claim against the 
 
 So: a package offered for removal, kept by answering *skip*, is excluded from collateral protection for the rest of the run. Approving an unrelated install whose transaction removes it deletes it with no question and, per `PKG-FR-COLLATERAL-AUTO`'s classification, no review line either. The user asked to keep it and it goes.
 
-`PKG-FR-COLLATERAL-MANUAL` now states that only an APPROVED removal exempts a package. Recorded in the criteria's gap register.
+`PKG-FR-COLLATERAL-MANUAL` now states that only an APPROVED removal exempts a package.
+
+**Closed 2026-07-30 (U1).** The install batch exempts nothing, so a removal candidate an install would take is a collateral question. What survives, and is recorded as a survivor in the criteria's gap register: inside the removal batch a candidate is still exempt from its own transaction, so a skipped candidate carried off by another approved removal's cascade is refused by the apply-time guard rather than asked about.
 
 ## Rulings that close earlier divergences
 

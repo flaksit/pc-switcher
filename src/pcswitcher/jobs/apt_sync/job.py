@@ -33,6 +33,7 @@ from pcswitcher.jobs.apt_sync.etc_apt import EtcApt
 from pcswitcher.jobs.apt_sync.files import TargetFiles
 from pcswitcher.jobs.apt_sync.items import (
     APT_HOLD_ID_PREFIX,
+    APT_PACKAGE_ID_PREFIX,
     APT_SOURCES_LIST,
     CONFLICT_ID_PREFIX,
     DISTRO_SOURCE_FILENAMES,
@@ -43,6 +44,7 @@ from pcswitcher.jobs.apt_sync.items import (
     UNRECORDABLE_ITEM_ID_PREFIXES,
     is_collateral_diff,
     is_repo_removal_diff,
+    package_name,
     pin_filename,
 )
 from pcswitcher.jobs.apt_sync.keyrings import Keyrings
@@ -254,6 +256,8 @@ class AptSyncJob(PackageSyncJob):
             machines=self.machines,
             target_manual_set=await self._probe.capture_target_manual_set(),
             origins=origins,
+            marked=self._target_marked_packages(),
+            log=self._log,
         )
         collateral_diffs = await collateral.plan_time(base_plan.diffs)
 
@@ -324,6 +328,19 @@ class AptSyncJob(PackageSyncJob):
             target_decisions,
         )
         return PackagePlan(manager=self.manager_id, diffs=diffs, groups=self._build_review_groups(diffs))
+
+    def _target_marked_packages(self) -> frozenset[str]:
+        """Package names the TARGET recorded machine-specific, from the decision file
+        `_plan_packages` has just read (`PKG-FR-COLLATERAL-MARKED`).
+
+        These never reach a review of their own — `filter_inert` drops them from the target
+        manifest before anything is diffed — so the collateral question is the only place
+        the user can be told a mark is about to be overrun.
+        """
+        _source_decisions, target_decisions = self._plan_decisions
+        return frozenset(
+            package_name(item_id) for item_id in target_decisions if item_id.startswith(APT_PACKAGE_ID_PREFIX)
+        )
 
     async def _plan_repo_diffs(
         self,
