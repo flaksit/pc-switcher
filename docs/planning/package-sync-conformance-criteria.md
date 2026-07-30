@@ -138,12 +138,12 @@ Decomposes [apt / Holds](package-sync-user-requirements.md#holds).
 
 Decomposes [apt / Collateral damage](package-sync-user-requirements.md#collateral-damage).
 
-- **PKG-FR-COLLATERAL-AUTO**: Collateral removals and downgrades that touch only automatically-installed packages MUST proceed without asking, and MUST be named in the run's log.
+- **PKG-FR-COLLATERAL-AUTO**: Collateral removals, downgrades and upgrades that touch only automatically-installed packages MUST proceed without asking, and MUST be named in the run's log.
   Why: that is the target's apt resolving its own dependency graph. Logging it is what keeps a change nobody is asked about from being a change nobody can see.
-- **PKG-FR-COLLATERAL-MANUAL**: An approved change MUST NOT remove or downgrade a package that is manually installed on the target unless the user has consented to that consequence specifically. Being offered for removal is not that consent: only a removal the user APPROVED may exempt a package from this protection, and one skipped for this run, or marked machine-specific, MUST keep it. The request MUST name the affected package, say why it is protected, and say what the approved change would do to it. The user MUST be able to accept it, to keep the package — leaving the changes that cause the loss unapplied rather than failing later — or to stop the sync, and each of those three MUST state its own effect. The stopping answer MUST say how far it reaches.
+- **PKG-FR-COLLATERAL-MANUAL**: An approved change MUST NOT remove, downgrade or upgrade a package that is manually installed on the target unless the user has consented to that consequence specifically. Being offered for removal is not that consent: only a removal the user APPROVED may exempt a package from this protection, and one skipped for this run, or marked machine-specific, MUST keep it. The request MUST name the affected package, say why it is protected, and say what the approved change would do to it. The user MUST be able to accept it, to keep the package — leaving the changes that cause the loss unapplied rather than failing later — or to stop the sync, and each of those three MUST state its own effect. The stopping answer MUST say how far it reaches.
   Why: "abort" alone reads as abandoning the question. Stopping here ends the entire sync, not just the package job, and a user who cannot tell those apart cannot choose between them. The protection is also not the machine-specific mark: nobody recorded a preference, the target's own package manager reports that a person asked for the package, and saying otherwise would describe a decision the user never made.
-- **PKG-FR-COLLATERAL-MARKED**: Where the collateral package is marked machine-specific, ANY change to it — removal, downgrade or upgrade alike — MUST raise the question of `PKG-FR-COLLATERAL-MANUAL`, and the question MUST say that the package is machine-specific. A mark recorded earlier in the same run MUST count.
-  Why: the mark says the job never touches that package on that machine of its own accord, so every touch needs permission and not only a destructive one. Nothing else in any review mentions a marked package, which makes this the only line the user ever gets about it.
+- **PKG-FR-COLLATERAL-MARKED**: Where the collateral package is marked machine-specific, the question MUST say so explicitly. A mark recorded earlier in the same run MUST count.
+  Why: nothing else in any review mentions a marked package, which makes this the only line the user ever gets about it, and the mark is why the job would otherwise not be touching it at all.
 - **PKG-FR-COLLATERAL-ATTRIBUTION**: Declining collateral MUST cancel only the approved changes whose own transaction causes it, and MUST NOT cancel any other change under review. Where the collateral is caused by a combination of changes and by no single one of them, the whole set MUST be cancelled, and the question MUST say so.
   Why: the review's other answers are the user's and were given about other software. A decline that reaches them is a decision the user did not make.
 - **PKG-FR-COLLATERAL-KEEPS-MARKS**: Cancelling a change on account of declined collateral MUST NOT alter a decision the user gave for that change. A change marked machine-specific MUST still be recorded as such, and a change already declined MUST NOT be re-decided.
@@ -271,7 +271,9 @@ Decomposes [When something goes wrong](package-sync-user-requirements.md#when-so
   Why: reading silence as "this machine has nothing installed" would propose removing everything the other machine has.
 - **PKG-FR-LOG-DECISIONS**: A run's log MUST name every item a job presented together with the decision it received, and every change a package manager made on its own behalf that no review showed.
   Why: the report says what a job did; the log is where the user reconstructs why, including the changes that were never theirs to approve.
-- **PKG-FR-LOG-VERBATIM**: A package manager's own output MUST be kept verbatim in the debug log, except where another article restricts what may be logged (`PKG-FR-ESM-PRIVACY`).
+- **PKG-FR-LOG-VERBATIM**: A package manager's own output MUST be kept verbatim in the debug log, subject to `PKG-FR-ESM-PRIVACY` and `PKG-FR-CREDENTIAL-PRIVACY`.
+- **PKG-FR-CREDENTIAL-PRIVACY**: A credential embedded in a URL MUST be withheld wherever the system writes or shows that URL — a log line, a command trace, a package manager's output, a review item, and a configuration file displayed in full for a decision.
+  Why: a private or commercial repository carries its credential in its own address, so the URL is the secret. A log file is readable by anyone with an account on the machine that wrote it.
 - **PKG-FR-FAIL-NAMED**: Every failure MUST name the item, package or file it concerns.
 
 ## Non-goals and accepted costs
@@ -301,6 +303,7 @@ Requirements the shipped code knowingly does not satisfy are recorded here, veri
 - **PKG-FR-READ-FAILS-JOB** is not implemented. Only `PackageItemFailures` lets the run continue; every other exception, a failed capture included, is re-raised and stops the whole sync (`orchestrator.py:1324-1344`).
 - **PKG-FR-JOB-ORDER** covers three jobs, not four. `orchestrator.py:1082` validates `apt_sync`, `snap_sync` and `flatpak_sync` against `folder_sync`; `manual_installs_sync` may be ordered after it without an error.
 - **PKG-FR-REPO-DELETE** is not implemented. `apt_sync` offers a target-only repository for deletion whatever still uses it, disclosing the machine-specific packages the deletion would strand rather than refusing to raise it.
+- **PKG-FR-CREDENTIAL-PRIVACY** is not implemented. Nothing in the codebase redacts, and the executor already traces every command verbatim at DEBUG (`executor.py:154`), so a repository URL carrying a credential reaches the log today.
 - **PKG-FR-REPO-CONFLICT** asks more widely than required. apt raises the conflict for every differing repository file feeding machine-specific software, without flatpak's gate on the file being one this run would write (recorded as DIV-07).
 
 - **PKG-FR-FLATPAK-REMOTE-DELETE** is not implemented. `flatpak_sync` still offers a target-only remote for deletion as a two-answer review item (`_diff_flatpak_remotes`), so the user can delete a remote that machine-specific or origin-diverged applications still depend on.
@@ -310,19 +313,15 @@ Requirements the shipped code knowingly does not satisfy are recorded here, veri
 
 - **PKG-FR-APT-HOLD-VERSION** is not implemented. `apt_sync` installs every package by name and applies the hold afterwards, so a held package the target lacks is installed at whatever version the target offers and then frozen there. The requirement was ruled on after the code was written.
 
-## Open questions
-
-None. Every question this document carried has been ruled on during the requirements review.
-
 ## Traceability
 
-Every article above decomposes exactly one section of [Package sync — user requirements](package-sync-user-requirements.md). 122 articles, no orphans in either direction. A new article needs a home here; a narrative section with no articles is either intentionally non-normative or a coverage gap.
+Every article above decomposes exactly one section of [Package sync — user requirements](package-sync-user-requirements.md). 123 articles, no orphans in either direction. A new article needs a home here; a narrative section with no articles is either intentionally non-normative or a coverage gap.
 
 | User-requirements section | Articles | |
 | - | - | - |
 | [What package sync is for](package-sync-user-requirements.md#what-package-sync-is-for) | 8 | `PKG-FR-OPT-IN` `PKG-FR-JOB-INDEPENDENCE` `PKG-FR-JOB-ORDER` `PKG-FR-APT-SCOPE` `PKG-FR-SNAP-SCOPE` `PKG-FR-FLATPAK-SCOPE` `PKG-FR-MANUAL-SCOPE` `PKG-FR-DATA-BOUNDARY` |
 | [The model](package-sync-user-requirements.md#the-model) | 18 | `PKG-FR-SOURCE-INTENT` `PKG-FR-MANAGER-CONVERGES` `PKG-FR-APT-IDENTITY` `PKG-FR-DISTRO-ORIGIN` `PKG-FR-SNAP-IDENTITY` `PKG-FR-FLATPAK-IDENTITY` `PKG-FR-FLATPAK-ORIGIN-NOT-IDENTITY` `PKG-FR-VERSION-FLOAT` `PKG-FR-SNAP-REVISION` `PKG-FR-BLOCKS-REPLICATE` `PKG-FR-REVIEW-FIRST` `PKG-FR-ONLY-APPROVED` `PKG-FR-BATCHED` `PKG-FR-ASK-AGAIN` `PKG-FR-CONSENT-BEFORE-CHANGE` `PKG-FR-ASK-ABOUT-SOFTWARE` `PKG-FR-ASK-WHEN-NOT-DERIVABLE` `PKG-FR-REMOVAL-DISTINCT` |
-| [What happens during a sync](package-sync-user-requirements.md#what-happens-during-a-sync) | 8 | `PKG-FR-NAME-THE-MACHINES` `PKG-FR-EFFECT-NOT-MECHANISM` `PKG-FR-ABORT` `PKG-FR-CONFIRM-EACH` `PKG-FR-NO-TERMINAL` `PKG-FR-DRY-RUN` `PKG-FR-LOG-DECISIONS` `PKG-FR-LOG-VERBATIM` |
+| [What happens during a sync](package-sync-user-requirements.md#what-happens-during-a-sync) | 9 | `PKG-FR-NAME-THE-MACHINES` `PKG-FR-EFFECT-NOT-MECHANISM` `PKG-FR-ABORT` `PKG-FR-CONFIRM-EACH` `PKG-FR-NO-TERMINAL` `PKG-FR-DRY-RUN` `PKG-FR-LOG-DECISIONS` `PKG-FR-LOG-VERBATIM` `PKG-FR-CREDENTIAL-PRIVACY` |
 | [Decisions and their memory](package-sync-user-requirements.md#decisions-and-their-memory-machine-specific) | 3 | `PKG-FR-SKIP-ONCE` `PKG-FR-MACHINE-SPECIFIC` `PKG-FR-NO-MARK-ON-ORIGIN` |
 | [apt / Installing](package-sync-user-requirements.md#installing) | 5 | `PKG-FR-DEB-OWNERSHIP` `PKG-FR-APT-ORIGIN-DISCLOSURE` `PKG-FR-APT-ORIGIN-DERIVED` `PKG-FR-APT-ORIGIN-UNREPLICABLE` `PKG-FR-APT-ORIGIN-VERIFY` |
 | [apt / Removing a package](package-sync-user-requirements.md#removing-a-package) | 1 | `PKG-FR-APT-REMOVE` |
@@ -340,4 +339,4 @@ Every article above decomposes exactly one section of [Package sync — user req
 
 It also runs the other way: an article can state an obligation its section deliberately does not spell out. `PKG-FR-SNIPPET-VERBATIM` refusing an empty snippet is one — a real requirement, and too obvious to spend the narrative reader's attention on. Such an article is not an orphan, and the remedy is never to add the sentence back.
 
-Two narrative sections carry no articles, deliberately. [Vocabulary](package-sync-user-requirements.md#vocabulary) defines terms rather than imposing obligations — but it is what makes the articles unambiguous, so an article that cannot be stated in its vocabulary is an article to rewrite. [Open questions](package-sync-user-requirements.md#open-questions) records what is undecided, and an open question resolved becomes one or more articles here.
+One narrative section carries no articles, deliberately. [Vocabulary](package-sync-user-requirements.md#vocabulary) defines terms rather than imposing obligations — but it is what makes the articles unambiguous, so an article that cannot be stated in its vocabulary is an article to rewrite.

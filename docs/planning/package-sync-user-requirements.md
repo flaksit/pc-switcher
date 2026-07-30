@@ -86,7 +86,9 @@ The two machines are named by hostname wherever the user reads them, and every a
 
 **Report** gives the job's outcome: success, skipped with the reason, or failed naming each failed item.
 
-The log holds more than the report. It names every item the job presented and the decision each one got, and every change the package manager made on its own behalf — the collateral the review never showed. The package manager's own output is kept verbatim in the debug log, except where a privacy rule withholds it.
+The log holds more than the report. It names every item the job presented and the decision each one got, and every change the package manager made on its own behalf — the collateral the review never showed. The package manager's own output is kept verbatim in the debug log.
+
+A credential embedded in a URL is withheld wherever the user or the log would otherwise see it — in a command, in a package manager's output, in a configuration file shown whole for a decision. A repository can carry its password in its own address, and a log file is readable by anyone with an account on the machine that wrote it.
 
 A **dry run** plans and reviews exactly as a real run does — the questions are still asked — then changes nothing and records nothing. A **non-interactive run** — one with no terminal to answer at, such as from cron or a script — asks nothing, treats every item as declined, and reports any job with a non-empty review as skipped.
 
@@ -96,7 +98,7 @@ A **dry run** plans and reviews exactly as a real run does — the questions are
 
 Example: two machines Atlas and Vega, sync launched from Atlas. Vega has `steam`; Atlas does not, so the sync offers to remove it from Vega. Answering "always skip" writes the mark **on Vega**, because Vega holds `steam`. The reverse case: Atlas has `wireshark`, the sync offers to install it on Vega, and "always skip" writes the mark on **Atlas**.
 
-A marked item is filtered out before the difference is computed, so it never appears in a later review. Because of that, the repository-conflict question below has to disclose it explicitly.
+A machine-specific item is filtered out before the difference is computed, so it never appears in a later review. Because of that, the repository-conflict question below has to disclose it explicitly.
 
 Marks never sync between machines. Snippets do, because how to install something is knowledge about the software rather than the machine.
 
@@ -160,11 +162,11 @@ Approving an install can make apt remove or downgrade something else, through *c
 
 If apt installed that something automatically, the collateral action proceeds silently — apt is resolving its own dependencies. The log names it.
 
-If it is **manually installed on the target**, the user is asked first. The question names the package, says that this machine's apt has it marked manually installed, and says what the approved change would do to it. Three answers, each stating its effect: install anyway, skip and leave the triggering install unapplied, or stop the whole apt sync.
+If it is **manually installed on the target**, the user is asked first about any removal/downgrade/upgrade. The question names the package, says that this machine's apt has it marked manually installed, and says what the approved change would do to it. Three answers, each stating its effect: install anyway, skip and leave the triggering install unapplied, or stop the whole apt sync.
 
-A package marked **machine-specific** is the case that matters most, and the question says so. Nothing else in the review mentions such a package, so this is the only line the user gets about it. It is also protected more widely: the job never touches a machine-specific package of its own accord, so *any* change to one — an upgrade included — is asked about, not only a removal or a downgrade.
+A package marked **machine-specific** is the case that matters most, and the question mentions explicitly that the package is machine specific.
 
-A package the user chose to keep is protected too. Being offered for removal is not consent to lose it: only a removal the user *approved* is exempt from this question, and one skipped for this run, or marked machine-specific, keeps its protection. A decision made earlier in this same run counts.
+A package the user chose to keep is protected too. Only a removal the user *approved* is exempt from this question, and one skipped for this run, or marked machine-specific, keeps its protection. A decision made earlier in this same run counts.
 
 Declining cancels only the changes that actually cause the collateral. Where several cause it together, all are cancelled and the question says so. It never overwrites a decision the user already gave.
 
@@ -176,7 +178,7 @@ Deleting one is a question, but only once nothing on the target still uses it �
 
 A repository both machines have with different content is overwritten with the source's version silently — unless the overwrite would repoint a package the target marked machine-specific. Then the user is asked, and shown both versions of the file in full. Declining fails every approved package whose origin depended on that file.
 
-Only a repository this run writes because an approved package comes from it can raise that question. A differing file nothing approved this run needs is not written, so there is nothing to consent to.
+Only a repository this run writes because an approved package comes from it can raise that question. A differing file nothing approved this run needs, is not written, so there is nothing to consent to.
 
 The distribution's own source files are written and updated, never removed or offered for removal. Files apt itself does not read are not treated as repository configuration.
 
@@ -295,7 +297,3 @@ A read that does not answer is different. If a package manager cannot be queried
 - **A target with no Ubuntu Pro attachment costs the whole apt job for that run.**
 - **A non-interactive run can answer no review.** There is no file of standing answers and no assume-yes option.
 - **Machine-specific marks are per job, per machine, and never synced.**
-
-## Open questions
-
-None. Every question this review raised has been ruled on. Where a ruling is not yet implemented, the [conformance criteria](package-sync-conformance-criteria.md) name it in their gap register.

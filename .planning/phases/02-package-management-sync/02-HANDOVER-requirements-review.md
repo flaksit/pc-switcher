@@ -4,7 +4,7 @@ Where the review of `docs/planning/package-sync-user-requirements.md` stands. St
 
 ## What the documents are
 
-`docs/planning/package-sync-user-requirements.md` — prose, authoritative for intent, ~3,700 words. `docs/planning/package-sync-conformance-criteria.md` — the same intent as 122 checkable articles, derived from it, with a traceability appendix mapping every article to a narrative section.
+`docs/planning/package-sync-user-requirements.md` — prose, authoritative for intent, ~3,700 words. `docs/planning/package-sync-conformance-criteria.md` — the same intent as 123 checkable articles, derived from it, with a traceability appendix mapping every article to a narrative section.
 
 ## How the review is running
 
@@ -29,7 +29,7 @@ Do not chain the check and the commit with `&&` — gate the commit on the check
 
 ## Review position
 
-The user has read the whole narrative and answered every open question. Both documents' *Open questions* sections now say so. What remains is not reading but consequence: the article audit below, and the implementation backlog.
+The user has read the whole narrative and answered every open question. Both documents' *Open questions* sections are gone, having none left to hold. What remains is not reading but consequence: the article audit below, and the implementation backlog.
 
 ## Rulings made during review that the code does not implement
 
@@ -45,7 +45,8 @@ All of these are in the criteria's gap register and in `02-DIVERGENCES.md`. They
 8. **`PKG-FR-JOB-ORDER`** — all four package jobs precede `folder_sync`. `orchestrator.py:1082` checks three.
 9. **`PKG-FR-REPO-DELETE`** — a repository still used by anything on the target, machine-specific packages included, is never raised. The code offers it and discloses what it would strand.
 10. **`PKG-FR-REPO-CONFLICT`** — narrowed to repositories this run writes for an approved package, which is what flatpak already does (closes DIV-07).
-11. **`PKG-FR-LOG-DECISIONS`, `PKG-FR-LOG-VERBATIM`** — new. Every item presented with its decision, every change a manager made on its own behalf, and the manager's own output verbatim in the debug log. Not yet checked against the code, so not in the gap register.
+11. **`PKG-FR-LOG-DECISIONS`, `PKG-FR-LOG-VERBATIM`** — new. Every item presented with its decision, every change a manager made on its own behalf, and the manager's own output verbatim in the debug log — all of it, not only failures. Not yet checked against the code, so not in the gap register.
+12. **`PKG-FR-CREDENTIAL-PRIVACY`** (DIV-13) — a credential embedded in a URL is withheld wherever a URL is written or shown. Nothing redacts today and the executor already traces commands verbatim, so the exposure predates the verbatim-output rule. `PKG-FR-ESM-PRIVACY` remains the only privacy rule that is already satisfied, and it is satisfied by parsing rather than by filtering.
 
 ## Open items unrelated to the review
 
@@ -57,9 +58,9 @@ All of these are in the criteria's gap register and in `02-DIVERGENCES.md`. They
 
 - snap and flatpak open by naming the shape every job shares and split into subsections. apt's *Removing, and reporting without acting* is two sections; *Decisions and their memory* gained a subtitle. Traceability rows follow all of it.
 - Six articles deleted as implementation detail or as claims that could not be substantiated: `PKG-FR-COLLATERAL-TIMING`, `PKG-FR-COLLATERAL-NEW-ORIGIN`, `PKG-FR-APT-HOLD-ORDER`, `PKG-NG-COLLATERAL-SOURCE-MANUAL`, `PKG-NG-COLLATERAL-MARKS`, `PKG-NG-DEB-ORPHANED`. `PKG-FR-APT-HELD-TARGET` was not deleted but re-mapped to *Holds*, since the narrative covers it there.
-- 122 articles now, down from 124.
+- 123 articles now, from 124: six deleted, five added.
 
 ## Next
 
-1. The Stage 5 article audit: all 122 articles re-read against the narrative's vocabulary. It was parked until the narrative settled, which it now has.
-2. The implementation backlog — eleven rulings the code does not implement, one of them a bug (DIV-12). That is a planning input, not review work.
+1. The Stage 5 article audit: all 123 articles re-read against the narrative's vocabulary. It was parked until the narrative settled, which it now has.
+2. The implementation backlog — twelve rulings the code does not implement, one of them a bug (DIV-12). That is a planning input, not review work.

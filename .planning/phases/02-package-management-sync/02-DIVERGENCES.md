@@ -130,3 +130,15 @@ So: a package offered for removal, kept by answering *skip*, is excluded from co
 - **DIV-07** (apt's repository-conflict question is wider than flatpak's) is ruled: both ask only what the approved changes need. `PKG-FR-REPO-CONFLICT` now gates on the repository being one this run writes for an approved package. The code still asks more widely.
 - **DIV-08** (`manual_installs_sync` outside the job-ordering check) is ruled: the rule covers all four package jobs. `orchestrator.py:1082` validates three.
 - The ESM cost question behind `PKG-FR-ESM-GATE` is answered by measurement rather than ruling: on an attached Ubuntu 24.04 desktop, 60 of 2297 installed packages resolve their candidate to `esm.ubuntu.com`, including `ffmpeg`, `gimp` and `imagemagick`. The container's zero was an artefact of its package set.
+
+## DIV-13 — A repository credential reaches the log
+
+Ruled on 2026-07-30, after the code was written.
+
+A private PPA or a commercial repository carries its credential in the URL itself (`https://user:token@host/...`), so the URL is the secret. `Executor._announce` traces every command verbatim at DEBUG (`executor.py:154`), the repository-conflict question shows both machines' copies of a source file in full, and `PKG-FR-LOG-VERBATIM` now adds the manager's own output. Nothing in the codebase redacts anything — `grep -rn redact src/` finds no match.
+
+Logs are written to `~/.local/share/pc-switcher/logs` with mode `rw-rw-r--`, so the exposure is to every account on the machine that wrote the log. It does not spread: pc-switcher's own runtime files are excluded from `folder_sync` ahead of any user filter and cannot be re-included (`default-config.yaml:135-137`).
+
+`PKG-FR-CREDENTIAL-PRIVACY` now requires the embedded credential to be withheld wherever a URL is written or shown. Recorded in the criteria's gap register.
+
+Related, and already satisfied: `PKG-FR-ESM-PRIVACY` is honoured by construction rather than by filtering — `pro status --format json` is parsed and only the `attached` boolean escapes (`apt_sync.py:113-114`, `278-281`).
