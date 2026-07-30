@@ -83,9 +83,10 @@ and it starts at skip-once: an overwrite moves software the target explicitly ma
 machine-specific, so it is chosen, never defaulted.
 
 A `ReviewGroup` whose `action` is `COLLATERAL_REVIEW_ACTION` likewise gets its own
-interaction shape (D-30): each entry is a package the TARGET's own apt has marked manually
-installed and the pending transaction would remove or downgrade, resolved one at a time
-with a three-way choice — go ahead, keep the package, or stop the whole sync. The decision
+interaction shape (D-30): each entry is a package the TARGET protects — its own apt has it
+marked manually installed, or that machine marked it machine-specific — that the pending
+transaction would remove, downgrade or upgrade, resolved one at a time with a three-way
+choice — go ahead, keep the package, or stop the whole sync. The decision
 is recorded against the entry's `item_id` (the triggering change, set by the caller), so
 "go ahead" proceeds with it, "keep" leaves it unapproved, and "stop" raises
 `SyncAbortedByUser` naming the collateral package. A non-interactive run leaves every
@@ -196,8 +197,8 @@ UNREPRODUCIBLE_REVIEW_ACTION = "unreproducible"
 # Sentinel `ReviewGroup.action` a caller (today, only `AptSyncJob`) uses to mark a group
 # of manual-collateral items (D-30) as needing the three-way per-entry resolution flow
 # below — go ahead / keep the package / stop the sync — rather than an ordinary decision
-# screen. A manual-collateral item is a package the TARGET's apt has marked manually
-# installed that the pending transaction would remove or downgrade; whether to lose it is not
+# screen. A manual-collateral item is a package `Collateral.protected` covers that the
+# pending transaction would remove, downgrade or upgrade; whether to lose it is not
 # a question the decision screen expresses, so it gets its own prompt (sibling to
 # `UNREPRODUCIBLE_REVIEW_ACTION`). Go-ahead records `Decision.APPLY` against
 # `ReviewEntry.item_id`, keep records `Decision.SKIP_ONCE`, and stop raises
@@ -879,21 +880,20 @@ async def _review_collateral_group(
     decisions: dict[str, Decision],
 ) -> None:
     """Resolve one `COLLATERAL_REVIEW_ACTION` group's entries, one at a time, with the
-    three-way choice D-30 requires for a package the target's own apt has marked manually
-    installed and the pending transaction would remove or downgrade: let it happen, protect
-    the package, or stop. Never a row on a decision screen — losing a package the user chose
-    to have is not the same question as approving an install off a list.
+    three-way choice D-30 requires for a package the pending transaction would remove,
+    downgrade or upgrade behind the user's back: let it happen, protect the package, or
+    stop. Never a row on a decision screen — losing a package the user chose to have is not
+    the same question as approving an install off a list.
 
-    What is protected here is a fact about the TARGET (`AptSyncJob._protected_manual_set` —
-    the target's own `apt-mark showmanual`), not a machine-specific mark: nobody recorded a
-    preference about this package, apt simply says the user asked for it on the machine being
-    changed. The prompt says that, because "manually installed" is apt's vocabulary and
-    "you asked for it here" is the user's.
+    What is protected is a fact about the TARGET (`Collateral.protected`): its own
+    `apt-mark showmanual` set, plus the packages that machine marked machine-specific.
+    Either the user asked for the package on the machine being changed, or they told this
+    tool to leave it alone there.
 
     The decision is recorded against `entry.item_id`: proceed records `Decision.APPLY`,
-    protect records `Decision.SKIP_ONCE`. The caller (`AptSyncJob`) maps that onto the
-    changes that CAUSE the collateral (`_collateral_trigger_ids`) — APPLY lets them proceed
-    and allows the collateral removal, SKIP_ONCE leaves exactly those unapproved. Stopping
+    protect records `Decision.SKIP_ONCE`. `Collateral.resolve` maps that onto the changes
+    that CAUSE the collateral — APPLY lets them proceed and allows the collateral
+    removal, SKIP_ONCE leaves exactly those unapproved. Stopping
     raises `SyncAbortedByUser` — the existing user-decline control-flow exception, caught
     once at WARNING by both the orchestrator and the CLI — naming the collateral package.
     That ends the WHOLE pc-switcher sync, not just this job: the orchestrator's per-job
