@@ -228,6 +228,27 @@ class TestDiff:
         assert "latest/stable" in gamma.detail
 
     @pytest.mark.asyncio
+    async def test_revision_and_channel_both_differing_names_both_pairs(self) -> None:
+        """`PKG-FR-SNAP-CASES`: one change, naming both values. Naming the revision alone
+        left the retrack out of the only line the user reads before approving it.
+        """
+        source = _HEADER + "beta      2.0        20     latest/edge     pub✓         -\n"
+        target = _HEADER + "beta      1.5        15     latest/stable   pub✓         -\n"
+        context, _source, _target = make_context(
+            source_responses={"snap list --all": CommandResult(0, source, "")},
+            target_responses={"snap list --all": CommandResult(0, target, "")},
+        )
+        job = SnapSyncJob(context)
+
+        plan = await job.plan()
+
+        beta = next(d for d in plan.diffs if d.item_id == "snap:beta")
+        assert beta.detail == (
+            "revision: source-host has 20, target-host has 15; "
+            "channel: source-host has latest/edge, target-host has latest/stable"
+        )
+
+    @pytest.mark.asyncio
     async def test_identical_snap_yields_no_diff(self) -> None:
         identical = _HEADER + "epsilon   1.0   50   latest/stable   pub✓   -\n"
         context, _source, _target = make_context(

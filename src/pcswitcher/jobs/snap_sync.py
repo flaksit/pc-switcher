@@ -285,14 +285,21 @@ def _remove_diff(item: SnapItem) -> ItemDiff:
 
 def _change_diff(item_id: str, source_item: SnapItem, target_item: SnapItem, machines: Machines) -> ItemDiff:
     """Present on both with a different revision and/or channel (D-06: unlike apt
-    package versions, D-04, both actively converge — never `REPORT_ONLY`). `detail`
-    names revisions when the revision differs (the more consequential fact); otherwise
-    it is a same-revision retrack and names channels instead.
+    package versions, D-04, both actively converge — never `REPORT_ONLY`).
+
+    `detail` names EVERY value that differs (`PKG-FR-SNAP-CASES`): one change can move
+    both the revision and the channel, and naming the revision alone left the retrack out
+    of the only line the user reads before approving it. Each pair is labelled, since
+    "atlas has latest/edge" says nothing on its own about which of the two it is.
     """
-    if source_item.revision != target_item.revision:
-        detail = build_version_mismatch_detail(source_item.revision, target_item.revision, machines)
-    else:
-        detail = build_version_mismatch_detail(source_item.channel, target_item.channel, machines)
+    detail = "; ".join(
+        f"{name}: {build_version_mismatch_detail(source_value, target_value, machines)}"
+        for name, source_value, target_value in (
+            ("revision", source_item.revision, target_item.revision),
+            ("channel", source_item.channel, target_item.channel),
+        )
+        if source_value != target_value
+    )
     return ItemDiff(
         item_class=ItemClass.SNAP,
         diff_class=DiffClass.VERSION_MISMATCH,
