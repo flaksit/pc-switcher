@@ -1,0 +1,11 @@
+You say first task 5, then task 7, then 6. That is not a plan. That is spaghetti. Restate steps for what's still coming, in order. Show me, I'll approve, then write handover.
+
+---
+
+Scope refactor: "decide which areas get": I don't think it is wise to allow to keep a mixture of refactored and non-refactored sit in the same class/module.
+
+For refactor: I often read as guideline for working with AI agents, that code files (like .py) should be < 500 lines. So worth to refactor that module to become a package with multiple modules so that you work with and reason about it more easily and code is structured/modularized better?
+
+---
+
+I see during first sweep you look at docs as well. But further in plan not really explicit how/where these docs are janitored. Make that more explicit in the plan and then write the handover.
