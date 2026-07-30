@@ -1,0 +1,39 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "df839400f385",
+  "strategy": "manual-commit",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "tests/unit/jobs/apt/__init__.py",
+    "tests/unit/jobs/apt/helpers.py",
+    "tests/unit/jobs/apt/test_apt_collateral.py",
+    "tests/unit/jobs/apt/test_apt_commands.py",
+    "tests/unit/jobs/apt/test_apt_derived.py",
+    "tests/unit/jobs/apt/test_apt_diffing.py",
+    "tests/unit/jobs/apt/test_apt_esm_gate.py",
+    "tests/unit/jobs/apt/test_apt_etc_apt.py",
+    "tests/unit/jobs/apt/test_apt_job.py",
+    "tests/unit/jobs/apt/test_apt_keyrings.py",
+    "tests/unit/jobs/apt/test_apt_messages.py",
+    "tests/unit/jobs/apt/test_apt_origins.py",
+    "tests/unit/jobs/apt/test_apt_packages.py",
+    "tests/unit/jobs/apt/test_apt_probe.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/df/839400f385/0/metadata.json",
+      "transcript": "/df/839400f385/0/full.jsonl",
+      "compact_transcript": "/df/839400f385/0/transcript.jsonl",
+      "content_hash": "/df/839400f385/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 2,
+    "cache_creation_tokens": 1658,
+    "cache_read_tokens": 491771,
+    "output_tokens": 594,
+    "api_call_count": 1
+  }
+}
