@@ -28,8 +28,11 @@ GitHub Secrets in public repositories are encrypted and never visible to anyone,
 | `HETZNER_SSH_PRIVATE_KEY` | SSH access to test VMs | ed25519 private key (PEM format) |
 | `SSH_AUTHORIZED_KEY_CI` | CI public key for VM access | ed25519 public key |
 | `SSH_AUTHORIZED_KEY_*` | Developer public keys (one per developer/machine) | ed25519 public key |
+| `GH_API_TOKEN_RO` | Long-lived read-only PAT (Contents: read), baked into the VMs at provision time so GitHub API calls survive the CI job (issue #163) | PAT string |
 
 All `SSH_AUTHORIZED_KEY_*` secrets are automatically collected and injected into VMs during provisioning.
+
+`HCLOUD_TOKEN` and `HETZNER_SSH_PRIVATE_KEY` are hard requirements: the `integration` job's "Check secrets" step **fails** the run when either is empty. It does not skip.
 
 ### Creating HCLOUD_TOKEN
 
@@ -84,11 +87,12 @@ rm ~/.ssh/pc-switcher-ci ~/.ssh/pc-switcher-ci.pub
 
 No workflow file changes needed - secrets are enumerated dynamically.
 
-### Optional: GITHUB_TOKEN for Rate Limiting
+### GitHub API Rate Limiting
 
-Without authentication, GitHub API allows 60 requests/hour per IP. With `GITHUB_TOKEN`, this increases to 5,000 requests/hour.
+Unauthenticated GitHub API calls are capped at 60 requests/hour per IP; a token raises that to 5,000. The self-update and version-resolution tests hit the releases API repeatedly, so a token is effectively required.
 
-Create a PAT with **no special permissions** (public repo access is sufficient) and add as repository secret if rate limit errors occur.
+- **CI**: the `GH_API_TOKEN_RO` secret. The ephemeral `GITHUB_TOKEN` Actions provides is deliberately not used — it expires with the job, and the VMs keep making API calls afterwards (issue #163).
+- **Local**: export `GITHUB_TOKEN`, or store it at `dev/pc-switcher/github_token_public_ro` in `pass` — `run-integration-tests.sh` reads that path automatically. Without either it warns and continues unauthenticated.
 
 ## VM Provisioning and Management
 
@@ -121,6 +125,8 @@ brew install hcloud
 hcloud context create pc-switcher-testing
 # Paste HCLOUD_TOKEN when prompted
 ```
+
+`run-integration-tests.sh` does not use the hcloud context: it reads `HCLOUD_TOKEN` from the environment, falling back to `pass show dev/pc-switcher/testing/hcloud_token_rw`.
 
 ### VM Management Commands
 
@@ -218,12 +224,13 @@ hcloud server describe pc1 --output json | jq '.labels'
 ### Lock Operations (Manual)
 
 ```bash
-# Acquire lock
+./tests/integration/scripts/internal/lock.sh status
 ./tests/integration/scripts/internal/lock.sh acquire <holder-id>
-
-# Release lock
-./tests/integration/scripts/internal/lock.sh release <holder-id>
+./tests/integration/scripts/internal/lock.sh release <holder-id>   # must be the current holder
+./tests/integration/scripts/internal/lock.sh clear                 # releases regardless of holder
 ```
+
+`acquire` never waits: if another holder owns the lock it fails immediately, naming it.
 
 ## Runbooks
 
@@ -355,37 +362,36 @@ hcloud server describe pc1 --output json | jq '.labels'
 | Situation | Action |
 | --------- | ------ |
 | VM is powered off | `hcloud server poweron pc1` |
-| VM running but SSH unreachable | `hcloud server reboot pc1` |
+| VM running but SSH unreachable | `hcloud server reboot pc1` (one server per invocation) |
 | VM completely unresponsive | `hcloud server reset pc1` |
 | Network configuration issue | Check `/etc/hosts` entries, re-run `configure-hosts.sh` |
 | All else fails | Delete and reprovision |
 
 ### Runbook: CI Workflow Failures
 
-**"Skipping integration tests: secrets not available"**
-- Verify `HCLOUD_TOKEN` and `HETZNER_SSH_PRIVATE_KEY` are added to repository secrets
-- For forked PRs: This is expected behavior (secrets unavailable)
+**"Integration tests cannot run: Required secrets (HCLOUD_TOKEN, HETZNER_SSH_PRIVATE_KEY) are not available"**
+- Verify both are added to repository secrets. The step exits non-zero — the run fails, it does not skip.
+- Forked PRs cannot see secrets, so they always hit this.
 
-**"VMs don't exist and provisioning is only allowed from GitHub CI"**
-- Ensure all secrets are configured
-- Trigger CI workflow: `gh workflow run integration-tests.yml`
+**"VMs don't exist and provisioning is only allowed from GitHub CI."**
+- `provision-test-infra.sh` refuses to create VMs unless `CI` is set, so that every `SSH_AUTHORIZED_KEY_*` secret is injected.
+- Ensure all secrets are configured, then: `gh workflow run integration-tests.yml`
 
-**"Timeout waiting for VM to reboot after reset"**
-- Check VM status in Hetzner Console
-- Manually reboot: `hcloud server reboot pc1 pc2`
-- Re-run CI workflow
+**"Timeout waiting for VM to come back online"**
+- The VM did not answer SSH within 300 s after the post-reset reboot.
+- Check VM status in the Hetzner Console; reboot with `hcloud server reboot pc1` (one server per invocation), then re-run.
 
 **"Permission denied (publickey)"**
-- Add your SSH public key as `SSH_AUTHORIZED_KEY_*` secret
+- Add your SSH public key as an `SSH_AUTHORIZED_KEY_*` secret
 - Delete VMs and reprovision:
   ```bash
   hcloud server delete pc1 pc2
   gh workflow run integration-tests.yml
   ```
 
-**"Failed to acquire lock after 5 minutes"**
-- Another test run is in progress (wait for completion)
-- Lock is stuck (see "Stuck Lock Cleanup" runbook)
+**"Lock held by \<holder\>"**
+- Acquisition fails immediately; there is no wait or retry.
+- Another run is in progress (wait for it), or the lock is stuck (see "Stuck Lock Cleanup" runbook).
 
 **"has a baseline snapshot but not the current test fixtures"**
 - The baseline predates the package-sync test subjects, or `PCSWITCHER_TEST_FIXTURES_VERSION` was bumped
@@ -403,63 +409,47 @@ hcloud server describe pc1 --output json | jq '.labels'
 | CI secrets missing | Add to Settings > Secrets and variables > Actions |
 | SSH permission denied | Add public key as `SSH_AUTHORIZED_KEY_*` secret, reprovision |
 | Reset timeout | Check VM status, manually reboot if needed |
-| Integration tests skip | Check environment variables or CI secrets |
+| Integration tests skipped in CI | PR is a draft, targets a branch other than `main`, or changed no filtered path |
+| Fewer integration tests ran than expected | PR runs are topic-scoped; add the `ci: full` label for the whole suite |
 | GitHub API rate limit | Set `GH_API_TOKEN_RO` Actions secret (CI) or `GITHUB_TOKEN` env var (local) |
 
 ## Environment Variables
 
-### Required for Integration Tests
-
 | Variable | Description | Default |
 | -------- | ----------- | ------- |
-| `PC_SWITCHER_TEST_PC1_HOST` | PC1 VM IP address or hostname | - |
-| `PC_SWITCHER_TEST_PC2_HOST` | PC2 VM IP address or hostname | - |
+| `PC_SWITCHER_TEST_PC1_HOST` | PC1 VM IP address or hostname | looked up via `hcloud server ip pc1` |
+| `PC_SWITCHER_TEST_PC2_HOST` | PC2 VM IP address or hostname | looked up via `hcloud server ip pc2` |
 | `PC_SWITCHER_TEST_USER` | SSH user on VMs | `testuser` |
-| `PC_SWITCHER_TEST_MARKERS` | pytest `-m` expression for `run-integration-tests.sh`; CI sets it to the topic selection (smoke/area_* markers) | `integration and not benchmark` |
+| `PC_SWITCHER_TEST_MARKERS` | pytest `-m` expression for `run-integration-tests.sh`; CI sets it to the topic selection (smoke/area_* markers, plus `not ci_skip`) | `integration and not benchmark` |
+| `HCLOUD_TOKEN` | Hetzner Cloud API token | `pass show dev/pc-switcher/testing/hcloud_token_rw` |
+| `GITHUB_TOKEN` | Raises the GitHub API rate limit | `pass show dev/pc-switcher/github_token_public_ro` |
+| `CI_JOB_ID` / `GITHUB_RUN_ID` | Marks the run as CI: strict host-key checking, `ci-<id>` lock holder | unset (local run) |
+| `PCSWITCHER_LOCK_HOLDER` | Set by a parent script that already holds the lock; children reuse it instead of acquiring | unset |
 
-### Setting for Local Runs
+`run-integration-tests.sh` requires none of these — it resolves everything itself, so the usual local invocation is just the script.
+
+### Local Runs
 
 ```bash
-# Get VM IPs
-hcloud server list
-
-# Export environment
-export PC_SWITCHER_TEST_PC1_HOST="<pc1-ip>"
-export PC_SWITCHER_TEST_PC2_HOST="<pc2-ip>"
-export PC_SWITCHER_TEST_USER="testuser"
-
-# Run tests
-./tests/local-pytest.sh tests/integration
+./tests/run-integration-tests.sh                                    # everything
+./tests/run-integration-tests.sh tests/integration/test_vm_connectivity.py
+./tests/run-integration-tests.sh --skip-reset -k "test_ssh"         # iterate without re-resetting
 ```
+
+`--skip-reset` is the script's only own flag; every other argument is forwarded to pytest.
 
 ## Maintenance Schedule
 
 | Frequency | Task |
 | --------- | ---- |
-| **Daily** | Monitor GitHub Actions workflow runs (automated VM updates run at 2am UTC) |
+| **Daily** | Monitor GitHub Actions workflow runs: VM updates at 02:00 UTC, the full-suite integration run at 02:30 UTC |
 | **Weekly** | Review Hetzner Cloud costs; check for stuck locks if tests failing |
 | **Monthly** | Validate VM baseline snapshots are healthy; update hcloud CLI if needed |
 | **As Needed** | Reprovision VMs after major changes; update documentation |
 
 ## Script Reference
 
-All infrastructure scripts are in `tests/integration/scripts/`:
-
-| Script | Purpose |
-| ------ | ------- |
-| `provision-test-infra.sh` | Orchestrator (calls all other scripts) |
-| `reset-vm.sh` | Resets a VM to baseline via snapshot rollback |
-| `upgrade-vms.sh` | Upgrades VMs and updates baseline snapshots |
-
-Internal scripts (`tests/integration/scripts/internal/`):
-
-| Script | Purpose |
-| ------ | ------- |
-| `create-vm.sh` | Creates a single VM via hcloud CLI |
-| `configure-vm.sh` | Configures a single VM (user, SSH, services) |
-| `configure-hosts.sh` | Sets up inter-VM networking and SSH keys |
-| `create-baseline-snapshots.sh` | Creates baseline btrfs snapshots |
-| `lock.sh` | Lock operations (acquire/release) |
+See [Script Inventory](testing-architecture.md#script-inventory).
 
 ## Security Considerations
 
