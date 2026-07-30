@@ -839,6 +839,37 @@ class TestSideloadedSnaps:
         assert "workshop" in message
 
     @pytest.mark.asyncio
+    async def test_a_marked_sideloaded_snap_is_still_named_and_still_produces_no_diff(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """`PKG-FR-SNAP-SIDELOAD` asks the run to name the sideloads it FOUND, and a snap
+        the user marked as this machine's own was found. The mark silences review items,
+        not the warning that the snap is unmanaged.
+        """
+        decisions = (
+            "machine_specific:\n"
+            '  "snap:homemade":\n'
+            "    item_class: snap\n"
+            "    label: homemade\n"
+            "    reason: null\n"
+            "    recorded_at: '2026-07-30T00:00:00+00:00'\n"
+        )
+        context, _source, _target = make_context(
+            source_responses={
+                "snap list --all": CommandResult(0, SNAP_LIST_SOURCE_SIDELOADED, ""),
+                "snap.decisions.yaml": CommandResult(0, decisions, ""),
+            },
+            target_responses={"snap list --all": CommandResult(0, "No snaps are installed yet.\n", "")},
+        )
+        job = SnapSyncJob(context)
+
+        with caplog.at_level(logging.WARNING, logger="pcswitcher.jobs.base"):
+            plan = await job.plan()
+
+        assert "homemade" in caplog.records[0].message
+        assert [d.item_id for d in plan.diffs] == ["snap:beta"]
+
+    @pytest.mark.asyncio
     async def test_sideloaded_snap_that_is_held_produces_no_hold_diff_either(self) -> None:
         """The hold diff derives from the SOURCE snap (`_diff_snap_holds`), so dropping the
         snap must drop its hold with it — otherwise the run would propose holding a snap it

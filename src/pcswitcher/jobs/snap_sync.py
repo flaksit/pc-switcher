@@ -522,18 +522,25 @@ class SnapSyncJob(PackageSyncJob):
         bytes between machines, so the run can neither reproduce one nor replace one it
         removes. Every diff they could produce — install, revision/channel change, the
         `snap:hold:` diff `_diff_snap_holds` derives from a source snap, and removal — is
-        withheld; the warning is all the user gets, since there is no action to take.
+        withheld; the warning is all the user gets, since there is no action to take. It
+        names sideloads the machine-specific filter would otherwise have swallowed, because
+        it is drawn from the raw listing.
         """
         source_decisions = await DecisionFile(self.manager_id, self.source).load()
         target_decisions = await DecisionFile(self.manager_id, self.target).load()
 
-        source_items = await filter_inert(await self.capture_source_items(), source_decisions)
-        target_items = await filter_inert(await self.query_target_items(), target_decisions)
-
-        source_items, source_sideloaded = _partition_sideloaded(source_items)
-        target_items, target_sideloaded = _partition_sideloaded(target_items)
+        # Sideloads are partitioned off the RAW listing, before the machine-specific filter:
+        # a sideloaded snap the user once marked as this machine's own was still FOUND, and
+        # `PKG-FR-SNAP-SIDELOAD` requires the run to name every sideload it found. Filtering
+        # first hid exactly those from the warning. The mark costs the item nothing either
+        # way — a sideload produces no diff whether it is recorded or not.
+        source_items, source_sideloaded = _partition_sideloaded(await self.capture_source_items())
+        target_items, target_sideloaded = _partition_sideloaded(await self.query_target_items())
         self._warn_sideloaded(Host.SOURCE, source_sideloaded)
         self._warn_sideloaded(Host.TARGET, target_sideloaded)
+
+        source_items = await filter_inert(source_items, source_decisions)
+        target_items = await filter_inert(target_items, target_decisions)
         # A name sideloaded on ONE machine leaves the diff on BOTH. Dropping only the
         # machine holding the sideloaded copy would leave the other machine's entry
         # unmatched, and an unmatched entry is an item: a source-only install whose
