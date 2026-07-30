@@ -1,0 +1,4 @@
+Ok, but don't check "every normative statement in it maps to at least one article" mechanically: the INTENT/MEANING must be covered.
+And ensure the docs are in line with user reqs and code. If we only update the part of the docs that corresponds with the part of the code that is modified, there is no check that the docs are in line with full user req, nor with full code.
+
+This is a big plan. Good to run here in this session (31% context used - auto-compacts at 83%), or better new session?
