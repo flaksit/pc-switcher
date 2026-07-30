@@ -21,6 +21,7 @@ from tests.unit.jobs.apt.helpers import (
     all_calls,
     decision_file,
     install_reviewer,
+    installed_on_target,
     make_context,
     target_offers,
 )
@@ -206,6 +207,57 @@ def _manual_collateral_context() -> tuple[JobContext, MagicMock, MagicMock]:
             ),
         },
     )
+
+
+class TestTheRehearsalSurvivesAStaleTargetHold:
+    """Measured on `ubuntu:24.04`: `apt-get --dry-run install --assume-yes` refuses the
+    WHOLE batch with `E: Held packages were changed` when one name in it carries a hold for
+    a package the machine does not have. Without the flag, one such name would end planning
+    for every package in the run.
+    """
+
+    @pytest.mark.asyncio
+    async def test_the_install_rehearsal_asks_apt_to_allow_the_held_name(self) -> None:
+        rehearsal = "apt-get --dry-run install --assume-yes --no-install-recommends --allow-change-held-packages pkg-a"
+        context, _source, target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "other-manual\n", ""),
+                "db:Status-Status": installed_on_target("other-manual"),
+                "dpkg-query": CommandResult(0, "other-manual\t1.0\n", ""),
+                "apt-mark showhold": CommandResult(0, "pkg-a\n", ""),
+                "apt-cache policy": CommandResult(0, target_offers("pkg-a"), ""),
+                rehearsal: CommandResult(0, "Inst pkg-a (1.0)\nRemv other-manual [1.0]\n", ""),
+            },
+        )
+
+        plan = await AptSyncJob(context).plan()
+
+        assert rehearsal in all_calls(target)
+        assert "apt:collateral:other-manual" in {diff.item_id for diff in plan.diffs}
+
+    @pytest.mark.asyncio
+    async def test_an_ordinary_run_never_asks_for_it(self) -> None:
+        """The flag would also let apt move OTHER held packages, which apt refusing is the
+        only thing protecting a held package apt installed automatically.
+        """
+        context, _source, target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "", ""),
+                "apt-cache policy": CommandResult(0, target_offers("pkg-a"), ""),
+            },
+        )
+
+        await AptSyncJob(context).plan()
+
+        assert not any("--allow-change-held-packages" in cmd for cmd in all_calls(target))
 
 
 class TestCollateralFlow:

@@ -74,11 +74,22 @@ def require_apt_answer(command: str, result: CommandResult, host: Host, *, block
     require_answer(command, result, host, answers=blocks, answer_noun="package block")
 
 
-def install_args(names: Sequence[str]) -> str:
+def install_args(names: Sequence[str], *, allow_held: bool = False) -> str:
     """The apt-get arguments for installing `names`, shared by the plan-time rehearsal, the
     apply-time rehearsal and the real command, so no pair of them can drift apart and
-    rehearse a transaction other than the one that runs."""
-    return f"install --assume-yes --no-install-recommends {' '.join(shlex.quote(name) for name in names)}"
+    rehearse a transaction other than the one that runs.
+
+    `allow_held` belongs to the PLAN-TIME rehearsal alone. Measured on `ubuntu:24.04`,
+    `apt-get --dry-run install --assume-yes` refuses the whole batch with `E: Held packages
+    were changed` when any name in it carries a stale hold, which would abort planning over
+    one package. The real command instead clears that one selection first
+    (`PackageConverger._install`), so the flag is how the rehearsal models the transaction
+    that will actually run. It is never passed to a real command: it would also let apt move
+    OTHER held packages, which apt refusing is the only thing protecting a held package apt
+    installed automatically.
+    """
+    held = " --allow-change-held-packages" if allow_held else ""
+    return f"install --assume-yes --no-install-recommends{held} {' '.join(shlex.quote(name) for name in names)}"
 
 
 def remove_args(names: Sequence[str]) -> str:

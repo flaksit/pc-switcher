@@ -26,6 +26,7 @@ from tests.unit.jobs.apt.helpers import (
     foo_target_side_effect,
     index_of,
     install_reviewer,
+    installed_on_target,
     make_context,
     sha256_line,
     target_offers,
@@ -540,6 +541,65 @@ class TestAHeldPackageIsInstalledAtTheSourcesVersion:
         assert "source-host holds it at 1.0" in failures["apt:package:pkg-a"]
         assert "target-host offers 2.0" in failures["apt:package:pkg-a"]
         assert not any(cmd == _PINNED_INSTALL for cmd in all_calls(target))
+
+
+class TestAStaleTargetHoldDoesNotStrandThePackage:
+    """`PKG-FR-APT-HOLD-VERSION`: `apt-mark hold` records a hold for a package the machine
+    merely does not have. Suppressing on the hold set alone meant such a name produced no
+    install and — with both machines holding it — no hold item either, so the target stayed
+    without the package for good. apt refuses the install while the selection stands, so the
+    run clears it first and re-registers the hold once the package lands.
+    """
+
+    @pytest.mark.asyncio
+    async def test_the_stale_hold_is_cleared_the_package_installed_and_the_hold_restored(self) -> None:
+        context, _source, target = make_context(
+            source_responses=_HELD_SOURCE,
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "", ""),
+                "apt-mark showhold": CommandResult(0, "pkg-a\n", ""),
+                "db:Status-Status": installed_on_target("other-pkg"),
+                "apt-cache policy": CommandResult(0, _target_offering("1.0"), ""),
+                _PINNED_SIMULATION: CommandResult(0, "Inst pkg-a (1.0)\n", ""),
+                _PINNED_INSTALL: CommandResult(0, "", ""),
+                "sudo apt-mark unhold pkg-a": CommandResult(0, "Canceled hold on pkg-a.\n", ""),
+                "sudo apt-mark hold pkg-a": CommandResult(0, "pkg-a set on hold.\n", ""),
+                "sudo apt-get update": CommandResult(0, "", ""),
+            },
+        )
+        job = AptSyncJob(context)
+        install_reviewer(job, {"apt:package:pkg-a": Decision.APPLY, "apt:hold:pkg-a": Decision.APPLY})
+
+        await job.execute()
+
+        commands = all_calls(target)
+        unhold = index_of(commands, lambda cmd: cmd == "sudo apt-mark unhold pkg-a")
+        install = index_of(commands, lambda cmd: cmd == _PINNED_INSTALL)
+        hold = index_of(commands, lambda cmd: cmd == "sudo apt-mark hold pkg-a")
+        assert unhold < install < hold
+        # The simulation is refused on the same grounds as the install, so it too comes
+        # after the selection is cleared.
+        assert unhold < index_of(commands, lambda cmd: cmd == _PINNED_SIMULATION)
+
+    @pytest.mark.asyncio
+    async def test_a_hold_on_a_package_the_target_has_still_suppresses_its_install(self) -> None:
+        """`PKG-FR-APT-HELD-TARGET` is untouched: a real hold — one naming a package the
+        target HAS — keeps suppressing the package item, including for a package apt
+        installed there automatically and so absent from its manual set.
+        """
+        context, _source, target = make_context(
+            source_responses=_HELD_SOURCE,
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "", ""),
+                "apt-mark showhold": CommandResult(0, "pkg-a\n", ""),
+                "db:Status-Status": installed_on_target("pkg-a"),
+            },
+        )
+
+        plan = await AptSyncJob(context).plan()
+
+        assert [diff.item_id for diff in plan.diffs] == []
+        assert not any("apt-mark unhold" in cmd for cmd in all_calls(target))
 
 
 class TestAHoldNeedsItsPackage:

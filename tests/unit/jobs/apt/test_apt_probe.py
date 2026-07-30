@@ -1076,6 +1076,48 @@ class TestAReadThatDidNotAnswer:
         assert not [d for d in plan.diffs if d.item_class == ItemClass.APT_HOLD]
 
     @pytest.mark.asyncio
+    async def test_an_unanswered_installed_set_read_fails_the_job(self) -> None:
+        """A machine with no installed packages does not exist, so silence here is never
+        data: read as one it would make every hold stale and every target-only repository
+        deletable. Only a run with something to ask it pays the command, so the fixture
+        gives the target a hold.
+        """
+        context, _source, _target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+                "apt-mark showhold": CommandResult(0, "", ""),
+            },
+            target_responses={
+                **_NO_PACKAGES,
+                "apt-mark showhold": CommandResult(0, "pkg-a\n", ""),
+                "db:Status-Status": CommandResult(0, "", ""),
+            },
+        )
+
+        with pytest.raises(ProbeFailed) as excinfo:
+            await AptSyncJob(context).plan()
+
+        assert "db:Status-Status" in str(excinfo.value)
+        assert "printed no installed package" in str(excinfo.value)
+
+    @pytest.mark.asyncio
+    async def test_a_machine_holding_nothing_is_never_asked_what_it_has_installed(self) -> None:
+        """The read is the answer to two rare questions — a hold, a target-only repository —
+        so an ordinary run pays no command for it."""
+        context, _source, target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+            },
+            target_responses=_NO_PACKAGES,
+        )
+
+        await AptSyncJob(context).plan()
+
+        assert not any("db:Status-Status" in cmd for cmd in all_calls(target))
+
+    @pytest.mark.asyncio
     async def test_a_target_policy_read_that_did_not_answer_fails_the_job(self) -> None:
         """The source has a package, so the only `apt-cache policy` the TARGET is asked at
         plan time is `collect_target_policy`'s.

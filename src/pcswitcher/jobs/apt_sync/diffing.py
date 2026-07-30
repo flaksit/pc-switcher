@@ -71,6 +71,7 @@ def diff_apt_packages(
     machines: Machines,
     source_hold_names: frozenset[str] = frozenset(),
     target_hold_names: frozenset[str] = frozenset(),
+    target_stale_holds: frozenset[str] = frozenset(),
 ) -> list[ItemDiff]:
     """One diff per item id present on either side, source-then-target order,
     followed by the `apt:hold:` membership diffs (#208, D5/D8 — holds emitted AFTER
@@ -79,7 +80,11 @@ def diff_apt_packages(
     A HELD package (target hold set) has its install/upgrade action SUPPRESSED (a held
     package is never proposed for install/version change) but produces NO package-level
     report — the hold travels as its own `apt:hold:` item, so a held package is never
-    double-reported. A PINNED package gets no echo of any kind: a pin's only job is
+    double-reported. `target_stale_holds` is the exception: a hold the target records for a
+    package it does not HAVE (`AptProbe.capture_target_installed`) freezes nothing, and
+    suppressing on it left the target permanently without the package
+    (`PKG-FR-APT-HOLD-VERSION`) — those names diff as ordinary missing-on-target installs.
+    A PINNED package gets no echo of any kind: a pin's only job is
     deciding which origin wins, which D-35 checks against the target's real post-refresh
     state instead of guessing at it here. Otherwise:
 
@@ -98,7 +103,9 @@ def diff_apt_packages(
     - present on both, same vendor, same version -> no diff at all.
 
     Hold membership (D2): source-held & target-not -> `AptHoldItem` INSTALL (hold);
-    target-held & source-not -> REMOVE (unhold); held on both or neither -> no diff.
+    target-held & source-not -> REMOVE (unhold); held on both or neither -> no diff. A
+    stale target hold counts as "not held" for the ADD direction alone, so a package both
+    machines hold and only the source has gets its hold registered after the install lands.
     """
     source_by_id = {item.item_id: item for item in source_items}
     target_by_id = {item.item_id: item for item in target_items}
@@ -115,7 +122,7 @@ def diff_apt_packages(
         # Both cannot be None: `item_id` is here because one side or the other carries it,
         # and the two sides' items share the name their id is built from.
         name = (target_item or source_item).name  # pyright: ignore[reportOptionalMemberAccess]
-        if name in target_hold_names:
+        if name in target_hold_names and name not in target_stale_holds:
             # Held on the target: suppress its install/version action entirely (a held
             # package must never be proposed for install/upgrade). No package-level
             # report — the `apt:hold:` item below carries the hold fact.
@@ -124,6 +131,12 @@ def diff_apt_packages(
             # target's hold set is `apt-mark showhold`, which covers packages apt
             # installed automatically there too, and one of those held on the target and
             # manual on the source would otherwise be proposed for an install apt refuses.
+            #
+            # A STALE hold is excluded because it protects no installed version: apt
+            # records one for a package the machine merely lacks, where its only effect is
+            # to refuse the install the source is asking for. Suppressing there made the
+            # missing package unreachable for good — the target never got it and no item
+            # ever said so.
             continue
         elif source_item is not None and target_item is None:
             origins = origin_plan.get(item_id, OriginPlan())
@@ -194,19 +207,33 @@ def diff_apt_packages(
 
     # Hold membership diffs (#208, D2/D8): emitted AFTER every package diff so a
     # package install lands before its hold when both are approved.
-    diffs.extend(diff_apt_holds(source_hold_names, target_hold_names))
+    diffs.extend(diff_apt_holds(source_hold_names, target_hold_names, target_stale_holds))
     return diffs
 
 
-def diff_apt_holds(source_hold_names: frozenset[str], target_hold_names: frozenset[str]) -> list[ItemDiff]:
+def diff_apt_holds(
+    source_hold_names: frozenset[str],
+    target_hold_names: frozenset[str],
+    target_stale_holds: frozenset[str] = frozenset(),
+) -> list[ItemDiff]:
     """`apt:hold:` membership diffs (#208, D2): source-held & target-not -> INSTALL
     (hold); target-held & source-not -> REMOVE (unhold); held on both or on neither
     -> no diff. `sorted` for a stable, deterministic review order.
+
+    A hold the target records for a package it does not have counts as held for the REMOVE
+    direction — it is still selection state the target carries and the source does not — and
+    as NOT held for the ADD direction, which is what gives a package both machines hold and
+    only the source has the hold item `PKG-FR-APT-HOLD-VERSION` requires once it lands.
     """
     diffs: list[ItemDiff] = []
     for name in sorted(source_hold_names | target_hold_names):
         in_source = name in source_hold_names
         in_target = name in target_hold_names
+        if in_source and name in target_stale_holds:
+            # Not the hold the source is asking for: nothing is installed there to freeze,
+            # and the install this run proposes clears the selection before it runs. Held
+            # on neither side, so the hold becomes an item and lands after the package.
+            in_target = False
         if in_source == in_target:
             continue
         hold_item = AptHoldItem(name=name)

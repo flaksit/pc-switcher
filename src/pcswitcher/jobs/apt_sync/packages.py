@@ -6,7 +6,9 @@ run: a derived file that never landed refuses the install before any command at 
 cheapest and most specific); then the run's single `apt-get update`; then the origin read-back
 (D-35, one cached lookup); then the transaction simulation and the collateral guard (D-30, one
 command). Each step is stated as its own early return so the sequence is readable as a
-sequence rather than inferred from nesting.
+sequence rather than inferred from nesting. One non-guard sits inside it: a stale target hold
+is cleared just before the simulation, because apt refuses both the simulation and the install
+while it stands.
 """
 
 from __future__ import annotations
@@ -104,6 +106,7 @@ class PackageConverger:
         origins: OriginClassifier,
         refresh: MetadataRefresh,
         held_versions: Mapping[str, str] | None = None,
+        stale_holds: frozenset[str] = frozenset(),
     ) -> None:
         self._target = target
         self._manager_id = manager_id
@@ -114,6 +117,9 @@ class PackageConverger:
         self._refresh = refresh
         # `{package name: the version the SOURCE holds it at}` (`PKG-FR-APT-HOLD-VERSION`).
         self._held_versions = dict(held_versions or {})
+        # Names the TARGET holds without having them installed. apt refuses to install one
+        # while the selection stands, so `_install` clears it first.
+        self._stale_holds = stale_holds
         # `{package name: why its install failed}`, and `None` for one that succeeded. Read
         # by `hold`, which converges after every install (`accept_review` orders holds last)
         # and may not register a hold for a package that never landed.
@@ -162,6 +168,19 @@ class PackageConverger:
         refusal = await self._origins.refusal(name, diffs=diffs, decisions=decisions, target=self._target)
         if refusal is not None:
             raise ConvergeItemFailed(refusal)
+
+        # A hold the target recorded for a package it does not have blocks this install and
+        # protects nothing: there is no installed version to freeze. Clearing it is not a
+        # decision — the item under review IS the install, and the selection's only effect is
+        # to refuse it — so it happens here rather than as a review line of its own. Ahead of
+        # the simulation, which apt refuses on the same grounds. Whether the hold comes back
+        # afterwards is the `apt:hold:` item's business (`diff_apt_holds`).
+        if name in self._stale_holds:
+            await self._target.run_command(
+                f"sudo apt-mark unhold {shlex.quote(name)}",
+                login_shell=False,
+                mutates=f"clear the stale apt hold on {name} on {self._machines.target}",
+            )
 
         # A held package is requested as `<name>=<version>` — apt's own way of asking for one
         # version and refusing rather than substituting another (`PKG-FR-APT-HOLD-VERSION`).

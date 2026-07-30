@@ -614,6 +614,39 @@ class AptProbe:
         require_answer(command, target_hold, Host.TARGET)
         return frozenset(lines(source_hold.stdout)), frozenset(lines(target_hold.stdout))
 
+    async def capture_target_installed(self) -> frozenset[str]:
+        """Every package NAME dpkg reports as installed on the target — not the manual set,
+        the whole of it.
+
+        Two callers need the same fact and neither can be answered from `apt-mark showmanual`:
+
+        - a hold recorded for a package the target does not HAVE freezes nothing and only
+          blocks the install of it (`PKG-FR-APT-HOLD-VERSION`). Measured on `ubuntu:24.04`:
+          `apt-mark hold` exits 0 and records the hold for a merely-uninstalled package, and
+          `apt-get install` then refuses with `E: Held packages were changed`. Membership
+          here is what separates that stale selection from a real hold.
+        - a repository is withheld from deletion while anything on the target still installs
+          from it (`PKG-FR-REPO-DELETE`), and an automatically-installed package is still
+          something: `commands.remove_args` runs `apt-get remove`, never `autoremove`, so
+          nothing in this job takes an unused dependency away, and a kept manual package can
+          require it anyway.
+
+        `${Package}`, not `${binary:Package}`: the arch-qualified form only appears for a
+        foreign architecture, and both callers want the plain name apt-mark and apt-cache
+        speak. Both also err safe on an over-inclusive answer — a hold stays real, a
+        repository stays.
+
+        Guarded on the exit code AND on emptiness (ADR-022): a machine with no installed
+        packages does not exist, so nothing here is a legitimate empty answer, and silence
+        read as data would make every hold stale and every target-only repository deletable.
+        """
+        command = "dpkg-query --show --showformat='${Package}\\t${db:Status-Status}\\n'"
+        result = await self._target.run_command(command, login_shell=False)
+        fields = (line.partition("\t") for line in lines(result.stdout))
+        installed = frozenset(name for name, _, status in fields if status == "installed")
+        require_answer(command, result, Host.TARGET, answers=len(installed), answer_noun="installed package")
+        return installed
+
     async def collect_target_policy(self, names: Sequence[str]) -> TargetPolicy:
         """ONE batched `apt-cache policy` on the target over the source's whole package set
         (never one call per package, and never one call per question it answers).

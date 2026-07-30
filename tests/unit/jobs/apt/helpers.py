@@ -31,16 +31,36 @@ def sha256_line(digest: str, filename: str) -> str:
     return f"{digest}  {filename}\n"
 
 
+_STATUS_QUERY = "db:Status-Status"
+
+
+def installed_on_target(*names: str) -> CommandResult:
+    """What `AptProbe.capture_target_installed` reads on a machine that has exactly
+    `names` — the answer a test states when it disagrees with the version query, which is
+    what a stale hold is."""
+    return CommandResult(0, "".join(f"{name}\tinstalled\n" for name in names), "")
+
+
 def respond_to(
     mapping: dict[str, CommandResult], default: CommandResult | None = None
 ) -> Callable[..., CommandResult]:
-    """Build a run_command side_effect matching by substring (first match wins)."""
+    """Build a run_command side_effect matching by substring (first match wins).
+
+    A `dpkg-query` key answers two different questions — the version query and
+    `capture_target_installed`'s status query — so the status one is derived from the
+    version answer unless the mapping states it: a fixture saying the machine has `pkg-a` at
+    1.0 has said `pkg-a` is installed there. A test with a hold on a package the machine
+    does NOT have overrides it with its own `db:Status-Status` key.
+    """
     fallback = default if default is not None else CommandResult(exit_code=0, stdout="", stderr="")
 
     def _side_effect(cmd: str, **_: object) -> CommandResult:
         for pattern, result in mapping.items():
-            if pattern in cmd:
-                return result
+            if pattern not in cmd:
+                continue
+            if _STATUS_QUERY in cmd and _STATUS_QUERY not in pattern:
+                return installed_on_target(*(line.split("\t")[0] for line in result.stdout.splitlines() if line))
+            return result
         return fallback
 
     return _side_effect

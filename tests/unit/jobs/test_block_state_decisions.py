@@ -25,7 +25,7 @@ from pcswitcher.jobs.packages.review import Decision, ReviewOutcome
 from pcswitcher.jobs.packages.sync_core import PackagePlan, PackageSyncJob
 from pcswitcher.jobs.snap_sync import SnapSyncJob
 from pcswitcher.models import CommandResult
-from tests.unit.jobs.apt.helpers import all_calls, make_context, sha256_line
+from tests.unit.jobs.apt.helpers import all_calls, installed_on_target, make_context, sha256_line
 
 _SNAP_HEADER = "Name      Version    Rev    Tracking        Publisher    Notes\n"
 SNAP_ALPHA_HELD = _SNAP_HEADER + "alpha     1.0        10     latest/stable   pub✓         held\n"
@@ -108,7 +108,12 @@ class TestAptHoldDecisions:
     @pytest.mark.asyncio
     async def test_declined_unhold_is_recorded_on_target_and_never_re_offered(self) -> None:
         source_responses = {"apt-mark showhold": NO_HOLDS}
-        target_responses = {"apt-mark showhold": CommandResult(0, "pkg-a\n", "")}
+        # The hold is a real one: pkg-a is installed on the target. A hold naming a package
+        # the target lacks is a different item entirely (`PKG-FR-APT-HOLD-VERSION`).
+        target_responses = {
+            "apt-mark showhold": CommandResult(0, "pkg-a\n", ""),
+            "db:Status-Status": installed_on_target("pkg-a"),
+        }
 
         context, source, target = make_context(source_responses=source_responses, target_responses=target_responses)
         await record_skip_always(AptSyncJob(context), "apt:hold:pkg-a")

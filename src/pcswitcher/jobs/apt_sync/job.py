@@ -130,6 +130,13 @@ class AptSyncJob(PackageSyncJob):
         # `{package name: the version the SOURCE holds it at}` for the packages this run
         # proposes to install and the source holds (`PKG-FR-APT-HOLD-VERSION`).
         self._held_versions: dict[str, str] = {}
+        # Every package dpkg reports installed on the target, read at most once per run and
+        # only by a run that has something to ask it: the hold handling
+        # (`PKG-FR-APT-HOLD-VERSION`) and repository-usage counting (`PKG-FR-REPO-DELETE`)
+        # share the answer, and a machine holding nothing with no target-only repository
+        # pays no command at all. `None` means "not read yet".
+        self._target_installed: frozenset[str] | None = None
+        self._stale_holds: frozenset[str] = frozenset()
         self._work = self._assemble_work(
             source_facts=OriginFacts.empty(),
             target_facts=OriginFacts.empty(),
@@ -150,6 +157,7 @@ class AptSyncJob(PackageSyncJob):
         package_owned: frozenset[str],
         origins: OriginClassifier | None,
         collateral: Collateral | None,
+        stale_holds: frozenset[str] = frozenset(),
     ) -> _Work:
         """Wire the collaborators over one set of captured facts.
 
@@ -212,6 +220,7 @@ class AptSyncJob(PackageSyncJob):
                 origins=origins,
                 refresh=self._refresh,
                 held_versions=self._held_versions,
+                stale_holds=stale_holds,
             ),
         )
 
@@ -266,6 +275,7 @@ class AptSyncJob(PackageSyncJob):
             target_manual_set=target_manual_set,
             origins=origins,
             marked=self._target_marked_packages(),
+            stale_holds=self._stale_holds,
             log=self._log,
         )
         collateral_diffs = await collateral.plan_time(base_plan.diffs)
@@ -316,6 +326,7 @@ class AptSyncJob(PackageSyncJob):
         held package. `plan()` runs the same pass again over the repository and collateral
         diffs it appends.
         """
+        self._target_installed = None
         source_decisions = await DecisionFile(self.manager_id, self.source).load()
         target_decisions = await DecisionFile(self.manager_id, self.target).load()
         self._plan_decisions = (source_decisions, target_decisions)
@@ -324,6 +335,12 @@ class AptSyncJob(PackageSyncJob):
         source_items = await filter_inert(captured, source_decisions)
         target_items = await filter_inert(await self._probe.query_target_items(), target_decisions)
         source_hold_names, target_hold_names = await self._probe.collect_hold_sets()
+        # A hold naming a package the target does not have is dpkg selection state that
+        # freezes nothing and refuses the install the source is asking for. Kept apart from
+        # the real holds here, once, so the diff and the converger agree on which is which.
+        self._stale_holds = frozenset()
+        if target_hold_names:
+            self._stale_holds = target_hold_names - await self._installed_on_target()
         policy = await self._probe.collect_target_policy([item.name for item in source_items])
         origin_plan = origins.classify(source_items, target_items, policy, source_origins)
         diffs = self._drop_inert_diffs(
@@ -334,6 +351,7 @@ class AptSyncJob(PackageSyncJob):
                 self.machines,
                 source_hold_names,
                 target_hold_names,
+                self._stale_holds,
             ),
             source_decisions,
             target_decisions,
@@ -352,6 +370,12 @@ class AptSyncJob(PackageSyncJob):
             if name in source_hold_names and name in source_versions
         }
         return PackagePlan(manager=self.manager_id, diffs=diffs, groups=self._build_review_groups(diffs))
+
+    async def _installed_on_target(self) -> frozenset[str]:
+        """The target's installed package set, read once per run and only when asked for."""
+        if self._target_installed is None:
+            self._target_installed = await self._probe.capture_target_installed()
+        return self._target_installed
 
     def _target_marked_packages(self) -> frozenset[str]:
         """Package names the TARGET recorded machine-specific, from the decision file
@@ -471,6 +495,7 @@ class AptSyncJob(PackageSyncJob):
             package_owned=package_owned,
             origins=origins,
             collateral=collateral,
+            stale_holds=self._stale_holds,
         )
 
         diffs: list[ItemDiff] = []
