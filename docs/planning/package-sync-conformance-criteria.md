@@ -32,7 +32,7 @@ The package jobs — `apt_sync`, `snap_sync`, `flatpak_sync`, `manual_installs_s
 - **PKG-FR-APT-SCOPE**: `apt_sync` MUST cover the manually-installed apt package set, the repositories and pins that govern where those packages come from, apt's own behavioural configuration, and apt holds. Packages apt installed automatically to satisfy dependencies MUST NOT be items.
 - **PKG-FR-SNAP-SCOPE**: `snap_sync` MUST cover installed snaps with their revision, tracking channel, confinement mode and per-snap refresh holds.
 - **PKG-FR-FLATPAK-SCOPE**: `flatpak_sync` MUST cover installed flatpak applications per flatpak installation scope, the remotes those applications need, and mask patterns per scope.
-- **PKG-FR-MANUAL-SCOPE**: `manual_installs_sync` MUST cover what no package manager can reproduce — apt packages whose installed version comes from no repository the machine has configured, and software under `/usr/local` and `/opt` that no package owns — together with the registry of install snippets that is the only way such software can be reproduced on the other machine.
+- **PKG-FR-MANUAL-SCOPE**: `manual_installs_sync` MUST cover what no package manager can reproduce — apt packages whose installed version comes from no repository the machine has configured, and software under `/usr/local` and `/opt` that no package owns, found by a scan that MUST stay shallow enough to name findings rather than walk either tree — together with the registry of install snippets that is the only way such software can be reproduced on the other machine.
 - **PKG-FR-DEB-OWNERSHIP**: Software installed from a hand-downloaded `.deb` MUST belong to `manual_installs_sync` alone. `apt_sync` MUST NOT produce an item, a review line or an install for it in any configuration.
   Why: the target's apt has never heard the name; an apt item for it could only fail.
 - **PKG-FR-DATA-BOUNDARY**: No package job may sync application data. Data belongs to `folder_sync`.
@@ -81,9 +81,20 @@ Decomposes [The model](package-sync-user-requirements.md#the-model); the review 
   Why: the holding machine is the one whose state the mark describes, and it is frequently not the machine the sync was launched from. Recording it anywhere else would leave the mark on a machine the item is not on.
 - **PKG-FR-NO-MARK-ON-ORIGIN**: An apt repository and an apt pin MUST NOT be markable machine-specific, whether they are being deleted or overwritten. Declining either MUST record nothing. A flatpak remote is never a review item (`PKG-FR-FLATPAK-REMOTE-DELETE`), so there is nothing to mark.
   Why: a mark would silence a real disagreement between the two machines about where software comes from, permanently and without further mention. Leaving them unmarkable makes that disagreement surface on every run until the user aligns the two machines.
+- **PKG-FR-NO-MARK-ON-REPORT**: A report-only finding MUST NOT be markable machine-specific.
+  Why: no machine holds a version difference, so there is no holding machine to record it on, and a mark would stop the package syncing rather than stop the report.
 - **PKG-FR-ABORT**: The user MUST be able to abort the whole sync at any question, and an abort MUST NOT be read as declining a single item.
 - **PKG-FR-CONFIRM-EACH**: Every modification a package job makes MUST be covered by pc-switcher's per-command confirmation, including the decision records, the snippet registry and the snap refresh pause. No write a package job makes may bypass it.
   Why: those three are writes the review never showed as items, so without this they would be the only changes a run makes that the user cannot see coming.
+
+## Preconditions and defaults
+
+Decomposes the validation and review paragraphs of [What happens during a sync](package-sync-user-requirements.md#what-happens-during-a-sync).
+
+- **PKG-FR-APT-DPKG-LOCK**: `apt_sync` MUST refuse to start while the target's dpkg lock is held, and MUST NOT wait on it silently.
+  Why: another package operation is already changing the machine this run is about to change, so a review answered against that machine's state would be answered against state something else is moving.
+- **PKG-FR-HARMLESS-DEFAULT**: Every reviewed item's default answer MUST be the action that does no harm — apply for an install, skip for anything that removes or overwrites.
+  Why: `PKG-FR-REMOVAL-DISTINCT` covers removals only. Overwriting a configuration file the target holds is equally irreversible and equally must not be the answer a user gets by not choosing.
 
 ## apt
 
@@ -210,7 +221,7 @@ Decomposes [snap](package-sync-user-requirements.md#snap).
   Why: no store can serve such a revision and nothing carries the file between machines, so a snap the tool cannot reinstall must not be one it offers to delete. Handling half of the case, and later handling the other half from a different job, is worse than leaving it alone until the whole case is designed.
 - **PKG-FR-SNAP-FAIL-ITEM**: A snap whose revision the target cannot fetch MUST fail as its own item, and the rest of the run MUST continue.
 - **PKG-FR-SNAP-HOLD**: A snap refresh hold MUST be an item of its own, both when it is added and when it is removed. A hold recorded for a snap the source no longer has MUST produce no item, and no command a sync issues may set a standing hold as a side effect.
-- **PKG-FR-SNAP-REFRESH-PAUSE**: Automatic snap refreshes MUST be suspended on both machines for the duration of a run and MUST NOT interfere with the run's own revision convergence. Each machine's prior refresh policy MUST be restored afterwards, including an indefinite hold the user set. Where the prior policy cannot be read on a machine, that machine's policy MUST be left untouched.
+- **PKG-FR-SNAP-REFRESH-PAUSE**: Automatic snap refreshes MUST be suspended on both machines for the duration of a run and MUST NOT interfere with the run's own revision convergence. Each machine's prior refresh policy MUST be restored afterwards, including an indefinite hold the user set. Where the prior policy cannot be read on a machine, that machine's policy MUST be left untouched. The suspension MUST expire by itself, so a run that dies without cleaning up MUST NOT leave a machine's automatic refreshes suspended.
   Why: snapd refreshes several times a day and would otherwise move a revision mid-sync.
 - **PKG-FR-SNAP-DATA-BOUNDARY**: Data directories of revisions the target's snapd never installed MUST NOT be synced.
   Why: they would leave orphan data behind on the target.
@@ -239,7 +250,7 @@ Decomposes [flatpak](package-sync-user-requirements.md#flatpak).
   Why: flatpak stores the filter's path rather than its content, so the content is an ordinary file the run can carry byte-for-byte exactly as it carries a signing key; replicating the remote without it silently widens what the target offers.
   Why the ordering: a filter can be narrower than the set the source has installed, so applying it before the installs could block the very replication it describes.
 - **PKG-FR-FLATPAK-THIRD-SCOPE**: An installation that is neither the user nor the system one MUST be skipped.
-- **PKG-FR-FLATPAK-MASK**: Mask patterns MUST replicate per scope, added and removed alike, whether or not anything currently matches them. Editing or moving a pattern MUST be reported as found and MUST NOT be normalised.
+- **PKG-FR-FLATPAK-MASK**: Mask patterns MUST replicate per scope, added and removed alike, whether or not anything currently matches them, and MUST land after the applications. Editing or moving a pattern MUST be reported as found and MUST NOT be normalised.
 - **PKG-FR-FLATPAK-PRIVILEGE**: A run that touches only the user scope MUST NOT require root on the target.
 
 ## Manual installs
@@ -315,14 +326,14 @@ Requirements the shipped code knowingly does not satisfy are recorded here, veri
 
 ## Traceability
 
-Every article above decomposes exactly one section of [Package sync — user requirements](package-sync-user-requirements.md). 123 articles, no orphans on either side. A new article needs a home here; a narrative section with no articles is either intentionally non-normative or a coverage gap.
+Every article above decomposes exactly one section of [Package sync — user requirements](package-sync-user-requirements.md). 126 articles, no orphans on either side. A new article needs a home here; a narrative section with no articles is either intentionally non-normative or a coverage gap.
 
 | User-requirements section | Articles | |
 | - | - | - |
 | [What package sync is for](package-sync-user-requirements.md#what-package-sync-is-for) | 8 | `PKG-FR-OPT-IN` `PKG-FR-JOB-INDEPENDENCE` `PKG-FR-JOB-ORDER` `PKG-FR-APT-SCOPE` `PKG-FR-SNAP-SCOPE` `PKG-FR-FLATPAK-SCOPE` `PKG-FR-MANUAL-SCOPE` `PKG-FR-DATA-BOUNDARY` |
 | [The model](package-sync-user-requirements.md#the-model) | 18 | `PKG-FR-SOURCE-INTENT` `PKG-FR-MANAGER-CONVERGES` `PKG-FR-APT-IDENTITY` `PKG-FR-DISTRO-ORIGIN` `PKG-FR-SNAP-IDENTITY` `PKG-FR-FLATPAK-IDENTITY` `PKG-FR-FLATPAK-ORIGIN-NOT-IDENTITY` `PKG-FR-VERSION-FLOAT` `PKG-FR-SNAP-REVISION` `PKG-FR-BLOCKS-REPLICATE` `PKG-FR-REVIEW-FIRST` `PKG-FR-ONLY-APPROVED` `PKG-FR-BATCHED` `PKG-FR-ASK-AGAIN` `PKG-FR-CONSENT-BEFORE-CHANGE` `PKG-FR-ASK-ABOUT-SOFTWARE` `PKG-FR-ASK-WHEN-NOT-DERIVABLE` `PKG-FR-REMOVAL-DISTINCT` |
-| [What happens during a sync](package-sync-user-requirements.md#what-happens-during-a-sync) | 9 | `PKG-FR-NAME-THE-MACHINES` `PKG-FR-EFFECT-NOT-MECHANISM` `PKG-FR-ABORT` `PKG-FR-CONFIRM-EACH` `PKG-FR-NO-TERMINAL` `PKG-FR-DRY-RUN` `PKG-FR-LOG-DECISIONS` `PKG-FR-LOG-VERBATIM` `PKG-FR-CREDENTIAL-PRIVACY` |
-| [Decisions and their memory](package-sync-user-requirements.md#decisions-and-their-memory-machine-specific) | 3 | `PKG-FR-SKIP-ONCE` `PKG-FR-MACHINE-SPECIFIC` `PKG-FR-NO-MARK-ON-ORIGIN` |
+| [What happens during a sync](package-sync-user-requirements.md#what-happens-during-a-sync) | 11 | `PKG-FR-NAME-THE-MACHINES` `PKG-FR-EFFECT-NOT-MECHANISM` `PKG-FR-ABORT` `PKG-FR-CONFIRM-EACH` `PKG-FR-NO-TERMINAL` `PKG-FR-DRY-RUN` `PKG-FR-LOG-DECISIONS` `PKG-FR-LOG-VERBATIM` `PKG-FR-CREDENTIAL-PRIVACY` `PKG-FR-APT-DPKG-LOCK` `PKG-FR-HARMLESS-DEFAULT` |
+| [Decisions and their memory](package-sync-user-requirements.md#decisions-and-their-memory-machine-specific) | 4 | `PKG-FR-SKIP-ONCE` `PKG-FR-MACHINE-SPECIFIC` `PKG-FR-NO-MARK-ON-ORIGIN` `PKG-FR-NO-MARK-ON-REPORT` |
 | [apt / Installing](package-sync-user-requirements.md#installing) | 5 | `PKG-FR-DEB-OWNERSHIP` `PKG-FR-APT-ORIGIN-DISCLOSURE` `PKG-FR-APT-ORIGIN-DERIVED` `PKG-FR-APT-ORIGIN-UNREPLICABLE` `PKG-FR-APT-ORIGIN-VERIFY` |
 | [apt / Removing a package](package-sync-user-requirements.md#removing-a-package) | 1 | `PKG-FR-APT-REMOVE` |
 | [apt / Reporting without acting](package-sync-user-requirements.md#reporting-without-acting) | 3 | `PKG-FR-APT-SAME` `PKG-FR-APT-VERSION-DIFF` `PKG-FR-APT-ORIGIN-DIFF` |
