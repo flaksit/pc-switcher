@@ -1,0 +1,17 @@
+<task-notification>
+<task-id>bqfkglcjw</task-id>
+<tool-use-id>toolu_01AQx7qhxZgn1BQMtJVhofja</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/1b0cc20e-9530-4d69-a503-cc392b0e3957/tasks/bqfkglcjw.output</output-file>
+<status>completed</status>
+<summary>Background command "Push and wait for CI" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bjxlbefqo</task-id>
+<tool-use-id>toolu_01HRxKugjUgmW4FDmM7U6H7T</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/1b0cc20e-9530-4d69-a503-cc392b0e3957/tasks/bjxlbefqo.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for CI to reach terminal state" completed (exit code 0)</summary>
+</task-notification>
