@@ -1980,8 +1980,12 @@ class TestPackageSyncWholeRunContracts:
 
             combined_output = sync_result.stdout + sync_result.stderr
             collapsed = _collapse_run_output(combined_output)
-            assert "Report flatpak packages" in collapsed, (
-                f"the mismatch reached no REPORT_ONLY review group.\n{combined_output}"
+            # A report group is titled by its CAUSE (`sync_core._REPORT_TITLES`), so this
+            # asserts the mismatch reached the ORIGIN_MISMATCH group specifically rather
+            # than any report group at all — which is the distinction the version-mismatch
+            # check below is here to make.
+            assert "Installed from different repositories (flatpak packages)" in collapsed, (
+                f"the mismatch reached no origin-mismatch review group.\n{combined_output}"
             )
             assert ref in combined_output, f"the report does not name the ref {ref}.\n{combined_output}"
             # The discriminating pair: a VERSION_MISMATCH -- what this diverged pair would
