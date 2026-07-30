@@ -1,0 +1,13 @@
+You did it AGAIN: committing stuff that is not yours. 86a0fcc8. REMEMBER TO ONLY COMMIT THE STUFF YOU ARE WORKING ON, not completely unrelated files
+
+---
+
+Go on (article audit).
+
+Verify PKG-FR-LOG-DECISIONS and PKG-FR-LOG-VERBATIM and add to gap register if needed. Or is there still a full pass planned?
+
+Use todo list for remaining tasks
+
+---
+
+I just staged two files to commit myself while you were committing. Undo that commit and redo it for only your files
