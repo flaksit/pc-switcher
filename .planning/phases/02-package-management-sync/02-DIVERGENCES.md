@@ -114,3 +114,19 @@ The original reading was that this makes the filter unsyncable — "not reposito
 `docs/jobs/package-sync.md:252` documents the shipped warning behaviour and stays accurate until the code changes.
 
 **Open within this ruling:** the ordering rule is stated as a design requirement, not from measurement. Whether flatpak actually refuses to install a ref its own filter excludes has not been tested.
+
+## DIV-12 — A skipped removal loses its collateral protection
+
+Found on 2026-07-30 while checking the narrative's collateral claim against the code. This is a shipped bug, not a requirement that moved.
+
+`_collect_plan_time_collateral` builds `reviewed_names` from the install and removal candidate lists (`apt_sync.py:2586-2588`), before the review runs and therefore before any answer exists. `_classify_collateral` then skips every package in that set (`apt_sync.py:2670`). The comment justifies it as "a decision the user is taking anyway" — true for a removal the user approved, false for one they skipped.
+
+So: a package offered for removal, kept by answering *skip*, is excluded from collateral protection for the rest of the run. Approving an unrelated install whose transaction removes it deletes it with no question and, per `PKG-FR-COLLATERAL-AUTO`'s classification, no review line either. The user asked to keep it and it goes.
+
+`PKG-FR-COLLATERAL-MANUAL` now states that only an APPROVED removal exempts a package. Recorded in the criteria's gap register.
+
+## Rulings that close earlier divergences
+
+- **DIV-07** (apt's repository-conflict question is wider than flatpak's) is ruled: both ask only what the approved changes need. `PKG-FR-REPO-CONFLICT` now gates on the repository being one this run writes for an approved package. The code still asks more widely.
+- **DIV-08** (`manual_installs_sync` outside the job-ordering check) is ruled: the rule covers all four package jobs. `orchestrator.py:1082` validates three.
+- The ESM cost question behind `PKG-FR-ESM-GATE` is answered by measurement rather than ruling: on an attached Ubuntu 24.04 desktop, 60 of 2297 installed packages resolve their candidate to `esm.ubuntu.com`, including `ffmpeg`, `gimp` and `imagemagick`. The container's zero was an artefact of its package set.

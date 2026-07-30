@@ -27,7 +27,8 @@ The package jobs — `apt_sync`, `snap_sync`, `flatpak_sync`, `manual_installs_s
 - **PKG-FR-OPT-IN**: Every package job MUST ship disabled and MUST be enabled individually in configuration.
   Why: enabling one authorises the system to install and remove software on the target.
 - **PKG-FR-JOB-INDEPENDENCE**: Each job MUST be enableable, reviewable and failable on its own. Enabling one MUST NOT enable another, and no job's behaviour may depend on whether another is enabled.
-- **PKG-FR-JOB-ORDER**: The three package-manager jobs MUST run before `folder_sync`, and the system MUST refuse to start when they are ordered otherwise.
+- **PKG-FR-JOB-ORDER**: All four package jobs — the three package managers and the job for software none of them can reproduce — MUST run before `folder_sync`, and the system MUST refuse to start when they are ordered otherwise.
+  Why: software installed by a snippet writes its own stock defaults exactly as a package does, so it needs to land before the user's synced settings go on top.
   Why: software must exist before data lands on top of it, or an installer's stock defaults overwrite synced configuration.
 - **PKG-FR-APT-SCOPE**: `apt_sync` MUST cover the manually-installed apt package set, the repositories and pins that govern where those packages come from, apt's own behavioural configuration, and apt holds. Packages apt installed automatically to satisfy dependencies MUST NOT be items.
 - **PKG-FR-SNAP-SCOPE**: `snap_sync` MUST cover installed snaps with their revision, tracking channel, confinement mode and per-snap refresh holds.
@@ -59,7 +60,7 @@ Decomposes [The model](package-sync-user-requirements.md#the-model).
 
 ## Consent
 
-Decomposes [The model](package-sync-user-requirements.md#the-model); the review mechanics it constrains are in [What happens during a sync](package-sync-user-requirements.md#what-happens-during-a-sync) and [Decisions and their memory](package-sync-user-requirements.md#decisions-and-their-memory).
+Decomposes [The model](package-sync-user-requirements.md#the-model); the review mechanics it constrains are in [What happens during a sync](package-sync-user-requirements.md#what-happens-during-a-sync) and [Decisions and their memory](package-sync-user-requirements.md#decisions-and-their-memory-machine-specific).
 
 - **PKG-FR-REVIEW-FIRST**: A job MUST NOT modify the target before the user has approved the changes that job proposes.
 - **PKG-FR-ONLY-APPROVED**: A job MUST apply only what the user approved.
@@ -77,7 +78,7 @@ Decomposes [The model](package-sync-user-requirements.md#the-model); the review 
   Why: the user is deciding about their machines, not operating the tool's internals. An answer labelled with the name of an internal concept asks them to translate before they can choose.
 - **PKG-FR-REMOVAL-DISTINCT**: Approving the removal of software MUST require a gesture distinct from approving installs, MUST NOT be the default, and MUST be presented so that the user is told the approval deletes something.
 - **PKG-FR-SKIP-ONCE**: The user MUST be able to decline any reviewed item for the current run only. Nothing MUST be recorded, and the item MUST be offered again on the next sync.
-- **PKG-FR-MACHINE-SPECIFIC**: The user MUST be able to mark a reviewed item as specific to one machine. A marked item MUST NOT be synced to any other machine, MUST NOT be removed or overwritten by a sync from any other machine, and MUST NOT be proposed in any later review: it is protected from every action the tool takes. The mark MUST be recorded on the machine that HOLDS the item — the machine that has the software the decision is about, which for a removal is the target and for an install or a change is the source — and MUST NOT be synced.
+- **PKG-FR-MACHINE-SPECIFIC**: The user MUST be able to mark a reviewed item as specific to one machine. A marked item MUST NOT be synced to any other machine, MUST NOT be removed or overwritten by a sync from any other machine, and MUST NOT be proposed in any later review: it is protected from every action the tool takes of its own accord. Where an approved change would touch it regardless, the user MUST be asked (`PKG-FR-COLLATERAL-MARKED`). The mark MUST be recorded on the machine that HOLDS the item — the machine that has the software the decision is about, which for a removal is the target and for an install or a change is the source — and MUST NOT be synced.
   Why: the holding machine is the one whose state the mark describes, and it is frequently not the machine the sync was launched from. Recording it anywhere else would leave the mark on a machine the item is not on.
 - **PKG-FR-NO-MARK-ON-ORIGIN**: An apt repository and an apt pin MUST NOT be markable machine-specific, whether they are being deleted or overwritten. Declining either MUST record nothing. A flatpak remote is never a review item (`PKG-FR-FLATPAK-REMOTE-DELETE`), so there is nothing to mark.
   Why: a mark would silence a real disagreement between the two machines about where software comes from, permanently and without further mention. Leaving them unmarkable makes that disagreement surface on every run until the user aligns the two machines.
@@ -114,23 +115,21 @@ flowchart TD
 
 ### Removing and diverging
 
-Decomposes [apt / Removing, and reporting without acting](package-sync-user-requirements.md#removing-and-reporting-without-acting).
+Decomposes [apt / Removing a package](package-sync-user-requirements.md#removing-a-package) and [apt / Reporting without acting](package-sync-user-requirements.md#reporting-without-acting).
 
 - **PKG-FR-APT-REMOVE**: A package on the target that the source does not have MUST be offered for removal. Approval MUST remove the package without purging its configuration.
 - **PKG-FR-APT-SAME**: A package present on both machines at the same version from the same origin MUST produce no item.
 - **PKG-FR-APT-VERSION-DIFF**: A version difference MUST be reported with both versions named and MUST NOT be acted on.
 - **PKG-FR-APT-ORIGIN-DIFF**: The same package installed from different origins on the two machines MUST be reported as a provenance divergence naming both origins, MUST NOT be converged, and MUST take precedence over any version difference on that package. It MUST NOT be raised for a mirror difference.
   Why: converging it would mean a reinstall from the other origin that the user did not ask for, and builds from two different origins share no version scale.
-- **PKG-FR-APT-HELD-TARGET**: A package held on the target MUST NOT be proposed for install or upgrade, and MUST produce no package-level item. Its hold MUST still be an item.
 
 ### Holds
 
 Decomposes [apt / Holds](package-sync-user-requirements.md#holds).
 
 - **PKG-FR-APT-HOLD-ITEM**: An apt hold MUST be an item separate from the package it applies to, decided separately, both when it is added and when it is removed.
-- **PKG-FR-APT-HOLD-ORDER**: An approved hold MUST be applied after the package it names is installed, never before.
-  Why: apt refuses to install a held package (`E: Held packages were changed`, measured on Ubuntu 24.04), so setting the hold first blocks the install it is meant to protect and leaves the package `hold ok not-installed`.
-- **PKG-FR-APT-HOLD-VERSION**: Where the source holds a package the target lacks, the target MUST be given the source's exact version, not whatever its repositories currently offer. Where that version cannot be obtained on the target, the install MUST fail as its own item naming both versions, and MUST NOT fall back to another version.
+- **PKG-FR-APT-HELD-TARGET**: A package held on the target MUST NOT be proposed for install or upgrade, and MUST produce no package-level item. Its hold MUST still be an item.
+- **PKG-FR-APT-HOLD-VERSION**: Where the source holds a package the target lacks, the target MUST be given the source's exact version, not whatever its repositories currently offer. Where that version cannot be obtained on the target, the install MUST fail as its own item naming both versions, and MUST NOT fall back to another version. When the job is done, the package MUST be installed at the source's version and its hold MUST be registered.
   Why: a hold blocks install, upgrade and removal alike (measured on Ubuntu 24.04), so it carries the intent "do not move this off the version that works" as well as "do not lose this", and apt cannot distinguish them. Everywhere else a version floats because the user expressed no preference; a hold is that preference. Installing a different version and then freezing it there is worse than ordinary drift, because nothing will move it again.
 - **PKG-FR-APT-HOLD-INERT**: Replicating a hold MUST NOT change the package's version, and a hold whose package install was not approved or failed MUST fail alone.
   Why: a hold carries no version — it freezes whatever is installed on that machine — so what replicates is the intent to freeze. Since versions float, the two machines may end up held at different versions.
@@ -139,17 +138,15 @@ Decomposes [apt / Holds](package-sync-user-requirements.md#holds).
 
 Decomposes [apt / Collateral damage](package-sync-user-requirements.md#collateral-damage).
 
-- **PKG-FR-COLLATERAL-AUTO**: Collateral removals and downgrades that touch only automatically-installed packages MUST proceed without asking.
-  Why: that is the target's apt resolving its own dependency graph.
-- **PKG-FR-COLLATERAL-MANUAL**: An approved change MUST NOT remove or downgrade a package that is manually installed on the target unless the user has consented to that consequence specifically. The request MUST name the affected package, say why it is protected, and say what the approved change would do to it. The user MUST be able to accept it, to keep the package — leaving the changes that cause the loss unapplied rather than failing later — or to stop the sync, and each of those three MUST state its own effect. The stopping answer MUST say how far it reaches.
+- **PKG-FR-COLLATERAL-AUTO**: Collateral removals and downgrades that touch only automatically-installed packages MUST proceed without asking, and MUST be named in the run's log.
+  Why: that is the target's apt resolving its own dependency graph. Logging it is what keeps a change nobody is asked about from being a change nobody can see.
+- **PKG-FR-COLLATERAL-MANUAL**: An approved change MUST NOT remove or downgrade a package that is manually installed on the target unless the user has consented to that consequence specifically. Being offered for removal is not that consent: only a removal the user APPROVED may exempt a package from this protection, and one skipped for this run, or marked machine-specific, MUST keep it. The request MUST name the affected package, say why it is protected, and say what the approved change would do to it. The user MUST be able to accept it, to keep the package — leaving the changes that cause the loss unapplied rather than failing later — or to stop the sync, and each of those three MUST state its own effect. The stopping answer MUST say how far it reaches.
   Why: "abort" alone reads as abandoning the question. Stopping here ends the entire sync, not just the package job, and a user who cannot tell those apart cannot choose between them. The protection is also not the machine-specific mark: nobody recorded a preference, the target's own package manager reports that a person asked for the package, and saying otherwise would describe a decision the user never made.
+- **PKG-FR-COLLATERAL-MARKED**: Where the collateral package is marked machine-specific, ANY change to it — removal, downgrade or upgrade alike — MUST raise the question of `PKG-FR-COLLATERAL-MANUAL`, and the question MUST say that the package is machine-specific. A mark recorded earlier in the same run MUST count.
+  Why: the mark says the job never touches that package on that machine of its own accord, so every touch needs permission and not only a destructive one. Nothing else in any review mentions a marked package, which makes this the only line the user ever gets about it.
 - **PKG-FR-COLLATERAL-ATTRIBUTION**: Declining collateral MUST cancel only the approved changes whose own transaction causes it, and MUST NOT cancel any other change under review. Where the collateral is caused by a combination of changes and by no single one of them, the whole set MUST be cancelled, and the question MUST say so.
   Why: the review's other answers are the user's and were given about other software. A decline that reaches them is a decision the user did not make.
 - **PKG-FR-COLLATERAL-KEEPS-MARKS**: Cancelling a change on account of declined collateral MUST NOT alter a decision the user gave for that change. A change marked machine-specific MUST still be recorded as such, and a change already declined MUST NOT be re-decided.
-- **PKG-FR-COLLATERAL-TIMING**: Collateral MUST be classified, and consented to, before anything is applied. If the real transaction has drifted by the time it runs, the system MUST refuse it rather than proceed.
-  Why: the package manager states the transaction in advance when asked, so the consequence is knowable while the user is deciding about the change that causes it.
-- **PKG-FR-COLLATERAL-NEW-ORIGIN**: For an install whose origin this run must itself provision, the protection of `PKG-FR-COLLATERAL-MANUAL` MUST still hold, but consent MUST NOT be sought in advance: unapproved collateral MUST fail that one item, and the run MUST continue.
-  Why: the facts that question needs do not exist while the review is being built — until the repository lands, the target's apt cannot resolve the name, and including it would strip the protection from every other package in the run rather than weaken it for one. The cost is that for those packages the user is told afterwards instead of asked beforehand.
 
 ### Repositories, keys and pins
 
@@ -157,10 +154,10 @@ Decomposes [apt / Repositories, keys and pins](package-sync-user-requirements.md
 
 - **PKG-FR-REPO-DERIVED**: The user MUST NOT be asked to add or change a repository. A repository MUST be written to the target only because an approved package comes from it. A repository on the source that feeds no package this run syncs MUST NOT be synced.
 - **PKG-FR-REPO-OVERWRITE**: A repository present on both machines with differing content MUST be overwritten with the source's version, except as required by `PKG-FR-REPO-CONFLICT`.
-- **PKG-FR-REPO-CONFLICT**: Where overwriting would repoint a repository that software the target marked machine-specific depends on, the system MUST obtain consent first, MUST show both machines' versions of the configuration in full, and MUST NOT record the answer. Declining MUST fail every approved package whose origin depended on it, naming them, rather than installing them from elsewhere.
-  Why: machine-specific software produces no review line in any run, so nothing else would tell the user its origin was about to move. Ordinary target-only software already has a removal line of its own.
-- **PKG-FR-REPO-DELETE**: A repository present on the target and not on the source MUST NOT be deleted without explicit approval. The request MUST name the repository URLs the file declares, and MUST name the machine-specific packages on the target the deletion would strand.
-  Why: disclosure, not refusal — deleting a repository whose packages are also going is ordinary cleanup, and the stranded packages are invisible in the review by design. The filename alone is not the decision: it is whatever created the file happened to call it, and two machines routinely name the same repository differently, while the URL is what the deletion actually takes away.
+- **PKG-FR-REPO-CONFLICT**: Where overwriting would repoint a repository that software the target marked machine-specific depends on, the system MUST obtain consent first, MUST show both machines' versions of the configuration in full, and MUST NOT record the answer. Declining MUST fail every approved package whose origin depended on it, naming them, rather than installing them from elsewhere. The question MUST be raised only for a repository this run writes because an approved package comes from it.
+  Why: machine-specific software produces no review line in any run, so nothing else would tell the user its origin was about to move. Ordinary target-only software already has a removal line of its own. A differing file no approved package needs is not written at all (`PKG-FR-REPO-DERIVED`), so there is nothing to consent to — which is what makes this symmetric with `PKG-FR-FLATPAK-REPOINT`.
+- **PKG-FR-REPO-DELETE**: A repository present on the target and not on the source MUST NOT be deleted while anything on the target still uses it — counted after this run's approved removals and counting packages the target marked machine-specific — and while that holds it MUST NOT be raised as an item at all. Once nothing uses it, its deletion MUST NOT proceed without explicit approval, and the request MUST name the repository URLs the file declares.
+  Why: the packages are the software and the repository is plumbing, so removing the packages is the decision and the repository follows. Machine-specific packages are invisible in the review by design, so a repository feeding one must never become deletable out from under it. The filename alone is not the decision: it is whatever created the file happened to call it, and two machines routinely name the same repository differently, while the URL is what the deletion actually takes away.
 - **PKG-FR-DISTRO-FILES**: The distribution's own source files MUST be written when the target lacks them and overwritten when they differ. They MUST NEVER be removed and MUST NEVER be offered for removal.
   Why: they are what defines "the distribution's own origin" on each machine, which is what makes `PKG-FR-DISTRO-ORIGIN` computable.
 - **PKG-FR-APT-IGNORES**: Files apt itself does not read MUST NOT be treated as repository configuration, in any of add, change or remove.
@@ -185,6 +182,7 @@ Decomposes [apt / Ubuntu Pro](package-sync-user-requirements.md#esm-repositories
 
 - **PKG-FR-ESM-GATE**: Where the source carries ESM repositories that would be written to a target reporting no Ubuntu Pro attachment, the system MUST obtain the user's decision before writing anything and before asking that job's other questions, with exactly two outcomes: attach the target, or skip the apt job for this run while the other jobs proceed. The user MUST be told what to do on the target to attach it.
   Why: an unattached target's metadata refresh succeeds because the ESM indexes are public, so the ESM suites enter candidate selection above the ordinary archive and the failure lands later, at install time, on a package the user will not connect to the sync. The system cannot fix this itself: attaching needs a subscription token or an interactive browser flow, the source's own credentials are root-only and not reusable, and carrying a token would put a secret on a command line.
+  Measured, on an attached Ubuntu 24.04 desktop with `esm-apps` and `esm-infra` enabled: 60 of 2297 installed packages resolve their candidate to `esm.ubuntu.com`, among them `ffmpeg`, `gimp`, `imagemagick` and the `libav*` set. The earlier container measurement of zero was an artefact of a container's package set.
 - **PKG-FR-ESM-VERIFY**: An answer claiming the target is attached MUST be verified against the target rather than believed, and the user MAY answer it any number of times.
 - **PKG-FR-ESM-SKIP-WHOLE-JOB**: Skipping MUST leave the target's apt configuration exactly as it was found, and MUST skip the whole apt job rather than only the ESM repositories.
   Why: pins are always synced (`PKG-FR-PIN-ALWAYS`), so the source's ESM pins would reach a target without the sources they name, leaving a candidate selection matching neither machine. An untouched configuration is a state the user can reason about.
@@ -269,6 +267,11 @@ Decomposes [When something goes wrong](package-sync-user-requirements.md#when-so
 - **PKG-FR-OUTCOME-FAILED**: A job MUST report failure when at least one approved item could not be applied. Every approved item MUST be attempted, failures MUST be collected and reported together naming each item, one failed item MUST NOT block the rest of its job, and one failed job MUST NOT stop the others.
 - **PKG-FR-NO-TERMINAL**: A non-interactive run — one with no interactive terminal — MUST ask nothing, MUST treat every reviewable item as declined for this run, and MUST report every package job with a non-empty review as skipped. Nothing may be recorded, no snippet written and no registry transferred.
 - **PKG-FR-DRY-RUN**: A rehearsal MUST produce the same plan and the same review as a real run and MUST issue no command that changes either machine. The preview MUST include the derived changes that have no review line of their own. A rehearsal on a terminal MUST report success; without one it MUST report skipped, for the same reason a real run does.
+- **PKG-FR-READ-FAILS-JOB**: A package manager that cannot be queried at all MUST fail its own job, naming the command that did not answer, and MUST NOT stop the run's other jobs. Its silence MUST NOT be read as an empty installed set. An empty answer is ordinary data.
+  Why: reading silence as "this machine has nothing installed" would propose removing everything the other machine has.
+- **PKG-FR-LOG-DECISIONS**: A run's log MUST name every item a job presented together with the decision it received, and every change a package manager made on its own behalf that no review showed.
+  Why: the report says what a job did; the log is where the user reconstructs why, including the changes that were never theirs to approve.
+- **PKG-FR-LOG-VERBATIM**: A package manager's own output MUST be kept verbatim in the debug log, except where another article restricts what may be logged (`PKG-FR-ESM-PRIVACY`).
 - **PKG-FR-FAIL-NAMED**: Every failure MUST name the item, package or file it concerns.
 
 ## Non-goals and accepted costs
@@ -280,9 +283,6 @@ Each of these is a real cost, given up knowingly.
 - **PKG-NG-APT-LINE-CONTROL**: The target's apt configuration is not under the user's line-by-line control. Repositories, keys and pins appear because a package was approved, and declining the package is the only way to decline them.
 - **PKG-NG-APT-IDENTICAL**: The two machines' apt configurations are converged for what packages need, not made identical.
 - **PKG-NG-PIN-LOCAL**: A pin cannot be kept on one machine only. It returns on every sync until it is deleted on the source.
-- **PKG-NG-COLLATERAL-SOURCE-MANUAL**: A package installed by hand on the source but present on the target as an automatic dependency is not protected from collateral removal. The target's apt owns what the target's apt installed.
-- **PKG-NG-COLLATERAL-MARKS**: Machine-specific marks are not consulted when protecting against collateral. Software marked machine-specific can still be removed as collateral of an approved install.
-- **PKG-NG-DEB-ORPHANED**: Enabling `apt_sync` without `manual_installs_sync` leaves hand-installed `.deb` packages replicated by nobody. They are absent from the review rather than offered as installs that would fail.
 - **PKG-NG-SNAP-ORIGIN**: snap has no origin model and needs none.
 - **PKG-NG-ESM-PARTIAL**: A target with no Ubuntu Pro attachment costs the whole apt job for that run, not only the ESM repositories.
 - **PKG-NG-MARK-ORIGIN**: Deleting an apt configuration file can be marked machine-specific; deleting an apt repository, an apt pin or a flatpak remote cannot.
@@ -296,6 +296,13 @@ Each of these is a real cost, given up knowingly.
 
 Requirements the shipped code knowingly does not satisfy are recorded here, verified against the code on the current branch rather than against older documents.
 
+- **PKG-FR-COLLATERAL-MANUAL** is violated by a shipped bug. `_collect_plan_time_collateral` builds `reviewed_names` from the candidate lists before any answer is given (`apt_sync.py:2586-2588`) and `_classify_collateral` skips everything in it (`apt_sync.py:2670`), so a package the user was offered for removal and answered *skip* loses its collateral protection: an approved install can then remove it with no question at all.
+- **PKG-FR-COLLATERAL-MARKED** is not implemented. `_classify_collateral` tests removals and downgrades only, and consults the target's manual set rather than the machine-specific marks, so an upgrade of a marked package raises nothing.
+- **PKG-FR-READ-FAILS-JOB** is not implemented. Only `PackageItemFailures` lets the run continue; every other exception, a failed capture included, is re-raised and stops the whole sync (`orchestrator.py:1324-1344`).
+- **PKG-FR-JOB-ORDER** covers three jobs, not four. `orchestrator.py:1082` validates `apt_sync`, `snap_sync` and `flatpak_sync` against `folder_sync`; `manual_installs_sync` may be ordered after it without an error.
+- **PKG-FR-REPO-DELETE** is not implemented. `apt_sync` offers a target-only repository for deletion whatever still uses it, disclosing the machine-specific packages the deletion would strand rather than refusing to raise it.
+- **PKG-FR-REPO-CONFLICT** asks more widely than required. apt raises the conflict for every differing repository file feeding machine-specific software, without flatpak's gate on the file being one this run would write (recorded as DIV-07).
+
 - **PKG-FR-FLATPAK-REMOTE-DELETE** is not implemented. `flatpak_sync` still offers a target-only remote for deletion as a two-answer review item (`_diff_flatpak_remotes`), so the user can delete a remote that machine-specific or origin-diverged applications still depend on.
 - **PKG-FR-FLATPAK-FILTER** is not implemented, and the code implements the opposite. `_FLATPAK_REMOTES_CMD_TEMPLATE` requests `name,url,options` only, so the run never reads the filter's path; a filtered source remote is provisioned unfiltered and `flatpak_sync` emits one warning per such remote naming the `remote-modify --filter` command. The requirement was ruled on after the code was written.
 
@@ -305,38 +312,31 @@ Requirements the shipped code knowingly does not satisfy are recorded here, veri
 
 ## Open questions
 
-Genuinely undecided. An answer invented here would be worse than the question.
-
-How many answers should `PKG-FR-APTCONF` offer? It is required to be reviewed whether it is being added, changed or removed, and it currently carries the full decision including the permanent mark, reasoned from the fact that the two-answer questions were justified by consequences an apt configuration file does not have. That reasoning is sound but was never ruled on.
-
-Should `PKG-FR-REPO-DELETE` ever be markable machine-specific? `PKG-FR-NO-MARK-ON-ORIGIN` says no, with consolidation as the remedy. That remedy is real work the user may not want to do, and the alternative was rejected rather than tested against use.
-
-How much does the ESM hazard behind `PKG-FR-ESM-GATE` cost on a real desktop? Measured in a container, zero of thirteen upgradable packages had an ESM candidate. That a desktop with a large `universe` set has many more follows from the priority ordering but has not been measured. The gate does not depend on the count, but the size of the problem is unknown.
-
-How often is a package manual on the source and automatic on the target — the case `PKG-NG-COLLATERAL-SOURCE-MANUAL` gives up? Nobody has counted. "Rare" is not a claim this document makes.
+None. Every question this document carried has been ruled on during the requirements review.
 
 ## Traceability
 
-Every article above decomposes exactly one section of [Package sync — user requirements](package-sync-user-requirements.md). 124 articles, no orphans in either direction. A new article needs a home here; a narrative section with no articles is either intentionally non-normative or a coverage gap.
+Every article above decomposes exactly one section of [Package sync — user requirements](package-sync-user-requirements.md). 122 articles, no orphans in either direction. A new article needs a home here; a narrative section with no articles is either intentionally non-normative or a coverage gap.
 
 | User-requirements section | Articles | |
 | - | - | - |
 | [What package sync is for](package-sync-user-requirements.md#what-package-sync-is-for) | 8 | `PKG-FR-OPT-IN` `PKG-FR-JOB-INDEPENDENCE` `PKG-FR-JOB-ORDER` `PKG-FR-APT-SCOPE` `PKG-FR-SNAP-SCOPE` `PKG-FR-FLATPAK-SCOPE` `PKG-FR-MANUAL-SCOPE` `PKG-FR-DATA-BOUNDARY` |
 | [The model](package-sync-user-requirements.md#the-model) | 18 | `PKG-FR-SOURCE-INTENT` `PKG-FR-MANAGER-CONVERGES` `PKG-FR-APT-IDENTITY` `PKG-FR-DISTRO-ORIGIN` `PKG-FR-SNAP-IDENTITY` `PKG-FR-FLATPAK-IDENTITY` `PKG-FR-FLATPAK-ORIGIN-NOT-IDENTITY` `PKG-FR-VERSION-FLOAT` `PKG-FR-SNAP-REVISION` `PKG-FR-BLOCKS-REPLICATE` `PKG-FR-REVIEW-FIRST` `PKG-FR-ONLY-APPROVED` `PKG-FR-BATCHED` `PKG-FR-ASK-AGAIN` `PKG-FR-CONSENT-BEFORE-CHANGE` `PKG-FR-ASK-ABOUT-SOFTWARE` `PKG-FR-ASK-WHEN-NOT-DERIVABLE` `PKG-FR-REMOVAL-DISTINCT` |
-| [What happens during a sync](package-sync-user-requirements.md#what-happens-during-a-sync) | 6 | `PKG-FR-NAME-THE-MACHINES` `PKG-FR-EFFECT-NOT-MECHANISM` `PKG-FR-ABORT` `PKG-FR-CONFIRM-EACH` `PKG-FR-NO-TERMINAL` `PKG-FR-DRY-RUN` |
-| [Decisions and their memory](package-sync-user-requirements.md#decisions-and-their-memory) | 3 | `PKG-FR-SKIP-ONCE` `PKG-FR-MACHINE-SPECIFIC` `PKG-FR-NO-MARK-ON-ORIGIN` |
+| [What happens during a sync](package-sync-user-requirements.md#what-happens-during-a-sync) | 8 | `PKG-FR-NAME-THE-MACHINES` `PKG-FR-EFFECT-NOT-MECHANISM` `PKG-FR-ABORT` `PKG-FR-CONFIRM-EACH` `PKG-FR-NO-TERMINAL` `PKG-FR-DRY-RUN` `PKG-FR-LOG-DECISIONS` `PKG-FR-LOG-VERBATIM` |
+| [Decisions and their memory](package-sync-user-requirements.md#decisions-and-their-memory-machine-specific) | 3 | `PKG-FR-SKIP-ONCE` `PKG-FR-MACHINE-SPECIFIC` `PKG-FR-NO-MARK-ON-ORIGIN` |
 | [apt / Installing](package-sync-user-requirements.md#installing) | 5 | `PKG-FR-DEB-OWNERSHIP` `PKG-FR-APT-ORIGIN-DISCLOSURE` `PKG-FR-APT-ORIGIN-DERIVED` `PKG-FR-APT-ORIGIN-UNREPLICABLE` `PKG-FR-APT-ORIGIN-VERIFY` |
-| [apt / Removing, and reporting without acting](package-sync-user-requirements.md#removing-and-reporting-without-acting) | 5 | `PKG-FR-APT-REMOVE` `PKG-FR-APT-SAME` `PKG-FR-APT-VERSION-DIFF` `PKG-FR-APT-ORIGIN-DIFF` `PKG-FR-APT-HELD-TARGET` |
-| [apt / Holds](package-sync-user-requirements.md#holds) | 4 | `PKG-FR-APT-HOLD-ITEM` `PKG-FR-APT-HOLD-ORDER` `PKG-FR-APT-HOLD-VERSION` `PKG-FR-APT-HOLD-INERT` |
-| [apt / Collateral damage](package-sync-user-requirements.md#collateral-damage) | 6 | `PKG-FR-COLLATERAL-AUTO` `PKG-FR-COLLATERAL-MANUAL` `PKG-FR-COLLATERAL-ATTRIBUTION` `PKG-FR-COLLATERAL-KEEPS-MARKS` `PKG-FR-COLLATERAL-TIMING` `PKG-FR-COLLATERAL-NEW-ORIGIN` |
+| [apt / Removing a package](package-sync-user-requirements.md#removing-a-package) | 1 | `PKG-FR-APT-REMOVE` |
+| [apt / Reporting without acting](package-sync-user-requirements.md#reporting-without-acting) | 3 | `PKG-FR-APT-SAME` `PKG-FR-APT-VERSION-DIFF` `PKG-FR-APT-ORIGIN-DIFF` |
+| [apt / Holds](package-sync-user-requirements.md#holds) | 4 | `PKG-FR-APT-HOLD-ITEM` `PKG-FR-APT-HELD-TARGET` `PKG-FR-APT-HOLD-VERSION` `PKG-FR-APT-HOLD-INERT` |
+| [apt / Collateral damage](package-sync-user-requirements.md#collateral-damage) | 5 | `PKG-FR-COLLATERAL-AUTO` `PKG-FR-COLLATERAL-MANUAL` `PKG-FR-COLLATERAL-MARKED` `PKG-FR-COLLATERAL-ATTRIBUTION` `PKG-FR-COLLATERAL-KEEPS-MARKS` |
 | [apt / Repositories, keys and pins](package-sync-user-requirements.md#repositories-keys-and-pins) | 14 | `PKG-FR-REPO-DERIVED` `PKG-FR-REPO-OVERWRITE` `PKG-FR-REPO-CONFLICT` `PKG-FR-REPO-DELETE` `PKG-FR-DISTRO-FILES` `PKG-FR-APT-IGNORES` `PKG-FR-KEY-NOT-ITEM` `PKG-FR-KEY-COPY` `PKG-FR-KEY-REFRESH` `PKG-FR-KEY-CLEANUP` `PKG-FR-PIN-ALWAYS` `PKG-FR-PIN-DELETE` `PKG-FR-PIN-NOT-INVENTORY` `PKG-FR-APTCONF` |
 | [apt / Ubuntu Pro](package-sync-user-requirements.md#esm-repositories--ubuntu-pro) | 5 | `PKG-FR-ESM-GATE` `PKG-FR-ESM-VERIFY` `PKG-FR-ESM-SKIP-WHOLE-JOB` `PKG-FR-ESM-NO-ASK` `PKG-FR-ESM-PRIVACY` |
 | [apt / Applying apt's changes](package-sync-user-requirements.md#applying-apts-changes) | 3 | `PKG-FR-APT-CONFIG-ATOMIC` `PKG-FR-DERIVED-FAILURE` `PKG-FR-DERIVED-VISIBLE` |
 | [snap](package-sync-user-requirements.md#snap) | 8 | `PKG-FR-SNAP-CASES` `PKG-FR-SNAP-CONFINEMENT` `PKG-FR-SNAP-REMOVE-SNAPSHOT` `PKG-FR-SNAP-SIDELOAD` `PKG-FR-SNAP-FAIL-ITEM` `PKG-FR-SNAP-HOLD` `PKG-FR-SNAP-REFRESH-PAUSE` `PKG-FR-SNAP-DATA-BOUNDARY` |
 | [flatpak](package-sync-user-requirements.md#flatpak) | 14 | `PKG-FR-FLATPAK-CASES` `PKG-FR-FLATPAK-REMOTE-DERIVED` `PKG-FR-FLATPAK-REMOTE-FIRST` `PKG-FR-FLATPAK-REMOTE-TRUST` `PKG-FR-FLATPAK-REPOINT` `PKG-FR-FLATPAK-REMOTE-DELETE` `PKG-FR-FLATPAK-INSTALL-ORIGIN` `PKG-FR-FLATPAK-MISSING-REMOTE` `PKG-FR-FLATPAK-ORIGIN-DIFF` `PKG-FR-FLATPAK-REMOTE-FAILURE` `PKG-FR-FLATPAK-FILTER` `PKG-FR-FLATPAK-THIRD-SCOPE` `PKG-FR-FLATPAK-MASK` `PKG-FR-FLATPAK-PRIVILEGE` |
 | [Software no manager can reproduce](package-sync-user-requirements.md#software-no-manager-can-reproduce) | 7 | `PKG-FR-MANUAL-RESOLUTION` `PKG-FR-MANUAL-SOURCE-DECIDES` `PKG-FR-MANUAL-SAME-RUN` `PKG-FR-SNIPPET-VERBATIM` `PKG-FR-REGISTRY-SYNCS` `PKG-FR-REGISTRY-CONSENT` `PKG-FR-MANUAL-FAIL-ITEM` |
-| [When something goes wrong](package-sync-user-requirements.md#when-something-goes-wrong) | 4 | `PKG-FR-OUTCOME-SUCCESS` `PKG-FR-OUTCOME-SKIPPED` `PKG-FR-OUTCOME-FAILED` `PKG-FR-FAIL-NAMED` |
-| [What this deliberately does not do](package-sync-user-requirements.md#what-this-deliberately-does-not-do) | 14 | `PKG-NG-APT-LINE-CONTROL` `PKG-NG-APT-IDENTICAL` `PKG-NG-PIN-LOCAL` `PKG-NG-COLLATERAL-SOURCE-MANUAL` `PKG-NG-COLLATERAL-MARKS` `PKG-NG-DEB-ORPHANED` `PKG-NG-SNAP-ORIGIN` `PKG-NG-ESM-PARTIAL` `PKG-NG-MARK-ORIGIN` `PKG-NG-MANUAL-REMOVE` `PKG-NG-VERSION-CONVERGE` `PKG-NG-ORIGIN-CONVERGE` `PKG-NG-UNATTENDED` `PKG-NG-MARK-PORTABILITY` |
+| [When something goes wrong](package-sync-user-requirements.md#when-something-goes-wrong) | 5 | `PKG-FR-OUTCOME-SUCCESS` `PKG-FR-OUTCOME-SKIPPED` `PKG-FR-OUTCOME-FAILED` `PKG-FR-READ-FAILS-JOB` `PKG-FR-FAIL-NAMED` |
+| [What this deliberately does not do](package-sync-user-requirements.md#what-this-deliberately-does-not-do) | 11 | `PKG-NG-APT-LINE-CONTROL` `PKG-NG-APT-IDENTICAL` `PKG-NG-PIN-LOCAL` `PKG-NG-SNAP-ORIGIN` `PKG-NG-ESM-PARTIAL` `PKG-NG-MARK-ORIGIN` `PKG-NG-MANUAL-REMOVE` `PKG-NG-VERSION-CONVERGE` `PKG-NG-ORIGIN-CONVERGE` `PKG-NG-UNATTENDED` `PKG-NG-MARK-PORTABILITY` |
 
 It also runs the other way: an article can state an obligation its section deliberately does not spell out. `PKG-FR-SNIPPET-VERBATIM` refusing an empty snippet is one — a real requirement, and too obvious to spend the narrative reader's attention on. Such an article is not an orphan, and the remedy is never to add the sentence back.
 

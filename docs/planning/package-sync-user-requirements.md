@@ -31,7 +31,7 @@ An **item** is one thing the user can be asked about: a package, a snap, a flatp
 
 A **decision** is the user's answer about an item: apply it, skip it this run, or always skip it in future runs.
 
-**Machine-specific** describes an item marked "always skip". The job that marked it never touches that item again on that machine, whichever machine the sync runs from — it is neither sent to the other machine nor changed by it.
+**Machine-specific** describes an item marked "always skip". The job that marked it never touches that item again on that machine of its own accord, whichever machine the sync runs from — it is neither sent to the other machine nor changed by it. Where an approved change would touch it anyway, the user is asked first.
 
 **Derived** describes plumbing that is synced because approved software needs it — the repository a package comes from, its signing key, a pin, a flatpak remote. It is never a question of its own.
 
@@ -86,15 +86,17 @@ The two machines are named by hostname wherever the user reads them, and every a
 
 **Report** gives the job's outcome: success, skipped with the reason, or failed naming each failed item.
 
+The log holds more than the report. It names every item the job presented and the decision each one got, and every change the package manager made on its own behalf — the collateral the review never showed. The package manager's own output is kept verbatim in the debug log, except where a privacy rule withholds it.
+
 A **dry run** plans and reviews exactly as a real run does — the questions are still asked — then changes nothing and records nothing. A **non-interactive run** — one with no terminal to answer at, such as from cron or a script — asks nothing, treats every item as declined, and reports any job with a non-empty review as skipped.
 
-## Decisions and their memory
+## Decisions and their memory: "machine specific"
 
-**Apply** does the thing. **Skip** declines it for this run only. **Always skip** marks the item machine-specific. The mark is recorded on the **holding machine** — not necessarily the machine the sync was launched from.
+**Apply** does the thing. **Skip** declines it for this run only. **Always skip** marks the item as **machine-specific**. The mark is recorded on the **holding machine** — not necessarily the machine the sync was launched from.
 
 Example: two machines Atlas and Vega, sync launched from Atlas. Vega has `steam`; Atlas does not, so the sync offers to remove it from Vega. Answering "always skip" writes the mark **on Vega**, because Vega holds `steam`. The reverse case: Atlas has `wireshark`, the sync offers to install it on Vega, and "always skip" writes the mark on **Atlas**.
 
-A marked item is filtered out before the difference is computed, so it never appears in a later review. Because of that, two questions have to disclose it explicitly: repository deletion and repository conflict, both below.
+A marked item is filtered out before the difference is computed, so it never appears in a later review. Because of that, the repository-conflict question below has to disclose it explicitly.
 
 Marks never sync between machines. Snippets do, because how to install something is knowledge about the software rather than the machine.
 
@@ -128,21 +130,21 @@ The last step is a real check against the target's own state after the configura
 
 Two machines on different Ubuntu mirrors are not two origins: each machine's own distribution source files define what "the distribution" means for it.
 
-A package from a hand-downloaded `.deb` is not apt's business — see [*Software no manager can reproduce*](#software-no-manager-can-reproduce).
+A package from a hand-downloaded `.deb` is not apt-sync's business — see [*Software no manager can reproduce*](#software-no-manager-can-reproduce).
 
-### Removing, and reporting without acting
+### Removing a package
 
-A package on the target that the source lacks is offered for removal, with skip selected by default. Removal does not purge the package's configuration.
+A package on the target that the source lacks is offered for removal, with "skip" selected as default action. Removal does not purge the package's configuration.
 
-Same package, same origin, same version produces nothing at all.
+### Reporting without acting
+
+Same package, same origin, same version shows nothing at all.
 
 Three situations are reported and never acted on:
 
 - **different versions** — both named; versions float — package managers handle updates, not pc-switcher
-- **different origins** — both named; takes precedence over a version difference, and is never raised for a mirror difference
-- **an origin that cannot be replicated** — reported with the reason, never installed from somewhere else
-
-A package held on the target is never proposed for install or upgrade. Its hold is still an item.
+- **different origins** — both named; takes precedence over a version difference, and is never reported for a mirror difference
+- **an origin that cannot be replicated** — warning reported with the reason, never installed from somewhere else
 
 ### Holds
 
@@ -150,31 +152,31 @@ An apt hold is its own item, decided separately from its package, both when it i
 
 A hold blocks everything: apt will not install, upgrade or remove a held package, not even as an unused dependency. So it serves two intents at once — "never lose this" and "never move this off the version that works" — and apt gives no way to tell them apart.
 
-That second intent decides how a held package is installed. Everywhere else a version floats, because the user expressed no preference; a hold *is* that preference. So when the source holds a package the target lacks, the target gets the **source's exact version**, not whatever its repositories currently offer. If that version is no longer available on the target, the install fails as its own item naming both versions — better than silently freezing the target on a version the user never chose, which nothing would ever move again.
-
-The hold is applied after the package is installed, never before: apt refuses to install a held package, so holding first would block the very install the hold is meant to protect.
+That second intent decides how a held package is installed. Everywhere else a version floats, because the user expressed no preference; a hold *is* that preference. So when the source holds a package the target lacks, the target gets the **source's exact version**, not whatever repositories currently offer. If that version is no longer available on the target, the install fails as its own item naming both versions — better than silently freezing the target on a version the user never chose, which nothing would ever move again.
 
 ### Collateral damage
 
-Approving an install can make apt remove something else.
+Approving an install can make apt remove or downgrade something else, through *conflicts*, *replaces* or version constraints.
 
-If apt installed that something automatically, the removal proceeds silently — apt is resolving its own dependencies.
+If apt installed that something automatically, the collateral action proceeds silently — apt is resolving its own dependencies. The log names it.
 
-If it is **manually installed on the target**, the user is asked first. The question names the package, says why it is protected — that machine's apt has it marked manually installed — and says what would happen to it. Three answers, each stating its effect: install anyway, skip and leave the triggering install unapplied, or stop the whole apt sync.
+If it is **manually installed on the target**, the user is asked first. The question names the package, says that this machine's apt has it marked manually installed, and says what the approved change would do to it. Three answers, each stating its effect: install anyway, skip and leave the triggering install unapplied, or stop the whole apt sync.
 
-It is asked during the review, from apt's own simulation, never mid-install.
+A package marked **machine-specific** is the case that matters most, and the question says so. Nothing else in the review mentions such a package, so this is the only line the user gets about it. It is also protected more widely: the job never touches a machine-specific package of its own accord, so *any* change to one — an upgrade included — is asked about, not only a removal or a downgrade.
+
+A package the user chose to keep is protected too. Being offered for removal is not consent to lose it: only a removal the user *approved* is exempt from this question, and one skipped for this run, or marked machine-specific, keeps its protection. A decision made earlier in this same run counts.
 
 Declining cancels only the changes that actually cause the collateral. Where several cause it together, all are cancelled and the question says so. It never overwrites a decision the user already gave.
-
-One exception: where this run must itself provision the repository, apt cannot simulate until it lands. Those are checked afterwards, and unapproved collateral fails that one install.
 
 ### Repositories, keys and pins
 
 Adding or changing a repository is never a question: it is written because an approved package comes from it, and one that feeds nothing this run syncs is not synced at all.
 
-Deleting one is a question. The question names the URLs the file declares — not just its filename — and the machine-specific packages the deletion would strand.
+Deleting one is a question, but only once nothing on the target still uses it — counted after this run's approved removals, and counting packages marked machine-specific. While anything still uses it, the repository stays and is never raised. The question names the URLs the file declares, not just its filename.
 
-A repository both machines have with different content is overwritten with the source's version silently — unless it feeds a package the target marked machine-specific. Then the user is asked, and shown both versions of the file in full. Declining fails every approved package whose origin depended on that file.
+A repository both machines have with different content is overwritten with the source's version silently — unless the overwrite would repoint a package the target marked machine-specific. Then the user is asked, and shown both versions of the file in full. Declining fails every approved package whose origin depended on that file.
+
+Only a repository this run writes because an approved package comes from it can raise that question. A differing file nothing approved this run needs is not written, so there is nothing to consent to.
 
 The distribution's own source files are written and updated, never removed or offered for removal. Files apt itself does not read are not treated as repository configuration.
 
@@ -212,7 +214,7 @@ snap converges the source's **exact revision and channel**, where apt and flatpa
 
 So a difference of revision or channel is a change to apply, naming both values, rather than something reported; an install lands the source's revision and channel on the target; and the same revision and channel on both machines produces nothing.
 
-### Removing
+### Removing a snap
 
 Removing a snap leaves snapd's own pre-removal snapshot in place — the only recovery path if the removal was a mistake.
 
@@ -282,15 +284,12 @@ A repository, key, pin or remote has no item of its own to fail on. When one of 
 
 It does not work the other way round. A package that fails to install leaves the repository it came from in place, and leaves the other packages that share it untouched.
 
-A read that does not answer is different. If a package manager cannot be queried at all, its silence is never read as "this machine has nothing installed", which would propose removing everything on the other machine. It fails once, naming the command. An *empty* answer is ordinary data.
+A read that does not answer is different. If a package manager cannot be queried at all, its silence is never read as "this machine has nothing installed", which would propose removing everything on the other machine. It fails once, naming the command, and it fails only its own job — the other jobs still run. An *empty* answer is ordinary data.
 
 ## What this deliberately does not do
 
 - **The target's apt configuration is not under line-by-line control.** Repositories, keys and pins appear because a package was approved; declining the package is the only way to decline them.
-- **A pin cannot be kept on one machine only.** It returns every run until it is deleted on the source.
-- **A package installed by hand on the source but automatic on the target is not protected from collateral removal.** The target's apt owns what it installed.
-- **Machine-specific marks are not consulted when protecting against collateral.**
-- **Enabling apt sync without the job for irreproducible software** leaves hand-installed `.deb` packages replicated by nobody.
+- **A pin cannot be kept on one machine only.** It is asked about every run until source and target have the same pin.
 - **Version drift and origin divergence are reported, never resolved**, for apt and flatpak.
 - **Hand-installed software is never removed from the target.**
 - **A target with no Ubuntu Pro attachment costs the whole apt job for that run.**
@@ -299,16 +298,4 @@ A read that does not answer is different. If a package manager cannot be queried
 
 ## Open questions
 
-Should a failed package-manager read fail only its own job, or stop the whole sync? Today it stops the sync, which contradicts the rule that one job's failure does not stop the others.
-
-Should the ordering rule — software before folder sync — cover snippet-installed software too? It covers the three package managers today.
-
-Should apt's and flatpak's repository-conflict questions cover the same set? apt asks about every differing repository file feeding machine-specific software; flatpak asks only about remotes something approved this run would touch anyway.
-
-How many answers should apt's own configuration offer? It currently carries the full three-way decision, which was reasoned but never ruled on.
-
-Should deleting a repository ever be markable machine-specific? Today it is not, with consolidating the two machines' configurations as the remedy.
-
-How much does the Ubuntu Pro hazard cost on a real desktop? Measured in a container, zero of thirteen upgradable packages had an ESM candidate. A real desktop has not been measured.
-
-How often is a package manually installed on the source and automatic on the target — the case the collateral protection gives up? Nobody has counted.
+None. Every question this review raised has been ruled on. Where a ruling is not yet implemented, the [conformance criteria](package-sync-conformance-criteria.md) name it in their gap register.

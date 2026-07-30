@@ -999,6 +999,34 @@ def build_orphaned_packages_detail(source_filename: str, packages: Sequence[str]
     )
 
 
+def build_esm_gate_message(esm_files: Sequence[str], machines: Machines, job_name: str) -> str:
+    """The ESM gate's question (D-38): what would break, how to fix it, what skipping costs.
+
+    The remedy is spelled out because this is the one gate whose "proceed" answer asks the
+    user to go and DO something on the other machine first, and a question they cannot act
+    on has only one answer. The two commands are Ubuntu's, not this tool's, so the tutorial
+    link carries the weight: if the attach flow changes under us the link still lands on the
+    current procedure, and the stale commands beside it are recognisably a summary of it.
+
+    A module-level builder, not an f-string in the gate, so `tests/manual/review_harness.py`
+    rehearses the text a real run shows rather than a paraphrase that drifts from it.
+    """
+    named = ", ".join(esm_files)
+    return (
+        f"{machines.source} carries {named}, which this sync would copy to {machines.target} — but "
+        f"{machines.target} is not attached to Ubuntu Pro.\n\n"
+        f"The ESM package lists are public, so apt on {machines.target} would refresh cleanly and start "
+        "preferring the ESM versions. The next thing you install there that ESM covers would then fail to "
+        "download with 401 Unauthorized.\n\n"
+        f"To attach {machines.target}, run there:\n"
+        "    sudo pro attach <token from https://ubuntu.com/pro/dashboard>\n"
+        "    sudo pro enable esm-apps esm-infra\n"
+        "Full instructions: https://documentation.ubuntu.com/pro/attach-tutorial/\n\n"
+        f"Skipping means {job_name} does nothing at all this run and {machines.target}'s /etc/apt is left "
+        "exactly as it is. Every other job still runs."
+    )
+
+
 def _package_name(item_id: str) -> str:
     if not item_id.startswith(_APT_PACKAGE_ID_PREFIX):
         raise ValueError(f"Not an apt package item id: {item_id!r}")
@@ -2256,19 +2284,8 @@ class AptSyncJob(PackageSyncJob):
             f"{self.manager_id} sync has no reviewer; the orchestrator must inject one "
             "through JobContext.reviewer before plan()."
         )
-        source, target = self.machines.source, self.machines.target
-        message = (
-            f"{source} carries {named}, which this sync would copy to {target} — but {target} is not attached "
-            "to Ubuntu Pro.\n\n"
-            f"The ESM package lists are public, so apt on {target} would refresh cleanly and start preferring the "
-            f"ESM versions. The next thing you install there that ESM covers would then fail to download with "
-            "401 Unauthorized.\n\n"
-            f"To attach {target}, run there:\n"
-            "    sudo pro attach <token from https://ubuntu.com/pro/dashboard>\n"
-            "    sudo pro enable esm-apps esm-infra\n\n"
-            f"Skipping means {self.name} does nothing at all this run and {target}'s /etc/apt is left exactly as "
-            "it is. Every other job still runs."
-        )
+        target = self.machines.target
+        message = build_esm_gate_message(esm_files, self.machines, self.name)
         while True:
             answer = await self.context.reviewer.ask_gate(
                 title=f"{target} needs an Ubuntu Pro attachment",
