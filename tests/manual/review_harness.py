@@ -178,7 +178,8 @@ GROUPS = [
     ReviewGroup(
         "apt",
         COLLATERAL_REVIEW_ACTION,
-        f"Packages you installed yourself on {TARGET_HOST} that this sync would remove or downgrade (apt)",
+        f"Packages you installed on {TARGET_HOST} or marked as its own that this sync would remove, downgrade "
+        "or upgrade (apt)",
         [
             ReviewEntry(
                 "apt:collateral:fortunes",

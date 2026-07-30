@@ -680,6 +680,21 @@ class TestTheReasonNamesTheGroundThatApplies:
         )
 
     @pytest.mark.asyncio
+    async def test_the_group_title_names_both_grounds(self) -> None:
+        """One group can hold packages protected on either ground, so the title cannot name
+        one of them.
+        """
+        context, _source, _target = self._marked_context("")
+
+        plan = await AptSyncJob(context).plan()
+
+        group = next(g for g in plan.groups if g.action == COLLATERAL_REVIEW_ACTION)
+        assert group.title == (
+            "Packages you installed on target-host or marked as its own that this sync would remove, "
+            "downgrade or upgrade (apt)"
+        )
+
+    @pytest.mark.asyncio
     async def test_a_package_both_grounds_cover_states_both(self) -> None:
         context, _source, _target = self._marked_context("vendor-tool\n")
 

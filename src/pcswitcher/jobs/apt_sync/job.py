@@ -559,9 +559,13 @@ class AptSyncJob(PackageSyncJob):
                 ReviewGroup(
                     manager=self.manager_id,
                     action=COLLATERAL_REVIEW_ACTION,
+                    # Both of `Collateral.protected`'s grounds, because one group can hold
+                    # both: a package a mark alone protects is not one the user installed
+                    # there. Which ground holds for a given entry is its own detail line
+                    # (`Collateral._reason`).
                     title=(
-                        f"Packages you installed yourself on {self.machines.target} that this sync would "
-                        f"remove or downgrade ({self.manager_id})"
+                        f"Packages you installed on {self.machines.target} or marked as its own that this sync "
+                        f"would remove, downgrade or upgrade ({self.manager_id})"
                     ),
                     entries=tuple(
                         ReviewEntry(
