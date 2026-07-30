@@ -62,5 +62,5 @@ All of these are in the criteria's gap register and in `02-DIVERGENCES.md`. They
 
 ## Next
 
-1. The Stage 5 article audit: all 123 articles re-read against the narrative's vocabulary. It was parked until the narrative settled, which it now has.
-2. The implementation backlog — twelve rulings the code does not implement, one of them a bug (DIV-12). That is a planning input, not review work.
+1. ~~The Stage 5 article audit~~ — done 2026-07-30, ten vocabulary findings, recorded in `02-DIVERGENCES.md`. No article failed to be statable in the narrative's vocabulary.
+2. The implementation backlog — fourteen rulings the code does not implement, one of them a bug (DIV-12); the two logging articles were verified and failed (DIV-14). That is a planning input, not review work.

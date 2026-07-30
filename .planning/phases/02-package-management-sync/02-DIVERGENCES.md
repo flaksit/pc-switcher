@@ -95,9 +95,11 @@ An apt hold blocks install, upgrade and removal alike — measured on `ubuntu:24
 
 **Still unruled:** the same package held on *both* machines at different versions. `PKG-FR-APT-HELD-TARGET` suppresses any package-level item for a held target package, and a hold present on both sides produces no hold item either, so that divergence is currently invisible in every run. Converging it would mean unhold → install the source's version → re-hold, which is a larger change than the install case.
 
-## Ambiguity flagged for the Stage 5 article audit
+## Ambiguity flagged for the Stage 5 article audit — done 2026-07-30
 
-`PKG-FR-MACHINE-SPECIFIC` says the item is "never to be offered again on that machine. The mark MUST be local to that machine" with no antecedent for either "that machine". The rule the code implements is the holder rule (`sync_core.py:213-223`): install and change diffs record on the source, removal diffs on the target, written through that machine's own executor. The article is unstatable without a name for the holding machine, which the narrative's vocabulary section introduces. Full audit of all 124 articles against that vocabulary follows once the narrative is approved.
+`PKG-FR-MACHINE-SPECIFIC` says the item is "never to be offered again on that machine. The mark MUST be local to that machine" with no antecedent for either "that machine". The rule the code implements is the holder rule (`sync_core.py:213-223`): install and change diffs record on the source, removal diffs on the target, written through that machine's own executor. The article was unstatable without a name for the holding machine, which the narrative's vocabulary section now introduces; the article uses the term and drops its inline gloss.
+
+The full audit ran over all 123 articles on 2026-07-30. Ten findings, all in the criteria and all vocabulary rather than substance: `rehearsal` for the narrative's *dry run*; `provenance` for *origin*, which the criteria itself contradicted by saying *origin divergence* elsewhere; `prompts` and `a screen` for what the user is asked; `Skip-once` for the narrative's decision words; `blocks` as a collective noun the narrative never defines; `in either direction` on the banned list; two articles carrying two Why lines that said the same thing twice; and `PKG-FR-ASK-WHEN-NOT-DERIVABLE` claiming to enumerate every non-derivable question while omitting four of them. No article was found that could not be stated in the narrative's vocabulary once reworded.
 
 ## DIV-11 — A filtered remote is replicated unfiltered
 

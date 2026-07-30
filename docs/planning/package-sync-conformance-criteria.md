@@ -4,7 +4,7 @@ The intent stated in [Package sync — user requirements](package-sync-user-requ
 
 Read that document first. It says what package sync is for and why it behaves as it does, which is what makes these articles cohere; this one is a checklist and is not meant to be read end to end.
 
-Requirement ids are `PKG-FR-*` for obligations and `PKG-NG-*` for non-goals — outcomes the system is required not to attempt. MUST, MUST NOT, SHOULD and MAY carry their usual normative force. How an obligation is met — which command reads what, which file holds it, what a screen says — is not specified here; that is the specification's job.
+Requirement ids are `PKG-FR-*` for obligations and `PKG-NG-*` for non-goals — outcomes the system is required not to attempt. MUST, MUST NOT, SHOULD and MAY carry their usual normative force. How an obligation is met — which command reads what, which file holds it, how a question is worded — is not specified here; that is the specification's job.
 
 ## Navigation
 
@@ -28,8 +28,7 @@ The package jobs — `apt_sync`, `snap_sync`, `flatpak_sync`, `manual_installs_s
   Why: enabling one authorises the system to install and remove software on the target.
 - **PKG-FR-JOB-INDEPENDENCE**: Each job MUST be enableable, reviewable and failable on its own. Enabling one MUST NOT enable another, and no job's behaviour may depend on whether another is enabled.
 - **PKG-FR-JOB-ORDER**: All four package jobs — the three package managers and the job for software none of them can reproduce — MUST run before `folder_sync`, and the system MUST refuse to start when they are ordered otherwise.
-  Why: software installed by a snippet writes its own stock defaults exactly as a package does, so it needs to land before the user's synced settings go on top.
-  Why: software must exist before data lands on top of it, or an installer's stock defaults overwrite synced configuration.
+  Why: software must exist before data lands on top of it, or an installer's stock defaults overwrite the synced configuration. Software installed by a snippet writes those defaults exactly as a package does.
 - **PKG-FR-APT-SCOPE**: `apt_sync` MUST cover the manually-installed apt package set, the repositories and pins that govern where those packages come from, apt's own behavioural configuration, and apt holds. Packages apt installed automatically to satisfy dependencies MUST NOT be items.
 - **PKG-FR-SNAP-SCOPE**: `snap_sync` MUST cover installed snaps with their revision, tracking channel, confinement mode and per-snap refresh holds.
 - **PKG-FR-FLATPAK-SCOPE**: `flatpak_sync` MUST cover installed flatpak applications per flatpak installation scope, the remotes those applications need, and mask patterns per scope.
@@ -48,7 +47,7 @@ Decomposes [The model](package-sync-user-requirements.md#the-model).
   Why: `gh` from a project's own repository and `gh` from the distribution archive are one name and two different pieces of software.
 - **PKG-FR-DISTRO-ORIGIN**: All origins a machine's distribution source files declare MUST count as one origin, computed per machine.
   Why: two machines on different mirrors are not two different origins and must not disagree about every package.
-- **PKG-FR-SNAP-IDENTITY**: A snap MUST be identified by name alone, and the system MUST NOT ask the user anything about snap provenance.
+- **PKG-FR-SNAP-IDENTITY**: A snap MUST be identified by name alone, and the system MUST NOT ask the user anything about where a snap comes from.
   Why: one store, and a name resolves to one publisher through an assertion snapd validates itself, so no second build of a name exists to install by mistake.
 - **PKG-FR-FLATPAK-IDENTITY**: A flatpak application MUST be identified by its installation scope and its full reference including branch. The same application in two scopes, or on two branches, MUST be treated as two independent items — one install and one removal — and the system MUST NOT normalise the difference away.
   Why: two branches of one application can be installed side by side, and the two scopes are configured separately.
@@ -56,7 +55,7 @@ Decomposes [The model](package-sync-user-requirements.md#the-model).
 - **PKG-FR-VERSION-FLOAT**: For apt and flatpak the system MUST install by name and accept whatever the target's own repositories offer. A version difference MUST be reported and MUST NOT be forced, upgraded or downgraded.
 - **PKG-FR-SNAP-REVISION**: For snap the system MUST converge the target to the source's exact revision and tracking channel.
   Why: snap keeps per-user data in revision-numbered directories, so `folder_sync` is only correct when both machines are on the same revision.
-- **PKG-FR-BLOCKS-REPLICATE**: Blocks the user set by hand — apt holds, snap refresh holds, flatpak masks — MUST replicate, each as an item decided separately from the software it applies to.
+- **PKG-FR-BLOCKS-REPLICATE**: An apt hold, a snap refresh hold and a flatpak mask MUST each replicate as an item decided separately from the software it applies to.
 
 ## Consent
 
@@ -64,21 +63,21 @@ Decomposes [The model](package-sync-user-requirements.md#the-model); the review 
 
 - **PKG-FR-REVIEW-FIRST**: A job MUST NOT modify the target before the user has approved the changes that job proposes.
 - **PKG-FR-ONLY-APPROVED**: A job MUST apply only what the user approved.
-- **PKG-FR-BATCHED**: A job's questions SHOULD be gathered into as few reviews as the decisions allow, and where the same kind of decision recurs the items MUST be presented together and be settleable in a single pass rather than as a sequence of per-item prompts.
+- **PKG-FR-BATCHED**: A job's questions SHOULD be gathered into as few reviews as the decisions allow, and where the same kind of decision recurs the items MUST be presented together and be settleable in a single pass rather than as a sequence of one-item questions.
   Why: asking about each package separately would interrupt the user constantly, which is the whole reason the review exists.
 - **PKG-FR-ASK-AGAIN**: A job MAY ask again, including after it has begun changing the target, where the answer it needs rests on facts this run's own changes invalidated or that could not be established before the first change.
   Why: correctness outranks batching, and some things are knowable only once an action has landed. What this permits is a second question, never a queue of them.
 - **PKG-FR-CONSENT-BEFORE-CHANGE**: Every consent a job needs for a change MUST be obtained before that change is made.
 - **PKG-FR-ASK-ABOUT-SOFTWARE**: The user MUST be asked about software, and MUST NOT be asked separately about machinery whose necessity follows from an approved package: the repository a package comes from, the key that makes that repository trusted, the pin that makes that origin's build win, the remote a flatpak application is installed from.
   Why: the test is derivability. Approving the package answers the question; asking it separately would ask for an answer the user cannot give independently of the package, and the pairing was never expressible — a repository approved without its package does nothing, a package approved without its repository cannot be installed.
-- **PKG-FR-ASK-WHEN-NOT-DERIVABLE**: Where the answer does not follow from any approved package, the system MUST ask. The questions this requires are each specified below: apt's own behavioural configuration (`PKG-FR-APTCONF`), an unattached Ubuntu Pro target (`PKG-FR-ESM-GATE`), collateral damage to software the user installed by hand on the target (`PKG-FR-COLLATERAL-MANUAL`), and repointing an origin that machine-specific software depends on (`PKG-FR-REPO-CONFLICT`, `PKG-FR-FLATPAK-REPOINT`).
-- **PKG-FR-NAME-THE-MACHINES**: Everything the user reads while deciding — titles, item details, warnings, prompts and their answers — MUST identify each machine by its hostname. "Source" and "target" MUST NOT appear in any of it.
+- **PKG-FR-ASK-WHEN-NOT-DERIVABLE**: Where the answer does not follow from any approved package, the system MUST ask. Every question this requires is specified below: apt's own behavioural configuration (`PKG-FR-APTCONF`), an unattached Ubuntu Pro target (`PKG-FR-ESM-GATE`), collateral damage to software installed by hand on the target (`PKG-FR-COLLATERAL-MANUAL`), repointing an origin that machine-specific software depends on (`PKG-FR-REPO-CONFLICT`, `PKG-FR-FLATPAK-REPOINT`), deleting a repository or a pin the source does not have (`PKG-FR-REPO-DELETE`, `PKG-FR-PIN-DELETE`), a snippet registry transfer that would lose an entry (`PKG-FR-REGISTRY-CONSENT`), and how to reproduce software no manager can (`PKG-FR-MANUAL-RESOLUTION`).
+- **PKG-FR-NAME-THE-MACHINES**: Everything the user reads while deciding — titles, item details, warnings, questions and their answers — MUST identify each machine by its hostname. "Source" and "target" MUST NOT appear in any of it.
   Why: source and target are roles this run assigns, not names of the user's computers. A line saying "the target loses this package" makes the reader work out which machine that is before they can answer, and the whole point of the question is which of their two machines is affected.
 - **PKG-FR-EFFECT-NOT-MECHANISM**: Every answer offered MUST state its own effect on a named machine rather than the mechanism that produces it, and every question MUST state what the change would do before it is answered.
   Why: the user is deciding about their machines, not operating the tool's internals. An answer labelled with the name of an internal concept asks them to translate before they can choose.
 - **PKG-FR-REMOVAL-DISTINCT**: Approving the removal of software MUST require a gesture distinct from approving installs, MUST NOT be the default, and MUST be presented so that the user is told the approval deletes something.
 - **PKG-FR-SKIP-ONCE**: The user MUST be able to decline any reviewed item for the current run only. Nothing MUST be recorded, and the item MUST be offered again on the next sync.
-- **PKG-FR-MACHINE-SPECIFIC**: The user MUST be able to mark a reviewed item as specific to one machine. A marked item MUST NOT be synced to any other machine, MUST NOT be removed or overwritten by a sync from any other machine, and MUST NOT be proposed in any later review: it is protected from every action the tool takes of its own accord. Where an approved change would touch it regardless, the user MUST be asked (`PKG-FR-COLLATERAL-MARKED`). The mark MUST be recorded on the machine that HOLDS the item — the machine that has the software the decision is about, which for a removal is the target and for an install or a change is the source — and MUST NOT be synced.
+- **PKG-FR-MACHINE-SPECIFIC**: The user MUST be able to mark a reviewed item as specific to one machine. A marked item MUST NOT be synced to any other machine, MUST NOT be removed or overwritten by a sync from any other machine, and MUST NOT be proposed in any later review: it is protected from every action the tool takes of its own accord. Where an approved change would touch it regardless, the user MUST be asked (`PKG-FR-COLLATERAL-MARKED`). The mark MUST be recorded on the HOLDING MACHINE and MUST NOT be synced.
   Why: the holding machine is the one whose state the mark describes, and it is frequently not the machine the sync was launched from. Recording it anywhere else would leave the mark on a machine the item is not on.
 - **PKG-FR-NO-MARK-ON-ORIGIN**: An apt repository and an apt pin MUST NOT be markable machine-specific, whether they are being deleted or overwritten. Declining either MUST record nothing. A flatpak remote is never a review item (`PKG-FR-FLATPAK-REMOTE-DELETE`), so there is nothing to mark.
   Why: a mark would silence a real disagreement between the two machines about where software comes from, permanently and without further mention. Leaving them unmarkable makes that disagreement surface on every run until the user aligns the two machines.
@@ -120,7 +119,7 @@ Decomposes [apt / Removing a package](package-sync-user-requirements.md#removing
 - **PKG-FR-APT-REMOVE**: A package on the target that the source does not have MUST be offered for removal. Approval MUST remove the package without purging its configuration.
 - **PKG-FR-APT-SAME**: A package present on both machines at the same version from the same origin MUST produce no item.
 - **PKG-FR-APT-VERSION-DIFF**: A version difference MUST be reported with both versions named and MUST NOT be acted on.
-- **PKG-FR-APT-ORIGIN-DIFF**: The same package installed from different origins on the two machines MUST be reported as a provenance divergence naming both origins, MUST NOT be converged, and MUST take precedence over any version difference on that package. It MUST NOT be raised for a mirror difference.
+- **PKG-FR-APT-ORIGIN-DIFF**: The same package installed from different origins on the two machines MUST be reported as an origin divergence naming both origins, MUST NOT be converged, and MUST take precedence over any version difference on that package. It MUST NOT be raised for a mirror difference.
   Why: converging it would mean a reinstall from the other origin that the user did not ask for, and builds from two different origins share no version scale.
 
 ### Holds
@@ -187,7 +186,7 @@ Decomposes [apt / Ubuntu Pro](package-sync-user-requirements.md#esm-repositories
 - **PKG-FR-ESM-SKIP-WHOLE-JOB**: Skipping MUST leave the target's apt configuration exactly as it was found, and MUST skip the whole apt job rather than only the ESM repositories.
   Why: pins are always synced (`PKG-FR-PIN-ALWAYS`), so the source's ESM pins would reach a target without the sources they name, leaving a candidate selection matching neither machine. An untouched configuration is a state the user can reason about.
 - **PKG-FR-ESM-NO-ASK**: A non-interactive run MUST take the skip and MUST say why. A dry run MUST NOT ask, and MUST warn that a real run would skip the apt job.
-  Why: a rehearsal must not send the user off to attach a machine.
+  Why: a dry run must not send the user off to attach a machine.
 - **PKG-FR-ESM-PRIVACY**: Only whether the target is attached may be logged or shown. Nothing else the attachment check learns, including the subscriber's identity, may leave it.
 
 ### Applying
@@ -208,8 +207,7 @@ Decomposes [snap](package-sync-user-requirements.md#snap).
 - **PKG-FR-SNAP-CONFINEMENT**: A snap's confinement mode MUST be captured on the source and replicated with the install.
 - **PKG-FR-SNAP-REMOVE-SNAPSHOT**: Removing a snap MUST leave snapd's own pre-removal snapshot in place.
 - **PKG-FR-SNAP-SIDELOAD**: Sideloaded snaps are out of scope (#221) and MUST be ignored on both machines: never installed, never removed, never offered as an item, and never the subject of a hold item. A run MUST name the ones it found so the user knows they are unmanaged, and MUST do nothing else about them.
-  Why: a snap the tool cannot reinstall must not be one it offers to delete. Handling half of the case, and later handling the other half from a different job, is worse than leaving it alone until the whole case is designed.
-  Why: no store can serve such a revision and nothing carries the file between machines.
+  Why: no store can serve such a revision and nothing carries the file between machines, so a snap the tool cannot reinstall must not be one it offers to delete. Handling half of the case, and later handling the other half from a different job, is worse than leaving it alone until the whole case is designed.
 - **PKG-FR-SNAP-FAIL-ITEM**: A snap whose revision the target cannot fetch MUST fail as its own item, and the rest of the run MUST continue.
 - **PKG-FR-SNAP-HOLD**: A snap refresh hold MUST be an item of its own, both when it is added and when it is removed. A hold recorded for a snap the source no longer has MUST produce no item, and no command a sync issues may set a standing hold as a side effect.
 - **PKG-FR-SNAP-REFRESH-PAUSE**: Automatic snap refreshes MUST be suspended on both machines for the duration of a run and MUST NOT interfere with the run's own revision convergence. Each machine's prior refresh policy MUST be restored afterwards, including an indefinite hold the user set. Where the prior policy cannot be read on a machine, that machine's policy MUST be left untouched.
@@ -234,7 +232,7 @@ Decomposes [flatpak](package-sync-user-requirements.md#flatpak).
 - **PKG-FR-FLATPAK-INSTALL-ORIGIN**: An application MUST be installed from the source's remote or not at all, and the source's remote MUST be identified by its URL and verification setting rather than its name. The system MUST verify this against the target's own state before the install and MUST verify the landed origin after it; either failure MUST fail that application alone, naming both URLs.
   Why: two remotes can share a name and serve different builds of the same application, with success reported either way, and re-adding an existing remote name succeeds without changing where it points — so neither a matching name nor a successful add is evidence.
 - **PKG-FR-FLATPAK-MISSING-REMOTE**: An application whose origin remote exists neither on the target nor among this run's own additions MUST be refused as its own item naming the missing remote.
-- **PKG-FR-FLATPAK-ORIGIN-DIFF**: The same application, scope and branch installed from different remotes on the two machines MUST be reported as a provenance divergence naming both remotes and both URLs, MUST NOT be converged, and MUST take precedence over a version difference on that application. Origins MUST be compared by URL, never by remote name.
+- **PKG-FR-FLATPAK-ORIGIN-DIFF**: The same application, scope and branch installed from different remotes on the two machines MUST be reported as an origin divergence naming both remotes and both URLs, MUST NOT be converged, and MUST take precedence over a version difference on that application. Origins MUST be compared by URL, never by remote name.
   Why: flatpak refuses to install a reference already installed from another remote, so the only mechanical convergence would be uninstalling what the user has and reinstalling it from the other origin.
 - **PKG-FR-FLATPAK-REMOTE-FAILURE**: A remote that cannot be provisioned has no item of its own to fail; the failure MUST land on every application that needed it, naming the remote and quoting flatpak's own error.
 - **PKG-FR-FLATPAK-FILTER**: A remote the source restricts with a filter MUST be replicated with that filter. The filter file MUST be copied byte-for-byte from the source to the same absolute path on the target and re-applied to the replicated remote. It is derived like a signing key and MUST NOT be a review item. It MUST be applied after the approved applications from that remote have landed. A filter that cannot be copied or re-applied MUST fail every approved application from that remote, naming the remote and the path.
@@ -248,7 +246,7 @@ Decomposes [flatpak](package-sync-user-requirements.md#flatpak).
 
 Decomposes [Software no manager can reproduce](package-sync-user-requirements.md#software-no-manager-can-reproduce).
 
-- **PKG-FR-MANUAL-RESOLUTION**: Every detected item MUST end the run in one of exactly three states: reproducible by an install snippet, marked machine-specific, or skipped for this run. Skip-once MUST count as a resolution, not as an unresolved state.
+- **PKG-FR-MANUAL-RESOLUTION**: Every detected item MUST end the run in one of exactly three states: reproducible by an install snippet, marked machine-specific, or skipped for this run. Skipping for this run MUST count as a resolution, not as an unresolved state.
 - **PKG-FR-MANUAL-SOURCE-DECIDES**: Whether an item is reproducible MUST be decided by what the source holds. An item with a snippet only on the target MUST still be treated as unresolved.
 - **PKG-FR-MANUAL-SAME-RUN**: A snippet authored during a review MUST be persisted, transferred and replayed in the same run.
 - **PKG-FR-SNIPPET-VERBATIM**: A snippet MUST be stored and replayed exactly as written. The system MUST NOT parse, interpret or reason about it. It MUST run as the target user with no privilege added around it, and MUST run without standing input so that a command expecting input fails rather than hanging the sync. An empty snippet MUST NOT be accepted as a resolution.
@@ -258,15 +256,15 @@ Decomposes [Software no manager can reproduce](package-sync-user-requirements.md
   Why: aborting lets the user consolidate the two registries by hand; the alternative silently drops the target's snippets.
 - **PKG-FR-MANUAL-FAIL-ITEM**: A snippet that has vanished between planning and replay, or whose replay fails, MUST fail as its own item naming the item, and the run MUST continue.
 
-## Reporting, failure and rehearsal
+## Reporting, failure and the dry run
 
-Decomposes [When something goes wrong](package-sync-user-requirements.md#when-something-goes-wrong) and the rehearsal and no-terminal paragraphs of [What happens during a sync](package-sync-user-requirements.md#what-happens-during-a-sync).
+Decomposes [When something goes wrong](package-sync-user-requirements.md#when-something-goes-wrong) and the dry-run and no-terminal paragraphs of [What happens during a sync](package-sync-user-requirements.md#what-happens-during-a-sync).
 
 - **PKG-FR-OUTCOME-SUCCESS**: A job MUST report success when it did what its review approved, including when its review was empty because the target already matches.
 - **PKG-FR-OUTCOME-SKIPPED**: A job that deliberately did nothing MUST report skipped rather than success, MUST say why, MUST record no decision, MUST transfer no registry and MUST leave the target untouched. The run MUST continue and the exit code MUST be unaffected.
 - **PKG-FR-OUTCOME-FAILED**: A job MUST report failure when at least one approved item could not be applied. Every approved item MUST be attempted, failures MUST be collected and reported together naming each item, one failed item MUST NOT block the rest of its job, and one failed job MUST NOT stop the others.
 - **PKG-FR-NO-TERMINAL**: A non-interactive run — one with no interactive terminal — MUST ask nothing, MUST treat every reviewable item as declined for this run, and MUST report every package job with a non-empty review as skipped. Nothing may be recorded, no snippet written and no registry transferred.
-- **PKG-FR-DRY-RUN**: A rehearsal MUST produce the same plan and the same review as a real run and MUST issue no command that changes either machine. The preview MUST include the derived changes that have no review line of their own. A rehearsal on a terminal MUST report success; without one it MUST report skipped, for the same reason a real run does.
+- **PKG-FR-DRY-RUN**: A dry run MUST produce the same plan and the same review as a real run and MUST issue no command that changes either machine. The preview MUST include the derived changes that have no review line of their own. A dry run on a terminal MUST report success; without one it MUST report skipped, for the same reason a real run does.
 - **PKG-FR-READ-FAILS-JOB**: A package manager that cannot be queried at all MUST fail its own job, naming the command that did not answer, and MUST NOT stop the run's other jobs. Its silence MUST NOT be read as an empty installed set. An empty answer is ordinary data.
   Why: reading silence as "this machine has nothing installed" would propose removing everything the other machine has.
 - **PKG-FR-LOG-DECISIONS**: A run's log MUST name every item a job presented together with the decision it received, and every change a package manager made on its own behalf that no review showed.
@@ -317,7 +315,7 @@ Requirements the shipped code knowingly does not satisfy are recorded here, veri
 
 ## Traceability
 
-Every article above decomposes exactly one section of [Package sync — user requirements](package-sync-user-requirements.md). 123 articles, no orphans in either direction. A new article needs a home here; a narrative section with no articles is either intentionally non-normative or a coverage gap.
+Every article above decomposes exactly one section of [Package sync — user requirements](package-sync-user-requirements.md). 123 articles, no orphans on either side. A new article needs a home here; a narrative section with no articles is either intentionally non-normative or a coverage gap.
 
 | User-requirements section | Articles | |
 | - | - | - |
