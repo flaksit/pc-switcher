@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "67606051943b",
+  "strategy": "manual-commit",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".planning/phases/02-package-management-sync/02-DIVERGENCES.md",
+    ".planning/phases/02-package-management-sync/02-HANDOVER-requirements-review.md",
+    "docs/planning/package-sync-conformance-criteria.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/67/606051943b/0/metadata.json",
+      "transcript": "/67/606051943b/0/full.jsonl",
+      "compact_transcript": "/67/606051943b/0/transcript.jsonl",
+      "content_hash": "/67/606051943b/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 16,
+    "cache_creation_tokens": 18859,
+    "cache_read_tokens": 2274162,
+    "output_tokens": 11971,
+    "api_call_count": 8
+  }
+}
