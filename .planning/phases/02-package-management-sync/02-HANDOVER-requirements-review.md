@@ -63,13 +63,3 @@ All of these are in the criteria's gap register and in `02-DIVERGENCES.md`. They
 
 1. The Stage 5 article audit: all 122 articles re-read against the narrative's vocabulary. It was parked until the narrative settled, which it now has.
 2. The implementation backlog — eleven rulings the code does not implement, one of them a bug (DIV-12). That is a planning input, not review work.
-
-
-- snap and flatpak open by naming the shape every job shares and split into subsections. apt's *Removing, and reporting without acting* is two sections; *Decisions and their memory* gained a subtitle. Traceability rows follow all of it.
-- Six articles deleted as implementation detail or as claims that could not be substantiated: `PKG-FR-COLLATERAL-TIMING`, `PKG-FR-COLLATERAL-NEW-ORIGIN`, `PKG-FR-APT-HOLD-ORDER`, `PKG-NG-COLLATERAL-SOURCE-MANUAL`, `PKG-NG-COLLATERAL-MARKS`, `PKG-NG-DEB-ORPHANED`. `PKG-FR-APT-HELD-TARGET` was not deleted but re-mapped to *Holds*, since the narrative covers it there.
-- 122 articles now, down from 124.
-
-## Next
-
-1. The Stage 5 article audit: all 122 articles re-read against the narrative's vocabulary. It was parked until the narrative settled, which it now has.
-2. The implementation backlog — eleven rulings the code does not implement, one of them a bug (DIV-12). That is a planning input, not review work.
