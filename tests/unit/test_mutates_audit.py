@@ -159,6 +159,9 @@ _READ_ONLY_CALLS: dict[str, int] = {
     # The post-install origin read-back: the same `flatpak list` the capture uses, re-run on
     # the target so a ref's real provenance is checked rather than inferred (ADR-020 D-35).
     "jobs/flatpak_sync.py::FlatpakSyncJob._installed_origin_refusal::run_command": 1,
+    # What the target holds once the converge loop is done, which decides whether a remote
+    # the source lacks is still in use (`PKG-FR-FLATPAK-REMOTE-DELETE`).
+    "jobs/flatpak_sync.py::FlatpakSyncJob._target_refs_now::run_command": 1,
     "jobs/flatpak_sync.py::FlatpakSyncJob.validate::run_command": 3,
     # folder_sync: capability probes, and the per-directory filter-file digest manifest.
     "jobs/folder_sync.py::FolderSyncJob.validate::run_command": 8,

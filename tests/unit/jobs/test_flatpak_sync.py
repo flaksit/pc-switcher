@@ -1,6 +1,7 @@
 """Unit tests for FlatpakSyncJob: tab-separated `flatpak list`/`flatpak remotes`
-parsing, the flatpak-specific plan()/diff pipeline, scope-as-identity, remote-before-
-ref convergence ordering, and the missing-origin-remote skip guard.
+parsing, the flatpak-specific plan()/diff pipeline, scope-as-identity, the remotes derived
+around the converge loop — provisioned before it, filtered and deleted after it — and the
+missing-origin-remote skip guard.
 
 All executor interactions are mocked; no real flatpak commands run.
 """
@@ -25,14 +26,12 @@ from pcswitcher.jobs.flatpak_sync import (
     _parse_flatpak_masks,  # pyright: ignore[reportPrivateUsage]
     _parse_flatpak_remotes,  # pyright: ignore[reportPrivateUsage]
     _parse_keyring_digests,  # pyright: ignore[reportPrivateUsage]
-    build_orphaned_refs_detail,
     flatpak_sync_exclude_paths,
 )
-from pcswitcher.jobs.packages.items import DiffAction, DiffClass, ItemClass, ItemDiff, Machines
+from pcswitcher.jobs.packages.items import DiffAction, DiffClass, ItemClass, ItemDiff
 from pcswitcher.jobs.packages.probes import ProbeFailed
 from pcswitcher.jobs.packages.review import (
     REPO_CONFLICT_REVIEW_ACTION,
-    REPO_REMOVAL_REVIEW_ACTION,
     Decision,
     ReviewEntry,
     ReviewGroup,
@@ -68,7 +67,18 @@ FLATPAK_LIST_BOTH_SCOPES = (
     "org.example.App\t1.0\tflathub\tsystem\torg.example.App/x86_64/stable\n"
 )
 
-_FLATHUB_REMOTE_LINE = "flathub\thttps://dl.flathub.org/repo/\n"
+
+def remote_row(name: str, url: str, *, options: str = "", ref_filter: str = "-") -> str:
+    """One `flatpak remotes --columns=name,url,options,filter` line.
+
+    Four tab-separated fields always: an unfiltered remote prints `-` in the filter column
+    rather than nothing (measured, Flatpak 1.14.6), so requesting `filter` last is what makes
+    the width fixed.
+    """
+    return f"{name}\t{url}\t{options}\t{ref_filter}\n"
+
+
+_FLATHUB_REMOTE_LINE = remote_row("flathub", "https://dl.flathub.org/repo/")
 
 SOURCE_RESPONSES = {
     "flatpak list --app --columns=application,version,origin,installation,ref": CommandResult(
@@ -123,7 +133,9 @@ class FakeFlatpakTarget:
         *,
         remotes: dict[str, dict[str, str]] | None = None,
         refs: dict[tuple[str, str], str] | None = None,
+        runtimes: dict[tuple[str, str], str] | None = None,
         unverified: set[tuple[str, str]] | None = None,
+        filters: dict[tuple[str, str], str] | None = None,
         install_records_origin: str | None = None,
         install_lands: bool = True,
         responses: dict[str, CommandResult] | None = None,
@@ -131,10 +143,15 @@ class FakeFlatpakTarget:
         self.remotes: dict[str, dict[str, str]] = {"user": {}, "system": {}}
         for scope, entries in (remotes or {}).items():
             self.remotes[scope] = dict(entries)
-        # (scope, ref) -> origin remote name.
-        self.refs: dict[tuple[str, str], str] = dict(refs or {})
+        # (scope, ref) -> origin remote name. `runtimes` are refs the `--app` listing filters
+        # out and the columns-only one reports, which is the difference the remote-deletion
+        # count runs on.
+        self.refs: dict[tuple[str, str], str] = {**(refs or {}), **(runtimes or {})}
+        self.runtime_refs: frozenset[tuple[str, str]] = frozenset(runtimes or {})
         # (scope, name) pairs this target reports with the `no-gpg-verify` option.
         self.unverified: set[tuple[str, str]] = set(unverified or ())
+        # (scope, name) -> the path this target reports in the `filter` column.
+        self.filters: dict[tuple[str, str], str] = dict(filters or {})
         # What an `install` that exits 0 actually leaves behind. Both default to the honest
         # case; they exist so the post-install read-back has conditions to find, since the
         # whole point of that check is the outcomes an exit code cannot rule out.
@@ -146,7 +163,7 @@ class FakeFlatpakTarget:
         self.run_command = AsyncMock(side_effect=self._run)
         self.send_file = AsyncMock()
 
-    def _run(self, cmd: str, **kwargs: object) -> CommandResult:  # noqa: PLR0911
+    def _run(self, cmd: str, **kwargs: object) -> CommandResult:  # noqa: PLR0911, PLR0912
         for pattern, result in self._responses.items():
             if pattern in cmd:
                 return result
@@ -160,7 +177,12 @@ class FakeFlatpakTarget:
 
         if verb == "remotes":
             lines = "".join(
-                f"{name}\t{url}\tno-gpg-verify\n" if (scope, name) in self.unverified else f"{name}\t{url}\n"
+                remote_row(
+                    name,
+                    url,
+                    options="no-gpg-verify" if (scope, name) in self.unverified else "",
+                    ref_filter=self.filters.get((scope, name), "-"),
+                )
                 for name, url in sorted(self.remotes[scope].items())
             )
             return CommandResult(0, lines, "")
@@ -168,6 +190,7 @@ class FakeFlatpakTarget:
             lines = "".join(
                 f"{ref.split('/')[0]}\t1.0\t{origin}\t{ref_scope}\t{ref}\n"
                 for (ref_scope, ref), origin in sorted(self.refs.items())
+                if not ("--app" in cmd and (ref_scope, ref) in self.runtime_refs)
             )
             return CommandResult(0, lines, "")
         if verb == "remote-add":
@@ -176,12 +199,18 @@ class FakeFlatpakTarget:
             self._apply_verification(cmd, scope, name)
             return CommandResult(0, "", "")
         if verb == "remote-modify":
-            url = next(word for word in shlex.split(cmd) if word.startswith("--url=")).removeprefix("--url=")
+            words_with_flags = shlex.split(cmd)
+            ref_filter = next((w for w in words_with_flags if w.startswith("--filter=")), None)
+            if ref_filter is not None:
+                self.filters[(scope, positional[0])] = ref_filter.removeprefix("--filter=")
+                return CommandResult(0, "", "")
+            url = next(word for word in words_with_flags if word.startswith("--url=")).removeprefix("--url=")
             self.remotes[scope][positional[0]] = url
             self._apply_verification(cmd, scope, positional[0])
             return CommandResult(0, "", "")
         if verb == "remote-delete":
             _ = self.remotes[scope].pop(positional[0], None)
+            _ = self.filters.pop((scope, positional[0]), None)
             return CommandResult(0, "", "")
         if verb == "install":
             remote, ref = positional
@@ -370,11 +399,15 @@ class TestRefIdentityCarriesTheBranch:
         context, _source, _target = make_context(
             source_responses={
                 "flatpak list --app": CommandResult(0, _BETA_REF_LINE, ""),
-                "flatpak remotes --user": CommandResult(0, "flathub-beta\thttps://dl.flathub.org/beta-repo/\n", ""),
+                "flatpak remotes --user": CommandResult(
+                    0, remote_row("flathub-beta", "https://dl.flathub.org/beta-repo/"), ""
+                ),
             },
             target_responses={
                 "flatpak list --app": CommandResult(0, _STABLE_REF_LINE, ""),
-                "flatpak remotes --user": CommandResult(0, "flathub-beta\thttps://dl.flathub.org/beta-repo/\n", ""),
+                "flatpak remotes --user": CommandResult(
+                    0, remote_row("flathub-beta", "https://dl.flathub.org/beta-repo/"), ""
+                ),
             },
         )
         job = FlatpakSyncJob(context)
@@ -392,7 +425,9 @@ class TestRefIdentityCarriesTheBranch:
         context, _source, target = make_context(
             source_responses={
                 "flatpak list --app": CommandResult(0, _BETA_REF_LINE, ""),
-                "flatpak remotes --user": CommandResult(0, "flathub-beta\thttps://dl.flathub.org/beta-repo/\n", ""),
+                "flatpak remotes --user": CommandResult(
+                    0, remote_row("flathub-beta", "https://dl.flathub.org/beta-repo/"), ""
+                ),
             },
             fake_target=FakeFlatpakTarget(remotes={"user": {"flathub-beta": "https://dl.flathub.org/beta-repo/"}}),
         )
@@ -479,7 +514,7 @@ def _ref_line(ref: str, version: str, origin: str, scope: str) -> str:
 
 
 def _remote_lines(*remotes: tuple[str, str]) -> str:
-    return "".join(f"{name}\t{url}\n" for name, url in remotes)
+    return "".join(remote_row(name, url) for name, url in remotes)
 
 
 def origin_pair_context(
@@ -606,8 +641,6 @@ class TestRefOriginMismatch:
 
         plan = await job.plan()
 
-        # The target-only remote still earns its own REMOVE line; the REF is what must
-        # produce nothing.
         assert [d for d in plan.diffs if d.item_class is ItemClass.FLATPAK_REF] == []
 
     @pytest.mark.asyncio
@@ -623,9 +656,11 @@ class TestRefOriginMismatch:
         assert plan.diffs == ()
 
     @pytest.mark.asyncio
-    async def test_an_origin_naming_no_configured_remote_falls_back_to_the_name(self) -> None:
-        """A ref whose origin remote has since been deleted has no URL to compare. Equal
-        names then read as one vendor rather than manufacturing a mismatch from a lookup miss.
+    async def test_an_origin_naming_no_configured_remote_matches_nothing(self) -> None:
+        """A ref whose origin remote the machine no longer configures has no URL, and an
+        absent URL is a value of its own that matches nothing — not even the same name on the
+        other machine (`PKG-FR-FLATPAK-ORIGIN-DIFF`). Falling back to the name would call two
+        unresolvable origins one origin on no evidence at all.
         """
         context, _source, _target = origin_pair_context(
             source_origin="flathub",
@@ -637,11 +672,30 @@ class TestRefOriginMismatch:
 
         plan = await job.plan()
 
-        assert plan.diffs == ()
+        assert [d.diff_class for d in plan.diffs] == [DiffClass.ORIGIN_MISMATCH]
+
+    @pytest.mark.asyncio
+    async def test_a_side_with_no_url_says_so_rather_than_printing_a_bare_name(self) -> None:
+        """Both sides name `flathub`, so a detail that printed the names alone would report a
+        divergence and show two identical strings. The missing URL is the finding.
+        """
+        context, _source, _target = origin_pair_context(
+            source_origin="flathub",
+            target_origin="flathub",
+            source_remotes=(("flathub", _FLATHUB_URL),),
+            target_remotes=(),
+        )
+        job = FlatpakSyncJob(context)
+
+        plan = await job.plan()
+
+        detail = plan.diffs[0].detail
+        assert detail is not None
+        assert f"source-host installed it from flathub ({_FLATHUB_URL})" in detail
+        assert "target-host from flathub (no URL: the machine does not configure flathub)" in detail
 
     @pytest.mark.asyncio
     async def test_an_unresolvable_origin_with_a_different_name_is_still_reported(self) -> None:
-        """The name is all the evidence there is, and two different names are evidence."""
         context, _source, _target = origin_pair_context(
             source_origin="flathub",
             target_origin="flathub-beta",
@@ -653,10 +707,10 @@ class TestRefOriginMismatch:
         plan = await job.plan()
 
         assert [d.diff_class for d in plan.diffs] == [DiffClass.ORIGIN_MISMATCH]
-        # No URL is known for the target's side, so the detail names what there is and
-        # invents nothing.
         assert plan.diffs[0].detail is not None
-        assert plan.diffs[0].detail.endswith("target-host from flathub-beta")
+        assert plan.diffs[0].detail.endswith(
+            "target-host from flathub-beta (no URL: the machine does not configure flathub-beta)"
+        )
 
     @pytest.mark.asyncio
     async def test_the_mismatch_is_reported_and_never_converged(self) -> None:
@@ -718,7 +772,7 @@ _APP_ID = "flatpak:ref:user:org.example.App/x86_64/stable"
 
 def derivation_source(
     *,
-    remotes: str = f"flathub\t{_SRC_URL}\n",
+    remotes: str = remote_row("flathub", _SRC_URL),
     apps: str = _APP_LINE,
     system_remotes: str = "",
     all_refs: str | None = None,
@@ -779,7 +833,7 @@ class TestRemotesAreDerivedFromApprovedRefs:
     async def test_a_remote_no_approved_ref_needs_does_not_travel(self) -> None:
         context, _source, target = make_context(
             source_responses=derivation_source(
-                remotes=f"flathub\t{_SRC_URL}\nunused\thttps://unused.example.org/repo/\n"
+                remotes=remote_row("flathub", _SRC_URL) + remote_row("unused", "https://unused.example.org/repo/")
             ),
             fake_target=FakeFlatpakTarget(),
         )
@@ -826,7 +880,7 @@ class TestRemotesAreDerivedFromApprovedRefs:
     @pytest.mark.asyncio
     async def test_a_user_scope_ref_derives_only_the_user_scope_remote(self) -> None:
         context, _source, target = make_context(
-            source_responses=derivation_source(system_remotes=f"flathub\t{_SRC_URL}\n"),
+            source_responses=derivation_source(system_remotes=remote_row("flathub", _SRC_URL)),
             fake_target=FakeFlatpakTarget(),
         )
 
@@ -845,7 +899,9 @@ class TestRemotesAreDerivedFromApprovedRefs:
         """
         system_app = "org.example.Sys\t1.0\tflathub\tsystem\torg.example.Sys/x86_64/stable\n"
         context, _source, target = make_context(
-            source_responses=derivation_source(apps=_APP_LINE + system_app, system_remotes=f"flathub\t{_SRC_URL}\n"),
+            source_responses=derivation_source(
+                apps=_APP_LINE + system_app, system_remotes=remote_row("flathub", _SRC_URL)
+            ),
             fake_target=FakeFlatpakTarget(),
         )
 
@@ -865,7 +921,7 @@ class TestRemotesAreDerivedFromApprovedRefs:
         runtime_ref = "org.example.Platform/x86_64/49"
         context, _source, target = make_context(
             source_responses=derivation_source(
-                remotes=f"flathub\t{_SRC_URL}\nruntimes\thttps://runtimes.example.org/repo/\n",
+                remotes=remote_row("flathub", _SRC_URL) + remote_row("runtimes", "https://runtimes.example.org/repo/"),
                 all_refs=_APP_LINE + f"org.example.Platform\t49\truntimes\tuser\t{runtime_ref}\n",
                 runtime=f"{runtime_ref}\n",
             ),
@@ -886,7 +942,7 @@ class TestRemotesAreDerivedFromApprovedRefs:
         )
         context, _source, _target = make_context(
             source_responses=derivation_source(
-                remotes=f"flathub\t{_SRC_URL}\nsecond\thttps://second.example.org/repo/\n",
+                remotes=remote_row("flathub", _SRC_URL) + remote_row("second", "https://second.example.org/repo/"),
                 apps=_APP_LINE + second,
             ),
             fake_target=target,
@@ -1134,7 +1190,8 @@ class TestARepointThatMovesAMachineSpecificRefIsAsked:
         other = "org.example.App\t1.0\tother\tuser\torg.example.App/x86_64/stable\n"
         context, _source, target = make_context(
             source_responses=derivation_source(
-                apps=other, remotes=f"flathub\t{_SRC_URL}\nother\thttps://other.example.org/repo/\n"
+                apps=other,
+                remotes=remote_row("flathub", _SRC_URL) + remote_row("other", "https://other.example.org/repo/"),
             ),
             fake_target=conflict_target(),
         )
@@ -1280,29 +1337,46 @@ class TestRemoteTrustCapture:
     """
 
     def test_absent_options_column_means_a_verified_remote(self) -> None:
-        # A remote with no options prints two fields and NO trailing tab (verified live).
-        items = _parse_flatpak_remotes("flathub\thttps://dl.flathub.org/repo/\n", "user", {})
+        items = _parse_flatpak_remotes(remote_row("flathub", "https://dl.flathub.org/repo/"), "user", {})
 
         assert len(items) == 1
         assert items[0].gpg_verify is True
         assert items[0].key_digest is None
+        assert items[0].filter_path is None
+
+    def test_a_short_line_parses_as_a_remote_with_nothing_after_its_url(self) -> None:
+        """A trailing empty column is omitted rather than printed (verified live), so the
+        two- and three-field widths stay readable alongside the four-field one.
+        """
+        items = _parse_flatpak_remotes(
+            "flathub\thttps://dl.flathub.org/repo/\nmirror\thttps://example.org/repo/\tno-gpg-verify\n", "user", {}
+        )
+
+        assert [(item.name, item.gpg_verify, item.filter_path) for item in items] == [
+            ("flathub", True, None),
+            ("mirror", False, None),
+        ]
 
     def test_no_gpg_verify_token_marks_the_remote_unverified_and_keyless(self) -> None:
         items = _parse_flatpak_remotes(
-            "local\tfile:///srv/repo\tno-enumerate,no-gpg-verify\n", "user", {"local": _SOURCE_KEY_DIGEST}
+            remote_row("local", "file:///srv/repo", options="no-enumerate,no-gpg-verify"),
+            "user",
+            {"local": _SOURCE_KEY_DIGEST},
         )
 
         assert items[0].gpg_verify is False
         assert items[0].key_digest is None
 
     def test_other_options_do_not_read_as_no_gpg_verify(self) -> None:
-        items = _parse_flatpak_remotes("mirror\thttps://example.org/repo/\tno-enumerate\n", "user", {})
+        items = _parse_flatpak_remotes(
+            remote_row("mirror", "https://example.org/repo/", options="no-enumerate"), "user", {}
+        )
 
         assert items[0].gpg_verify is True
 
     def test_key_digest_joins_the_scope_map_by_remote_name(self) -> None:
         items = _parse_flatpak_remotes(
-            "flathub\thttps://dl.flathub.org/repo/\n", "system", {"flathub": _SOURCE_KEY_DIGEST}
+            remote_row("flathub", "https://dl.flathub.org/repo/"), "system", {"flathub": _SOURCE_KEY_DIGEST}
         )
 
         assert items[0].key_digest == _SOURCE_KEY_DIGEST
@@ -1637,9 +1711,9 @@ class TestRemoteTrustTravelsWithTheDerivedWrite:
         target.send_file.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_removal_transfers_nothing(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_deletion_transfers_nothing(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """`remote-delete` takes the per-remote keyring with it (verified live), so the
-        removal direction stages no key and needs no source lookup at all.
+        deletion pass stages no key and needs no source lookup at all.
         """
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         context, _source, target = make_context(
@@ -1647,11 +1721,8 @@ class TestRemoteTrustTravelsWithTheDerivedWrite:
             fake_target=FakeFlatpakTarget(remotes={"user": {"flathub": self._URL}}),
         )
         job = FlatpakSyncJob(context)
-        plan = await job.plan()
-        diff = next(d for d in plan.diffs if d.item_class == ItemClass.FLATPAK_REMOTE)
-        assert diff.action == DiffAction.REMOVE
 
-        await job.converge(diff)
+        await run_job(job)
 
         assert any("flatpak remote-delete --user flathub" in c for c in all_calls(target))
         target.send_file.assert_not_awaited()
@@ -2081,12 +2152,18 @@ class TestMaskEditsAndScopeMoves:
         replicated, because it encodes the user's intent about future installs.
         """
         installed = "org.gnome.Podcasts\t1.0\tflathub\tuser\torg.gnome.Podcasts/x86_64/stable\n"
+        # Both machines configure the ref's origin, so its origin resolves to one URL on both
+        # sides and the ref stays out of the way of what this asserts.
         context, _source, _target = make_context(
             source_responses={
                 "flatpak list --app": CommandResult(0, installed, ""),
+                "flatpak remotes --user": CommandResult(0, _FLATHUB_REMOTE_LINE, ""),
                 "flatpak --user mask": CommandResult(0, "  org.example.NeverInstalledAnywhere\n", ""),
             },
-            target_responses={"flatpak list --app": CommandResult(0, installed, "")},
+            target_responses={
+                "flatpak list --app": CommandResult(0, installed, ""),
+                "flatpak remotes --user": CommandResult(0, _FLATHUB_REMOTE_LINE, ""),
+            },
         )
         job = FlatpakSyncJob(context)
 
@@ -2146,7 +2223,7 @@ class TestMaskReviewVerbs:
                     0, "org.example.SourceOnly\t1.0\tflathub\tuser\torg.example.SourceOnly/x86_64/stable\n", ""
                 ),
                 "flatpak remotes --user --columns=name,url": CommandResult(
-                    0, _FLATHUB_REMOTE_LINE + "srcremote\thttps://src.example.org/repo/\n", ""
+                    0, _FLATHUB_REMOTE_LINE + remote_row("srcremote", "https://src.example.org/repo/"), ""
                 ),
                 "flatpak --user mask": CommandResult(0, "  org.example.MaskNew\n", ""),
             },
@@ -2155,7 +2232,7 @@ class TestMaskReviewVerbs:
                     0, "org.example.TargetOnly\t1.0\tflathub\tuser\torg.example.TargetOnly/x86_64/stable\n", ""
                 ),
                 "flatpak remotes --user --columns=name,url": CommandResult(
-                    0, _FLATHUB_REMOTE_LINE + "tgtremote\thttps://tgt.example.org/repo/\n", ""
+                    0, _FLATHUB_REMOTE_LINE + remote_row("tgtremote", "https://tgt.example.org/repo/"), ""
                 ),
                 "flatpak --user mask": CommandResult(0, "  org.example.MaskOld\n", ""),
             },
@@ -2187,12 +2264,11 @@ class TestMaskReviewVerbs:
         assert _is_removal_direction(group.action)
 
     @pytest.mark.asyncio
-    async def test_ref_and_remote_groups_keep_their_own_verbs_and_exclude_masks(self) -> None:
+    async def test_ref_groups_keep_their_own_verbs_and_exclude_masks(self) -> None:
         plan = await self._mixed_plan()
 
         ref_install = self._group_holding(plan, "flatpak:ref:user:org.example.SourceOnly/x86_64/stable")
         ref_remove = self._group_holding(plan, "flatpak:ref:user:org.example.TargetOnly/x86_64/stable")
-        remote_remove = self._group_holding(plan, "flatpak:remote:user:tgtremote")
 
         assert ref_install.title == "Install flatpak packages"
         assert ref_remove.title == "Remove flatpak packages"
@@ -2200,151 +2276,280 @@ class TestMaskReviewVerbs:
         # DiffAction verb — which is exactly the verb a mask must NOT inherit.
         assert {e.action_label for e in ref_install.entries} == {"install"}
         assert {e.action_label for e in ref_remove.entries} == {"remove"}
-        # The source-only remote is not offered anywhere: it feeds no ref approved this run.
-        assert not any(e.item_id == "flatpak:remote:user:srcremote" for g in plan.groups for e in g.entries)
-        # The target-only one is, on its own two-answer screen.
-        assert remote_remove.action == REPO_REMOVAL_REVIEW_ACTION
-        for group in (ref_install, ref_remove, remote_remove):
+        # Neither remote is offered anywhere: a remote is never a review item in any
+        # direction (`PKG-FR-FLATPAK-REMOTE-DELETE`).
+        assert not any(e.item_id.startswith("flatpak:remote:") for g in plan.groups for e in g.entries)
+        for group in (ref_install, ref_remove):
             assert not any(e.item_id.startswith("flatpak:mask:") for e in group.entries)
 
 
-class TestRemoteRemovalOrphansRefs:
-    """F21 (#214) — a remote offered for removal names the target refs it would orphan.
+class TestUnusedRemoteIsDeleted:
+    """`PKG-FR-FLATPAK-REMOTE-DELETE` — a remote the source does not have is deleted once
+    nothing on the target still uses it, and is a review item in no direction.
 
-    The removal itself is NOT guarded and is not meant to be: `_converge_remote`'s
-    REMOVE branch still issues `flatpak remote-delete` for any approved diff, because
-    deleting a remote whose refs are being removed in the same run is legitimate
-    cleanup. What plan() adds is disclosure — the REMOVE diff's `detail` names the
-    target-side refs whose origin the remote is, in that same scope, so the review
-    states the consequence before approval (D-30's placement, unlike the ref-INSTALL
-    direction's `_remote_ready_on_target` hard refusal). The ref below is installed
-    identically on both machines, so it produces no diff of its own and would otherwise
-    never appear in the review at all.
+    "Nothing still uses it" is counted after the converge loop against what the target
+    actually holds, so a ref installed identically on both machines keeps its remote even
+    though that ref produces no diff of its own and never appears in the review at all.
     """
 
-    _USER_REF_LINE = "org.example.NeedsRemote\t1.0\tcustomremote\tuser\torg.example.NeedsRemote/x86_64/stable\n"
-    _SYSTEM_REF_LINE = "org.example.SystemOnly\t1.0\tcustomremote\tsystem\torg.example.SystemOnly/x86_64/stable\n"
-    _CUSTOM_REMOTE_LINE = "customremote\thttps://custom.example.org/repo/\n"
+    _URL = "https://custom.example.org/repo/"
+    _USER_REF = "org.example.NeedsRemote/x86_64/stable"
+    _SYSTEM_REF = "org.example.SystemOnly/x86_64/stable"
 
-    def _responses(self) -> tuple[dict[str, CommandResult], dict[str, CommandResult]]:
-        """User-scope `customremote` is target-only (so: one REMOVE diff), while the
-        system-scope remote of the same name exists on both sides (so: no diff). Both
-        refs are installed identically on both machines.
-        """
-        source = {
-            "flatpak list --app": CommandResult(0, self._USER_REF_LINE + self._SYSTEM_REF_LINE, ""),
-            "flatpak remotes --user --columns=name,url": CommandResult(0, _FLATHUB_REMOTE_LINE, ""),
-            "flatpak remotes --system --columns=name,url": CommandResult(
-                0, _FLATHUB_REMOTE_LINE + self._CUSTOM_REMOTE_LINE, ""
-            ),
+    @staticmethod
+    def _source(remotes: str = "", apps: str = "") -> dict[str, CommandResult]:
+        return {
+            "flatpak list --app": CommandResult(0, apps, ""),
+            "flatpak list --columns": CommandResult(0, apps, ""),
+            "flatpak remotes --user": CommandResult(0, remotes, ""),
+            "flatpak remotes --system": CommandResult(0, "", ""),
         }
-        target = {
-            "flatpak list --app": CommandResult(0, self._USER_REF_LINE + self._SYSTEM_REF_LINE, ""),
-            "flatpak remotes --user --columns=name,url": CommandResult(
-                0, _FLATHUB_REMOTE_LINE + self._CUSTOM_REMOTE_LINE, ""
-            ),
-            "flatpak remotes --system --columns=name,url": CommandResult(
-                0, _FLATHUB_REMOTE_LINE + self._CUSTOM_REMOTE_LINE, ""
-            ),
-        }
-        return source, target
+
+    @staticmethod
+    def _deletions(target: FakeFlatpakTarget) -> list[str]:
+        return [cmd for cmd in all_calls(target) if "remote-delete" in cmd]
 
     @pytest.mark.asyncio
-    async def test_dependent_target_ref_is_named_in_the_removal_detail(self) -> None:
-        source_responses, target_responses = self._responses()
-        context, _source, _target = make_context(source_responses=source_responses, target_responses=target_responses)
-        job = FlatpakSyncJob(context)
-
-        plan = await job.plan()
-
-        # Both refs exist identically on both machines, so neither is reviewed itself.
-        assert not any(d.item_class == ItemClass.FLATPAK_REF for d in plan.diffs)
-        remote_diffs = [d for d in plan.diffs if d.item_class == ItemClass.FLATPAK_REMOTE]
-        assert len(remote_diffs) == 1
-        assert remote_diffs[0].item_id == "flatpak:remote:user:customremote"
-        assert remote_diffs[0].action == DiffAction.REMOVE
-        assert remote_diffs[0].detail is not None
-        assert "org.example.NeedsRemote" in remote_diffs[0].detail
-
-    @pytest.mark.asyncio
-    async def test_same_name_remote_in_the_other_scope_contributes_no_dependents(self) -> None:
-        """A remote is per-installation, so only same-scope refs depend on it: the
-        system-scope ref whose origin is also named `customremote` must not be named in
-        the USER-scope removal's detail.
-        """
-        source_responses, target_responses = self._responses()
-        context, _source, _target = make_context(source_responses=source_responses, target_responses=target_responses)
-        job = FlatpakSyncJob(context)
-
-        plan = await job.plan()
-
-        diff = next(d for d in plan.diffs if d.item_class == ItemClass.FLATPAK_REMOTE)
-        assert diff.detail is not None
-        assert "org.example.SystemOnly" not in diff.detail
-
-    @pytest.mark.asyncio
-    async def test_remote_with_no_dependent_refs_keeps_detail_none(self) -> None:
-        context, _source, _target = make_context(
-            source_responses={
-                "flatpak list --app": CommandResult(0, self._USER_REF_LINE, ""),
-                "flatpak remotes --user --columns=name,url": CommandResult(
-                    0, _FLATHUB_REMOTE_LINE + self._CUSTOM_REMOTE_LINE, ""
-                ),
-            },
-            target_responses={
-                "flatpak list --app": CommandResult(0, self._USER_REF_LINE, ""),
-                "flatpak remotes --user --columns=name,url": CommandResult(
-                    0,
-                    _FLATHUB_REMOTE_LINE
-                    + self._CUSTOM_REMOTE_LINE
-                    + "unusedremote\thttps://unused.example.org/repo/\n",
-                    "",
-                ),
-            },
+    async def test_a_remote_nothing_uses_is_deleted_and_never_offered(self) -> None:
+        context, _source, target = make_context(
+            source_responses=self._source(),
+            fake_target=FakeFlatpakTarget(remotes={"user": {"customremote": self._URL}}),
         )
         job = FlatpakSyncJob(context)
 
-        plan = await job.plan()
+        plan = await run_job(job)
 
-        diff = next(d for d in plan.diffs if d.item_id == "flatpak:remote:user:unusedremote")
-        assert diff.action == DiffAction.REMOVE
-        assert diff.detail is None
-
-    @pytest.mark.asyncio
-    async def test_review_entry_carries_the_dependent_refs_to_the_user(self) -> None:
-        source_responses, target_responses = self._responses()
-        context, _source, _target = make_context(source_responses=source_responses, target_responses=target_responses)
-        job = FlatpakSyncJob(context)
-
-        plan = await job.plan()
-
-        remove_group = next(g for g in plan.groups if _is_removal_direction(g.action))
-        entry = next(e for e in remove_group.entries if e.item_id == "flatpak:remote:user:customremote")
-        assert entry.detail is not None
-        assert "org.example.NeedsRemote" in entry.detail
-        assert "customremote" in entry.detail
+        assert plan.diffs == ()
+        assert plan.groups == ()
+        assert self._deletions(target) == ["flatpak remote-delete --user customremote"]
 
     @pytest.mark.asyncio
-    async def test_removal_offers_exactly_two_answers_and_is_never_recordable(self) -> None:
-        """ADR-020 D-07's exception: delete, or leave it for now. A permanent machine-local
-        mark on a remote whose whole purpose is to feed refs would silently and permanently
-        change where those refs come from.
+    async def test_a_remote_a_target_ref_still_uses_stays(self) -> None:
+        """The ref is installed on both machines, so it is not even a diff — and it is still
+        what keeps the remote.
         """
-        source_responses, target_responses = self._responses()
-        context, source, target = make_context(source_responses=source_responses, target_responses=target_responses)
+        line = f"org.example.NeedsRemote\t1.0\tcustomremote\tuser\t{self._USER_REF}\n"
+        context, _source, target = make_context(
+            source_responses=self._source(remotes=remote_row("flathub", _FLATHUB_URL), apps=line),
+            fake_target=FakeFlatpakTarget(
+                remotes={"user": {"customremote": self._URL, "flathub": _FLATHUB_URL}},
+                refs={("user", self._USER_REF): "customremote"},
+            ),
+        )
+        job = FlatpakSyncJob(context)
+
+        await run_job(job)
+
+        assert self._deletions(target) == []
+
+    @pytest.mark.asyncio
+    async def test_a_same_name_remote_in_the_other_scope_does_not_keep_it(self) -> None:
+        """A remote is per-installation, so only same-scope refs use it. The system-scope ref
+        below is installed on both machines, so nothing removes it and its own remote stays.
+        """
+        system_line = f"org.example.SystemOnly\t1.0\tcustomremote\tsystem\t{self._SYSTEM_REF}\n"
+        context, _source, target = make_context(
+            source_responses=self._source(apps=system_line),
+            fake_target=FakeFlatpakTarget(
+                remotes={"user": {"customremote": self._URL}, "system": {"customremote": self._URL}},
+                refs={("system", self._SYSTEM_REF): "customremote"},
+            ),
+        )
+        job = FlatpakSyncJob(context)
+
+        await run_job(job)
+
+        assert self._deletions(target) == ["flatpak remote-delete --user customremote"]
+
+    @pytest.mark.asyncio
+    async def test_a_machine_specific_app_keeps_its_remote(self) -> None:
+        """A skip-always ref is dropped before the diff and produces no review line in any
+        run, so counting anything but the machine's real state would delete the remote
+        feeding software the user told this tool to leave alone.
+        """
+        item_id = f"flatpak:ref:user:{self._USER_REF}"
+        decisions = (
+            "machine_specific:\n"
+            f'  "{item_id}":\n'
+            "    item_class: flatpak_ref\n"
+            f'    label: "{self._USER_REF}"\n'
+            "    reason: null\n"
+            "    recorded_at: 2026-01-01T00:00:00Z\n"
+        )
+        context, _source, target = make_context(
+            source_responses=self._source(),
+            fake_target=FakeFlatpakTarget(
+                remotes={"user": {"customremote": self._URL}},
+                refs={("user", self._USER_REF): "customremote"},
+                responses={"flatpak.decisions.yaml": CommandResult(0, decisions, "")},
+            ),
+        )
+        job = FlatpakSyncJob(context)
+
+        await run_job(job)
+
+        assert self._deletions(target) == []
+
+    @pytest.mark.asyncio
+    async def test_a_runtime_keeps_its_remote(self) -> None:
+        """Counted over every installed ref, runtimes included: a runtime installed from a
+        remote loses its updates just as an app does.
+        """
+        runtime = "org.example.Platform/x86_64/24.08"
+        context, _source, target = make_context(
+            source_responses=self._source(),
+            fake_target=FakeFlatpakTarget(
+                remotes={"user": {"customremote": self._URL}}, runtimes={("user", runtime): "customremote"}
+            ),
+        )
+        job = FlatpakSyncJob(context)
+
+        await run_job(job)
+
+        assert self._deletions(target) == []
+
+    @pytest.mark.asyncio
+    async def test_a_remote_the_source_has_is_never_deleted(self) -> None:
+        context, _source, target = make_context(
+            source_responses=self._source(remotes=remote_row("customremote", self._URL)),
+            fake_target=FakeFlatpakTarget(remotes={"user": {"customremote": self._URL}}),
+        )
+        job = FlatpakSyncJob(context)
+
+        await run_job(job)
+
+        assert self._deletions(target) == []
+
+    @pytest.mark.asyncio
+    async def test_the_count_runs_after_this_runs_approved_removals(self) -> None:
+        """The target's only user of the remote is uninstalled by this very run, so the
+        remote is free by the time the count happens.
+        """
+        context, _source, target = make_context(
+            source_responses=self._source(),
+            fake_target=FakeFlatpakTarget(
+                remotes={"user": {"customremote": self._URL}}, refs={("user", self._USER_REF): "customremote"}
+            ),
+        )
+        job = FlatpakSyncJob(context)
+
+        await run_job(job)
+
+        assert any("flatpak uninstall" in cmd for cmd in all_calls(target))
+        assert self._deletions(target) == ["flatpak remote-delete --user customremote"]
+
+    @pytest.mark.asyncio
+    async def test_a_removal_the_user_declined_keeps_the_remote(self) -> None:
+        context, _source, target = make_context(
+            source_responses=self._source(),
+            fake_target=FakeFlatpakTarget(
+                remotes={"user": {"customremote": self._URL}}, refs={("user", self._USER_REF): "customremote"}
+            ),
+        )
+        job = FlatpakSyncJob(context)
+
+        await run_job(job, approve=lambda _diff: False)
+
+        assert self._deletions(target) == []
+
+    @pytest.mark.asyncio
+    async def test_a_removal_that_failed_keeps_the_remote(self) -> None:
+        """A measurement, not a prediction: the ref the user approved for removal is still
+        installed, so its remote is still in use.
+        """
+        context, _source, target = make_context(
+            source_responses=self._source(),
+            fake_target=FakeFlatpakTarget(
+                remotes={"user": {"customremote": self._URL}},
+                refs={("user", self._USER_REF): "customremote"},
+                responses={"flatpak uninstall": CommandResult(1, "", "error: busy\n")},
+            ),
+        )
+        job = FlatpakSyncJob(context)
+
+        await run_job(job, expect_failures=True)
+
+        assert self._deletions(target) == []
+
+    @pytest.mark.asyncio
+    async def test_a_system_scope_deletion_uses_sudo(self) -> None:
+        context, _source, target = make_context(
+            source_responses=self._source(),
+            fake_target=FakeFlatpakTarget(remotes={"system": {"customremote": self._URL}}),
+        )
+        job = FlatpakSyncJob(context)
+
+        await run_job(job)
+
+        assert self._deletions(target) == ["sudo flatpak remote-delete --system customremote"]
+
+    @pytest.mark.asyncio
+    async def test_the_deletion_carries_mutates(self) -> None:
+        context, _source, target = make_context(
+            source_responses=self._source(),
+            fake_target=FakeFlatpakTarget(remotes={"user": {"customremote": self._URL}}),
+        )
+        job = FlatpakSyncJob(context)
+
+        await run_job(job)
+
+        call = next(c for c in target.run_command.call_args_list if "remote-delete" in c.args[0])
+        assert "customremote" in call.kwargs["mutates"]
+
+    @pytest.mark.asyncio
+    async def test_a_dry_run_previews_the_deletion_and_issues_none(self, caplog: pytest.LogCaptureFixture) -> None:
+        context, _source, target = make_context(
+            source_responses=self._source(),
+            fake_target=FakeFlatpakTarget(
+                remotes={"user": {"customremote": self._URL}}, refs={("user", self._USER_REF): "customremote"}
+            ),
+            dry_run=True,
+        )
+        job = FlatpakSyncJob(context)
+
+        with caplog.at_level(logging.DEBUG, logger="pcswitcher.jobs.base"):
+            await run_job(job)
+
+        # The ref removal has not run, so the preview subtracts it itself rather than
+        # reporting the remote as still in use.
+        assert any("Would delete user flatpak remote customremote" in r.message for r in caplog.records)
+        assert self._deletions(target) == []
+
+    @pytest.mark.asyncio
+    async def test_a_deletion_that_fails_warns_and_fails_no_item(self, caplog: pytest.LogCaptureFixture) -> None:
+        """No approved item depended on it, so there is nothing to charge the failure to."""
+        context, _source, _target = make_context(
+            source_responses=self._source(),
+            fake_target=FakeFlatpakTarget(
+                remotes={"user": {"customremote": self._URL}},
+                responses={"remote-delete": CommandResult(1, "", "error: in use\n")},
+            ),
+        )
+        job = FlatpakSyncJob(context)
+
+        with caplog.at_level(logging.WARNING, logger="pcswitcher.jobs.base"):
+            await run_job(job)
+
+        warnings = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1
+        assert "customremote" in warnings[0]
+        assert "error: in use" in warnings[0]
+
+    @pytest.mark.asyncio
+    async def test_no_decision_file_entry_is_ever_written_for_a_remote(self) -> None:
+        """Not merely unoffered: a SKIP_ALWAYS arriving from anywhere writes nothing."""
+        context, source, target = make_context(
+            source_responses=self._source(),
+            fake_target=FakeFlatpakTarget(remotes={"user": {"customremote": self._URL}}),
+        )
         job = FlatpakSyncJob(context)
         plan = await job.plan()
-        group = next(g for g in plan.groups if any(e.item_id.startswith("flatpak:remote:") for e in g.entries))
 
-        assert group.action == REPO_REMOVAL_REVIEW_ACTION
-        assert _is_removal_direction(group.action)
-        assert not _is_promotable_group(group.action)
-
-        # Not merely unoffered: a SKIP_ALWAYS arriving from anywhere writes nothing.
         job.accept_review(
             plan,
             ReviewOutcome(
-                decisions={d.item_id: Decision.SKIP_ALWAYS for d in plan.diffs},
+                decisions={d.item_id: Decision.SKIP_ALWAYS for d in plan.diffs}
+                | {"flatpak:remote:user:customremote": Decision.SKIP_ALWAYS},
                 was_interactive=True,
             ),
         )
@@ -2354,22 +2559,6 @@ class TestRemoteRemovalOrphansRefs:
             assert not any("mv --force" in c for c in all_calls(executor)), (
                 "a remote reached the machine-local decision file"
             )
-
-    @pytest.mark.asyncio
-    async def test_approved_removal_still_deletes_the_remote(self) -> None:
-        """Disclosure, not refusal: converge is unchanged, so an approved removal of a
-        remote with dependents still runs `flatpak remote-delete`.
-        """
-        source_responses, target_responses = self._responses()
-        context, _source, target = make_context(source_responses=source_responses, target_responses=target_responses)
-        job = FlatpakSyncJob(context)
-        plan = await job.plan()
-        diff = next(d for d in plan.diffs if d.item_class == ItemClass.FLATPAK_REMOTE)
-
-        result = await job.converge(diff)
-
-        assert result.success
-        assert any("flatpak remote-delete --user customremote" in c for c in all_calls(target))
 
 
 class TestMaskConverge:
@@ -2447,58 +2636,245 @@ class TestMaskSystemScopeGate:
         assert not any("sudo --non-interactive true" in c for c in all_calls(target))
 
 
-class TestFilteredRemoteWarning:
-    """ADR-020, Consequences: a filtered flatpak remote replicates as an unfiltered one,
-    and the run warns per affected remote rather than claiming the remote replicated.
+class TestRemoteFilterReplicates:
+    """`PKG-FR-FLATPAK-FILTER` — a remote the source restricts with a filter is replicated
+    with it: the file copied byte-for-byte to the same absolute path on the target and
+    re-applied there, derived rather than reviewed.
 
     Measured in a stock `ubuntu:24.04` container, Flatpak 1.14.6: `flatpak remote-modify
-    --filter=<path> <name>` exits 0, adds `filtered` to the `options` column as its own
-    comma-separated token, and stores the path VERBATIM as `xa.filter` in the installation's
-    `repo/config` — unvalidated, so a relative path and a path that does not exist are both
-    accepted. The filter's content therefore lives in an arbitrary local file outside the
-    ostree store and is not repository-or-key material this job can carry.
+    --filter=<path> <name>` exits 0 and stores the path VERBATIM as `xa.filter` in the
+    installation's `repo/config` — unvalidated, so a relative path and a path that does not
+    exist are both accepted. The path is all flatpak records; the content is an ordinary file
+    at that path, which is what makes carrying it possible at all.
     """
 
-    _FILTERED_REMOTE = "customremote\thttps://custom.example.org/repo/\tfiltered\n"
-    _PLAIN_REMOTE = "customremote\thttps://custom.example.org/repo/\n"
-    _CUSTOM_APP_LINE = "org.example.App\t1.0\tcustomremote\tuser\torg.example.App/x86_64/stable\n"
+    _URL = "https://custom.example.org/repo/"
+    _APP_LINE = "org.example.App\t1.0\tcustomremote\tuser\torg.example.App/x86_64/stable\n"
+    _APP_ID = "flatpak:ref:user:org.example.App/x86_64/stable"
 
-    def _source(self, remotes: str) -> dict[str, CommandResult]:
-        return derivation_source(remotes=remotes, apps=self._CUSTOM_APP_LINE)
+    def _source(self, ref_filter: str, *, extra: str = "") -> dict[str, CommandResult]:
+        return derivation_source(
+            remotes=remote_row("customremote", self._URL, ref_filter=ref_filter) + extra, apps=self._APP_LINE
+        )
 
     @staticmethod
-    def _warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
-        return [record.message for record in caplog.records if record.levelno == logging.WARNING]
+    def _filter_file(tmp_path: Path) -> Path:
+        path = tmp_path / "filters" / "custom.filter"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _ = path.write_text("org.example.*\n")
+        return path
 
-    def test_the_filtered_token_is_parsed_next_to_verification(self) -> None:
-        """Two independent tokens: a filtered remote's verification state must parse exactly
+    @staticmethod
+    def _target(responses: dict[str, CommandResult] | None = None) -> FakeFlatpakTarget:
+        return FakeFlatpakTarget(responses={"echo $HOME": CommandResult(0, "/home/tgt\n", ""), **(responses or {})})
+
+    def test_the_filter_column_is_read_next_to_the_options_column(self) -> None:
+        """Two independent columns: a filtered remote's verification state must parse exactly
         as an unfiltered one's, and vice versa.
         """
-        filtered_signed = _parse_flatpak_remotes("a\thttps://example.org/a/\tfiltered\n", "user", {})
-        filtered_unsigned = _parse_flatpak_remotes("b\thttps://example.org/b/\tno-gpg-verify,filtered\n", "user", {})
-        plain = _parse_flatpak_remotes("c\thttps://example.org/c/\n", "user", {})
+        signed = _parse_flatpak_remotes(remote_row("a", "https://example.org/a/", ref_filter="/etc/a.f"), "user", {})
+        unsigned = _parse_flatpak_remotes(
+            remote_row("b", "https://example.org/b/", options="no-gpg-verify", ref_filter="/etc/b.f"), "user", {}
+        )
+        plain = _parse_flatpak_remotes(remote_row("c", "https://example.org/c/"), "user", {})
 
-        assert (filtered_signed[0].is_filtered, filtered_signed[0].gpg_verify) == (True, True)
-        assert (filtered_unsigned[0].is_filtered, filtered_unsigned[0].gpg_verify) == (True, False)
-        assert (plain[0].is_filtered, plain[0].gpg_verify) == (False, True)
+        assert (signed[0].filter_path, signed[0].gpg_verify) == ("/etc/a.f", True)
+        assert (unsigned[0].filter_path, unsigned[0].gpg_verify) == ("/etc/b.f", False)
+        assert (plain[0].filter_path, plain[0].gpg_verify) == (None, True)
 
     def test_a_filter_difference_never_makes_two_remotes_compare_unequal(self) -> None:
-        """`is_filtered` is `compare=False` on purpose: no command this job can issue would
-        make the two sides agree, so letting it into `__eq__` would make
-        `_write_derived_remote`'s whole-item equality test miss and issue a `remote-modify`
-        that changes nothing, on every run, forever.
+        """`filter_path` is `compare=False` on purpose: the filter is converged by its own
+        later pass, so letting it into `__eq__` would make `_write_derived_remote`'s
+        whole-item equality test miss and issue a `remote-modify --url` that changes nothing,
+        on every run.
         """
-        filtered = FlatpakRemoteItem(name="r", url="https://example.org/r/", scope="user", is_filtered=True)
+        filtered = FlatpakRemoteItem(name="r", url="https://example.org/r/", scope="user", filter_path="/etc/r.f")
         plain = FlatpakRemoteItem(name="r", url="https://example.org/r/", scope="user")
 
         assert filtered == plain
 
     @pytest.mark.asyncio
-    async def test_a_derived_remote_whose_source_is_filtered_warns_once(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_the_file_is_copied_to_the_same_absolute_path_and_re_applied(self, tmp_path: Path) -> None:
+        path = self._filter_file(tmp_path)
+        context, _source, target = make_context(source_responses=self._source(str(path)), fake_target=self._target())
+        job = FlatpakSyncJob(context)
+
+        await run_job(job)
+
+        staged = target.send_file.await_args_list[-1].args[1]
+        assert staged.startswith("/home/tgt/.cache/pc-switcher/")
+        assert target.send_file.await_args_list[-1].args[0] == path
+        assert any(f"install --mode=0644 {staged} {path}" in cmd for cmd in all_calls(target))
+        assert any(f"flatpak remote-modify --user --filter={path} customremote" in cmd for cmd in all_calls(target))
+
+    @pytest.mark.asyncio
+    async def test_the_filter_lands_after_the_app_it_could_exclude(self, tmp_path: Path) -> None:
+        """A filter can be narrower than what the source has installed, so applying it first
+        would exclude the very ref being replicated. That flatpak actually refuses such an
+        install is a design requirement here, not something measured — the ordering is what
+        makes it moot either way.
+        """
+        path = self._filter_file(tmp_path)
+        context, _source, target = make_context(source_responses=self._source(str(path)), fake_target=self._target())
+        job = FlatpakSyncJob(context)
+
+        await run_job(job)
+
+        calls = all_calls(target)
+        install = next(i for i, cmd in enumerate(calls) if "flatpak install" in cmd)
+        applied = next(i for i, cmd in enumerate(calls) if "--filter=" in cmd)
+        assert install < applied
+
+    @pytest.mark.asyncio
+    async def test_the_filter_is_no_review_item(self, tmp_path: Path) -> None:
+        path = self._filter_file(tmp_path)
+        context, _source, _target = make_context(source_responses=self._source(str(path)), fake_target=self._target())
+        job = FlatpakSyncJob(context)
+
+        plan = await run_job(job)
+
+        assert not any("filter" in entry.item_id for group in plan.groups for entry in group.entries)
+        assert not any(entry.item_id.startswith("flatpak:remote:") for group in plan.groups for entry in group.entries)
+
+    @pytest.mark.asyncio
+    async def test_an_unfiltered_remote_applies_none(self, tmp_path: Path) -> None:
+        """Negative control: without it the pass could be running on every derived remote."""
+        _ = self._filter_file(tmp_path)
+        context, _source, target = make_context(source_responses=self._source("-"), fake_target=self._target())
+        job = FlatpakSyncJob(context)
+
+        await run_job(job)
+
+        assert not any("--filter=" in cmd for cmd in all_calls(target))
+        target.send_file.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_remote_no_approved_ref_needs_carries_no_filter_either(self, tmp_path: Path) -> None:
+        """A remote nothing derives is not provisioned (D-41), so there is nothing to filter."""
+        path = self._filter_file(tmp_path)
         context, _source, target = make_context(
-            source_responses=self._source(self._FILTERED_REMOTE), fake_target=FakeFlatpakTarget()
+            source_responses=self._source(
+                "-", extra=remote_row("unused", "https://unused.example.org/", ref_filter=str(path))
+            ),
+            fake_target=self._target(),
+        )
+        job = FlatpakSyncJob(context)
+
+        await run_job(job)
+
+        assert not any("--filter=" in cmd for cmd in all_calls(target))
+
+    @pytest.mark.asyncio
+    async def test_a_missing_source_file_fails_the_app_naming_the_remote_and_the_path(self, tmp_path: Path) -> None:
+        path = tmp_path / "gone.filter"
+        context, _source, _target = make_context(source_responses=self._source(str(path)), fake_target=self._target())
+        job = FlatpakSyncJob(context)
+        plan = await job.plan()
+        job.accept_review(
+            plan, ReviewOutcome(decisions={d.item_id: Decision.APPLY for d in plan.diffs}, was_interactive=True)
+        )
+
+        with pytest.raises(PackageItemFailures) as raised:
+            await job.apply()
+
+        failed = {diff.item_id: reason for diff, reason in raised.value.failures}
+        assert list(failed) == [self._APP_ID]
+        assert "customremote" in failed[self._APP_ID]
+        assert str(path) in failed[self._APP_ID]
+
+    @pytest.mark.asyncio
+    async def test_a_filter_flatpak_refuses_fails_the_app_and_quotes_the_error(self, tmp_path: Path) -> None:
+        path = self._filter_file(tmp_path)
+        context, _source, _target = make_context(
+            source_responses=self._source(str(path)),
+            fake_target=self._target(responses={"--filter=": CommandResult(1, "", "error: no such remote\n")}),
+        )
+        job = FlatpakSyncJob(context)
+        plan = await job.plan()
+        job.accept_review(
+            plan, ReviewOutcome(decisions={d.item_id: Decision.APPLY for d in plan.diffs}, was_interactive=True)
+        )
+
+        with pytest.raises(PackageItemFailures) as raised:
+            await job.apply()
+
+        assert [diff.item_id for diff, _reason in raised.value.failures] == [self._APP_ID]
+        assert "error: no such remote" in raised.value.failures[0][1]
+
+    @pytest.mark.asyncio
+    async def test_an_app_from_another_remote_is_untouched_by_the_failure(self, tmp_path: Path) -> None:
+        """ "Every approved application from that remote" is the app's OWN origin, so an app
+        whose origin is a different remote keeps its own outcome.
+        """
+        path = tmp_path / "gone.filter"
+        other = "org.example.Other\t1.0\tflathub\tuser\torg.example.Other/x86_64/stable\n"
+        context, _source, _target = make_context(
+            source_responses=derivation_source(
+                remotes=remote_row("customremote", self._URL, ref_filter=str(path)) + remote_row("flathub", _SRC_URL),
+                apps=self._APP_LINE + other,
+            ),
+            fake_target=self._target(),
+        )
+        job = FlatpakSyncJob(context)
+        plan = await job.plan()
+        job.accept_review(
+            plan, ReviewOutcome(decisions={d.item_id: Decision.APPLY for d in plan.diffs}, was_interactive=True)
+        )
+
+        with pytest.raises(PackageItemFailures) as raised:
+            await job.apply()
+
+        assert [diff.item_id for diff, _reason in raised.value.failures] == [self._APP_ID]
+
+    @pytest.mark.asyncio
+    async def test_the_staged_copy_is_discarded(self, tmp_path: Path) -> None:
+        path = self._filter_file(tmp_path)
+        context, _source, target = make_context(source_responses=self._source(str(path)), fake_target=self._target())
+        job = FlatpakSyncJob(context)
+
+        await run_job(job)
+
+        staged = target.send_file.await_args_list[-1].args[1]
+        assert any(f"rm --force {staged}" in cmd for cmd in all_calls(target))
+
+    @pytest.mark.asyncio
+    async def test_a_dry_run_previews_the_filter_and_issues_none(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        path = self._filter_file(tmp_path)
+        context, _source, target = make_context(
+            source_responses=self._source(str(path)), fake_target=self._target(), dry_run=True
+        )
+        job = FlatpakSyncJob(context)
+
+        with caplog.at_level(logging.DEBUG, logger="pcswitcher.jobs.base"):
+            await run_job(job)
+
+        assert any(str(path) in record.message for record in caplog.records)
+        assert not any("--filter=" in cmd for cmd in all_calls(target))
+        target.send_file.assert_not_awaited()
+
+
+class TestAnUnverifiedRemoteIsReported:
+    """`PKG-FR-FLATPAK-REMOTE-TRUST` — a remote the source does not verify is replicated
+    unverified, and an ORDINARY run is told so. The `mutates=` phrase says it too, but that
+    reaches only `--confirm-each-command` and the command trace.
+    """
+
+    _URL = "https://custom.example.org/repo/"
+    _APP_LINE = "org.example.App\t1.0\tcustomremote\tuser\torg.example.App/x86_64/stable\n"
+
+    def _source(self, *, options: str) -> dict[str, CommandResult]:
+        return derivation_source(remotes=remote_row("customremote", self._URL, options=options), apps=self._APP_LINE)
+
+    @staticmethod
+    def _warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
+        return [record.message for record in caplog.records if record.levelno == logging.WARNING]
+
+    @pytest.mark.asyncio
+    async def test_an_unverified_source_remote_warns_once(self, caplog: pytest.LogCaptureFixture) -> None:
+        context, _source, target = make_context(
+            source_responses=self._source(options="no-gpg-verify"), fake_target=FakeFlatpakTarget()
         )
         job = FlatpakSyncJob(context)
 
@@ -2508,19 +2884,15 @@ class TestFilteredRemoteWarning:
         warnings = self._warnings(caplog)
         assert len(warnings) == 1
         assert "customremote" in warnings[0]
-        assert "user" in warnings[0]
-        assert "UNFILTERED" in warnings[0]
-        # The remote itself still travels — the warning qualifies the write, it does not
-        # replace it.
-        assert any("remote-add" in cmd for cmd in all_calls(target))
+        assert "target-host" in warnings[0]
+        # The remote is still provisioned unverified — the alternative is one that refuses
+        # every install.
+        assert any("remote-add" in cmd and "--no-gpg-verify" in cmd for cmd in all_calls(target))
 
     @pytest.mark.asyncio
-    async def test_an_unfiltered_derived_remote_produces_no_warning(self, caplog: pytest.LogCaptureFixture) -> None:
-        """Negative control: without this the warning could be firing on every derived
-        remote and the test above would not notice.
-        """
+    async def test_a_verified_source_remote_produces_no_warning(self, caplog: pytest.LogCaptureFixture) -> None:
         context, _source, _target = make_context(
-            source_responses=self._source(self._PLAIN_REMOTE), fake_target=FakeFlatpakTarget()
+            source_responses=self._source(options=""), fake_target=FakeFlatpakTarget()
         )
         job = FlatpakSyncJob(context)
 
@@ -2531,11 +2903,11 @@ class TestFilteredRemoteWarning:
 
     @pytest.mark.asyncio
     async def test_the_warning_fires_in_a_dry_run_too(self, caplog: pytest.LogCaptureFixture) -> None:
-        """ADR-014 makes the preview the whole report, so a rehearsal that hid this would
-        overstate the real run it is previewing.
+        """ADR-014 makes the preview the whole report, so a preview that hid this would
+        overstate the real run.
         """
         context, _source, target = make_context(
-            source_responses=self._source(self._FILTERED_REMOTE), fake_target=FakeFlatpakTarget(), dry_run=True
+            source_responses=self._source(options="no-gpg-verify"), fake_target=FakeFlatpakTarget(), dry_run=True
         )
         job = FlatpakSyncJob(context)
 
@@ -2544,22 +2916,6 @@ class TestFilteredRemoteWarning:
 
         assert len(self._warnings(caplog)) == 1
         assert not any("remote-add" in cmd for cmd in all_calls(target))
-
-    @pytest.mark.asyncio
-    async def test_a_filtered_remote_no_approved_ref_needs_never_warns(self, caplog: pytest.LogCaptureFixture) -> None:
-        """A remote nothing derives does not travel at all (D-41), so warning about it would
-        describe a replication that was never going to happen.
-        """
-        context, _source, _target = make_context(
-            source_responses=self._source(self._PLAIN_REMOTE + "unused\thttps://unused.example.org/repo/\tfiltered\n"),
-            fake_target=FakeFlatpakTarget(),
-        )
-        job = FlatpakSyncJob(context)
-
-        with caplog.at_level(logging.WARNING, logger="pcswitcher.jobs.base"):
-            await run_job(job)
-
-        assert self._warnings(caplog) == []
 
 
 class TestExcludePaths:
@@ -2710,18 +3066,6 @@ class TestFlatpakRemoteItem:
 
         assert "flathub" in label
         assert "https://dl.flathub.org/repo/" in label
-
-
-class TestOrphanedRefsDetail:
-    def test_names_the_remote_and_every_dependent(self) -> None:
-        detail = build_orphaned_refs_detail(
-            "customremote", ["org.example.One", "org.example.Two"], Machines(source="atlas", target="nomad")
-        )
-
-        assert detail == (
-            "nomad still installs org.example.One, org.example.Two from customremote — they would stay "
-            "installed but never get another update"
-        )
 
 
 class TestAProbeThatDidNotAnswer:
