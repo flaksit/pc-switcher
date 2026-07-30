@@ -12,12 +12,13 @@ from datetime import datetime
 from logging.handlers import QueueHandler, QueueListener
 from pathlib import Path
 from queue import Queue
-from typing import Any, ClassVar, Protocol
+from typing import Any, ClassVar, Protocol, override
 
 from rich.console import Console
 from rich.text import Text
 
 from pcswitcher.config import LogConfig
+from pcswitcher.redaction import redact_credentials
 from pcswitcher.terminal import is_interactive
 
 # Register custom FULL level (15) with stdlib logging
@@ -35,6 +36,7 @@ logging.Logger.full = _full  # type: ignore[method-assign]
 
 __all__ = [
     "FULL",
+    "CredentialRedactionFilter",
     "JsonFormatter",
     "RichFormatter",
     "UILogHandler",
@@ -254,6 +256,29 @@ class RichFormatter(logging.Formatter):
         return capture.get()
 
 
+class CredentialRedactionFilter(logging.Filter):
+    """Withhold a URL's embedded credential from every record that reaches a handler
+    (`PKG-FR-CREDENTIAL-PRIVACY`).
+
+    Installed on the two `QueueHandler`s, which is every route into the log: one pass per
+    record, before any formatter sees it, so the file, the TUI panel and the warning summary
+    cannot disagree about what was withheld.
+
+    The message is rendered here rather than left to `getMessage()`, because the credential
+    can arrive through `record.args` as easily as through the format string. Structured
+    context is redacted too — a package manager's stderr travels that way.
+    """
+
+    @override
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.msg = redact_credentials(record.getMessage())
+        record.args = None
+        for key, value in record.__dict__.items():
+            if key not in {"msg", "args"} and isinstance(value, str):
+                record.__dict__[key] = redact_credentials(value)
+        return True
+
+
 class UILogHandler(logging.Handler):
     """Route log records into a UI's Recent Logs panel via the event loop.
 
@@ -459,12 +484,16 @@ def setup_logging(
     if use_ui:
         logger_level = min(logger_level, logging.WARNING)
     pcswitcher_logger.setLevel(logger_level)
-    pcswitcher_logger.addHandler(QueueHandler(queue))
+    pcswitcher_queue_handler = QueueHandler(queue)
+    pcswitcher_queue_handler.addFilter(CredentialRedactionFilter())
+    pcswitcher_logger.addHandler(pcswitcher_queue_handler)
     pcswitcher_logger.propagate = False  # Don't propagate to root (avoids external filter)
 
     # Root logger for external libs only (pcswitcher logs don't reach here)
     root = logging.getLogger()
     root.setLevel(log_config.external)
-    root.addHandler(QueueHandler(queue))
+    root_queue_handler = QueueHandler(queue)
+    root_queue_handler.addFilter(CredentialRedactionFilter())
+    root.addHandler(root_queue_handler)
 
     return listener, queue

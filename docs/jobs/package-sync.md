@@ -176,6 +176,16 @@ Everything under `/etc/apt` that a run writes or deletes is backed up first, app
 
 Each key write and deletion is still a real command, so `--confirm-each-command` shows every one of them.
 
+## What the log keeps
+
+The report tells you what a job did. The log is where you reconstruct why, months later, so it keeps more than the report does:
+
+- Every item a review offered you, with the answer you gave — including the ones you skipped, which change nothing and would otherwise leave no trace at all.
+- Every change a package manager made on its own behalf. Dependencies apt resolves for itself are never a question, but each one is named.
+- At `log.file: DEBUG`, every command pc-switcher ran and everything that command printed, verbatim. That is what makes a post-mortem read the tool's own words rather than a paraphrase. It is also why debug runs produce log files of several hundred megabytes.
+
+One thing never reaches any of it. A private PPA or a commercial repository carries its credential inside its own address, so `https://user:token@host/...` is printed as `https://***@host/...` — in the log, in the `--confirm-each-command` prompt, and in every review line and configuration file the review shows you. Log files are readable by anyone with an account on the machine that wrote them. The rule covers credentials in URLs and nothing else: a secret that reaches a command another way is not withheld.
+
 ## Machine-specific packages
 
 Choosing **skip always** on a review item marks that package as belonging to *this specific machine* — the one running as source or target right now. A machine-specific package is never synced out to peers when this machine is the source, and never installed or removed here by a sync arriving from another machine. Use it for things tied to one box: a hardware driver, a tool for an attached peripheral.

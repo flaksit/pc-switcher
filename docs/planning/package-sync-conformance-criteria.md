@@ -350,9 +350,6 @@ Every article above was read against the code at `0abe7670`. What is listed here
 
 - **PKG-FR-READ-FAILS-JOB** is not implemented. `PackageItemFailures` is the only exception the orchestrator's job loop records and continues from; `probes.ProbeFailed` falls into the `except Exception` arm, which records FAILED and re-raises, ending the run.
 - **PKG-FR-JOB-ORDER** covers three jobs, not four. `Orchestrator._check_package_jobs_precede_folder_sync` validates `apt_sync`, `snap_sync` and `flatpak_sync`; `manual_installs_sync` may be ordered after `folder_sync` without an error.
-- **PKG-FR-LOG-DECISIONS** is not implemented. `PackageSyncJob._converge_one` names an item only when its change was applied and `apply` names one only when a dry run previewed it; everything else is a count, and `review.review_items` logs the NUMBER of unresolved items on a non-interactive run rather than their names. No line pairs an item with the decision it received, so a skipped item leaves no trace.
-- **PKG-FR-LOG-VERBATIM** is not implemented. `executor._GatedExecutorMixin._announce` traces the command TEXT at DEBUG and nothing logs what came back. `stderr` reaches the log as structured context on error paths only (`PackageSyncJob._converge_one`, `etc_apt.EtcApt._write_derived`); no package manager's stdout reaches it at any level.
-- **PKG-FR-CREDENTIAL-PRIVACY** is not implemented. Nothing in the codebase redacts, and the executor traces every command verbatim at DEBUG, so a repository URL carrying a credential reaches the log today — as does the repository-conflict question, which shows both machines' copies of the file in full.
 
 ## Traceability
 

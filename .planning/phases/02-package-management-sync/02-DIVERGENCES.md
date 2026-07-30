@@ -142,7 +142,9 @@ A private PPA or a commercial repository carries its credential in the URL itsel
 
 Logs are written to `~/.local/share/pc-switcher/logs` with mode `rw-rw-r--`, so the exposure is to every account on the machine that wrote the log. It does not spread: pc-switcher's own runtime files are excluded from `folder_sync` ahead of any user filter and cannot be re-included (`default-config.yaml:135-137`).
 
-`PKG-FR-CREDENTIAL-PRIVACY` now requires the embedded credential to be withheld wherever a URL is written or shown. Recorded in the criteria's gap register.
+`PKG-FR-CREDENTIAL-PRIVACY` now requires the embedded credential to be withheld wherever a URL is written or shown.
+
+**Closed 2026-07-30 (U2).** `redaction.redact_credentials` replaces every absolute URL's whole userinfo, applied at the three exits: `logger.CredentialRedactionFilter` on both queue handlers, the confirmation prompt in `executor._announce`, and `ItemDiff.__post_init__` for the review's own text.
 
 Related, and already satisfied: `PKG-FR-ESM-PRIVACY` is honoured by construction rather than by filtering — `pro status --format json` is parsed and only the `attached` boolean escapes (`apt_sync.py:113-114`, `278-281`).
 
@@ -160,6 +162,6 @@ So an item the user skipped produces no line at all, and no line anywhere pairs 
 
 `PKG-FR-LOG-VERBATIM` asks for the manager's own output verbatim in the debug log. `Executor._announce` traces the command TEXT at DEBUG before running it (`executor.py:154`); nothing traces what came back. The only output that reaches the log is `stderr` attached as structured context on error paths (`sync_core.py:489`, `apt_sync.py:3551-3557`). No stdout, at any level.
 
-Both are recorded in the criteria's gap register. Note the interaction with `PKG-FR-CREDENTIAL-PRIVACY` (DIV-13): implementing verbatim output without the redaction point puts repository credentials in a world-readable file, so the two land together or not at all.
+**Closed 2026-07-30 (U2), together with DIV-13** as that interaction required. `PackageSyncJob._log_decisions` writes one FULL line per presented item naming its answer; `review_items` names each item it could not ask about instead of counting them; `Collateral._log_auto` names each auto-collateral change; `executor._trace_output` records every command's stdout and stderr verbatim at DEBUG.
 
 Log volume is a known consequence, not an objection: runs on the maintainer's desktop already produce 350-378 MB logs, and the ruling was "all of it, as written".

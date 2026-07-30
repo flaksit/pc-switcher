@@ -138,7 +138,8 @@ class TestNonInteractive:
         ui.pause.assert_not_called()
         ui.resume.assert_not_called()
 
-    async def test_warns_with_unresolved_count_and_reports_groups(self) -> None:
+    async def test_warns_naming_every_item_and_reports_groups(self) -> None:
+        """`PKG-FR-LOG-DECISIONS`: a count says which items were declined to nobody."""
         buffer = io.StringIO()
         console = Console(file=buffer)
         ui = MagicMock()
@@ -150,8 +151,9 @@ class TestNonInteractive:
         with patch.object(sys, "stdin", _mock_isatty(False)):
             await review_items(groups, console=console, ui=ui, logger=logger, **HOSTS)
 
-        logger.warning.assert_called_once()
-        assert logger.warning.call_args.args[1] == 2
+        assert logger.warning.call_count == 2
+        labels = [call.args[2] for call in logger.warning.call_args_list]
+        assert labels == ["pkg", "pkg"]
         # The console still reports every item even though nothing was applied.
         assert "pkg" in buffer.getvalue()
 

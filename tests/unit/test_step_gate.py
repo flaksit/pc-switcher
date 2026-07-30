@@ -219,6 +219,45 @@ class TestExecutorDebugTrace:
 
         assert any("sudo rm --recursive --force /etc/apt/x" in record.getMessage() for record in caplog.records)
 
+    async def test_what_the_command_said_is_traced_too(self, caplog: pytest.LogCaptureFixture) -> None:
+        """`PKG-FR-LOG-VERBATIM`: a package manager's own output is the only account of what
+        it did with the transaction it was handed."""
+        executor, conn = _remote(None)
+        conn.run = AsyncMock(
+            return_value=MagicMock(exit_status=100, stdout="Reading package lists...\n", stderr="E: Unable to fetch\n")
+        )
+        with caplog.at_level(logging.DEBUG, logger="pcswitcher.executor"):
+            await executor.run_command("sudo apt-get update", login_shell=False, mutates="refresh package lists")
+
+        messages = [record.getMessage() for record in caplog.records]
+        assert "stdout: Reading package lists..." in messages
+        assert "stderr: E: Unable to fetch" in messages
+
+    async def test_a_silent_command_adds_no_output_lines(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A run's trace is large enough without a line per command that said nothing."""
+        executor, _conn = _remote(None)
+        with caplog.at_level(logging.DEBUG, logger="pcswitcher.executor"):
+            await executor.run_command("true", login_shell=False)
+
+        assert [record.getMessage() for record in caplog.records] == ["true"]
+
+    async def test_the_confirmation_prompt_withholds_a_url_credential(self) -> None:
+        """`PKG-FR-CREDENTIAL-PRIVACY`: the prompt is the one route out of `_announce` that
+        never becomes a log record, so the logging filter cannot cover it."""
+        gate = _stub_gate()
+        executor, _conn = _remote(gate)
+
+        await executor.run_command(
+            "sudo apt-get install --assume-yes --target https://bearer:tok3n@example.com/deb",
+            login_shell=False,
+            mutates="install from https://bearer:tok3n@example.com/deb",
+        )
+
+        kwargs = gate.confirm_action.await_args.kwargs
+        assert "tok3n" not in kwargs["command"]
+        assert "tok3n" not in kwargs["description"]
+        assert "https://***@example.com/deb" in kwargs["command"]
+
 
 def _entry() -> DecisionEntry:
     return DecisionEntry(

@@ -166,6 +166,14 @@ _REPORT_NOTES: dict[DiffClass, str] = {
     DiffClass.VERSION_MISMATCH: "These converge on their own: run `{upgrade}` on {target}.",
 }
 
+# How the log names a decision (`PKG-FR-LOG-DECISIONS`). The enum's own values are the
+# tool's internal words; these are what the user was offered.
+_DECISION_WORDS: dict[Decision, str] = {
+    Decision.APPLY: "applied",
+    Decision.SKIP_ONCE: "skipped this run",
+    Decision.SKIP_ALWAYS: "marked as this machine's own",
+}
+
 _UPGRADE_COMMANDS: dict[str, str] = {
     "apt": "sudo apt update && sudo apt upgrade",
     "snap": "sudo snap refresh",
@@ -406,6 +414,7 @@ class PackageSyncJob(SyncJob):
         outcome = self._accepted_outcome
         decisions = outcome.decisions
 
+        self._log_decisions(plan, decisions)
         await self._record_permanent_skips(plan, decisions)
         await self._finalize_unreproducible(plan, outcome)
 
@@ -452,6 +461,28 @@ class PackageSyncJob(SyncJob):
                 f"{len(all_failures)} {self.manager_id} item(s) failed: {summary}",
             )
             raise PackageItemFailures(self.manager_id, all_failures)
+
+    def _log_decisions(self, plan: PackagePlan, decisions: Mapping[str, Decision]) -> None:
+        """One FULL line per item this job presented, naming the decision it received
+        (`PKG-FR-LOG-DECISIONS`).
+
+        Every item, not only the ones that were applied: an item the user skipped produces
+        no converge line and no report entry, so without this the log has no record that it
+        was ever offered. The decision is written in the words the answer used rather than
+        the enum's — "skip this run", not `skip_once` — because the log is read by the same
+        person who answered.
+
+        Recorded on the machine the answer acts on, which for a removal is the target and
+        for an install the source's intent landing on the target; both are the target, so
+        one host label is correct for all of them.
+        """
+        for diff in plan.diffs:
+            decision = decisions.get(diff.item_id, Decision.SKIP_ONCE)
+            self._log(
+                Host.TARGET,
+                LogLevel.FULL,
+                f"reviewed {diff.label} ({diff.action.value}): {_DECISION_WORDS[decision]}",
+            )
 
     def _unresolved_as_failures(self, plan: PackagePlan, outcome: ReviewOutcome) -> list[tuple[ItemDiff, str]]:
         """Hook: this job's genuinely-undecided items that fail an interactive run (D-27).

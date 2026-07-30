@@ -4,10 +4,14 @@ Every operation that reaches either machine goes through an `Executor`, which ma
 module the one place two cross-cutting concerns can be implemented once rather than at
 every call site:
 
-- **Debug trace (#210).** Every command, file transfer and background process is logged
-  verbatim at `DEBUG` before it runs — the literal string handed to the shell, or the two
-  paths of a transfer. Reads included: a trace that omits them cannot answer "what did the
-  tool actually do".
+- **Debug trace (#210, `PKG-FR-LOG-VERBATIM`).** Every command, file transfer and background
+  process is logged verbatim at `DEBUG` before it runs — the literal string handed to the
+  shell, or the two paths of a transfer — and every command's own stdout and stderr are
+  logged verbatim after it. Reads included: a trace that omits them cannot answer "what did
+  the tool actually do".
+- **Credential privacy (`PKG-FR-CREDENTIAL-PRIVACY`).** A URL's embedded credential is
+  withheld from the confirmation prompt here, and from every log line by
+  `logger.CredentialRedactionFilter`.
 - **Per-action confirmation (`--confirm-each-command`).** A call that passes `mutates=`
   declares itself a modification and is gated: the user sees the same verbatim operation
   and must proceed or abort. Reads pass `mutates=None` (the default) and are never gated.
@@ -38,6 +42,7 @@ from typing import ClassVar, Protocol
 import asyncssh
 
 from pcswitcher.models import CommandResult, Host
+from pcswitcher.redaction import redact_credentials
 from pcswitcher.step_gate import StepGate
 
 __all__ = [
@@ -148,6 +153,11 @@ class _GatedExecutorMixin:
 
         Trace first, so the debug log records the operation even if the user aborts at the
         prompt — "what was I about to be asked" is exactly what the log is for.
+
+        The confirmation prompt is redacted here rather than left to the logging filter: it
+        is the one route out of this method that never becomes a log record, and a command
+        carrying a repository credential would otherwise be shown in full on screen
+        (`PKG-FR-CREDENTIAL-PRIVACY`).
         """
         job = _active_job.get()
         on_host = host if host is not None else self.host
@@ -159,7 +169,30 @@ class _GatedExecutorMixin:
         )
         if mutates is None or self._gate is None:
             return
-        await self._gate.confirm_action(job=job, host=on_host, description=mutates, command=operation)
+        await self._gate.confirm_action(
+            job=job,
+            host=on_host,
+            description=redact_credentials(mutates),
+            command=redact_credentials(operation),
+        )
+
+    def _trace_output(self, result: CommandResult, host: Host | None = None) -> None:
+        """Keep what the command said, verbatim, in the debug log (`PKG-FR-LOG-VERBATIM`).
+
+        The counterpart to `_announce`: the trace records what was asked, this records what
+        came back. Both halves are needed to answer "what did the tool actually do" — a
+        package manager's own output is the only account of what it did with the transaction
+        it was handed, and until now none of it reached the log at any level.
+
+        stdout and stderr are separate records so a formatter never has to guess which
+        stream a line came from. Empty streams produce nothing: a run's trace is large
+        enough without a line per silent command.
+        """
+        extra = {"job": _active_job.get(), "host": (host if host is not None else self.host).value}
+        if result.stdout:
+            _logger.debug("stdout: %s", result.stdout.rstrip("\n"), extra=extra)
+        if result.stderr:
+            _logger.debug("stderr: %s", result.stderr.rstrip("\n"), extra=extra)
 
 
 class Process(Protocol):
@@ -302,11 +335,13 @@ class LocalExecutor(_GatedExecutorMixin):
                 proc.communicate(),
                 timeout=timeout,
             )
-            return CommandResult(
+            result = CommandResult(
                 exit_code=proc.returncode or 0,
                 stdout=stdout.decode() if stdout else "",
                 stderr=stderr.decode() if stderr else "",
             )
+            self._trace_output(result)
+            return result
         except TimeoutError:
             proc.terminate()
             await proc.wait()
@@ -457,11 +492,13 @@ class RemoteExecutor(_GatedExecutorMixin):
                 self._conn.run(cmd),
                 timeout=timeout,
             )
-            return CommandResult(
+            outcome = CommandResult(
                 exit_code=result.exit_status or 0,
                 stdout=str(result.stdout) if result.stdout else "",
                 stderr=str(result.stderr) if result.stderr else "",
             )
+            self._trace_output(outcome)
+            return outcome
         except TimeoutError:
             raise
 

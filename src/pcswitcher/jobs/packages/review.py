@@ -1017,6 +1017,17 @@ async def _review_repo_conflict_group(
         )
 
 
+def _warn_every_item_unasked(groups: Sequence[ReviewGroup], log: logging.Logger) -> None:
+    """Name every item a run with no terminal could not ask about (`PKG-FR-LOG-DECISIONS`).
+
+    Names, not a count: every one of them is declined for this run, and a number says which
+    items were declined to nobody.
+    """
+    for group in groups:
+        for entry in group.entries:
+            log.warning("%s — not asked, declined for this run (no TTY): %s", group.title, entry.label)
+
+
 async def review_items(
     groups: Sequence[ReviewGroup],
     *,
@@ -1048,8 +1059,7 @@ async def review_items(
         return ReviewOutcome(decisions=_decisions_from_automation(groups, automation_raw), was_interactive=True)
 
     if not is_interactive(console):
-        total = sum(len(group.entries) for group in groups)
-        log.warning("%d package review item(s) left unresolved (non-interactive run)", total)
+        _warn_every_item_unasked(groups, log)
         for group in groups:
             console.print(_render_group_panel(group))
         decisions = {entry.item_id: Decision.SKIP_ONCE for group in groups for entry in group.entries}

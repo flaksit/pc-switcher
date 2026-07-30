@@ -24,6 +24,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
+from pcswitcher.redaction import redact_credentials
+
 __all__ = [
     "DiffAction",
     "DiffClass",
@@ -127,6 +129,14 @@ class ItemDiff:
     This is D-02's "all classes flow through one pipeline" made real: regardless of
     which manager or item class produced it, `PackageSyncJob.apply()` and
     `packages.review.review_items()` only ever see `ItemDiff`/`ReviewEntry` shapes.
+
+    Being the one shape is also why the credential rule lands here
+    (`PKG-FR-CREDENTIAL-PRIVACY`): every URL the user reads while deciding arrives as this
+    object's own text — a repository's URLs, a flatpak remote's, a repository file shown
+    whole for a conflict — so redacting at construction covers all of them once instead of
+    at each of the dozen places that build a detail string. `item_id` is left alone: it is
+    the item's stable identity across runs and is written to the decision file, so
+    rewriting it would make a recorded decision unfindable.
     """
 
     item_class: ItemClass
@@ -143,6 +153,13 @@ class ItemDiff:
     # at once, so the group's own verb would be wrong for half of them.
     answer_hints: tuple[str, str] | None = None
     act_word: str | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "label", redact_credentials(self.label))
+        if self.detail is not None:
+            object.__setattr__(self, "detail", redact_credentials(self.detail))
+        if self.answer_hints is not None:
+            object.__setattr__(self, "answer_hints", tuple(redact_credentials(h) for h in self.answer_hints))
 
 
 def build_version_mismatch_detail(source_version: str, target_version: str, machines: Machines) -> str:

@@ -385,6 +385,49 @@ class TestConvergeDispatchByAction:
         assert "[dry-run] Would install i2" in caplog.messages
 
 
+class TestDecisionsReachTheLog:
+    """`PKG-FR-LOG-DECISIONS`: the report says what a job did; the log is where the user
+    reconstructs why, so every item it presented is named with the answer it got.
+    """
+
+    @pytest.mark.asyncio
+    async def test_every_presented_item_is_named_with_its_decision(self, caplog: pytest.LogCaptureFixture) -> None:
+        caplog.set_level(LogLevel.FULL.value, logger="pcswitcher.jobs.base")
+        job = FakeSyncJob(make_context())
+        diffs = (
+            _diff("i1", DiffAction.INSTALL),
+            _diff("r1", DiffAction.REMOVE, DiffClass.EXTRA_ON_TARGET),
+            _diff("r2", DiffAction.REMOVE, DiffClass.EXTRA_ON_TARGET),
+        )
+        _accept(
+            job,
+            diffs,
+            {"i1": Decision.APPLY, "r1": Decision.SKIP_ONCE, "r2": Decision.SKIP_ALWAYS},
+        )
+
+        await job.apply()
+
+        assert "reviewed i1 (install): applied" in caplog.messages
+        assert "reviewed r1 (remove): skipped this run" in caplog.messages
+        assert "reviewed r2 (remove): marked as this machine's own" in caplog.messages
+
+    @pytest.mark.asyncio
+    async def test_a_skipped_item_leaves_a_line_where_nothing_else_would(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A skipped item converges nothing and enters no report, so this is the only
+        record that it was ever offered."""
+        caplog.set_level(LogLevel.FULL.value, logger="pcswitcher.jobs.base")
+        job = FakeSyncJob(make_context())
+        diffs = (_diff("r1", DiffAction.REMOVE, DiffClass.EXTRA_ON_TARGET),)
+        _accept(job, diffs, {"r1": Decision.SKIP_ONCE})
+
+        await job.apply()
+
+        assert job.converge_calls == []
+        assert "reviewed r1 (remove): skipped this run" in caplog.messages
+
+
 class TestIdempotency:
     """J10/N2: a run over an ALREADY-converged pair is a no-op end to end.
 

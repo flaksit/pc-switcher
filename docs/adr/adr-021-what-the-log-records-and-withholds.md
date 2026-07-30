@@ -15,7 +15,7 @@ The log is the record of what pc-switcher did and why, so it names every item a 
 - Every change a tool made on its own behalf that no review showed — a package manager resolving its own dependencies is the case that exists today — MUST be logged.
 - A command's own output MUST be recorded verbatim at DEBUG, alongside the command text the executor already traces there.
 - A credential embedded in a URL MUST be withheld wherever pc-switcher writes or shows that URL: the executor's command trace, a command's recorded output, anything the user reads while deciding, and a configuration file displayed in full for a decision.
-- Redaction MUST sit where every path passes through it. `Executor` traces every command for every job, so a rule applied per job or per call site is a rule with holes.
+- Redaction MUST sit at each point a path leaves the process, never at each call site that builds a string. There are three: every log record, the per-command confirmation prompt, and the text a review shows while the user decides.
 
 **Forbidden:**
 - No aggregate standing in for the record: "3 of 5 applied" does not say which two did not, and a count is not a decision.
@@ -48,7 +48,7 @@ Each command's own output is recorded as the command produced it. A summary is a
 
 Repository credentials live inside the URL, so every place a URL appears is a place the secret appears: the command trace, recorded output, a review line, a configuration file shown whole for a decision. Withholding it in the log alone would leave it on screen; withholding it on screen alone would leave it in a world-readable file.
 
-Redaction belongs in `Executor`, because that is the one point every job's commands and output pass through. Placing it in each job would make correctness depend on every future call site remembering.
+There is no single point. `Executor` covers the command trace and each command's output, but a job's own log lines never pass through it, and the text a review shows — a repository file printed whole for a conflict — is built in-process and goes to the screen, not through a command. So the rule is applied at each of the three exits instead: a logging filter on the queue handlers, which is every route into the log; the confirmation prompt in `Executor`, the one thing there that never becomes a log record; and `ItemDiff`, which is the single shape every review line is built from. Three points, each of which every path of its kind passes through — not a rule repeated at each call site that happens to build a URL.
 
 ### The precedent this generalises
 
@@ -59,11 +59,11 @@ ADR-020's Ubuntu Pro rule already withholds content by construction: `pro status
 **Positive:**
 - A run is reconstructable from its log alone: what was proposed, what was decided, what the tool did unasked, and what each command said.
 - The exposure that already existed in the command trace closes with the same change that widens the record.
-- One redaction point, so a new job or a new command inherits the rule instead of re-implementing it.
+- Three redaction points and no fourth, so a new job, a new command or a new review line inherits the rule instead of re-implementing it.
 
 **Negative (costly to reverse):**
 - Log volume grows, and the current several-hundred-megabyte runs are the floor rather than the ceiling.
-- A redaction point in `Executor` sits on the path of every command in the program, so a mistake there affects every job rather than one.
+- Each redaction point sits on the path of everything of its kind in the program, so a mistake there affects every job rather than one. The logging filter additionally renders each record's message eagerly, giving up stdlib logging's deferred formatting.
 - Redacted output is no longer byte-identical to what the command printed, so a reader cannot diff a log against a live command and expect equality.
 - The rule protects credentials in URLs and nothing else. A secret that reaches a command another way is not covered, and pretending otherwise would be worse than stating the boundary.
 
@@ -71,7 +71,7 @@ ADR-020's Ubuntu Pro rule already withholds content by construction: `pro status
 
 - **Log the decisions, summarise the output** — rejected: the summary is chosen before knowing what a future post-mortem needs, which is the failure this ADR exists to fix.
 - **Verbatim output without redaction** — rejected: it writes repository credentials into a file every account on the machine can read.
-- **Redact in each job rather than in the executor** — rejected: the executor already traces every command, so per-job redaction leaves the oldest path uncovered and every new call site free to forget.
+- **Redact in each job rather than at the exits** — rejected: it leaves every new call site free to forget, and the oldest path — the command trace the executor has always written — uncovered.
 - **Declare the debug log sensitive instead of redacting** — rejected: it moves a tool problem onto the user, and the user reads review lines and conflict displays too, which no file permission covers.
 - **Withhold whole URLs** — rejected: the URL is what makes a repository identifiable, and origin divergence is reported by URL precisely because names lie (ADR-020 D-35, D-41).
 
