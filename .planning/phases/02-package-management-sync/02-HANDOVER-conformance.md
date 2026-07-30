@@ -8,7 +8,17 @@ Fourteen rulings the code does not implement: gap register in the criteria, evid
 
 ADR-020 holds the decisions; ADR-021 the logging and credential-privacy rules. Both Draft.
 
-## Step 1 — One sweep, three targets
+## Step 1 — Restructure `apt_sync.py`, wholesale
+
+`AptSyncJob` is 2412 lines, 69 methods, 35 attributes carrying state from `plan()` to `converge()`. It does seven jobs; extract them as collaborators and the attributes become explicit state. `flatpak_sync.py` (860 code lines) arguable, `snap_sync.py` no.
+
+Split: `apt/items.py`, `origins.py`, `messages.py` (the nine `build_*_detail`), `diffing.py`, `sources.py`, `commands.py`, `job.py` + collaborators. 150–600 lines each; 500 is not a target.
+
+Complete or not at all. Renaming and reshaping functions and classes is allowed; changing behaviour is not. Unit and integration suites green before and after each commit — otherwise a behavioural change introduced here becomes the baseline Step 2 records.
+
+Docs naming module paths, classes or test layout ship in the restructure commit.
+
+## Step 2 — One sweep, three targets
 
 Read the code once; check against it:
 
@@ -16,25 +26,13 @@ Read the code once; check against it:
 - `docs/system/package-sync.md` and `docs/jobs/package-sync.md`, whole;
 - `docs/system/{architecture,core,data-model,_index,logging}.md`, `docs/configuration.md`, `docs/jobs/folder-sync.md`, `docs/ops/testing-{architecture,ops}.md`, `docs/README.md`, `README.md`, `docs/planning/high-level-requirements.md`.
 
-Evidence as symbol names, never line numbers — Step 2 moves every line in `apt_sync.py`.
+Evidence as symbol names, never line numbers — Step 3 moves lines again.
 
-Outputs: complete gap register, with the swept-at commit recorded; docs wrong about today fixed here; docs wrong only once a fix lands listed in `02-DOC-DEBT.md` (deleted in Step 4); the work units.
-
-## Step 2 — Restructure `apt_sync.py`, wholesale
-
-`AptSyncJob` is 2412 lines, 69 methods, 35 attributes carrying state from `plan()` to `converge()`. It does seven jobs; extract them as collaborators and the attributes become explicit state. `flatpak_sync.py` (860 code lines) arguable, `snap_sync.py` no.
-
-Split: `apt/items.py`, `origins.py`, `messages.py` (the nine `build_*_detail`), `diffing.py`, `sources.py`, `commands.py`, `job.py` + collaborators. 150–600 lines each; 500 is not a target.
-
-Complete or not at all. Pure moves, no logic edits in the same commit, green suite either side. A move this size can hide a behavioural change.
-
-Docs naming module paths, classes or test layout ship in the restructure commit.
-
-Runs in parallel with Step 1: Step 1 writes docs only, Step 2 code only, and symbol-name evidence survives the moves.
+Outputs: complete gap register, with the swept-at commit recorded; docs wrong about current code-state fixed here; docs wrong only once a fix lands listed in `02-DOC-DEBT.md` (deleted in Step 4); the work units.
 
 ## Step 3 — Work units
 
-Per unit, one commit: fix, tests, and every doc it affects (`docs/system/package-sync.md`, `docs/jobs/package-sync.md`, `docs/configuration.md`, `docs/jobs/folder-sync.md`), closing its gap-register and `02-DIVERGENCES.md` entries. Units come from Step 1. Likely: collateral (DIV-12 first); logging + credential privacy together in `executor.py`; orchestration; apt repositories and holds; flatpak remotes and filter (widens the remote capture to four columns, reshapes every remote fixture); snap sideloads.
+Per unit, one commit: fix, tests, and every doc it affects (`docs/system/package-sync.md`, `docs/jobs/package-sync.md`, `docs/configuration.md`, `docs/jobs/folder-sync.md`), closing its gap-register and `02-DIVERGENCES.md` entries. Units come from Step 2. Likely: collateral (DIV-12 first); logging + credential privacy together in `executor.py`; orchestration; apt repositories and holds; flatpak remotes and filter (widens the remote capture to four columns, reshapes every remote fixture); snap sideloads.
 
 ## Step 4 — Closing re-sweep
 
@@ -50,23 +48,15 @@ ADR-020 and ADR-021 leave Draft once the code matches them.
 
 ## How to work
 
-Doc checks before every doc commit, gated on exit code, not chained with `&&`:
-
-```
-anchors resolve (GitHub slug: lowercase, drop non-word chars, EACH space -> one hyphen)
-every article mapped in the traceability table, no phantom or dangling ids
-no banned vocabulary reintroduced
-```
-
 Commit with an explicit pathspec: `git commit -F - -- path1 path2`. Never `git add -A`, never a bare `git commit` — the user stages their own files in the same tree.
 
 No GSD. Work directly, one commit per unit.
 
 ## Standing instructions on the documents
 
-- Handover ≤ 40 lines. Cut any sentence a reader could skip without acting differently.
+- Be concise. Cut any sentence a reader could skip without acting differently.
 - One home per fact: narrative = intent; criteria = checkable obligation + one-line why; ADR = decision + what forced it; `docs/adr/considerations/` = evidence; `docs/system/` = how it is built; `docs/jobs/` = what the user sees; `.planning/*` = scaffolding, deleted when spent. The ESM measurement is in six files, the firefox-epoch evidence in eight — collapse on contact.
 - Terms used must be defined, terms defined must be used. Banned: diff, direction, travel, vendor, screen, rows, keystrokes, provenance, rehearsal, prompts, "blocks" as a noun.
-- Say "synced", "the user", "job". No UI mechanics in the requirements. No restating core pc-switcher behaviour.
+- Say "synced", "the user", "job".
 - Machine names: `Atlas`, `Nomad`, `Vega`.
 - Do not restructure ADR-020 unasked.
