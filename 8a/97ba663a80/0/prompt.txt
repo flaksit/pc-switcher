@@ -9,3 +9,12 @@ For refactor: I often read as guideline for working with AI agents, that code fi
 ---
 
 I see during first sweep you look at docs as well. But further in plan not really explicit how/where these docs are janitored. Make that more explicit in the plan and then write the handover.
+
+---
+
+Your handover says "Be concise". But itself is a masterpiece of not being concise nor to the point nor telling only what's relevant for the audience and intent. Cut the blah-blah. ALWAYS. YOU COST ME MILLIONS OF TOKENS. I didn't read through the entire document at all. I just read a sentence. And another one. And another one. Everywhere my eye rests, I see wieldy, unnecessary prose. I don't have time to read. You waste tokens. Next sessions that reads is drowned in details and history and gets a bad start with less focus that it could have. IT IS AT LEAST THE 10TH TIME I TELL YOU THIS. How can I make you stop vomiting text?
+A few examples: look at my edits to the handover (just done where my eye rested; not exhaustive)
+
+Can step 1 and 2 be done in parallel?
+
+Show the prompt(s) that I should give to the next session(s).
