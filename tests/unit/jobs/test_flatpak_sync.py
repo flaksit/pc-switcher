@@ -136,6 +136,7 @@ class FakeFlatpakTarget:
         runtimes: dict[tuple[str, str], str] | None = None,
         unverified: set[tuple[str, str]] | None = None,
         filters: dict[tuple[str, str], str] | None = None,
+        filter_blocks: set[str] | None = None,
         install_records_origin: str | None = None,
         install_lands: bool = True,
         responses: dict[str, CommandResult] | None = None,
@@ -152,6 +153,11 @@ class FakeFlatpakTarget:
         self.unverified: set[tuple[str, str]] = set(unverified or ())
         # (scope, name) -> the path this target reports in the `filter` column.
         self.filters: dict[tuple[str, str], str] = dict(filters or {})
+        # Refs an ACTIVE filter on their origin remote makes `flatpak install` refuse. This is
+        # the one design requirement `PKG-FR-FLATPAK-FILTER`'s ordering rests on and the one
+        # thing about filters nobody has measured, so it is modelled explicitly and opted into
+        # per test rather than assumed everywhere.
+        self.filter_blocks: set[str] = set(filter_blocks or ())
         # What an `install` that exits 0 actually leaves behind. Both default to the honest
         # case; they exist so the post-install read-back has conditions to find, since the
         # whole point of that check is the outcomes an exit code cannot rule out.
@@ -200,6 +206,9 @@ class FakeFlatpakTarget:
             return CommandResult(0, "", "")
         if verb == "remote-modify":
             words_with_flags = shlex.split(cmd)
+            if "--no-filter" in words_with_flags:
+                _ = self.filters.pop((scope, positional[0]), None)
+                return CommandResult(0, "", "")
             ref_filter = next((w for w in words_with_flags if w.startswith("--filter=")), None)
             if ref_filter is not None:
                 self.filters[(scope, positional[0])] = ref_filter.removeprefix("--filter=")
@@ -214,6 +223,8 @@ class FakeFlatpakTarget:
             return CommandResult(0, "", "")
         if verb == "install":
             remote, ref = positional
+            if ref in self.filter_blocks and (scope, remote) in self.filters:
+                return CommandResult(1, "", f"error: Nothing matches {ref} in remote {remote}\n")
             if self.install_lands:
                 self.refs[(scope, ref)] = self.install_records_origin or remote
             return CommandResult(0, "", "")
@@ -2664,9 +2675,23 @@ class TestRemoteFilterReplicates:
         _ = path.write_text("org.example.*\n")
         return path
 
-    @staticmethod
-    def _target(responses: dict[str, CommandResult] | None = None) -> FakeFlatpakTarget:
-        return FakeFlatpakTarget(responses={"echo $HOME": CommandResult(0, "/home/tgt\n", ""), **(responses or {})})
+    @classmethod
+    def _target(
+        cls,
+        responses: dict[str, CommandResult] | None = None,
+        *,
+        carries: str | None = None,
+        filter_blocks: set[str] | None = None,
+    ) -> FakeFlatpakTarget:
+        """`carries` gives the target its OWN filter on the remote this run derives — the
+        state the ordering rule is really about, and the one the fake used to model as absent.
+        """
+        return FakeFlatpakTarget(
+            remotes={"user": {"customremote": cls._URL}} if carries is not None else None,
+            filters={("user", "customremote"): carries} if carries is not None else None,
+            filter_blocks=filter_blocks,
+            responses={"echo $HOME": CommandResult(0, "/home/tgt\n", ""), **(responses or {})},
+        )
 
     def test_the_filter_column_is_read_next_to_the_options_column(self) -> None:
         """Two independent columns: a filtered remote's verification state must parse exactly
@@ -2724,6 +2749,111 @@ class TestRemoteFilterReplicates:
         install = next(i for i, cmd in enumerate(calls) if "flatpak install" in cmd)
         applied = next(i for i, cmd in enumerate(calls) if "--filter=" in cmd)
         assert install < applied
+
+    @pytest.mark.asyncio
+    async def test_the_filter_the_target_already_carries_comes_off_before_the_install(self, tmp_path: Path) -> None:
+        """The late pass covers the source's filter; the target's own is in force throughout
+        the installs unless it is taken off first.
+        """
+        path = self._filter_file(tmp_path)
+        context, _source, target = make_context(
+            source_responses=self._source(str(path)), fake_target=self._target(carries="/etc/old.filter")
+        )
+        job = FlatpakSyncJob(context)
+
+        await run_job(job)
+
+        calls = all_calls(target)
+        cleared = next(i for i, cmd in enumerate(calls) if "--no-filter" in cmd)
+        install = next(i for i, cmd in enumerate(calls) if "flatpak install" in cmd)
+        applied = next(i for i, cmd in enumerate(calls) if "--filter=" in cmd)
+        assert cleared < install < applied
+        assert target.filters == {("user", "customremote"): str(path)}
+
+    @pytest.mark.asyncio
+    async def test_a_filter_the_target_carries_does_not_refuse_the_app_being_replicated(self, tmp_path: Path) -> None:
+        """The end the ordering exists for, with flatpak's refusal modelled: the app installs
+        because no filter is in force while it does.
+        """
+        path = self._filter_file(tmp_path)
+        context, _source, target = make_context(
+            source_responses=self._source(str(path)),
+            fake_target=self._target(carries="/etc/old.filter", filter_blocks={"org.example.App/x86_64/stable"}),
+        )
+        job = FlatpakSyncJob(context)
+
+        await run_job(job)
+
+        assert ("user", "org.example.App/x86_64/stable") in target.refs
+
+    @pytest.mark.asyncio
+    async def test_a_filter_the_source_no_longer_has_is_taken_off_the_target(self, tmp_path: Path) -> None:
+        """`PKG-FR-MANAGER-CONVERGES`: the source-driven late pass has nothing to iterate for
+        an unfiltered source remote, so without the clear the target keeps its filter for good.
+        """
+        _ = self._filter_file(tmp_path)
+        context, _source, target = make_context(
+            source_responses=self._source("-"), fake_target=self._target(carries="/etc/old.filter")
+        )
+        job = FlatpakSyncJob(context)
+
+        await run_job(job)
+
+        assert target.filters == {}
+        assert not any("--filter=" in cmd for cmd in all_calls(target))
+
+    @pytest.mark.asyncio
+    async def test_a_clear_that_fails_fails_the_app_naming_the_remote_and_the_filter(self, tmp_path: Path) -> None:
+        path = self._filter_file(tmp_path)
+        context, _source, target = make_context(
+            source_responses=self._source(str(path)),
+            fake_target=self._target(
+                {"--no-filter": CommandResult(1, "", "error: no such remote\n")}, carries="/etc/old.filter"
+            ),
+        )
+        job = FlatpakSyncJob(context)
+        plan = await job.plan()
+        job.accept_review(
+            plan, ReviewOutcome(decisions={d.item_id: Decision.APPLY for d in plan.diffs}, was_interactive=True)
+        )
+
+        with pytest.raises(PackageItemFailures) as raised:
+            await job.apply()
+
+        failed = {diff.item_id: reason for diff, reason in raised.value.failures}
+        assert list(failed) == [self._APP_ID]
+        assert "customremote" in failed[self._APP_ID]
+        assert "/etc/old.filter" in failed[self._APP_ID]
+        assert not any("flatpak install" in cmd for cmd in all_calls(target))
+
+    @pytest.mark.asyncio
+    async def test_a_dry_run_previews_the_clear_and_issues_none(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        path = self._filter_file(tmp_path)
+        context, _source, target = make_context(
+            source_responses=self._source(str(path)),
+            fake_target=self._target(carries="/etc/old.filter"),
+            dry_run=True,
+        )
+        job = FlatpakSyncJob(context)
+
+        with caplog.at_level(logging.DEBUG, logger="pcswitcher.jobs.base"):
+            await run_job(job)
+
+        assert any("/etc/old.filter" in record.message for record in caplog.records)
+        assert not any("--no-filter" in cmd for cmd in all_calls(target))
+
+    @pytest.mark.asyncio
+    async def test_a_remote_with_no_filter_on_either_machine_is_never_cleared(self, tmp_path: Path) -> None:
+        """Negative control: the clear runs on what the target reports, not on every remote."""
+        _ = self._filter_file(tmp_path)
+        context, _source, target = make_context(source_responses=self._source("-"), fake_target=self._target())
+        job = FlatpakSyncJob(context)
+
+        await run_job(job)
+
+        assert not any("--no-filter" in cmd for cmd in all_calls(target))
 
     @pytest.mark.asyncio
     async def test_the_filter_is_no_review_item(self, tmp_path: Path) -> None:

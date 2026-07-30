@@ -88,6 +88,17 @@ being replicated. That ordering rests on flatpak refusing an install its own fil
 which is a design requirement here and has NOT been measured. A filter that cannot be copied
 or re-applied fails every approved ref from that remote, naming the remote and the path.
 
+The rule is about which refs a filter can exclude, not about which machine wrote it, so the
+TARGET's own filter comes off first (`_clear_target_filters`, before the converge loop). A
+filter already on the target is in force during this run's installs exactly as a
+prematurely-applied source one would be, and `_apply_remote_filters` cannot reach it: that
+pass iterates the SOURCE's filters, so a remote the source no longer filters would keep the
+target's for good and the two machines would never converge. Clearing first is what makes the
+invariant "no filter is in force on a remote this run provisions while its approved refs
+install", whoever set it. The cost is accepted rather than unnoticed: a run whose re-apply
+then fails leaves the remote unfiltered until the next run, and every approved ref from it
+fails saying so.
+
 The flatpak OSTree store stays authoritative for its own state (D-01): this job never
 WRITES into `/var/lib/flatpak` or `~/.local/share/flatpak`, only shells out to `flatpak`
 itself. It does READ one file there, `<installation>/repo/<remote>.trustedkeys.gpg`,
@@ -1513,15 +1524,16 @@ class FlatpakSyncJob(PackageSyncJob):
 
     @override
     async def apply(self) -> None:
-        """Provision the derived remotes, run the base converge loop, then re-apply the
-        remotes' filters and delete the ones nothing uses.
+        """Provision the derived remotes and take their target-side filters off, run the base
+        converge loop, then re-apply the remotes' filters and delete the ones nothing uses.
 
         The ordering `plan()` used to carry in its `diffs` tuple lives here now, and has to:
         no remote is a diff in any direction, so nothing in the base loop would reach one.
         The first half is the whole of D-14's guarantee — every remote an approved ref needs
         is written before the loop issues its first `flatpak install` — and the second half is
         what `_apply_remote_filters` and `_delete_unused_remotes` each need the loop to have
-        finished for.
+        finished for. `_clear_target_filters` belongs to the first half for the same reason
+        `_apply_remote_filters` belongs to the second (module docstring).
 
         The base raises `PackageItemFailures` at the end of its own loop, so its failures are
         caught and re-raised together with the filter's: a filter that could not land fails
@@ -1545,6 +1557,7 @@ class FlatpakSyncJob(PackageSyncJob):
                 )
                 continue
             await self._write_derived_remote(derived)
+        await self._clear_target_filters()
 
         failures: list[tuple[ItemDiff, str]] = []
         try:
@@ -1658,6 +1671,71 @@ class FlatpakSyncJob(PackageSyncJob):
                 )
         return None
 
+    async def _clear_target_filters(self) -> None:
+        """Take the TARGET's own ref filter off every derived remote, before the converge
+        loop reaches its first install (`PKG-FR-FLATPAK-FILTER`, `PKG-FR-MANAGER-CONVERGES`).
+
+        Two things the late `_apply_remote_filters` pass cannot do on its own:
+
+        - The ordering rule protects the refs a filter can exclude, and a filter the target
+          already carries excludes them just as a prematurely-applied source one would. Only
+          the source's filter is late today; the target's would stay in force throughout.
+        - A remote the source no longer filters at all is absent from `_apply_remote_filters`'
+          source-driven loop, so the target's filter would survive every run and the two
+          machines would never converge.
+
+        Filters are cleared rather than left alone when they already match, because a matching
+        filter excludes exactly the same refs — the ordering rule is about what is in force
+        during the installs, not about whose it is. `--no-filter` is `remote-modify`'s own verb
+        for it (Flatpak 1.14.6).
+
+        The target's CURRENT filters are read back rather than taken from `plan()`: the derived
+        writes have just run, and `_target_remotes_now` is the same "the target's own answer is
+        the only evidence" rule the origin guard uses.
+
+        A clear that fails is charged to the refs like a failed derived write (D-39): the
+        filter it could not remove is precisely what may refuse them, so installing in hope
+        would report flatpak's symptom instead of this run's cause.
+        """
+        for derived in self._derived_remotes:
+            if derived.remote_id in self._failed_derived_remotes:
+                continue
+            target_item = (await self._target_remotes_now()).get(derived.remote_id)
+            if target_item is None or target_item.filter_path is None:
+                continue
+            if self.context.dry_run:
+                self._log(
+                    Host.TARGET,
+                    LogLevel.FULL,
+                    f"[dry-run] Would take the ref filter {target_item.filter_path} off the {derived.scope} "
+                    f"flatpak remote {derived.name} before installing from it",
+                )
+                continue
+            result = await self.target.run_command(
+                f"{_sudo_prefix(derived.scope)}flatpak remote-modify {_scope_flag(derived.scope)} --no-filter "
+                f"{shlex.quote(derived.name)}",
+                login_shell=False,
+                mutates=(
+                    f"take the ref filter {target_item.filter_path} off the {derived.scope} flatpak remote "
+                    f"{derived.name} on {self.machines.target}"
+                ),
+            )
+            self._target_remotes_now_by_id = None
+            if result.success:
+                # A filter has no item of its own, so this is the only line the run leaves
+                # about the removal — the same reason `_apply_remote_filters` logs its own.
+                self._log(
+                    Host.TARGET,
+                    LogLevel.FULL,
+                    f"take the ref filter {target_item.filter_path} off the {derived.scope} flatpak remote "
+                    f"{derived.name}",
+                )
+            else:
+                self._failed_derived_remotes[derived.remote_id] = (
+                    f"its ref filter {target_item.filter_path} could not be taken off first: "
+                    f"{result.stderr.strip() or 'flatpak refused --no-filter'}"
+                )
+
     async def _apply_remote_filters(self, already_failed: frozenset[str]) -> list[tuple[ItemDiff, str]]:
         """Replicate each derived remote's ref filter, returning the approved refs it failed
         (`PKG-FR-FLATPAK-FILTER`).
@@ -1666,6 +1744,9 @@ class FlatpakSyncJob(PackageSyncJob):
         the source has installed, so applying it first would exclude the very refs this run is
         replicating. That ordering rests on flatpak refusing an install its own filter
         excludes, which is a design requirement here and has not been measured.
+
+        A remote the source does not filter needs nothing here: `_clear_target_filters` has
+        already taken the target's own off, so skipping it converges rather than strands it.
         """
         failures: list[tuple[ItemDiff, str]] = []
         for derived in self._derived_remotes:
