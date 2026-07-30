@@ -80,6 +80,11 @@ class TerminalUIStepGate:
     `TerminalUIConfirmer` does — a Rich `Live` and a `Prompt.ask` cannot share the
     terminal — and resumes it in a `finally` so the display is handed back even when the
     prompt raises.
+
+    Both machine names are required, not defaulted (`PKG-FR-NAME-THE-MACHINES`): this
+    prompt is a question the user answers, so the machine about to be changed is named
+    here by hostname, once, in the heading. That is why a `mutates=` phrase does not have
+    to repeat it — the phrase says what the change does, the heading says where.
     """
 
     def __init__(
@@ -87,20 +92,24 @@ class TerminalUIStepGate:
         console: Console,
         ui: PausableUI,
         *,
+        source_hostname: str,
+        target_hostname: str,
         logger: logging.Logger | None = None,
     ) -> None:
         self._console = console
         self._ui = ui
+        self._hostnames = {Host.SOURCE: source_hostname, Host.TARGET: target_hostname}
         self._logger = logger if logger is not None else logging.getLogger("pcswitcher.step_gate")
 
     async def confirm_action(self, *, job: str, host: Host, description: str, command: str) -> None:
         extra = {"job": job, "host": host.value}
+        hostname = self._hostnames[host]
 
         # Body is assembled as a `Text`, never a markup string: `command` is arbitrary
         # content (package names, file paths, snippet bodies) and a stray `[` in it would
         # otherwise be parsed as Rich markup and raise mid-prompt.
         body = Text()
-        body.append(f"{job} → {host.value}\n", style="bold")
+        body.append(f"{job} → {hostname}\n", style="bold")
         body.append(f"{description}\n\n", style="dim")
         body.append(command, style="bold")
 
@@ -125,5 +134,5 @@ class TerminalUIStepGate:
 
         if response == _ABORT:
             self._logger.warning("Aborted by user at: %s", description, extra=extra)
-            raise SyncAbortedByUser(f"{job}: aborted by user before {description} on {host.value}")
+            raise SyncAbortedByUser(f"{job}: aborted by user before {description} on {hostname}")
         self._logger.debug("Confirmed: %s", description, extra=extra)

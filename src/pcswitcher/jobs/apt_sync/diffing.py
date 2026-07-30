@@ -112,10 +112,18 @@ def diff_apt_packages(
         source_item = source_by_id.get(item_id)
         target_item = target_by_id.get(item_id)
 
-        if target_item is not None and target_item.name in target_hold_names:
+        # Both cannot be None: `item_id` is here because one side or the other carries it,
+        # and the two sides' items share the name their id is built from.
+        name = (target_item or source_item).name  # pyright: ignore[reportOptionalMemberAccess]
+        if name in target_hold_names:
             # Held on the target: suppress its install/version action entirely (a held
             # package must never be proposed for install/upgrade). No package-level
             # report — the `apt:hold:` item below carries the hold fact.
+            #
+            # Keyed on the name, not on the target having a MANUAL entry for it: the
+            # target's hold set is `apt-mark showhold`, which covers packages apt
+            # installed automatically there too, and one of those held on the target and
+            # manual on the source would otherwise be proposed for an install apt refuses.
             continue
         elif source_item is not None and target_item is None:
             origins = origin_plan.get(item_id, OriginPlan())

@@ -393,9 +393,10 @@ class Orchestrator:
         # Shared interactive confirmation gate for the orchestrator's out-of-order check
         # and any job-level prompt (e.g. FolderSyncJob first-sync overwrite, ADR-015).
         self._confirmer = TerminalUIConfirmer(self._console, self._ui, logger=self._logger)
-        # Both machine names, because every review screen names the machine an answer acts
-        # on rather than its source/target role. The target's is the CLI argument, the same
-        # string `JobContext.target_hostname` carries and the one the user typed.
+        # Both machine names, because every review screen — and the per-command
+        # confirmation, which is also a question the user answers — names the machine an
+        # answer acts on rather than its source/target role. The target's is the CLI
+        # argument, the same string `JobContext.target_hostname` carries.
         self._reviewer = TerminalUIReviewer(
             self._console,
             self._ui,
@@ -404,7 +405,13 @@ class Orchestrator:
             logger=self._logger,
         )
         if self._confirm_each_command:
-            self._step_gate = TerminalUIStepGate(self._console, self._ui, logger=self._logger)
+            self._step_gate = TerminalUIStepGate(
+                self._console,
+                self._ui,
+                source_hostname=self._source_hostname,
+                target_hostname=self._target_hostname,
+                logger=self._logger,
+            )
 
         # Create log file path and set up stdlib logging infrastructure.
         # Passing ui + console lets setup_logging pick the UI-routed TUI

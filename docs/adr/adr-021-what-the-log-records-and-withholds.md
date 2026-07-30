@@ -81,4 +81,3 @@ ADR-020's Ubuntu Pro rule already withholds content by construction: `pro status
 - ADR-020: Declarative package convergence — the requirements that forced these rules, and the Ubuntu Pro withholding precedent this generalises.
 - ADR-022: A read that did not answer fails the job — the other half of "the log names what went wrong".
 - `docs/planning/package-sync-conformance-criteria.md`: `PKG-FR-LOG-DECISIONS`, `PKG-FR-LOG-VERBATIM`, `PKG-FR-CREDENTIAL-PRIVACY`, `PKG-FR-COLLATERAL-AUTO` and `PKG-FR-ESM-PRIVACY` — the same rules as individually checkable articles.
-- `.planning/phases/02-package-management-sync/02-DIVERGENCES.md`: DIV-13 and DIV-14 record how far the shipped code is from these rules.

@@ -2215,8 +2215,8 @@ class FlatpakSyncJob(PackageSyncJob):
                 # sync does add, repoint and delete them on the target. Ruling 6's conflict
                 # screen is the one exception and is not named here — it asks about a remote
                 # feeding refs this machine already keeps, which a first sync has none of.
-                "the flatpak remotes those refs come from, and the unused ones the source "
-                "does not have (per scope, without a review line)",
+                "the flatpak remotes those refs come from, and unused remotes this sync "
+                "deletes (per scope, without a review line)",
             ],
             mechanism="flatpak install/uninstall/mask per item after review, with each ref's remote provisioned first",
         )

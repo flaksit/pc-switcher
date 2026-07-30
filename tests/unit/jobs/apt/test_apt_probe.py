@@ -1250,7 +1250,7 @@ class TestAReadThatDidNotAnswer:
 
     @pytest.mark.asyncio
     async def test_a_removal_impact_read_that_did_not_answer_fails_the_job(self) -> None:
-        """`_machine_specific_packages_by_source_file`. Its silence answers "this
+        """`AptProbe.packages_by_source_file`. Its silence answers "this
         repository strands nothing", which is the answer that lets a repository feeding
         machine-specific packages be removed or overwritten with no disclosure. The source
         holds no packages here, so `collect_target_policy` never runs and this is the only

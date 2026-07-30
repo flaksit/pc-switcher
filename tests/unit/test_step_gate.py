@@ -27,7 +27,7 @@ from pcswitcher.step_gate import StepGate, TerminalUIStepGate
 def _make_gate() -> tuple[TerminalUIStepGate, MagicMock]:
     """A gate wired to a real (non-terminal) Console and a mock UI; return both."""
     ui = MagicMock()
-    return TerminalUIStepGate(Console(), ui), ui
+    return TerminalUIStepGate(Console(), ui, source_hostname="atlas", target_hostname="nomad"), ui
 
 
 def _stub_gate(side_effect: object | None = None) -> MagicMock:
@@ -85,6 +85,26 @@ class TestTerminalUIStepGate:
         with patch("rich.prompt.Prompt.ask", side_effect=interrupt), pytest.raises(SyncAbortedByUser):
             await gate.confirm_action(job="snap_sync", host=Host.SOURCE, description="d", command="c")
         ui.resume.assert_called_once()
+
+    async def test_the_panel_names_the_machine_by_hostname(self) -> None:
+        """`PKG-FR-NAME-THE-MACHINES`: this is a question the user answers, so the machine
+        about to be changed is named once in the heading and never by its role."""
+        ui = MagicMock()
+        console = Console(record=True, width=100)
+        gate = TerminalUIStepGate(console, ui, source_hostname="atlas", target_hostname="nomad")
+        with patch("rich.prompt.Prompt.ask", return_value="p"):
+            await gate.confirm_action(job="apt_sync", host=Host.TARGET, description="install x", command="apt-get x")
+
+        rendered = console.export_text()
+        assert "apt_sync → nomad" in rendered
+        assert "target" not in rendered
+
+    async def test_the_abort_message_names_the_machine_by_hostname(self) -> None:
+        gate, _ui = _make_gate()
+        with patch("rich.prompt.Prompt.ask", return_value="a"), pytest.raises(SyncAbortedByUser) as excinfo:
+            await gate.confirm_action(job="snap_sync", host=Host.SOURCE, description="pause refreshes", command="c")
+        assert "on atlas" in str(excinfo.value)
+        assert "source" not in str(excinfo.value)
 
     async def test_command_with_markup_characters_does_not_raise(self) -> None:
         """A command containing Rich markup syntax renders as literal text."""

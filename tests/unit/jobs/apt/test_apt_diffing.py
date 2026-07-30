@@ -166,6 +166,18 @@ class TestDiffEngine:
         assert diffs[0].item_class == ItemClass.APT_HOLD
         assert diffs[0].action == DiffAction.REMOVE
 
+    def test_a_held_package_outside_the_targets_manual_set_is_still_not_proposed(self) -> None:
+        """`PKG-FR-APT-HELD-TARGET`: the target's hold set is `apt-mark showhold`, which
+        covers packages apt installed automatically there. Such a package is absent from
+        the target's manual set, so keying the suppression on that set proposed an install
+        apt refuses with `E: Held packages were changed`. Its hold is still an item.
+        """
+        source_items = [AptPackageItem(name="pkg-a", version="1.0")]
+
+        diffs = diff_apt_packages(source_items, [], {}, MACHINES, frozenset(), frozenset({"pkg-a"}))
+
+        assert [(diff.item_id, diff.action) for diff in diffs] == [("apt:hold:pkg-a", DiffAction.REMOVE)]
+
     def test_held_on_both_yields_no_diff(self) -> None:
         source_items = [AptPackageItem(name="pkg-a", version="1.0")]
         target_items = [AptPackageItem(name="pkg-a", version="1.0")]
