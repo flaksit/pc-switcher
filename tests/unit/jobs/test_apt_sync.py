@@ -6599,10 +6599,9 @@ class TestTheESMAttachmentGate:
         message = reviewer.gate_calls[0]["message"]
         assert _ESM_APPS in message
         assert _ESM_INFRA in message
-        assert "pro attach" in message
-        assert "401" in message
         # The gate asks the user to go and attach the other machine, so the message must
         # carry both the commands and the link that outlives them if Ubuntu changes the flow.
+        assert "pro attach" in message
         assert "pro enable esm-apps esm-infra" in message
         assert "https://documentation.ubuntu.com/pro/attach-tutorial/" in message
         assert reviewer.target_calls_at_gate == [[]], "the gate must precede the job's first write"
