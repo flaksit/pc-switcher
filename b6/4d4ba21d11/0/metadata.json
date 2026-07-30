@@ -1,0 +1,42 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "b64d4ba21d11",
+  "session_id": "a0fc14c1-6e48-4642-8170-4cbe4a8ffcec",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-30T09:03:44.931619435Z",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "docs/adr/_index.md",
+    "docs/adr/adr-020-declarative-package-convergence.md",
+    "docs/adr/adr-021-what-the-log-records-and-withholds.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "caf6fafeb48c",
+  "checkpoint_transcript_start": 408,
+  "transcript_lines_at_start": 408,
+  "compact_transcript_start": 112,
+  "token_usage": {
+    "input_tokens": 4,
+    "cache_creation_tokens": 4644,
+    "cache_read_tokens": 313012,
+    "output_tokens": 4666,
+    "api_call_count": 2
+  },
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-30T09:03:44.886640965Z",
+    "agent_lines": 87,
+    "agent_removed": 2,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 87,
+    "total_lines_changed": 89,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
