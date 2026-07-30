@@ -80,7 +80,9 @@ Each job then plans, reviews, applies and reports.
 
 **Review** presents one group at a time: items of one kind, all doing the same thing, each carrying its own decision and all settled in a single pass. The default choice for each item is the action that does no harm: *apply* for an install, *skip* for anything that removes or overwrites. Three answers are offered, or two where a permanent decision is not meaningful.
 
-The two machines are named by hostname wherever the user reads them, and every answer states its effect on a named machine — the skip answer on a removal reads *keep it on MyMachine*, not "skip". The user can abort the whole sync at any question, and aborting is never read as declining one item.
+The two machines are named by hostname wherever the user reads them. *Apply*, *skip this run* and *always skip* name the decisions; they are not what the user reads. Each answer is offered as the act itself — *install*, *skip now*, *never install*, or *keep for good* where the item is already on the machine — and carries a sentence of its own naming the machine the act happens to and how long the answer lasts, so a permanent answer says it will not be asked again. The answers to one question read as a set: one grammar for all of them, and the machine named in every sentence or in none.
+
+The user can abort the whole sync at any question, and aborting is never read as declining one item.
 
 **Apply** converges one item at a time, in the order the job requires, and announces every write. Nothing unapproved is written, and no write escapes pc-switcher's per-command confirmation — including the decision records, the snippet registry and the snap refresh pause.
 
