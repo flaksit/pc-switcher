@@ -1,0 +1,79 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "fd6132ef4548",
+  "session_id": "354077f7-8171-4dc7-8e2f-e2c4e73a7888",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-30T22:58:19.62629922Z",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 2,
+  "save_step_count": 3,
+  "files_touched": [
+    "docs/system/data-model.md",
+    "docs/system/logging.md",
+    "docs/system/testing.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "32e116260473",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 338,
+    "cache_creation_tokens": 389830,
+    "cache_read_tokens": 39915193,
+    "output_tokens": 126359,
+    "api_call_count": 178
+  },
+  "session_metrics": {
+    "turn_count": 13
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-30T22:58:19.478648689Z",
+    "agent_lines": 0,
+    "agent_removed": 11,
+    "human_added": 65,
+    "human_modified": 102,
+    "human_removed": 0,
+    "total_committed": 74,
+    "total_lines_changed": 178,
+    "agent_percentage": 6.179775280898876,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 9,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9
+      }
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 332,
+      "user_lines_removed": 303,
+      "agent_lines_added": 5,
+      "agent_lines_removed": 7,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9,
+        "docs/ops/ci-setup.md": 1,
+        "docs/ops/testing-architecture.md": 109,
+        "docs/ops/testing-ops.md": 47,
+        "docs/system/data-model.md": 97,
+        "docs/system/logging.md": 42,
+        "docs/system/package-sync.md": 1,
+        "docs/system/testing.md": 26
+      },
+      "user_removed_per_file": {
+        "docs/ops/ci-setup.md": 1,
+        "docs/ops/testing-architecture.md": 144,
+        "docs/ops/testing-ops.md": 57,
+        "docs/system/data-model.md": 39,
+        "docs/system/logging.md": 34,
+        "docs/system/package-sync.md": 1,
+        "docs/system/testing.md": 27
+      }
+    }
+  ]
+}
