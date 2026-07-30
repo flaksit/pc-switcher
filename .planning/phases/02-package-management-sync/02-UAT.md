@@ -3,74 +3,42 @@ status: testing
 phase: 02-package-management-sync
 source: [02-VERIFICATION.md]
 started: 2026-07-24T12:02:22Z
-updated: 2026-07-29T08:16:47Z
+updated: 2026-07-31T00:00:00Z
 ---
 
 ## Current Test
 
 number: 1
-name: Real-TTY interactive batched review
+name: The package review on two machines
 expected: |
-  On a real terminal, run a sync with packages diverged in both directions. Each group is one screen listing its items, every row carrying its own decision in a column; `<y>`/`<s>`/`<n>` set the focused row, `<enter>` confirms, and the recorded outcome in *.decisions.yaml matches the column. The screens name the two machines by hostname. The snippet editor works, and an authored snippet lands in ~/.config/pc-switcher/package-snippets.yaml and replays on the target the same run.
+  Follow `02-UAT-01-RUNBOOK.md`. Every group is one question, every item a line carrying its own answer, and nothing is asked twice. What each column said is what lands in `*.decisions.yaml`, on the machine that holds the item.
 awaiting: user response
 
 ## Tests
 
-Intent under test: `docs/planning/package-sync-user-requirements.md` (what the user is promised) and `docs/planning/package-sync-conformance-criteria.md` (its testable form). Hand procedure for test 1: `02-UAT-01-RUNBOOK.md`.
+Intent under test: `docs/planning/package-sync-user-requirements.md` and its testable form, `docs/planning/package-sync-conformance-criteria.md`. Hand procedure for tests 1 and 2: `02-UAT-01-RUNBOOK.md`.
 
-### 1. Real-TTY interactive batched review
+### 1. The package review on two machines
 expected: |
-  On a real terminal (not CI), run a sync with packages diverged in both directions (some to install, some to remove). Confirm:
-  - Each group is ONE screen (`packages.decision_list`) listing its own items — no Rich panel above it, no second pass over the leftovers — and it hands the terminal back to the Rich Live display without corruption.
-  - Every row carries its current decision in a column: `<y>` applies, `<s>` skips once, `<n>` marks always-skip, `<space>` cycles the focused row, the shift of any of those keys sets every row, `<enter>` confirms. State is a glyph, not a background colour.
-  - Installs and removals are separate screens; install-direction rows start applied and removal-direction rows start at skip-once (`PKG-FR-REMOVAL-DISTINCT`).
-  - A screen that records nothing (report-only, repository deletion, pin deletion, repository and remote conflicts) is the same widget with `<n>` absent from the legend (`PKG-FR-NO-MARK-ON-ORIGIN`).
-  - Every title, detail, prompt and answer names the two machines by hostname; "source" and "target" appear nowhere on screen (`PKG-FR-NAME-THE-MACHINES`).
-  - Each answer states its own effect on a named machine (`PKG-FR-EFFECT-NOT-MECHANISM`): a repository deletion names the URLs it takes away, a pin deletion prints the pin file, and the collateral prompt says what protects the package and that stopping ends the whole sync.
-  - Whatever each column said is what lands in `*.decisions.yaml`, on the machine that HOLDS the item (`PKG-FR-MACHINE-SPECIFIC`).
-  - The multi-line snippet editor (`(Ctrl-D to finish)`) works, rejects a whitespace-only body, and an authored snippet lands in ~/.config/pc-switcher/package-snippets.yaml and is replayed on the target in the same run.
+  On a real terminal, with the two machines diverged as the runbook sets them up:
+  - One question per group: arrow keys between lines, `<y>`/`<s>`/`<x>` on the focused line, a shifted key on every line, `<enter>` to confirm, `<ctrl-c>` to abort the sync. No second pass and no leftover set. A question that records nothing offers two answers, its legend shorter by exactly `<x>`. The questions that must show something first — a repository being deleted, a collateral package, an unreproducible item — come one item at a time.
+  - Every title, detail and answer names the two machines by hostname and states its own effect on one of them; the permanent answer says the user will not be asked again and whose machine the item is. "source" and "target" name no machine anywhere.
+  - What each column said is what lands in `*.decisions.yaml` on the machine that holds the item: an install on the source, a removal on the target. The snippet editor rejects a whitespace-only body, and an accepted snippet lands in `~/.config/pc-switcher/package-snippets.yaml` and replays on the target in the same run.
 result: [pending]
-note: |
-  Rehearsal run 2026-07-28, product still unrun. `tests/manual/review_harness.py` was driven interactively from the repo venv against the real `TerminalUI`, the real `review_items` and `ask_gate`, and the real prompt widgets — every screen shape the review can produce, plus Ctrl-C at each. No machine was contacted and nothing was written.
 
-  Found in that rehearsal, all fixed in 9ba0d437 / 6541eae4 / 1db1fc6b:
-  - the second screen echoed back the opposite of the decision just chosen ("remove fortunes-min" after the user had declined that removal);
-  - the two-pass tick-then-tick-the-leftovers flow itself, replaced by one screen per group with a decision per row;
-  - selection state carried by background colour alone, invisible in some terminals — now a glyph per decision;
-  - the legend mislabelled `<a>` (conventionally abort) and never mentioned `<enter>`;
-  - every row repeated the item's action, which the group title already names;
-  - a trailing blank line inside every rendered panel;
-  - a whitespace-only install snippet was accepted as a resolution;
-  - "never offer again on this machine" named the consequence rather than what is recorded — now "always skip";
-  - screens said "source"/"target" instead of the two hostnames;
-  - a repository deletion showed only a filename, never the URLs it would take away;
-  - a pin deletion showed only a filename, never the pin's content;
-  - the collateral prompt said neither what protects the package nor that aborting ends the whole sync rather than the question.
-
-  Two further reports were harness artifacts, not product defects: a stale hardcoded title in the harness, and a traceback on Ctrl-C that the real CLI catches (`cli.py`'s `except SyncAbortedByUser`). The harness now catches it the same way.
-
-  Not exercised, and the reason this test stays pending: everything that needs two machines — a real sync, decision files written to the holding machine, the source-vs-target routing of an always-skip, the snippet registry push and replay, `/etc/apt` and flatpak remote convergence, and the Ubuntu Pro gate's re-probe loop.
-
-### 2. Physical two-machine end-to-end walkthrough
+### 2. What the run leaves behind
 expected: |
-  On two real machines, run a full package sync and confirm all three phase success criteria hold end-to-end:
-  - Packages replicate (apt/snap/flatpak installed on target match source).
-  - Conflicts and version mismatches are reported before any change, never silently converged.
-  - Machine-specific / always-skip packages stay inert (not forced onto target).
-  Everything the user reads while deciding names the two machines by hostname (`PKG-FR-NAME-THE-MACHINES`). Then inspect ~/.config/pc-switcher/*.decisions.yaml (note `manual.decisions.yaml` for manual installs — the manager id, not the job name) and package-snippets.yaml on both ends, and confirm they reflect the run, each always-skip entry landing on the machine that holds the item.
+  The same run, checked afterwards on both machines (runbook §5):
+  - Packages replicate, except what the user skipped or marked; conflicts and version differences are reported before any change, never silently converged; a package marked as a machine's own stays inert, and is named rather than taken when another change would remove it.
+  - A held package arrives at the source's version; a sideloaded snap is left alone on both machines and named in a warning; a flatpak remote's filter reaches the target at the same path; a repository the target still installs from is not offered for deletion; a remote nothing uses is deleted with no question.
+  - The log names every item and the answer it received, carries each package manager's own output, and shows a URL credential as `***@` and never in full. A dead package-manager read fails its own job; the other three still run (runbook §6).
 result: [pending]
 
 ### 3. --confirm-each-command gate and verbatim debug trace
 expected: |
-  Only reachable by hand: the gate refuses to run without a TTY, so no unit or integration test can drive the prompt. On a real terminal, run a sync with diverged packages using `pc-switcher sync <target> --confirm-each-command`. Confirm:
-  - Before EVERY modification a prompt appears showing the exact command (or `send_file <local> -> <remote>`), and the prompt composes cleanly with the paused Rich Live display, same as the batched review.
-  - Pressing Enter alone re-prompts — there is no default choice.
-  - `p` runs that one command and moves to the next prompt; `a` aborts the whole sync.
-  - Prompts appear for target writes (apt/snap/flatpak converge) AND source writes (an always-skip decision file, an authored snippet), and NOT for read-only commands.
-  - Ctrl-C at a prompt aborts rather than proceeding.
-  Then, in the same run's log file (`pc-switcher logs --last`), confirm every command appears verbatim at DEBUG with its job and host — reads included — and that a mutating line carries its description in brackets.
-  Finally, run once WITHOUT the flag and confirm the sync is unchanged (no prompts, same outcome).
-  Intent: `PKG-FR-CONFIRM-EACH` in `docs/planning/package-sync-conformance-criteria.md`.
+  Only reachable by hand: the gate refuses to run without a TTY. On a real terminal, run `pc-switcher sync <target> --confirm-each-command` with diverged packages, then once without the flag to confirm the sync is unchanged. Confirm:
+  - Before every modification a prompt shows the exact command (or `send_file <local> -> <remote>`) and composes cleanly with the paused Rich Live display; Enter alone re-prompts, `p` runs that one command, `a` and Ctrl-C abort the whole sync. The gate appears for target writes and for source writes (a decision file, an authored snippet), and never for reads.
+  - In the same run's log, every command appears verbatim at DEBUG with its job and host, and a mutating line carries its description in brackets (`PKG-FR-CONFIRM-EACH`).
 result: [pending]
 
 ## Summary
@@ -87,8 +55,6 @@ skipped: 0
 
 blocked: 0
 
-<!-- Test 1 carries rehearsal evidence (see its note): every review screen was driven by hand through tests/manual/review_harness.py on 2026-07-28 and twelve findings were fixed. It stays pending because the test is a real sync between two machines, which has never run. -->
-
 ## Gaps
 
-[none open — every rehearsal finding recorded under test 1 was fixed before this file was updated]
+[none open]
