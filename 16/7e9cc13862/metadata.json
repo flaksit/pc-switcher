@@ -1,0 +1,29 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "167e9cc13862",
+  "strategy": "manual-commit",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "src/pcswitcher/jobs/apt_sync/diffing.py",
+    "src/pcswitcher/jobs/apt_sync/job.py",
+    "src/pcswitcher/jobs/apt_sync/messages.py",
+    "src/pcswitcher/jobs/apt_sync/packages.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/16/7e9cc13862/0/metadata.json",
+      "transcript": "/16/7e9cc13862/0/full.jsonl",
+      "compact_transcript": "/16/7e9cc13862/0/transcript.jsonl",
+      "content_hash": "/16/7e9cc13862/0/content_hash.txt",
+      "prompt": "/16/7e9cc13862/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 298,
+    "cache_creation_tokens": 320445,
+    "cache_read_tokens": 32004848,
+    "output_tokens": 96225,
+    "api_call_count": 157
+  }
+}
