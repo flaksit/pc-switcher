@@ -124,7 +124,7 @@ So before `apt_sync` writes anything, it probes the target and — if the target
 - **I have attached `<target>` — check again and continue.** pc-switcher probes again rather than trusting the answer. You can answer this as many times as you like; re-probing is free.
 - **Skip `apt_sync` this run (every other job still runs).** The target's `/etc/apt` is left exactly as it was and every other job runs normally.
 
-The commands the prompt gives you, to run on the target, are `sudo pro attach <token>` followed by `sudo pro enable esm-apps esm-infra`.
+The commands the prompt gives you, to run on the target, are `sudo pro attach <token>` followed by `sudo pro enable esm-apps esm-infra`, and it links Ubuntu's own tutorial — [Attach a machine to your subscription](https://documentation.ubuntu.com/pro/attach-tutorial/) — which stays current if the procedure changes.
 
 Skipping costs the whole apt job, not just the two files, and that is deliberate: pin files always travel, so a pin the source has and the target lacks would reach the target whether or not the sources it names did, leaving a candidate selection matching neither machine. A run with nobody to ask takes the skip too. A dry run never asks — it warns that the target is unattached and that a real run would skip `apt_sync` entirely.
 
