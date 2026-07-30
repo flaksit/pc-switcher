@@ -74,10 +74,20 @@ setting and the digest of its own ostree keyring, and convergence replicates bot
 `flatpak remote-add --gpg-import=<staged key>` for a signed remote, `--no-gpg-verify`
 only when the SOURCE remote is itself unverified. Without this a replicated remote is
 configured but unusable: flatpak refuses every install from it with `Can't check
-signature: public key not found`. The key bytes travel byte-for-byte from the source
+signature: public key not found`. The key bytes are synced byte-for-byte from the source
 machine and are never re-fetched from a vendor (ADR-020 D-12's rule for apt signing
 keys), staged under the target's `~/.cache/pc-switcher/` exactly as `apt_sync` stages
 `/etc/apt` content, because SFTP reaches only the SSH user's own home.
+
+A verified remote need not hold a keyring of its own: libostree also verifies against
+`_OSTREE_TRUSTED_ANCHOR_DIR`, which is the MACHINE's trust rather than the remote's, and
+replicating name, URL and `gpg-verify` alone hands the target a remote it cannot install
+from. `_anchors_to_import` closes that by giving the replicated remote the source's anchor
+files as its OWN keyring: the target's remote then trusts exactly what the source's remote
+trusted, and no other remote on the target gains anything. An anchor the target already
+holds is left alone, and a verified remote with no key material anywhere on the source is
+refused outright — every approved ref from it fails naming the remote, which is the honest
+end of `PKG-FR-FLATPAK-REMOTE-TRUST` when there is nothing to sync.
 
 A remote's FILTER replicates by the same mechanism as its key. flatpak records only the
 path (`_FLATPAK_REMOTES_CMD_TEMPLATE`'s fourth column), so the file at that path is copied
@@ -251,6 +261,19 @@ _FLATPAK_KEYRING_DIGESTS_CMD_TEMPLATE = "sha256sum {directory}/*{suffix} 2>/dev/
 # it does.
 _FLATPAK_SYSTEM_INSTALLATION = Path("/var/lib/flatpak")
 
+# The one keyring directory libostree consults BESIDES a remote's own
+# `<remote>.trustedkeys.gpg` — verified against the installed libostree 2024.5 binary, which
+# carries this path as a literal and names no other such directory. A remote can therefore be
+# verified while holding no key of its own, its trust supplied by whichever machine put a
+# keyring here. That is trust the MACHINE holds rather than the remote, so replicating the
+# remote alone gives the target a remote marked verified against a key it may not have, and
+# every install from it fails the signature check. `_anchors_to_import` carries these files
+# into the replicated remote's OWN keyring instead of replicating them machine-wide: the
+# target's remote then trusts exactly what the source's remote trusted, and nothing else on
+# the target gains trust it did not have.
+_OSTREE_TRUSTED_ANCHOR_DIR = Path("/usr/share/ostree/trusted.gpg.d")
+
+
 # Masks are ALSO per-installation (#208, D-10), listed one pattern per line with no
 # header — but the scope flag MUST precede the `mask` subcommand: bare `flatpak mask`
 # omits --user masks and defaults to --system (RESEARCH: verified live, Flatpak 1.14.6),
@@ -374,12 +397,15 @@ class FlatpakRemoteItem:
     `flatpak remotes --columns=options` (the `no-gpg-verify` token) and `key_digest` is
     the sha256 of the remote's own ostree keyring, `<installation>/repo/<name>.
     trustedkeys.gpg`; it is `None` for an unverified remote and for a verified one whose
-    trust comes from a machine-level anchor under `/usr/share/ostree/trusted.gpg.d`
-    rather than from a per-remote key.
+    trust comes from the machine-level anchor `_OSTREE_TRUSTED_ANCHOR_DIR` rather than from
+    a per-remote key. The anchor deliberately stays OFF the item: it is one machine-wide
+    fact, not a facet of any one remote, and folding it in would make every remote on two
+    machines with different anchors compare unequal and be rewritten every run. It is read
+    once per run and consulted at converge time instead (`_anchors_to_import`).
 
     The DIGEST lives on the item, not the key bytes. An item is carried through the diff,
     the review and the decision file, all of which want an identity and a comparison,
-    never a payload; the bytes themselves travel
+    never a payload; the bytes themselves are synced
     separately and byte-for-byte (`flatpak_sync` stages the source's keyring file and
     passes it to `flatpak remote-add --gpg-import`), which is ADR-020 D-12's rule that
     key material is copied from the source machine and never re-fetched from a vendor.
@@ -514,6 +540,18 @@ def _keyring_digests_cmd(scope: str) -> str:
     )
 
 
+def _trust_anchor_digests_cmd() -> str:
+    """Digests of every file in `_OSTREE_TRUSTED_ANCHOR_DIR`, batched exactly like the
+    per-remote keyring read and unguarded for the same reason: a machine with no anchor at all
+    leaves the glob unmatched, so `sha256sum` prints nothing and exits 1, and that is the
+    ordinary case rather than a failure.
+
+    Built at call time rather than held as a constant, exactly as `_keyring_digests_cmd` is,
+    so the directory stays the single place the path is written down.
+    """
+    return f"sha256sum {_OSTREE_TRUSTED_ANCHOR_DIR}/* 2>/dev/null"
+
+
 def _source_keyring_path(item: FlatpakRemoteItem) -> Path:
     """The LOCAL path of the source machine's own keyring file for `item`.
 
@@ -526,21 +564,28 @@ def _source_keyring_path(item: FlatpakRemoteItem) -> Path:
     return installation / "repo" / f"{item.name}{_TRUSTEDKEYS_SUFFIX}"
 
 
-def _parse_keyring_digests(output: str) -> dict[str, str]:
-    """`{remote name: sha256}` from one scope's batched `sha256sum` output.
-
-    `<digest>  <path>` lines, mapped by stripping the `.trustedkeys.gpg` suffix off the
-    basename — a remote name may contain dots (`my.remote.name.trustedkeys.gpg`,
-    verified live), so only the fixed suffix is removed, never everything after the
-    first dot.
-    """
+def _parse_file_digests(output: str) -> dict[str, str]:
+    """`{path: sha256}` from a batched `sha256sum` run — `<digest>  <path>` per line."""
     digests: dict[str, str] = {}
     for line in _lines(output):
         parts = line.split(maxsplit=1)
         if len(parts) != 2:
             continue
         digest, path = parts
-        name = Path(path.strip()).name
+        digests[path.strip()] = digest
+    return digests
+
+
+def _parse_keyring_digests(output: str) -> dict[str, str]:
+    """`{remote name: sha256}` from one scope's batched `sha256sum` output.
+
+    Mapped by stripping the `.trustedkeys.gpg` suffix off the basename — a remote name may
+    contain dots (`my.remote.name.trustedkeys.gpg`, verified live), so only the fixed suffix
+    is removed, never everything after the first dot.
+    """
+    digests: dict[str, str] = {}
+    for path, digest in _parse_file_digests(output).items():
+        name = Path(path).name
         if not name.endswith(_TRUSTEDKEYS_SUFFIX):
             continue
         digests[name[: -len(_TRUSTEDKEYS_SUFFIX)]] = digest
@@ -989,7 +1034,7 @@ def build_remote_conflict_detail(name: str, scope: str, refs: Sequence[str], mac
     )
 
 
-def _remote_trust_flags(item: FlatpakRemoteItem, staged_key: str | None, *, restore_verification: bool) -> str:
+def _remote_trust_flags(item: FlatpakRemoteItem, staged_keys: Sequence[str], *, restore_verification: bool) -> str:
     """The `flatpak remote-add`/`remote-modify` flags that replicate `item`'s trust
     (#215), as a string that begins with a space or is empty.
 
@@ -1001,26 +1046,28 @@ def _remote_trust_flags(item: FlatpakRemoteItem, staged_key: str | None, *, rest
     verification is its default), so a CHANGE can lift a target-side remote back out of
     `no-gpg-verify` instead of leaving the divergence half-converged.
 
-    A verified remote with `staged_key is None` carries no per-remote key at all: nothing
-    is invented for it, and its trust stays whatever machine-level anchor the target has.
+    `--gpg-import` is repeatable, so an anchor-trusted remote can carry several files
+    (`_anchors_to_import`) through the same flag a per-remote keyring uses. An empty
+    `staged_keys` means the target already trusts what the source's remote trusts and
+    nothing needs importing.
     """
     if not item.gpg_verify:
         return " --no-gpg-verify"
     flags = " --gpg-verify" if restore_verification else ""
-    if staged_key is not None:
-        flags += f" --gpg-import={shlex.quote(staged_key)}"
-    return flags
+    return flags + "".join(f" --gpg-import={shlex.quote(key)}" for key in staged_keys)
 
 
-def _trust_mutation_phrase(item: FlatpakRemoteItem, source_hostname: str) -> str:
+def _trust_mutation_phrase(item: FlatpakRemoteItem, source_hostname: str, staged_keys: Sequence[str]) -> str:
     """Trailing clause for the `mutates=` phrase, so the confirm-each-command prompt and
     the trace state what a remote command does to TRUST, not only to the URL.
     """
     if not item.gpg_verify:
         return f", with gpg verification disabled (as on {source_hostname})"
-    if item.key_digest is None:
+    if not staged_keys:
         return ""
-    return f", importing {source_hostname}'s signing key"
+    if item.key_digest is not None:
+        return f", importing {source_hostname}'s signing key"
+    return f", importing the machine-level signing key {source_hostname} verifies it against"
 
 
 def _target_refs_by_origin_remote(target_refs: Sequence[FlatpakItem]) -> dict[str, list[str]]:
@@ -1149,6 +1196,12 @@ class FlatpakSyncJob(PackageSyncJob):
         # synchronous `accept_review()` and cannot issue commands of its own.
         self._source_ref_origins: dict[tuple[str, str], str] = {}
         self._source_runtime_by_ref_id: dict[str, str] = {}
+        # The machine-level trust `_OSTREE_TRUSTED_ANCHOR_DIR` holds on each machine: the
+        # source's as `{path: digest}`, because the paths are what gets staged, and the
+        # target's as digests alone, because only "does the target already trust this" is
+        # asked of it. Machine-level, so read once per run rather than per remote or scope.
+        self._source_trust_anchors: dict[str, str] = {}
+        self._target_trust_anchor_digests: frozenset[str] = frozenset()
         # Set by `accept_review()` from the approved ref installs, consumed by `apply()`:
         # the remotes to provision, which approved ref depended on each (D-39), and the
         # writes that failed, keyed by remote_id.
@@ -1293,6 +1346,43 @@ class FlatpakSyncJob(PackageSyncJob):
                 runtimes[item.item_id] = runtime
         return runtimes
 
+    async def _capture_trust_anchors(self) -> None:
+        """Both machines' machine-level trust anchors, one batched read each
+        (`_OSTREE_TRUSTED_ANCHOR_DIR`).
+
+        Once per run, not per scope or per remote: the directory is outside every flatpak
+        installation and every remote in either scope verifies against the same files.
+        Unguarded on the exit code, like the per-remote keyring read and for the same measured
+        reason (`_capture_source_remotes`).
+        """
+        command = _trust_anchor_digests_cmd()
+        source = await self.source.run_command(command)
+        target = await self.target.run_command(command, login_shell=False)
+        self._source_trust_anchors = _parse_file_digests(source.stdout)
+        self._target_trust_anchor_digests = frozenset(_parse_file_digests(target.stdout).values())
+
+    def _anchors_to_import(self, item: FlatpakRemoteItem) -> list[Path]:
+        """The source's machine-level anchor files a verified remote with no keyring of its
+        own needs imported into its keyring on the target (`PKG-FR-FLATPAK-REMOTE-TRUST`).
+
+        A remote whose key sits in `_OSTREE_TRUSTED_ANCHOR_DIR` rather than in
+        `<remote>.trustedkeys.gpg` is verified on the source and unusable on a target that
+        lacks the same files: flatpak refuses every install from it with `Can't check
+        signature: public key not found`. Replicating the anchor machine-wide would grant that
+        trust to every remote the target has; importing it into this remote's own keyring
+        grants exactly what the source's remote had, and nothing else on the target changes.
+
+        An anchor the target already holds is left out — its trust is already there, and
+        importing it would issue a write per run for no change.
+        """
+        if not item.gpg_verify or item.key_digest is not None:
+            return []
+        return [
+            Path(path)
+            for path, digest in sorted(self._source_trust_anchors.items())
+            if digest not in self._target_trust_anchor_digests
+        ]
+
     @override
     async def plan(self) -> PackagePlan:
         """Load decision files -> capture -> query -> diff -> build review groups.
@@ -1339,6 +1429,7 @@ class FlatpakSyncJob(PackageSyncJob):
         self._target_remotes_now_by_id = None
         self._source_ref_origins = await self._capture_source_ref_origins()
         self._source_runtime_by_ref_id = await self._capture_source_runtimes(source_refs)
+        await self._capture_trust_anchors()
 
         ref_diffs = _diff_flatpak_refs(
             source_refs,
@@ -1547,7 +1638,7 @@ class FlatpakSyncJob(PackageSyncJob):
         remote achieves, so a preview that hid it would overstate the real run.
         """
         for derived in self._derived_remotes:
-            self._warn_if_unverified(derived)
+            self._warn_about_trust(derived)
             if self.context.dry_run:
                 self._log(
                     Host.TARGET,
@@ -1569,29 +1660,46 @@ class FlatpakSyncJob(PackageSyncJob):
         if failures:
             raise PackageItemFailures(self.manager_id, failures)
 
-    def _warn_if_unverified(self, derived: _DerivedRemote) -> None:
-        """One WARNING per derived remote the SOURCE does not verify
-        (`PKG-FR-FLATPAK-REMOTE-TRUST`).
+    def _warn_about_trust(self, derived: _DerivedRemote) -> None:
+        """One WARNING per derived remote whose trust a successful provisioning leaves
+        weaker than it reads (`PKG-FR-FLATPAK-REMOTE-TRUST`). Two cases, mutually exclusive:
 
-        Replicating it unverified is the correct outcome — the alternative is a remote that
-        refuses every install — but it is also the one case where a successful provisioning
-        leaves the target trusting whatever that URL serves. The `mutates=` phrase says so
-        too, and reaches only `--confirm-each-command`; this is what tells an ordinary run.
+        - The SOURCE does not verify it. Replicating it unverified is the correct outcome —
+          the alternative is a remote that refuses every install — but the target then trusts
+          whatever that URL serves.
+        - The source verifies it and holds no key for it anywhere: no keyring of its own and
+          nothing under `_OSTREE_TRUSTED_ANCHOR_DIR`. Nothing can be synced, because there is
+          nothing there; the source cannot install from that remote either, and the target
+          inherits that exactly. Said out loud rather than left to flatpak's signature error
+          on each ref.
+
+        The `mutates=` phrase says the first of these too, and reaches only
+        `--confirm-each-command`; this is what tells an ordinary run.
 
         Keyed on the derived set rather than the source's remote list: a remote no approved
         ref needs is never provisioned (D-41). `_derived_remotes` is deduplicated by remote
         id, so a remote several approved refs need still warns once.
         """
         source_item = self._source_remotes_by_id.get(derived.remote_id)
-        if source_item is None or source_item.gpg_verify:
+        if source_item is None:
             return
-        self._log(
-            Host.TARGET,
-            LogLevel.WARNING,
-            f"The {derived.scope} flatpak remote {derived.name} does not verify signatures on "
-            f"{self.machines.source}, so it is provisioned on {self.machines.target} with gpg verification "
-            f"disabled: nothing checks what {derived.name} serves there either.",
-        )
+        if not source_item.gpg_verify:
+            self._log(
+                Host.TARGET,
+                LogLevel.WARNING,
+                f"The {derived.scope} flatpak remote {derived.name} does not verify signatures on "
+                f"{self.machines.source}, so it is provisioned on {self.machines.target} with gpg verification "
+                f"disabled: nothing checks what {derived.name} serves there either.",
+            )
+        elif source_item.key_digest is None and not self._source_trust_anchors:
+            self._log(
+                Host.TARGET,
+                LogLevel.WARNING,
+                f"The {derived.scope} flatpak remote {derived.name} verifies signatures on {self.machines.source} "
+                f"but has no signing key there — neither its own keyring nor anything under "
+                f"{_OSTREE_TRUSTED_ANCHOR_DIR} — so there is none to sync and installs from it will fail the "
+                f"signature check on {self.machines.target} as they do on {self.machines.source}.",
+            )
 
     async def _write_derived_remote(self, derived: _DerivedRemote) -> None:
         """Bring one derived remote's URL and trust on the target to the source's.
@@ -1615,18 +1723,22 @@ class FlatpakSyncJob(PackageSyncJob):
             )
             return
         target_item = self._target_remotes_by_id.get(derived.remote_id)
-        if target_item == source_item:
+        # Anchor-trusted remotes are the one case whole-item equality cannot settle: two
+        # remotes both carrying no keyring of their own compare equal whether or not the
+        # target holds the machine-level key the source verifies against, so the anchor
+        # question is asked separately rather than read off `==` (`_anchors_to_import`).
+        if target_item == source_item and not self._anchors_to_import(source_item):
             return
 
         scope_flag = _scope_flag(derived.scope)
         sudo = _sudo_prefix(derived.scope)
         try:
-            staged_key = await self._stage_source_key(source_item, derived.remote_id)
+            staged_keys = await self._stage_source_keys(source_item, derived.remote_id)
         except ConvergeItemFailed as exc:
             self._failed_derived_remotes[derived.remote_id] = str(exc)
             return
         try:
-            trust = _remote_trust_flags(source_item, staged_key, restore_verification=target_item is not None)
+            trust = _remote_trust_flags(source_item, staged_keys, restore_verification=target_item is not None)
             if target_item is None:
                 cmd = (
                     f"{sudo}flatpak remote-add --if-not-exists {scope_flag}{trust} "
@@ -1645,7 +1757,9 @@ class FlatpakSyncJob(PackageSyncJob):
                 # says which facets of the remote were actually out of step.
                 self._log(Host.TARGET, LogLevel.FULL, _remote_change_detail(source_item, target_item))
             result = await self.target.run_command(
-                cmd, login_shell=False, mutates=f"{phrase}{_trust_mutation_phrase(source_item, self.machines.source)}"
+                cmd,
+                login_shell=False,
+                mutates=f"{phrase}{_trust_mutation_phrase(source_item, self.machines.source, staged_keys)}",
             )
             self._target_remotes_now_by_id = None
             if result.success:
@@ -1655,7 +1769,8 @@ class FlatpakSyncJob(PackageSyncJob):
             else:
                 self._failed_derived_remotes[derived.remote_id] = result.stderr.strip() or f"`{cmd}` failed"
         finally:
-            await self._discard_staged_file(staged_key, "signing key")
+            for staged in staged_keys:
+                await self._discard_staged_file(staged, "signing key")
 
     def _derived_remote_failure(self, item_id: str) -> str | None:
         """Why an approved ref cannot be installed because a remote it needed did not get
@@ -2037,27 +2152,58 @@ class FlatpakSyncJob(PackageSyncJob):
             f"FlatpakSyncJob.converge: unsupported action {diff.action.value!r} for a flatpak mask ({diff.label})"
         )
 
-    async def _stage_source_key(self, item: FlatpakRemoteItem, remote_id: str) -> str | None:
-        """Copy the source remote's own keyring onto the target and return its staged
-        path, or `None` when the remote has no key to carry (#215).
+    async def _stage_source_keys(self, item: FlatpakRemoteItem, remote_id: str) -> list[str]:
+        """Copy the key material a verified source remote verifies against onto the target and
+        return the staged paths (#215, `PKG-FR-FLATPAK-REMOTE-TRUST`).
+
+        Two cases:
+
+        - The remote has a keyring of its own: that file, byte-for-byte.
+        - Its trust is machine-level: the source's anchor files the target lacks
+          (`_anchors_to_import`), imported into this remote's own keyring on the target.
+
+        Nothing is staged when the source's every anchor is already on the target, and
+        nothing is staged when the source holds no key material for the remote at all —
+        `_warn_about_trust` reports that second case, because it is a remote the SOURCE
+        cannot install from either, and replicating the source's own state is what this job
+        does with an unverified remote too.
 
         Staged and no more (`_stage_source_file`), unlike a repository key or a ref filter:
         `flatpak remote-add --gpg-import` only READS the file, and a system-scope converge
         runs under sudo, where root reads the staged copy in the user's cache without it ever
         being moved into a root-owned directory. The bytes are the source's own (ADR-020
-        D-12) — never re-fetched from a vendor — and `_discard_staged_file` removes the copy
+        D-12) — never re-fetched from a vendor — and `_discard_staged_file` removes the copies
         afterwards.
         """
-        if not item.gpg_verify or item.key_digest is None:
-            return None
+        if not item.gpg_verify:
+            return []
 
-        local_path = _source_keyring_path(item)
-        if not local_path.is_file():
-            raise ConvergeItemFailed(
-                f"signing key for {item.label()} is missing on {self.machines.source} at {local_path} "
-                "(it existed when the plan was captured); refusing to provision a remote whose key cannot be synced"
+        if item.key_digest is not None:
+            local_path = _source_keyring_path(item)
+            if not local_path.is_file():
+                raise ConvergeItemFailed(
+                    f"signing key for {item.label()} is missing on {self.machines.source} at {local_path} "
+                    "(it existed when the plan was captured); refusing to provision a remote whose key cannot "
+                    "be synced"
+                )
+            return [
+                await self._stage_source_file(local_path, f"{remote_id}.gpg", f"the signing key for {item.label()}")
+            ]
+
+        staged: list[str] = []
+        for index, anchor in enumerate(self._anchors_to_import(item)):
+            if not anchor.is_file():
+                raise ConvergeItemFailed(
+                    f"the machine-level signing key {anchor} that {item.label()} verifies against is missing on "
+                    f"{self.machines.source} (it existed when the plan was captured); refusing to provision a "
+                    "remote whose trust cannot be synced"
+                )
+            staged.append(
+                await self._stage_source_file(
+                    anchor, f"{remote_id}.anchor{index}.gpg", f"the machine-level signing key for {item.label()}"
+                )
             )
-        return await self._stage_source_file(local_path, f"{remote_id}.gpg", f"the signing key for {item.label()}")
+        return staged
 
     async def _stage_source_file(self, local_path: Path, staged_name: str, what: str) -> str:
         """Copy one of the source's own files into the target's `~/.cache/pc-switcher/` and

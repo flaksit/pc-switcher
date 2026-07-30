@@ -127,6 +127,7 @@ _READ_ONLY_CALLS: dict[str, int] = {
     "jobs/apt_sync/probe.py::AptProbe.source_policy::run_command": 1,
     "jobs/apt_sync/probe.py::AptProbe.query_target_items::run_command": 1,
     "jobs/apt_sync/probe.py::AptProbe.collect_hold_sets::run_command": 2,
+    "jobs/apt_sync/probe.py::AptProbe.capture_target_installed::run_command": 1,
     "jobs/apt_sync/probe.py::AptProbe.collect_target_policy::run_command": 1,
     "jobs/apt_sync/probe.py::AptProbe.capture_target_manual_set::run_command": 1,
     # `pro status --format json` on the target — a read, and the only thing that leaves
@@ -152,6 +153,9 @@ _READ_ONLY_CALLS: dict[str, int] = {
     "jobs/flatpak_sync.py::FlatpakSyncJob._target_home_dir::run_command": 1,
     "jobs/flatpak_sync.py::FlatpakSyncJob._capture_source_masks::run_command": 1,
     "jobs/flatpak_sync.py::FlatpakSyncJob._query_target_masks::run_command": 1,
+    # Both machines' machine-level ostree trust anchors, one batched `sha256sum` each
+    # (`PKG-FR-FLATPAK-REMOTE-TRUST`).
+    "jobs/flatpak_sync.py::FlatpakSyncJob._capture_trust_anchors::run_command": 2,
     # Remote derivation's two source-side inputs: every installed ref including runtimes,
     # and the runtime each app is built against (one local `flatpak info` per app).
     "jobs/flatpak_sync.py::FlatpakSyncJob._capture_source_ref_origins::run_command": 1,

@@ -1492,14 +1492,33 @@ def trust_job(
     remote_line: str,
     key_digest: str | None,
     scope: str = "user",
+    source_anchor: str | None = None,
+    target_anchor: str | None = None,
     target_remotes: dict[str, dict[str, str]] | None = None,
     target_unverified: set[tuple[str, str]] | None = None,
     target_responses: dict[str, CommandResult] | None = None,
 ) -> tuple[FlatpakSyncJob, FakeFlatpakTarget]:
     """A job whose source holds one app from `remote_line`'s remote, so that remote is
     derived and provisioned when the app is approved (#215's assertions, re-driven).
+
+    `source_anchor`/`target_anchor` are digests for the machine-level keyring directory
+    (relocated into `tmp_path`, since the real one is `/usr/share/ostree/trusted.gpg.d`).
+    Equal digests mean the two machines already trust the same key.
     """
     scope_flag = "--user" if scope == "user" else "--system"
+    anchor_dir = tmp_path / "ostree-anchors"
+    monkeypatch.setattr(flatpak_sync, "_OSTREE_TRUSTED_ANCHOR_DIR", anchor_dir)
+    source_anchor_responses: dict[str, CommandResult] = {}
+    target_anchor_responses: dict[str, CommandResult] = {}
+    if source_anchor is not None:
+        anchor_dir.mkdir(parents=True, exist_ok=True)
+        anchor_file = anchor_dir / "vendor.gpg"
+        _ = anchor_file.write_bytes(b"fake machine anchor bytes")
+        source_anchor_responses[f"sha256sum {anchor_dir}"] = CommandResult(0, f"{source_anchor}  {anchor_file}\n", "")
+    if target_anchor is not None:
+        target_anchor_responses[f"sha256sum {anchor_dir}"] = CommandResult(
+            0, f"{target_anchor}  {anchor_dir}/whatever-the-target-calls-it.gpg\n", ""
+        )
     if scope == "user":
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         installation = tmp_path / ".local" / "share" / "flatpak"
@@ -1515,16 +1534,23 @@ def trust_job(
     target = FakeFlatpakTarget(
         remotes=target_remotes,
         unverified=target_unverified,
-        responses={"echo $HOME": CommandResult(0, "/home/tester\n", ""), **(target_responses or {})},
+        responses={
+            "echo $HOME": CommandResult(0, "/home/tester\n", ""),
+            **target_anchor_responses,
+            **(target_responses or {}),
+        },
     )
     context, _source, _target = make_context(
-        source_responses=trust_responses(
-            remote_line=remote_line,
-            key_digest=key_digest,
-            keyring_dir=keyring_dir,
-            scope_flag=scope_flag,
-            apps=_TRUST_APP[scope],
-        ),
+        source_responses={
+            **trust_responses(
+                remote_line=remote_line,
+                key_digest=key_digest,
+                keyring_dir=keyring_dir,
+                scope_flag=scope_flag,
+                apps=_TRUST_APP[scope],
+            ),
+            **source_anchor_responses,
+        },
         fake_target=target,
     )
     return FlatpakSyncJob(context), target
@@ -1705,14 +1731,47 @@ class TestRemoteTrustTravelsWithTheDerivedWrite:
                 )
             )
 
+    _STAGED_ANCHOR = "/home/tester/.cache/pc-switcher/flatpak-staging/flatpak_remote_user_flathub.anchor0.gpg"
+
     @pytest.mark.asyncio
-    async def test_verified_remote_without_a_key_of_its_own_adds_plainly(
+    async def test_a_machine_level_anchor_the_target_lacks_becomes_the_remotes_own_key(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A remote trusted through a machine-level anchor has no per-remote key to
-        carry: nothing is invented for it, and verification is left on.
+        """A remote verified through `/usr/share/ostree/trusted.gpg.d` holds no key of its
+        own, and replicating name, URL and `gpg-verify` alone leaves the target refusing every
+        install from it. The anchor is imported into the replicated remote's OWN keyring, so
+        the target's remote trusts what the source's remote trusted and no other remote gains
+        anything.
         """
-        job, target = trust_job(tmp_path, monkeypatch, remote_line=self._SIGNED, key_digest=None)
+        job, target = trust_job(
+            tmp_path, monkeypatch, remote_line=self._SIGNED, key_digest=None, source_anchor=_SOURCE_KEY_DIGEST
+        )
+
+        await run_job(job)
+
+        add_cmd = next(c for c in all_calls(target) if "remote-add" in c)
+        assert f"--gpg-import={self._STAGED_ANCHOR}" in add_cmd
+        assert "--no-gpg-verify" not in add_cmd
+        sent_local, sent_remote = target.send_file.call_args.args
+        assert sent_local == tmp_path / "ostree-anchors" / "vendor.gpg"
+        assert sent_remote == self._STAGED_ANCHOR
+
+    @pytest.mark.asyncio
+    async def test_an_anchor_the_target_already_holds_is_not_imported_again(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Same digest on both machines: the target already trusts that key, so importing it
+        would be a write per run for no change. Its file name on the target is irrelevant —
+        the digest is the identity.
+        """
+        job, target = trust_job(
+            tmp_path,
+            monkeypatch,
+            remote_line=self._SIGNED,
+            key_digest=None,
+            source_anchor=_SOURCE_KEY_DIGEST,
+            target_anchor=_SOURCE_KEY_DIGEST,
+        )
 
         await run_job(job)
 
@@ -1720,6 +1779,79 @@ class TestRemoteTrustTravelsWithTheDerivedWrite:
         assert "--gpg-import" not in add_cmd
         assert "--no-gpg-verify" not in add_cmd
         target.send_file.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_the_anchor_reaches_a_remote_the_target_otherwise_already_matches(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Two anchor-trusted remotes compare equal whether or not the target holds the key,
+        so whole-item equality cannot be what decides this one.
+        """
+        job, target = trust_job(
+            tmp_path,
+            monkeypatch,
+            remote_line=self._SIGNED,
+            key_digest=None,
+            source_anchor=_SOURCE_KEY_DIGEST,
+            target_anchor=_TARGET_KEY_DIGEST,
+            target_remotes={"user": {"flathub": self._URL}},
+        )
+
+        await run_job(job)
+
+        modify_cmd = next(c for c in all_calls(target) if "remote-modify" in c)
+        assert f"--gpg-import={self._STAGED_ANCHOR}" in modify_cmd
+
+    @pytest.mark.asyncio
+    async def test_the_anchor_import_says_so_in_its_mutates_phrase(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        job, target = trust_job(
+            tmp_path, monkeypatch, remote_line=self._SIGNED, key_digest=None, source_anchor=_SOURCE_KEY_DIGEST
+        )
+
+        await run_job(job)
+
+        add_call = next(c for c in target.run_command.call_args_list if "remote-add" in c.args[0])
+        assert "machine-level signing key" in add_call.kwargs["mutates"]
+
+    @pytest.mark.asyncio
+    async def test_a_verified_remote_with_no_key_anywhere_is_added_plainly_and_the_run_says_so(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Nothing to sync, because the source holds nothing: that remote refuses every
+        install on the source too, so the target inherits the source's own state — said out
+        loud rather than left to flatpak's signature error on each ref.
+        """
+        job, target = trust_job(tmp_path, monkeypatch, remote_line=self._SIGNED, key_digest=None)
+
+        with caplog.at_level(logging.WARNING, logger="pcswitcher.jobs.base"):
+            await run_job(job)
+
+        add_cmd = next(c for c in all_calls(target) if "remote-add" in c)
+        assert "--gpg-import" not in add_cmd
+        assert "--no-gpg-verify" not in add_cmd
+        target.send_file.assert_not_awaited()
+        warnings = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1
+        assert "flathub" in warnings[0]
+        assert "/usr/share/ostree/trusted.gpg.d" not in warnings[0]  # the relocated dir, not the real one
+
+    @pytest.mark.asyncio
+    async def test_a_missing_anchor_file_fails_the_ref_rather_than_provisioning_a_dead_remote(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Same rule as a vanished per-remote keyring: the digest was captured at plan time,
+        so the file disappearing before the write is a real inconsistency.
+        """
+        job, target = trust_job(
+            tmp_path, monkeypatch, remote_line=self._SIGNED, key_digest=None, source_anchor=_SOURCE_KEY_DIGEST
+        )
+        (tmp_path / "ostree-anchors" / "vendor.gpg").unlink()
+
+        await run_job(job, expect_failures=True)
+
+        assert not any("remote-add" in c for c in all_calls(target))
 
     @pytest.mark.asyncio
     async def test_deletion_transfers_nothing(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -3020,9 +3152,19 @@ class TestAnUnverifiedRemoteIsReported:
         assert any("remote-add" in cmd and "--no-gpg-verify" in cmd for cmd in all_calls(target))
 
     @pytest.mark.asyncio
-    async def test_a_verified_source_remote_produces_no_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+    async def test_a_verified_source_remote_with_its_own_key_produces_no_warning(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        _ = write_source_keyring(tmp_path / ".local" / "share" / "flatpak", "customremote")
         context, _source, _target = make_context(
-            source_responses=self._source(options=""), fake_target=FakeFlatpakTarget()
+            source_responses={
+                **self._source(options=""),
+                f"sha256sum {_USER_KEYRING_DIR}": CommandResult(
+                    0, keyring_line(_SOURCE_KEY_DIGEST, _USER_KEYRING_DIR, "customremote"), ""
+                ),
+            },
+            fake_target=FakeFlatpakTarget(responses={"echo $HOME": CommandResult(0, "/home/tester\n", "")}),
         )
         job = FlatpakSyncJob(context)
 
