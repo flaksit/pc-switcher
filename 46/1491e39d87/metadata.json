@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "461491e39d87",
+  "strategy": "manual-commit",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/02-package-management-sync/02-HANDOVER-requirements-review.md",
+    "tests/manual/review_harness.py",
+    "tests/unit/jobs/test_apt_sync.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/46/1491e39d87/0/metadata.json",
+      "transcript": "/46/1491e39d87/0/full.jsonl",
+      "compact_transcript": "/46/1491e39d87/0/transcript.jsonl",
+      "content_hash": "/46/1491e39d87/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 8,
+    "cache_creation_tokens": 2044,
+    "cache_read_tokens": 289121,
+    "output_tokens": 1167,
+    "api_call_count": 4
+  }
+}
