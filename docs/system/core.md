@@ -1,6 +1,6 @@
 # Core System Specification
 
-This document is the **Living Truth** for pc-switcher's core. It consolidates specifications from SpecKit runs into the authoritative, current definition of the system.
+The authoritative, current definition of pc-switcher's core: CLI, orchestration, locking, snapshots, configuration, and the job contract. Every claim here is verified against `src/pcswitcher/`.
 
 **Domain Code**: `CORE` (Core)
 
@@ -10,387 +10,181 @@ This document is the **Living Truth** for pc-switcher's core. It consolidates sp
 
 Lineage: 001-US-1
 
-Priority: P1
-
-The system defines a precise contract for how sync jobs integrate with the core orchestration system. Each job (representing a discrete sync capability like package sync, Docker sync, or folder sync) implements a standardized interface covering configuration, validation, execution, logging, progress reporting, and error handling. This contract is detailed enough that all feature jobs can be developed independently and concurrently once the core infrastructure exists.
-
-**Why this priority**: This is P1 because it's the architectural core. Without a clear, detailed job contract, subsequent features cannot be developed independently or correctly. This user story serves as the specification document for all future job developers. All sync-features (packages, Docker, VMs, k3s, user data) will be implemented as jobs. The btrfs snapshots safety infrastructure (CORE-US-BTRFS) is orchestrator-level infrastructure (not configurable via sync_jobs). Self-installation (CORE-US-SELF-INSTALL) is NOT a job—it is pre-job orchestrator logic that runs before any job execution.
-
-**Independent Test**: Can be fully tested by:
-1. Defining the job interface contract
-2. Implementing a minimal test job that satisfies the contract
-3. Registering it with the core orchestrator
-4. Running sync and verifying the orchestrator correctly:
-   - Loads the job configuration
-   - Calls lifecycle methods in correct order (validate -> execute)
-   - Handles job logging at all six levels
-   - Processes progress updates
-   - Handles job errors (exceptions)
-   - Requests job termination on interrupts
-5. Demonstrating that a developer can implement a new job by only implementing the contract
-
-**Constitution Alignment**:
-- Deliberate Simplicity (clear interface reduces complexity)
-- Reliability Without Compromise (standardized contract ensures consistent behavior)
-- Up-to-date Documentation (interface serves as implementation specification)
+Every sync capability is a job. `Job` (`jobs/base.py`) defines the whole contract — config schema, validation, execution, logging, progress, error handling — so a new job is written against the base class alone with no orchestrator change. Snapshots and self-installation are `SystemJob`s the orchestrator runs directly, not entries in `sync_jobs`.
 
 **Acceptance Scenarios**:
 
-1. **Given** a developer implements a new sync job conforming to the job interface, **When** the job is registered with the orchestrator, **Then** the system automatically integrates it into the sync workflow, configuration system, logging infrastructure, and progress reporting without requiring changes to core code
+1. **Given** a new `SyncJob` subclass in `pcswitcher/jobs/<name>.py` whose `name` ClassVar equals its module name, **When** `<name>: true` appears in `sync_jobs`, **Then** `Orchestrator._resolve_sync_job_class` imports the module, finds the class, validates its config and runs it in the job loop — no core change
 
-2. **Given** a job defines configuration schema (enabled: bool, job-specific settings), **When** user loads configuration, **Then** the system validates job config against schema, applies defaults for missing values, and makes configuration available to the job via standardized accessor methods
+2. **Given** a job declares `CONFIG_SCHEMA` (a JSON Schema draft-07 dict), **When** config is loaded, **Then** `Job.validate_config()` validates the top-level config section named after the job, and the job reads the validated dict through `self.context.config`
 
-3. **Given** a job emits log messages at any of six levels (DEBUG, FULL, INFO, WARNING, ERROR, CRITICAL), **When** logging occurs, **Then** the system routes logs to both file (with configured file log level) and terminal UI (with configured CLI log level), and formats them consistently with timestamp and job name
+3. **Given** a job logs via `self._log(host, level, message, **extra)` at any of the six levels (DEBUG, FULL, INFO, WARNING, ERROR, CRITICAL), **Then** the record is routed to the log file at or above `logging.file` and to the terminal at or above `logging.tui`, tagged with the job name and host
 
-4. **Given** a job emits progress updates (percentage, current item, estimated remaining), **When** progress is reported, **Then** the orchestrator forwards this to the terminal UI system for display and to the log file at FULL level
+4. **Given** a job calls `self._report_progress(ProgressUpdate(...))`, **Then** the event reaches the terminal UI through the event bus and updates that job's progress bar
 
-5. **Given** a job's validate() method returns validation errors, **When** validation phase executes, **Then** the orchestrator collects all errors, displays them in terminal UI, and halts sync before any state changes occur (no termination request needed as jobs haven't started executing)
+5. **Given** any job's `validate()` returns errors, **When** the validation phase runs, **Then** the orchestrator collects every job's errors, raises `RuntimeError` listing all of them, and halts before any state changes
 
-6. **Given** a job is executing and raises an exception, **When** the exception propagates, **Then** the orchestrator catches it, logs the error message at CRITICAL level, requests job termination with cleanup timeout (see `CLEANUP_TIMEOUT_SECONDS` in cli.py), and halts the sync before any further jobs execute
+6. **Given** a job raises, **When** the exception reaches the job loop, **Then** the orchestrator records a FAILED `JobResult`, logs CRITICAL, and halts the run — except `PackageItemFailures` and `ProbeFailed`, which are recorded FAILED without cancelling the remaining jobs, and `JobSkipped`, which is recorded SKIPPED (see [Job outcomes](#job-outcomes))
 
-7. **Given** user presses Ctrl+C during job execution, **When** signal is caught, **Then** orchestrator requests termination of the currently-executing job with cleanup timeout (see `CLEANUP_TIMEOUT_SECONDS` in cli.py), logs interruption at WARNING level, and exits gracefully with code 130
+7. **Given** the user presses Ctrl+C during job execution, **Then** the CLI cancels the sync task, the orchestrator's `finally` block runs `_cleanup()`, and the process exits with code 130
 
 ### Self-Installing Sync Orchestrator (CORE-US-SELF-INSTALL)
 
 Lineage: 001-US-2
 
-Priority: P1
-
-When a user initiates sync from source to target, the orchestrator ensures the pc-switcher package on the target machine is at the same version as the source machine. If versions differ or pc-switcher is not installed on target, the system automatically installs or upgrades the target installation. Additionally, the orchestrator ensures the target has the source's configuration file, prompting the user for confirmation before applying it. This installation/upgrade happens after pre-sync snapshots are created, providing rollback capability if installation fails.
-
-**Why this priority**: This is P1 because version consistency is required for reliable sync operations. Without matching versions, the target-side helper scripts may be incompatible with source-side orchestration logic, causing unpredictable failures. Self-installation also eliminates manual setup steps, aligning with "Frictionless Command UX". Configuration sync ensures both machines operate with the same settings.
-
-**Independent Test**: Can be fully tested by:
-1. Setting up a target machine without pc-switcher installed
-2. Running sync from source
-3. Verifying orchestrator detects missing installation
-4. Validating orchestrator installs pc-switcher on target
-5. Checking that versions now match
-6. Repeating with version mismatch (older version on target) to test upgrade path
-7. Verifying config is copied to target after user confirmation
-8. Testing config diff display when target has existing different config
-
-**Constitution Alignment**:
-- Frictionless Command UX (automated installation, no manual setup)
-- Reliability Without Compromise (version consistency prevents compatibility issues, config consistency ensures predictable behavior)
-- Deliberate Simplicity (self-contained deployment, no separate install process)
+The orchestrator brings the target's pc-switcher to the source's version, then reconciles the config file. Both happen after pre-sync snapshots, so a bad install is recoverable.
 
 **Acceptance Scenarios**:
 
-1. **Given** source machine has pc-switcher version 0.3.2 installed and target machine has no pc-switcher installed, **When** user runs `pc-switcher sync <target>`, **Then** the orchestrator detects missing installation, installs pc-switcher version 0.3.2 on target from GitHub repository using `uv tool install git+https://github.com/.../pc-switcher@v0.3.2`, verifies installation succeeded, and proceeds with sync
+1. **Given** the target has no pc-switcher, **When** `InstallOnTargetJob` runs, **Then** it pipes `install.sh` for the source's version into bash on the target (`install.get_install_with_script_command_line`), which bootstraps `uv` if missing and runs `uv tool install`
 
-2. **Given** source has version 0.4.0 and target has version 0.3.2, **When** sync begins, **Then** orchestrator detects version mismatch, logs "Target pc-switcher version 0.3.2 is outdated, upgrading to 0.4.0", upgrades pc-switcher on target from GitHub repository using Git URL installation, and verifies upgrade completed
+2. **Given** the target has an older version, **Then** the job logs `Upgrading pc-switcher on target from <old> to <new>` and installs; the exact-version tag is attempted first and, when no such tag exists, the run falls back to the highest release at or below the source version (`Version.get_release_floor`)
 
-3. **Given** source and target both have version 0.4.0, **When** sync begins, **Then** orchestrator logs "Target pc-switcher version matches source (0.4.0), skipping installation" and proceeds immediately to next phase
+3. **Given** source and target versions match, **Then** the job logs `Target pc-switcher version matches source: <version>, no install needed` and returns immediately
 
-4. **Given** installation/upgrade fails on target (e.g., disk full, permissions issue), **When** the failure occurs, **Then** orchestrator logs CRITICAL error and does not proceed with sync
+4. **Given** the install or the post-install `pc-switcher --version` check fails, **Then** the job raises `RuntimeError` and the sync aborts
 
-5. **Given** target has no config file (`~/.config/pc-switcher/config.yaml`), **When** sync reaches config sync phase, **Then** orchestrator displays the source config content to the user, prompts "Apply this config to target? [y/N]", and if user confirms copies the config to target; if user declines, orchestrator aborts sync with message "Sync aborted: config required on target"
+5. **Given** the target has no `~/.config/pc-switcher/config.yaml`, **When** the config-sync step runs, **Then** the source config is displayed and the user is asked `Apply this config to the target?` (`y` applies and continues, `n` — the default — aborts the whole sync with `SyncAbortedByUser`)
 
-6. **Given** target has existing config that differs from source, **When** sync reaches config sync phase, **Then** orchestrator displays a diff between source and target configs, prompts user with three options: (a) Accept config from source, (b) Keep current config on target, (c) Abort sync; user selects the desired action
+6. **Given** the target config differs from the source's, **Then** a unified diff is shown with three choices: `a` accept from source, `k` keep the target's, `x` abort (the default)
 
-7. **Given** target config matches source config exactly, **When** sync reaches config sync phase, **Then** orchestrator logs "Target config matches source, skipping config sync" and proceeds without prompting
+7. **Given** the configs match, **Then** the step prints `Target config matches source, skipping config sync.` without prompting
+
+`--yes` auto-accepts both prompts. `--dry-run` shows the same preview and never prompts or writes.
 
 ### Safety Infrastructure with Btrfs Snapshots (CORE-US-BTRFS)
 
 Lineage: 001-US-3
 
-Priority: P1
-
-Before any sync operations modify state, the system creates read-only btrfs snapshots of critical subvolumes on both source and target machines. These "pre-sync" snapshots serve as recovery points. After all sync jobs complete successfully, the system creates "post-sync" snapshots capturing the final state. This safety mechanism is implemented as orchestrator-level infrastructure (not a SyncJob) that is always active and cannot be disabled by users.
-
-**Why this priority**: This is P1 because it's the primary safety mechanism protecting against data loss. Without snapshots, there's no reliable way to recover from failed sync operations. This directly enforces the top project principle: "Reliability Without Compromise".
-
-**Independent Test**: Can be fully tested by:
-1. Running sync on test machines with btrfs filesystems
-2. Verifying orchestrator validates subvolume existence during pre-sync checks
-3. Verifying snapshots are created before any SyncJob executes
-4. Confirming snapshot naming includes timestamp and sync session ID
-5. Checking that snapshots are read-only
-6. Simulating sync failure and verifying pre-sync snapshot can be used for manual recovery
-7. Confirming post-sync snapshots are created after successful completion of all SyncJobs
-8. Verifying that snapshot infrastructure is always active (no config option to disable)
-
-**Constitution Alignment**:
-- Reliability Without Compromise (transactional safety via snapshots)
-- Minimize SSD Wear (btrfs snapshots use copy-on-write, minimizing write amplification)
+Read-only btrfs snapshots of the configured subvolumes are taken on both machines before any sync job runs, and again after they all complete. This is orchestrator-level infrastructure with no configuration switch to disable it.
 
 **Acceptance Scenarios**:
 
-1. **Given** a sync is requested with configured subvolumes, **When** orchestrator begins pre-sync checks, **Then** it MUST verify that all configured subvolumes exist on both source and target; if any configured subvolume is missing on either side the system MUST log a CRITICAL error and abort sync before creating snapshots
+1. **Given** configured subvolumes, **When** `BtrfsSnapshotJob.validate()` runs, **Then** every subvolume must exist on both machines; any missing one is a `ValidationError` and the sync aborts before snapshots are created
 
-2. **Given** user initiates sync, **When** the orchestrator begins the pre-sync phase (after version check and subvolume existence checks, before any SyncJobs execute), **Then** the system creates read-only btrfs snapshots in `/.snapshots/pc-switcher/<timestamp>-<session-id>/` on both source and target for all configured subvolumes (e.g., `@`, `@home`) with naming pattern `pre-<subvol>-<timestamp>` (e.g., `pre-@home-20251129T143022`)
+2. **Given** the pre-snapshot step, **Then** read-only snapshots are created at `/.snapshots/pc-switcher/<timestamp>-<session-id>/<phase>-<subvolume>-<timestamp>` on both machines (e.g. `pre-@home-20251129T143022`); every timestamp is UTC
 
-3. **Given** all sync jobs complete successfully, **When** the orchestrator begins the post-sync phase, **Then** the system creates read-only btrfs snapshots in the same session folder with naming pattern `post-<subvol>-<timestamp>`
+3. **Given** all sync jobs completed, **Then** post-sync snapshots are created in the same session folder with the `post-` prefix
 
-4. **Given** `/.snapshots/` does not exist on source or target, **When** orchestrator validates snapshot infrastructure, **Then** it creates `/.snapshots/` as a btrfs subvolume and logs INFO to inform the user
+4. **Given** `/.snapshots` does not exist, **Then** `validate_snapshots_directory` creates it as a btrfs subvolume along with its `pc-switcher` folder
 
-5. **Given** `/.snapshots/` exists but is a regular directory (not a subvolume), **When** orchestrator validates snapshot infrastructure, **Then** it logs CRITICAL error explaining the problem (snapshots would be recursive) and aborts sync
+5. **Given** `/.snapshots` exists but is not a subvolume, **Then** validation fails with an error explaining that snapshots would be recursive, and the sync aborts
 
-6. **Given** snapshot creation fails on target (e.g., insufficient space), **When** the failure occurs, **Then** the orchestrator logs CRITICAL error and aborts sync before any state changes occur
+6. **Given** snapshot creation fails, **Then** the job logs CRITICAL and raises, aborting the sync
 
-7. **Given** snapshots accumulate over multiple sync runs, **When** user runs `pc-switcher cleanup-snapshots --older-than 7d`, **Then** the system deletes pre-sync and post-sync snapshots older than 7 days on that machine only, retaining the most recent 3 (configurable) sync sessions regardless of age (`--older-than` is optional; default is configurable); this command operates locally and does not affect snapshots on the remote machine
+7. **Given** accumulated snapshots, **When** the user runs `pc-switcher cleanup-snapshots --older-than 7d`, **Then** snapshots older than 7 days are deleted on that machine only, keeping the most recent `btrfs_snapshots.keep_recent` sessions (default 3) regardless of age; `--older-than` is optional and falls back to `btrfs_snapshots.max_age_days`, and `--dry-run` previews the deletions
 
-8. **Given** orchestrator configuration includes `disk_space_monitor.preflight_minimum` (percentage like "20%" or absolute value like "50GiB", default: "20%") for source and target, **When** sync begins, **Then** orchestrator MUST check free disk space on both source and target and log CRITICAL and abort if free space is below configured threshold
+8. **Given** `disk_space_monitor.preflight_minimum` (default `"20%"`), **When** the disk-check step runs, **Then** free space on `/` is checked on both machines and the sync aborts with a CRITICAL log if either is below the threshold
 
-9. **Given** orchestrator configuration includes `disk_space_monitor.check_interval` (seconds, default: 30) and `disk_space_monitor.runtime_minimum` (percentage like "15%" or absolute value like "40GiB", default: "15%"), **When** sync is running, **Then** orchestrator MUST periodically check free disk space at the configured interval and log CRITICAL and abort if available free space falls below the configured runtime minimum on either side
+9. **Given** `disk_space_monitor.check_interval` (default 30) and `disk_space_monitor.runtime_minimum` (default `"15%"`), **When** jobs are running, **Then** a `DiskSpaceMonitorJob` per machine re-checks at that interval and raises `DiskSpaceCriticalError` if free space drops below the runtime minimum; `warning_threshold` (default `"25%"`) logs a WARNING without aborting
 
 ### Graceful Interrupt Handling (CORE-US-INTERRUPT)
 
 Lineage: 001-US-5
 
-Priority: P1
-
-When the user presses Ctrl+C during sync, the system catches the SIGINT signal, notifies the currently-executing job, logs the interruption, sends cleanup commands to the target machine, closes the connection cleanly, and exits with appropriate status code. The system does not leave orphaned processes. This does not issue a rollback automatically; rollback capability is a separate feature.
-
-**Why this priority**: This is P1 because users must be able to safely interrupt long-running operations. Without graceful handling, interrupts could leave systems in inconsistent states or with orphaned processes on target machines.
-
-**Independent Test**: Can be fully tested by:
-1. Starting a sync operation with a long-running dummy job
-2. Pressing Ctrl+C mid-execution
-3. Verifying terminal displays "Sync interrupted by user"
-4. Confirming currently-executing job received termination request and performed cleanup
-5. Checking that connection to target was closed
-6. Validating no orphaned processes remain on source or target
-7. Ensuring log file contains interruption event
-
-**Constitution Alignment**:
-- Frictionless Command UX (user maintains control)
-- Reliability Without Compromise (clean shutdown prevents inconsistent state)
+Ctrl+C cancels the sync task and lets the orchestrator's cleanup run. No rollback is issued — that is a separate feature.
 
 **Acceptance Scenarios**:
 
-1. **Given** sync operation is in progress with a job executing on target machine, **When** user presses Ctrl+C, **Then** the orchestrator catches SIGINT, logs "Sync interrupted by user" at WARNING level, requests termination of the current job, sends termination signal to target-side processes, waits up to the cleanup timeout (see `CLEANUP_TIMEOUT_SECONDS` in cli.py) for graceful cleanup, then closes connection and exits with code 130
+1. **Given** a sync in progress, **When** the first SIGINT arrives, **Then** the CLI prints `Interrupt received, cleaning up...` and cancels the sync task; the orchestrator logs `Sync interrupted by user` at WARNING, and its `finally` block restores the snapd hold, releases the target lock, terminates every tracked local and remote process, runs `pkill --full pc-switcher` on the target, disconnects, and releases the source lock. The CLI then prints `Sync interrupted by user` and exits 130
 
-2. **Given** sync is in the orchestrator phase between jobs (no job actively running), **When** user presses Ctrl+C, **Then** orchestrator logs interruption, skips remaining jobs, and exits cleanly
+2. **Given** the interrupt arrives between jobs, **Then** the remaining jobs never start and cleanup runs the same way
 
-3. **Given** user presses Ctrl+C multiple times rapidly, **When** the second SIGINT arrives before cleanup completes, **Then** orchestrator immediately force-terminates (kills connection, exits with code 130) without waiting for graceful cleanup
+3. **Given** a second SIGINT before cleanup completes, **Then** the CLI cancels every task in the loop immediately, without waiting for cleanup
+
+There is no cleanup grace timeout: cleanup either completes or is cut short by the second SIGINT.
 
 ### Configuration System (CORE-US-CONFIG)
 
 Lineage: 001-US-6
 
-Priority: P1
-
-The system loads configuration from `~/.config/pc-switcher/config.yaml` covering global settings (log levels, enabled jobs) and job-specific settings. Each job declares its configuration schema; the core validates job configs against schemas and provides validated settings to jobs. Configuration supports enabling/disabling optional jobs, setting separate log levels for file and CLI, and job-specific parameters.
-
-**Why this priority**: This is P1 because jobs need configuration to function, and users need the ability to customize behavior (especially disabling expensive or irrelevant jobs like k3s sync).
-
-**Independent Test**: Can be fully tested by:
-1. Creating a config file with various settings
-2. Running sync and verifying jobs receive correct configuration
-3. Testing invalid config triggers validation errors
-4. Confirming log levels are applied correctly
-5. Disabling an optional job and verifying it's skipped
-
-**Constitution Alignment**:
-- Frictionless Command UX (reasonable defaults, easy customization)
-- Deliberate Simplicity (single config file, clear structure)
+`Configuration.from_yaml` loads `~/.config/pc-switcher/config.yaml` (or `--config <path>`), validates it against `pcswitcher/schemas/config-schema.yaml` with `jsonschema` (draft-07), and applies defaults. Job sections are top-level keys named after the job.
 
 **Acceptance Scenarios**:
 
-1. **Given** config file contains global settings and job sections, **When** orchestrator starts, **Then** it loads config, validates structure, applies defaults for missing values, and makes settings available to jobs via `job.config` accessor
+1. **Given** a config with global and job sections, **Then** the loader validates the structure, applies defaults, and hands each job its own section via `JobContext.config`
 
-2. **Given** config includes `logging: { file: DEBUG, tui: INFO, external: WARNING }`, **When** sync runs, **Then** file logging captures all events at DEBUG and above, while terminal UI shows only INFO and above, and external library logs are filtered at WARNING
+2. **Given** `logging: { file: DEBUG, tui: INFO, external: WARNING }`, **Then** the file handler keeps everything at DEBUG and above, the terminal shows INFO and above, and non-`pcswitcher` loggers must additionally clear WARNING
 
-3. **Given** config includes `sync_jobs: { dummy_success: true, dummy_fail: false }`, **When** sync runs, **Then** dummy_success job executes and dummy_fail job is skipped (with INFO log: "dummy_fail job disabled by configuration")
+3. **Given** `sync_jobs: { dummy_success: true, dummy_fail: false }`, **Then** `dummy_success` runs and `dummy_fail` is skipped with a DEBUG log (`Job dummy_fail is disabled in config`) and no `JobResult`
 
-4. **Given** a job declares required config parameters (e.g., Docker job requires `docker_preserve_cache: bool`), **When** config is missing this parameter and no default exists, **Then** orchestrator logs CRITICAL error during startup and refuses to run
+4. **Given** an unknown key anywhere in the config — including an unknown name under `sync_jobs` — **Then** schema validation fails (`additionalProperties: false` throughout) and the CLI exits before any sync work
 
-5. **Given** config file has invalid YAML syntax, **When** orchestrator attempts to load it, **Then** the system displays clear parse error with line number and exits before attempting sync
+5. **Given** invalid YAML, **Then** `ConfigurationError` reports the line and column and the CLI exits 1; a duplicate mapping key is a parse error too (`_StrictLoader`)
 
-**Example Configuration**:
-```yaml
-# ~/.config/pc-switcher/config.yaml
-# Logging configuration (3-setting model)
-logging:
-  file: FULL      # Floor level for log file output
-  tui: INFO       # Floor level for terminal output
-  external: WARNING  # Floor for third-party libraries
+**Example Configuration**: `pcswitcher/default-config.yaml` is the shipped, fully commented example; `pc-switcher init` writes it verbatim to `~/.config/pc-switcher/config.yaml` together with the `home.filter` and `root.filter` starter files it references.
 
-# Jobs implemented in 001-core:
-sync_jobs:
-  dummy_success: true   # Test job that completes successfully
-  dummy_fail: false     # Test job that fails at configurable time
-
-# Job-specific configuration
-btrfs_snapshots:
-  # Configure these to match YOUR system's btrfs subvolume layout
-  subvolumes:
-    - "@"       # Example: root filesystem
-    - "@home"   # Example: home directories
-
-# Dummy job configuration (optional - defaults shown)
-dummy_success:
-  source_duration: 20   # Seconds to run on source
-  target_duration: 20   # Seconds to run on target
-
-dummy_fail:
-  source_duration: 10   # Seconds to run on source
-  target_duration: 10   # Seconds to run on target
-  fail_at: 12           # Elapsed seconds at which to fail
-```
-
-**Configuration Schema**: The formal configuration schema structure (global settings, sync_jobs section, and per-job settings) is defined in `specs/001-core/contracts/config-schema.yaml`. Job-specific settings appear as top-level keys (e.g., `btrfs_snapshots`, `user_data`) outside of the `sync_jobs` section.
+**Configuration Schema**: `src/pcswitcher/schemas/config-schema.yaml`. Job-specific settings are top-level keys outside `sync_jobs` (`btrfs_snapshots`, `disk_space_monitor`, `folder_sync`, `dummy_success`, `dummy_fail`). The four package jobs and `vscode_state_sync` have no config section — they are enabled through `sync_jobs` alone.
 
 ### Installation and Setup Infrastructure (CORE-US-INSTALL)
 
 Lineage: 001-US-7
 
-Priority: P2
-
-The system provides installation and setup tooling to deploy pc-switcher to new machines and configure required infrastructure (packages, configuration). A setup script handles initial installation, dependency checking (including `uv` and `btrfs-progs`), and subvolume creation guidance.
-
-**Installation Pattern**: Initial installation works without any prerequisites on the target machine. A simple `curl | sh` command (like many modern tools) downloads and runs the installation script, which installs prerequisites like `uv` if needed.
-
-**Why this priority**: This is P2 because while essential for new users, developers can manually install during early development. Once the core sync system works, this becomes P1 for usability.
-
-**Independent Test**: Can be fully tested by:
-1. Running `curl --location --silent --show-error --fail https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh | bash` on a fresh Ubuntu 24.04 machine (without uv installed)
-2. Verifying uv is installed if it was missing
-3. Verifying all other dependencies are installed
-4. Confirming pc-switcher package is installed
-5. Checking that config directory is created with default config
-6. Validating btrfs subvolume structure guidance is provided
-
-**Constitution Alignment**:
-- Frictionless Command UX (simple installation process, no prerequisites)
-- Proven Tooling Only (uses standard package managers)
-- Deliberate Simplicity (shared installation logic between initial setup and target deployment)
+`install.sh` deploys pc-switcher to a machine with no prerequisites, and is the same script `InstallOnTargetJob` runs on the target.
 
 **Acceptance Scenarios**:
 
-1. **Given** a fresh Ubuntu 24.04 machine without uv installed, **When** user runs `curl --location --silent --show-error --fail https://...install.sh | bash`, **Then** the script installs uv (if not present), installs btrfs-progs (if not present), installs pc-switcher via `uv tool install`, creates `~/.config/pc-switcher/` with default config, and displays "pc-switcher installed successfully"
+1. **Given** a fresh Ubuntu 24.04 machine, **When** the user runs `curl -sSL https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh | bash`, **Then** the script installs `uv` if missing, offers to install `btrfs-progs` if missing, installs pc-switcher via `uv tool install`, creates `~/.local/share/pc-switcher/logs`, and prints the next steps — the first of which is `pc-switcher init` to create the config
 
-2. **Given** pc-switcher sync installs on target (InstallOnTargetJob), **When** the target is missing uv, **Then** the same installation logic installs uv first, then installs/upgrades pc-switcher
+2. **Given** a sync installs on the target, **When** the target is missing `uv`, **Then** the same script bootstraps it before installing pc-switcher
 
-3. **Given** `~/.config/pc-switcher/config.yaml` already exists, **When** user runs the installation script, **Then** the script prompts "Configuration file already exists. Overwrite? [y/N]" and preserves the existing file unless user confirms overwrite
+3. **Given** `~/.config/pc-switcher/config.yaml` already exists, **When** the user runs `pc-switcher init`, **Then** it refuses with `Configuration file already exists` and exits 1; `--force` overwrites config.yaml and both filter files
+
+`VERSION=<tag>` and `--ref <branch-or-sha>` select what the script installs.
 
 ### Dummy Test Jobs (CORE-US-DUMMY)
 
 Lineage: 001-US-8
 
-Priority: P1
-
-Two dummy jobs exist for testing infrastructure: `dummy_success` (completes successfully with INFO/WARNING/ERROR logs) and `dummy_fail` (raises unhandled exception to test exception handling). Each simulates long-running operations on both source and target with progress reporting.
-
-**Why this priority**: This is P1 because these jobs are essential for testing the orchestrator, logging, progress UI, error handling, and interrupt handling during development. They serve as reference implementations of the job contract.
-
-**Independent Test**: Each dummy job can be independently tested by enabling it in config and running sync, then verifying expected behavior.
-
-**Constitution Alignment**:
-- Deliberate Simplicity (provides clear reference implementation)
-- Reliability Without Compromise (enables thorough testing)
+`dummy_success` and `dummy_fail` exercise the orchestrator, logging, progress UI, error handling and interrupt handling, and serve as reference implementations of the job contract.
 
 **Acceptance Scenarios**:
 
-1. **Given** `dummy_success` job is enabled, **When** sync runs, **Then** the job performs 20-second busy-wait on source (logging INFO message every 2s), emits WARNING at 6s, performs 20-second busy-wait on target (logging INFO message every 2s), emits ERROR at 8s, reports progress updates (0%, 25%, 50%, 75%, 100%), and completes successfully
+1. **Given** `dummy_success` is enabled, **Then** it busy-waits `source_duration` seconds on the source (INFO every 2s, WARNING at 6s), then `target_duration` seconds on the target (INFO every 2s, ERROR at 8s), reporting progress at 0/25/50/75/100%, and completes successfully
 
-2. **Given** `dummy_fail` job is enabled, **When** sync runs and job reaches the configured `fail_at` time, **Then** the job raises a RuntimeError, the orchestrator catches the exception, logs it at CRITICAL level, requests job termination with cleanup timeout (see `CLEANUP_TIMEOUT_SECONDS` in cli.py), and halts sync
+2. **Given** `dummy_fail` is enabled, **When** elapsed time reaches `fail_at`, **Then** it raises `RuntimeError`; the orchestrator records a FAILED `JobResult`, logs CRITICAL and halts the sync
 
-3. **Given** any dummy job is running, **When** user presses Ctrl+C, **Then** the job receives termination request, it logs "Dummy job termination requested", stops its busy-wait loop within the grace period, and returns control to orchestrator
+3. **Given** either dummy job is running, **When** the task is cancelled, **Then** it catches `CancelledError`, logs a termination message, and re-raises
 
 ### Terminal UI with Progress Reporting (CORE-US-TUI)
 
 Lineage: 001-US-9
 
-Priority: P2
-
-The terminal displays real-time sync progress including current job, operation phase (validate/sync/cleanup), progress percentage, current item being processed, and log messages at configured CLI log level. UI updates smoothly without excessive redraws and gracefully handles terminal resize.
-
-**Why this priority**: This is P2 because basic sync can work with simple log output to terminal. Rich progress UI significantly improves UX but isn't blocking for core functionality testing.
-
-**Independent Test**: Can be tested by running sync with dummy jobs and verifying terminal shows progress bars, job names, log messages, and updates smoothly.
-
-**Constitution Alignment**:
-- Frictionless Command UX (clear feedback reduces uncertainty)
+`TerminalUI` (Rich `Live`) shows the current step, per-job progress bars, a recent-logs panel and connection status.
 
 **Acceptance Scenarios**:
 
-1. **Given** sync is running, **When** a job reports progress, **Then** terminal displays progress bar, percentage, current job name, and current operation (e.g., "folder_sync: 45% - copying files via rsync")
+1. **Given** a job reports progress, **Then** the display shows that job's bar with percentage or item counts, and a spinner for heartbeat-only updates
 
-2. **Given** multiple jobs execute sequentially, **When** each completes, **Then** terminal shows overall progress (e.g., "Step 10a/12: folder_sync", the first job sub-step; the denominator is fixed regardless of job count) and individual job progress
+2. **Given** the job loop is running, **Then** the step counter reads `Step 10a/12`, `Step 10b/12`, … — one letter sub-step per job. The denominator is `len(SyncStep)` and is fixed regardless of how many jobs are enabled
 
-3. **Given** a job emits log at INFO level or higher, **When** log reaches terminal UI, **Then** it's displayed below progress indicators with appropriate formatting (color-coded by level if terminal supports colors)
+3. **Given** a record at or above `logging.tui`, **Then** it appears in the Recent Logs panel, colour-coded by level; every record at or above WARNING is also captured and reprinted as an end-of-run summary block after the Live display stops
 
 ### Spec-Driven Test Coverage for Core (CORE-US-TEST-COVERAGE)
 
 Lineage: 003-US-1
 
-Priority: P1
+Core's tests are written from this document — user stories, acceptance scenarios, functional requirements — not from the implementation, so a gap between the two fails a test rather than passing silently. Each test names the requirement it covers (e.g. `test_core_fr_lock`), and both success and failure paths are covered.
 
-As a pc-switcher developer, I have comprehensive tests that verify 100% of the specifications defined in the core specification. Tests are written based on the spec (user stories, acceptance scenarios, functional requirements), not the implementation code. If any part of the spec was not implemented or implemented incorrectly, the tests fail.
-
-**Why this priority**: P1 because the existing core code is critical infrastructure. Bugs could break entire systems. Spec-driven tests ensure the implementation matches the documented requirements and catch gaps or deviations.
-
-**Independent Test**: Can be verified by running the full test suite and confirming tests exist for every user story, acceptance scenario, and functional requirement in the core spec.
-
-**Acceptance Scenarios**:
-
-1. **Given** tests are implemented based on core spec, **When** I run the full test suite, **Then** 100% of user stories have corresponding test coverage
-
-2. **Given** tests are implemented based on core spec, **When** I run the full test suite, **Then** 100% of acceptance scenarios have corresponding test cases
-
-3. **Given** tests are implemented based on core spec, **When** I run the full test suite, **Then** 100% of functional requirements have corresponding test assertions
-
-4. **Given** a part of the spec was not implemented or implemented incorrectly, **When** I run the tests, **Then** the relevant tests fail, exposing the gap or bug
-
-5. **Given** tests cover both success and failure paths, **When** I run the full test suite, **Then** error handling, edge cases, and boundary conditions from the spec are all verified
-
-### Traceability from Tests to Spec (CORE-US-TEST-TRACE)
-
-Lineage: 003-US-2
-
-Priority: P2
-
-As a pc-switcher developer, I can trace each test back to the specific requirement it validates. When a test fails, I can quickly identify which part of the core spec is affected.
-
-**Why this priority**: P2 because traceability improves debugging and maintenance but the tests themselves are more critical.
-
-**Independent Test**: Can be verified by examining test names/docstrings and confirming they reference specific requirements from core spec.
-
-**Acceptance Scenarios**:
-
-1. **Given** I look at any test for core, **When** I read the test name or docstring, **Then** I can identify the specific user story, acceptance scenario, or FR being tested
-
-2. **Given** a test fails in CI, **When** I review the failure output, **Then** I can immediately navigate to the corresponding spec requirement
-
-### Edge Cases
+## Edge Cases
 
 Lineage: 001-core edge cases, 003-core-tests edge cases
 
-- **What happens when target machine becomes unreachable mid-sync?**
-  - Orchestrator detects connection loss, logs CRITICAL error with diagnostic information, and aborts sync (no reconnection attempt)
+- **Target becomes unreachable mid-sync** — asyncssh keepalives (15 s interval, 3 missed) drop the connection, the failing operation raises, and the sync aborts. No reconnection is attempted.
 
-- **What happens when source machine crashes or powers off?**
-  - Target-side operations should timeout and cleanup after 5 minutes of no communication; next sync will detect inconsistent state via validation
+- **Source crashes or powers off** — the target's lock is a `flock` held by a remote process attached to the SSH session, so it is released when the connection dies. Nothing else is left behind to time out.
 
-- **What happens when btrfs snapshots cannot be created due to insufficient space?**
-  - Snapshot job logs CRITICAL error with space usage details, orchestrator aborts before any state modification
+- **Snapshots cannot be created** — `BtrfsSnapshotJob` logs CRITICAL with the btrfs error and raises, aborting before any job runs.
 
-- **What happens when a job's cleanup logic raises an exception during termination?**
-  - Orchestrator logs the exception, continues with shutdown sequence (cleanup is best-effort)
+- **Cleanup itself raises** — `_cleanup` absorbs a failed snapd restore and continues; a declined confirmation at that gate is honoured, logged at WARNING, and the remaining cleanup (which only releases resources) still runs.
 
-- **What happens when user runs multiple sync commands concurrently?**
-  - Second invocation detects lock, displays "Another sync is in progress (PID: 12345)", gives instructions on how to remove a stale lock and exits
+- **Two syncs at once** — the second run fails to take the fcntl lock and reports `This machine is already involved in a sync (held by: …)` (or, for the far end, `Target <host> is already involved in a sync`) with instructions to terminate the holder process rather than delete the lock file.
 
-- **What happens when config file contains unknown job names?**
-  - Orchestrator logs ERROR "Unknown job 'xyz' in configuration, aborting" and aborts sync
+- **Unknown job name in `sync_jobs`** — rejected by the config schema at load time; the CLI exits before connecting. A *known* name whose module or class does not resolve logs a WARNING and records a SKIPPED `JobResult`.
 
-- **How does the system handle partial failures (some jobs succeed, some fail)?**
-  - Each job's success/failure is tracked independently; orchestrator logs summary at end showing which jobs succeeded/failed; overall sync is considered failed if any job fails
+- **Partial failures** — each job contributes its own `JobResult`; `_summarize_job_outcomes` marks the session FAILED and the CLI exits 1 if any job is FAILED, listing the names.
 
-- **What happens when target has newer pc-switcher version than source?**
-  - Orchestrator detects version mismatch, logs CRITICAL "Target version 0.5.0 is newer than source 0.4.0, this is unusual", and aborts sync to prevent accidental downgrade
-
-- **What happens when tests find a gap between spec and implementation?**
-  - Tests fail with clear assertion messages indicating which spec requirement is not met
-
-- **What happens when a spec requirement is ambiguous?**
-  - Test documents the interpretation used; if implementation differs, test fails and forces clarification
-
-- **What happens when implementation has functionality not in spec?**
-  - Such functionality should be tested as well, but a warning should be raised to the user to consider updating the spec
+- **Target has a newer version than the source** — `InstallOnTargetJob.validate()` returns a `ValidationError` and the sync aborts, preventing an accidental downgrade.
 
 ## Requirements
 
@@ -398,284 +192,217 @@ Lineage: 001-core edge cases, 003-core-tests edge cases
 
 #### Job Architecture
 
-- **CORE-FR-JOB-IFACE** `[Deliberate Simplicity]` `[Reliability Without Compromise]`: System MUST define a standardized Job interface specifying how the orchestrator interacts with jobs, including how logging is done, how a job reports progress to the user, methods, error handling, termination request handling, timeout handling; the interface MUST include at least `validate()` and `execute()` methods, a mechanism to declare configuration schema, and property: `name: str`  
+- **CORE-FR-JOB-IFACE** `[Deliberate Simplicity]` `[Reliability Without Compromise]`: `Job` MUST define the whole orchestrator/job contract: the `name` and `required` ClassVars, the `CONFIG_SCHEMA` ClassVar, `validate_config()`, `validate()`, `execute()`, `_log()` and `_report_progress()`
   Lineage: 001-FR-001
 
-- **CORE-FR-LIFECYCLE** `[Reliability Without Compromise]`: System MUST call job lifecycle methods in order: `validate()` (all jobs), then `execute()` for each job in the specified order; on shutdown, errors, or user interrupt the system requests termination of the currently-executing job  
+- **CORE-FR-LIFECYCLE** `[Reliability Without Compromise]`: The orchestrator MUST call `validate_config()` for every enabled job, then `validate()` for every job that passed, then `execute()` one job at a time in config order
   Lineage: 001-FR-002
 
-- **CORE-FR-TERM-CTRLC** `[Reliability Without Compromise]`: System MUST request termination of currently-executing job when Ctrl+C is pressed, allowing cleanup timeout (see `CLEANUP_TIMEOUT_SECONDS` in cli.py) for graceful cleanup; if job does not complete cleanup within timeout, orchestrator MUST force-terminate connections and the job, then proceed with exit  
+- **CORE-FR-TERM-CTRLC** `[Reliability Without Compromise]`: Ctrl+C MUST cancel the sync task so the running job receives `CancelledError` and the orchestrator's `finally` block runs cleanup; a second SIGINT MUST cancel every task immediately without waiting for cleanup
   Lineage: 001-FR-003
 
-- **CORE-FR-JOB-LOAD** `[Deliberate Simplicity]`: Jobs MUST be loaded from the configuration file section `sync_jobs` in the order they appear and instantiated by the orchestrator; job execution order is strictly sequential from config (no dependency resolution is provided—simplicity over flexibility)  
+- **CORE-FR-JOB-LOAD** `[Deliberate Simplicity]`: Jobs MUST be imported from `pcswitcher.jobs.<job_name>` and run in the order their keys appear in `sync_jobs`; there is no dependency resolution
   Lineage: 001-FR-004
+
+- **CORE-FR-JOB-ORDER** `[Reliability Without Compromise]`: The orchestrator MUST reject a config in which `apt_sync`, `snap_sync`, `flatpak_sync` or `manual_installs_sync` is enabled after `folder_sync` — apps are provisioned before their data lands on top (D-17)
+  Lineage: 02-WR-02
 
 #### Self-Installation
 
-- **CORE-FR-VERSION-CHECK** `[Frictionless Command UX]`: System MUST check target machine's pc-switcher version before any other operations; if missing or mismatched, MUST install/upgrade to source version from public GitHub repository using `uv tool install git+https://github.com/[owner]/pc-switcher@v<version>` (no authentication required for public repository)  
+- **CORE-FR-VERSION-CHECK** `[Frictionless Command UX]`: Before installing, the system MUST read the target's `pc-switcher --version`; if missing or different from the source's, it MUST install by piping the version's `install.sh` from the public GitHub repository into bash on the target (no authentication required)
   Lineage: 001-FR-005
 
-- **CORE-FR-VERSION-NEWER** `[Reliability Without Compromise]`: System MUST abort sync with CRITICAL log if the target machine's pc-switcher version is newer than the source version (preventing accidental downgrades)  
+- **CORE-FR-VERSION-NEWER** `[Reliability Without Compromise]`: The system MUST abort if the target's version is newer than the source's, preventing an accidental downgrade
   Lineage: 001-FR-006
 
-- **CORE-FR-INSTALL-FAIL** `[Frictionless Command UX]`: If installation/upgrade fails, system MUST log CRITICAL error and abort sync  
+- **CORE-FR-INSTALL-FAIL** `[Frictionless Command UX]`: A failed install, or a post-install version that does not match what was requested, MUST abort the sync
   Lineage: 001-FR-007
 
-- **CORE-FR-CONFIG-SYNC** `[Reliability Without Compromise]`: After pc-switcher installation/upgrade, system MUST sync configuration from source to target; if target has no config, system MUST display source config and prompt user for confirmation before copying; if user declines, system MUST abort sync  
+- **CORE-FR-CONFIG-SYNC** `[Reliability Without Compromise]`: After installation, the system MUST reconcile `config.yaml` with the target; with no config on the target it MUST show the source's and prompt, and MUST abort if the user declines
   Lineage: 001-FR-007a
 
-- **CORE-FR-CONFIG-DIFF** `[Frictionless Command UX]`: If target has existing config that differs from source, system MUST display a diff and prompt user with three options: (a) Accept config from source, (b) Keep current config on target, (c) Abort sync  
+- **CORE-FR-CONFIG-DIFF** `[Frictionless Command UX]`: If the target's config differs, the system MUST show a unified diff and offer accept-source, keep-target or abort
   Lineage: 001-FR-007b
 
-- **CORE-FR-CONFIG-MATCH** `[Frictionless Command UX]`: If target config matches source config exactly, system MUST skip config sync with INFO log and proceed without prompting  
+- **CORE-FR-CONFIG-MATCH** `[Frictionless Command UX]`: If the configs match, the system MUST skip the transfer without prompting
   Lineage: 001-FR-007c
 
 #### Safety Infrastructure (Btrfs Snapshots)
 
-- **CORE-FR-SNAP-PRE** `[Reliability Without Compromise]`: System MUST create read-only btrfs snapshots of configured subvolumes on both source and target before any job executes (after version check and pre-checks)  
+- **CORE-FR-SNAP-PRE** `[Reliability Without Compromise]`: Read-only snapshots of the configured subvolumes MUST be created on both machines before any job executes
   Lineage: 001-FR-008
 
-- **CORE-FR-SNAP-POST** `[Reliability Without Compromise]`: System MUST create post-sync snapshots after all jobs complete successfully  
+- **CORE-FR-SNAP-POST** `[Reliability Without Compromise]`: Post-sync snapshots MUST be created after the job loop finishes
   Lineage: 001-FR-009
 
-- **CORE-FR-SNAP-NAME** `[Minimize SSD Wear]`: Snapshot naming MUST follow pattern `{pre|post}-<subvolume>-<timestamp>` for clear identification and cleanup (e.g., `pre-@home-20251116T143022`); session folder provides session context  
+- **CORE-FR-SNAP-NAME** `[Minimize SSD Wear]`: Snapshot names MUST be `{pre|post}-<subvolume>-<UTC timestamp>` inside a per-session folder `<UTC timestamp>-<session id>`
   Lineage: 001-FR-010
 
-- **CORE-FR-SNAP-ALWAYS** `[Reliability Without Compromise]`: Snapshot management MUST be implemented as orchestrator-level infrastructure (not a SyncJob) that is always active; there is no configuration option to disable snapshot creation  
+- **CORE-FR-SNAP-ALWAYS** `[Reliability Without Compromise]`: Snapshots MUST be orchestrator-level infrastructure (a `SystemJob`, not a `sync_jobs` entry) with no option to disable them
   Lineage: 001-FR-011
 
-- **CORE-FR-SNAP-FAIL** `[Frictionless Command UX]`: If pre-sync snapshot creation fails, system MUST log CRITICAL error and abort before any state modifications occur  
+- **CORE-FR-SNAP-FAIL** `[Frictionless Command UX]`: A failed pre-sync snapshot MUST abort before any state modification
   Lineage: 001-FR-012
 
-- **CORE-FR-SNAP-CLEANUP** `[Minimize SSD Wear]`: System MUST provide snapshot cleanup command to delete old snapshots while retaining most recent N syncs; default retention policy (keep_recent count and max_age_days) MUST be configurable in the btrfs_snapshots job section of config.yaml  
+- **CORE-FR-SNAP-CLEANUP** `[Minimize SSD Wear]`: `pc-switcher cleanup-snapshots` MUST delete old snapshots while retaining the most recent N sessions; `keep_recent` and `max_age_days` MUST be configurable under `btrfs_snapshots`
   Lineage: 001-FR-014
 
-- **CORE-FR-SUBVOL-EXIST** `[Reliability Without Compromise]`: System MUST verify that all configured subvolumes exist on both source and target before attempting snapshots; if any are missing, system MUST log CRITICAL and abort  
+- **CORE-FR-SUBVOL-EXIST** `[Reliability Without Compromise]`: Every configured subvolume MUST be verified to exist on both machines before snapshots are attempted
   Lineage: 001-FR-015
 
-- **CORE-FR-SNAPDIR** `[Reliability Without Compromise]`: System MUST verify that `/.snapshots/` is a btrfs subvolume (not a regular directory); if it does not exist, system MUST create it as a subvolume and inform the user; if it exists but is not a subvolume, system MUST log CRITICAL error and abort (to prevent recursive snapshots)  
+- **CORE-FR-SNAPDIR** `[Reliability Without Compromise]`: `/.snapshots` MUST be a btrfs subvolume; the system MUST create it when absent and MUST abort when it exists as a plain directory (which would make snapshots recursive)
   Lineage: 001-FR-015b
 
-- **CORE-FR-DISK-PRE** `[Reliability Without Compromise]`: Orchestrator MUST check free disk space on both source and target before starting a sync; the minimum free-space threshold is configured via `disk_space_monitor.preflight_minimum` and MUST be specified as a percentage (e.g., "20%") or absolute value (e.g., "50GiB"); values without explicit units are invalid; default is "20%"  
+- **CORE-FR-DISK-PRE** `[Reliability Without Compromise]`: Free space on `/` MUST be checked on both machines before snapshots; `disk_space_monitor.preflight_minimum` MUST be a percentage (`"20%"`) or an absolute value with a `GiB`/`MiB`/`GB`/`MB` unit; unitless values are rejected by the schema; default `"20%"`
   Lineage: 001-FR-016
 
-- **CORE-FR-DISK-RUNTIME** `[Reliability Without Compromise]`: Orchestrator MUST monitor free disk space on source and target at a configurable interval (default: 30 seconds) during sync and abort with CRITICAL if available free space falls below the configured runtime minimum via `disk_space_monitor.runtime_minimum` (e.g., "15%" or "40GiB"); values without explicit units are invalid; default is "15%"  
+- **CORE-FR-DISK-RUNTIME** `[Reliability Without Compromise]`: A background monitor per machine MUST re-check free space every `disk_space_monitor.check_interval` seconds (default 30) and abort the run when free space falls below `runtime_minimum` (default `"15%"`); `warning_threshold` (default `"25%"`) warns without aborting
   Lineage: 001-FR-017
 
 #### Interrupt Handling
 
-- **CORE-FR-SIGINT** `[Reliability Without Compromise]`: System MUST install SIGINT handler that requests current job termination with cleanup timeout grace period (see `CLEANUP_TIMEOUT_SECONDS` in cli.py), logs "Sync interrupted by user" at WARNING level, and exits with code 130  
+- **CORE-FR-SIGINT** `[Reliability Without Compromise]`: A SIGINT handler MUST cancel the sync task, log `Sync interrupted by user` at WARNING, and exit with code 130
   Lineage: 001-FR-024
 
-- **CORE-FR-TARGET-TERM** `[Reliability Without Compromise]`: On interrupt, system MUST send termination signal to any target-side processes and wait up to the cleanup timeout (see `CLEANUP_TIMEOUT_SECONDS` in cli.py) for graceful shutdown  
+- **CORE-FR-TARGET-TERM** `[Reliability Without Compromise]`: Cleanup MUST terminate every tracked local and remote process and run `pkill --full pc-switcher` on the target
   Lineage: 001-FR-025
 
-- **CORE-FR-FORCE-TERM** `[Reliability Without Compromise]`: Force-terminate on second SIGINT - When a second SIGINT arrives before cleanup completes, the system immediately force-terminates without waiting for graceful cleanup.  
+- **CORE-FR-FORCE-TERM** `[Reliability Without Compromise]`: A second SIGINT MUST cancel every task immediately, without waiting for cleanup
   Lineage: 001-FR-026
 
-- **CORE-FR-NO-ORPHAN** `[Reliability Without Compromise]`: System MUST ensure no orphaned processes remain on source or target after interrupt  
+- **CORE-FR-NO-ORPHAN** `[Reliability Without Compromise]`: No orphaned processes may remain on either machine after an interrupt
   Lineage: 001-FR-027
 
 #### Configuration System
 
-- **CORE-FR-CONFIG-LOAD** `[Frictionless Command UX]`: System MUST load configuration from `~/.config/pc-switcher/config.yaml` on startup  
+- **CORE-FR-CONFIG-LOAD** `[Frictionless Command UX]`: Configuration MUST be loaded from `~/.config/pc-switcher/config.yaml`, overridable per command with `--config`
   Lineage: 001-FR-028
 
-- **CORE-FR-CONFIG-FORMAT** `[Deliberate Simplicity]`: Configuration MUST use YAML format with sections: global settings, `sync_jobs` (enable/disable), and per-job settings  
+- **CORE-FR-CONFIG-FORMAT** `[Deliberate Simplicity]`: Configuration MUST be YAML with global sections, `sync_jobs` (enable/disable), and one top-level section per job named after the job
   Lineage: 001-FR-029
 
-- **CORE-FR-CONFIG-VALIDATE** `[Reliability Without Compromise]`: System MUST validate configuration structure and job-specific settings against job-declared schemas (Python dicts conforming to JSON Schema draft-07, validated using jsonschema library) before execution  
+- **CORE-FR-CONFIG-VALIDATE** `[Reliability Without Compromise]`: The file MUST be validated against the packaged JSON Schema (draft-07, via `jsonschema`) and each job section against that job's `CONFIG_SCHEMA`, both before execution
   Lineage: 001-FR-030
 
-- **CORE-FR-CONFIG-DEFAULTS** `[Frictionless Command UX]`: System MUST apply reasonable defaults for missing configuration values  
+- **CORE-FR-CONFIG-DEFAULTS** `[Frictionless Command UX]`: Missing values MUST take the defaults defined on the config dataclasses
   Lineage: 001-FR-031
 
-- **CORE-FR-JOB-ENABLE** `[Frictionless Command UX]`: System MUST allow enabling/disabling optional jobs via `sync_jobs: { module_name: true/false }`  
+- **CORE-FR-JOB-ENABLE** `[Frictionless Command UX]`: Jobs MUST be enabled or disabled via `sync_jobs: { module_name: true|false }`
   Lineage: 001-FR-032
 
-- **CORE-FR-CONFIG-ERROR** `[Reliability Without Compromise]`: If configuration file has syntax errors or invalid values, system MUST display clear error message with location and exit before sync  
+- **CORE-FR-CONFIG-ERROR** `[Reliability Without Compromise]`: A syntax error, a duplicate key or a schema violation MUST be reported with its location and exit before the sync starts
   Lineage: 001-FR-033
 
 #### Installation & Setup
 
-- **CORE-FR-INSTALL-SCRIPT** `[Frictionless Command UX]`: System MUST provide installation script (`install.sh`) that can be run via `curl | sh` without prerequisites; the script installs uv (if not present) via `curl --location --silent --show-error --fail https://astral.sh/uv/install.sh | sh`, installs btrfs-progs via apt-get (if not present), installs pc-switcher package via `uv tool install`, and creates default configuration; the installation logic MUST be shared with `InstallOnTargetJob` to ensure DRY compliance (btrfs filesystem is a documented prerequisite checked at runtime, not during installation)  
+- **CORE-FR-INSTALL-SCRIPT** `[Frictionless Command UX]`: `install.sh` MUST run via `curl | bash` with no prerequisites — installing `uv` from `https://astral.sh/uv/install.sh` if absent, offering `btrfs-progs` via apt if absent, installing the package with `uv tool install`, and creating the log directory. `InstallOnTargetJob` MUST run this same script so there is one installation path
   Lineage: 001-FR-035
 
-- **CORE-FR-DEFAULT-CONFIG** `[Up-to-date Documentation]`: Setup script MUST create default config file with inline comments explaining each setting  
+- **CORE-FR-DEFAULT-CONFIG** `[Up-to-date Documentation]`: `pc-switcher init` MUST write the packaged `default-config.yaml`, whose inline comments explain every setting, plus the `home.filter` and `root.filter` files it references
   Lineage: 001-FR-036
 
 #### Testing Infrastructure (Dummy Jobs)
 
-- **CORE-FR-DUMMY-JOBS**: System MUST include two dummy jobs: `dummy-success`, `dummy-fail`  
+- **CORE-FR-DUMMY-JOBS**: The system MUST ship two dummy jobs: `dummy_success` and `dummy_fail`
   Lineage: 001-FR-038
 
-- **CORE-FR-DUMMY-SIM**: `dummy-success` and `dummy-fail` MUST simulate an operation of configurable duration on source (log every 2s, log WARNING at 6s) and of configurable duration on target (log every 2s, log ERROR at 8s), emit progress updates, and complete successfully  
+- **CORE-FR-DUMMY-SIM**: Both MUST simulate configurable-duration work on source (log every 2 s, WARNING at 6 s) and target (log every 2 s, ERROR at 8 s) and emit progress updates
   Lineage: 001-FR-039
 
-- **CORE-FR-DUMMY-EXCEPTION** `[Reliability Without Compromise]`: `dummy-fail` MUST raise unhandled exception at configurable time to test orchestrator exception handling on both source and target  
+- **CORE-FR-DUMMY-EXCEPTION** `[Reliability Without Compromise]`: `dummy_fail` MUST raise at the configured `fail_at` elapsed second, on whichever phase that falls in, to exercise orchestrator exception handling
   Lineage: 001-FR-041
 
-- **CORE-FR-DUMMY-TERM** `[Reliability Without Compromise]`: All dummy jobs MUST handle termination requests by logging "Dummy job termination requested" and stopping execution within the grace period  
+- **CORE-FR-DUMMY-TERM** `[Reliability Without Compromise]`: Both MUST handle `CancelledError` by logging a termination message and re-raising
   Lineage: 001-FR-042
 
 #### Progress Reporting
 
-- **CORE-FR-PROGRESS-EMIT** `[Frictionless Command UX]`: Jobs CAN emit progress updates including percentage (0-100), current item description, and estimated completion time (progress updates are optional for jobs, but recommended for long-running operations; dummy test jobs emit progress for infrastructure testing)  
+- **CORE-FR-PROGRESS-EMIT** `[Frictionless Command UX]`: Jobs CAN emit `ProgressUpdate`s (percentage, item counts, item description, heartbeat, sub-bar track). Optional, but recommended for long operations
   Lineage: 001-FR-043
 
-- **CORE-FR-PROGRESS-FWD** `[Frictionless Command UX]`: Orchestrator MUST forward progress updates to terminal UI system for display  
+- **CORE-FR-PROGRESS-FWD** `[Frictionless Command UX]`: The event bus MUST deliver `ProgressEvent`s to the terminal UI, which owns one bar per job and one per `track`
   Lineage: 001-FR-044
-
-- **CORE-FR-PROGRESS-LOG**: Progress updates MUST be written to log file at FULL log level  
-  Lineage: 001-FR-045
 
 #### Core Orchestration
 
-- **CORE-FR-SYNC-CMD** `[Frictionless Command UX]`: System MUST provide single command `pc-switcher sync <target>` that executes complete workflow  
+- **CORE-FR-SYNC-CMD** `[Frictionless Command UX]`: `pc-switcher sync <target>` MUST run the complete workflow. Flags: `--config`, `--dry-run`, `--yes`, `--allow-out-of-order`, `--allow-first-sync`, `--confirm-each-command`
   Lineage: 001-FR-046
 
-- **CORE-FR-LOCK** `[Reliability Without Compromise]`: System MUST implement locking mechanism to prevent concurrent sync executions  
+- **CORE-FR-LOCK** `[Reliability Without Compromise]`: A single unified lock per machine MUST prevent it from taking part in two syncs at once, in either role
   Lineage: 001-FR-047
 
-- **CORE-FR-SUMMARY**: System MUST log overall sync result (success/failure) and summary of job outcomes; summary MUST list each job with its result (SUCCESS/SKIPPED/FAILED), total duration, error count, and names of any jobs that failed  
+- **CORE-FR-SUMMARY**: Every job that ran MUST contribute one `JobResult` with SUCCESS, SKIPPED or FAILED and its start/end timestamps; the session status MUST be derived from those results, the failed job names MUST be named in the outcome message, and the exit code MUST be non-zero when any job failed
   Lineage: 001-FR-048
 
 ### Core Test Requirements
 
-#### Test Coverage Requirements
+- **CORE-FR-TEST-US** / **CORE-FR-TEST-AS** / **CORE-FR-TEST-FR**: Tests MUST cover every user story, acceptance scenario and functional requirement in this document
+  Lineage: 003-FR-001, 003-FR-002, 003-FR-003
 
-- **CORE-FR-TEST-US**: Tests MUST cover 100% of user stories defined in core specification  
-  Lineage: 003-FR-001
-
-- **CORE-FR-TEST-AS**: Tests MUST cover 100% of acceptance scenarios defined in core specification  
-  Lineage: 003-FR-002
-
-- **CORE-FR-TEST-FR**: Tests MUST cover 100% of functional requirements defined in core specification  
-  Lineage: 003-FR-003
-
-- **CORE-FR-TEST-PATHS**: Tests MUST verify both success paths and failure paths (error handling, edge cases, boundary conditions) for each requirement  
+- **CORE-FR-TEST-PATHS**: Tests MUST cover the failure path of each requirement, not only the success path
   Lineage: 003-FR-004
 
-#### Test Organization Requirements
+- **CORE-FR-TEST-NAMING**: Test names MUST identify the requirement under test (e.g. `test_core_fr_lock`), and each test file MUST reference the requirements it covers in its docstring
+  Lineage: 003-FR-007, 003-FR-008
 
-- **CORE-FR-TEST-UNIT-DIR**: Unit tests for core MUST be placed in `tests/unit/` directory following module structure  
-  Lineage: 003-FR-005
-
-- **CORE-FR-TEST-INT-DIR**: Integration tests for core MUST be placed in `tests/integration/` directory  
-  Lineage: 003-FR-006
-
-- **CORE-FR-TEST-DOCSTRING**: Each test file MUST include docstrings or comments referencing the spec requirements being tested  
-  Lineage: 003-FR-007
-
-- **CORE-FR-TEST-NAMING**: Test function names MUST indicate the requirement being tested (e.g., `test_fr001_connection_ssh_authentication`)  
-  Lineage: 003-FR-008
-
-#### Test Quality Requirements
-
-- **CORE-FR-TEST-INDEP**: Tests MUST be independent and not rely on execution order or shared mutable state between tests  
+- **CORE-FR-TEST-INDEP**: Tests MUST NOT depend on execution order or shared mutable state
   Lineage: 003-FR-009
 
-- **CORE-FR-TEST-FIXTURES**: Tests MUST use fixtures from the testing framework for VM access, event buses, and cleanup  
-  Lineage: 003-FR-010
+- **CORE-FR-TEST-MOCK**: Unit tests MUST use mock executors; integration tests MUST run real operations on test VMs
+  Lineage: 003-FR-011, 003-FR-012
 
-- **CORE-FR-TEST-MOCK**: Unit tests MUST use mock executors to avoid real system operations  
-  Lineage: 003-FR-011
-
-- **CORE-FR-TEST-REAL**: Integration tests MUST execute real operations on test VMs  
-  Lineage: 003-FR-012
-
-#### Test Performance Requirements
-
-- **CORE-FR-TEST-SPEED**: Unit tests MUST complete full suite execution in under 30 seconds  
-  Lineage: 003-FR-013
+Test directory layout, markers, fixtures and runtime budgets are specified in the [Testing Framework](testing.md).
 
 ### Key Entities
 
 Lineage: 001-core Key Entities, 003-core-tests Key Entities
 
-- **Job**: Abstract base class for all sync components implementing the job interface; has name, config schema, and lifecycle methods. Concrete subclasses: **SystemJob** (required, always runs), **SyncJob** (configurable via `sync_jobs`), **BackgroundJob** (runs concurrently)
+Field-level definitions live in the [Data Model](data-model.md); this is the vocabulary.
 
-- **SyncSession**: Represents a single sync operation including session ID, timestamp, source/target machines, enabled jobs, and execution state
-
-- **JobResult**: One job's outcome within a session — job name, start/end timestamps, a status of SUCCESS, SKIPPED or FAILED, and an error or skip reason (see [Job outcomes](#job-outcomes))
-
-- **Snapshot**: Represents a btrfs snapshot including subvolume name, timestamp, session ID, type (pre/post), and location (source/target)
-
-- **LogEntry**: Represents a logged event with timestamp, level, job name, message, and structured context data
-
-- **ProgressUpdate**: Represents job progress including percentage, current item, estimated remaining time, and job name
-
-- **Configuration**: Represents parsed and validated config including global settings, job enable/disable flags, and per-job settings
-
-- **TargetConnection**: Represents the connection with methods for command execution, file transfer, process management, and connection loss detection/recovery
-
-- **RemoteExecutor**: Represents the interface injected into jobs wrapping TargetConnection with simplified run_command(), send_file(), and get_hostname() methods
-
-- **SpecRequirement**: Represents a requirement from core spec; has ID (FR-xxx, US-xxx, AS-xxx), description, and test status
-
-- **TestMapping**: Represents the mapping between a spec requirement and its corresponding tests; enables traceability
-
-- **CoverageReport**: Represents the summary of which spec requirements have tests and which are missing
+- **Job** — abstract base for every sync component. Subclasses: **SystemJob** (required, orchestrator-run), **SyncJob** (configurable through `sync_jobs`), **BackgroundJob** (runs concurrently in the job TaskGroup)
+- **JobContext** — everything a job is given: its config section, both executors, the event bus, session id, both hostnames, `dry_run`, `allow_first_sync`, the confirmer, the reviewer, the target username, and the full `sync_jobs` enablement map
+- **SyncSession** — one sync run: session id, timestamps, both hostnames, status and the collected `JobResult`s
+- **JobResult** — one job's outcome: name, SUCCESS/SKIPPED/FAILED, start and end timestamps, and an error or skip reason (see [Job outcomes](#job-outcomes))
+- **Snapshot** — a btrfs snapshot: subvolume, phase, UTC timestamp, session id, host and path; parseable back out of its path
+- **ProgressUpdate** — percentage, item counts, item description, heartbeat flag and optional sub-bar track
+- **Configuration** — the parsed and validated config: `logging`, `sync_jobs`, `disk`, `btrfs_snapshots` and the per-job sections
+- **Connection** — the asyncssh connection to the target, with session multiplexing and keepalive-based failure detection
+- **LocalExecutor / RemoteExecutor** — the only route to either machine: `run_command`, `start_process`, `terminate_all_processes`, `declare_modification`, plus `send_file` and `get_file` on the remote side
 
 ## Success Criteria
 
-### Core
-
-- **CORE-SC-SINGLE-CMD** `[Frictionless Command UX]`: User executes complete sync with single command `pc-switcher sync <target>` without additional manual steps
+- **CORE-SC-SINGLE-CMD** `[Frictionless Command UX]`: A complete sync runs from `pc-switcher sync <target>` with no additional manual steps
   Lineage: 001-SC-001
 
-- **CORE-SC-SNAPSHOTS** `[Reliability Without Compromise]`: System creates snapshots before and after sync in 100% of successful sync runs
+- **CORE-SC-SNAPSHOTS** `[Reliability Without Compromise]`: Pre- and post-sync snapshots exist for 100% of successful runs
   Lineage: 001-SC-002
 
-- **CORE-SC-ABORT** `[Reliability Without Compromise]`: System successfully aborts sync within the cleanup timeout (see `CLEANUP_TIMEOUT_SECONDS` in cli.py) when CRITICAL error occurs, with no state modifications after abort
+- **CORE-SC-ABORT** `[Reliability Without Compromise]`: A CRITICAL error aborts the run with no state modification after the abort
   Lineage: 001-SC-003
 
-- **CORE-SC-VERSION-TIME** `[Frictionless Command UX]`: System completes version check and installation/upgrade on target within 30 seconds
+- **CORE-SC-VERSION-TIME** `[Frictionless Command UX]`: Version check plus install/upgrade on the target completes within 30 seconds
   Lineage: 001-SC-004
 
-- **CORE-SC-AUDIT**: Log files contain complete audit trail of all operations with timestamps, levels, and job attribution in 100% of sync runs
+- **CORE-SC-AUDIT**: Log files carry a complete audit trail — timestamps, levels, job and host attribution — for 100% of runs
   Lineage: 001-SC-005
 
-- **CORE-SC-GRACEFUL** `[Reliability Without Compromise]`: User interrupt (Ctrl+C) results in graceful shutdown with no orphaned processes in 100% of tests
+- **CORE-SC-GRACEFUL** `[Reliability Without Compromise]`: Ctrl+C shuts down cleanly with no orphaned processes in 100% of tests
   Lineage: 001-SC-006
 
-- **CORE-SC-JOB-SIMPLE** `[Deliberate Simplicity]`: New feature job implementation requires only implementing job interface (< 200 lines of code for basic job) with no changes to core orchestrator
+- **CORE-SC-JOB-SIMPLE** `[Deliberate Simplicity]`: A basic new job needs only the job interface and no orchestrator change
   Lineage: 001-SC-007
 
-- **CORE-SC-COW** `[Minimize SSD Wear]`: Btrfs snapshots use copy-on-write with zero initial write amplification (verified via btrfs filesystem usage commands)
+- **CORE-SC-COW** `[Minimize SSD Wear]`: Snapshots are copy-on-write with zero initial write amplification
   Lineage: 001-SC-008
 
-- **CORE-SC-INSTALL-TIME** `[Frictionless Command UX]`: Installation script completes setup on fresh Ubuntu 24.04 machine in under 2 minutes with network connection
+- **CORE-SC-INSTALL-TIME** `[Frictionless Command UX]`: `install.sh` completes on a fresh Ubuntu 24.04 machine in under 2 minutes with a network connection
   Lineage: 001-SC-009
 
-- **CORE-SC-DUMMY-DEMO** `[Reliability Without Compromise]`: All dummy jobs correctly demonstrate their expected behaviors (success, CRITICAL abort, exception handling) in 100% of test runs
+- **CORE-SC-DUMMY-DEMO** `[Reliability Without Compromise]`: The dummy jobs demonstrate success, exception handling and cancellation in 100% of test runs
   Lineage: 001-SC-010
 
-### Test Success Criteria
-
-- **CORE-SC-TEST-US**: 100% of user stories in core spec have corresponding test coverage
-  Lineage: 003-SC-001
-
-- **CORE-SC-TEST-AS**: 100% of acceptance scenarios in core spec have corresponding test cases
-  Lineage: 003-SC-002
-
-- **CORE-SC-TEST-FR**: 100% of functional requirements in core spec have corresponding test assertions
-  Lineage: 003-SC-003
-
-- **CORE-SC-TEST-PATHS**: All tests verify both success and failure paths as specified in the requirements
-  Lineage: 003-SC-004
-
-- **CORE-SC-TEST-TRACE**: All test files include traceability references to spec requirements
-  Lineage: 003-SC-005
-
-- **CORE-SC-TEST-GAPS**: Running the test suite surfaces any gaps between spec and implementation through failing tests
+- **CORE-SC-TEST-GAPS**: Running the test suite surfaces any gap between this document and the implementation as a failing test
   Lineage: 003-SC-006
-
-- **CORE-SC-TEST-UNIT-SPEED**: Unit test suite executes completely in under 30 seconds on a standard development machine
-  Lineage: 003-SC-007
-
-- **CORE-SC-TEST-INT-SPEED**: Integration tests complete full VM-based testing in under 15 minutes
-  Lineage: 003-SC-008
 
 ## Per-action confirmation
 
@@ -698,7 +425,7 @@ One consequence of "no skip" shapes the code beyond the gate itself:
 
 - **Declining the snapd restore is honoured, and stops exactly there.** `_restore_snap_hold` re-raises `SyncAbortedByUser` ahead of its best-effort handler, so an abort is not absorbed the way a failed restore is. `_cleanup` catches it around that one call and continues: everything after it releases resources (target lock, SSH connection, source lock, event bus, UI) rather than modifying a machine, and no confirmation prompt should be able to leak a lock. What was left in place is logged at `WARNING`, so the end-of-run summary resurfaces it. This matters because restoring is not merely lifting — when the machine already had a hold of its own, declining means pc-switcher's timed hold expires and that prior hold is gone with it, which is why the prompt names the value being written back.
 
-The mechanism lives in `executor.py`, the one funnel every command, transfer and background process already passes through, so it is caller-agnostic rather than job-specific: any call that passes `mutates="<phrase>"` declares itself a modification and is gated, on either machine. Reads pass no `mutates` and are never gated — that is what keeps the prompts worth reading. The trade-off is that the marker is opt-in, so a forgotten `mutates=` is an unannounced write; `tests/unit/test_mutates_audit.py` enumerates every ungated call site so an omission fails a test instead of shipping.
+The mechanism lives in `executor.py`, the one funnel every command, transfer and background process already passes through, so it is caller-agnostic rather than job-specific: any call that passes `mutates="<phrase>"` declares itself a modification and is gated, on either machine. In-process writes that are neither a command nor a transfer go through `declare_modification` so they reach the same funnel. Reads pass no `mutates` and are never gated — that is what keeps the prompts worth reading. The trade-off is that the marker is opt-in, so a forgotten `mutates=` is an unannounced write; `tests/unit/test_mutates_audit.py` enumerates every ungated call site so an omission fails a test instead of shipping.
 
 The same seam carries the verbatim `DEBUG` trace of every executor operation — reads included, since a trace that omits them cannot answer "what did the tool actually do" — and, on the way back, each command's own stdout and stderr as separate records (`_trace_output`). The job a line belongs to comes from the `active_job` context variable the orchestrator sets around each job, which `asyncio` copies per task so a concurrently running background job cannot clobber the label.
 
@@ -708,45 +435,39 @@ Every job that ran contributes one `JobResult` with a status of SUCCESS, SKIPPED
 
 The dividing line between the first two is what the job's inaction means. "Nothing to do because the target already matches the source" is the goal met, so it is SUCCESS — an empty package plan, a mirror that finds nothing to transfer. "Nothing done because nobody could decide, or nothing was applicable" is SKIPPED. Per-item exclusions inside an otherwise-working job are neither: a job-level status cannot express them, and the review and the run's warnings already do.
 
-Four situations produce SKIPPED:
+Situations that produce SKIPPED:
 
 - A package job (`apt_sync`, `snap_sync`, `flatpak_sync`, `manual_installs_sync`) whose review had items to offer on a run with no TTY. Nobody was present to answer anything, so every item is marked skip-once and the job converges nothing.
+- `apt_sync` when the source carries Ubuntu Pro (ESM) packages, the target reports no attachment, and the ESM gate is either unanswerable or answered "skip".
 - `vscode_state_sync` when the source has none of the state DBs it handles.
 - `folder_sync` when every configured folder is `enabled: false`.
 - An enabled `sync_jobs` name whose module or class does not resolve. There is no job instance in this case, so the orchestrator records the result at discovery time; the job the user enabled leaves a record rather than only a warning.
 
 A skipped job does not fail the run: the remaining jobs still execute, the session still completes, and the exit code is unchanged. A job signals it by raising `JobSkipped`, which it may only do **before** its first mutating command — raised later, the partial state it already wrote would go unreported.
 
-Dry-run is not a reason to report SKIPPED on its own: a rehearsal that completes did succeed. A rehearsal that hits one of the four situations above is skipped like any other run.
+FAILED behaves the same way for two causes only: `PackageItemFailures` (a manager's items that could not be applied) and `ProbeFailed` (a package-manager read that went dark, ADR-022). Both record a FAILED `JobResult`, log CRITICAL and let the remaining jobs run, because one manager's trouble says nothing about consent the user already gave for another. Every other exception still aborts the run.
+
+Dry-run is not a reason to report SKIPPED on its own: a rehearsal that completes did succeed. A rehearsal that hits one of the situations above is skipped like any other run.
 
 ## Assumptions
 
 Lineage: 001-core Assumptions, 003-core-tests Assumptions
 
-- Source and target machines run Ubuntu 24.04 LTS with btrfs filesystems
-- User has sudo privileges on both machines for operations requiring elevation
-- Machines are reachable via SSH (LAN, VPN such as Tailscale, or other network) during sync operations
-- Terminal emulator supports ANSI escape codes for progress UI
-- User's `~/.ssh/config` contains target machine configurations if using aliases
-- Sufficient disk space exists on target for package installation
-- No other tools are simultaneously modifying the same system state during sync
-- Testing framework infrastructure from specs/002-testing-framework/spec.md is implemented and operational
-- Core implementation exists and is testable
+- Source and target run Ubuntu 24.04 LTS on btrfs
+- The user has sudo on both machines for operations requiring elevation
+- Both machines are reachable over SSH (LAN, VPN such as Tailscale, or other) for the whole sync
+- `~/.ssh/config` holds the target's connection details when an alias is used
+- The terminal supports ANSI escape codes for the progress UI
+- The target has enough disk space for package installation
+- Nothing else is modifying the same system state during a sync
 
 ## Out of Scope
 
 Lineage: 001-core Out of Scope, 003-core-tests Out of Scope
 
-- Implementation of user-facing sync features (user data, packages, Docker, VMs, k3s) - those are separate feature specs (features 4-9)
 - Bi-directional sync or conflict resolution between divergent states
-- Automatic sync scheduling or daemon mode
+- Automatic rollback from a snapshot
+- Sync scheduling or daemon mode
 - GUI or web interface
-- Windows or macOS support
-- Non-btrfs filesystems
+- Windows or macOS support, and non-btrfs filesystems
 - Multi-user concurrent usage
-- Automated testing infrastructure (CI/CD) - though dummy jobs enable manual testing
-- Tests for features beyond core (those will have their own test specs)
-- Testing implementation details not specified in core spec
-- Fixing bugs found by these tests (separate bug fix tasks)
-- Updating core spec if gaps are found (separate spec update task)
-- Test coverage for third-party libraries (only test project code)
