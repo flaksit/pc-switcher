@@ -1,6 +1,5 @@
 # Package sync divergences
 
-Places where the code on `gsd/phase-02-package-management-sync` and the decision documents disagree, or where the code does something no document states. Found while building `02-BEHAVIOUR-LEDGER.md`. Nothing here is resolved — each is a ruling for the user to make. The narrative describes the code and marks the disputed points rather than picking a side.
 
 Two seeds from the planning stage were checked and did **not** hold up: dry run does show and answer the review, which is what `PKG-FR-DRY-RUN` asks for; and `--confirm-each-command` does cover the decision records, the snippet registry and the refresh pause, as `PKG-FR-CONFIRM-EACH` requires. Neither is a divergence.
 

@@ -50,7 +50,6 @@ All of these are in the criteria's gap register and in `02-DIVERGENCES.md`. They
 
 ## Open items unrelated to the review
 
-- `02-BEHAVIOUR-LEDGER.md` line references outside "The review" were taken at `ffa06900`; the branch has moved. Symbol names are reliable, line numbers are not. A re-read against the current head is outstanding.
 - `02-UAT-01-RUNBOOK.md` still describes the superseded two-pass review flow (DIV-09).
 - `~/go/bin/crit` was installed for the review TUI and is no longer used.
 
