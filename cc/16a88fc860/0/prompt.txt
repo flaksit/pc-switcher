@@ -1,0 +1,3 @@
+On "install apt packages" (and others): "install" is bold green. But "skip once" and "always skip" not bold and not coloured. At least "always skip" should be more visible because that is a hard and important change. What do you propose?
+Don't mention Ctrl-C as possibility.
+Don't make the question mark blink. This draws user attention to the wrong place.
