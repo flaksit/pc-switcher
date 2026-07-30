@@ -166,7 +166,7 @@ Approving an install can make apt remove or downgrade something else, through *c
 
 If apt installed that something automatically, the collateral action proceeds silently — apt is resolving its own dependencies. The log names it.
 
-If it is **manually installed on the target**, the user is asked first about any removal/downgrade/upgrade. The question names the package, says that this machine's apt has it marked manually installed, and says what the approved change would do to it. Three answers, each stating its effect: install anyway, skip and leave the triggering install unapplied, or stop the whole apt sync.
+If it is **manually installed on the target**, the user is asked first about any removal/downgrade/upgrade. The question names the package, says that this machine's apt has it marked manually installed, and says what the approved change would do to it. Three answers, each stating its effect: install anyway, skip and leave the triggering install unapplied, or stop — which ends the whole sync, not just apt.
 
 A package marked **machine-specific** is the case that matters most, and the question mentions explicitly that the package is machine specific.
 
