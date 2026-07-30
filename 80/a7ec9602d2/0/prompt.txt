@@ -1,0 +1,13 @@
+Should we "/clear" before step 3? If so, give the prompt I need to give to the new session.
+
+---
+
+No, I want that step 3+4 are done in a row without me intervening. Give prompt for that. Or tell me if better to stay out directly here in this running session.
+
+---
+
+why do you repeat all that stuff from the handover? It is already the first doc you instruct to read.
+
+Is 02-WORK-UNITS.md committed and pushed? I don't see it on GitHub and you didn't ask me for "U0 rulings".
+
+Add Step 5 (the preparation of the two docs) as well to the task list. Instruct to keep it concise. The current form of the document is an encyclopedia I would never read.
