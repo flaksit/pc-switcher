@@ -112,6 +112,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 
+from pcswitcher.jobs.packages import prompt_navigation
 from pcswitcher.jobs.packages.decision_list import DecisionOption, DecisionRow, decision_list
 from pcswitcher.models import SyncAbortedByUser
 from pcswitcher.terminal import is_interactive
@@ -529,7 +530,7 @@ async def _review_unreproducible_group(
         # empty snippet capture loops back here rather than manufacturing an unresolved
         # item (decision 10); a cancelled choice breaks out by aborting the whole sync.
         while True:
-            choice_prompt = questionary.select(
+            choice_prompt = prompt_navigation.select(
                 f"How should {target_hostname} get {entry.label}?",
                 choices=[
                     questionary.Choice(
@@ -659,7 +660,7 @@ async def _review_collateral_group(
         if entry.detail:
             console.print(Text(entry.detail, style="dim"))
 
-        choice_prompt = questionary.select(
+        choice_prompt = prompt_navigation.select(
             f"What should happen to {entry.label} on {target_hostname}?",
             choices=[
                 questionary.Choice(
@@ -918,7 +919,7 @@ async def ask_gate(
     try:
         console.print()
         console.print(Panel(Text(message), title=Text(title), border_style="yellow"))
-        prompt = questionary.select(
+        prompt = prompt_navigation.select(
             title,
             choices=[
                 questionary.Choice(title=proceed_label, value=True),

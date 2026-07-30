@@ -55,7 +55,7 @@ Most items that would actually change something — packages, holds, masks and `
 - **Skip this run** — leave it alone for now; it comes back next sync. On a screen whose act answer would change something the target already has, this reads as what it does — `keep it on <target>`, or `keep <target>'s version` on the repository-conflict screen — rather than as `skip once`.
 - **Skip always** — mark it as belonging to this machine only, so no future sync touches it (see [Machine-specific packages](#machine-specific-packages)).
 
-You give those answers on **one screen per group**, not with a question per item and not in two passes. Every item is a row; the decision it currently carries is shown in a column to the right of the longest item; the arrow keys move between rows and one key sets the focused row:
+You give those answers on **one screen per group**, not with a question per item and not in two passes. Every item is a row; the decision it currently carries is shown in a column to the right of the longest item; the arrow keys move between rows — the first and last rows are walls, not a way round to the other end — and one key sets the focused row:
 
 - `<y>` — apply, shown in the column as the group's own verb (`install`, `remove`, `overwrite`, …)
 - `<s>` — skip this run (`skip once`, or `keep it on <target>` where there is something to keep)

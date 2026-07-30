@@ -42,6 +42,8 @@ from prompt_toolkit.layout import FormattedTextControl, HSplit, Layout, Window
 from prompt_toolkit.styles import Style
 from questionary.styles import merge_styles_default
 
+from pcswitcher.jobs.packages.prompt_navigation import step
+
 __all__ = [
     "PREFIX_WIDTH",
     "DecisionOption",
@@ -333,7 +335,7 @@ def decision_list(
 
     def _mover(delta: int) -> Callable[[KeyPressEvent], None]:
         def move(_event: KeyPressEvent) -> None:
-            control.focused = (control.focused + delta) % len(control.rows)
+            control.focused = step(control.focused, delta, len(control.rows))
 
         return move
 

@@ -243,7 +243,7 @@ class TestGroupsNeverOfferedPermanence:
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
-            patch("pcswitcher.jobs.packages.review.questionary.select", return_value=select_prompt),
+            patch("pcswitcher.jobs.packages.review.prompt_navigation.select", return_value=select_prompt),
             patch("pcswitcher.jobs.packages.review.decision_list") as decision_list,
         ):
             outcome = await review_items([group], console=console, ui=ui, **HOSTS)
@@ -263,7 +263,7 @@ class TestGroupsNeverOfferedPermanence:
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
-            patch("pcswitcher.jobs.packages.review.questionary.select", return_value=select_prompt),
+            patch("pcswitcher.jobs.packages.review.prompt_navigation.select", return_value=select_prompt),
             patch("pcswitcher.jobs.packages.review.decision_list") as decision_list,
         ):
             outcome = await review_items([group], console=console, ui=ui, **HOSTS)

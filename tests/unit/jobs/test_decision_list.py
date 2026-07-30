@@ -273,9 +273,16 @@ class TestKeyHandling:
 
         assert _drive(f"{_DOWN}n{_ENTER}", rows=rows) == {"a": "apply", "b": "skip_always", "c": "apply"}
 
-    def test_arrows_move_and_wrap_around(self) -> None:
-        # Up from the first row wraps to the last.
-        assert _drive(f"{_UP}s{_ENTER}", rows=[_row("a"), _row("b")]) == {"a": "apply", "b": "skip_once"}
+    def test_the_ends_of_the_list_are_walls(self) -> None:
+        """Ruled by the user, replacing the wrap this screen shipped with: UP on the first
+        row jumped to the last one, which on a list of packages is a silent jump to a row
+        the next keystroke then answered.
+        """
+        rows = [_row("a"), _row("b")]
+
+        # Up from the first row stays on the first, and down from the last stays on the last.
+        assert _drive(f"{_UP}s{_ENTER}", rows=rows) == {"a": "skip_once", "b": "apply"}
+        assert _drive(f"{_DOWN}{_DOWN}{_DOWN}s{_ENTER}", rows=rows) == {"a": "apply", "b": "skip_once"}
 
     def test_shift_of_a_key_sets_every_row(self) -> None:
         rows = [_row("a"), _row("b"), _row("c")]
