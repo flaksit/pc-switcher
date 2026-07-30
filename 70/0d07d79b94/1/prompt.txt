@@ -1,0 +1,9 @@
+"The ESM package lists are public, so..." is blah-blah we shouldn't bother the user with
+
+---
+
+Cut. Not needed. Cut
+
+---
+
+On any question with options, like the following, I use up/down keys to select the option and then press enter to select it. However, the arrow keys "roll over": pressing UP on the top option, moves the selection to the bottom of the list. And DOWN on the bottom option, moves back to the top. This is counter-intuitive and already made me select unwanted option. Is it possible to disable that "roll over" behavior?
