@@ -26,3 +26,10 @@ I'd do step 2 first and then step 1. Give step 2 a bit more liberty to possibly 
 ---
 
 Useful to start the session in claude code "/plan" mode? Or go ahead in "auto mode" directly because the model (Opus) will do good planning anyway?
+
+---
+
+Update/addition/clarification to the user reqs: see uncommitted change to ADR-020: in UI, user must be given consistent and clear user-oriented wording and concrete implications of the actions apply/skip-once/skip-always;
+not the litteral "apply", "skip-once", "skip-always" but e.g. "install: go ahead — nomad changes this sync", "skip now: leave nomad alone; you are asked again next sync" and "never install: atlas's own — nomad never gets it, never asked again".
+
+Put that in user req doc and translate to conformance article(s)
