@@ -134,11 +134,11 @@ GROUPS = [
     ),
 ]
 
-GATE_MESSAGE = (
-    f"{SOURCE_HOST} carries ubuntu-esm-apps.sources, which this sync would copy to {TARGET_HOST} — but "
-    f"{TARGET_HOST} is not attached to Ubuntu Pro.\n\n"
-    f"Skipping means apt_sync does nothing at all this run and {TARGET_HOST}'s /etc/apt is left exactly as it is. "
-    "Every other job still runs."
+# The real builder, not a paraphrase: the gate's whole job is telling the user how to attach
+# the target, and a rehearsal that abbreviates that away cannot show whether the instructions
+# read well on screen — which is the one thing this harness exists to check.
+GATE_MESSAGE = build_esm_gate_message(
+    ("ubuntu-esm-apps.sources", "ubuntu-esm-infra.sources"), Machines(SOURCE_HOST, TARGET_HOST), "apt_sync"
 )
 
 # `ask_gate` answers with a bare bool (or None), which says nothing on its own in a
