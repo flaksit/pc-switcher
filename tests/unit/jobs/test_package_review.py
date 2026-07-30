@@ -1544,6 +1544,15 @@ class TestRemovalGroupContent:
         assert "[bold red]not-markup[/]" in out.getvalue()
 
 
+_COLLATERAL_DETAIL = (
+    "Installing sl on nomad would remove fortunes\n"
+    "apt on nomad has fortunes marked as manually installed: something asked for it there directly, rather "
+    "than it arriving as another package's dependency."
+)
+"""One collateral item's detail as `Collateral` composes it: the finding, then the ground that
+protects this package."""
+
+
 @pytest.mark.asyncio
 class TestCollateralPromptWording:
     """D-30's prompt, in the user's language: what is protected, what the change does to it,
@@ -1559,7 +1568,7 @@ class TestCollateralPromptWording:
                     item_id="apt:package:pkg-a",
                     label="fortunes",
                     action_label="remove",
-                    detail="Installing sl on nomad would remove fortunes",
+                    detail=_COLLATERAL_DETAIL,
                     answer_hints=(
                         "install sl on nomad, so fortunes is removed as well",
                         "keep fortunes on nomad; sl will not be installed; will be asked again next sync",
@@ -1597,20 +1606,15 @@ class TestCollateralPromptWording:
         )
         assert "the target" not in " ".join(option.hint for option in options.values())
 
-    async def test_the_finding_is_stated_before_the_reason_this_package_is_protected(self) -> None:
-        """The user could not tell what "You asked for fortunes on nomad yourself" meant.
-        It is apt's manual-install mark — nobody recorded a pc-switcher preference — and it
-        answers "why am I being asked about this one", which is a question the reader only
-        has after being told what would happen to it.
+    async def test_the_reason_is_the_item_own_and_the_review_adds_nothing(self) -> None:
+        """Why the package is protected comes from the item: `Collateral.protected` is a union
+        of the target's manual set and its marks, so a sentence composed here would be false
+        about a package a mark alone protects.
         """
-        decision_list, printed = await self._titles()
+        decision_list, _printed = await self._titles()
 
-        printed += " ".join(row.detail or "" for row in decision_list.call_args.kwargs["rows"])
-        assert "manually installed" in printed
-        assert "Installing sl on nomad would remove fortunes" in printed
-        assert printed.index("would remove fortunes") < printed.index("manually installed")
-        assert "You asked for" not in printed
-        assert "without asking" not in printed
+        rows = decision_list.call_args.kwargs["rows"]
+        assert [row.detail for row in rows] == [_COLLATERAL_DETAIL]
 
     async def test_stopping_names_the_package_and_the_machine_in_the_abort(self) -> None:
         with pytest.raises(SyncAbortedByUser) as excinfo:

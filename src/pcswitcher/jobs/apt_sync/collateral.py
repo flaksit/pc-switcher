@@ -324,6 +324,26 @@ class Collateral:
                 f"({effect.package} is installed automatically on {self._machines.target}; not asked)",
             )
 
+    def _reason(self, package: str) -> str:
+        """Why this package gets a question when apt's other casualties do not
+        (`PKG-FR-COLLATERAL-MANUAL`, `PKG-FR-COLLATERAL-MARKED`).
+
+        Composed here because `protected()` is a union and only this layer knows which of its
+        grounds applies: a fixed "apt has it marked as manually installed" sentence is false
+        about a package a mark alone protects. `_run_marked` is deliberately not consulted —
+        items are built at plan time, before this run's own marks exist.
+        """
+        target = self._machines.target
+        manual = f"apt on {target} has {package} marked as manually installed"
+        if package not in self._marked:
+            return (
+                f"{manual}: something asked for it there directly, rather than it arriving as "
+                "another package's dependency."
+            )
+        if package in self._target_manual_set:
+            return f"{manual}, and it is marked as {target}'s own — either ground alone would protect it."
+        return f"{package} is marked as {target}'s own, so nothing else in this review mentions it."
+
     def _item(self, effect: CollateralEffect, trigger: str, verb: str, trigger_ids: frozenset[str]) -> ItemDiff:
         """Build one manual-collateral `ItemDiff` and record the candidates it gates.
 
@@ -333,16 +353,15 @@ class Collateral:
         the direction of the change under review ("Installing"/"Removing"), not what happens
         to the collateral package.
 
-        A marked package says so in the same sentence (`PKG-FR-COLLATERAL-MARKED`): the mark
-        is why nothing else in the review mentions this package, so this is the only line the
-        user gets about it.
+        The detail states the finding first and the reason second: what is about to happen to
+        the package is what the answer is about, and why it is protected means nothing before
+        the reader knows that.
         """
         target = self._machines.target
         causing = "install" if verb == "Installing" else "remove"
-        marked = f" — a package marked as {target}'s own" if effect.package in self._marked else ""
         diff = collateral_diff(
             effect.package,
-            f"{verb} {trigger} on {target} would {effect.phrase}{marked}",
+            f"{verb} {trigger} on {target} would {effect.phrase}\n{self._reason(effect.package)}",
             act_word=effect.act_word,
             answer_hints=(
                 f"{causing} {trigger} {'on' if causing == 'install' else 'from'} {target}, so {effect.sentence}",

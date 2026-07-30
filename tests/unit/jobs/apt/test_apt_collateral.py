@@ -11,7 +11,7 @@ import pytest
 
 from pcswitcher.jobs import JobContext
 from pcswitcher.jobs.apt_sync import AptSyncJob
-from pcswitcher.jobs.packages.items import DiffAction
+from pcswitcher.jobs.packages.items import DiffAction, ItemDiff
 from pcswitcher.jobs.packages.review import (
     COLLATERAL_REVIEW_ACTION,
     Decision,
@@ -24,6 +24,14 @@ from tests.unit.jobs.apt.helpers import (
     make_context,
     target_offers,
 )
+
+
+def finding(diff: ItemDiff) -> str:
+    """The detail's first line — what the approved change would do to this package. The
+    reason line under it has its own tests in `TestTheReasonNamesTheGroundThatApplies`.
+    """
+    assert diff.detail is not None
+    return diff.detail.split("\n")[0]
 
 
 class TestPlanTimeCollateral:
@@ -59,7 +67,7 @@ class TestPlanTimeCollateral:
         assert len(collateral) == 1
         assert collateral[0].action == DiffAction.REPORT_ONLY
         assert collateral[0].label == "other-manual"
-        assert collateral[0].detail == "Installing pkg-a on target-host would remove other-manual"
+        assert finding(collateral[0]) == "Installing pkg-a on target-host would remove other-manual"
 
         collateral_group = next(g for g in plan.groups if g.action == COLLATERAL_REVIEW_ACTION)
         assert "apt:collateral:other-manual" in {entry.item_id for entry in collateral_group.entries}
@@ -363,7 +371,7 @@ class TestCollateralAttribution:
         plan = await AptSyncJob(context).plan()
 
         collateral = next(diff for diff in plan.diffs if diff.item_id == "apt:collateral:other-manual")
-        assert collateral.detail == "Removing pkg-x on target-host would remove other-manual"
+        assert finding(collateral) == "Removing pkg-x on target-host would remove other-manual"
         # The cost, pinned: one batched rehearsal plus one per candidate, and only because
         # the batch found manual collateral.
         rehearsals = [cmd for cmd in all_calls(target) if cmd.startswith("apt-get --dry-run remove")]
@@ -393,7 +401,7 @@ class TestCollateralAttribution:
         plan = await AptSyncJob(context).plan()
 
         collateral = next(diff for diff in plan.diffs if diff.item_id == "apt:collateral:other-manual")
-        assert collateral.detail == "Removing the packages listed earlier on target-host would remove other-manual"
+        assert finding(collateral) == "Removing the packages listed earlier on target-host would remove other-manual"
 
     @pytest.mark.asyncio
     async def test_a_clean_batch_costs_no_extra_rehearsal(self) -> None:
@@ -573,7 +581,7 @@ class TestRemovalCandidateKeepsItsProtection:
         plan = await job.plan()
 
         collateral = next(d for d in plan.diffs if d.item_id == "apt:collateral:old-tool")
-        assert collateral.detail == "Installing pkg-a on target-host would remove old-tool"
+        assert finding(collateral) == "Installing pkg-a on target-host would remove old-tool"
         # Its own removal item is untouched: the two questions are about different things.
         assert "apt:package:old-tool" in {d.item_id for d in plan.diffs}
 
@@ -617,15 +625,18 @@ class TestRemovalCandidateKeepsItsProtection:
         assert removal_batch_items == []
 
 
-class TestMarkedCollateral:
-    """`PKG-FR-COLLATERAL-MARKED`: a machine-specific package is invisible in every other
-    review line, so the collateral question is the only place the mark can be named.
+class TestTheReasonNamesTheGroundThatApplies:
+    """`PKG-FR-COLLATERAL-MANUAL` wants the question to say why the package is protected;
+    `PKG-FR-COLLATERAL-MARKED` wants the mark named where there is one. `protected()` is a
+    union, so the sentence has to follow the ground that actually holds — a machine-specific
+    package the target's apt pulled in automatically is protected by nothing apt knows about,
+    and the question is the only place its mark is ever named.
     """
 
     @staticmethod
-    def _context() -> tuple[JobContext, MagicMock, MagicMock]:
-        """`vendor-tool` is marked machine-specific on the target and is NOT in the target's
-        `apt-mark showmanual` set, so the mark alone is what protects it.
+    def _marked_context(target_manual: str) -> tuple[JobContext, MagicMock, MagicMock]:
+        """`vendor-tool` is marked machine-specific on the target; `target_manual` decides
+        whether the target's `apt-mark showmanual` set protects it as well.
         """
         return make_context(
             source_responses={
@@ -633,7 +644,8 @@ class TestMarkedCollateral:
                 "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
             },
             target_responses={
-                "apt-mark showmanual": CommandResult(0, "", ""),
+                "apt-mark showmanual": CommandResult(0, target_manual, ""),
+                "dpkg-query": CommandResult(0, "vendor-tool\t1.0\n", ""),
                 "apt.decisions.yaml": CommandResult(0, decision_file("apt:package:vendor-tool"), ""),
                 "apt-cache policy": CommandResult(0, target_offers("pkg-a"), ""),
                 "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": CommandResult(
@@ -643,27 +655,42 @@ class TestMarkedCollateral:
         )
 
     @pytest.mark.asyncio
-    async def test_a_marked_package_is_protected_and_the_question_says_it_is_marked(self) -> None:
-        context, _source, _target = self._context()
-        job = AptSyncJob(context)
+    async def test_a_manually_installed_package_says_apt_has_it_marked_manual(self) -> None:
+        context, _source, _target = _manual_collateral_context()
 
-        plan = await job.plan()
+        plan = await AptSyncJob(context).plan()
 
-        collateral = next(d for d in plan.diffs if d.item_id == "apt:collateral:vendor-tool")
+        collateral = next(d for d in plan.diffs if d.item_id == "apt:collateral:other-manual")
         assert collateral.detail == (
-            "Installing pkg-a on target-host would remove vendor-tool — a package marked as target-host's own"
+            "Installing pkg-a on target-host would remove other-manual\n"
+            "apt on target-host has other-manual marked as manually installed: something asked for it there "
+            "directly, rather than it arriving as another package's dependency."
         )
 
     @pytest.mark.asyncio
-    async def test_an_unmarked_manual_package_says_nothing_about_a_mark(self) -> None:
-        context, _source, _target = _manual_collateral_context()
-        job = AptSyncJob(context)
+    async def test_a_package_only_a_mark_protects_says_so_and_claims_nothing_about_apt(self) -> None:
+        context, _source, _target = self._marked_context("")
 
-        plan = await job.plan()
+        plan = await AptSyncJob(context).plan()
 
-        collateral = next(d for d in plan.diffs if d.item_id == "apt:collateral:other-manual")
-        assert collateral.detail is not None
-        assert "marked as" not in collateral.detail
+        collateral = next(d for d in plan.diffs if d.item_id == "apt:collateral:vendor-tool")
+        assert collateral.detail == (
+            "Installing pkg-a on target-host would remove vendor-tool\n"
+            "vendor-tool is marked as target-host's own, so nothing else in this review mentions it."
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_package_both_grounds_cover_states_both(self) -> None:
+        context, _source, _target = self._marked_context("vendor-tool\n")
+
+        plan = await AptSyncJob(context).plan()
+
+        collateral = next(d for d in plan.diffs if d.item_id == "apt:collateral:vendor-tool")
+        assert collateral.detail == (
+            "Installing pkg-a on target-host would remove vendor-tool\n"
+            "apt on target-host has vendor-tool marked as manually installed, and it is marked as "
+            "target-host's own — either ground alone would protect it."
+        )
 
 
 class TestCollateralUpgrade:
@@ -694,7 +721,7 @@ class TestCollateralUpgrade:
         plan = await job.plan()
 
         collateral = next(d for d in plan.diffs if d.item_id == "apt:collateral:manual-up")
-        assert collateral.detail == "Installing pkg-a on target-host would upgrade manual-up from 1.0 to 2.0"
+        assert finding(collateral) == "Installing pkg-a on target-host would upgrade manual-up from 1.0 to 2.0"
 
 
 class TestAutoCollateralIsLogged:

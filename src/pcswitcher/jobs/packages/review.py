@@ -853,7 +853,8 @@ async def _review_collateral_group(
     What is protected is a fact about the TARGET (`Collateral.protected`): its own
     `apt-mark showmanual` set, plus the packages that machine marked machine-specific.
     Either the user asked for the package on the machine being changed, or they told this
-    tool to leave it alone there.
+    tool to leave it alone there. Which of the two applies to THIS package is stated in
+    `entry.detail`, composed by `Collateral` — the only layer that knows the ground.
 
     The decision is recorded against `entry.item_id`: proceed records `Decision.APPLY`,
     protect records `Decision.SKIP_ONCE`. `Collateral.resolve` maps that onto the changes
@@ -871,21 +872,11 @@ async def _review_collateral_group(
     phase already guards against (T-02-02).
     """
     for entry in group.entries:
-        # The finding first, the reason second, both on the row itself. The finding —
-        # which change, on which machine, and what it does to this package — is what the
-        # answer is about; the reason is why this package gets a question at all when apt's
-        # other casualties do not, and it means nothing before the reader knows what is
-        # happening to it.
-        reason = (
-            f"apt on {target_hostname} has {entry.label} marked as manually installed: something asked for it "
-            "there directly, rather than it arriving as another package's dependency."
-        )
         selected = await _ask_about_one_item(
             entry,
             title=group.title,
             options=_collateral_options(entry, target_hostname),
             default=Decision.SKIP_ONCE,
-            detail=f"{entry.detail}\n{reason}" if entry.detail else reason,
         )
 
         if selected == Decision.APPLY:
