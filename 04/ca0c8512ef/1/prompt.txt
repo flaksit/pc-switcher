@@ -229,3 +229,60 @@ All eight claims came back CONFIRMED, but three carry corrections the claimants 
 None of these appear in the conformance doc's existing "Where the tool does not yet meet these requirements" section, so all would be new findings against it. Two (K81, K23) are trade-offs the code documents deliberately in `folder_sync`'s module comment, which makes them requirements conflicts rather than oversights.</result>
 <usage><subagent_tokens>139908</subagent_tokens><tool_uses>33</tool_uses><duration_ms>280248</duration_ms></usage>
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>a1fe8eaf1f82465f9</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/79395195-eaac-4280-9fbf-7a7610dd3e3a/tasks/a1fe8eaf1f82465f9.output</output-file>
+<status>completed</status>
+<summary>Agent "Apply codex review to the matrix" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All four passes are applied to `/home/janfr/dev/pc-switcher/docs/dev/package-sync-scenario-coverage.md` (only that file changed; no tests written, nothing run, nothing committed).
+
+## 1. Added rows (14)
+
+Each Cov mark comes from opening the candidate test or, where marked `‼`, from reading the code that contradicts the article.
+
+| id | branch | Cov |
+| --- | --- | --- |
+| A75 | approved vendor install carries the pin its origin needs, no separate question | U |
+| C171 | declining one conflicted repository fails **both** approved packages that needed it | — |
+| C172 | repository used only by a **declined** removal stays unraised and undeleted | ‼ |
+| C173 | target-missing key owned by packaging on Atlas is still copied | — |
+| C174 | differing target key owned by a **vendor** package must be refreshed | ‼ |
+| C175 | permanently declining an apt-config **overwrite** — mark, holder, later protection | — |
+| D71 | apply-time-discovered collateral **upgrade** must be asked, not refused | ‼ |
+| E114 | unfetchable revision on a source-only snap **install** (E50 is a change) | — |
+| E115 | data of a revision whose install was declined must not land | ‼ |
+| F145 | flatpak install names no version/commit; the target's build is accepted | — |
+| F146 | verification flipped between the pre-check and the read-back | ‼ |
+| F147 | approving an unmask actually removes the target-only pattern | P |
+| G93 | several lost **and** changed registry entries named in one question | — |
+| G94 | absent source registry with a non-empty target registry | P |
+
+## 2. Rewritten Expected columns
+
+Acted on all 13 named rows; the reviewer was right on every one. `A15`, `G5`, `C50`, `C81`, `D39`, `D40`, `D41`, `F79`, `F118`, `G46`, `G79` are now `‼` with the Test column naming the code that does otherwise (`AptProbe.query_target_items`, `_scan_no_candidate_apt_packages`, `AptSyncJob._plan_repo_diffs`'s candidate-based `going` set, `AptKeyrings.manages`, `PackageConverger.install/remove`, `_origin_refusal`'s verification branch, `_clear_target_filters`, `review_items`' non-interactive arm, `_guard_registry_overwrite`). `C3` became `P` (the code is right — C75 proves rotation is honoured — but its test only covers the matching-key sub-case). `G48` became `U`: an interactive review provably cannot leave an item unanswered, so the tolerance tests it cited assert an unreachable state, not the branch. `G72` kept its `‼`; only its Expected, which stated the code's behaviour as the requirement, was replaced — no new row added, per the overlap warning. `C50`/`C172` and `C81`/`C174` each carry the shared-defect note rather than repeating it.
+
+## 3. Mechanism rows
+
+Left untouched. One sentence added to `## How this document is kept true`: a row whose Expected names a command, a count or a parse pins mechanism, not an article branch, and is not by itself evidence of conformance.
+
+## 4. Duplicates merged
+
+Cross-referenced (id and Cov mark kept, Test column kept, keeper annotated for findability): `A61`→A23, `A39`→A27, `A28`→C21, `A29`→C22, `A36`→C24, `A34`→C86, `A35`→C87, `C1`→A51, `A65`→C2, `A55`→D36, `B12`→B3, `B15`→B11, `F20`→F45, `G22`→G88+G89. Keepers chosen by which row states the branch more completely, tie-broken by the section whose header names the governing article; A28/A29 keep their flowchart edge labels so A.3's enumeration stays intact.
+
+## Refused
+
+- **Source-side snap orphan hold** (`PKG-FR-SNAP-HOLD`). snapd records a hold only against an installed snap, and `_diff_snap_holds` iterates source snaps, so "a hold the source has for a snap it no longer has" is not a situation a reviewer can set up on two machines. E60 already covers the only realizable reading (Nomad's orphan hold). No row added.
+- **F3 vs F122/F123** (`PKG-FR-FLATPAK-SCOPE`). F3's Expected — both scopes' mask lists are read, each naming its scope — is the SCOPE obligation, which neither F122 nor F123 states. It shares their tests but not their branch, so it is not a duplicate. Left as is.
+
+## Needs a requirements decision
+
+1. **`PKG-FR-FLATPAK-FILTER` vs `PKG-FR-FLATPAK-REMOTE-DERIVED`** (F118). Read literally, the filter article's "a remote the source does not restrict MUST NOT stay restricted" reaches a remote no approved application needs — which the derived article forbids touching. Recorded in the row; no test can be written until the criteria settle it.
+2. **Which machine holds a declined overwrite** (C175). `PackageSyncJob._decision_holder_is_source` records a change-direction mark on Atlas, while the copy the answer protects is Nomad's. `PKG-FR-MACHINE-SPECIFIC`'s "holding machine" does not resolve a change item. The Expected is written so it stays true either way, with the ambiguity in the Test column.
+3. **D39–D41/D71** rest on reading `PKG-FR-COLLATERAL-MANUAL` + `PKG-FR-ASK-AGAIN` as requiring a late question where the code refuses the transaction. That defect is *not* in the criteria's own "Where the tool does not yet meet these requirements" list (which records only the removal-batch and held-package gaps), so it is worth confirming before it is treated as settled.</result>
+<usage><subagent_tokens>312108</subagent_tokens><tool_uses>103</tool_uses><duration_ms>963652</duration_ms></usage>
+</task-notification>
