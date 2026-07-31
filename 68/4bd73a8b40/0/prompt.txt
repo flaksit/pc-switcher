@@ -689,3 +689,43 @@ What the hell, how is this possible? Who wrote this file? Are the scenarios writ
 
 Are you 100% sure, for each and every scenario?
 Every scenario only a single sync? And the N-scenarios?
+
+---
+
+<task-notification>
+<task-id>a2e757c780f42bc1e</task-id>
+<tool-use-id>toolu_01GYyTkVn87qpBTYnuvoBCzz</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/79395195-eaac-4280-9fbf-7a7610dd3e3a/tasks/a2e757c780f42bc1e.output</output-file>
+<status>completed</status>
+<summary>Agent "Audit machine-role consistency" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I read all 1185 rows across sections A–K and N. Note: the document's opening section was edited by someone else at 20:00:58 during the audit (2064 → 2068 lines); the convention's substance is unchanged, but see the note at the end.
+
+## Rows that break the convention
+
+**H31** (`docs/dev/package-sync-scenario-coverage.md:1222`) — "A removal-direction item is left declined across a whole VM run (Nomad→Atlas). | Atlas keeps the package; the same item approved on the next run removes it." A sync action (an apt removal) lands on Atlas and Nomad's state is the intent — rules 1 and 2, in section H, not N. It is also a multi-run narrative ("the next run"). This is N9's narrative restated inside H; N9 already covers it and says so.
+
+**H126** (`:1360`) — "The same machine plays the target role in a later run." The machine that holds the mark is Atlas (H125, the row directly above, puts it "in the source role"), so this row runs a second sync with the roles swapped and Atlas as the machine being changed — rule 2, outside section N. Its own Test column concedes the direction ("reversed direction"). It also names neither machine, so a reviewer has to carry H125's antecedent forward to set it up.
+
+**C175** (`:1465`) — "…the file is proposed in no later review, launched from either machine." "Launched from either machine" asserts the outcome of a run launched from Nomad, which only section N is allowed to do. Compounding it, "the mark is recorded on one machine" names no machine — and the Test column states the holder is genuinely unsettled (`PackageSyncJob._decision_holder_is_source` records the change on Atlas while the copy the answer protects is Nomad's). Rules 2 and 4 together.
+
+## Rows that are ambiguous
+
+**A54** (`:1226` region, section A.4 Removing) — "The same removal item across three runs: proposed, left undecided, then approved | Undecided leaves the package installed; approved removes it." Names no machine and no direction. Read inside A.4 a reviewer sets it up as a removal from Nomad; the cited proof (`TestCrossDirectionRoundTrips::test_install_propagates_then_reversed_removal_needs_approval`) is the reversed run, and its docstring says "the final run removes the package from pc1" — i.e. from the machine A.4 treats as read-only. The row and its evidence describe removals on different machines.
+
+Two borderline rows I checked and am **not** counting: C16 ("a machine has no `/etc/apt/preferences.d` … no removal proposals against the other machine") and E26 ("A machine with no snaps … the other machine's snaps are offered for removal") name neither machine, but the Expected clause pins the empty machine to Atlas in both cases, so a reviewer can decode them.
+
+## Verdict
+
+The convention holds for 1181 of 1185 rows. **Four rows break it: H31, H126, C175 (violations) and A54 (ambiguous).** All four are the same defect — a cross-run or role-swapped narrative written into A–K instead of N — and three of the four are already covered by an N row (H31/A54 by N9 and N7; H126 by N2).
+
+Everything else checked clean:
+- No row uses `Vega` where two machines suffice; H133 is its only use and genuinely needs a third machine (rule 3 clean).
+- No row treats Nomad's state as the intent outside N. G43 ("Nomad holds a snippet for the finding, Atlas holds none | Still unresolved") is the explicit negative control.
+- Every Atlas-side write in the tables is one of the three permitted source writes: machine-specific marks (B42, C124, E68, F130, G36, H118–H124, H144, J146), the review-authored snippet (G49, G52, J147), and the snap refresh pause with its restore (E72–E99, J148). J149 asserts the "no fourth source write" boundary directly.
+- The many rows mentioning Atlas alongside an action (C8/C13/C27/C34/C106 "overwritten from Atlas", C71/C75/C173/C174 key copies, E8/E14/E21/E33 revision and channel moves, F31/F46/F56/F101) all read Atlas and write Nomad.
+- No row mixes the convention within itself (rule 5 clean).
+
+One thing outside the five rules, arising from the header edit made during the audit: the new line 16 reads "**Sections A–K are one sync, launched from Atlas.** Every row is a single run in that one direction." Beyond the four rows above, a dozen more A–K rows are multi-run without swapping direction — B45, B47, C33, C61, C115, C119, D21, G35, G37, G82, G90, H114, H145 all turn on "the next run" / "a later run" / "asked again next sync". They do not break the machine-role convention I was asked to audit, but they do contradict the "single run" half of the sentence as now written.</result>
+<usage><subagent_tokens>245064</subagent_tokens><tool_uses>27</tool_uses><duration_ms>304386</duration_ms></usage>
+</task-notification>
