@@ -1,0 +1,53 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "5bf40442a268",
+  "strategy": "manual-commit",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 5,
+  "files_touched": [
+    "docs/dev/package-sync-scenario-coverage.md",
+    "docs/jobs/package-sync.md",
+    "docs/planning/package-sync-conformance-criteria.md",
+    "docs/system/data-model.md",
+    "docs/system/package-sync.md",
+    "src/pcswitcher/jobs/apt_sync/collateral.py",
+    "src/pcswitcher/jobs/apt_sync/diffing.py",
+    "src/pcswitcher/jobs/apt_sync/job.py",
+    "src/pcswitcher/jobs/apt_sync/origins.py",
+    "src/pcswitcher/jobs/apt_sync/packages.py",
+    "src/pcswitcher/jobs/flatpak_sync.py",
+    "src/pcswitcher/jobs/packages/state.py",
+    "src/pcswitcher/jobs/packages/sync_core.py",
+    "src/pcswitcher/jobs/snap_sync.py",
+    "tests/integration/jobs/test_package_sync.py",
+    "tests/unit/jobs/apt/test_apt_collateral.py",
+    "tests/unit/jobs/apt/test_apt_job.py",
+    "tests/unit/jobs/apt/test_apt_keyrings.py",
+    "tests/unit/jobs/apt/test_apt_packages.py",
+    "tests/unit/jobs/apt/test_apt_probe.py",
+    "tests/unit/jobs/test_block_state_decisions.py",
+    "tests/unit/jobs/test_flatpak_sync.py",
+    "tests/unit/jobs/test_manual_installs_sync.py",
+    "tests/unit/jobs/test_package_review.py",
+    "tests/unit/jobs/test_package_state.py",
+    "tests/unit/jobs/test_package_sync_core.py",
+    "tests/unit/test_redaction.py",
+    "tests/unit/test_scenario_coverage_matrix.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/5b/f40442a268/0/metadata.json",
+      "transcript": "/5b/f40442a268/0/full.jsonl",
+      "compact_transcript": "/5b/f40442a268/0/transcript.jsonl",
+      "content_hash": "/5b/f40442a268/0/content_hash.txt",
+      "prompt": "/5b/f40442a268/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 158,
+    "cache_creation_tokens": 504833,
+    "cache_read_tokens": 18067120,
+    "output_tokens": 111700,
+    "api_call_count": 84
+  }
+}
