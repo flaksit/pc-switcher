@@ -160,3 +160,36 @@ Key findings:
 - **One wording question for the user, not a test gap (H93/H96).** `PKG-FR-ANSWERS-AS-A-SET`'s "one grammar" is not operationalised anywhere, and the repository-conflict screen's act hint (`"nomad changes this sync"`) is a declarative clause sitting beside imperative ones on every other screen. Flagged rather than silently rewritten.</result>
 <usage><subagent_tokens>302560</subagent_tokens><tool_uses>72</tool_uses><duration_ms>740113</duration_ms></usage>
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>a341c8d4a68ca6426</task-id>
+<tool-use-id>toolu_01PuoiB5Zto4wUKHEed2jcHN</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/79395195-eaac-4280-9fbf-7a7610dd3e3a/tasks/a341c8d4a68ca6426.output</output-file>
+<status>completed</status>
+<summary>Agent "Verify N cross-run coverage" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Both citations are consistent. The file is complete.
+
+## What I did
+
+Filled the `Cov` and `Test` columns for all 22 N rows in `/home/janfr/dev/pc-switcher/.planning/phases/02-package-management-sync/coverage-sweep/N-cross-run.md`, then appended a `## Gaps` section (8 entries) and a `## Integration suite inventory` covering all 22 integration tests. `#`, `Narrative` and `Expected` untouched; no other file edited.
+
+## Verdict spread
+
+`U V` ×6 (N1, N4, N5, N8, N9, N13, N18) · `V` ×1 (N2) · `U` ×5 (N6, N10, N14, N15, N20) · `P` ×7 (N3, N7, N11, N16, N17, N19, N21) · `‼` ×1 (N12) · `—` ×1 (N22, hand check)
+
+## Key findings
+
+**N12 is a real code/requirement conflict, not a test gap.** `PKG-FR-REPO-DELETE` says repository usage is "counted after this run's **approved** removals". `apt_sync/job.py` builds `going` from every `APT_PACKAGE`/`REMOVE` diff — the *proposed* removals, at plan time, before any answer exists — and `diff_apt_sources` withholds on that set. Nothing re-checks at converge (`etc_apt.converge_item` → `ensure_converged` → `approved_diffs` filters on the repository's own decision only). So approving a repository's deletion while declining its package's removal deletes the repo out from under an installed package. `test_apt_job:TestRepoRemovalWithheldWhileInUse::test_a_repository_only_this_runs_removals_use_is_offered` pins the current (wrong) behaviour. `flatpak_sync` does *not* have this bug — it counts after the converge loop against the target's real state — which is the shape apt is missing.
+
+**Two rows have solid genuine two-cycle unit coverage** that I'd otherwise have downgraded: `test_block_state_decisions.py` really does run the pipeline twice (round 1 records, round 2 replays the exact file round 1 wrote back through the decision-file `cat`), so N4/N5/N6 are `U`, not `P`.
+
+**N3 is the mirror of the covered case and is untested.** `test_skip_always_is_inert_in_both_roles` covers a *source*-held mark across a role reversal. Nothing covers a *target*-held mark (removal-direction) surviving a role reversal, where the holder becomes the source and the item flips to `INSTALL` — the opposite branch of `_decision_holder_is_source`.
+
+**Nothing asserts that a `SKIP_ONCE` writes no decision entry** (N7). The two "no record" tests both use `SKIP_ALWAYS` and guard the dry-run / non-interactive conditions instead.
+
+**Three rows aren't genuinely cross-run** (N10, N15, N20) — flagged in Notes for the assembler as candidates to move to the apt-repos, apt-collateral and mark-persistence areas. Two `V` marks are shared with other areas and shouldn't be double-counted (N13's key half, N18's skip arm).</result>
+<usage><subagent_tokens>235701</subagent_tokens><tool_uses>61</tool_uses><duration_ms>635152</duration_ms></usage>
+</task-notification>
