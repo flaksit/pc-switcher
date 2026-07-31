@@ -372,6 +372,7 @@ class TestConfirmEachCommandFlag:
     """
 
     def test_refused_without_a_tty(self) -> None:
+        """J166 — refused before config is loaded or anything is connected, naming the flag."""
         with (
             patch("pcswitcher.cli.is_interactive", return_value=False),
             patch("pcswitcher.cli._load_configuration") as load_config,
@@ -386,7 +387,7 @@ class TestConfirmEachCommandFlag:
         run_sync.assert_not_called()
 
     def test_accepted_and_forwarded_on_a_tty(self) -> None:
-        """The flag must actually reach the orchestrator, not be validated and dropped.
+        """J166 — the flag must actually reach the orchestrator, not be validated and dropped.
 
         The two version functions are stubbed for the same reason every TTY-faking test in
         `test_version_check.py` stubs them: faking a TTY also arms the startup update check,
@@ -406,7 +407,7 @@ class TestConfirmEachCommandFlag:
         assert run_sync.call_args.kwargs["confirm_each_command"] is True
 
     def test_a_non_interactive_run_without_the_flag_is_not_refused(self) -> None:
-        """The refusal is scoped to the flag: ordinary non-interactive syncs still run."""
+        """J166 — the refusal is scoped to the flag: ordinary non-interactive syncs still run."""
         with (
             patch("pcswitcher.cli.is_interactive", return_value=False),
             patch("pcswitcher.cli._load_configuration", return_value=MagicMock(spec=Configuration)),

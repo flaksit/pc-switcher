@@ -29,6 +29,8 @@ class TestDiff:
 
     @pytest.mark.asyncio
     async def test_diff_yields_exactly_two_missing_items(self) -> None:
+        """A1 — a name in the source's manual set and absent from the target's is one
+        install item."""
         context, _source, _target = make_context(
             source_responses={
                 "apt-mark showmanual": CommandResult(0, SHOWMANUAL_3, ""),
@@ -117,6 +119,8 @@ class TestDiffEngine:
         assert diffs[0].action == DiffAction.REMOVE
 
     def test_version_mismatch_yields_report_only_with_both_versions(self) -> None:
+        """A57, A67 — two differing `dpkg-query` answers are a report naming both, decided
+        by string inequality alone."""
         source_items = [AptPackageItem(name="pkg-a", version="1.0")]
         target_items = [AptPackageItem(name="pkg-a", version="2.0")]
 
@@ -130,6 +134,8 @@ class TestDiffEngine:
         assert "2.0" in diffs[0].detail
 
     def test_equal_versions_yields_no_diff(self) -> None:
+        """A56, A67, B4 — same name, same version, neither machine holding anything: no
+        item of any kind."""
         source_items = [AptPackageItem(name="pkg-a", version="1.0")]
         target_items = [AptPackageItem(name="pkg-a", version="1.0")]
 
@@ -138,7 +144,7 @@ class TestDiffEngine:
         assert diffs == []
 
     def test_source_hold_only_yields_apt_hold_install(self) -> None:
-        """#208: a name held on the source but not the target is an `apt:hold:` INSTALL
+        """B1 — #208: a name held on the source but not the target is an `apt:hold:` INSTALL
         (hold), a distinct APT_HOLD item — never a package-level report.
         """
         source_items = [AptPackageItem(name="pkg-a", version="1.0")]
@@ -152,7 +158,8 @@ class TestDiffEngine:
         assert diffs[0].action == DiffAction.INSTALL
 
     def test_target_hold_only_yields_apt_hold_remove_and_suppresses_package_action(self) -> None:
-        """#208: a name held on the target but not the source is an `apt:hold:` REMOVE
+        """B2, B11, B15 — #208: a name held on the target but not the source is an `apt:hold:`
+        REMOVE
         (unhold); the version-mismatch package action it would otherwise carry is
         suppressed (a held package is never proposed for upgrade) and no package-level
         report is emitted for the hold mechanism.
@@ -167,7 +174,7 @@ class TestDiffEngine:
         assert diffs[0].action == DiffAction.REMOVE
 
     def test_a_held_package_outside_the_targets_manual_set_is_still_not_proposed(self) -> None:
-        """`PKG-FR-APT-HELD-TARGET`: the target's hold set is `apt-mark showhold`, which
+        """B13 — `PKG-FR-APT-HELD-TARGET`: the target's hold set is `apt-mark showhold`, which
         covers packages apt installed automatically there. Such a package is absent from
         the target's manual set, so keying the suppression on that set proposed an install
         apt refuses with `E: Held packages were changed`. Its hold is still an item.
@@ -179,7 +186,7 @@ class TestDiffEngine:
         assert [(diff.item_id, diff.action) for diff in diffs] == [("apt:hold:pkg-a", DiffAction.REMOVE)]
 
     def test_a_hold_for_a_package_the_target_lacks_still_proposes_the_install(self) -> None:
-        """`PKG-FR-APT-HOLD-VERSION`: `apt-mark hold` records a hold for a package the
+        """B16 — `PKG-FR-APT-HOLD-VERSION`: `apt-mark hold` records a hold for a package the
         machine merely does not have (measured on `ubuntu:24.04`, exit 0), and suppressing
         on it left the target without the package for good — no install item, and no hold
         item either when both machines hold the name. The hold lands after the install.
@@ -196,8 +203,8 @@ class TestDiffEngine:
         ]
 
     def test_a_stale_hold_the_source_does_not_share_proposes_install_and_unhold(self) -> None:
-        """Only the target carries the stale hold: the install is proposed as well as the
-        unhold, rather than the unhold alone leaving the package a run behind."""
+        """B17 — only the target carries the stale hold: the install is proposed as well as
+        the unhold, rather than the unhold alone leaving the package a run behind."""
         source_items = [AptPackageItem(name="pkg-a", version="1.0")]
 
         diffs = diff_apt_packages(
@@ -210,12 +217,33 @@ class TestDiffEngine:
         ]
 
     def test_held_on_both_yields_no_diff(self) -> None:
+        """B3 — both machines hold the package and both have it: nothing to replicate."""
         source_items = [AptPackageItem(name="pkg-a", version="1.0")]
         target_items = [AptPackageItem(name="pkg-a", version="1.0")]
 
         diffs = diff_apt_packages(source_items, target_items, {}, MACHINES, frozenset({"pkg-a"}), frozenset({"pkg-a"}))
 
         assert diffs == []
+
+    def test_a_package_only_the_target_has_and_holds_yields_the_unhold_alone(self) -> None:
+        """B14 — the target has `pkg-a`, holds it, and the source does not have it at all.
+        The hold suppresses the package action in BOTH directions, so no removal is offered;
+        the unhold is still the target's own selection state to give up.
+        """
+        target_items = [AptPackageItem(name="pkg-a", version="1.0")]
+
+        diffs = diff_apt_packages([], target_items, {}, MACHINES, frozenset(), frozenset({"pkg-a"}))
+
+        assert [(diff.item_id, diff.action) for diff in diffs] == [("apt:hold:pkg-a", DiffAction.REMOVE)]
+
+    def test_a_hold_for_a_package_neither_machine_has_yields_the_unhold_alone(self) -> None:
+        """B18 — pure bookkeeping: the target records a hold for a name nobody has installed.
+        There is no package to diff in either direction, and the selection state the source
+        does not share is still offered for removal.
+        """
+        diffs = diff_apt_packages([], [], {}, MACHINES, frozenset(), frozenset({"pkg-a"}), frozenset({"pkg-a"}))
+
+        assert [(diff.item_id, diff.action) for diff in diffs] == [("apt:hold:pkg-a", DiffAction.REMOVE)]
 
     def test_the_diff_takes_no_pin_input_at_all(self) -> None:
         """The signature is the deletion, made structural: with no pin argument there is no
@@ -226,7 +254,7 @@ class TestDiffEngine:
         assert not any("pin" in name for name in parameters)
 
     def test_an_origin_no_source_file_declares_yields_repo_unavailable_not_install(self) -> None:
-        """ADR-020 D-34 class 4, the only remaining meaning of `REPO_UNAVAILABLE`: the
+        """A33 — ADR-020 D-34 class 4, the only remaining meaning of `REPO_UNAVAILABLE`: the
         source has the package from a repository that has since been deleted from the
         source's own `/etc/apt`, so the origin cannot be handed to the target at all.
         """

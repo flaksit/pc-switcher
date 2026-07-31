@@ -9,6 +9,7 @@ and snippet-replay coverage that previously lived against `AptSyncJob` in
 
 from __future__ import annotations
 
+import io
 import logging
 import shlex
 from collections.abc import Callable, Sequence
@@ -16,6 +17,8 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from rich.console import Console
+from rich.panel import Panel
 
 from pcswitcher.config import Configuration
 from pcswitcher.jobs import JobContext
@@ -31,7 +34,7 @@ from pcswitcher.jobs.packages.review import (
 )
 from pcswitcher.jobs.packages.state import SNIPPET_REGISTRY_RELPATH
 from pcswitcher.jobs.packages.sync_core import PackageItemFailures, PackagePlan
-from pcswitcher.models import CommandResult, Host, SyncAbortedByUser, ValidationError
+from pcswitcher.models import CommandResult, Host, JobSkipped, SyncAbortedByUser, ValidationError
 from pcswitcher.orchestrator import Orchestrator
 
 # -- Real `apt-cache policy` output, verbatim ------------------------------------------
@@ -91,6 +94,19 @@ _POLICY_PINNED_NO_CANDIDATE = """docker.io:
         500 http://security.ubuntu.com/ubuntu noble-security/universe amd64 Packages
         100 /var/lib/dpkg/status
      24.0.7-0ubuntu4 500
+        500 http://ftp.belnet.be/ubuntu noble/universe amd64 Packages
+"""
+
+# `mytool`, hand-installed at a version NEWER than any repository offers: the `***` row
+# carries only dpkg's status file while an OLDER row names a real repository. The
+# repository cannot supply the version this machine actually has.
+_POLICY_NEWER_THAN_REPO = """mytool:
+  Installed: 3.0.0
+  Candidate: 3.0.0
+  Version table:
+ *** 3.0.0 100
+        100 /var/lib/dpkg/status
+     2.1.0 500
         500 http://ftp.belnet.be/ubuntu noble/universe amd64 Packages
 """
 
@@ -197,6 +213,26 @@ def all_calls(mock: MagicMock) -> list[str]:
     return [call.args[0] for call in mock.run_command.call_args_list]
 
 
+def decision_file_writes(mock: MagicMock) -> list[str]:
+    """Every command that WRITES this job's machine-local decision file on `mock`'s
+    machine — the `mv --force` half of the atomic write, so the file's `cat` read never
+    counts as a write."""
+    return [
+        call.args[0]
+        for call in mock.run_command.call_args_list
+        if "manual.decisions.yaml" in call.args[0] and "mv --force" in call.args[0]
+    ]
+
+
+def registry_writes(mock: MagicMock) -> list[str]:
+    """Every command that WRITES the install-snippet registry on `mock`'s machine."""
+    return [
+        call.args[0]
+        for call in mock.run_command.call_args_list
+        if "package-snippets" in call.args[0] and "mv --force" in call.args[0]
+    ]
+
+
 def job_diff(item_id: str, action: DiffAction) -> ItemDiff:
     return ItemDiff(
         item_class=ItemClass.UNREPRODUCIBLE,
@@ -256,6 +292,8 @@ class TestNoCandidateDetection:
 
     @pytest.mark.asyncio
     async def test_package_whose_only_origin_is_dpkg_status_is_unreproducible(self) -> None:
+        """G1 — a hand-downloaded `.deb` whose installed version only dpkg's status file
+        accounts for is presented as an item no package manager can reproduce."""
         context, _source, _target = make_context(
             source_responses={
                 "apt-mark showmanual": CommandResult(0, "code\n", ""),
@@ -274,7 +312,7 @@ class TestNoCandidateDetection:
 
     @pytest.mark.asyncio
     async def test_repo_installed_package_is_not_unreproducible(self) -> None:
-        """`gh` comes from its vendor repository and is reinstallable. Its block also
+        """G2 — `gh` comes from its vendor repository and is reinstallable. Its block also
         carries a `/var/lib/dpkg/status` line — every installed package's does — so
         "the block mentions dpkg status" is not the predicate.
         """
@@ -292,7 +330,7 @@ class TestNoCandidateDetection:
 
     @pytest.mark.asyncio
     async def test_negatively_pinned_package_is_not_unreproducible(self) -> None:
-        """`docker.io` reports `Candidate: (none)` only because a local pin holds every
+        """G3 — `docker.io` reports `Candidate: (none)` only because a local pin holds every
         version below zero. It is fully repo-available, so reproducing it needs no
         snippet — the item the `Candidate:` test used to invent.
         """
@@ -310,6 +348,7 @@ class TestNoCandidateDetection:
 
     @pytest.mark.asyncio
     async def test_package_installed_from_a_repo_as_an_automatic_dependency_is_not_unreproducible(self) -> None:
+        """G4 — the installed version comes from an ESM origin, so a repository supplies it."""
         context, _source, _target = make_context(
             source_responses={
                 "apt-mark showmanual": CommandResult(0, "7zip\n", ""),
@@ -323,9 +362,25 @@ class TestNoCandidateDetection:
         assert self._unreproducible_ids(plan) == set()
 
     @pytest.mark.asyncio
+    async def test_a_version_newer_than_any_repository_offers_is_unreproducible(self) -> None:
+        """G6 — the installed version's own row names no repository while an older row
+        does: replicating THIS machine's version needs the `.deb`, so the item is
+        presented rather than left to apt."""
+        context, _source, _target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "mytool\n", ""),
+                "apt-cache policy": CommandResult(0, _POLICY_NEWER_THAN_REPO, ""),
+            }
+        )
+
+        plan = await ManualInstallsSyncJob(context).plan()
+
+        assert self._unreproducible_ids(plan) == {"unreproducible:apt-no-candidate:mytool"}
+
+    @pytest.mark.asyncio
     async def test_one_batched_scan_separates_the_hand_deb_from_the_repo_installed(self) -> None:
-        """The whole manual set goes through a SINGLE `apt-cache policy` (never one call
-        per package), and only the hand-installed `.deb` comes back unreproducible."""
+        """G7 — the whole manual set goes through a SINGLE `apt-cache policy` (never one
+        call per package), and only the hand-installed `.deb` comes back unreproducible."""
         policy = _POLICY_HAND_DEB + _POLICY_REPO_INSTALLED + _POLICY_PINNED_NO_CANDIDATE + _POLICY_AUTO_DEP
         context, source, _target = make_context(
             source_responses={
@@ -345,7 +400,7 @@ class TestNoCandidateDetection:
 
     @pytest.mark.asyncio
     async def test_no_block_inside_an_answered_policy_read_indicts_nothing(self) -> None:
-        """No block for a queried name is silence, not evidence. Indicting on absence would
+        """G8 — no block for a queried name is silence, not evidence. Indicting on absence would
         declare a machine's whole manual set unreproducible, and hand `apt_sync`'s exclusion
         the same verdict. The probe ANSWERED here — exit 0, and a block for the other name —
         so nothing but `gh`'s missing block can decide this."""
@@ -362,7 +417,7 @@ class TestNoCandidateDetection:
 
     @pytest.mark.asyncio
     async def test_a_policy_read_that_did_not_answer_fails_the_job(self) -> None:
-        """ADR-022: the detection probe exits non-zero, so it reported nothing about any
+        """G9, J81 — ADR-022: the detection probe exits non-zero, so it reported nothing about any
         package. Reading that as "no unreproducible packages here" silently drops findings
         that `apt_sync` has meanwhile excluded from its own manifest off the same predicate.
         """
@@ -381,7 +436,7 @@ class TestNoCandidateDetection:
 
     @pytest.mark.asyncio
     async def test_a_policy_read_that_printed_no_block_at_all_fails_the_job(self) -> None:
-        """The `blocks` half of ADR-022 D-04, which `apt_sync._source_policy` puts on the
+        """G10, J82 — the `blocks` half of ADR-022 D-04, which `apt_sync._source_policy` puts on the
         BYTE-IDENTICAL command — same names, same host, same probe. apt prints one block per
         name it knows and every name here came from this machine's own `apt-mark showmanual`,
         so zero blocks at exit 0 is apt not answering. The two jobs disagreeing about that
@@ -403,7 +458,7 @@ class TestNoCandidateDetection:
 
     @pytest.mark.asyncio
     async def test_a_policy_read_over_only_bare_deb_packages_still_answers(self) -> None:
-        """The limit of the rule above, and the reason the count is of BLOCKS rather than of
+        """G11 — the limit of the rule above, and the reason the count is of BLOCKS rather than of
         packages with an origin: a machine whose whole manual set was hand-installed from
         `.deb` files gets one origin-less block per name, which is apt answering.
         """
@@ -420,7 +475,7 @@ class TestNoCandidateDetection:
 
     @pytest.mark.asyncio
     async def test_a_manual_set_read_that_did_not_answer_fails_the_job(self) -> None:
-        """The other end of the same detection: `apt-mark showmanual` exits non-zero, so the
+        """G12, J83 — the other end of the same detection: `apt-mark showmanual` exits non-zero, so the
         run knows nothing about the source's packages. The policy probe below it is left
         answering normally, so only the manual-set read can fail this."""
         context, _source, _target = make_context(
@@ -449,6 +504,8 @@ class TestUnownedScan:
 
     @pytest.mark.asyncio
     async def test_scan_unowned_installs_yields_two_items_from_four_candidates(self) -> None:
+        """G13 — of four entries under `/usr/local` and `/opt`, only the two no package owns
+        are presented, each named by its path."""
         context, _source, _target = make_context(
             source_responses={
                 "for root in": CommandResult(
@@ -471,6 +528,8 @@ class TestUnownedScan:
 
     @pytest.mark.asyncio
     async def test_unowned_scan_queries_only_usr_local_and_opt(self) -> None:
+        """G14 — the scan names top-level findings in ONE command over exactly four roots,
+        one level deep each; it never walks the tree below them."""
         context, source, _target = make_context()
         job = ManualInstallsSyncJob(context)
 
@@ -486,7 +545,7 @@ class TestUnownedScan:
 
     @pytest.mark.asyncio
     async def test_a_find_that_could_not_run_fails_the_job_rather_than_reporting_nothing(self) -> None:
-        """`PKG-FR-READ-FAILS-JOB`: an unreadable scan root, a missing binary, a shell that
+        """G16, J84 — `PKG-FR-READ-FAILS-JOB`: an unreadable scan root, a missing binary, a shell that
         could not start — none of them mean this machine installed nothing by hand.
         """
         context, _source, _target = make_context(
@@ -501,7 +560,7 @@ class TestUnownedScan:
 
     @pytest.mark.asyncio
     async def test_a_scan_root_that_is_not_there_is_skipped_not_an_error(self) -> None:
-        """The loop tests each root before listing it, so the one tolerated failure never
+        """G15, J90 — the loop tests each root before listing it, so the one tolerated failure never
         reaches the exit code — which is what lets the guard above trust that exit code.
         """
         context, source, _target = make_context(
@@ -519,7 +578,7 @@ class TestUnownedScan:
 
     @pytest.mark.asyncio
     async def test_a_dpkg_that_did_not_answer_does_not_make_every_path_unowned(self) -> None:
-        """A dead `dpkg --search` prints nothing and exits 1 — the same shape as a batch
+        """G18, J85 — a dead `dpkg --search` prints nothing and exits 1 — the same shape as a batch
         where every path is genuinely unowned. Without the witness, every entry under
         `/opt` and `/usr/local` would become an item demanding an install snippet.
         """
@@ -539,7 +598,7 @@ class TestUnownedScan:
 
     @pytest.mark.asyncio
     async def test_a_batch_where_every_path_is_unowned_is_an_ordinary_answer(self) -> None:
-        """The legitimate exit-1 case dpkg cannot distinguish by exit code: the witness is
+        """G19, J92 — the legitimate exit-1 case dpkg cannot distinguish by exit code: the witness is
         answered, so every other path really is unowned.
         """
         context, _source, _target = make_context(
@@ -558,6 +617,8 @@ class TestUnownedScan:
 
     @pytest.mark.asyncio
     async def test_the_witness_is_never_reported_as_a_finding(self) -> None:
+        """G20 — the path handed to `dpkg --search` to prove it answered is filtered out of
+        the candidates and never reported."""
         context, _source, _target = make_context(
             source_responses={
                 "for root in": CommandResult(0, "/opt/az\n", ""),
@@ -606,6 +667,8 @@ class TestSnippetResolution:
 
     @pytest.mark.asyncio
     async def test_item_without_snippet_is_report_only_and_grouped_separately(self) -> None:
+        """G29 — an item the source holds no snippet for appears in its own resolution
+        question and in no other list."""
         context, _source, _target = make_context(
             source_responses={
                 "apt-mark showmanual": CommandResult(0, "brscan3\n", ""),
@@ -628,7 +691,7 @@ class TestSnippetResolution:
 
     @pytest.mark.asyncio
     async def test_missing_snippet_at_converge_is_a_failed_result_not_a_crash(self) -> None:
-        """A snippet-backed diff whose snippet vanished between plan and converge (a
+        """G85 — a snippet-backed diff whose snippet vanished between plan and converge (a
         registry race) fails as one item (D-27), never raises."""
         context, _source, _target = make_context(
             target_responses={
@@ -644,7 +707,7 @@ class TestSnippetResolution:
 
 
 class TestPromptingSnippetCannotHang:
-    """G30: a snippet that would need stdin must FAIL rather than hang the sync. The
+    """A snippet that would need stdin must FAIL rather than hang the sync. The
     mechanism is the replay command's shape — the body passed as ONE quoted argument to
     `bash -c`, `login_shell=False`, and no stdin supplied under any name — so a command
     that waits for input reads EOF and exits non-zero, becoming an ordinary per-item
@@ -653,6 +716,8 @@ class TestPromptingSnippetCannotHang:
 
     @pytest.mark.asyncio
     async def test_replay_supplies_no_stdin_and_a_prompting_snippet_is_a_plain_item_failure(self) -> None:
+        """G58 — a snippet whose command asks a question fails as its own item rather than
+        hanging the sync: nothing is ever fed to its input."""
         item_id = "unreproducible:apt-no-candidate:brother-driver"
         body = "apt-get install brother-driver"  # a debconf prompt with nothing behind it
         registry_yaml = (
@@ -690,6 +755,7 @@ class TestInstallOnly:
 
     @pytest.mark.asyncio
     async def test_target_query_is_empty_by_design(self) -> None:
+        """G89 — the target is never asked what unreproducible software it holds."""
         context, _source, _target = make_context(
             target_responses={"apt-mark showmanual": CommandResult(0, "target-only-tool\n", "")}
         )
@@ -699,7 +765,7 @@ class TestInstallOnly:
 
     @pytest.mark.asyncio
     async def test_no_removal_diff_or_group_even_when_the_target_holds_items(self) -> None:
-        """The target is stocked with everything the source has plus its own extras — the
+        """G22, G88 — the target is stocked with everything the source has plus its own extras — the
         shape that produces `EXTRA_ON_TARGET`/REMOVE in every other manager — and still no
         removal is proposed, nor is the target ever asked for a manifest.
         """
@@ -732,6 +798,8 @@ class TestInertFiltering:
 
     @pytest.mark.asyncio
     async def test_machine_specific_item_is_filtered_before_becoming_a_diff(self) -> None:
+        """G37 — a mark from an earlier run for a still-present finding keeps it out of every
+        list."""
         decisions_yaml = (
             "machine_specific:\n"
             "  unreproducible:apt-no-candidate:brscan3:\n"
@@ -753,11 +821,106 @@ class TestInertFiltering:
 
         assert plan.diffs == ()
 
+    @pytest.mark.asyncio
+    async def test_a_mark_on_the_target_does_not_silence_a_source_held_finding(self) -> None:
+        """G45 — only the SOURCE's marks silence a source-held finding: the same recorded
+        item on the target leaves the finding presented, and the target's decision file is
+        never even read."""
+        decisions_yaml = (
+            "machine_specific:\n"
+            "  unreproducible:apt-no-candidate:brscan3:\n"
+            "    item_class: unreproducible\n"
+            "    label: brscan3 (no apt candidate)\n"
+            "    reason: null\n"
+            "    recorded_at: '2026-01-01T00:00:00+00:00'\n"
+        )
+        context, _source, target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "brscan3\n", ""),
+                "apt-cache policy": CommandResult(0, _hand_deb_policy("brscan3"), ""),
+            },
+            target_responses={"cat ~/.config/pc-switcher/manual.decisions.yaml": CommandResult(0, decisions_yaml, "")},
+        )
+        job = ManualInstallsSyncJob(context)
+
+        plan = await job.plan()
+
+        assert [d.item_id for d in plan.diffs] == ["unreproducible:apt-no-candidate:brscan3"]
+        assert not [cmd for cmd in all_calls(target) if "manual.decisions.yaml" in cmd]
+
+
+class TestPermanentMarkWrites:
+    """`_finalize_unreproducible`'s write side (D-08a/D-21): which machine records a
+    resolved unreproducible item, and which resolutions record nothing at all."""
+
+    @staticmethod
+    def _brscan3_context(*, dry_run: bool = False) -> tuple[JobContext, MagicMock, MagicMock]:
+        return make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "brscan3\n", ""),
+                "apt-cache policy": CommandResult(0, _hand_deb_policy("brscan3"), ""),
+            },
+            dry_run=dry_run,
+        )
+
+    @pytest.mark.asyncio
+    async def test_never_install_it_records_the_mark_on_the_source_naming_the_item(self) -> None:
+        """G36 — "never install it on Nomad" writes the mark through Atlas's executor, the
+        machine that holds the software, never Nomad's; the entry carries the item's own id
+        and its label."""
+        context, source, target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "brscan3\n", ""),
+                "apt-cache policy": CommandResult(0, _hand_deb_policy("brscan3"), ""),
+            }
+        )
+        job = ManualInstallsSyncJob(context)
+
+        plan = await job.plan()
+        item_id = "unreproducible:apt-no-candidate:brscan3"
+        job.accept_review(plan, ReviewOutcome(decisions={item_id: Decision.SKIP_ALWAYS}, was_interactive=True))
+        await job.apply()
+
+        writes = decision_file_writes(source)
+        assert len(writes) == 1
+        assert item_id in writes[0]
+        assert "brscan3 (installed from no configured repository)" in writes[0]
+        assert decision_file_writes(target) == []
+
+    @pytest.mark.asyncio
+    async def test_not_for_now_records_nothing_on_either_machine(self) -> None:
+        """G35 — skipping for this run is a resolution that leaves no trace, so the next
+        sync asks about the finding again."""
+        context, source, target = self._brscan3_context()
+        job = ManualInstallsSyncJob(context)
+
+        plan = await job.plan()
+        item_id = "unreproducible:apt-no-candidate:brscan3"
+        job.accept_review(plan, ReviewOutcome(decisions={item_id: Decision.SKIP_ONCE}, was_interactive=True))
+        await job.apply()
+
+        assert decision_file_writes(source) == []
+        assert decision_file_writes(target) == []
+
+    @pytest.mark.asyncio
+    async def test_a_rehearsal_records_no_permanent_mark(self) -> None:
+        """G55 — ADR-014: the same answer under `--dry-run` writes nothing on Atlas."""
+        context, source, target = self._brscan3_context(dry_run=True)
+        job = ManualInstallsSyncJob(context)
+
+        plan = await job.plan()
+        item_id = "unreproducible:apt-no-candidate:brscan3"
+        job.accept_review(plan, ReviewOutcome(decisions={item_id: Decision.SKIP_ALWAYS}, was_interactive=True))
+        await job.apply()
+
+        assert decision_file_writes(source) == []
+        assert decision_file_writes(target) == []
+
 
 class TestEmptyDetection:
     @pytest.mark.asyncio
     async def test_empty_detection_produces_no_group_and_applies_nothing(self) -> None:
-        """Backstop (must_haves): an empty unreproducible set yields no review group and
+        """G17 — backstop (must_haves): an empty unreproducible set yields no review group and
         nothing to apply."""
         context, _source, _target = make_context(source_responses={"apt-mark showmanual": CommandResult(0, "\n", "")})
         job = ManualInstallsSyncJob(context)
@@ -776,6 +939,8 @@ class TestExecuteIndependentOfApt:
 
     @pytest.mark.asyncio
     async def test_plan_runs_with_apt_absent_from_config_and_manual_enabled(self) -> None:
+        """G26 — the hand-`.deb` finding is detected with apt sync absent from the
+        configuration: this job asks apt and dpkg its own questions."""
         context, _source, _target = make_context(
             source_responses={
                 "apt-mark showmanual": CommandResult(0, "brscan3\n", ""),
@@ -821,6 +986,8 @@ class TestTracerEndToEnd:
 
     @pytest.mark.asyncio
     async def test_detect_plan_and_replay_end_to_end(self) -> None:
+        """G30 — an item the source holds a snippet for appears as an ordinary install
+        alongside the rest, and converges by replaying it."""
         context, _source, target = make_context(
             source_responses={
                 "apt-mark showmanual": CommandResult(0, "brscan3\n", ""),
@@ -868,6 +1035,8 @@ class TestSameRunApplication:
     async def test_on_the_fly_snippet_is_replayed_the_same_run(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """G51 — a finding with no snippet at the start of the run, resolved by one written
+        during the review, is installed on the target that same run."""
         # Point Path.home at an empty dir so no on-disk source registry exists: the push
         # early-returns (its overwrite guard never runs) and the replay reads the seeded
         # target registry below, which stands in for what the push would have delivered.
@@ -916,6 +1085,8 @@ class TestClassificationAuthority:
 
     @pytest.mark.asyncio
     async def test_target_only_snippet_stays_report_only(self) -> None:
+        """G43 — a snippet only the target holds leaves the item unresolved: the user is
+        still asked to resolve it."""
         context, _source, _target = make_context(
             source_responses={
                 "apt-mark showmanual": CommandResult(0, "brscan3\n", ""),
@@ -937,6 +1108,7 @@ class TestClassificationAuthority:
 
     @pytest.mark.asyncio
     async def test_source_snippet_classifies_install(self) -> None:
+        """G44 — a snippet the source holds resolves the item: it is presented as an install."""
         context, _source, _target = make_context(
             source_responses={
                 "apt-mark showmanual": CommandResult(0, "brscan3\n", ""),
@@ -955,7 +1127,7 @@ class TestClassificationAuthority:
     async def test_dry_run_previews_on_the_fly_install_without_replay_or_write(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """ADR-014: under dry-run an on-the-fly-authored item is promoted and previewed as
+        """G53, J50, J56 — ADR-014: under dry-run an on-the-fly-authored item is promoted and previewed as
         an install (`apply()`'s dry-run branch reports 1 change to apply), yet NO `bash -c`
         replay reaches the target and NO source registry write (`mv --force` of
         `package-snippets.yaml`) runs — a rehearsal leaves no trace and touches nothing."""
@@ -987,6 +1159,74 @@ class TestClassificationAuthority:
         ]
         assert not source_writes
 
+    @pytest.mark.asyncio
+    async def test_dry_run_previews_a_pre_existing_snippet_install_naming_the_item(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """G54 — a rehearsal of an item the source ALREADY holds a snippet for previews the
+        install by name and issues no command on the target."""
+        item_id = "unreproducible:apt-no-candidate:brscan3"
+        context, _source, target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "brscan3\n", ""),
+                "apt-cache policy": CommandResult(0, _hand_deb_policy("brscan3"), ""),
+                "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, BRSCAN3_REGISTRY_YAML, ""),
+            },
+            dry_run=True,
+            reviewer=FakeReviewer(decisions={item_id: Decision.APPLY}),
+        )
+        job = ManualInstallsSyncJob(context)
+
+        with caplog.at_level(logging.DEBUG):
+            await job.execute()
+
+        assert "Would install brscan3 (installed from no configured repository)" in caplog.text
+        assert not [cmd for cmd in all_calls(target) if cmd.startswith("bash -c")]
+
+
+class TestNoTerminalRun:
+    """`PKG-FR-NO-TERMINAL` for this job's own `execute()`: a run with nobody to answer
+    reports skipped before it touches the target."""
+
+    @pytest.mark.asyncio
+    async def test_a_run_with_no_terminal_and_findings_skips_before_touching_the_target(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """G47 — with findings to resolve and no terminal, the job is reported skipped
+        rather than applied: `after_review()` never runs, so no registry is transferred, and
+        no snippet is replayed."""
+        registry = tmp_path / SNIPPET_REGISTRY_RELPATH
+        registry.parent.mkdir(parents=True, exist_ok=True)
+        registry.write_text(BRSCAN3_REGISTRY_YAML)
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        context, _source, target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "brscan3\n", ""),
+                "apt-cache policy": CommandResult(0, _hand_deb_policy("brscan3"), ""),
+            },
+            target_responses={"echo $HOME": CommandResult(0, "/home/user\n", "")},
+            reviewer=FakeReviewer(was_interactive=False),
+        )
+        job = ManualInstallsSyncJob(context)
+
+        with pytest.raises(JobSkipped):
+            await job.execute()
+
+        target.send_file.assert_not_called()
+        assert not [cmd for cmd in all_calls(target) if cmd.startswith("bash -c")]
+
+
+class TestFirstSyncScope:
+    def test_the_announced_scope_names_snippet_replay_as_what_it_does_to_the_target(self) -> None:
+        """G92 — ADR-015's first-sync announcement names this job and the mechanism it uses
+        on the target."""
+        scope = ManualInstallsSyncJob.describe_first_sync_scope({})
+
+        assert scope is not None
+        assert scope.job_name == "manual_installs_sync"
+        assert any("snippet" in item for item in scope.scope_items)
+        assert "replay install snippet" in scope.mechanism
+
 
 class TestSkipOnceResolution:
     """D-21: skip-once is a valid resolution — a run whose only items were skipped-once is
@@ -995,6 +1235,7 @@ class TestSkipOnceResolution:
 
     @pytest.mark.asyncio
     async def test_run_whose_only_items_were_skipped_once_passes(self) -> None:
+        """G34, J7 — a run whose only findings were all answered "not for now" ends clean."""
         context, _source, _target = make_context(
             source_responses={
                 "apt-mark showmanual": CommandResult(0, "brscan3\n", ""),
@@ -1015,7 +1256,7 @@ class TestSkipOnceResolution:
 
     @pytest.mark.asyncio
     async def test_interactive_unresolved_no_longer_fails_the_run(self) -> None:
-        """Decision 10: the `_unresolved_as_failures` override is gone — an interactive
+        """G48 — decision 10: the `_unresolved_as_failures` override is gone — an interactive
         outcome carrying an unresolved id (now unreachable through the real review) applies
         cleanly rather than failing the job."""
         context, _source, _target = make_context(
@@ -1039,6 +1280,9 @@ class TestSkipOnceResolution:
 class TestContinueOnFailure:
     @pytest.mark.asyncio
     async def test_failed_snippet_replay_is_a_per_item_failure_and_does_not_stop_the_job(self) -> None:
+        """G86, G87 — one of two approved snippets exits non-zero: the other still runs, and
+        only the failing item is reported failed. A snippet lacking administrative rights
+        on the target arrives here as the same ordinary non-zero replay."""
         registry_yaml = (
             "snippets:\n"
             "  unreproducible:apt-no-candidate:brscan3:\n"
@@ -1084,6 +1328,7 @@ class TestContinueOnFailure:
 class TestValidate:
     @pytest.mark.asyncio
     async def test_apt_cache_unavailable_on_source_yields_validation_error(self) -> None:
+        """G23, K63 — validation fails before anything runs, naming the source and the missing tool."""
         context, _source, _target = make_context(
             source_responses={"apt-cache --version": CommandResult(127, "", "not found")}
         )
@@ -1095,6 +1340,7 @@ class TestValidate:
 
     @pytest.mark.asyncio
     async def test_dpkg_unavailable_on_source_yields_validation_error(self) -> None:
+        """G24, K64 — validation fails before anything runs, naming the source and the missing tool."""
         context, _source, _target = make_context(
             source_responses={"dpkg --version": CommandResult(127, "", "not found")}
         )
@@ -1106,6 +1352,8 @@ class TestValidate:
 
     @pytest.mark.asyncio
     async def test_valid_environment_yields_no_errors(self) -> None:
+        """G25, K50, K51, K62 — with both tools present nothing fails, and no administrative-rights
+        precondition is imposed on the target: a snippet's own needs are unknowable."""
         context, _source, _target = make_context()
         job = ManualInstallsSyncJob(context)
 
@@ -1130,6 +1378,8 @@ class TestSnippetPush:
     async def test_push_sends_source_registry_under_the_user_home_never_etc(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """G65, K93 — the target ends the run holding the source's registry under the SSH user's
+        own home, never a system directory."""
         source_registry = self._write_source_registry(tmp_path)
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         context, _source, target = make_context(target_responses={"echo $HOME": CommandResult(0, "/home/user\n", "")})
@@ -1147,6 +1397,8 @@ class TestSnippetPush:
     async def test_absent_source_registry_makes_push_a_noop(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """G66 — a source that never had a snippet written on it transfers nothing and fails
+        nothing."""
         # No registry file exists under tmp_path — a user who has never authored a snippet.
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         context, _source, target = make_context()
@@ -1160,7 +1412,7 @@ class TestSnippetPush:
     async def test_a_run_with_no_terminal_pushes_nothing_even_with_nothing_to_review(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """`PKG-FR-NO-TERMINAL`: a non-interactive run transfers no registry. A scan that
+        """G82, J13, J46 — `PKG-FR-NO-TERMINAL`: a non-interactive run transfers no registry. A scan that
         finds nothing raises no `JobSkipped` — the target already matches, so the job
         succeeds (`PKG-FR-OUTCOME-SUCCESS`) — and the push must still not happen: the
         registry on disk holds entries from earlier runs that nobody approved sending
@@ -1183,7 +1435,156 @@ class TestSnippetPush:
         target.send_file.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_an_answered_run_with_nothing_to_review_still_transfers_the_registry(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """G83 — an empty review means nothing new to decide, not nothing to carry: a run
+        at a terminal that found no finding still delivers the registry's earlier entries.
+        """
+        source_registry = self._write_source_registry(tmp_path)
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        context, _source, target = make_context(
+            source_responses={"apt-mark showmanual": CommandResult(0, "\n", "")},
+            target_responses={"echo $HOME": CommandResult(0, "/home/user\n", "")},
+            reviewer=FakeReviewer(was_interactive=True),
+        )
+        job = ManualInstallsSyncJob(context)
+
+        await job.execute()
+
+        target.send_file.assert_called_once()
+        assert target.send_file.call_args.args[0] == source_registry
+
+    @pytest.mark.asyncio
+    async def test_a_directory_that_cannot_be_created_fails_naming_the_target_and_sends_nothing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """G84 — the transfer's own plumbing failing is a job failure naming the machine,
+        never a half-finished transfer."""
+        self._write_source_registry(tmp_path)
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        context, _source, target = make_context(
+            target_responses={
+                "mkdir --parents": CommandResult(1, "", "mkdir: cannot create directory: Permission denied"),
+                "echo $HOME": CommandResult(0, "/home/user\n", ""),
+            }
+        )
+        job = ManualInstallsSyncJob(context)
+
+        with pytest.raises(RuntimeError) as excinfo:
+            await job._push_snippet_registry()  # pyright: ignore[reportPrivateUsage]
+
+        assert "target-host" in str(excinfo.value)
+        assert "Permission denied" in str(excinfo.value)
+        target.send_file.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_a_home_that_cannot_be_resolved_fails_naming_the_target_and_sends_nothing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """G84 — the second plumbing failure: with no home directory there is no absolute
+        destination to send to, so nothing is sent."""
+        self._write_source_registry(tmp_path)
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        context, _source, target = make_context(target_responses={"echo $HOME": CommandResult(1, "", "no such user")})
+        job = ManualInstallsSyncJob(context)
+
+        with pytest.raises(RuntimeError) as excinfo:
+            await job._push_snippet_registry()  # pyright: ignore[reportPrivateUsage]
+
+        assert "target-host" in str(excinfo.value)
+        target.send_file.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_a_snippet_written_this_run_is_stamped_exactly_once(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """G52 — `_finalize_unreproducible` runs twice in one run (from `after_review()`
+        and again from `apply()`), so the guard that makes the second a no-op is what keeps
+        one `authored_at` stamp on the record and the two machines' copies identical: the
+        registry is written exactly once.
+
+        Home points at an empty directory, so the push itself is a no-op and the replay
+        reads the seeded target registry — what a real push would have delivered.
+        """
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        item_id = "unreproducible:apt-no-candidate:falco-app"
+        body = "sudo dpkg --install /tmp/falco.deb"
+        target_registry_yaml = (
+            "snippets:\n"
+            f"  {item_id}:\n"
+            "    label: falco-app (no apt candidate)\n"
+            f"    body: {body}\n"
+            "    authored_at: '2026-01-01T00:00:00+00:00'\n"
+            "    authored_on: laptop\n"
+        )
+        context, source, _target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "falco-app\n", ""),
+                "apt-cache policy": CommandResult(0, _hand_deb_policy("falco-app"), ""),
+                "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, "snippets: {}\n", ""),
+            },
+            target_responses={
+                "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, target_registry_yaml, ""),
+                f"bash -c '{body}'": CommandResult(0, "falco installed\n", ""),
+            },
+            reviewer=FakeReviewer(snippets={item_id: body}),
+        )
+        job = ManualInstallsSyncJob(context)
+
+        await job.execute()
+
+        assert len(registry_writes(source)) == 1
+
+    @pytest.mark.asyncio
+    async def test_a_successful_replay_records_nothing_on_the_target(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """G90 — the only file this job writes on Nomad is the registry: two snippets
+        replay successfully and Nomad keeps no record of what was installed, so a later run
+        has no memory of it."""
+        registry_yaml = BRSCAN3_REGISTRY_YAML + (
+            "  unreproducible:apt-no-candidate:cnpg:\n"
+            "    label: cnpg (no apt candidate)\n"
+            "    body: sudo dpkg --install /tmp/cnpg.deb\n"
+            "    authored_at: '2026-01-01T00:00:00+00:00'\n"
+            "    authored_on: laptop\n"
+        )
+        self._write_source_registry(tmp_path, registry_yaml)
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        decisions = {
+            "unreproducible:apt-no-candidate:brscan3": Decision.APPLY,
+            "unreproducible:apt-no-candidate:cnpg": Decision.APPLY,
+        }
+        context, _source, target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "brscan3\ncnpg\n", ""),
+                "apt-cache policy": CommandResult(0, _hand_deb_policy("brscan3") + _hand_deb_policy("cnpg"), ""),
+                "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, registry_yaml, ""),
+            },
+            target_responses={
+                "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, registry_yaml, ""),
+                "echo $HOME": CommandResult(0, "/home/user\n", ""),
+                "bash -c 'sudo dpkg --install /tmp/brscan3.deb'": CommandResult(0, "installed\n", ""),
+                "bash -c 'sudo dpkg --install /tmp/cnpg.deb'": CommandResult(0, "installed\n", ""),
+            },
+            reviewer=FakeReviewer(decisions=decisions),
+        )
+        job = ManualInstallsSyncJob(context)
+
+        await job.execute()
+
+        assert len([cmd for cmd in all_calls(target) if cmd.startswith("bash -c")]) == 2
+        assert not [cmd for cmd in all_calls(target) if "decisions.yaml" in cmd]
+        assert decision_file_writes(target) == []
+        assert registry_writes(target) == []
+        assert [call.args[1] for call in target.send_file.call_args_list] == [
+            "/home/user/.config/pc-switcher/package-snippets.yaml"
+        ]
+
+    @pytest.mark.asyncio
     async def test_dry_run_pushes_nothing(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """G81, J57 — a rehearsal transfers no registry and asks no question."""
         self._write_source_registry(tmp_path)
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         context, _source, target = make_context(dry_run=True)
@@ -1197,7 +1598,7 @@ class TestSnippetPush:
     async def test_snippet_authored_in_review_is_persisted_before_the_push(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """finalize-then-push: the review's authored snippet is written to the SOURCE
+        """G49 — finalize-then-push: the review's authored snippet is written to the SOURCE
         registry before the file is pushed, so the pushed copy includes it (D-23)."""
         source_registry = self._write_source_registry(tmp_path, "snippets: {}\n")
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
@@ -1239,7 +1640,7 @@ class TestSnippetPush:
     async def test_push_runs_after_review_and_before_replay_in_execute(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """End to end: `execute()` pushes the registry, then `apply()` replays the
+        """G50, H11 — end to end: `execute()` pushes the registry, then `apply()` replays the
         snippet-backed item against the target — push strictly before replay."""
         self._write_source_registry(tmp_path)
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
@@ -1308,12 +1709,38 @@ TARGET_WITH_CREDENTIAL_YAML = BRSCAN3_REGISTRY_YAML + (
     "    authored_on: workstation\n"
 )
 
+# A target registry holding a bracketed label and body — console markup the question must
+# show as written rather than parse.
+TARGET_WITH_MARKUP_YAML = (
+    "snippets:\n"
+    "  unreproducible:unowned-path:/opt/[bold]tool:\n"
+    "    label: '[bold]tool (unowned in /opt)'\n"
+    "    body: 'sudo /opt/[bold]tool/install.sh --mode=[red]fast'\n"
+    "    authored_at: '2026-01-01T00:00:00+00:00'\n"
+    "    authored_on: workstation\n"
+)
+
 # A target registry whose brscan3 body DIFFERS from the source's.
 TARGET_CHANGED_BODY_YAML = (
     "snippets:\n"
     "  unreproducible:apt-no-candidate:brscan3:\n"
     "    label: brscan3 (no apt candidate)\n"
     "    body: sudo dpkg --install /tmp/brscan3-OLD.deb\n"
+    "    authored_at: '2026-01-01T00:00:00+00:00'\n"
+    "    authored_on: workstation\n"
+)
+
+# A target registry holding two entries the source lacks AND the source's brscan3 with a
+# different body: one question has to name all three.
+TARGET_WITH_TWO_LOST_AND_ONE_CHANGED_YAML = TARGET_CHANGED_BODY_YAML + (
+    "  unreproducible:apt-no-candidate:cnpg:\n"
+    "    label: cnpg (no apt candidate)\n"
+    "    body: sudo dpkg --install /tmp/cnpg.deb\n"
+    "    authored_at: '2026-01-01T00:00:00+00:00'\n"
+    "    authored_on: workstation\n"
+    "  unreproducible:unowned-path:/opt/az:\n"
+    "    label: az (unowned in /opt)\n"
+    "    body: sudo /opt/az/install.sh\n"
     "    authored_at: '2026-01-01T00:00:00+00:00'\n"
     "    authored_on: workstation\n"
 )
@@ -1334,7 +1761,7 @@ class TestSnippetRegistryOverwriteGuard:
     async def test_additive_overwrite_proceeds_without_confirming(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Target is a subset of the source (here empty): additive -> push, no prompt."""
+        """G68 — target is a subset of the source (here empty): additive -> push, no prompt."""
         self._write_source_registry(tmp_path)
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         confirmer = FakeConfirmer(approve=False)  # would abort if ever consulted
@@ -1351,7 +1778,7 @@ class TestSnippetRegistryOverwriteGuard:
 
     @pytest.mark.asyncio
     async def test_identical_target_entry_is_additive(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Target holds exactly the same brscan3 body the source has: additive -> no prompt."""
+        """G69 — target holds exactly the same brscan3 body the source has: additive -> no prompt."""
         self._write_source_registry(tmp_path)
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         confirmer = FakeConfirmer(approve=False)
@@ -1373,7 +1800,7 @@ class TestSnippetRegistryOverwriteGuard:
     async def test_lost_target_entry_prompts_and_proceeds_on_confirm(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Target holds an entry (cnpg) absent from the source: non-additive -> confirm.
+        """G70, H16, N17 — target holds an entry (cnpg) absent from the source: non-additive -> confirm.
         On approval the wholesale push proceeds."""
         self._write_source_registry(tmp_path)  # source has brscan3 only
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
@@ -1397,7 +1824,7 @@ class TestSnippetRegistryOverwriteGuard:
 
     @pytest.mark.asyncio
     async def test_lost_target_entry_aborts_on_decline(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Declining the non-additive overwrite aborts the whole run and sends nothing."""
+        """G73, G74, H60 — declining the non-additive overwrite aborts the whole run and sends nothing."""
         self._write_source_registry(tmp_path)
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         confirmer = FakeConfirmer(approve=False)
@@ -1420,7 +1847,7 @@ class TestSnippetRegistryOverwriteGuard:
     async def test_changed_body_is_non_additive_and_prompts(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Target holds brscan3 with a DIFFERENT body than the source: non-additive."""
+        """G71 — target holds brscan3 with a DIFFERENT body than the source: non-additive."""
         self._write_source_registry(tmp_path)  # source brscan3 body
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         confirmer = FakeConfirmer(approve=True)
@@ -1443,7 +1870,7 @@ class TestSnippetRegistryOverwriteGuard:
     async def test_a_credential_in_a_snippet_body_is_withheld_from_the_question(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """ADR-021's fifth credential exit: the question displays two whole snippet bodies,
+        """G77, J125, J126 — ADR-021's fifth credential exit: the question displays two whole snippet bodies,
         and a body may legitimately fetch a private `.deb`. Only what is displayed is
         rewritten — the file the push sends keeps its author's bytes
         (`PKG-FR-SNIPPET-VERBATIM`)."""
@@ -1470,10 +1897,123 @@ class TestSnippetRegistryOverwriteGuard:
         target.send_file.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_one_question_names_every_entry_the_push_would_lose_or_change(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """G93 — two target entries the source lacks and a third whose body differs are put
+        in ONE question, each named."""
+        self._write_source_registry(tmp_path)  # source has brscan3 only
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        confirmer = FakeConfirmer(approve=True)
+        context, _source, target = make_context(
+            target_responses={
+                "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(
+                    0, TARGET_WITH_TWO_LOST_AND_ONE_CHANGED_YAML, ""
+                ),
+                "echo $HOME": CommandResult(0, "/home/user\n", ""),
+            },
+            confirmer=confirmer,
+        )
+        job = ManualInstallsSyncJob(context)
+
+        await job._push_snippet_registry()  # pyright: ignore[reportPrivateUsage]
+
+        assert len(confirmer.calls) == 1
+        message = str(confirmer.calls[0]["message"])
+        assert "unreproducible:apt-no-candidate:cnpg" in message
+        assert "unreproducible:unowned-path:/opt/az" in message
+        assert "unreproducible:apt-no-candidate:brscan3" in message
+        assert message.count("LOST") == 2
+        assert message.count("CHANGED") == 1
+        target.send_file.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_a_bracketed_label_and_body_reach_the_question_as_written(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """G78 — square-bracketed text is console markup to Rich, and the confirmer renders
+        the message inside a `Panel`. Every snippet field is escaped, so the question shows
+        the author's text instead of raising on it."""
+        self._write_source_registry(tmp_path)
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        confirmer = FakeConfirmer(approve=True)
+        context, _source, _target = make_context(
+            target_responses={
+                "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, TARGET_WITH_MARKUP_YAML, ""),
+                "echo $HOME": CommandResult(0, "/home/user\n", ""),
+            },
+            confirmer=confirmer,
+        )
+        job = ManualInstallsSyncJob(context)
+
+        await job._push_snippet_registry()  # pyright: ignore[reportPrivateUsage]
+
+        message = str(confirmer.calls[0]["message"])
+        # Rendered the way the real confirmer renders it: unescaped markup raises here.
+        console = Console(file=io.StringIO(), width=200, force_terminal=False, no_color=True)
+        console.print(Panel(message))
+        rendered = console.file.getvalue()  # pyright: ignore[reportAttributeAccessIssue]
+        assert "[bold]tool (unowned in /opt)" in rendered
+        assert "--mode=[red]fast" in rendered
+
+    @pytest.mark.asyncio
+    async def test_a_corrupt_source_registry_makes_every_target_entry_a_loss(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """G80 — an unparseable source file reads as holding nothing, so every target entry
+        counts as lost and the user is asked; approving sends the corrupt file itself,
+        because the push is a byte-for-byte copy of what is on disk."""
+        corrupt = "snippets: [\n  - broken\n"
+        source_registry = self._write_source_registry(tmp_path, corrupt)
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        confirmer = FakeConfirmer(approve=True)
+        context, _source, target = make_context(
+            target_responses={
+                "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, TARGET_WITH_EXTRA_YAML, ""),
+                "echo $HOME": CommandResult(0, "/home/user\n", ""),
+            },
+            confirmer=confirmer,
+        )
+        job = ManualInstallsSyncJob(context)
+
+        await job._push_snippet_registry()  # pyright: ignore[reportPrivateUsage]
+
+        assert len(confirmer.calls) == 1
+        message = str(confirmer.calls[0]["message"])
+        assert "unreproducible:apt-no-candidate:brscan3" in message
+        assert "unreproducible:apt-no-candidate:cnpg" in message
+        target.send_file.assert_called_once()
+        assert target.send_file.call_args.args[0] == source_registry
+        assert source_registry.read_text(encoding="utf-8") == corrupt
+
+    @pytest.mark.asyncio
+    async def test_an_absent_source_registry_leaves_the_targets_entries_alone(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """G94 — with no registry on the source there is no transfer, so nothing of the
+        target's can be lost or changed and no question is asked: its two entries stay."""
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)  # no source registry on disk
+        confirmer = FakeConfirmer(approve=False)
+        context, _source, target = make_context(
+            target_responses={
+                "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, TARGET_WITH_EXTRA_YAML, ""),
+                "echo $HOME": CommandResult(0, "/home/user\n", ""),
+            },
+            confirmer=confirmer,
+        )
+        job = ManualInstallsSyncJob(context)
+
+        await job._push_snippet_registry()  # pyright: ignore[reportPrivateUsage]
+
+        assert confirmer.calls == []
+        target.send_file.assert_not_called()
+        assert registry_writes(target) == []
+
+    @pytest.mark.asyncio
     async def test_non_additive_push_without_a_confirmer_fails_and_sends_nothing(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """G22 — the requirement is that a non-additive push NEVER silently overwrites; the
+        """G76 — the requirement is that a non-additive push NEVER silently overwrites; the
         two acceptable outcomes are a confirmed push or a failed run. With no confirmer on
         the context there is nothing to ask, and this pins the actual failure mode: the
         bare `assert self.context.confirmer is not None` in
@@ -1502,7 +2042,7 @@ class TestSnippetRegistryOverwriteGuard:
 
     @pytest.mark.asyncio
     async def test_non_interactive_non_additive_aborts(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """A non-interactive run cannot confirm: the confirmer returns its `allow` (False,
+        """G75 — a non-interactive run cannot confirm: the confirmer returns its `allow` (False,
         since no override flag exists), so a non-additive overwrite aborts."""
         self._write_source_registry(tmp_path)
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
@@ -1525,6 +2065,7 @@ class TestSnippetRegistryOverwriteGuard:
 class TestJobDiscovery:
     @pytest.mark.asyncio
     async def test_orchestrator_resolves_manual_installs_sync_to_its_job(self) -> None:
+        """G91, K38 — named in the configuration, the job resolves to its own class."""
         config = MagicMock(spec=Configuration)
         config.logging = MagicMock()
         config.logging.file = 10
@@ -1544,6 +2085,8 @@ class TestUnreproducibleItem:
         assert UnreproducibleItem.ITEM_CLASS == ItemClass.UNREPRODUCIBLE
 
     def test_same_identifier_different_origin_yields_distinct_item_ids(self) -> None:
+        """G21 — a package and a path that share a name are two independent items, one per
+        kind of finding."""
         no_candidate = UnreproducibleItem(origin="apt-no-candidate", identifier="brscan3", label="brscan3")
         unowned_path = UnreproducibleItem(origin="unowned-path", identifier="brscan3", label="/opt/brscan3")
 

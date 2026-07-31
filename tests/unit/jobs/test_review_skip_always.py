@@ -78,6 +78,11 @@ def _values(call: Any) -> list[str]:
     return [option.value for option in call.kwargs["options"]]
 
 
+def _defaults(call: Any) -> dict[str, str]:
+    """What one built screen would answer if the user pressed Enter without touching it."""
+    return {row.row_id: row.default for row in call.kwargs["rows"]}
+
+
 def _permanent(call: Any) -> str | None:
     """The word of the screen's recorded-forever answer, or None where it offers none.
 
@@ -112,7 +117,7 @@ class TestThePermanentAnswer:
         ui.resume.assert_called_once()
 
     async def test_the_screen_names_the_permanent_answer_as_this_screen_s_own_act(self) -> None:
-        """The user's correction, twice over: the answer is not about being asked again on
+        """H81, H90 — The user's correction, twice over: the answer is not about being asked again on
         this machine but about the item belonging to it, and one generic "always skip" could
         not say that in both directions — an install screen refuses an arrival, a removal
         screen keeps what is already there.
@@ -132,7 +137,7 @@ class TestThePermanentAnswer:
         assert "never offer again" not in " ".join(_words(decision_list.call_args))
 
     async def test_no_group_is_ever_asked_about_permanence_a_second_time(self) -> None:
-        """The two-pass shape is gone: one screen per group, whatever the answers were."""
+        """H33 — The two-pass shape is gone: one screen per group, whatever the answers were."""
         console = _interactive_console()
         ui = MagicMock()
         groups = [_group("install", [_entry("a")]), _group("remove", [_entry("b", action_label="remove")])]
@@ -149,6 +154,7 @@ class TestThePermanentAnswer:
 
     @pytest.mark.parametrize("action", ["install", "add", "enable", "change", "remove", "delete", "disable"])
     async def test_every_promotable_direction_offers_all_three_answers(self, action: str) -> None:
+        """H101 — every direction that records a mark offers the act, the one-sync skip and the permanent answer."""
         console = _interactive_console()
         ui = MagicMock()
         group = _group(action, [_entry("a", action_label=action)], title=f"{action} things")
@@ -172,6 +178,7 @@ class TestBlockStateItemsArePromotable:
     """
 
     async def test_hold_add_direction_can_be_made_permanent(self) -> None:
+        """B10, H84 — a hold's add direction reads as a hold, and its permanent answer as never holding."""
         console = _interactive_console()
         ui = MagicMock()
         group = _group(
@@ -191,6 +198,7 @@ class TestBlockStateItemsArePromotable:
         assert outcome.decisions == {"apt:hold:firefox": Decision.SKIP_ALWAYS}
 
     async def test_mask_removal_direction_can_be_made_permanent(self) -> None:
+        """H82, H84 — an unmask keeps its own verb, and its permanent answer keeps the mask for good."""
         console = _interactive_console()
         ui = MagicMock()
         group = _group(
@@ -213,6 +221,35 @@ class TestBlockStateItemsArePromotable:
         assert _permanent(decision_list.call_args) == KEEP_FOR_GOOD_WORD
         assert outcome.decisions == {"flatpak:mask:user:org.gimp.GIMP": Decision.SKIP_ALWAYS}
 
+    @pytest.mark.parametrize(
+        ("item_id", "label", "action_label", "title"),
+        [
+            ("apt:hold:firefox", "firefox", "unhold", "Unhold apt packages"),
+            ("flatpak:mask:user:org.gimp.GIMP", "org.gimp.GIMP (user)", "unmask", "Unmask flatpak applications"),
+        ],
+    )
+    async def test_an_unhold_or_unmask_screen_opens_on_keeping_the_block(
+        self, item_id: str, label: str, action_label: str, title: str
+    ) -> None:
+        """H101 — `PKG-FR-HARMLESS-DEFAULT`: releasing a block the machine deliberately
+        holds is a removal, so confirming the screen unread must unhold and unmask nothing.
+        Asserted on the unhold/unmask verbs specifically because their group carries a verb
+        no other removal screen uses, and only the group's `action` decides the default.
+        """
+        console = _interactive_console()
+        ui = MagicMock()
+        group = _group("remove", [_entry(item_id, label=label, action_label=action_label)], title=title)
+        screen = _fake_prompt(ask_return={item_id: "skip_once"})
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen) as decision_list,
+        ):
+            outcome = await review_items([group], console=console, ui=ui, **HOSTS)
+
+        assert _defaults(decision_list.call_args) == {item_id: Decision.SKIP_ONCE}
+        assert outcome.decisions == {item_id: Decision.SKIP_ONCE}
+
 
 @pytest.mark.asyncio
 class TestGroupsNeverOfferedPermanence:
@@ -230,6 +267,9 @@ class TestGroupsNeverOfferedPermanence:
     async def test_two_answer_screens_omit_the_permanent_option(
         self, action: str, title: str, action_label: str
     ) -> None:
+        """H93, H95, H136, H138 — a repository deletion and a repository overwrite are the
+        same widget, one answer short.
+        """
         console = _interactive_console()
         ui = MagicMock()
         group = _group(action, [_entry("a", action_label=action_label)], title=title)
@@ -269,7 +309,7 @@ class TestGroupsNeverOfferedPermanence:
         assert outcome.decisions == {"u1": Decision.SKIP_ONCE}
 
     async def test_collateral_group_is_never_offered_permanence(self) -> None:
-        """Its third answer stops the sync; nothing about a collateral package is recorded,
+        """D19, H117 — Its third answer stops the sync; nothing about a collateral package is recorded,
         because nobody expressed a preference about it — apt's manual mark is not one.
         """
         console = _interactive_console()
@@ -292,7 +332,7 @@ class TestGroupsNeverOfferedPermanence:
         assert outcome.decisions == {"apt:package:pkg-a": Decision.SKIP_ONCE}
 
     async def test_non_interactive_run_prompts_nothing(self) -> None:
-        """D-26: no TTY -> no screen at all, everything skip-once, nothing permanent."""
+        """H135, H160 — D-26: no TTY -> no screen at all, everything skip-once, nothing permanent."""
         console = Console(file=io.StringIO())
         ui = MagicMock()
         group = _group("install", [_entry("a"), _entry("b")])
@@ -311,6 +351,7 @@ class TestGroupsNeverOfferedPermanence:
 @pytest.mark.asyncio
 class TestAbortAndTeardown:
     async def test_ctrl_c_at_a_decision_screen_aborts_the_whole_sync(self) -> None:
+        """H148 — Ctrl-C at a decision screen ends the whole review; no later group is built."""
         console = _interactive_console()
         ui = MagicMock()
         first_group = _group("install", [_entry("a")])

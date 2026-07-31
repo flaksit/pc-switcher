@@ -88,7 +88,7 @@ class TestKeysAreNotItems:
 
     @pytest.mark.asyncio
     async def test_no_key_reaches_a_diff_or_a_review_group_in_any_direction(self) -> None:
-        """All three directions at once: `new.gpg` missing on the target, `rot.gpg` present
+        """C15, H50, N10 — all three directions at once: `new.gpg` missing on the target, `rot.gpg` present
         with different bytes, `old.gpg` present on the target alone — under the old model
         an INSTALL, a CHANGE and a REMOVE entry.
         """
@@ -121,7 +121,7 @@ class TestKeysAreNotItems:
 
     @pytest.mark.asyncio
     async def test_key_of_a_derived_repo_is_provisioned_with_no_decision_of_its_own(self) -> None:
-        """The reviewer is told about the PACKAGE only. `foo.gpg` still lands, and lands
+        """C1, C71 — the reviewer is told about the PACKAGE only. `foo.gpg` still lands, and lands
         before the repository that references it, which lands before the install.
         """
         context, _source, target = _repo_context(source_responses=foo_source_responses())
@@ -139,7 +139,7 @@ class TestKeysAreNotItems:
 
     @pytest.mark.asyncio
     async def test_key_of_an_overwritten_repo_is_provisioned_too(self) -> None:
-        """A repository the target already has with different bytes may point at a keyring
+        """C73 — a repository the target already has with different bytes may point at a keyring
         it has never seen — the `Signed-By:` line is part of what differs.
         """
         context, _source, target = _repo_context(source_responses=foo_source_responses())
@@ -157,7 +157,7 @@ class TestKeysAreNotItems:
 
     @pytest.mark.asyncio
     async def test_a_matching_keyring_is_never_written(self) -> None:
-        """Same bytes on both machines: no transfer, no promotion, nothing for
+        """C3, C74 — same bytes on both machines: no transfer, no promotion, nothing for
         `--confirm-each-command` to prompt about.
         """
         both_sides = sha256_line("d1", "foo.sources")
@@ -185,7 +185,7 @@ class TestKeysAreNotItems:
 
     @pytest.mark.asyncio
     async def test_one_rotated_key_serving_three_repos_is_written_once(self) -> None:
-        """1-n: `shared.gpg` is named by three source files, all byte-identical on both
+        """C76 — 1-n: `shared.gpg` is named by three source files, all byte-identical on both
         machines. One rotation, one write.
         """
         names = ["a.list", "b.list", "c.list"]
@@ -215,7 +215,7 @@ class TestKeysAreNotItems:
 
     @pytest.mark.asyncio
     async def test_global_trust_keys_are_replicated_whether_missing_or_differing(self) -> None:
-        """Nothing references a `trusted.gpg.d` key, so its own content is the only signal
+        """C77 — nothing references a `trusted.gpg.d` key, so its own content is the only signal
         there is: copy the ones the target lacks, refresh the ones whose bytes differ.
         """
         context, _source, target = _repo_context(
@@ -240,7 +240,7 @@ class TestKeysAreNotItems:
 
     @pytest.mark.asyncio
     async def test_an_unreferenced_source_keyring_is_not_copied_to_the_target(self) -> None:
-        """`/etc/apt/keyrings` is not mirrored wholesale: a key no repository on the target
+        """C78 — `/etc/apt/keyrings` is not mirrored wholesale: a key no repository on the target
         points at would be litter, not configuration.
         """
         context, _source, target = _repo_context(
@@ -259,7 +259,7 @@ class TestKeysAreNotItems:
 
     @pytest.mark.asyncio
     async def test_inline_armored_signed_by_names_no_keyring(self) -> None:
-        """A deb822 `Signed-By:` carrying an inline armored block has an empty field value
+        """C84 — a deb822 `Signed-By:` carrying an inline armored block has an empty field value
         and continuation lines. It must yield no reference at all: not a bogus dependency
         on some file, and not a match that makes a real keyring look referenced.
         """
@@ -313,7 +313,7 @@ class TestUnusedKeyringCollection:
 
     @pytest.mark.asyncio
     async def test_key_left_unreferenced_by_an_approved_removal_is_deleted(self) -> None:
-        """The reference count is taken AFTER the repository is gone: the scan the
+        """C92, C144 — the reference count is taken AFTER the repository is gone: the scan the
         collection pass runs no longer lists `going.list`, so `shared.gpg` is unused.
         """
         context, _source, target = self._context(
@@ -335,7 +335,7 @@ class TestUnusedKeyringCollection:
 
     @pytest.mark.asyncio
     async def test_key_still_referenced_by_a_surviving_repo_is_kept(self) -> None:
-        """`keeper.list` exists on both machines, so it has no diff of its own and nothing
+        """C93 — `keeper.list` exists on both machines, so it has no diff of its own and nothing
         in the review mentions it — and it is exactly what keeps `shared.gpg` alive.
         """
         keeper_digest = sha256_line("d-keep", "keeper.list")
@@ -355,7 +355,7 @@ class TestUnusedKeyringCollection:
 
     @pytest.mark.asyncio
     async def test_key_referenced_only_by_a_file_pc_switcher_never_syncs_is_kept(self) -> None:
-        """`/etc/apt/sources.list` is not an item, is never captured and is never deleted —
+        """C94 — `/etc/apt/sources.list` is not an item, is never captured and is never deleted —
         and a keyring named only there is still very much in use.
         """
         context, _source, target = self._context(
@@ -373,7 +373,7 @@ class TestUnusedKeyringCollection:
 
     @pytest.mark.asyncio
     async def test_key_referenced_by_a_repo_whose_removal_was_declined_is_kept(self) -> None:
-        """Unticking the removal keeps the repository, and the repository keeps its key."""
+        """C95 — unticking the removal keeps the repository, and the repository keeps its key."""
         context, _source, target = self._context(
             target_sources={"going.list": _GOING_LIST, "extra.list": "deb https://other.example.com stable main\n"},
             target_source_digests=sha256_line("d9", "going.list") + sha256_line("d8", "extra.list"),
@@ -390,7 +390,7 @@ class TestUnusedKeyringCollection:
 
     @pytest.mark.asyncio
     async def test_key_referenced_by_a_machine_specific_repo_is_kept(self) -> None:
-        """A source recorded skip-always produces no diff in any run, so nothing else could
+        """C96 — a source recorded skip-always produces no diff in any run, so nothing else could
         speak for it — and it still counts as a reference.
         """
         decisions_file = (
@@ -417,7 +417,7 @@ class TestUnusedKeyringCollection:
 
     @pytest.mark.asyncio
     async def test_a_key_the_source_machine_still_has_is_never_collected(self) -> None:
-        """Collection mirrors: a key both machines carry is configuration this sync is
+        """C97 — collection mirrors: a key both machines carry is configuration this sync is
         replicating, not litter, even when nothing on the target references it yet.
         """
         context, _source, target = self._context(
@@ -435,7 +435,7 @@ class TestUnusedKeyringCollection:
 
     @pytest.mark.asyncio
     async def test_a_global_trust_key_is_never_collected(self) -> None:
-        """`trusted.gpg.d` is ambient trust nothing references by construction, so "unused"
+        """C98 — `trusted.gpg.d` is ambient trust nothing references by construction, so "unused"
         is not computable for it. It accumulates rather than being deleted on a guess.
         """
         context, _source, target = self._context(
@@ -452,8 +452,70 @@ class TestUnusedKeyringCollection:
         assert not any("ambient.gpg" in c for c in _all_removals(target))
 
     @pytest.mark.asyncio
+    async def test_a_shared_keyring_orphan_is_never_collected(self) -> None:
+        """C99 — `/usr/share/keyrings` is package territory: a key nothing references there
+        is the distribution's business, not litter this run may sweep up.
+        """
+        context, _source, target = self._context(
+            target_sources={"going.list": _GOING_LIST},
+            target_source_digests=sha256_line("d9", "going.list"),
+            target_keyrings="",
+            target_extra={"find /usr/share/keyrings": CommandResult(0, sha256_line("s9", "orphan.gpg"), "")},
+        )
+        job = AptSyncJob(context)
+        install_reviewer(job, {"apt:source:going.list": Decision.APPLY})
+
+        await job.execute()
+
+        assert not any("orphan.gpg" in c for c in _all_removals(target))
+
+    @pytest.mark.asyncio
+    async def test_a_key_that_cannot_be_backed_up_is_kept_rather_than_deleted(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """C102 — without a backup a rollback could not restore it, and an unused keyring
+        costs nothing to keep. The warning names the key.
+        """
+        context, _source, target = self._context(
+            target_sources={"going.list": _GOING_LIST},
+            target_source_digests=sha256_line("d9", "going.list"),
+            target_keyrings=sha256_line("k9", "shared.gpg"),
+            target_extra={"sudo cp --archive /etc/apt/keyrings/shared.gpg": CommandResult(1, "", "disk full")},
+        )
+        job = AptSyncJob(context)
+        install_reviewer(job, {"apt:source:going.list": Decision.APPLY})
+
+        with caplog.at_level(1):
+            await job.execute()
+
+        assert _key_deletions(target) == []
+        assert "keeping unused signing key /etc/apt/keyrings/shared.gpg" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_a_deletion_that_fails_warns_and_the_run_carries_on(self, caplog: pytest.LogCaptureFixture) -> None:
+        """C103 — an uncollected key is untidy, not broken: the run names it and goes on to
+        the refresh rather than failing the repository removal that occasioned it.
+        """
+        context, _source, target = self._context(
+            target_sources={"going.list": _GOING_LIST},
+            target_source_digests=sha256_line("d9", "going.list"),
+            target_keyrings=sha256_line("k9", "shared.gpg"),
+            target_extra={
+                "sudo rm --force /etc/apt/keyrings/shared.gpg": CommandResult(1, "", "Read-only file system")
+            },
+        )
+        job = AptSyncJob(context)
+        install_reviewer(job, {"apt:source:going.list": Decision.APPLY})
+
+        with caplog.at_level(1):
+            await job.execute()
+
+        assert "could not delete unused signing key /etc/apt/keyrings/shared.gpg" in caplog.text
+        assert "sudo apt-get update" in all_calls(target)
+
+    @pytest.mark.asyncio
     async def test_no_source_removed_means_no_collection_pass_at_all(self) -> None:
-        """ "Runs after removing sources" is literal: with no source deletion the pass does
+        """C91 — "runs after removing sources" is literal: with no source deletion the pass does
         not run, so it does not even pay for the post-write re-scan.
         """
         context, _source, target = self._context(
@@ -475,7 +537,7 @@ class TestUnusedKeyringCollection:
 
     @pytest.mark.asyncio
     async def test_a_key_only_the_departing_repo_needs_is_not_refreshed_first(self) -> None:
-        """The keyring differs on the two machines, but its only referent is on its way
+        """C100 — the keyring differs on the two machines, but its only referent is on its way
         out: refreshing it and then collecting it in the same run would be absurd.
         """
         context, _source, target = self._context(
@@ -493,7 +555,7 @@ class TestUnusedKeyringCollection:
 
     @pytest.mark.asyncio
     async def test_a_collected_key_is_backed_up_and_gated_as_a_modification(self) -> None:
-        """It is backed up before deletion (so a failing `apt-get update` rolls it back)
+        """C101 — it is backed up before deletion (so a failing `apt-get update` rolls it back)
         and its deletion carries `mutates=`, so `--confirm-each-command` shows it.
         """
         context, _source, target = self._context(
@@ -581,6 +643,7 @@ class TestSharedKeyringsDirectory:
 
     @pytest.mark.asyncio
     async def test_a_usr_share_keyrings_reference_resolves_and_the_repo_is_replicable(self) -> None:
+        """C79 — a `Signed-By:` pointing into `/usr/share/keyrings` resolves like any other."""
         context, _source, _target = _shared_key_context()
         job = AptSyncJob(context)
 
@@ -595,7 +658,7 @@ class TestSharedKeyringsDirectory:
 
     @pytest.mark.asyncio
     async def test_a_hand_placed_key_the_target_lacks_is_provisioned(self) -> None:
-        """Nothing on this machine owns `vendor.gpg` — it is as machine-local as anything in
+        """C79 — nothing on this machine owns `vendor.gpg` — it is as machine-local as anything in
         `/etc/apt/keyrings`, and currently replicated nowhere.
         """
         context, _source, target = _shared_key_context()
@@ -627,7 +690,7 @@ class TestSharedKeyringsDirectory:
 
     @pytest.mark.asyncio
     async def test_a_package_owned_key_the_target_is_missing_is_copied_anyway(self) -> None:
-        """The bootstrap case. `dpkg --search` answers from the package's FILE LIST, so a keyring
+        """C82 — the bootstrap case. `dpkg --search` answers from the package's FILE LIST, so a keyring
         can be owned and absent at once — and a vendor `.deb` that ships both a repository
         entry and the keyring trusting it can only be installed once that keyring is there.
         Ownership must gate the OVERWRITE, never the COPY.
@@ -650,7 +713,7 @@ class TestSharedKeyringsDirectory:
 
     @pytest.mark.asyncio
     async def test_ownership_is_probed_once_for_every_key_directory(self) -> None:
-        """One batched `dpkg --search` naming every key the target has across all three
+        """C83 — one batched `dpkg --search` naming every key the target has across all three
         directories — never one call per file.
         """
         context, _source, target = _repo_context(
@@ -673,7 +736,7 @@ class TestSharedKeyringsDirectory:
 
     @pytest.mark.asyncio
     async def test_a_shared_keyring_no_source_references_is_never_copied(self) -> None:
-        """`/usr/share/keyrings` is not mirrored wholesale: it is mostly the distro's own."""
+        """C80 — `/usr/share/keyrings` is not mirrored wholesale: it is mostly the distro's own."""
         context, _source, target = _repo_context(
             source_responses={
                 **_NO_PACKAGES,
@@ -690,7 +753,7 @@ class TestSharedKeyringsDirectory:
 
     @pytest.mark.asyncio
     async def test_a_genuinely_missing_key_is_still_reported_dangling(self) -> None:
-        """The check must still bite, and it bites on the PACKAGE now (D-39): `ghost.gpg`
+        """C86 — the check must still bite, and it bites on the PACKAGE now (D-39): `ghost.gpg`
         exists in no key directory on the source, so the only file that could deliver
         `pkg-a`'s origin cannot be written and the package is reported, not installed.
 
@@ -719,12 +782,14 @@ class TestInlineArmoredSignedBy:
     """
 
     def test_the_armor_first_line_on_the_field_line_yields_no_ref(self) -> None:
+        """C85 — the armor's first line on the field line is still not a path."""
         _fmt, refs, _uris = parse_source_file("ppa.sources", _INLINE_ON_FIELD_LINE)
 
         assert refs == ()
 
     @pytest.mark.asyncio
     async def test_a_ppa_with_an_inline_key_installs_normally_and_needs_no_keyring(self) -> None:
+        """C85 — the repository installs normally, and no key is written for it."""
         context, _source, target = _shared_key_context(
             filename="ppa.sources",
             content=_INLINE_ON_FIELD_LINE,
@@ -749,6 +814,7 @@ class TestKeyWritesAreVisible:
 
     @pytest.mark.asyncio
     async def test_a_provisioned_key_is_logged_as_it_lands(self, caplog: pytest.LogCaptureFixture) -> None:
+        """C163 — the line names the destination and the machine the bytes came from."""
         context, _source, target = _repo_context(source_responses=foo_source_responses())
         target.run_command = AsyncMock(side_effect=foo_target_side_effect())
         job = AptSyncJob(context)
@@ -761,6 +827,7 @@ class TestKeyWritesAreVisible:
 
     @pytest.mark.asyncio
     async def test_a_collected_key_is_logged_as_it_goes(self, caplog: pytest.LogCaptureFixture) -> None:
+        """C164 — a key that leaves is named as it goes."""
         context, _source, _target = TestUnusedKeyringCollection._context(
             target_sources={"going.list": _GOING_LIST},
             target_source_digests=sha256_line("d9", "going.list"),
@@ -776,6 +843,7 @@ class TestKeyWritesAreVisible:
 
     @pytest.mark.asyncio
     async def test_a_dry_run_previews_the_key_it_would_write(self, caplog: pytest.LogCaptureFixture) -> None:
+        """C166 — a rehearsal previews the key and writes none."""
         context, _source, target = _repo_context(source_responses=foo_source_responses(), dry_run=True)
         target.run_command = AsyncMock(side_effect=foo_target_side_effect())
         job = AptSyncJob(context)
@@ -789,6 +857,7 @@ class TestKeyWritesAreVisible:
 
     @pytest.mark.asyncio
     async def test_a_dry_run_previews_the_key_it_would_collect(self, caplog: pytest.LogCaptureFixture) -> None:
+        """C167 — a rehearsal previews the key it would orphan and deletes none."""
         context, _source, target = TestUnusedKeyringCollection._context(
             target_sources={"going.list": _GOING_LIST},
             target_source_digests=sha256_line("d9", "going.list"),

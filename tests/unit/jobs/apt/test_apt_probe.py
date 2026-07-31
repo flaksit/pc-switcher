@@ -60,6 +60,8 @@ class TestCapture:
 
     @pytest.mark.asyncio
     async def test_capture_source_items_returns_three_items_with_versions(self) -> None:
+        """A66 — one batched `dpkg-query` answers the installed version of the whole manual
+        set."""
         context, _source, _target = make_context(
             source_responses={
                 "apt-mark showmanual": CommandResult(0, SHOWMANUAL_3, ""),
@@ -75,7 +77,7 @@ class TestCapture:
 
     @pytest.mark.asyncio
     async def test_dpkg_query_used_not_apt_list_installed(self) -> None:
-        """Backstop: versions come from dpkg-query, never `apt list --installed`."""
+        """A66 — versions come from dpkg-query, never `apt list --installed`."""
         context, source, _target = make_context(
             source_responses={
                 "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
@@ -99,7 +101,7 @@ class TestManifestIsShowmanualOnly:
 
     @pytest.mark.asyncio
     async def test_auto_installed_dependency_produces_no_diff_of_any_kind(self) -> None:
-        """`libdep` is installed on the source (dpkg knows it) but is not in either
+        """A2, N16 — `libdep` is installed on the source (dpkg knows it) but is not in either
         machine's `showmanual` set, so it is never an item: never installed on the target,
         never removed, never reported. `_resolve_versions` builds items from the
         `showmanual` names alone, which is exactly the mechanism this pins.
@@ -122,8 +124,32 @@ class TestManifestIsShowmanualOnly:
         assert not any("libdep" in cmd for cmd in all_calls(target))
 
     @pytest.mark.asyncio
+    async def test_an_automatically_installed_package_on_the_target_is_never_offered_for_removal(self) -> None:
+        """A3 — the mirror of A2 on the other machine: `auto-dep` is installed on the target
+        (its `dpkg-query` lists it) and outside its `showmanual` set, so it is not the
+        target's manifest and the source lacking it implies no removal. Only the manual set
+        builds either manifest, which is what keeps apt's own dependency resolution off the
+        review.
+        """
+        context, _source, target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\nauto-dep\t5.0\n", ""),
+            },
+        )
+
+        plan = await AptSyncJob(context).plan()
+
+        assert plan.diffs == ()
+        assert not any("auto-dep" in cmd for cmd in all_calls(target))
+
+    @pytest.mark.asyncio
     async def test_empty_source_manifest_offers_every_target_package_as_an_unticked_removal(self) -> None:
-        """An empty `apt-mark showmanual` on the source means every target package is
+        """A4 — an empty `apt-mark showmanual` on the source means every target package is
         extra. That mass removal must surface as ordinary EXTRA_ON_TARGET/REMOVE items in
         a removal-direction group (unticked by default, D-07), never silently and never
         pre-approved.
@@ -152,6 +178,7 @@ class TestHoldPinCapture:
 
     @pytest.mark.asyncio
     async def test_hold_sets_from_both_machines_surface(self) -> None:
+        """B48 — each machine's holds are attributed to that machine."""
         context, _source, _target = make_context(
             source_responses={"apt-mark showhold": CommandResult(0, "pkg-src-held\n", "")},
             target_responses={"apt-mark showhold": CommandResult(0, "pkg-tgt-held\n", "")},
@@ -198,6 +225,8 @@ class TestUnavailableCapture:
 
     @pytest.mark.asyncio
     async def test_one_batched_policy_call_covers_every_package(self) -> None:
+        """A72 — one `apt-cache policy` on the target over the whole of the source's set,
+        parsed for the candidate rows."""
         context, _source, target = make_context(
             source_responses={
                 "apt-mark showmanual": CommandResult(0, "pkg-a\npkg-b\n", ""),
@@ -254,6 +283,8 @@ class TestBareDebPackagesAreNotAptSyncsBusiness:
 
     @pytest.mark.asyncio
     async def test_bare_deb_package_produces_no_diff_and_no_review_entry(self) -> None:
+        """A9, K15 — a package whose installed version comes from no repository is not this
+        job's, so it reaches neither the diff nor the review."""
         context, _source, _target = make_context(
             source_responses={
                 "apt-mark showmanual": CommandResult(0, "code\n", ""),
@@ -270,6 +301,8 @@ class TestBareDebPackagesAreNotAptSyncsBusiness:
 
     @pytest.mark.asyncio
     async def test_bare_deb_package_reaches_no_apt_get_install(self) -> None:
+        """A9 — and approving it anyway issues no `apt-get install`: the name was dropped at
+        capture, so no decision can revive it."""
         context, _source, target = make_context(
             source_responses={
                 "apt-mark showmanual": CommandResult(0, "code\n", ""),
@@ -307,6 +340,8 @@ class TestBareDebPackagesAreNotAptSyncsBusiness:
 
     @pytest.mark.asyncio
     async def test_one_source_policy_call_covers_the_whole_manual_set(self) -> None:
+        """A10 — one batched call over a hand `.deb`, a vendor package, a pinned one and an
+        auto dependency: only the hand `.deb` is dropped."""
         policy = _POLICY_HAND_DEB + _POLICY_REPO_INSTALLED + _POLICY_PINNED_NO_CANDIDATE + _POLICY_AUTO_DEP
         context, source, _target = make_context(
             source_responses={
@@ -334,7 +369,7 @@ class TestBareDebPackagesAreNotAptSyncsBusiness:
 
     @pytest.mark.asyncio
     async def test_excluded_package_reaches_neither_the_simulation_nor_the_availability_probe(self) -> None:
-        """Both downstream target reads are built from the diffs, so a package excluded at
+        """A16 — both downstream target reads are built from the diffs, so a package excluded at
         capture cannot appear in the transaction `_collect_plan_time_collateral` asks apt to
         rehearse, nor in the target's origin probe."""
         context, _source, target = make_context(
@@ -364,7 +399,7 @@ class TestBareDebPackagesAreNotAptSyncsBusiness:
 
     @pytest.mark.asyncio
     async def test_repo_installed_package_the_target_has_never_heard_of_is_still_offered(self) -> None:
-        """The target half is untouched (`collect_target_policy`): the target's apt
+        """A32 — the target half is untouched (`collect_target_policy`): the target's apt
         printing no block is still "no evidence against", because a repository this same run
         adds may be about to supply the package."""
         context, _source, _target = make_context(
@@ -386,7 +421,7 @@ class TestBareDebPackagesAreNotAptSyncsBusiness:
 
     @pytest.mark.asyncio
     async def test_a_name_an_answered_policy_printed_no_block_for_is_not_excluded(self) -> None:
-        """Silence inside an ANSWERED probe is not evidence: apt spoke, and it said nothing
+        """A11 — silence inside an ANSWERED probe is not evidence: apt spoke, and it said nothing
         about `ghost-pkg`, which is not the same as saying it came from no repository.
         Indicting on that absence would drop the package from the sync without a word.
         """
@@ -405,7 +440,7 @@ class TestBareDebPackagesAreNotAptSyncsBusiness:
 
     @pytest.mark.asyncio
     async def test_a_source_policy_that_did_not_run_fails_the_run_naming_the_command(self) -> None:
-        """The other side of the same distinction, and a deliberate reversal: a policy read
+        """A12 — the other side of the same distinction, and a deliberate reversal: a policy read
         that EXITED NON-ZERO answered nothing about any package. Tolerating it silently
         exempted every package from the D-35 origin check and offered
         `manual_installs_sync`'s bare-`.deb` packages as apt installs, both without a word.
@@ -434,7 +469,7 @@ class TestBareDebPackagesAreNotAptSyncsBusiness:
 
     @pytest.mark.asyncio
     async def test_a_source_policy_that_printed_nothing_at_all_fails_the_run(self) -> None:
-        """Exit 0 and no block for a single name apt must know. Measured: apt prints one
+        """A13, J75 — exit 0 and no block for a single name apt must know. Measured: apt prints one
         block per installed name it is asked about, so this output is not apt's answer.
         """
         context, _source, _target = make_context(
@@ -453,7 +488,7 @@ class TestBareDebPackagesAreNotAptSyncsBusiness:
 
     @pytest.mark.asyncio
     async def test_an_excluded_bare_deb_package_is_not_protected_from_collateral(self) -> None:
-        """`code` is a bare `.deb` on the source, so it is dropped from the manifest, and it
+        """D31 — `code` is a bare `.deb` on the source, so it is dropped from the manifest, and it
         is auto on the target. Under ADR-020 D-40 the target's apt owns it: an install whose
         simulation would remove it proceeds with no collateral item and no prompt.
         """
@@ -483,7 +518,7 @@ class TestRepoStateCapture:
 
     @pytest.mark.asyncio
     async def test_deb822_and_legacy_source_each_record_own_format(self) -> None:
-        """The format is still recorded, on the one direction that still shows a file to
+        """C4, C62 — The format is still recorded, on the one direction that still shows a file to
         the user: a legacy `.list` and a deb822 `.sources` offered for deletion read as
         two distinguishable entries rather than two bare filenames.
         """
@@ -536,7 +571,7 @@ class TestRepoStateCapture:
 
     @pytest.mark.asyncio
     async def test_a_repository_never_appears_as_a_review_entry_in_the_add_or_change_direction(self) -> None:
-        """Ruling 4's property, in both directions at once and across both file classes:
+        """C2, C20, H49 — Ruling 4's property, in both directions at once and across both file classes:
         `new.sources` is missing on the target, `changed.sources` differs, `new-pin` and
         `changed-pin` likewise. Under the old model that is four review entries; under
         derivation the user is asked about none of them.
@@ -565,7 +600,7 @@ class TestRepoStateCapture:
 
     @pytest.mark.asyncio
     async def test_pin_and_config_diff_missing_extra_and_changed(self) -> None:
-        """The split ruling 11 makes: a pin keeps only the removal direction, apt config
+        """C19, C121 — The split ruling 11 makes: a pin keeps only the removal direction, apt config
         keeps all three, and the two live side by side in one plan.
         """
         context, _source, _target = make_context(
@@ -608,7 +643,7 @@ class TestWhatAptItselfReads:
 
     @pytest.mark.asyncio
     async def test_a_save_file_in_sources_list_d_is_never_captured(self) -> None:
-        """Ubuntu's own tooling leaves `.save`/`.curtin.orig` copies beside the real files.
+        """C5 — Ubuntu's own tooling leaves `.save`/`.curtin.orig` copies beside the real files.
         apt reads neither, so neither may reach the review — the target-only copy below
         would otherwise be offered for deletion as a repository the source lacks.
         """
@@ -630,7 +665,7 @@ class TestWhatAptItselfReads:
 
     @pytest.mark.asyncio
     async def test_preferences_d_and_apt_conf_d_keep_no_extension_filter(self) -> None:
-        """apt reads extensionless files in both (six of them in `preferences.d` on the
+        """C6 — apt reads extensionless files in both (six of them in `preferences.d` on the
         development machine), so the narrowing that is right for `sources.list.d` is wrong
         here — on either machine.
         """
@@ -657,7 +692,7 @@ class TestWhatAptItselfReads:
 
     @pytest.mark.asyncio
     async def test_sources_list_is_digested_on_both_machines_and_is_still_not_an_item(self) -> None:
-        """`/etc/apt/sources.list` is a file, not a directory, so it appears in no `find`
+        """C8, C10 — `/etc/apt/sources.list` is a file, not a directory, so it appears in no `find`
         listing and needs its own digest — which ADR-020 D-38's write-when-different rule
         compares. Capturing it must not turn it into a reviewable item.
         """
@@ -683,7 +718,7 @@ class TestWhatAptItselfReads:
 
     @pytest.mark.asyncio
     async def test_an_absent_sources_list_yields_no_digest_rather_than_an_error(self) -> None:
-        """Verified on the development machine: `sha256sum` on a missing path exits 1 and
+        """C9 — Verified on the development machine: `sha256sum` on a missing path exits 1 and
         prints nothing to stdout, so absence falls out of the parse with no probe.
         """
         context, _source, _target = make_context(
@@ -701,7 +736,7 @@ class TestWhatAptItselfReads:
 
     @pytest.mark.asyncio
     async def test_ubuntu_sources_is_never_offered_for_removal(self) -> None:
-        """D-38: the distribution's own files are written and updated but never removed.
+        """C11, C12 — D-38: the distribution's own files are written and updated but never removed.
         A target holding `ubuntu.sources` and `ubuntu-esm-apps.sources` that the source does
         not have would otherwise be offered a deletion of its own archive, while a
         `.sources` file with a lookalike name is an ordinary repository and still is.
@@ -726,7 +761,7 @@ class TestWhatAptItselfReads:
 
     @pytest.mark.asyncio
     async def test_the_distribution_files_are_written_when_they_differ(self) -> None:
-        """The other half of D-38's always-sync bucket, `/etc/apt/sources.list` included —
+        """C2, C13, C14 — The other half of D-38's always-sync bucket, `/etc/apt/sources.list` included —
         it is a file rather than a directory entry and so travels on its own digest. An
         ordinary vendor repository that feeds no approved package stays put, which is
         ruling 4 working as intended.
@@ -756,7 +791,7 @@ class TestWhatAptItselfReads:
     async def test_a_dry_run_previews_the_derived_writes_and_issues_none(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """A derived write has no review entry, so without a preview line ADR-014's
+        """C165, J53 — A derived write has no review entry, so without a preview line ADR-014's
         rehearsal would report an `apt-get update` and no reason for it.
         """
         context, _source, target = _repo_context(
@@ -809,7 +844,7 @@ class TestOriginCapture:
     """
 
     def test_source_files_serving_is_the_union_of_every_file_declaring_an_origin(self) -> None:
-        """A package's installed version can list several origins and each may be declared
+        """A24 — a package's installed version can list several origins and each may be declared
         by a different file — every one of them served it, so none may be dropped.
         """
         refs = {
@@ -825,7 +860,7 @@ class TestOriginCapture:
         assert serving == frozenset({"vendor.list", "mirror.sources"})
 
     def test_an_origin_no_file_declares_serves_from_nowhere(self) -> None:
-        """The class-4 input: a repository deleted from the source while its packages stay
+        """A25 — the class-4 input: a repository deleted from the source while its packages stay
         installed leaves an origin with no file behind it.
         """
         refs = {"vendor.list": ((), ("https://vendor.example.com/apt",))}
@@ -835,7 +870,7 @@ class TestOriginCapture:
         assert serving == frozenset()
 
     def test_distribution_origins_come_from_the_machines_own_distribution_files(self) -> None:
-        """Per machine, from that machine's `ubuntu.sources`/`sources.list`/ESM files — not
+        """A21 — per machine, from that machine's `ubuntu.sources`/`sources.list`/ESM files — not
         from a list of known Ubuntu hostnames, which is what would make two machines on
         different mirrors disagree about every package.
         """
@@ -856,7 +891,7 @@ class TestOriginCapture:
         )
 
     def test_a_user_named_esm_lookalike_is_not_a_distribution_file(self) -> None:
-        """Exact filenames, not a `ubuntu-esm-*` glob: a file the user named that way is
+        """A22 — exact filenames, not a `ubuntu-esm-*` glob: a file the user named that way is
         theirs, and treating its URIs as the distribution's would suppress the origin from
         every review line it feeds.
         """
@@ -866,7 +901,7 @@ class TestOriginCapture:
 
     @pytest.mark.asyncio
     async def test_the_source_policy_call_answers_both_questions_asked_of_it(self) -> None:
-        """One batched `apt-cache policy` on the source, parsed twice: the bare-`.deb`
+        """A18 — one batched `apt-cache policy` on the source, parsed twice: the bare-`.deb`
         exclusion and the installed-origin map. A second call would re-run a full policy
         query to learn something already on screen.
         """
@@ -893,7 +928,7 @@ class TestOriginCapture:
 
     @pytest.mark.asyncio
     async def test_the_source_origin_map_holds_the_installed_row_not_the_candidate_one(self) -> None:
-        """The distinction the whole classification rests on: what the source HAS, not what
+        """A17 — the distinction the whole classification rests on: what the source HAS, not what
         the source would install next.
         """
         context, _source, _target = make_context(
@@ -925,7 +960,7 @@ class TestAReadThatDidNotAnswer:
 
     @pytest.mark.asyncio
     async def test_a_source_manual_set_read_that_did_not_answer_fails_the_job(self) -> None:
-        """Measured: `apt-mark showmanual` exits 100 when it cannot read `/var/lib/dpkg/
+        """A5, J63 — measured: `apt-mark showmanual` exits 100 when it cannot read `/var/lib/dpkg/
         status` or parse `apt.conf.d`. Reading that silence as data makes the source
         manifest empty, which offers every package on the target for removal.
         """
@@ -948,7 +983,7 @@ class TestAReadThatDidNotAnswer:
 
     @pytest.mark.asyncio
     async def test_an_empty_source_manual_set_at_exit_zero_is_still_data(self) -> None:
-        """The deliberate limit of the rule above, pinned so it is not silently widened
+        """A7, J86 — the deliberate limit of the rule above, pinned so it is not silently widened
         later: the guard is on the EXIT CODE, and an empty answer at exit 0 still reaches
         the diff as "remove the target's packages". Widening it to "empty means broken"
         would fail every run against a machine whose manual set is legitimately empty.
@@ -991,6 +1026,7 @@ class TestAReadThatDidNotAnswer:
 
     @pytest.mark.asyncio
     async def test_a_target_manifest_read_that_did_not_answer_fails_the_job(self) -> None:
+        """A6, J64 — the same rule on the target, naming it."""
         context, _source, target = make_context(
             source_responses={
                 "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
@@ -1007,7 +1043,7 @@ class TestAReadThatDidNotAnswer:
 
     @pytest.mark.asyncio
     async def test_a_collateral_protection_read_that_did_not_answer_fails_the_job(self) -> None:
-        """The second of the two. Its silence empties the target's manual set, which
+        """D32, J65 — The second of the two. Its silence empties the target's manual set, which
         classifies every collateral package as automatic and switches D-30's protection off
         entirely — the manifest read above it answers normally, so only this one can fail.
         """
@@ -1026,7 +1062,7 @@ class TestAReadThatDidNotAnswer:
 
     @pytest.mark.asyncio
     async def test_a_version_read_that_did_not_answer_fails_the_job(self) -> None:
-        """A `dpkg-query` that does not answer leaves every version empty, which reads as a
+        """A8, J66 — a `dpkg-query` that does not answer leaves every version empty, which reads as a
         version difference against the other machine on every package at once.
         """
         context, _source, _target = make_context(
@@ -1045,6 +1081,7 @@ class TestAReadThatDidNotAnswer:
 
     @pytest.mark.asyncio
     async def test_a_hold_read_that_did_not_answer_fails_the_job(self) -> None:
+        """B49, J67 — a refused `apt-mark showhold` is not "holds nothing"."""
         context, _source, _target = make_context(
             source_responses={
                 "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
@@ -1061,7 +1098,7 @@ class TestAReadThatDidNotAnswer:
 
     @pytest.mark.asyncio
     async def test_an_empty_hold_set_is_data_not_a_failure(self) -> None:
-        """Holding nothing is what most machines do, so an empty `apt-mark showhold` at
+        """B50, J88 — holding nothing is what most machines do, so an empty `apt-mark showhold` at
         exit 0 must stay ordinary data — the plan completes and proposes no hold.
         """
         context, _source, _target = make_context(
@@ -1079,7 +1116,7 @@ class TestAReadThatDidNotAnswer:
 
     @pytest.mark.asyncio
     async def test_an_unanswered_installed_set_read_fails_the_job(self) -> None:
-        """A machine with no installed packages does not exist, so silence here is never
+        """J68 — A machine with no installed packages does not exist, so silence here is never
         data: read as one it would make every hold stale and every target-only repository
         deletable. Only a run with something to ask it pays the command, so the fixture
         gives the target a hold.
@@ -1105,7 +1142,7 @@ class TestAReadThatDidNotAnswer:
 
     @pytest.mark.asyncio
     async def test_a_machine_holding_nothing_is_never_asked_what_it_has_installed(self) -> None:
-        """The read is the answer to two rare questions — a hold, a target-only repository —
+        """B51, J94 — the read is the answer to two rare questions — a hold, a target-only repository —
         so an ordinary run pays no command for it."""
         context, _source, target = make_context(
             source_responses={
@@ -1121,7 +1158,7 @@ class TestAReadThatDidNotAnswer:
 
     @pytest.mark.asyncio
     async def test_a_target_policy_read_that_did_not_answer_fails_the_job(self) -> None:
-        """The source has a package, so the only `apt-cache policy` the TARGET is asked at
+        """A73, J69 — the source has a package, so the only `apt-cache policy` the TARGET is asked at
         plan time is `collect_target_policy`'s.
         """
         context, _source, _target = make_context(
@@ -1143,7 +1180,7 @@ class TestAReadThatDidNotAnswer:
 
     @pytest.mark.asyncio
     async def test_a_target_policy_that_knows_none_of_the_source_names_is_data(self) -> None:
-        """The `blocks` half of the apt guard is deliberately NOT applied here: these are
+        """A74, J93 — the `blocks` half of the apt guard is deliberately NOT applied here: these are
         the SOURCE's names asked of the TARGET's apt, and a target that has never heard of
         any of them is the ordinary case this call exists to detect. It must still plan.
         """
@@ -1161,7 +1198,7 @@ class TestAReadThatDidNotAnswer:
 
     @pytest.mark.asyncio
     async def test_a_directory_digest_read_that_did_not_answer_fails_the_job(self) -> None:
-        """`sudo find <dir> ... sha256sum` on the source keyrings directory. Its silence
+        """C17, J70 — `sudo find <dir> ... sha256sum` on the source keyrings directory. Its silence
         empties `_source_key_filenames`, which makes every `Signed-By:` reference look
         dangling.
         """
@@ -1181,7 +1218,7 @@ class TestAReadThatDidNotAnswer:
 
     @pytest.mark.asyncio
     async def test_an_absent_directory_answers_nothing_rather_than_failing(self) -> None:
-        """The `sudo test -d` wrapper is what keeps a legitimately absent directory out of
+        """C16, J89 — The `sudo test -d` wrapper is what keeps a legitimately absent directory out of
         the failure path: it is what makes the command exit 0 with no output, which this
         asserts is planned through rather than raised on.
 
@@ -1226,7 +1263,7 @@ class TestAReadThatDidNotAnswer:
 
     @pytest.mark.asyncio
     async def test_a_source_file_scan_that_did_not_answer_fails_the_job(self) -> None:
-        """The scan's silence reads as "no source file references any keyring", which is
+        """C18, J71 — The scan's silence reads as "no source file references any keyring", which is
         what deletes keys that are still in use.
         """
         context, _source, _target = make_context(
@@ -1245,7 +1282,7 @@ class TestAReadThatDidNotAnswer:
 
     @pytest.mark.asyncio
     async def test_a_conflict_content_read_that_did_not_answer_fails_the_job(self) -> None:
-        """The two panes the repository-conflict review shows are `sudo cat` output
+        """C38, J72 — The two panes the repository-conflict review shows are `sudo cat` output
         (ADR-020 D-37). Reading that silence as CONTENT renders the source's pane empty and asks
         the user to approve an overwrite off a diff nobody could read. The TARGET's `cat`
         runs first and answers normally, so only the source's can fail this.
@@ -1270,7 +1307,7 @@ class TestAReadThatDidNotAnswer:
 
     @pytest.mark.asyncio
     async def test_a_removal_content_read_that_did_not_answer_fails_the_job(self) -> None:
-        """The other `sudo cat` call site: a file only the target has is read to learn its
+        """C56, J73 — The other `sudo cat` call site: a file only the target has is read to learn its
         format before it is offered for removal. Its silence makes the removal item describe
         a file this run never read.
         """
@@ -1293,7 +1330,7 @@ class TestAReadThatDidNotAnswer:
 
     @pytest.mark.asyncio
     async def test_a_removal_impact_read_that_did_not_answer_fails_the_job(self) -> None:
-        """`AptProbe.packages_by_source_file`. Its silence answers "this
+        """C55, J74 — `AptProbe.packages_by_source_file`. Its silence answers "this
         repository strands nothing", which is the answer that lets a repository feeding
         machine-specific packages be removed or overwritten with no disclosure. The source
         holds no packages here, so `collect_target_policy` never runs and this is the only

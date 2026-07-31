@@ -69,7 +69,7 @@ class TestSessionStatusReflectsJobResults:
         assert "snap_sync" in error_message
 
     def test_every_failed_job_is_named(self) -> None:
-        """The message names each failing job, not just the first one."""
+        """J24 — the message names each failing job, not just the first one."""
         status, error_message = _summarize_job_outcomes(
             [
                 _job_result("apt_sync", JobStatus.FAILED),
@@ -83,7 +83,7 @@ class TestSessionStatusReflectsJobResults:
         assert "flatpak_sync" in error_message
 
     def test_skipped_job_result_is_not_a_failure(self) -> None:
-        """SKIPPED is a normal outcome for a disabled or not-applicable job."""
+        """J16 — SKIPPED is a normal outcome for a disabled or not-applicable job."""
         status, error_message = _summarize_job_outcomes(
             [
                 _job_result("apt_sync", JobStatus.SUCCESS),
@@ -108,6 +108,7 @@ class TestTheOutcomeMessageNamesWhatFailed:
     """
 
     def test_each_failed_jobs_reason_reaches_the_message(self) -> None:
+        """J24 — each failed job's own reason survives into the end-of-run message."""
         _status, error_message = _summarize_job_outcomes(
             [
                 _job_result(
@@ -125,7 +126,7 @@ class TestTheOutcomeMessageNamesWhatFailed:
         assert "`snap list --all` exited 1" in error_message
 
     def test_a_job_with_many_failed_items_stays_on_one_line(self) -> None:
-        """Volume rule: one line per failed job, however many items it names."""
+        """J23 — volume rule: one line per failed job, however many items it names."""
         names = ", ".join(f"pkg-{n}" for n in range(40))
         _status, error_message = _summarize_job_outcomes(
             [
@@ -138,6 +139,7 @@ class TestTheOutcomeMessageNamesWhatFailed:
         assert len(error_message.splitlines()) == 2
 
     def test_a_failure_without_a_recorded_reason_still_names_its_job(self) -> None:
+        """J25 — a failure with no recorded reason still names the job it came from."""
         _status, error_message = _summarize_job_outcomes([_job_result("folder_sync", JobStatus.FAILED)])
 
         assert error_message is not None
@@ -149,7 +151,7 @@ class TestCliExitCodeFromSessionStatus:
 
     @pytest.mark.asyncio
     async def test_failed_session_exits_non_zero(self) -> None:
-        """A FAILED session must not exit 0, or a broken sync reads as a success."""
+        """J32 — a FAILED session must not exit 0, or a broken sync reads as a success."""
         session = _session(SessionStatus.FAILED, error_message="snap_sync — 1 snap item(s) failed to converge: bw")
 
         with patch("pcswitcher.cli.Orchestrator") as orchestrator_cls:

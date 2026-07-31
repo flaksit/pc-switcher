@@ -63,6 +63,7 @@ class TestPlanApplySplit:
 
     @pytest.mark.asyncio
     async def test_plan_issues_no_mutating_command(self) -> None:
+        """H2."""
         context, _source, target = make_context(
             source_responses={
                 "apt-mark showmanual": CommandResult(0, SHOWMANUAL_3, ""),
@@ -104,6 +105,7 @@ class TestPlanApplySplit:
 class TestDryRun:
     @pytest.mark.asyncio
     async def test_dry_run_issues_no_mutating_command(self) -> None:
+        """J50."""
         context, _source, target = make_context(
             source_responses={
                 "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
@@ -126,6 +128,7 @@ class TestDryRun:
 class TestContinueOnFailure:
     @pytest.mark.asyncio
     async def test_second_of_three_fails_all_attempted_one_failure_raised(self) -> None:
+        """J19, J20."""
         clean_preview = CommandResult(0, "Inst dummy (1.0)\n", "")
         context, _source, target = make_context(
             source_responses={
@@ -184,6 +187,7 @@ class TestHoldReviewVerbs:
 
     @pytest.mark.asyncio
     async def test_hold_items_get_their_own_group_with_hold_and_unhold_verbs(self) -> None:
+        """B5, H84."""
         context, _source, _target = make_context(
             source_responses={
                 "apt-mark showmanual": CommandResult(0, "pkg-install\npkg-common\n", ""),
@@ -215,7 +219,7 @@ class TestHoldReviewVerbs:
 
     @pytest.mark.asyncio
     async def test_unhold_group_is_removal_direction_and_the_hold_group_is_not(self) -> None:
-        """`ReviewGroup.action` is what `review._REMOVAL_ACTIONS` tests to decide whether a
+        """B6 — `ReviewGroup.action` is what `review._REMOVAL_ACTIONS` tests to decide whether a
         group's checkboxes default to unticked. Undoing a block the user deliberately set
         needs that friction; adding one does not (#208 D3).
         """
@@ -245,6 +249,7 @@ class TestValidate:
     async def test_all_checks_pass_returns_no_errors(self) -> None:
         # fuser exits 1 (not 0) when the lock file is NOT held (man fuser EXIT CODES) —
         # the "all clear" baseline, unlike every other check here where 0 means success.
+        """K45, K70."""
         context, _source, _target = make_context(
             target_responses={"fuser /var/lib/dpkg/lock-frontend": CommandResult(1, "", "")}
         )
@@ -256,6 +261,7 @@ class TestValidate:
 
     @pytest.mark.asyncio
     async def test_apt_mark_unavailable_yields_validation_error(self) -> None:
+        """K43, K44."""
         context, _source, _target = make_context(
             target_responses={"apt-mark --version": CommandResult(127, "", "not found")}
         )
@@ -267,6 +273,7 @@ class TestValidate:
 
     @pytest.mark.asyncio
     async def test_dpkg_lock_held_yields_distinct_validation_error(self) -> None:
+        """K69."""
         context, _source, _target = make_context(
             target_responses={"fuser /var/lib/dpkg/lock-frontend": CommandResult(0, "1234", "")}
         )
@@ -278,7 +285,7 @@ class TestValidate:
 
     @pytest.mark.asyncio
     async def test_source_without_passwordless_sudo_yields_validation_error(self) -> None:
-        """Capturing /etc/apt state needs `sudo find` on the SOURCE.
+        """K41, K46 — Capturing /etc/apt state needs `sudo find` on the SOURCE.
 
         Without this check the capture degrades to empty digest maps and the sync
         reports success having replicated no repository state at all.
@@ -295,7 +302,7 @@ class TestValidate:
 
     @pytest.mark.asyncio
     async def test_target_without_passwordless_sudo_yields_validation_error_naming_the_binaries(self) -> None:
-        """The target error must carry the sudoers remediation, not just a diagnosis:
+        """K42 — The target error must carry the sudoers remediation, not just a diagnosis:
         every binary the job escalates for has to appear so the user can paste one
         working grant rather than discover the missing paths one failed run at a time.
         """
@@ -317,6 +324,7 @@ class TestValidate:
 class TestJobDiscovery:
     @pytest.mark.asyncio
     async def test_orchestrator_resolves_apt_sync_to_apt_sync_job(self) -> None:
+        """K35."""
         config = MagicMock(spec=Configuration)
         config.logging = MagicMock()
         config.logging.file = 10
@@ -379,6 +387,8 @@ class TestRepoRemovalWithheldWhileInUse:
 
     @pytest.mark.asyncio
     async def test_a_repository_a_machine_specific_package_uses_is_not_raised_at_all(self) -> None:
+        """C47, N14 — a repository feeding a package the target marked as its own is not raised
+        as an item at all, rather than offered with a warning."""
         context, _source, _target = make_context(
             source_responses=_NO_PACKAGES,
             target_responses=self._target_responses(
@@ -395,10 +405,13 @@ class TestRepoRemovalWithheldWhileInUse:
         assert "apt:source:vendor.list" not in {d.item_id for d in plan.diffs}
 
     @pytest.mark.asyncio
-    async def test_a_repository_an_ordinary_target_package_uses_is_withheld_too(self) -> None:
-        """Usage is not only about marks: a package present on both machines is invisible to
-        the review for a different reason (nothing about it differs) and still needs its
-        repository.
+    async def test_a_repository_an_ordinary_target_package_uses_is_withheld_too(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """C48, C170 — usage is not only about marks: a package present on both machines is
+        invisible to the review for a different reason (nothing about it differs) and still
+        needs its repository. A file withheld from the review reaches the user nowhere else,
+        so the log names it and what keeps it.
         """
         context, _source, _target = make_context(
             source_responses={
@@ -418,13 +431,18 @@ class TestRepoRemovalWithheldWhileInUse:
         )
         job = AptSyncJob(context)
 
-        plan = await job.plan()
+        with caplog.at_level(1):
+            plan = await job.plan()
 
         assert "apt:source:vendor.list" not in {d.item_id for d in plan.diffs}
+        assert (
+            "keeping repository vendor.list: target-host still installs vendor-tool from it, "
+            "so its deletion is not offered" in caplog.text
+        )
 
     @pytest.mark.asyncio
     async def test_a_repository_only_an_automatic_package_uses_is_withheld(self) -> None:
-        """Counting the manual set alone offered this file for deletion. Nothing here takes
+        """C49 — counting the manual set alone offered this file for deletion. Nothing here takes
         `auto-dep` away with it — `remove_args` runs `apt-get remove`, never `autoremove` —
         and a manual package the user keeps can require it, so deleting its only repository
         strands an installed package.
@@ -449,7 +467,7 @@ class TestRepoRemovalWithheldWhileInUse:
 
     @pytest.mark.asyncio
     async def test_a_repository_only_this_runs_removals_use_is_offered(self) -> None:
-        """Removing a repository together with the packages it feeds is the legitimate case
+        """N13 — Removing a repository together with the packages it feeds is the legitimate case
         the withholding rule must not swallow, so usage is counted after this run's own
         removal candidates.
         """
@@ -476,7 +494,7 @@ class TestRepoRemovalWithheldWhileInUse:
 
     @pytest.mark.asyncio
     async def test_the_machine_specific_package_itself_still_produces_no_diff(self) -> None:
-        """The inertness this detail exists to compensate for must not regress: naming
+        """C52 — the inertness this detail exists to compensate for must not regress: naming
         the package in a removal's detail is NOT the same as re-proposing it (D-08).
         """
         context, _source, _target = make_context(
@@ -500,7 +518,7 @@ class TestRepoRemovalWithheldWhileInUse:
 
     @pytest.mark.asyncio
     async def test_deb822_uris_match_the_policy_origin_despite_the_trailing_slash(self) -> None:
-        """A `.sources` file writes `URIs: https://.../apt/` while `apt-cache policy`
+        """A20, C51 — a `.sources` file writes `URIs: https://.../apt/` while `apt-cache policy`
         prints the origin without the trailing slash. Verbatim comparison would find no
         link at all, and every repository written the first way would be offered for
         deletion with its packages still installed from it.
@@ -522,7 +540,7 @@ class TestRepoRemovalWithheldWhileInUse:
 
     @pytest.mark.asyncio
     async def test_a_repository_nothing_installs_from_is_offered_with_its_urls(self) -> None:
-        """`other-tool` is machine-specific but was installed from a local `.deb`, so its
+        """C43, H58 — `other-tool` is machine-specific but was installed from a local `.deb`, so its
         only origin is dpkg's own record: nothing uses the repository, so it is offered —
         and the URLs are the whole detail.
         """
@@ -545,7 +563,7 @@ class TestRepoRemovalWithheldWhileInUse:
 
     @pytest.mark.asyncio
     async def test_detail_reaches_the_user_through_the_review_entry(self) -> None:
-        """The plan's `ItemDiff` is not what the user reads — `ReviewGroup`/`ReviewEntry`
+        """C44 — the plan's `ItemDiff` is not what the user reads — `ReviewGroup`/`ReviewEntry`
         is. The removal lands in its own unticked removal group carrying the same text.
         """
         context, _source, _target = make_context(
@@ -567,7 +585,7 @@ class TestRepoRemovalWithheldWhileInUse:
 
     @pytest.mark.asyncio
     async def test_one_apt_cache_policy_call_regardless_of_package_count(self) -> None:
-        """The phase-wide batching rule: origins for every counted package come from ONE
+        """C53 — the phase-wide batching rule: origins for every counted package come from ONE
         `apt-cache policy` run, never one per package.
         """
         names = [f"vendor-tool-{i}" for i in range(12)]
@@ -591,7 +609,7 @@ class TestRepoRemovalWithheldWhileInUse:
 
     @pytest.mark.asyncio
     async def test_no_policy_call_when_nothing_is_offered_for_removal(self) -> None:
-        """Nothing extra on the target: the run does not pay for the `apt-cache policy`
+        """C54 — nothing extra on the target: the run does not pay for the `apt-cache policy`
         origin lookup. Machine-specific packages exist, so only the removal gate can be
         what stops it.
 
@@ -667,6 +685,7 @@ class TestAPinNeverSpeaksForAPackage:
 
     @pytest.mark.asyncio
     async def test_a_target_only_package_named_by_a_pin_is_offered_for_removal(self) -> None:
+        """C117 — the pin says nothing about the package: it is an ordinary removal item."""
         job, _target, _reviewer = _pinned_target_only_package_context()
 
         plan = await job.plan()
@@ -676,7 +695,7 @@ class TestAPinNeverSpeaksForAPackage:
 
     @pytest.mark.asyncio
     async def test_the_removal_reaches_the_user_as_an_actionable_review_entry(self) -> None:
-        """`REPORT_ONLY` was the whole problem: it is shown but carries no verb, so it can
+        """C117 — `REPORT_ONLY` was the whole problem: it is shown but carries no verb, so it can
         be neither applied nor recorded skip-always.
         """
         job, _target, reviewer = _pinned_target_only_package_context()
@@ -687,6 +706,7 @@ class TestAPinNeverSpeaksForAPackage:
 
     @pytest.mark.asyncio
     async def test_approving_it_actually_removes_the_package(self) -> None:
+        """C117 — and approving it really removes it."""
         job, target, _reviewer = _pinned_target_only_package_context()
 
         await job.execute()
@@ -695,7 +715,7 @@ class TestAPinNeverSpeaksForAPackage:
 
     @pytest.mark.asyncio
     async def test_no_command_asks_the_target_which_packages_its_pins_name(self) -> None:
-        """The stanza scan is gone with the echo. A pin file still travels as a FILE — its
+        """C118 — the stanza scan is gone with the echo. A pin file still travels as a FILE — its
         digest is captured — but nothing parses package names out of it any more.
         """
         job, target, _reviewer = _pinned_target_only_package_context()
@@ -730,7 +750,7 @@ class TestTwoAnswerRemovals:
 
     @pytest.mark.asyncio
     async def test_repository_and_pin_removals_get_two_separate_two_answer_screens(self) -> None:
-        """One sentinel, two groups: `_build_review_groups` keys on the item class, so a
+        """C110, C122 — one sentinel, two groups: `_build_review_groups` keys on the item class, so a
         repository deletion and a pin deletion never share a list. Apt config keeps the
         ordinary action value and therefore the ordinary three-way path.
         """
@@ -752,7 +772,7 @@ class TestTwoAnswerRemovals:
 
     @pytest.mark.asyncio
     async def test_each_two_answer_screen_is_titled_in_correct_english(self) -> None:
-        """The title names the plural of the OBJECT, not a verb phrase with an `s` glued on
+        """C57, C110 — the title names the plural of the OBJECT, not a verb phrase with an `s` glued on
         the end — "repositorys" is what the latter produces.
         """
         context, _source, _target = self._target_only_repo_state()
@@ -767,7 +787,7 @@ class TestTwoAnswerRemovals:
 
     @pytest.mark.asyncio
     async def test_a_pin_offered_for_deletion_carries_its_whole_content(self) -> None:
-        """A pin filename says nothing about which vendor it favours or by how much, and the
+        """C111, H59 — a pin filename says nothing about which vendor it favours or by how much, and the
         filename is all a decision row can show. The file itself is what the answer needs.
         """
         context, _source, target = self._target_only_repo_state()
@@ -784,7 +804,7 @@ class TestTwoAnswerRemovals:
 
     @pytest.mark.asyncio
     async def test_a_pin_read_that_did_not_answer_fails_the_job(self) -> None:
-        """ADR-022: silence from `cat` is not an empty pin file. An empty block on a deletion
+        """C113 — ADR-022: silence from `cat` is not an empty pin file. An empty block on a deletion
         screen is an approval given off nothing at all."""
         context, _source, target = self._target_only_repo_state()
         target.run_command.side_effect = respond_to(
@@ -803,7 +823,7 @@ class TestTwoAnswerRemovals:
 
     @pytest.mark.asyncio
     async def test_a_repository_offered_for_deletion_carries_no_content_block(self) -> None:
-        """Its URLs are in the detail line; a second whole-file block would be the same fact
+        """C58 — its URLs are in the detail line; a second whole-file block would be the same fact
         twice, and a `.sources` body is mostly fields the user is not deciding on."""
         context, _source, _target = self._target_only_repo_state()
 
@@ -821,7 +841,7 @@ class TestTwoAnswerRemovals:
 
     @pytest.mark.asyncio
     async def test_a_two_answer_group_is_unticked_and_never_offered_permanence(self) -> None:
-        """Both halves of the sentinel's contract, read off the real groups this job builds
+        """C57, C112, H137 — both halves of the sentinel's contract, read off the real groups this job builds
         rather than a hand-made one: unticked because it is a removal direction, never
         promoted because it is not promotable.
         """
@@ -837,7 +857,7 @@ class TestTwoAnswerRemovals:
 
     @pytest.mark.asyncio
     async def test_approving_a_pin_removal_deletes_the_file(self) -> None:
-        """The answer that acts still acts: two answers, not one."""
+        """C114 — the answer that acts still acts: two answers, not one."""
         context, _source, target = _repo_context(
             target_responses={
                 **_NO_PACKAGES,
@@ -853,8 +873,33 @@ class TestTwoAnswerRemovals:
         assert removals == ["sudo rm --force /etc/apt/preferences.d/vendor-pin"]
 
     @pytest.mark.asyncio
+    async def test_a_declined_pin_deletion_is_offered_again_on_the_next_run(self) -> None:
+        """C119 — the two-answer screen has no permanent answer, so a pin the user wants on
+        the target only is impossible: declining records nothing, and a second run over the
+        same two machines offers it again.
+        """
+        responses = {
+            **_NO_PACKAGES,
+            _PIN_DIGEST_CMD: CommandResult(0, sha256_line("p9", "vendor-pin"), ""),
+            "cat /etc/apt/preferences.d/vendor-pin": CommandResult(0, _VENDOR_PIN, ""),
+        }
+        context, _source, target = _repo_context(target_responses=responses)
+        first = AptSyncJob(context)
+        install_reviewer(first, {})
+
+        await first.execute()
+
+        assert not any("mv --force" in cmd and "apt.decisions" in cmd for cmd in all_calls(target))
+        assert not any(cmd.startswith("sudo rm --force") for cmd in all_calls(target))
+
+        context, _source, _target = _repo_context(target_responses=responses)
+        second_plan = await AptSyncJob(context).plan()
+
+        assert "apt:pin:vendor-pin" in {diff.item_id for diff in second_plan.diffs}
+
+    @pytest.mark.asyncio
     async def test_the_repository_goes_before_the_pin_that_prefers_it(self) -> None:
-        """Deletion order is the reverse of the write order (§3.3 step 5): a pin naming an
+        """C60 — deletion order is the reverse of the write order (§3.3 step 5): a pin naming an
         origin apt no longer has is a worse intermediate state than a repository nothing
         prefers.
         """
@@ -886,7 +931,7 @@ class TestAptConfigVocabulary:
 
     @staticmethod
     def _all_three_directions() -> JobContext:
-        """One apt-config file per direction: `10add` only on the source, `20update` on
+        """C120, C121, C122 — one apt-config file per direction: `10add` only on the source, `20update` on
         both with different bytes, `30delete` only on the target."""
         context, _source, _target = make_context(
             source_responses={
@@ -906,6 +951,7 @@ class TestAptConfigVocabulary:
 
     @pytest.mark.asyncio
     async def test_each_direction_names_the_config_file_not_a_package(self) -> None:
+        """C120."""
         context = self._all_three_directions()
 
         plan = await AptSyncJob(context).plan()
@@ -919,7 +965,7 @@ class TestAptConfigVocabulary:
 
     @pytest.mark.asyncio
     async def test_no_apt_config_group_claims_to_be_about_packages(self) -> None:
-        """The measured defect, pinned so it cannot come back through the fallback verb."""
+        """C123, H85 — the measured defect, pinned so it cannot come back through the fallback verb."""
         context = self._all_three_directions()
 
         plan = await AptSyncJob(context).plan()
@@ -937,7 +983,7 @@ class TestRepositoryConflicts:
 
     @pytest.mark.asyncio
     async def test_a_changed_repository_with_no_machine_specific_package_is_overwritten_silently(self) -> None:
-        """The ordinary case, and the reason the trigger is narrow: two machines whose
+        """C27 — the ordinary case, and the reason the trigger is narrow: two machines whose
         repository definitions have drifted are meant to converge, not to negotiate.
         """
         context, _source, _target = differing_repo_context(recorded="machine_specific: {}\n")
@@ -948,7 +994,7 @@ class TestRepositoryConflicts:
 
     @pytest.mark.asyncio
     async def test_a_changed_repository_feeding_a_machine_specific_package_asks_and_shows_both_versions(self) -> None:
-        """The entry carries both whole files, the target's first — the user asked for the
+        """C28, C29, H56 — the entry carries both whole files, the target's first — the user asked for the
         two versions, not a unified diff — and offers exactly the two answers.
         """
         context, _source, _target = differing_repo_context(recorded=decision_file("apt:package:curl"))
@@ -963,6 +1009,7 @@ class TestRepositoryConflicts:
 
     @pytest.mark.asyncio
     async def test_overwriting_a_conflict_writes_the_sources_version(self) -> None:
+        """C34, H26 — answering "overwrite" writes the source's version of the file."""
         context, _source, target = differing_repo_context(recorded=decision_file("apt:package:curl"))
         job = AptSyncJob(context)
         install_reviewer(job, {"apt:conflict:vendor.list": Decision.APPLY})
@@ -975,7 +1022,7 @@ class TestRepositoryConflicts:
 
     @pytest.mark.asyncio
     async def test_skipping_a_conflict_writes_nothing_and_fails_the_package_that_needed_it(self) -> None:
-        """The coupling §4.3 requires: a skipped conflict is not the same as no conflict.
+        """C35, H27 — the coupling §4.3 requires: a skipped conflict is not the same as no conflict.
         The package the user ticked depends on that file for its origin, so installing it
         anyway would deliver the wrong vendor's software — exactly what D-34 exists to stop.
         """
@@ -1015,8 +1062,100 @@ class TestRepositoryConflicts:
         assert not real_installs(target)
 
     @pytest.mark.asyncio
+    async def test_skipping_a_conflict_fails_every_package_whose_origin_needed_it(self) -> None:
+        """C171 — "every approved package" is a set, not one package: both installs took
+        their origin from `vendor.list`, so declining the overwrite fails both, each naming
+        the file, and neither is installed from the target's own version of the repository.
+        """
+        context, _source, target = _repo_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\npkg-b\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\npkg-b\t1.0\n", ""),
+                "apt-cache policy": CommandResult(
+                    0,
+                    _policy_block("pkg-a", "https://vendor.example.com/apt")
+                    + _policy_block("pkg-b", "https://vendor.example.com/apt"),
+                    "",
+                ),
+                _SOURCE_SCAN_CMD: CommandResult(0, _scan_line("vendor.list", _CHANGED_VENDOR), ""),
+                "find /etc/apt/sources.list.d": CommandResult(0, sha256_line("d-new", "vendor.list"), ""),
+                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "vendor.gpg"), ""),
+                "cat /etc/apt/sources.list.d/vendor.list": CommandResult(0, _CHANGED_VENDOR, ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "curl\n", ""),
+                "dpkg-query": CommandResult(0, "curl\t8.0\n", ""),
+                _SOURCE_SCAN_CMD: CommandResult(0, _scan_line("vendor.list", _VENDOR_LIST), ""),
+                "find /etc/apt/sources.list.d": CommandResult(0, sha256_line("d-old", "vendor.list"), ""),
+                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "vendor.gpg"), ""),
+                "cat /etc/apt/sources.list.d/vendor.list": CommandResult(0, _VENDOR_LIST, ""),
+                "apt.decisions.yaml": CommandResult(0, decision_file("apt:package:curl"), ""),
+                "apt-cache policy": CommandResult(0, _policy_block("curl", "https://vendor.example.com/apt"), ""),
+            },
+        )
+        job = AptSyncJob(context)
+        install_reviewer(job, {"apt:package:pkg-a": Decision.APPLY, "apt:package:pkg-b": Decision.APPLY})
+
+        with pytest.raises(PackageItemFailures) as exc_info:
+            await job.execute()
+
+        failures = {diff.item_id: message for diff, message in exc_info.value.failures}
+        assert set(failures) == {"apt:package:pkg-a", "apt:package:pkg-b"}
+        for message in failures.values():
+            assert "/etc/apt/sources.list.d/vendor.list" in message
+        assert not real_installs(target)
+
+    @pytest.mark.asyncio
+    async def test_a_differing_repository_no_install_would_write_raises_no_question(self) -> None:
+        """C36 — the gate D-37 puts in front of the question: `vendor-tool` is on both
+        machines, so no install proposes to write `vendor.list`, and a file this run would
+        not write is not a decision the user could act on. Nothing is asked, nothing is
+        written, and neither copy is even read.
+        """
+        context, source, target = _repo_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "vendor-tool\n", ""),
+                "dpkg-query": CommandResult(0, "vendor-tool\t1.0\n", ""),
+                "apt-cache policy": CommandResult(
+                    0, _policy_block("vendor-tool", "https://vendor.example.com/apt"), ""
+                ),
+                _SOURCE_SCAN_CMD: CommandResult(0, _scan_line("vendor.list", _CHANGED_VENDOR), ""),
+                "find /etc/apt/sources.list.d": CommandResult(0, sha256_line("d-new", "vendor.list"), ""),
+                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "vendor.gpg"), ""),
+                "cat /etc/apt/sources.list.d/vendor.list": CommandResult(0, _CHANGED_VENDOR, ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "vendor-tool\ncurl\n", ""),
+                "dpkg-query": CommandResult(0, "vendor-tool\t1.0\ncurl\t8.0\n", ""),
+                _SOURCE_SCAN_CMD: CommandResult(0, _scan_line("vendor.list", _VENDOR_LIST), ""),
+                "find /etc/apt/sources.list.d": CommandResult(0, sha256_line("d-old", "vendor.list"), ""),
+                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "vendor.gpg"), ""),
+                "cat /etc/apt/sources.list.d/vendor.list": CommandResult(0, _VENDOR_LIST, ""),
+                "apt.decisions.yaml": CommandResult(0, decision_file("apt:package:curl"), ""),
+                "apt-cache policy": CommandResult(
+                    0, _policy_block("vendor-tool", "https://vendor.example.com/apt"), ""
+                ),
+            },
+        )
+        job = AptSyncJob(context)
+        install_reviewer(job, {})
+
+        await job.execute()
+
+        assert job._accepted_plan is not None  # pyright: ignore[reportPrivateUsage]
+        assert not any(  # pyright: ignore[reportPrivateUsage]
+            group.action == REPO_CONFLICT_REVIEW_ACTION
+            for group in job._accepted_plan.groups  # pyright: ignore[reportPrivateUsage]
+        )
+        assert not any(
+            "sudo install" in cmd and cmd.endswith("/etc/apt/sources.list.d/vendor.list") for cmd in all_calls(target)
+        )
+        for machine in (source, target):
+            assert not any("cat /etc/apt/sources.list.d/vendor.list" in cmd for cmd in all_calls(machine))
+
+    @pytest.mark.asyncio
     async def test_the_conflict_computation_costs_one_batched_policy_call(self) -> None:
-        """Both `/etc/apt` follow-ups share one computation (§4.4): a run whose repository
+        """C39 — both `/etc/apt` follow-ups share one computation (§4.4): a run whose repository
         deletion has to be judged AND whose conflict has to be triggered asks the target's
         apt about its own packages once, not twice.
         """
@@ -1061,7 +1200,7 @@ class TestOneReviewPerRun:
 
     @pytest.mark.asyncio
     async def test_a_package_the_target_had_no_candidate_for_is_installed_in_one_review(self) -> None:
-        """At plan time the target's apt reports no candidate at all; the repository this
+        """A51 — At plan time the target's apt reports no candidate at all; the repository this
         run installs supplies one. The package is classified from the SOURCE's origin and
         the file declaring it, so its actionability never depended on a repository this run
         had not written yet — and one screen is enough.
@@ -1108,7 +1247,7 @@ class TestOneReviewPerRun:
 
     @pytest.mark.asyncio
     async def test_a_run_that_rewrites_etc_apt_still_reviews_exactly_once(self) -> None:
-        """The general property, asserted against the run shape that used to trigger the
+        """H13, H36 — The general property, asserted against the run shape that used to trigger the
         second screen: the pin the user is deleting really is deleted, `/etc/apt` really is
         refreshed, and the user is still asked exactly once.
         """

@@ -121,6 +121,9 @@ class TestTheESMAttachmentGate:
 
     @pytest.mark.asyncio
     async def test_an_unattached_target_is_asked_about_before_anything_is_written(self) -> None:
+        """C127, C128, H18, H54 — the question precedes the job's first write and every other apt
+        question, and it names both files, both commands and the tutorial.
+        """
         job, _target, reviewer = _esm_job(
             pro_status=[CommandResult(0, _PRO_UNATTACHED, ""), CommandResult(0, _PRO_ATTACHED, "")],
             gate_answers=[True],
@@ -141,6 +144,7 @@ class TestTheESMAttachmentGate:
 
     @pytest.mark.asyncio
     async def test_the_gate_offers_exactly_two_answers_and_names_both_of_them(self) -> None:
+        """C129 — a title naming the target, and exactly the two answers."""
         job, _target, reviewer = _esm_job(
             pro_status=[CommandResult(0, _PRO_UNATTACHED, ""), CommandResult(0, _PRO_ATTACHED, "")],
             gate_answers=[True],
@@ -155,6 +159,7 @@ class TestTheESMAttachmentGate:
 
     @pytest.mark.asyncio
     async def test_choosing_skip_raises_job_skipped_and_writes_nothing(self) -> None:
+        """C132, C133, C134, J10 — skipping withholds the WHOLE job: no review, and not one write."""
         job, target, reviewer = _esm_job(pro_status=CommandResult(0, _PRO_UNATTACHED, ""), gate_answers=[False])
 
         with pytest.raises(JobSkipped) as excinfo:
@@ -166,7 +171,7 @@ class TestTheESMAttachmentGate:
 
     @pytest.mark.asyncio
     async def test_a_non_interactive_run_skips_the_whole_job(self) -> None:
-        """The user's ruling, replacing an earlier fallback that withheld only the two files:
+        """C135, J11 — the user's ruling, replacing an earlier fallback that withheld only the two files:
         `/etc/apt/preferences.d` always-syncs with no derivation predicate, so the source's
         ESM pins would land on a target without the sources they name.
         """
@@ -184,6 +189,7 @@ class TestTheESMAttachmentGate:
 
     @pytest.mark.asyncio
     async def test_attach_now_re_probes_and_continues_when_the_target_became_attached(self) -> None:
+        """C130 — the claim is re-probed rather than believed, and the sources then land."""
         job, target, _reviewer = _esm_job(
             pro_status=[CommandResult(0, _PRO_UNATTACHED, ""), CommandResult(0, _PRO_ATTACHED, "")],
             gate_answers=[True],
@@ -198,7 +204,7 @@ class TestTheESMAttachmentGate:
 
     @pytest.mark.asyncio
     async def test_attach_now_can_be_answered_any_number_of_times(self) -> None:
-        """Unbounded by the user's ruling: re-probing costs nothing and the exit is skip."""
+        """C131 — unbounded by the user's ruling: re-probing costs nothing and the exit is skip."""
         attempts = 10
         job, target, reviewer = _esm_job(
             pro_status=CommandResult(0, _PRO_UNATTACHED, ""),
@@ -214,6 +220,8 @@ class TestTheESMAttachmentGate:
 
     @pytest.mark.asyncio
     async def test_esm_sources_are_written_to_an_attached_target(self, caplog: pytest.LogCaptureFixture) -> None:
+        """C137, N18 — an attached target is asked nothing, probed once, and written to without
+        a warning."""
         job, target, reviewer = _esm_job(pro_status=CommandResult(0, _PRO_ATTACHED, ""))
 
         with caplog.at_level(1):
@@ -228,7 +236,7 @@ class TestTheESMAttachmentGate:
 
     @pytest.mark.asyncio
     async def test_a_source_with_no_esm_sources_never_probes_at_all(self) -> None:
-        """The trigger is a pending write, not the target's Pro state: a source with no ESM
+        """C138 — the trigger is a pending write, not the target's Pro state: a source with no ESM
         files has nothing to gate, so the run costs no probe and asks no question.
         """
         job, target, reviewer = _esm_job(pro_status=CommandResult(0, _PRO_UNATTACHED, ""), source_esm=())
@@ -240,7 +248,7 @@ class TestTheESMAttachmentGate:
 
     @pytest.mark.asyncio
     async def test_an_esm_file_the_target_already_matches_is_not_gated(self) -> None:
-        """Nothing to write is nothing to ask about. The target holds the same bytes, so the
+        """C139 — nothing to write is nothing to ask about. The target holds the same bytes, so the
         always-sync bucket skips the file and the gate must skip the question.
         """
         listing = sha256_line("d0", "ubuntu.sources") + sha256_line("e0", _ESM_APPS)
@@ -277,7 +285,7 @@ class TestTheESMAttachmentGate:
         ],
     )
     async def test_an_unreadable_pro_probe_is_treated_as_unattached(self, probe: CommandResult) -> None:
-        """False asks a question the user can answer; True writes files that break the
+        """C140 — False asks a question the user can answer; True writes files that break the
         target's next install. The recoverable answer is the default (ADR-022 D-01).
         """
         job, target, reviewer = _esm_job(pro_status=probe, gate_answers=[False])
@@ -291,7 +299,7 @@ class TestTheESMAttachmentGate:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("payload", [_PRO_UNATTACHED, _PRO_ATTACHED])
     async def test_the_probe_payload_is_never_logged(self, payload: str, caplog: pytest.LogCaptureFixture) -> None:
-        """`pro status` names the subscriber. Only the parsed boolean may leave the probe."""
+        """C141 — `pro status` names the subscriber. Only the parsed boolean may leave the probe."""
         job, _target, reviewer = _esm_job(pro_status=CommandResult(0, payload, ""), gate_answers=[False])
 
         with caplog.at_level(1), contextlib.suppress(JobSkipped):
@@ -304,7 +312,7 @@ class TestTheESMAttachmentGate:
 
     @pytest.mark.asyncio
     async def test_a_dry_run_never_prompts_about_attachment(self, caplog: pytest.LogCaptureFixture) -> None:
-        """A rehearsal must not make the user go and attach a machine, and ADR-014 makes the
+        """C136, J61 — a rehearsal must not make the user go and attach a machine, and ADR-014 makes the
         preview the whole report — so it has to say the real run would skip the job, not just
         that two files would be held back.
         """

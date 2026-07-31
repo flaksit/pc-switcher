@@ -135,6 +135,7 @@ def make_orchestrator(
 class TestHoldEngaged:
     @pytest.mark.asyncio
     async def test_hold_set_on_both_hosts_when_snap_sync_enabled(self) -> None:
+        """E72, E88 — both machines are paused, with a timed value computed on each host's clock."""
         orchestrator, source, target = make_orchestrator(snap_sync_enabled=True)
 
         await orchestrator._hold_snap_autorefresh()  # pyright: ignore[reportPrivateUsage]
@@ -150,6 +151,7 @@ class TestHoldEngaged:
 
     @pytest.mark.asyncio
     async def test_capture_is_read_only_and_precedes_the_set(self) -> None:
+        """E73 — the existing policy is read, read-only, before anything is written."""
         orchestrator, source, _target = make_orchestrator(snap_sync_enabled=True)
 
         await orchestrator._hold_snap_autorefresh()  # pyright: ignore[reportPrivateUsage]
@@ -161,6 +163,7 @@ class TestHoldEngaged:
 
     @pytest.mark.asyncio
     async def test_hold_not_set_when_snap_sync_disabled(self) -> None:
+        """E92, K22 — nothing is suspended when `snap_sync` is not enabled."""
         orchestrator, source, target = make_orchestrator(snap_sync_enabled=False)
 
         await orchestrator._hold_snap_autorefresh()  # pyright: ignore[reportPrivateUsage]
@@ -171,6 +174,7 @@ class TestHoldEngaged:
 
     @pytest.mark.asyncio
     async def test_hold_skipped_in_dry_run(self) -> None:
+        """E91 — nothing is suspended in a dry run."""
         orchestrator, source, target = make_orchestrator(snap_sync_enabled=True, dry_run=True)
 
         await orchestrator._hold_snap_autorefresh()  # pyright: ignore[reportPrivateUsage]
@@ -194,6 +198,7 @@ class TestCaptureIsPrivileged:
 
     @pytest.mark.asyncio
     async def test_capture_reads_under_sudo_on_both_hosts(self) -> None:
+        """E74 — the read is privileged, so a permission failure cannot read as "no policy"."""
         orchestrator, source, target = make_orchestrator(snap_sync_enabled=True)
 
         await orchestrator._hold_snap_autorefresh()  # pyright: ignore[reportPrivateUsage]
@@ -205,7 +210,7 @@ class TestCaptureIsPrivileged:
 
     @pytest.mark.asyncio
     async def test_a_denied_read_is_not_reported_as_no_hold(self) -> None:
-        """An "access denied" read must not collapse into the same None a genuinely unset
+        """E75 — an "access denied" read must not collapse into the same None a genuinely unset
         option produces — the two lead to opposite restore behaviour.
         """
         denied = {"snap get system refresh.hold": CommandResult(1, "", HOLD_DENIED_STDERR)}
@@ -232,6 +237,7 @@ class TestUserHoldIsNeverDestroyed:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("prior", ["2026-07-24T18:00:00Z", "forever"])
     async def test_a_prior_hold_survives_the_sync_window(self, prior: str) -> None:
+        """E76, E77 — a machine's own hold, timed or indefinite, is back exactly as it was."""
         orchestrator, source, target = make_orchestrator(
             snap_sync_enabled=True, source_executor=make_snapd(prior), target_executor=make_snapd(prior)
         )
@@ -247,6 +253,7 @@ class TestUserHoldIsNeverDestroyed:
 
     @pytest.mark.asyncio
     async def test_only_a_genuinely_absent_hold_is_cleared(self) -> None:
+        """E78 — with no prior hold, the run's own suspension is cleared and nothing else is."""
         orchestrator, source, _target = make_orchestrator(snap_sync_enabled=True, source_executor=make_snapd(None))
 
         await orchestrator._hold_snap_autorefresh()  # pyright: ignore[reportPrivateUsage]
@@ -257,7 +264,7 @@ class TestUserHoldIsNeverDestroyed:
 
     @pytest.mark.asyncio
     async def test_an_unreadable_hold_is_never_written_in_the_first_place(self) -> None:
-        """`PKG-FR-SNAP-REFRESH-PAUSE`: a host whose prior policy could not be read is left
+        """E80 — E80, `PKG-FR-SNAP-REFRESH-PAUSE`: a host whose prior policy could not be read is left
         untouched. Declining to CLEAR it at cleanup is not enough — the machine has already
         lost its own policy by then, since a timed hold expires into "no hold at all".
         """
@@ -274,7 +281,7 @@ class TestUserHoldIsNeverDestroyed:
 
     @pytest.mark.asyncio
     async def test_the_readable_host_is_still_paused_when_the_other_is_not(self) -> None:
-        """Per host, not per run: one unreadable machine must not cost the other its pause."""
+        """E82 — per host, not per run: one unreadable machine must not cost the other its pause."""
         denied = {"snap get system refresh.hold": CommandResult(1, "", HOLD_DENIED_STDERR)}
         orchestrator, source, target = make_orchestrator(
             snap_sync_enabled=True, source_responses=denied, target_executor=make_snapd(None)
@@ -287,7 +294,7 @@ class TestUserHoldIsNeverDestroyed:
 
     @pytest.mark.asyncio
     async def test_an_unreadable_hold_is_left_alone_rather_than_cleared(self) -> None:
-        """Cleanup's half of the same rule: with no pre-sync value, clearing the option
+        """E81 — cleanup's half of the same rule: with no pre-sync value, clearing the option
         would destroy an unknown hold, so it is left as it was found.
         """
         denied = {"snap get system refresh.hold": CommandResult(1, "", HOLD_DENIED_STDERR)}
@@ -311,6 +318,7 @@ class TestApplyIsVerified:
 
     @pytest.mark.asyncio
     async def test_no_warning_when_the_hold_took_effect(self) -> None:
+        """E87 — everything works: no warning at all."""
         orchestrator, _source, _target = make_orchestrator(
             snap_sync_enabled=True, source_executor=make_snapd(None), target_executor=make_snapd(None)
         )
@@ -321,7 +329,7 @@ class TestApplyIsVerified:
 
     @pytest.mark.asyncio
     async def test_warns_when_the_hold_did_not_stick(self) -> None:
-        """`snap set` succeeds, yet the option still reads unset afterwards."""
+        """E84 — `snap set` succeeds, yet the option still reads unset afterwards."""
         never_set = {"snap get system refresh.hold": CommandResult(1, "", HOLD_UNSET_STDERR)}
         orchestrator, _source, _target = make_orchestrator(
             snap_sync_enabled=True, source_responses=never_set, target_responses=never_set
@@ -335,7 +343,7 @@ class TestApplyIsVerified:
 
     @pytest.mark.asyncio
     async def test_warns_when_the_read_back_is_denied(self) -> None:
-        """The capture answers, so the hold IS applied; only the read-back is denied."""
+        """E85 — the capture answers, so the hold IS applied; only the read-back is denied."""
 
         def _deny_after_the_capture() -> Callable[..., CommandResult]:
             reads = {"n": 0}
@@ -363,7 +371,7 @@ class TestApplyIsVerified:
 
     @pytest.mark.asyncio
     async def test_a_read_back_that_raises_never_fails_the_sync(self) -> None:
-        """The pause is a race guard; a check on it must not be able to end the run."""
+        """E86 — the pause is a race guard; a check on it must not be able to end the run."""
         calls = {"n": 0}
 
         def _raise_after_the_set(cmd: str, **_: object) -> CommandResult:
@@ -387,6 +395,7 @@ class TestApplyIsVerified:
 class TestRestore:
     @pytest.mark.asyncio
     async def test_restore_unsets_when_no_prior_hold(self) -> None:
+        """E78 — the cleanup half: with no prior hold, the option is cleared."""
         # `snap get` returns non-zero for an unset option -> no prior hold captured.
         no_hold = {"snap get system refresh.hold": CommandResult(1, "", 'has no "refresh.hold"')}
         orchestrator, source, target = make_orchestrator(
@@ -402,7 +411,7 @@ class TestRestore:
 
     @pytest.mark.asyncio
     async def test_restore_preserves_prior_hold_per_host(self) -> None:
-        """A hold the user already set is captured and restored EXACTLY — a timestamp on the
+        """E79 — a hold the user already set is captured and restored EXACTLY — a timestamp on the
         source, the literal `forever` on the target (decision 4: do not clobber it).
         """
         prior_ts = "2026-07-24T18:00:00Z"
@@ -425,6 +434,7 @@ class TestRestore:
 
     @pytest.mark.asyncio
     async def test_restore_is_noop_when_no_hold_engaged(self) -> None:
+        """E93 — a run that never engaged the pause issues no command at cleanup."""
         orchestrator, source, target = make_orchestrator(snap_sync_enabled=False)
 
         await orchestrator._restore_snap_autorefresh()  # pyright: ignore[reportPrivateUsage]
@@ -434,6 +444,7 @@ class TestRestore:
 
     @pytest.mark.asyncio
     async def test_restore_is_idempotent(self) -> None:
+        """E94 — cleanup twice restores once."""
         orchestrator, _source, target = make_orchestrator(snap_sync_enabled=True)
 
         await orchestrator._hold_snap_autorefresh()  # pyright: ignore[reportPrivateUsage]
@@ -447,7 +458,7 @@ class TestRestore:
 class TestHoldDoesNotBlockConvergence:
     @pytest.mark.asyncio
     async def test_hold_only_writes_refresh_hold_never_a_snap_refresh_command(self) -> None:
-        """The hold writes the auto-refresh gate (`refresh.hold`) only; it issues no
+        """E90 — the hold writes the auto-refresh gate (`refresh.hold`) only; it issues no
         `snap install/refresh --revision` command, so it cannot interfere with (nor
         substitute for) snap_sync's own manual convergence.
         """
@@ -488,6 +499,7 @@ class TestConfirmEachCommandGate:
 
     @pytest.mark.asyncio
     async def test_apply_and_restore_declare_mutations_on_both_hosts(self) -> None:
+        """E73, E95, J148, J156 — the pause and the restore are shown as changes; the policy read is not."""
         orchestrator, source, target = make_orchestrator(snap_sync_enabled=True)
 
         await orchestrator._hold_snap_autorefresh()  # pyright: ignore[reportPrivateUsage]
@@ -502,7 +514,7 @@ class TestConfirmEachCommandGate:
 
     @pytest.mark.asyncio
     async def test_restore_names_the_prior_value_it_is_writing_back(self) -> None:
-        """Skipping the restore loses a hold the user set themselves, so the prompt has to
+        """E96, J157 — skipping the restore loses a hold the user set themselves, so the prompt has to
         say which value is at stake — not just "restore".
         """
         orchestrator, source, _target = make_orchestrator(
@@ -517,6 +529,7 @@ class TestConfirmEachCommandGate:
 
     @pytest.mark.asyncio
     async def test_abort_at_restore_is_not_swallowed_by_the_best_effort_handler(self) -> None:
+        """E97, J158 — declining the restore at the gate stops the write rather than being absorbed."""
         orchestrator, source, _target = make_orchestrator(snap_sync_enabled=True)
         await orchestrator._hold_snap_autorefresh()  # pyright: ignore[reportPrivateUsage]
 
@@ -526,7 +539,7 @@ class TestConfirmEachCommandGate:
 
     @pytest.mark.asyncio
     async def test_cleanup_honours_the_abort_but_still_releases_resources(self) -> None:
-        """An abort at the restore stops the write and nothing else: a confirmation prompt
+        """E97 — an abort at the restore stops the write and nothing else: a confirmation prompt
         must never be able to leak the target lock or the SSH connection.
         """
         orchestrator, source, target = make_orchestrator(snap_sync_enabled=True)
@@ -547,8 +560,39 @@ class TestConfirmEachCommandGate:
         source_lock.release.assert_called_once()
 
 
+class TestCleanupOrder:
+    @pytest.mark.asyncio
+    async def test_the_restore_runs_before_the_connection_it_needs_is_torn_down(self) -> None:
+        """E99 — the target's restore travels over the SSH connection `_cleanup` also closes.
+        Closing first would turn every run's restore into a connection error and leave
+        Nomad paused until the timed hold lapsed, so the order is pinned rather than left
+        to the position of two statements.
+        """
+        orchestrator, source, target = make_orchestrator(snap_sync_enabled=True)
+        await orchestrator._hold_snap_autorefresh()  # pyright: ignore[reportPrivateUsage]
+
+        order: list[str] = []
+
+        def _record_restore(cmd: str, **_: object) -> CommandResult:
+            if "snap set system refresh.hold" in cmd:
+                order.append("restore")
+            return CommandResult(exit_code=0, stdout="", stderr="")
+
+        for ex in (source, target):
+            ex.run_command = AsyncMock(side_effect=_record_restore)
+            ex.terminate_all_processes = AsyncMock()
+        connection = MagicMock()
+        connection.kill_all_remote_processes = AsyncMock()
+        connection.disconnect = AsyncMock(side_effect=lambda: order.append("disconnect"))
+        orchestrator._connection = connection  # pyright: ignore[reportPrivateUsage]
+
+        await orchestrator._cleanup()  # pyright: ignore[reportPrivateUsage]
+
+        assert order == ["restore", "restore", "disconnect"]
+
+
 class TestWarningsNameTheMachines:
-    """`PKG-FR-NAME-THE-MACHINES`: a warning names the machine it concerns by hostname.
+    """E100, `PKG-FR-NAME-THE-MACHINES`: a warning names the machine it concerns by hostname.
 
     The end-of-run summary reprints every captured warning on its own, long after the line
     that maps each role to a machine, so "not paused on the target" leaves the reader to
@@ -567,6 +611,7 @@ class TestWarningsNameTheMachines:
 
     @pytest.mark.asyncio
     async def test_an_unreadable_hold_names_the_machine_it_leaves_unpaused(self) -> None:
+        """E100 — the unreadable-policy warning names the machine it leaves unpaused."""
         denied = {"snap get system refresh.hold": CommandResult(1, "", HOLD_DENIED_STDERR)}
         orchestrator, _source, _target = make_orchestrator(
             snap_sync_enabled=True, source_responses=denied, target_responses=denied
@@ -580,6 +625,7 @@ class TestWarningsNameTheMachines:
 
     @pytest.mark.asyncio
     async def test_a_failed_pause_names_the_machine(self) -> None:
+        """E83, E100 — a pause that failed names the machine, and the run continues."""
         refuses = {"snap set system refresh.hold": CommandResult(1, "", "error: cannot set")}
         orchestrator, _source, _target = make_orchestrator(
             snap_sync_enabled=True, source_responses=refuses, target_responses=refuses
@@ -593,6 +639,7 @@ class TestWarningsNameTheMachines:
 
     @pytest.mark.asyncio
     async def test_a_hold_that_did_not_stick_names_the_machine(self) -> None:
+        """E84, E100 — a pause that did not stick names the machine."""
         never_set = {"snap get system refresh.hold": CommandResult(1, "", HOLD_UNSET_STDERR)}
         orchestrator, _source, _target = make_orchestrator(
             snap_sync_enabled=True, source_responses=never_set, target_responses=never_set
@@ -606,7 +653,7 @@ class TestWarningsNameTheMachines:
 
     @pytest.mark.asyncio
     async def test_a_pause_that_cannot_be_confirmed_names_the_machine(self) -> None:
-        """The capture answers, so the hold is written; only the read-back is denied."""
+        """E85, E100 — the capture answers, so the hold is written; only the read-back is denied."""
 
         def _deny_the_read_back() -> Callable[..., CommandResult]:
             reads = {"n": 0}
@@ -634,6 +681,7 @@ class TestWarningsNameTheMachines:
 
     @pytest.mark.asyncio
     async def test_an_option_left_alone_at_restore_names_the_machine(self) -> None:
+        """E100 — the left-alone warning at restore names the machine."""
         denied = {"snap get system refresh.hold": CommandResult(1, "", HOLD_DENIED_STDERR)}
         orchestrator, _source, _target = make_orchestrator(
             snap_sync_enabled=True, source_responses=denied, target_responses=denied
@@ -648,6 +696,7 @@ class TestWarningsNameTheMachines:
 
     @pytest.mark.asyncio
     async def test_a_failed_restore_names_the_machine(self) -> None:
+        """E98, E100 — a restore command that failed names the machine."""
         orchestrator, source, target = make_orchestrator(
             snap_sync_enabled=True, source_executor=make_snapd(None), target_executor=make_snapd(None)
         )
@@ -665,6 +714,7 @@ class TestWarningsNameTheMachines:
 
     @pytest.mark.asyncio
     async def test_a_restore_that_raises_names_the_machine(self) -> None:
+        """E98, E100 — a restore whose connection is already gone names the machine."""
         orchestrator, source, target = make_orchestrator(
             snap_sync_enabled=True, source_executor=make_snapd(None), target_executor=make_snapd(None)
         )

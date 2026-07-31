@@ -88,7 +88,7 @@ class TestAPackageTheTargetCannotResolveYet:
 
     @pytest.mark.asyncio
     async def test_plan_survives_a_candidate_the_targets_apt_cannot_locate(self) -> None:
-        """The phase's flagship scenario: `gh` comes from `cli.github.com` on the source, the
+        """A30 — The phase's flagship scenario: `gh` comes from `cli.github.com` on the source, the
         target has never heard the name, and the batched rehearsal must not abort the run
         before the user is shown anything.
         """
@@ -115,7 +115,7 @@ class TestAPackageTheTargetCannotResolveYet:
 
     @pytest.mark.asyncio
     async def test_an_explicit_no_candidate_is_excluded_on_the_same_evidence(self) -> None:
-        """apt saying `Candidate: (none)` and apt printing no block at all are different
+        """A31 — apt saying `Candidate: (none)` and apt printing no block at all are different
         answers everywhere else in this job, and the same one here: neither names a version
         the target could install, so neither can enter the rehearsal.
         """
@@ -208,7 +208,7 @@ class TestOriginClassification:
 
     @pytest.mark.asyncio
     async def test_same_origin_install_derives_no_repository_write(self) -> None:
-        """Class 1. The target's own candidate already comes from a place the source uses,
+        """A26, A28, C21 — class 1. The target's own candidate already comes from a place the source uses,
         so nothing about `/etc/apt` has to change for the install to be faithful.
         """
         context, _source, _target = make_context(
@@ -234,7 +234,7 @@ class TestOriginClassification:
 
     @pytest.mark.asyncio
     async def test_different_origin_install_derives_the_sources_own_repository(self) -> None:
-        """Class 2, the Firefox case. The target HAS a candidate for the name — Ubuntu's
+        """A29, C22 — class 2, the Firefox case. The target HAS a candidate for the name — Ubuntu's
         epoch-1 transitional package — and it is not the source's software. Name-only
         matching read this as an ordinary install and shipped the other vendor's package.
         """
@@ -264,7 +264,7 @@ class TestOriginClassification:
 
     @pytest.mark.asyncio
     async def test_unreplicable_origin_is_report_only_naming_the_origin(self) -> None:
-        """Class 4. The repository the package came from is gone from the source's own
+        """A36, A64, C24 — class 4. The repository the package came from is gone from the source's own
         `/etc/apt`, so there is no file to hand the target and no honest install to offer.
         """
         context, _source, target = make_context(
@@ -287,7 +287,7 @@ class TestOriginClassification:
 
     @pytest.mark.asyncio
     async def test_a_dangling_keyring_makes_the_package_unavailable(self) -> None:
-        """Class 4's other half. The source declares the repository but references a key it
+        """A34, C86 — class 4's other half. The source declares the repository but references a key it
         does not have, so the file cannot be written and the origin cannot be delivered —
         and it is the PACKAGE that says so, because the package is what the user decided.
         """
@@ -310,7 +310,7 @@ class TestOriginClassification:
 
     @pytest.mark.asyncio
     async def test_one_writable_serving_file_is_enough(self) -> None:
-        """A package served by both a sound repository file and a broken one is replicable:
+        """A35, C87 — a package served by both a sound repository file and a broken one is replicable:
         the origin only has to be declared once for the target to install from it, so a
         second file with a dangling key must not condemn the package.
         """
@@ -336,7 +336,7 @@ class TestOriginClassification:
 
     @pytest.mark.asyncio
     async def test_a_distribution_origin_install_names_no_origin(self) -> None:
-        """The unremarkable case earns no text: naming the mirror on every archive package
+        """A27 — The unremarkable case earns no text: naming the mirror on every archive package
         would bury the two lines that matter under a hundred that do not.
         """
         context, _source, _target = make_context(
@@ -358,7 +358,7 @@ class TestOriginClassification:
 
     @pytest.mark.asyncio
     async def test_two_machines_on_different_ubuntu_mirrors_produce_no_origin_mismatch(self) -> None:
-        """The suppression that makes the provenance comparison usable at all: each machine's
+        """A23, A61 — The suppression that makes the provenance comparison usable at all: each machine's
         distribution origins are read from its OWN distribution files, so a Belgian mirror
         and the default archive are one vendor, not two.
         """
@@ -384,7 +384,7 @@ class TestOriginClassification:
 
     @pytest.mark.asyncio
     async def test_divergent_vendor_provenance_reports_origin_mismatch(self) -> None:
-        """The same name and the same version on both machines, from two vendors. A
+        """A59 — The same name and the same version on both machines, from two vendors. A
         presence-and-version diff sees nothing here, which is why this class exists —
         report only, because converging it means a cross-vendor reinstall nobody asked for.
         """
@@ -428,7 +428,7 @@ class TestOriginOutcome:
         assert plan.outcome() is not OriginOutcome.UNREPLICABLE
 
     def test_an_explicit_no_candidate_with_no_origin_to_replicate_is_unreplicable(self) -> None:
-        """The other half of the same distinction: apt answered, and its answer was no."""
+        """A31 — The other half of the same distinction: apt answered, and its answer was no."""
         plan = OriginPlan(target_candidate_known=True)
 
         assert plan.outcome() is OriginOutcome.UNREPLICABLE
@@ -464,7 +464,7 @@ class TestOriginEnforcement:
 
     @pytest.mark.asyncio
     async def test_install_is_refused_when_the_post_update_candidate_is_from_the_wrong_origin(self) -> None:
-        """The Firefox defect at its last possible catch point: the source runs Mozilla's
+        """A42 — The Firefox defect at its last possible catch point: the source runs Mozilla's
         build, the repository did not land (or did not win), and Ubuntu's epoch-1
         transitional package is still what apt would install. It fails as its own item.
         """
@@ -489,7 +489,7 @@ class TestOriginEnforcement:
 
     @pytest.mark.asyncio
     async def test_an_origin_the_converged_target_now_offers_lets_the_install_through(self) -> None:
-        """The same run once the repository and its pin have landed: the verification re-reads
+        """A41 — The same run once the repository and its pin have landed: the verification re-reads
         the target and finds Mozilla's copy, so the install proceeds. This is why the check
         re-reads instead of reusing the plan's answer, which still said Ubuntu's archive.
         """
@@ -512,7 +512,7 @@ class TestOriginEnforcement:
 
     @pytest.mark.asyncio
     async def test_the_origin_verification_costs_one_batched_policy_call(self) -> None:
-        """Three approved vendor installs, one policy read — never one per package. The
+        """A45, A46 — Three approved vendor installs, one policy read — never one per package. The
         answer cannot change between two installs of the same run.
         """
         names = ("pkg-a", "pkg-b", "pkg-c")
@@ -540,7 +540,7 @@ class TestOriginEnforcement:
 
     @pytest.mark.asyncio
     async def test_a_distribution_origin_package_is_not_origin_verified(self) -> None:
-        """D-35's exemption. The source has this package from its own Ubuntu mirror, so
+        """A48 — D-35's exemption. The source has this package from its own Ubuntu mirror, so
         whatever mirror the target answers with is the same vendor — and asking the question
         at all would refuse every package on a pair of machines with different mirrors.
         """
@@ -566,7 +566,7 @@ class TestOriginEnforcement:
 
     @pytest.mark.asyncio
     async def test_a_name_the_answered_verification_skipped_refuses_only_that_install(self) -> None:
-        """Stricter than the plan-time rule on purpose: there, apt's silence leaves the
+        """A43, A44 — Stricter than the plan-time rule on purpose: there, apt's silence leaves the
         install to report its own failure; here the install is the thing being guarded, and a
         guarantee that could not be evaluated has not been met. apt DID answer — it printed a
         block for `pkg-b` — so the silence about `pkg-a` is evidence about `pkg-a` alone, and
@@ -601,7 +601,7 @@ class TestOriginEnforcement:
 
     @pytest.mark.asyncio
     async def test_a_verification_probe_that_did_not_answer_fails_once_not_per_package(self) -> None:
-        """The environment broke, not the request. Three approved vendor installs and a
+        """A49 — The environment broke, not the request. Three approved vendor installs and a
         policy read that exited non-zero: one failure naming the command, never three
         failures blaming three packages' provenance for an apt that never ran.
         """
@@ -638,7 +638,7 @@ class TestOriginEnforcement:
 
     @pytest.mark.asyncio
     async def test_a_verification_probe_that_printed_nothing_fails_once_not_per_package(self) -> None:
-        """The ambiguous half, resolved toward failing fast: exit 0 and not one block over a
+        """A50 — The ambiguous half, resolved toward failing fast: exit 0 and not one block over a
         set apt owes a block for. Indistinguishable from "apt knows none of these", and
         misattributing a broken probe to every package's provenance is the worse reading.
         """
@@ -668,7 +668,7 @@ class TestOriginEnforcement:
 
     @pytest.mark.asyncio
     async def test_a_skipped_install_is_never_named_in_the_verification(self) -> None:
-        """The batch is the APPROVED set, not the planned one: a package the user left
+        """A47 — The batch is the APPROVED set, not the planned one: a package the user left
         unticked cannot be refused, and must not widen the command either.
         """
         context, _source, target = make_context(

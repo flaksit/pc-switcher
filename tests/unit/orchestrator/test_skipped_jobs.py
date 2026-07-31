@@ -47,6 +47,7 @@ class TestSkippedJobArm:
     async def test_the_orchestrator_records_a_skipped_job_and_runs_the_next_one(
         self, wired_orchestrator: Orchestrator
     ) -> None:
+        """J15, J16, J17 — the run continues, the session is clean, and the reason is kept."""
         skipping = _SkippingJob(make_context())
         following = _RanAfterJob(make_context())
 
@@ -62,7 +63,7 @@ class TestSkippedJobArm:
 class TestUnresolvableEnabledJob:
     @pytest.mark.asyncio
     async def test_an_unresolvable_enabled_job_is_recorded_skipped(self, wired_orchestrator: Orchestrator) -> None:
-        """An enabled job whose module does not exist used to leave no JobResult at all."""
+        """K39 — an enabled job whose module does not exist used to leave no JobResult at all."""
         wired_orchestrator._config.sync_jobs = {"no_such_job_module": True}  # pyright: ignore[reportPrivateUsage]
 
         jobs, unresolved = await wired_orchestrator._discover_and_validate_jobs()  # pyright: ignore[reportPrivateUsage]
@@ -74,7 +75,7 @@ class TestUnresolvableEnabledJob:
 
     @pytest.mark.asyncio
     async def test_a_resolvable_job_leaves_no_skipped_result(self, wired_orchestrator: Orchestrator) -> None:
-        """Guard on the arm above: a real job name must not be recorded as unresolvable."""
+        """K40 — Guard on the arm above: a real job name must not be recorded as unresolvable."""
         wired_orchestrator._config.sync_jobs = {"dummy_success": True}  # pyright: ignore[reportPrivateUsage]
         wired_orchestrator._config.job_configs = {}  # pyright: ignore[reportPrivateUsage]
 

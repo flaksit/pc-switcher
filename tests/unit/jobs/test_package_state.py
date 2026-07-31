@@ -182,6 +182,7 @@ class TestFilterInert:
 class TestDecisionFileLoad:
     @pytest.mark.asyncio
     async def test_absent_file_returns_empty_mapping(self) -> None:
+        """H147."""
         executor = MagicMock()
         executor.run_command = AsyncMock(return_value=CommandResult(1, "", ""))
         store = DecisionFile("apt", executor)
@@ -351,6 +352,7 @@ class TestDecisionFileRecord:
 
 class TestRelpathConstants:
     def test_relpath_template_places_file_under_config_pc_switcher(self) -> None:
+        """H132."""
         assert DECISION_FILE_RELPATH_TEMPLATE.format(manager="apt") == ".config/pc-switcher/apt.decisions.yaml"
 
     def test_glob_relpath_covers_every_manager_with_one_pattern(self) -> None:
@@ -408,6 +410,7 @@ def _change_diff(item_id: str) -> ItemDiff:
 class TestPipelineWiring:
     @pytest.mark.asyncio
     async def test_source_held_inert_item_absent_from_the_plans_diffs(self) -> None:
+        """H125."""
         context = make_context()
         source = context.source
         source.run_command = AsyncMock(  # pyright: ignore[reportAttributeAccessIssue]
@@ -426,6 +429,7 @@ class TestPipelineWiring:
 
     @pytest.mark.asyncio
     async def test_target_held_inert_item_absent_even_though_source_also_differs(self) -> None:
+        """H126, N3."""
         context = make_context()
         target = context.target
         target.run_command = AsyncMock(  # pyright: ignore[reportAttributeAccessIssue]
@@ -439,6 +443,7 @@ class TestPipelineWiring:
 
     @pytest.mark.asyncio
     async def test_plan_issues_no_decision_file_write(self) -> None:
+        """H6."""
         context = make_context()
         job = FakeSyncJob(context, source_items=[FakeItem(name="vim")])
 
@@ -463,6 +468,7 @@ class TestPipelineWiring:
 
     @pytest.mark.asyncio
     async def test_skip_always_on_remove_writes_to_target_not_source(self) -> None:
+        """H120, N3."""
         context = make_context()
         job = FakeSyncJob(context)
         diff = _remove_diff("fake:legacy-tool")
@@ -478,6 +484,7 @@ class TestPipelineWiring:
 
     @pytest.mark.asyncio
     async def test_skip_always_on_install_writes_to_source_not_target(self) -> None:
+        """H118, N1."""
         context = make_context()
         job = FakeSyncJob(context)
         diff = _install_diff("fake:brscan3")
@@ -493,7 +500,7 @@ class TestPipelineWiring:
 
     @pytest.mark.asyncio
     async def test_skip_always_on_change_writes_to_source_not_target(self) -> None:
-        """D-08a routes CHANGE with INSTALL, not with REMOVE: the SOURCE holds the value
+        """H119, J4, J146 — D-08a routes CHANGE with INSTALL, not with REMOVE: the SOURCE holds the value
         the item would be converged TO, so the source is the machine that must stop
         offering it. Sibling of the INSTALL and REMOVE cases above.
         """
@@ -512,6 +519,7 @@ class TestPipelineWiring:
 
     @pytest.mark.asyncio
     async def test_no_record_call_when_dry_run(self) -> None:
+        """H134, J55."""
         context = make_context(dry_run=True)
         job = FakeSyncJob(context)
         diff = _remove_diff("fake:legacy-tool")
@@ -525,6 +533,7 @@ class TestPipelineWiring:
 
     @pytest.mark.asyncio
     async def test_no_record_call_when_outcome_was_not_interactive(self) -> None:
+        """J12, J44."""
         context = make_context()
         job = FakeSyncJob(context)
         diff = _remove_diff("fake:legacy-tool")
@@ -546,6 +555,7 @@ class TestHandEditedDecisionFile:
 
     @pytest.mark.asyncio
     async def test_entry_deleted_by_hand_makes_that_item_live_again_next_run(self) -> None:
+        """H145."""
         shell = FakeShellExecutor()
         # The manager name only picks the path; the fake read below answers any `cat`.
         store = DecisionFile("apt", shell)
@@ -576,7 +586,7 @@ class TestHandEditedDecisionFile:
 
     @pytest.mark.asyncio
     async def test_deleting_the_whole_file_makes_every_item_live_again(self) -> None:
-        """The coarse half of the same workflow: an absent file degrades to "no decisions"
+        """H146 — The coarse half of the same workflow: an absent file degrades to "no decisions"
         (H13), so removing it re-offers every previously-recorded item."""
         context = make_context()
         context.source.run_command = AsyncMock(return_value=CommandResult(1, "", ""))  # pyright: ignore[reportAttributeAccessIssue]
@@ -659,6 +669,7 @@ class TestDecisionScopeReachesCollateral:
 
     @pytest.mark.asyncio
     async def test_a_mark_protects_a_package_apt_considers_auto_installed(self) -> None:
+        """D43, H129."""
         context = _apt_context(
             source_responses={
                 "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
@@ -689,7 +700,7 @@ class TestDecisionScopeReachesCollateral:
 
     @pytest.mark.asyncio
     async def test_manual_set_membership_protects_the_same_item_on_its_own(self) -> None:
-        """The other input, alone: the SAME recorded item is also protected by being in the
+        """D45 — The other input, alone: the SAME recorded item is also protected by being in the
         target's manual set. Either source of protection is sufficient.
         """
         context = _apt_context(
@@ -726,6 +737,7 @@ class TestDecisionScopeReachesCollateral:
 class TestConfigSyncScope:
     @pytest.mark.asyncio
     async def test_copy_config_to_target_sends_only_config_yaml(self, tmp_path: Path) -> None:
+        """H131."""
         source_path = tmp_path / "config.yaml"
         source_path.write_text("logging: {}\n")
 
@@ -753,6 +765,7 @@ class TestSnippetRegistry:
 
     @pytest.mark.asyncio
     async def test_absent_file_returns_empty_mapping(self) -> None:
+        """G64 — an absent registry reads as "no snippets"."""
         executor = MagicMock()
         executor.run_command = AsyncMock(return_value=CommandResult(1, "", ""))
         registry = SnippetRegistry(executor)
@@ -761,6 +774,7 @@ class TestSnippetRegistry:
 
     @pytest.mark.asyncio
     async def test_empty_file_returns_empty_mapping(self) -> None:
+        """G64 — an empty registry reads as "no snippets", with no warning."""
         executor = MagicMock()
         executor.run_command = AsyncMock(return_value=CommandResult(0, "", ""))
         registry = SnippetRegistry(executor)
@@ -771,6 +785,7 @@ class TestSnippetRegistry:
     async def test_malformed_registry_returns_empty_mapping_and_warns_naming_the_path(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
+        """G64 — a corrupt registry reads as "no snippets" and warns naming the file."""
         executor = MagicMock()
         executor.run_command = AsyncMock(return_value=CommandResult(0, "snippets: [\n  - broken\n", ""))
         registry = SnippetRegistry(executor)
@@ -784,6 +799,8 @@ class TestSnippetRegistry:
 
     @pytest.mark.asyncio
     async def test_add_then_get_round_trips_body_verbatim_including_whitespace(self) -> None:
+        """G56 — a body written with leading indentation and blank lines between commands
+        is stored and read back byte for byte."""
         shell = FakeShellExecutor()
         snippet = Snippet(
             item_id="unreproducible:apt-no-candidate:brscan3",
@@ -800,6 +817,34 @@ class TestSnippetRegistry:
         assert reloaded.body == snippet.body
 
     @pytest.mark.asyncio
+    async def test_a_body_of_shell_metacharacters_is_stored_and_replayed_uninterpreted(self) -> None:
+        """G60 — brackets, command substitution, backticks and quotes are the author's
+        bytes, not something the tool reads: the body round-trips exactly and reaches the
+        target as one quoted argument, with nothing expanded on the way."""
+        shell = FakeShellExecutor()
+        body = "sudo /opt/[bold]tool/install.sh --note=\"$(date)\" --tag=`hostname` --path='/opt/a b'"
+        snippet = Snippet(
+            item_id="unreproducible:unowned-path:/opt/tool",
+            label="tool [red]v2 (unowned in /opt)",
+            body=body,
+            authored_at="2026-07-23T09:00:00+00:00",
+            authored_on="laptop",
+        )
+
+        await SnippetRegistry(shell).add(snippet)
+        reloaded = await SnippetRegistry(shell).get(snippet.item_id)
+
+        assert reloaded is not None
+        assert reloaded.body == body
+        assert reloaded.label == snippet.label
+
+        target = MagicMock()
+        target.run_command = AsyncMock(return_value=CommandResult(0, "", ""))
+        await SnippetRegistry(shell).replay(snippet.item_id, target)
+
+        assert target.run_command.call_args.args[0] == f"bash -c {shlex.quote(body)}"
+
+    @pytest.mark.asyncio
     async def test_get_returns_none_for_an_unregistered_item(self) -> None:
         shell = FakeShellExecutor()
 
@@ -807,6 +852,8 @@ class TestSnippetRegistry:
 
     @pytest.mark.asyncio
     async def test_write_is_atomic_temp_then_move(self) -> None:
+        """G63 — written aside, then moved into place, so a machine that dies mid-write
+        never leaves the registry half written."""
         executor = MagicMock()
         executor.run_command = AsyncMock(return_value=CommandResult(0, "", ""))
         registry = SnippetRegistry(executor)
@@ -821,6 +868,7 @@ class TestSnippetRegistry:
 
     @pytest.mark.asyncio
     async def test_add_preserves_an_unrelated_pre_existing_entry(self) -> None:
+        """G62 — a second snippet for a different item accumulates rather than replacing."""
         shell = FakeShellExecutor()
         first = Snippet(item_id="a", label="a", body="echo a", authored_at="t", authored_on="h")
         second = Snippet(item_id="b", label="b", body="echo b", authored_at="t", authored_on="h")
@@ -834,6 +882,8 @@ class TestSnippetRegistry:
 
     @pytest.mark.asyncio
     async def test_replay_passes_body_as_one_quoted_argument_with_login_shell_false(self) -> None:
+        """G57, J155 — replayed as one unit, as the SSH user, with nothing added around it: no
+        elevation and no login shell."""
         shell = FakeShellExecutor()
         snippet = Snippet(item_id="x", label="x", body="echo hello world", authored_at="t", authored_on="h")
         await SnippetRegistry(shell).add(snippet)
@@ -861,6 +911,7 @@ class TestSnippetRegistry:
 
     @pytest.mark.asyncio
     async def test_replay_exit_code_alone_decides_success(self) -> None:
+        """G59 — a snippet that exits non-zero while printing nothing recognisable failed."""
         shell = FakeShellExecutor()
         snippet = Snippet(item_id="x", label="x", body="false", authored_at="t", authored_on="h")
         await SnippetRegistry(shell).add(snippet)

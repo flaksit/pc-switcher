@@ -21,18 +21,19 @@ class TestOriginDetailWording:
     """Ruling 9's naming rules, as pure text."""
 
     def test_origin_detail_strips_the_scheme_and_names_the_full_path(self) -> None:
-        """The path, not the bare host: one Launchpad host serves thousands of PPAs."""
+        """A37 — The path, not the bare host: one Launchpad host serves thousands of PPAs."""
         assert build_origin_detail(["https://ppa.launchpadcontent.net/git-core/ppa/ubuntu"]) == (
             "from ppa.launchpadcontent.net/git-core/ppa/ubuntu"
         )
 
     def test_origin_detail_is_omitted_for_a_distribution_origin(self) -> None:
-        """The caller filters the distribution's own origins out, so nothing left to name
+        """A39 — The caller filters the distribution's own origins out, so nothing left to name
         means the distribution serves it and the line says nothing about origins.
         """
         assert build_origin_detail([]) is None
 
     def test_several_vendors_are_named_comma_separated(self) -> None:
+        """A38."""
         assert build_origin_detail(["https://a.example.com/apt", "https://b.example.com/deb"]) == (
             "from a.example.com/apt, b.example.com/deb"
         )
@@ -51,6 +52,7 @@ class TestOriginRefusalWording:
     """The refusal names both origins, because either half alone is unactionable."""
 
     def test_both_the_wanted_and_the_offered_origin_are_named(self) -> None:
+        """A42."""
         detail = build_origin_refusal_detail(
             "firefox", ["https://packages.mozilla.org/apt"], ["http://ftp.belnet.be/ubuntu"], MACHINES
         )
@@ -61,6 +63,7 @@ class TestOriginRefusalWording:
         )
 
     def test_a_target_with_no_candidate_origin_says_so_rather_than_naming_nothing(self) -> None:
+        """A44."""
         detail = build_origin_refusal_detail("pkg-a", ["https://vendor.example.com/apt"], [], MACHINES)
 
         assert "offers it from no repository at all" in detail
@@ -85,13 +88,14 @@ class TestRepoRemovalWording:
     which is whatever whoever created the file happened to call it."""
 
     def test_the_urls_are_the_whole_detail(self) -> None:
-        """Nothing about stranded software: a file still feeding anything the target keeps
+        """N13 — Nothing about stranded software: a file still feeding anything the target keeps
         never reaches this text (`PKG-FR-REPO-DELETE`)."""
         detail = build_repo_removal_detail(["https://cli.github.com/packages"], MACHINES)
 
         assert detail == "target-host would stop getting software from https://cli.github.com/packages"
 
     def test_every_url_the_file_declares_is_named(self) -> None:
+        """C46 — a file declaring several URLs names all of them."""
         detail = build_repo_removal_detail(["https://a.example.com/apt", "https://b.example.com/deb"], MACHINES)
 
         assert detail == (
@@ -99,7 +103,7 @@ class TestRepoRemovalWording:
         )
 
     def test_a_file_declaring_no_url_says_so_rather_than_trailing_off(self) -> None:
-        """A commented-out leftover parses to no URI. Half a sentence would read as a bug."""
+        """C45 — a commented-out leftover parses to no URI. Half a sentence would read as a bug."""
         detail = build_repo_removal_detail([], MACHINES)
 
         assert detail == "target-host would stop getting software from nowhere — it declares no repository URL"

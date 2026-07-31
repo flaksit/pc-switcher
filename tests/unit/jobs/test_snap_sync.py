@@ -108,6 +108,7 @@ class TestCapture:
 
     @pytest.mark.asyncio
     async def test_capture_source_items_parses_name_rev_tracking_by_header(self) -> None:
+        """E1, E22 — name, revision and channel come from the columns their headers name."""
         context, _source, _target = make_context(
             source_responses={"snap list --all": CommandResult(0, SNAP_LIST_SOURCE, "")}
         )
@@ -121,7 +122,7 @@ class TestCapture:
 
     @pytest.mark.asyncio
     async def test_column_reordered_header_still_parses_correctly(self) -> None:
-        """Two columns swapped in BOTH header and body — parsing must still be correct,
+        """E23 — two columns swapped in BOTH header and body — parsing must still be correct,
         proving it is header-driven rather than positional.
         """
         context, _source, _target = make_context(
@@ -138,7 +139,7 @@ class TestCapture:
 
     @pytest.mark.asyncio
     async def test_disabled_revision_line_produces_no_item(self) -> None:
-        """A disabled older-revision line for a snap that also has an active line
+        """E24 — a disabled older-revision line for a snap that also has an active line
         yields only the active revision as an item.
         """
         context, _source, _target = make_context(
@@ -152,7 +153,21 @@ class TestCapture:
         assert items[0].revision == "2938"
 
     @pytest.mark.asyncio
+    async def test_a_line_with_fewer_fields_than_the_header_is_dropped(self) -> None:
+        """E29 — a truncated line is skipped rather than read across the columns it does
+        have, which would hand `--revision=` a value from the wrong column.
+        """
+        listing = _HEADER + "alpha     1.0\n" + "beta      2.0        20     latest/stable   pub✓         -\n"
+        context, _source, _target = make_context(source_responses={"snap list --all": CommandResult(0, listing, "")})
+        job = SnapSyncJob(context)
+
+        items = await job.capture_source_items()
+
+        assert [(item.name, item.revision) for item in items] == [("beta", "20")]
+
+    @pytest.mark.asyncio
     async def test_no_snaps_installed_yields_empty_list_not_a_crash(self) -> None:
+        """E26 — "No snaps are installed yet." at exit 0 is an empty machine, not a crash."""
         context, _source, _target = make_context(
             source_responses={"snap list --all": CommandResult(0, "No snaps are installed yet.\n", "")}
         )
@@ -166,6 +181,7 @@ class TestDiff:
 
     @pytest.mark.asyncio
     async def test_missing_on_target_yields_install_diff(self) -> None:
+        """E7 — a snap only Atlas has is offered for install on Nomad."""
         context, _source, _target = make_context(
             source_responses={"snap list --all": CommandResult(0, SNAP_LIST_SOURCE, "")},
             target_responses={"snap list --all": CommandResult(0, SNAP_LIST_TARGET, "")},
@@ -180,6 +196,7 @@ class TestDiff:
 
     @pytest.mark.asyncio
     async def test_extra_on_target_yields_remove_diff_in_its_own_group(self) -> None:
+        """E10 — a snap only Nomad has is a removal, in a group of its own."""
         context, _source, _target = make_context(
             source_responses={"snap list --all": CommandResult(0, SNAP_LIST_SOURCE, "")},
             target_responses={"snap list --all": CommandResult(0, SNAP_LIST_TARGET, "")},
@@ -197,6 +214,7 @@ class TestDiff:
 
     @pytest.mark.asyncio
     async def test_revision_change_yields_change_diff_naming_both_revisions(self) -> None:
+        """E11, E18 — a revision difference is one CHANGE naming both revisions, never a report."""
         context, _source, _target = make_context(
             source_responses={"snap list --all": CommandResult(0, SNAP_LIST_SOURCE, "")},
             target_responses={"snap list --all": CommandResult(0, SNAP_LIST_TARGET, "")},
@@ -213,6 +231,7 @@ class TestDiff:
 
     @pytest.mark.asyncio
     async def test_same_revision_different_channel_yields_change_diff_naming_both_channels(self) -> None:
+        """E13 — a channel difference alone is one CHANGE naming both channels."""
         context, _source, _target = make_context(
             source_responses={"snap list --all": CommandResult(0, SNAP_LIST_SOURCE, "")},
             target_responses={"snap list --all": CommandResult(0, SNAP_LIST_TARGET, "")},
@@ -229,7 +248,7 @@ class TestDiff:
 
     @pytest.mark.asyncio
     async def test_revision_and_channel_both_differing_names_both_pairs(self) -> None:
-        """`PKG-FR-SNAP-CASES`: one change, naming both values. Naming the revision alone
+        """E15 — E15, `PKG-FR-SNAP-CASES`: one change, naming both values. Naming the revision alone
         left the retrack out of the only line the user reads before approving it.
         """
         source = _HEADER + "beta      2.0        20     latest/edge     pub✓         -\n"
@@ -250,6 +269,7 @@ class TestDiff:
 
     @pytest.mark.asyncio
     async def test_identical_snap_yields_no_diff(self) -> None:
+        """E17, E59 — same revision and channel on both machines: no item, and no hold item."""
         identical = _HEADER + "epsilon   1.0   50   latest/stable   pub✓   -\n"
         context, _source, _target = make_context(
             source_responses={"snap list --all": CommandResult(0, identical, "")},
@@ -261,10 +281,68 @@ class TestDiff:
 
         assert plan.diffs == ()
 
+    @pytest.mark.asyncio
+    async def test_neither_machine_has_any_snap_yields_nothing_and_no_failure(self) -> None:
+        """E20 — both halves of "no snaps" at once. Each half alone is ordinary data
+        (E17/E26); together they must still produce a plan rather than an empty-manifest
+        scare.
+        """
+        empty = CommandResult(0, "", "No snaps are installed yet. Try 'snap install hello-world'.\n")
+        context, _source, _target = make_context(
+            source_responses={"snap list --all": empty},
+            target_responses={"snap list --all": empty},
+        )
+        job = SnapSyncJob(context)
+
+        plan = await job.plan()
+
+        assert plan.diffs == ()
+        assert plan.groups == ()
+
+
+class TestPublisherIsNotIdentity:
+    """`PKG-FR-SNAP-IDENTITY` — a snap is identified by its name alone. The Publisher
+    column exists in the listing this job parses, so nothing but a test stops it from
+    creeping into the match and splitting one snap into an install plus a removal.
+    """
+
+    @pytest.mark.asyncio
+    async def test_differing_publishers_at_the_same_revision_yield_no_diff(self) -> None:
+        """E4 — same name, revision and channel; only the Publisher differs."""
+        source = _HEADER + "beta      2.0        20     latest/stable   canonical✓   -\n"
+        target = _HEADER + "beta      2.0        20     latest/stable   someone-else -\n"
+        context, _source, _target = make_context(
+            source_responses={"snap list --all": CommandResult(0, source, "")},
+            target_responses={"snap list --all": CommandResult(0, target, "")},
+        )
+        job = SnapSyncJob(context)
+
+        plan = await job.plan()
+
+        assert plan.diffs == ()
+
+    @pytest.mark.asyncio
+    async def test_differing_publishers_with_a_revision_difference_yield_one_change(self) -> None:
+        """E4 — the same two listings with the revisions apart: one CHANGE for one snap,
+        never an install of the source's copy plus a removal of the target's.
+        """
+        source = _HEADER + "beta      2.0        20     latest/stable   canonical✓   -\n"
+        target = _HEADER + "beta      1.5        15     latest/stable   someone-else -\n"
+        context, _source, _target = make_context(
+            source_responses={"snap list --all": CommandResult(0, source, "")},
+            target_responses={"snap list --all": CommandResult(0, target, "")},
+        )
+        job = SnapSyncJob(context)
+
+        plan = await job.plan()
+
+        assert [(d.item_id, d.action) for d in plan.diffs] == [("snap:beta", DiffAction.CHANGE)]
+
 
 class TestPlanReadOnly:
     @pytest.mark.asyncio
     async def test_plan_issues_no_mutating_snap_command(self) -> None:
+        """H3, J144."""
         context, _source, target = make_context(
             source_responses={"snap list --all": CommandResult(0, SNAP_LIST_SOURCE, "")},
             target_responses={"snap list --all": CommandResult(0, SNAP_LIST_TARGET, "")},
@@ -288,6 +366,7 @@ class TestNoHold:
 
     @pytest.mark.asyncio
     async def test_install_change_retrack_and_removal_never_set_a_hold(self) -> None:
+        """E65 — no install, change, retrack or removal command sets a refresh hold."""
         context, _source, target = make_context(
             source_responses={"snap list --all": CommandResult(0, SNAP_LIST_SOURCE, "")},
             target_responses={"snap list --all": CommandResult(0, SNAP_LIST_TARGET, "")},
@@ -306,6 +385,7 @@ class TestNoHold:
 
     @pytest.mark.asyncio
     async def test_install_command_contains_an_explicit_revision(self) -> None:
+        """E8 — the install names Atlas's exact revision."""
         context, _source, target = make_context(
             source_responses={"snap list --all": CommandResult(0, SNAP_LIST_SOURCE, "")},
             target_responses={"snap list --all": CommandResult(0, SNAP_LIST_TARGET, "")},
@@ -318,6 +398,99 @@ class TestNoHold:
 
         commands = all_calls(target)
         assert any("snap install --revision=10 alpha" in cmd for cmd in commands)
+
+
+class TestConvergeRevisionAndChannel:
+    """`PKG-FR-SNAP-CASES`'s command side: which of the two commands an approved item
+    issues follows from which of the two facets actually differs, and a snap that needs
+    both gets both, revision first.
+    """
+
+    @staticmethod
+    def _converge_commands(target: MagicMock) -> list[str]:
+        """Every mutating snap command issued, in order — plan()'s own reads filtered out."""
+        return [cmd for cmd in all_calls(target) if cmd.startswith("sudo snap ")]
+
+    @pytest.mark.asyncio
+    async def test_install_ends_tracking_the_sources_channel(self) -> None:
+        """E9 — the channel is set as part of the install, so the target does not silently
+        end up on snapd's default channel for a snap the source tracks elsewhere.
+        """
+        source = _HEADER + "alpha     1.0        10     latest/edge     pub✓         -\n"
+        context, _source, target = make_context(
+            source_responses={"snap list --all": CommandResult(0, source, "")},
+            target_responses={"snap list --all": CommandResult(0, "No snaps are installed yet.\n", "")},
+        )
+        job = SnapSyncJob(context)
+        plan = await job.plan()
+        alpha = next(d for d in plan.diffs if d.item_id == "snap:alpha")
+
+        await job.converge(alpha)
+
+        assert self._converge_commands(target) == [
+            "sudo snap install --revision=10 alpha",
+            "sudo snap switch --channel=latest/edge alpha",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_a_revision_only_change_issues_no_channel_switch(self) -> None:
+        """E12 — the channels already match, so a retrack would be a command with nothing
+        behind it.
+        """
+        source = _HEADER + "beta      2.0        20     latest/stable   pub✓         -\n"
+        target_listing = _HEADER + "beta      1.5        15     latest/stable   pub✓         -\n"
+        context, _source, target = make_context(
+            source_responses={"snap list --all": CommandResult(0, source, "")},
+            target_responses={"snap list --all": CommandResult(0, target_listing, "")},
+        )
+        job = SnapSyncJob(context)
+        plan = await job.plan()
+        beta = next(d for d in plan.diffs if d.item_id == "snap:beta")
+
+        await job.converge(beta)
+
+        assert self._converge_commands(target) == ["sudo snap refresh --revision=20 beta"]
+
+    @pytest.mark.asyncio
+    async def test_a_channel_only_change_issues_no_revision_refresh(self) -> None:
+        """E14 — the revisions already match, so the retrack travels alone: a `--revision`
+        refresh here would re-fetch the revision the target is already on.
+        """
+        source = _HEADER + "gamma     3.0        30     latest/edge     pub✓         -\n"
+        target_listing = _HEADER + "gamma     3.0        30     latest/stable   pub✓         -\n"
+        context, _source, target = make_context(
+            source_responses={"snap list --all": CommandResult(0, source, "")},
+            target_responses={"snap list --all": CommandResult(0, target_listing, "")},
+        )
+        job = SnapSyncJob(context)
+        plan = await job.plan()
+        gamma = next(d for d in plan.diffs if d.item_id == "snap:gamma")
+
+        await job.converge(gamma)
+
+        assert self._converge_commands(target) == ["sudo snap switch --channel=latest/edge gamma"]
+
+    @pytest.mark.asyncio
+    async def test_a_change_differing_in_both_moves_the_revision_then_the_channel(self) -> None:
+        """E16 — one item, both commands. The revision move comes first: it is the one that
+        can fail, and a retrack onto a channel whose revision never landed says nothing true.
+        """
+        source = _HEADER + "beta      2.0        20     latest/edge     pub✓         -\n"
+        target_listing = _HEADER + "beta      1.5        15     latest/stable   pub✓         -\n"
+        context, _source, target = make_context(
+            source_responses={"snap list --all": CommandResult(0, source, "")},
+            target_responses={"snap list --all": CommandResult(0, target_listing, "")},
+        )
+        job = SnapSyncJob(context)
+        plan = await job.plan()
+        beta = next(d for d in plan.diffs if d.item_id == "snap:beta")
+
+        await job.converge(beta)
+
+        assert self._converge_commands(target) == [
+            "sudo snap refresh --revision=20 beta",
+            "sudo snap switch --channel=latest/edge beta",
+        ]
 
 
 # Per-snap hold fixtures (#208): `held` in the Notes column marks a per-snap refresh hold.
@@ -359,12 +532,22 @@ SNAP_LIST_TARGET_MIXED_HOLDS = (
     + "zeta      1.0        60     latest/stable   pub✓         held\n"
 )
 
+# The same plan plus a revision/channel CHANGE, so every action snap can review — install,
+# change, remove, hold and unhold — is present at once.
+SNAP_LIST_SOURCE_EVERY_ACTION = (
+    SNAP_LIST_SOURCE_MIXED_HOLDS + "beta      2.0        20     latest/edge     pub✓         -\n"
+)
+SNAP_LIST_TARGET_EVERY_ACTION = (
+    SNAP_LIST_TARGET_MIXED_HOLDS + "beta      1.5        15     latest/stable   pub✓         -\n"
+)
+
 
 class TestParseHeld:
     """`held` in the Notes column sets `SnapItem.held` (#208)."""
 
     @pytest.mark.asyncio
     async def test_held_note_sets_item_held(self) -> None:
+        """E3 — a per-snap refresh hold is captured as part of that machine's snap state."""
         context, _source, _target = make_context(
             source_responses={"snap list --all": CommandResult(0, SNAP_LIST_SOURCE_HELD_ALPHA, "")}
         )
@@ -382,6 +565,7 @@ class TestHolds:
 
     @pytest.mark.asyncio
     async def test_source_held_yields_install_hold_diff_and_converges_hold_forever(self) -> None:
+        """E54, E55 — Atlas's hold is an item of its own, and applying it holds the snap on Nomad."""
         context, _source, target = make_context(
             source_responses={"snap list --all": CommandResult(0, SNAP_LIST_SOURCE_HELD_ALPHA, "")},
             target_responses={"snap list --all": CommandResult(0, SNAP_LIST_TARGET_UNHELD, "")},
@@ -401,6 +585,7 @@ class TestHolds:
 
     @pytest.mark.asyncio
     async def test_target_held_only_yields_remove_hold_diff_and_converges_unhold(self) -> None:
+        """E56, E57 — Nomad's own hold is an item proposing to lift it, and applying it does."""
         context, _source, target = make_context(
             source_responses={"snap list --all": CommandResult(0, SNAP_LIST_TARGET_UNHELD, "")},
             target_responses={"snap list --all": CommandResult(0, SNAP_LIST_TARGET_HELD_ALPHA, "")},
@@ -420,6 +605,7 @@ class TestHolds:
 
     @pytest.mark.asyncio
     async def test_both_held_yields_no_hold_diff(self) -> None:
+        """E58 — both machines hold it: nothing to converge."""
         context, _source, _target = make_context(
             source_responses={"snap list --all": CommandResult(0, SNAP_LIST_SOURCE_HELD_ALPHA, "")},
             target_responses={"snap list --all": CommandResult(0, SNAP_LIST_TARGET_HELD_ALPHA, "")},
@@ -432,7 +618,7 @@ class TestHolds:
 
     @pytest.mark.asyncio
     async def test_hold_diff_emitted_after_presence_diffs(self) -> None:
-        """D8 install-before-hold: alpha is new on the target AND held on the source, so
+        """E63 — E63, D8 install-before-hold: alpha is new on the target AND held on the source, so
         its `snap:hold:alpha` diff must come after its `snap:alpha` install diff.
         """
         context, _source, _target = make_context(
@@ -450,7 +636,7 @@ class TestHolds:
 
     @pytest.mark.asyncio
     async def test_hold_converge_never_emits_bare_hold(self) -> None:
-        """The D-06/RESEARCH Pitfall 1 guarantee for the hold path: the snap name is
+        """E66 — the D-06/RESEARCH Pitfall 1 guarantee for the hold path: the snap name is
         always present, so `--hold` never appears without a following snap name.
         """
         context, _source, target = make_context(
@@ -493,6 +679,7 @@ class TestHoldReviewVerbs:
 
     @pytest.mark.asyncio
     async def test_hold_install_group_reads_hold_never_install(self) -> None:
+        """E61 — a hold item sits in a group of its own reading "hold", never in the install group."""
         plan = await self._mixed_plan()
 
         group = self._group_holding(plan, "snap:hold:epsilon")
@@ -504,7 +691,7 @@ class TestHoldReviewVerbs:
 
     @pytest.mark.asyncio
     async def test_hold_remove_group_reads_unhold_and_is_removal_direction(self) -> None:
-        """The unhold group must be removal-direction so the checkbox screen leaves it
+        """E61, E62 — the unhold group must be removal-direction so the checkbox screen leaves it
         unticked — the right friction for undoing a block the user deliberately set. That
         classification is `packages/review._is_removal_direction` applied to
         `ReviewGroup.action`, so this asserts against the real classifier rather than
@@ -520,6 +707,7 @@ class TestHoldReviewVerbs:
 
     @pytest.mark.asyncio
     async def test_snap_groups_keep_their_own_verbs_and_exclude_hold_items(self) -> None:
+        """E61 — the install and remove groups keep their own verbs and absorb no hold item."""
         plan = await self._mixed_plan()
 
         install_group = self._group_holding(plan, "snap:alpha")
@@ -538,10 +726,64 @@ class TestHoldReviewVerbs:
                     assert entry.action_label in {"hold", "unhold"}
 
 
+class TestAFullSnapReview:
+    """One plan carrying every action snap reviews — install, change, remove, hold and
+    unhold — used for the claims that are about the review as a whole.
+    """
+
+    @staticmethod
+    async def _every_action_plan() -> PackagePlan:
+        context, _source, _target = make_context(
+            source_responses={"snap list --all": CommandResult(0, SNAP_LIST_SOURCE_EVERY_ACTION, "")},
+            target_responses={"snap list --all": CommandResult(0, SNAP_LIST_TARGET_EVERY_ACTION, "")},
+        )
+        return await SnapSyncJob(context).plan()
+
+    @pytest.mark.asyncio
+    async def test_the_change_group_reads_as_a_change_and_stands_apart(self) -> None:
+        """E19 — the fifth verb, alongside the four `TestHoldReviewVerbs` pins: a snap whose
+        revision or channel moved is a change, not an install of the source's copy.
+        """
+        plan = await self._every_action_plan()
+
+        change_group = next(g for g in plan.groups if any(e.item_id == "snap:beta" for e in g.entries))
+
+        assert change_group.title == "Change snap packages"
+        assert [e.action_label for e in change_group.entries] == ["change"]
+        assert {e.item_id for e in change_group.entries} == {"snap:beta"}
+        assert not _is_removal_direction(change_group.action)
+
+    @pytest.mark.asyncio
+    async def test_no_item_or_group_ever_asks_where_a_snap_comes_from(self) -> None:
+        """E5, `PKG-NG-SNAP-ORIGIN` — one store serves the device and snapd pins name ->
+        publisher itself, so snap has no store, publisher, remote or key for the user to
+        decide about. Nothing but this test stands between the article and a future change
+        that adds an origin screen by analogy with apt or flatpak.
+        """
+        plan = await self._every_action_plan()
+
+        # The plan really does carry all five actions, so the sweep below is not vacuous.
+        assert {(d.item_id, d.action) for d in plan.diffs} == {
+            ("snap:alpha", DiffAction.INSTALL),
+            ("snap:beta", DiffAction.CHANGE),
+            ("snap:delta", DiffAction.REMOVE),
+            ("snap:hold:epsilon", DiffAction.INSTALL),
+            ("snap:hold:zeta", DiffAction.REMOVE),
+        }
+
+        assert {d.item_class for d in plan.diffs} == {ItemClass.SNAP, ItemClass.SNAP_HOLD}
+        origin_words = ("store", "publisher", "remote", "key", "vendor", "origin")
+        for group in plan.groups:
+            text = " ".join(
+                [group.title, group.note or "", *(f"{e.item_id} {e.label} {e.detail or ''}" for e in group.entries)]
+            ).lower()
+            assert not any(word in text for word in origin_words), text
+
+
 class TestHoldIntentIsSourceAuthoritative:
     @pytest.mark.asyncio
     async def test_hold_on_a_snap_the_source_does_not_have_yields_no_hold_diff(self) -> None:
-        """E14 — `_diff_snap_holds` iterates SOURCE snaps only: a hold recorded on the
+        """E60 — `_diff_snap_holds` iterates SOURCE snaps only: a hold recorded on the
         target for a snap the source no longer has at all is not the user's current
         intent, so no `snap:hold:` diff is proposed (the snap itself is still offered
         for removal as an ordinary presence diff).
@@ -571,7 +813,7 @@ class TestHoldAndRevisionFailuresArePerItem:
 
     @pytest.mark.asyncio
     async def test_hold_for_a_snap_absent_on_target_fails_only_that_item(self) -> None:
-        """E18 — the user skipped alpha's install but applied its hold, so
+        """E64 — the user skipped alpha's install but applied its hold, so
         `snap refresh --hold=forever alpha` hits an absent snap and exits non-zero. That
         is a normal per-item failure (D6: no gating machinery), and the epsilon hold that
         follows it still converges.
@@ -614,7 +856,7 @@ class TestHoldAndRevisionFailuresArePerItem:
 
     @pytest.mark.asyncio
     async def test_unfetchable_revision_is_a_clean_per_item_failure_not_a_crash(self) -> None:
-        """E22 — the D-06 assumption that the source's `--revision=N` is fetchable by the
+        """E50, E51 — the D-06 assumption that the source's `--revision=N` is fetchable by the
         target's snapd can fail (a revision that never reached this machine's store). The
         refusal surfaces as a per-item `PackageItemFailures`, the channel switch for the
         failed snap is skipped, and gamma's own retrack still runs.
@@ -658,6 +900,77 @@ class TestHoldAndRevisionFailuresArePerItem:
         # ...but gamma's same-revision retrack still converged.
         assert any("sudo snap switch --channel=latest/stable gamma" in c for c in commands)
 
+    @pytest.mark.asyncio
+    async def test_an_install_the_target_cannot_fetch_fails_only_that_snap(self) -> None:
+        """E114 — the same refusal on the INSTALL path rather than the refresh path: the
+        target's snapd cannot fetch alpha's revision, so alpha fails alone, its channel
+        switch never runs, and beta still installs.
+        """
+        source = (
+            _HEADER
+            + "alpha     1.0        10     latest/stable   pub✓         -\n"
+            + "beta      2.0        20     latest/stable   pub✓         -\n"
+        )
+        context, _source, target_mock = make_context(
+            source_responses={"snap list --all": CommandResult(0, source, "")},
+            target_responses={
+                "snap list --all": CommandResult(0, "No snaps are installed yet.\n", ""),
+                "snap install --revision=10 alpha": CommandResult(
+                    1, "", 'error: cannot perform the following tasks:\n- Download snap "alpha" (10)'
+                ),
+            },
+        )
+        job = SnapSyncJob(context)
+        plan = await job.plan()
+        job.accept_review(
+            plan,
+            ReviewOutcome(
+                decisions={"snap:alpha": Decision.APPLY, "snap:beta": Decision.APPLY},
+                was_interactive=True,
+            ),
+        )
+
+        with pytest.raises(PackageItemFailures) as exc_info:
+            await job.apply()
+
+        assert [diff.item_id for diff, _stderr in exc_info.value.failures] == ["snap:alpha"]
+        commands = all_calls(target_mock)
+        assert not any("snap switch" in c and " alpha" in c for c in commands)
+        assert any("sudo snap install --revision=20 beta" in c for c in commands)
+
+    @pytest.mark.asyncio
+    async def test_a_removal_the_target_refuses_fails_only_that_snap(self) -> None:
+        """E52 — a removal snapd refuses is an ordinary per-item failure: the loop still
+        reaches the second approved removal.
+        """
+        target = (
+            _HEADER
+            + "delta     4.0        40     latest/stable   pub✓         -\n"
+            + "omega     9.0        90     latest/stable   pub✓         -\n"
+        )
+        context, _source, target_mock = make_context(
+            source_responses={"snap list --all": CommandResult(0, "No snaps are installed yet.\n", "")},
+            target_responses={
+                "snap list --all": CommandResult(0, target, ""),
+                "snap remove delta": CommandResult(1, "", 'error: cannot remove "delta": snap is being used'),
+            },
+        )
+        job = SnapSyncJob(context)
+        plan = await job.plan()
+        job.accept_review(
+            plan,
+            ReviewOutcome(
+                decisions={"snap:delta": Decision.APPLY, "snap:omega": Decision.APPLY},
+                was_interactive=True,
+            ),
+        )
+
+        with pytest.raises(PackageItemFailures) as exc_info:
+            await job.apply()
+
+        assert [diff.item_id for diff, _stderr in exc_info.value.failures] == ["snap:delta"]
+        assert any("sudo snap remove omega" in c for c in all_calls(target_mock))
+
 
 # Confinement fixtures: `classic`/`devmode` in the Notes column. `zellij` is the real
 # classic snap on this project's own machine; `snap list --all` shows it as
@@ -675,6 +988,7 @@ class TestParseConfinement:
 
     @pytest.mark.asyncio
     async def test_classic_note_sets_item_classic(self) -> None:
+        """E2 — `classic` in the Notes column is captured alongside the revision and channel."""
         context, _source, _target = make_context(
             source_responses={"snap list --all": CommandResult(0, SNAP_LIST_SOURCE_CLASSIC, "")}
         )
@@ -689,6 +1003,7 @@ class TestParseConfinement:
 
     @pytest.mark.asyncio
     async def test_devmode_note_sets_item_devmode(self) -> None:
+        """E2 — `devmode` likewise, and it never reads as classic."""
         context, _source, _target = make_context(
             source_responses={"snap list --all": CommandResult(0, SNAP_LIST_SOURCE_DEVMODE, "")}
         )
@@ -701,7 +1016,7 @@ class TestParseConfinement:
 
     @pytest.mark.asyncio
     async def test_disabled_classic_line_is_still_skipped(self) -> None:
-        """The real `snap list --all` shape for a classic snap with a retained older
+        """E25 — the real `snap list --all` shape for a classic snap with a retained older
         revision: `disabled,classic` shares one Notes list, and `disabled` still wins.
         """
         listing = (
@@ -727,6 +1042,7 @@ class TestConvergeConfinement:
 
     @pytest.mark.asyncio
     async def test_install_of_classic_snap_passes_classic(self) -> None:
+        """E30 — a classic snap's install carries the confirmation snapd requires."""
         context, _source, target = make_context(
             source_responses={"snap list --all": CommandResult(0, SNAP_LIST_SOURCE_CLASSIC, "")},
             target_responses={"snap list --all": CommandResult(0, "No snaps are installed yet.\n", "")},
@@ -741,6 +1057,7 @@ class TestConvergeConfinement:
 
     @pytest.mark.asyncio
     async def test_install_of_strict_snap_passes_no_confinement_flag(self) -> None:
+        """E32 — a strictly confined snap's install carries neither flag."""
         context, _source, target = make_context(
             source_responses={"snap list --all": CommandResult(0, SNAP_LIST_SOURCE_CLASSIC, "")},
             target_responses={"snap list --all": CommandResult(0, "No snaps are installed yet.\n", "")},
@@ -757,6 +1074,7 @@ class TestConvergeConfinement:
 
     @pytest.mark.asyncio
     async def test_install_of_devmode_snap_passes_devmode_and_never_classic(self) -> None:
+        """E31 — a devmode snap's install carries `--devmode` and never `--classic`."""
         context, _source, target = make_context(
             source_responses={"snap list --all": CommandResult(0, SNAP_LIST_SOURCE_DEVMODE, "")},
             target_responses={"snap list --all": CommandResult(0, "No snaps are installed yet.\n", "")},
@@ -773,7 +1091,7 @@ class TestConvergeConfinement:
 
     @pytest.mark.asyncio
     async def test_refresh_passes_classic_when_target_is_strict(self) -> None:
-        """Source classic, target strict, same snap: a plain `snap refresh` preserves the
+        """E33 — source classic, target strict, same snap: a plain `snap refresh` preserves the
         TARGET's confinement, which is the wrong one here — snapd would refuse the source's
         classic revision. The flag follows the SOURCE item.
         """
@@ -791,8 +1109,30 @@ class TestConvergeConfinement:
         assert any("sudo snap refresh --classic --revision=65 zellij" in c for c in all_calls(target))
 
     @pytest.mark.asyncio
+    async def test_refresh_passes_no_flag_when_only_the_target_is_classic(self) -> None:
+        """E34 — the reverse skew of the test above. The flag follows the SOURCE either
+        way, so a strict source revision refreshes with no flag at all; the target's own
+        classic confinement is left as it is, because confinement is never a diff.
+        """
+        source_listing = _HEADER + "zellij    0.44.1     65     latest/stable   dominz88     -\n"
+        target_listing = _HEADER + "zellij    0.43.0     43     latest/stable   dominz88     classic\n"
+        context, _source, target = make_context(
+            source_responses={"snap list --all": CommandResult(0, source_listing, "")},
+            target_responses={"snap list --all": CommandResult(0, target_listing, "")},
+        )
+        job = SnapSyncJob(context)
+        plan = await job.plan()
+        zellij = next(d for d in plan.diffs if d.item_id == "snap:zellij")
+
+        await job.converge(zellij)
+
+        commands = all_calls(target)
+        assert any("sudo snap refresh --revision=65 zellij" in c for c in commands)
+        assert not any("--classic" in c or "--devmode" in c for c in commands)
+
+    @pytest.mark.asyncio
     async def test_confinement_difference_alone_produces_no_diff(self) -> None:
-        """Confinement is a FIELD, never identity and never a diff of its own: same name,
+        """E35 — confinement is a FIELD, never identity and never a diff of its own: same name,
         channel and revision on both sides yields nothing to converge even when the Notes
         column disagrees (there is no command that would resolve it).
         """
@@ -824,7 +1164,7 @@ SNAP_LIST_SOURCE_SIDELOADED_HELD = (
 
 
 class TestSideloadedSnaps:
-    """E17, `PKG-FR-SNAP-SIDELOAD` — a snap installed from a local file (`snap install
+    """E38-E48, `PKG-FR-SNAP-SIDELOAD` — a snap installed from a local file (`snap install
     --dangerous`, `snap try`) sits at a store-less `x<N>` revision no store can serve.
     Such snaps are out of scope (#221) and ignored on both machines: every diff the name
     could produce is dropped at plan time, and a warning per machine names them.
@@ -832,6 +1172,7 @@ class TestSideloadedSnaps:
 
     @pytest.mark.asyncio
     async def test_sideloaded_source_snap_produces_no_diff(self) -> None:
+        """E38 — a sideload only Atlas has is not offered for install."""
         context, _source, _target = make_context(
             source_responses={"snap list --all": CommandResult(0, SNAP_LIST_SOURCE_SIDELOADED, "")},
             target_responses={"snap list --all": CommandResult(0, "No snaps are installed yet.\n", "")},
@@ -844,6 +1185,7 @@ class TestSideloadedSnaps:
 
     @pytest.mark.asyncio
     async def test_one_warning_names_the_skipped_sideloaded_snaps(self, caplog: pytest.LogCaptureFixture) -> None:
+        """E38, E48 — two sideloads on one machine produce one finding naming both."""
         source = SNAP_LIST_SOURCE_SIDELOADED + "workshop  2.0        x2     -               -            try\n"
         context, _source, _target = make_context(
             source_responses={"snap list --all": CommandResult(0, source, "")},
@@ -863,7 +1205,7 @@ class TestSideloadedSnaps:
     async def test_a_marked_sideloaded_snap_is_still_named_and_still_produces_no_diff(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """`PKG-FR-SNAP-SIDELOAD` asks the run to name the sideloads it FOUND, and a snap
+        """E46 — E46, `PKG-FR-SNAP-SIDELOAD` asks the run to name the sideloads it FOUND, and a snap
         the user marked as this machine's own was found. The mark silences review items,
         not the warning that the snap is unmanaged.
         """
@@ -892,7 +1234,7 @@ class TestSideloadedSnaps:
 
     @pytest.mark.asyncio
     async def test_sideloaded_snap_that_is_held_produces_no_hold_diff_either(self) -> None:
-        """The hold diff derives from the SOURCE snap (`_diff_snap_holds`), so dropping the
+        """E44 — the hold diff derives from the SOURCE snap (`_diff_snap_holds`), so dropping the
         snap must drop its hold with it — otherwise the run would propose holding a snap it
         just declined to install.
         """
@@ -909,7 +1251,7 @@ class TestSideloadedSnaps:
 
     @pytest.mark.asyncio
     async def test_store_snaps_in_the_same_listing_still_diff_and_converge(self) -> None:
-        """The filter is surgical: beta's revision difference still converges normally
+        """E47 — the filter is surgical: beta's revision difference still converges normally
         alongside the dropped sideloaded snap.
         """
         target = _HEADER + "beta      1.5        15     latest/stable   pub✓         -\n"
@@ -932,7 +1274,7 @@ class TestSideloadedSnaps:
     async def test_target_only_sideloaded_snap_is_not_offered_for_removal(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """The tool must not offer to delete a snap it cannot reinstall: a sideloaded snap
+        """E39 — the tool must not offer to delete a snap it cannot reinstall: a sideloaded snap
         only the target has is named and left alone, not turned into a removal candidate.
         """
         target = _HEADER + "orphan    9.0        x3     -               -            try\n"
@@ -950,7 +1292,7 @@ class TestSideloadedSnaps:
 
     @pytest.mark.asyncio
     async def test_store_snap_the_target_sideloaded_under_the_same_name_produces_no_diff(self) -> None:
-        """The target's sideloaded copy is what `snap install` would have to displace, so
+        """E42 — the target's sideloaded copy is what `snap install` would have to displace, so
         the name is withheld on both machines rather than offered as an install.
         """
         source = _HEADER + "beta      2.0        20     latest/stable   pub✓         -\n"
@@ -966,8 +1308,67 @@ class TestSideloadedSnaps:
         assert plan.diffs == ()
 
     @pytest.mark.asyncio
+    async def test_each_machines_sideloads_are_named_in_a_finding_of_their_own(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """E41 — one finding per machine, each naming only what that machine holds: a
+        single merged list would leave the user unable to tell which computer to go to.
+        """
+        source = _HEADER + "homemade  1.0        x1     -               -            try\n"
+        target = _HEADER + "workshop  2.0        x2     -               -            try\n"
+        context, _source, _target = make_context(
+            source_responses={"snap list --all": CommandResult(0, source, "")},
+            target_responses={"snap list --all": CommandResult(0, target, "")},
+        )
+        job = SnapSyncJob(context)
+
+        with caplog.at_level(logging.WARNING, logger="pcswitcher.jobs.base"):
+            plan = await job.plan()
+
+        assert plan.diffs == ()
+        messages = [record.message for record in caplog.records]
+        assert len(messages) == 2
+        assert [("homemade" in m, "workshop" in m) for m in messages] == [(True, False), (False, True)]
+
+    @pytest.mark.asyncio
+    async def test_a_sideloaded_source_snap_withholds_the_targets_store_copy_too(self) -> None:
+        """E43 — the mirror of the case above it: the name is withheld on BOTH machines, so
+        a snap the source can no longer describe is never turned into a removal on the target.
+        """
+        source = _HEADER + "beta      1.0        x1     -               -            try\n"
+        target = _HEADER + "beta      2.0        20     latest/stable   pub✓         -\n"
+        context, _source, _target = make_context(
+            source_responses={"snap list --all": CommandResult(0, source, "")},
+            target_responses={"snap list --all": CommandResult(0, target, "")},
+        )
+        job = SnapSyncJob(context)
+
+        plan = await job.plan()
+
+        assert plan.diffs == ()
+
+    @pytest.mark.asyncio
+    async def test_a_hold_on_a_name_sideloaded_on_the_other_machine_yields_no_hold_diff(self) -> None:
+        """E45 — the target holds `beta`, which is a sideload there; the source has `beta`
+        from the store, unheld. Withholding the name on both machines takes its hold with
+        it, so the run never proposes unholding a snap it is deliberately ignoring.
+        """
+        source = _HEADER + "beta      2.0        20     latest/stable   pub✓         -\n"
+        target = _HEADER + "beta      1.0        x1     -               -            try,held\n"
+        context, _source, _target = make_context(
+            source_responses={"snap list --all": CommandResult(0, source, "")},
+            target_responses={"snap list --all": CommandResult(0, target, "")},
+        )
+        job = SnapSyncJob(context)
+
+        plan = await job.plan()
+
+        assert not any(d.item_id.startswith("snap:hold:") for d in plan.diffs)
+        assert plan.diffs == ()
+
+    @pytest.mark.asyncio
     async def test_sideloaded_snap_present_on_both_is_not_proposed_for_removal(self) -> None:
-        """Dropping the source snap must not orphan the target's copy into an
+        """E40 — dropping the source snap must not orphan the target's copy into an
         EXTRA_ON_TARGET removal — "cannot reproduce this" must never become "delete it".
         """
         target = _HEADER + "homemade  1.0        x1     -               -            try\n"
@@ -985,6 +1386,7 @@ class TestSideloadedSnaps:
 class TestConvergeRemoval:
     @pytest.mark.asyncio
     async def test_removal_never_passes_purge(self) -> None:
+        """E36 — the removal carries no purge, so snapd's pre-removal snapshot survives it."""
         context, _source, target = make_context(
             source_responses={"snap list --all": CommandResult(0, SNAP_LIST_SOURCE, "")},
             target_responses={"snap list --all": CommandResult(0, SNAP_LIST_TARGET, "")},
@@ -1004,7 +1406,7 @@ class TestExcludePaths:
     def test_excludes_old_revisions_keeps_current_common_and_current_symlink(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The revision `current` resolves to is mirrored (kept OUT of the exclude set,
+        """E104, E105, K80 — the revision `current` resolves to is mirrored (kept OUT of the exclude set,
         decision 3); every retained OLDER revision dir is excluded, and `common`/`current`
         are always kept.
         """
@@ -1028,7 +1430,7 @@ class TestExcludePaths:
     def test_dangling_current_falls_back_to_excluding_all_revisions(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A missing/dangling `current` means the active revision is indeterminate, so every
+        """E106, K78 — a dangling `current` means the active revision is indeterminate, so every
         revision dir is excluded (safe default).
         """
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
@@ -1048,6 +1450,7 @@ class TestExcludePaths:
     def test_missing_current_symlink_falls_back_to_excluding_all_revisions(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """E107 — the same fallback when there is no `current` symlink at all."""
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         firefox_dir = tmp_path / "snap" / "firefox"
         rev = firefox_dir / "2938"
@@ -1059,6 +1462,7 @@ class TestExcludePaths:
         assert rev in paths
 
     def test_no_snap_directory_returns_empty(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """E108 — no `~/snap` at all: nothing excluded, nothing raised."""
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
         assert snap_sync_exclude_paths() == []
@@ -1067,6 +1471,7 @@ class TestExcludePaths:
 class TestValidate:
     @pytest.mark.asyncio
     async def test_snap_unavailable_on_source_yields_validation_error(self) -> None:
+        """E103, K48 — validation fails naming Atlas when snap is absent there."""
         context, _source, _target = make_context(
             source_responses={"snap version": CommandResult(127, "", "not found")}
         )
@@ -1078,6 +1483,7 @@ class TestValidate:
 
     @pytest.mark.asyncio
     async def test_snap_unavailable_on_target_yields_validation_error(self) -> None:
+        """E103, K49 — and naming Nomad when it is absent there."""
         context, _source, _target = make_context(
             target_responses={"snap version": CommandResult(127, "", "not found")}
         )
@@ -1089,6 +1495,7 @@ class TestValidate:
 
     @pytest.mark.asyncio
     async def test_target_without_passwordless_sudo_yields_validation_error(self) -> None:
+        """E102, K47 — validation fails naming Nomad, which needs sudo for install/refresh/remove."""
         context, _source, _target = make_context(
             target_responses={"sudo --non-interactive true": CommandResult(1, "", "sudo: a password is required")}
         )
@@ -1100,7 +1507,7 @@ class TestValidate:
 
     @pytest.mark.asyncio
     async def test_source_without_passwordless_sudo_yields_validation_error(self) -> None:
-        """The source needs passwordless sudo too — the orchestrator pauses snapd
+        """E101 — the source needs passwordless sudo too: the orchestrator pauses snapd
         auto-refresh via `sudo snap set system refresh.hold` on the source as well (decision 4).
         """
         context, _source, _target = make_context(
@@ -1114,6 +1521,7 @@ class TestValidate:
 
     @pytest.mark.asyncio
     async def test_valid_environment_yields_no_errors(self) -> None:
+        """K50, K51, K62."""
         context, _source, _target = make_context()
         job = SnapSyncJob(context)
 
@@ -1125,6 +1533,7 @@ class TestValidate:
 class TestJobDiscovery:
     @pytest.mark.asyncio
     async def test_orchestrator_resolves_snap_sync_to_snap_sync_job(self) -> None:
+        """K36."""
         config = MagicMock(spec=Configuration)
         config.logging = MagicMock()
         config.logging.file = 10
@@ -1144,6 +1553,7 @@ class TestSnapItem:
         assert SnapItem.ITEM_CLASS == ItemClass.SNAP
 
     def test_label_names_the_snap_channel_and_revision(self) -> None:
+        """E6 — a snap's identity is `snap:<name>`, the name alone."""
         item = SnapItem(name="firefox", channel="latest/stable", revision="4536")
 
         assert item.item_id == "snap:firefox"
@@ -1164,6 +1574,7 @@ class TestAProbeThatDidNotAnswer:
 
     @pytest.mark.asyncio
     async def test_a_source_list_that_did_not_answer_fails_the_job(self) -> None:
+        """E27, J76, J78 — a source listing that exited non-zero fails the job, naming the command."""
         context, _source, _target = make_context(
             source_responses={
                 "snap list --all": CommandResult(
@@ -1182,7 +1593,7 @@ class TestAProbeThatDidNotAnswer:
 
     @pytest.mark.asyncio
     async def test_a_target_list_that_did_not_answer_fails_the_job(self) -> None:
-        """Only the TARGET read fails here — the source answers three snaps — so nothing
+        """E28, J77 — only the TARGET read fails here (the source answers three snaps), so nothing
         but the target's exit code can produce this."""
         context, _source, _target = make_context(
             source_responses={"snap list --all": CommandResult(0, SNAP_LIST_SOURCE, "")},
@@ -1196,7 +1607,7 @@ class TestAProbeThatDidNotAnswer:
 
     @pytest.mark.asyncio
     async def test_a_source_with_no_snaps_installed_is_data_not_a_failure(self) -> None:
-        """The legitimate-empty half, and the hazard the guard above exists for: the same
+        """E26, J87 — the legitimate-empty half, and the hazard the guard above exists for: the same
         empty stdout that a failed read produces is a real answer at exit 0, and it must
         still reach the diff as "remove the target's snaps" rather than fail the job.
         """

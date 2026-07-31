@@ -30,7 +30,7 @@ from pcswitcher.jobs.packages.sync_core import (  # pyright: ignore[reportPrivat
     PackagePlan,
     PackageSyncJob,
 )
-from pcswitcher.models import CommandResult, JobSkipped, JobStatus, LogLevel, ValidationError
+from pcswitcher.models import CommandResult, JobSkipped, JobStatus, LogLevel, SyncAbortedByUser, ValidationError
 from pcswitcher.orchestrator import Orchestrator
 
 
@@ -200,6 +200,7 @@ class TestReviewGroupsByAction:
     """`_build_review_groups`: one group per action, removal titles name the verb."""
 
     def test_four_diffs_produce_four_groups_keyed_by_action(self) -> None:
+        """H97 — installs and removals never share a group: one group per action."""
         job = FakeSyncJob(make_context())
         diffs = [
             _diff("i1", DiffAction.INSTALL),
@@ -231,7 +232,7 @@ class TestReviewGroupsByAction:
         assert [g.action for g in groups] == ["install", "change", "remove", "report_only"]
 
     def test_a_report_group_is_titled_by_its_cause_not_by_the_word_report(self) -> None:
-        """Ruled by the user: "Report apt packages" named none of the three conditions it
+        """H69 — Ruled by the user: "Report apt packages" named none of the three conditions it
         could hold. The title is the cause — the `DiffClass` — and the raw enum value
         ("report_only", which once produced "Report_only fake packages") reaches no title
         in either shape.
@@ -258,8 +259,20 @@ class TestReviewGroupsByAction:
         # dropped rather than printed as a sentence with a hole in it.
         assert groups[0].note is None
 
+    def test_the_origin_report_title_names_the_machine_that_cannot_reproduce_them(self) -> None:
+        """H69 — `PKG-FR-NAME-THE-MACHINES`: this is the one report title with a machine in
+        it, and it is filled from the run's own hostnames rather than saying "the target".
+        """
+        job = FakeSyncJob(make_context())
+        diffs = [_diff("o1", DiffAction.REPORT_ONLY, DiffClass.REPO_UNAVAILABLE)]
+
+        groups = job._build_review_groups(diffs)
+
+        assert groups[0].title == "Origins target-host cannot reproduce (fake packages)"
+        assert "target" not in groups[0].title.replace("target-host", "")
+
     def test_every_pair_without_a_vocabulary_entry_still_produces_a_usable_group(self) -> None:
-        """I5b: `_ACTION_VOCABULARY` covers only the (item_class, action) pairs the four
+        """H174 — `_ACTION_VOCABULARY` covers only the (item_class, action) pairs the four
         managers produce today. The backstop the pipeline promises is that ANY other pair
         still reaches the review with a usable verb — no diff class may silently vanish
         because nobody added a vocabulary row for it. Asserted over every uncovered pair
@@ -298,7 +311,7 @@ class TestReviewGroupsByAction:
             assert [entry.item_id for entry in groups[0].entries] == ["x1"]
 
     def test_only_an_apt_config_change_is_flagged_as_overwriting_the_users_own_content(self) -> None:
-        """`PKG-FR-HARMLESS-DEFAULT`: replacing an `/etc/apt/apt.conf.d` file the target
+        """H103, H104 — `PKG-FR-HARMLESS-DEFAULT`: replacing an `/etc/apt/apt.conf.d` file the target
         already holds destroys something the user wrote there, so it must not be the answer
         confirming a screen unread produces. Every other CHANGE converges software the user
         asked for and stays preselected.
@@ -322,7 +335,7 @@ class TestReviewGroupsByAction:
         assert flagged == {"apt_config:c1"}
 
     def test_an_apt_config_install_is_not_an_overwrite(self) -> None:
-        """A file the target does not have yet displaces nothing."""
+        """H105 — A file the target does not have yet displaces nothing."""
         job = FakeSyncJob(make_context())
         diffs = [
             ItemDiff(
@@ -340,6 +353,7 @@ class TestReviewGroupsByAction:
         assert [g.overwrites_authored_content for g in groups] == [False]
 
     def test_removal_group_title_names_a_removal_verb_never_apply(self) -> None:
+        """H83 — a group title names the concrete verb for its item class, never "Apply"."""
         job = FakeSyncJob(make_context())
         diffs = [_diff("i1", DiffAction.INSTALL), _diff("r1", DiffAction.REMOVE, DiffClass.EXTRA_ON_TARGET)]
 
@@ -353,7 +367,7 @@ class TestReviewGroupsByAction:
         assert "apply" not in install_group.title.lower()
 
     def test_each_manager_names_its_own_software_and_its_own_origins(self) -> None:
-        """`PKG-NG-ORIGIN-CONVERGE` covers apt packages and flatpak applications alike, and
+        """H86 — `PKG-NG-ORIGIN-CONVERGE` covers apt packages and flatpak applications alike, and
         the narrative calls what a flatpak comes from a remote, never a repository. One
         `ORIGIN_MISMATCH` title said "repositories" and "packages" for both, so the flatpak
         group named two things flatpak does not have.
@@ -367,7 +381,7 @@ class TestReviewGroupsByAction:
         assert flatpak_group.title == "Installed from different remotes (flatpak applications)"
 
     def test_a_flatpak_action_group_says_applications_too(self) -> None:
-        """The noun is the manager's, not the report group's: an install screen names the
+        """H86 — The noun is the manager's, not the report group's: an install screen names the
         same things the report does.
         """
         groups = _job_for_manager("flatpak")._build_review_groups([_diff("i1", DiffAction.INSTALL)])
@@ -380,6 +394,7 @@ class TestConvergeDispatchByAction:
 
     @pytest.mark.asyncio
     async def test_remove_diff_produces_exactly_one_target_converge_call(self) -> None:
+        """H20 — a removal answered with the act converges once, and it is the removal."""
         job = FakeSyncJob(make_context())
         diffs = (_diff("r1", DiffAction.REMOVE, DiffClass.EXTRA_ON_TARGET),)
         _accept(job, diffs, {"r1": Decision.APPLY})
@@ -391,6 +406,7 @@ class TestConvergeDispatchByAction:
 
     @pytest.mark.asyncio
     async def test_change_diff_reaches_converge_alongside_install_and_remove(self) -> None:
+        """H21 — a change answered with the act converges exactly once."""
         job = FakeSyncJob(make_context())
         diffs = (_diff("c1", DiffAction.CHANGE, DiffClass.VERSION_MISMATCH),)
         _accept(job, diffs, {"c1": Decision.APPLY})
@@ -401,6 +417,7 @@ class TestConvergeDispatchByAction:
 
     @pytest.mark.asyncio
     async def test_report_only_diff_produces_zero_target_commands(self) -> None:
+        """H24 — a report-only finding never converges, even carrying a forced act decision."""
         job = FakeSyncJob(make_context())
         diffs = (_diff("p1", DiffAction.REPORT_ONLY, DiffClass.VERSION_MISMATCH),)
         _accept(job, diffs, {"p1": Decision.APPLY})
@@ -411,6 +428,7 @@ class TestConvergeDispatchByAction:
 
     @pytest.mark.asyncio
     async def test_ticking_only_install_group_yields_zero_removal_commands(self) -> None:
+        """H19, H22 — the approved install converges once and the declined removal converges nothing."""
         job = FakeSyncJob(make_context())
         diffs = (
             _diff("i1", DiffAction.INSTALL),
@@ -423,7 +441,30 @@ class TestConvergeDispatchByAction:
         assert [d.item_id for d in job.converge_calls] == ["i1"]
 
     @pytest.mark.asyncio
+    async def test_a_marked_item_converges_nothing_while_its_mark_is_written(self) -> None:
+        """H23 — `PKG-FR-MACHINE-SPECIFIC`: the permanent answer is a refusal as well as a
+        record. Which machine the mark lands on is `test_package_state.py`'s subject; what
+        this pins is the other half — that the item itself converges nothing, while a
+        neighbouring approved item in the same run still does.
+        """
+        context = make_context()
+        job = FakeSyncJob(context)
+        diffs = (
+            _diff("i1", DiffAction.INSTALL),
+            _diff("r1", DiffAction.REMOVE, DiffClass.EXTRA_ON_TARGET),
+        )
+        _accept(job, diffs, {"i1": Decision.SKIP_ALWAYS, "r1": Decision.APPLY})
+
+        await job.apply()
+
+        assert [d.item_id for d in job.converge_calls] == ["r1"]
+        # The mark itself IS written, so this is a refusal to converge and not a lost item.
+        source_commands = [call.args[0] for call in context.source.run_command.call_args_list]  # pyright: ignore[reportAttributeAccessIssue]
+        assert any("fake.decisions.yaml" in command for command in source_commands)
+
+    @pytest.mark.asyncio
     async def test_dry_run_zero_mutating_commands_across_all_four_action_types(self) -> None:
+        """H25, J51 — a dry run issues no converge for any action kind, however the items were answered."""
         job = FakeSyncJob(make_context(dry_run=True))
         diffs = (
             _diff("i1", DiffAction.INSTALL),
@@ -439,7 +480,7 @@ class TestConvergeDispatchByAction:
 
     @pytest.mark.asyncio
     async def test_dry_run_preview_carries_each_items_detail(self, caplog: pytest.LogCaptureFixture) -> None:
-        """ADR-014: the dry run reports exactly what would happen, and for several diff
+        """J52 — ADR-014: the dry run reports exactly what would happen, and for several diff
         classes the WHAT lives in `detail` — the signing keys an apt source install
         copies, the two versions behind a mismatch. A dry run renders no review panel,
         so dropping the detail here is the difference between a preview and a bare list
@@ -466,6 +507,7 @@ class TestDecisionsReachTheLog:
 
     @pytest.mark.asyncio
     async def test_every_presented_item_is_named_with_its_decision(self, caplog: pytest.LogCaptureFixture) -> None:
+        """J99, J101."""
         caplog.set_level(LogLevel.FULL.value, logger="pcswitcher.jobs.base")
         job = FakeSyncJob(make_context())
         diffs = (
@@ -489,7 +531,7 @@ class TestDecisionsReachTheLog:
     async def test_a_skipped_item_leaves_a_line_where_nothing_else_would(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """A skipped item converges nothing and enters no report, so this is the only
+        """H22, J3, J100 — A skipped item converges nothing and enters no report, so this is the only
         record that it was ever offered."""
         caplog.set_level(LogLevel.FULL.value, logger="pcswitcher.jobs.base")
         job = FakeSyncJob(make_context())
@@ -500,6 +542,31 @@ class TestDecisionsReachTheLog:
 
         assert job.converge_calls == []
         assert "reviewed r1 (remove): skipped this run" in caplog.messages
+
+
+class TestEveryLogRecordCarriesItsMachine:
+    """H79 — the naming rule exempts log records from saying a hostname, and the exemption
+    rests on the record carrying the machine as a field of its own. `_log` puts `host` in
+    every record's `extra` by construction; this asserts the property the exemption claims,
+    over the records one `apply()` actually emits.
+    """
+
+    @pytest.mark.asyncio
+    async def test_no_package_job_log_record_leaves_its_machine_unsaid(self, caplog: pytest.LogCaptureFixture) -> None:
+        caplog.set_level(LogLevel.FULL.value, logger="pcswitcher.jobs.base")
+        job = FakeSyncJob(make_context())
+        diffs = (
+            _diff("i1", DiffAction.INSTALL),
+            _diff("r1", DiffAction.REMOVE, DiffClass.EXTRA_ON_TARGET),
+            _diff("p1", DiffAction.REPORT_ONLY, DiffClass.VERSION_MISMATCH),
+        )
+        _accept(job, diffs, {"i1": Decision.APPLY, "r1": Decision.SKIP_ONCE, "p1": Decision.SKIP_ALWAYS})
+
+        await job.apply()
+
+        from_this_job = [record for record in caplog.records if getattr(record, "job", None) == "fake_sync"]
+        assert from_this_job, "apply() emitted no record attributable to the job"
+        assert all(getattr(record, "host", "") for record in from_this_job)
 
 
 class TestIdempotency:
@@ -515,6 +582,7 @@ class TestIdempotency:
 
     @pytest.mark.asyncio
     async def test_identical_source_and_target_produce_no_diff_no_group_and_no_mutation(self) -> None:
+        """H32, J145 — an already-converged pair produces no diff, no group, no converge and no `mutates=` command."""
         reviewer = FakeReviewer()
         context = make_context(reviewer=reviewer)
         items = [FakeItem(name="pkg-a"), FakeItem(name="pkg-b")]
@@ -564,6 +632,7 @@ class TestFinalizeUnreproducible:
 
     @pytest.mark.asyncio
     async def test_authored_snippet_is_written_to_the_source_registry_not_target(self) -> None:
+        """J147."""
         context = make_context()
         job = _FakeManualJob(context)
         diff = _unreproducible_diff("unreproducible:apt-no-candidate:brscan3")
@@ -584,6 +653,7 @@ class TestFinalizeUnreproducible:
 
     @pytest.mark.asyncio
     async def test_skip_always_on_unreproducible_item_records_on_source(self) -> None:
+        """H144 — an unreproducible item answered permanently is marked on the machine that holds it."""
         context = make_context()
         job = _FakeManualJob(context)
         diff = _unreproducible_diff("unreproducible:apt-no-candidate:brscan3")
@@ -599,6 +669,7 @@ class TestFinalizeUnreproducible:
 
     @pytest.mark.asyncio
     async def test_no_finalize_writes_during_dry_run(self) -> None:
+        """J55."""
         context = make_context(dry_run=True)
         job = _FakeManualJob(context)
         diff = _unreproducible_diff("unreproducible:apt-no-candidate:brscan3")
@@ -619,6 +690,7 @@ class TestFinalizeUnreproducible:
 
     @pytest.mark.asyncio
     async def test_no_finalize_writes_when_outcome_not_interactive(self) -> None:
+        """J45."""
         context = make_context()
         job = _FakeManualJob(context)
         diff = _unreproducible_diff("unreproducible:apt-no-candidate:brscan3")
@@ -655,6 +727,7 @@ class TestBaseHooksAreNoOps:
 
     @pytest.mark.asyncio
     async def test_base_finalize_hook_writes_nothing(self) -> None:
+        """H143 — a report-only diff answered permanently records nothing."""
         context = make_context()
         job = FakeSyncJob(context)
         diff = _unreproducible_diff("unreproducible:apt-no-candidate:brscan3")
@@ -737,6 +810,7 @@ class TestExecuteSelfContained:
 
     @pytest.mark.asyncio
     async def test_call_order_is_plan_review_accept_review_apply(self) -> None:
+        """H1 — plan, review, accept, the after-review seam, then apply — and never apply before the review returns."""
         events: list[str] = []
         reviewer = _RecordingReviewer(events)
         job = _OrderRecordingJob(make_context(reviewer=reviewer), events)
@@ -766,6 +840,7 @@ class TestExecuteSelfContained:
 
     @pytest.mark.asyncio
     async def test_missing_reviewer_raises_and_issues_no_converge(self) -> None:
+        """H8 — a job with no reviewer injected fails loudly before any converge or command."""
         job = FakeSyncJob(make_context())  # reviewer defaults to None
 
         with pytest.raises(AssertionError, match="no reviewer"):
@@ -776,6 +851,7 @@ class TestExecuteSelfContained:
 
     @pytest.mark.asyncio
     async def test_plan_failure_propagates_out_of_execute_unchanged(self) -> None:
+        """H7 — a raising `plan()` propagates unchanged and the review is never reached."""
         failure = RuntimeError("manifest capture blew up")
         reviewer = FakeReviewer()
         job = _RaisingPlanJob(make_context(reviewer=reviewer), failure)
@@ -789,7 +865,7 @@ class TestExecuteSelfContained:
 
     @pytest.mark.asyncio
     async def test_a_non_interactive_package_review_skips_the_job_instead_of_applying_nothing(self) -> None:
-        """D-26 forces every item to SKIP_ONCE without a TTY, so the job converges nothing;
+        """H9 — D-26 forces every item to SKIP_ONCE without a TTY, so the job converges nothing;
         reporting SUCCESS for that made every headless run look like four successful syncs.
         """
         events: list[str] = []
@@ -806,7 +882,7 @@ class TestExecuteSelfContained:
 
     @pytest.mark.asyncio
     async def test_an_empty_plan_is_still_a_success_and_transfers_nothing(self) -> None:
-        """Same non-interactive path, nothing to decide: the target already matches the
+        """H10, J8, J47 — Same non-interactive path, nothing to decide: the target already matches the
         source, which is the goal met — not a skip.
 
         The `after_review` seam is still skipped (`PKG-FR-NO-TERMINAL`). An empty plan says
@@ -868,14 +944,39 @@ class _StubFailingPackageJob(PackageSyncJob):
         raise PackageItemFailures("stub-failing", [])
 
 
+class _StubAbortingPackageJob(PackageSyncJob):
+    """A package job whose execute() raises `SyncAbortedByUser` — what a review screen
+    answered "stop the sync", or abandoned with Ctrl-C, hands the orchestrator.
+    """
+
+    name: ClassVar[str] = "stub_aborting_package"
+    manager_id: ClassVar[str] = "stub-aborting"
+
+    async def converge(self, diff: ItemDiff) -> CommandResult:
+        raise NotImplementedError
+
+    async def validate(self) -> list[ValidationError]:
+        return []
+
+    async def plan(self) -> PackagePlan:
+        return PackagePlan(manager="stub-aborting", diffs=(), groups=())
+
+    async def execute(self) -> None:
+        raise SyncAbortedByUser("package review aborted at 'fortunes' (Ctrl-C)")
+
+
 class _StubSuccessJob(SyncJob):
     name: ClassVar[str] = "stub_success"
+
+    def __init__(self, context: JobContext) -> None:
+        super().__init__(context)
+        self.executed = False
 
     async def validate(self) -> list[ValidationError]:
         return []
 
     async def execute(self) -> None:
-        return None
+        self.executed = True
 
 
 class _StubOtherFailureJob(SyncJob):
@@ -902,6 +1003,7 @@ class TestOrchestratorPackageItemFailuresContinuation:
 
     @pytest.mark.asyncio
     async def test_failing_package_job_does_not_cancel_remaining_jobs(self, wired_orchestrator: Orchestrator) -> None:
+        """J26."""
         orchestrator = wired_orchestrator
         failing_job = _StubFailingPackageJob(make_context())
         success_job = _StubSuccessJob(make_context())
@@ -915,8 +1017,28 @@ class TestOrchestratorPackageItemFailuresContinuation:
         assert results[1].status == JobStatus.SUCCESS
 
     @pytest.mark.asyncio
+    async def test_an_abort_raised_in_a_package_job_stops_the_run_untouched(
+        self, wired_orchestrator: Orchestrator
+    ) -> None:
+        """H157 — `PKG-FR-ABORT`: the orchestrator's per-job handler re-raises
+        `SyncAbortedByUser` ahead of both the skip branch and the failure branch, so an
+        aborted review is not converted into a FAILED job result and no later job runs. The
+        absent CRITICAL is the load-bearing half: taking the ordinary failure branch would
+        record the run as a job failure instead of an abort.
+        """
+        orchestrator = wired_orchestrator
+        aborting_job = _StubAbortingPackageJob(make_context())
+        never_run_job = _StubSuccessJob(make_context())
+
+        with pytest.raises(SyncAbortedByUser, match="fortunes"):
+            await orchestrator._execute_jobs([aborting_job, never_run_job])  # pyright: ignore[reportPrivateUsage]
+
+        assert never_run_job.executed is False
+        orchestrator._logger.critical.assert_not_called()  # pyright: ignore[reportPrivateUsage, reportAttributeAccessIssue]
+
+    @pytest.mark.asyncio
     async def test_other_exception_types_still_abort_the_run(self, wired_orchestrator: Orchestrator) -> None:
-        """Regression guard: only `PackageItemFailures` and `ProbeFailed` get the
+        """J31 — Regression guard: only `PackageItemFailures` and `ProbeFailed` get the
         non-aborting branch — every other exception must still stop the remaining jobs from
         running.
         """

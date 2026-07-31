@@ -1252,7 +1252,7 @@ class TestAptSyncEndToEnd:
         pc2_with_pcswitcher: BashLoginRemoteExecutor,
         reset_pcswitcher_state: None,
     ) -> None:
-        """A real `pc-switcher sync pc2` reinstalls a package removed from pc2, proven by
+        """J1, K9 — A real `pc-switcher sync pc2` reinstalls a package removed from pc2, proven by
         pc2's own `apt-mark showmanual` (never pc-switcher's log output).
         """
         _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
@@ -1298,7 +1298,7 @@ class TestAptSyncEndToEnd:
         pc2_with_pcswitcher: BashLoginRemoteExecutor,
         reset_pcswitcher_state: None,
     ) -> None:
-        """`--dry-run` with the same automation mapping leaves pc2's `apt-mark showmanual`
+        """J58, J59 — `--dry-run` with the same automation mapping leaves pc2's `apt-mark showmanual`
         byte-identical before and after -- ADR-014's read-only preview contract for a
         package job.
         """
@@ -1343,7 +1343,7 @@ class TestAptSyncEndToEnd:
         pc2_with_pcswitcher: BashLoginRemoteExecutor,
         reset_pcswitcher_state: None,
     ) -> None:
-        """ADR-020 D-37/D-38 at VM level, in both directions at once.
+        """A65, C2, C165, C168, C169, J53, J116 — ADR-020 D-37/D-38 at VM level, in both directions at once.
 
         The synthetic repository the source has and the target lacks feeds NO package this
         run syncs, so under derivation it does not travel and it is not a review line
@@ -1451,7 +1451,7 @@ class TestAptSyncEndToEnd:
         pc2_with_pcswitcher: BashLoginRemoteExecutor,
         reset_pcswitcher_state: None,
     ) -> None:
-        """ADR-020 D-34 class 3 at VM level: the repository that supplies the package is
+        """A30, J98 — ADR-020 D-34 class 3 at VM level: the repository that supplies the package is
         derived from the package's own approval and written during converge, so at plan time
         the target's apt has never heard the name and refuses to rehearse any transaction
         containing it.
@@ -1531,7 +1531,8 @@ class TestPackageSyncWholeRunContracts:
         pc2_with_pcswitcher: BashLoginRemoteExecutor,
         reset_pcswitcher_state: None,
     ) -> None:
-        """A non-interactive `pc-switcher sync` (no `PACKAGE_REVIEW_AUTOMATION_ENV`, no
+        """H162, J9, J12, J14, J37, J44, J49, J103 — A non-interactive `pc-switcher sync`
+        (no `PACKAGE_REVIEW_AUTOMATION_ENV`, no
         TTY on stdin/stdout -- the default for a command run through this fixture's
         plain SSH exec, which requests no pty) applies nothing, records no permanent
         decision, names every item it could not ask about, and reports the job as skipped
@@ -1611,7 +1612,7 @@ class TestPackageSyncWholeRunContracts:
         pc2_with_pcswitcher: BashLoginRemoteExecutor,
         reset_pcswitcher_state: None,
     ) -> None:
-        """A failing item does not stop the job (D-27): the item ordered after it still
+        """J20, J26, J34 — A failing item does not stop the job (D-27): the item ordered after it still
         converges, the failure's stderr and exit code land in the run's own summary, and
         the sync's own exit code is non-zero (the orchestrator derives it from job
         results, not from whether an exception propagated -- `_summarize_job_outcomes`).
@@ -1717,7 +1718,7 @@ class TestPackageSyncWholeRunContracts:
         pc2_with_pcswitcher: BashLoginRemoteExecutor,
         reset_pcswitcher_state: None,
     ) -> None:
-        """snap convergence lands the target on the source's revision (D-06) without
+        """E21, E67, K10 — snap convergence lands the target on the source's revision (D-06) without
         ever touching `snap get system refresh.hold` on either machine -- the exact
         constraint `SnapSyncJob` exists to satisfy (module docstring: `snap refresh
         --hold` with no snap name is a global-mutating command this job never calls).
@@ -1786,7 +1787,7 @@ class TestPackageSyncWholeRunContracts:
         pc2_with_pcswitcher: BashLoginRemoteExecutor,
         reset_pcswitcher_state: None,
     ) -> None:
-        """flatpak convergence installs into the scope the source item carries and
+        """K11 — flatpak convergence installs into the scope the source item carries and
         provisions the remote first (D-06, D-14): `flatpak install` refuses outright
         when its remote is not yet configured in that scope.
 
@@ -2279,7 +2280,7 @@ class TestPackageSyncWholeRunContracts:
         pc2_with_pcswitcher: BashLoginRemoteExecutor,
         reset_pcswitcher_state: None,
     ) -> None:
-        """A skip-always decision recorded in one run makes the item produce no diff in
+        """H125, H126, H166, N1, N2 — A skip-always decision recorded in one run makes the item produce no diff in
         the next run, in BOTH roles this machine can play (D-08): source (never pushed
         again) and target (never installed/removed here again).
 
@@ -2377,7 +2378,7 @@ class TestPackageSyncWholeRunContracts:
         pc2_with_pcswitcher: BashLoginRemoteExecutor,
         reset_pcswitcher_state: None,
     ) -> None:
-        """The corrected D-24 (per-manager review): with two package jobs enabled and
+        """H12, J144, K20 — The corrected D-24 (per-manager review): with two package jobs enabled and
         both machines diverged, each enabled manager completes its OWN batched review
         before that same manager issues its OWN first mutating command. With the
         cross-manager coordinator gone (plan 02-15), the old "no manager mutates before
@@ -2475,7 +2476,7 @@ class TestManualInstallsSyncEndToEnd:
         pc2_with_pcswitcher: BashLoginRemoteExecutor,
         reset_pcswitcher_state: None,
     ) -> None:
-        """A snippet registered on the source travels to the target by the job's own push
+        """G67, H30, K12, K16 — A snippet registered on the source travels to the target by the job's own push
         and is replayed there, all in one run (D-23), proven against pc2's own filesystem
         and registry file.
 
@@ -2569,7 +2570,7 @@ class TestPackageSyncIdempotency:
         pc2_with_pcswitcher: BashLoginRemoteExecutor,
         reset_pcswitcher_state: None,
     ) -> None:
-        """Run 1 converges a real apt divergence; run 2, with all three package-manager
+        """J2, N8 — Run 1 converges a real apt divergence; run 2, with all three package-manager
         jobs enabled, changes NO package-manager state on the target and no longer
         presents the converged item at all.
 
@@ -2686,7 +2687,7 @@ class TestSnapHoldCaptureTiming:
         self,
         pc2_executor: BashLoginRemoteExecutor,
     ) -> None:
-        """With a system-wide `refresh.hold` engaged, a per-snap hold still reads `held`
+        """E71 — With a system-wide `refresh.hold` engaged, a per-snap hold still reads `held`
         in `snap list` Notes, and a snap WITHOUT a per-snap hold still reads no `held`.
 
         Both directions matter. If the system hold masked the note, capture inside the
@@ -2751,7 +2752,7 @@ class TestSnapHoldCaptureTiming:
         pc2_with_pcswitcher: BashLoginRemoteExecutor,
         reset_pcswitcher_state: None,
     ) -> None:
-        """The same assumption, end to end: a hold set on the source only reaches the
+        """E55 — The same assumption, end to end: a hold set on the source only reaches the
         target through a real sync -- whose orchestrator engages the system-wide
         `refresh.hold` on both hosts around the job window (L6) before snap_sync reads
         `snap list`.
@@ -2817,7 +2818,7 @@ class TestBlockStateDecisionRoundTrip:
         pc2_with_pcswitcher: BashLoginRemoteExecutor,
         reset_pcswitcher_state: None,
     ) -> None:
-        """Run 1 records SKIP_ALWAYS for a source-only `apt-mark hold`; run 2 force-maps
+        """B42, B47, N4 — Run 1 records SKIP_ALWAYS for a source-only `apt-mark hold`; run 2 force-maps
         the same item to APPLY and the hold still never lands on pc2.
 
         Same proof shape as `test_skip_always_is_inert_in_both_roles`: if the item is
@@ -2883,7 +2884,7 @@ class TestBlockStateDecisionRoundTrip:
         pc2_with_pcswitcher: BashLoginRemoteExecutor,
         reset_pcswitcher_state: None,
     ) -> None:
-        """The snap half of the same requirement, whose identity (`snap:hold:<name>`) is
+        """E68, H122, N5 — The snap half of the same requirement, whose identity (`snap:hold:<name>`) is
         a strict superstring of the snap item's own (`snap:<name>`) -- so a filter that
         matched on the plain prefix would silence the wrong item, and one that matched
         only captured items would silence neither.
@@ -2954,7 +2955,7 @@ class TestCrossDirectionRoundTrips:
         pc2_with_pcswitcher: BashLoginRemoteExecutor,
         reset_pcswitcher_state: None,
     ) -> None:
-        """N4, whole: pc1 -> pc2 installs a package; the user then removes it on pc2;
+        """A54, H31, H114, N7, N9 — N4, whole: pc1 -> pc2 installs a package; the user then removes it on pc2;
         pc2 -> pc1 offers that removal as an item that does NOT take effect on its own
         and DOES when approved.
 
@@ -3051,7 +3052,7 @@ class TestCrossDirectionRoundTrips:
         pc2_with_pcswitcher: BashLoginRemoteExecutor,
         reset_pcswitcher_state: None,
     ) -> None:
-        """C24: a vendor repository file that exists only on the TARGET is removed, and
+        """C24, C63, C104: a vendor repository file that exists only on the TARGET is removed, and
         its signing key goes with it although the user decided only about the repository —
         leaving pc2 with an `apt-get update` that works and no longer reaches for the
         removed repository at all.
@@ -3196,6 +3197,7 @@ class TestTheESMAttachmentGateOnVMs:
         pc2_with_pcswitcher: BashLoginRemoteExecutor,
         reset_pcswitcher_state: None,
     ) -> None:
+        """H54, J10, N18."""
         _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
 
         esm_dests = [f"{_APT_SOURCES_DIR}/{name}" for name in _ESM_SOURCE_BODIES]

@@ -327,6 +327,7 @@ class TestCapture:
 
     @pytest.mark.asyncio
     async def test_same_application_both_scopes_yields_two_distinct_identities(self) -> None:
+        """F1 — one application in both installations is two items, each carrying its own scope."""
         context, _source, _target = make_context(
             source_responses={"flatpak list --app": CommandResult(0, FLATPAK_LIST_BOTH_SCOPES, "")}
         )
@@ -340,6 +341,7 @@ class TestCapture:
 
     @pytest.mark.asyncio
     async def test_unrecognized_installation_value_is_skipped(self) -> None:
+        """F119 — an installation that is neither `user` nor `system` yields no item at all."""
         weird = "org.example.Weird\t1.0\tflathub\tcustom-install\torg.example.Weird/x86_64/stable\n"
         context, _source, _target = make_context(source_responses={"flatpak list --app": CommandResult(0, weird, "")})
         job = FlatpakSyncJob(context)
@@ -347,7 +349,22 @@ class TestCapture:
         assert await job.capture_source_items() == []
 
     @pytest.mark.asyncio
+    async def test_only_the_user_and_system_installations_are_ever_asked(self) -> None:
+        """F120 — a third installation's remotes and masks are never read: every remotes and mask
+        command names one of the two installations this job knows about.
+        """
+        context, source, target = make_context(source_responses=SOURCE_RESPONSES, target_responses=TARGET_RESPONSES)
+
+        await FlatpakSyncJob(context).plan()
+
+        for calls in (all_calls(source), all_calls(target)):
+            scoped = [cmd for cmd in calls if "flatpak remotes" in cmd or " mask" in cmd]
+            assert scoped
+            assert all("--user" in cmd or "--system" in cmd for cmd in scoped)
+
+    @pytest.mark.asyncio
     async def test_no_apps_installed_yields_empty_list_not_a_crash(self) -> None:
+        """F7 — an empty listing at exit 0 is a machine with no flatpaks."""
         context, _source, _target = make_context(source_responses={"flatpak list --app": CommandResult(0, "", "")})
         job = FlatpakSyncJob(context)
 
@@ -368,6 +385,7 @@ class TestRefIdentityCarriesTheBranch:
 
     @pytest.mark.asyncio
     async def test_capture_asks_for_the_ref_column_and_keeps_it_on_the_item(self) -> None:
+        """F12 — the full `<application>/<arch>/<branch>` reference is captured and kept as the identity."""
         context, source, _target = make_context(
             source_responses={"flatpak list --app": CommandResult(0, _BETA_REF_LINE, "")}
         )
@@ -381,7 +399,7 @@ class TestRefIdentityCarriesTheBranch:
 
     @pytest.mark.asyncio
     async def test_two_branches_of_one_application_in_one_scope_are_two_items(self) -> None:
-        """`(scope, application)` is not a unique key for a machine's own listing: keying
+        """F10 — `(scope, application)` is not a unique key for a machine's own listing: keying
         on it folds the two rows into one and silently loses a ref.
         """
         context, _source, _target = make_context(
@@ -394,7 +412,7 @@ class TestRefIdentityCarriesTheBranch:
         assert len({item.item_id for item in items}) == 2
 
     def test_origin_stays_out_of_the_identity(self) -> None:
-        """The opposite ruling from branch, and for a measured reason: an install-plus-
+        """F13 — The opposite ruling from branch, and for a measured reason: an install-plus-
         removal pair on an origin change cannot converge, because
         `flatpak install <other remote> <ref>` on an installed ref refuses.
         """
@@ -406,6 +424,7 @@ class TestRefIdentityCarriesTheBranch:
 
     @pytest.mark.asyncio
     async def test_a_branch_change_reads_as_install_plus_removal_never_a_version_mismatch(self) -> None:
+        """F11 — two branches of one application are two items, so a branch move is an install plus a removal."""
         context, _source, _target = make_context(
             source_responses={
                 "flatpak list --app": CommandResult(0, _BETA_REF_LINE, ""),
@@ -432,6 +451,7 @@ class TestRefIdentityCarriesTheBranch:
 
     @pytest.mark.asyncio
     async def test_install_names_the_full_ref_after_the_remote(self) -> None:
+        """F12 — the install names the remote and then the full reference."""
         context, _source, target = make_context(
             source_responses={
                 "flatpak list --app": CommandResult(0, _BETA_REF_LINE, ""),
@@ -452,6 +472,7 @@ class TestRefIdentityCarriesTheBranch:
 
     @pytest.mark.asyncio
     async def test_uninstall_names_the_full_ref(self) -> None:
+        """F12 — the uninstall names the full reference and its scope."""
         context, _source, target = make_context(
             target_responses={"flatpak list --app": CommandResult(0, _BETA_REF_LINE, "")},
         )
@@ -472,6 +493,9 @@ class TestPlanDiff:
 
     @pytest.mark.asyncio
     async def test_full_diff_taxonomy(self) -> None:
+        """F1, F9, F15, F16, F17, F18 — source-only installs, target-only removals, a version report
+        and the silent identical pair, in one plan.
+        """
         context, _source, _target = make_context(source_responses=SOURCE_RESPONSES, target_responses=TARGET_RESPONSES)
         job = FlatpakSyncJob(context)
 
@@ -577,6 +601,7 @@ class TestRefOriginMismatch:
 
     @pytest.mark.asyncio
     async def test_two_differently_named_remotes_yield_one_report_only_diff(self) -> None:
+        """F88 — one report-only item naming both remotes and both URLs, and it reaches the review screen."""
         context, _source, _target = origin_pair_context(source_origin="flathub", target_origin="flathub-beta")
         job = FlatpakSyncJob(context)
 
@@ -598,7 +623,7 @@ class TestRefOriginMismatch:
 
     @pytest.mark.asyncio
     async def test_origin_mismatch_outranks_a_version_mismatch(self) -> None:
-        """Two vendors' builds of one ref share no version scale, so "source has X, target
+        """F89 — Two vendors' builds of one ref share no version scale, so "source has X, target
         has Y" would state a difference of degree where the real difference is of provenance.
         """
         context, _source, _target = origin_pair_context(
@@ -618,7 +643,7 @@ class TestRefOriginMismatch:
 
     @pytest.mark.asyncio
     async def test_one_name_pointing_at_two_vendors_is_a_mismatch(self) -> None:
-        """The case a name comparison cannot see (`5fc3ac01`): both machines report the
+        """F90 — The case a name comparison cannot see (`5fc3ac01`): both machines report the
         ref's origin as `flathub`, and the two `flathub`s are different vendors.
         """
         context, _source, _target = origin_pair_context(
@@ -638,7 +663,7 @@ class TestRefOriginMismatch:
 
     @pytest.mark.asyncio
     async def test_a_remote_the_two_machines_merely_named_differently_is_not_a_mismatch(self) -> None:
-        """One vendor under two labels. Reporting it would be noise about a label, and the
+        """F91 — One vendor under two labels. Reporting it would be noise about a label, and the
         label is not what D-41 replicates.
         """
         context, _source, _target = origin_pair_context(
@@ -655,7 +680,7 @@ class TestRefOriginMismatch:
 
     @pytest.mark.asyncio
     async def test_one_vendor_and_one_version_still_produces_no_diff(self) -> None:
-        """Negative control: the ordinary case must stay silent, or the mismatch branch is
+        """F18 — Negative control: the ordinary case must stay silent, or the mismatch branch is
         reporting the machines rather than a divergence.
         """
         context, _source, _target = origin_pair_context()
@@ -667,7 +692,7 @@ class TestRefOriginMismatch:
 
     @pytest.mark.asyncio
     async def test_an_origin_naming_no_configured_remote_matches_nothing(self) -> None:
-        """A ref whose origin remote the machine no longer configures has no URL, and an
+        """F92 — A ref whose origin remote the machine no longer configures has no URL, and an
         absent URL is a value of its own that matches nothing — not even the same name on the
         other machine (`PKG-FR-FLATPAK-ORIGIN-DIFF`). Falling back to the name would call two
         unresolvable origins one origin on no evidence at all.
@@ -686,7 +711,7 @@ class TestRefOriginMismatch:
 
     @pytest.mark.asyncio
     async def test_a_side_with_no_url_says_so_rather_than_printing_a_bare_name(self) -> None:
-        """Both sides name `flathub`, so a detail that printed the names alone would report a
+        """F92 — Both sides name `flathub`, so a detail that printed the names alone would report a
         divergence and show two identical strings. The missing URL is the finding.
         """
         context, _source, _target = origin_pair_context(
@@ -706,6 +731,7 @@ class TestRefOriginMismatch:
 
     @pytest.mark.asyncio
     async def test_an_unresolvable_origin_with_a_different_name_is_still_reported(self) -> None:
+        """F92 — an absent URL matches nothing, whatever the two names are."""
         context, _source, _target = origin_pair_context(
             source_origin="flathub",
             target_origin="flathub-beta",
@@ -724,7 +750,7 @@ class TestRefOriginMismatch:
 
     @pytest.mark.asyncio
     async def test_the_mismatch_is_reported_and_never_converged(self) -> None:
-        """`REPORT_ONLY` is forced by flatpak, not chosen: `flatpak install <other remote>
+        """F93 — `REPORT_ONLY` is forced by flatpak, not chosen: `flatpak install <other remote>
         <installed ref>` refuses on an already-installed ref, so approving the entry must
         still issue no install and no uninstall.
         """
@@ -739,7 +765,7 @@ class TestRefOriginMismatch:
 
     @pytest.mark.asyncio
     async def test_a_skip_always_on_the_targets_own_remote_does_not_hide_the_mismatch(self) -> None:
-        """The URL maps are the UNFILTERED captures. A machine-local mark on a remote makes
+        """F94 — The URL maps are the UNFILTERED captures. A machine-local mark on a remote makes
         it inert as an item; letting it withdraw the URL as well would silently switch the
         wrong-vendor finding off on exactly the machine that recorded it.
         """
@@ -758,7 +784,7 @@ class TestRefOriginMismatch:
 
     @pytest.mark.asyncio
     async def test_a_scope_split_is_two_items_not_an_origin_mismatch(self) -> None:
-        """Scope is identity, so the two sides are different items and never meet in the
+        """F9 — Scope is identity, so the two sides are different items and never meet in the
         both-present arm at all — the mismatch branch must not reach across scopes.
         """
         context, _source, _target = origin_pair_context(
@@ -818,6 +844,7 @@ class TestRemotesAreDerivedFromApprovedRefs:
 
     @pytest.mark.asyncio
     async def test_no_remote_appears_in_any_review_group(self) -> None:
+        """F19, H52 — a run that must add a remote shows none of it, and writes it anyway."""
         context, _source, target = make_context(source_responses=derivation_source(), fake_target=FakeFlatpakTarget())
         job = FlatpakSyncJob(context)
 
@@ -828,6 +855,7 @@ class TestRemotesAreDerivedFromApprovedRefs:
 
     @pytest.mark.asyncio
     async def test_a_remote_is_provisioned_before_the_ref_that_needed_it(self) -> None:
+        """F21 — the remote lands before the first install runs."""
         context, _source, target = make_context(source_responses=derivation_source(), fake_target=FakeFlatpakTarget())
 
         await run_job(FlatpakSyncJob(context))
@@ -841,6 +869,7 @@ class TestRemotesAreDerivedFromApprovedRefs:
 
     @pytest.mark.asyncio
     async def test_a_remote_no_approved_ref_needs_does_not_travel(self) -> None:
+        """F23 — no remote is exempt: one no approved ref comes from is left behind."""
         context, _source, target = make_context(
             source_responses=derivation_source(
                 remotes=remote_row("flathub", _SRC_URL) + remote_row("unused", "https://unused.example.org/repo/")
@@ -854,6 +883,7 @@ class TestRemotesAreDerivedFromApprovedRefs:
 
     @pytest.mark.asyncio
     async def test_declining_the_ref_declines_its_remote(self) -> None:
+        """F24 — declining the only application that needed it is the only way to decline a remote."""
         context, _source, target = make_context(source_responses=derivation_source(), fake_target=FakeFlatpakTarget())
 
         await run_job(FlatpakSyncJob(context), approve=lambda _diff: False)
@@ -863,6 +893,7 @@ class TestRemotesAreDerivedFromApprovedRefs:
 
     @pytest.mark.asyncio
     async def test_a_differing_url_is_repointed_with_no_review_line(self) -> None:
+        """F20, F45 — a URL both machines have but disagree about is repointed in place, silently."""
         context, _source, target = make_context(
             source_responses=derivation_source(),
             fake_target=FakeFlatpakTarget(remotes={"user": {"flathub": _TGT_URL}}),
@@ -878,6 +909,7 @@ class TestRemotesAreDerivedFromApprovedRefs:
 
     @pytest.mark.asyncio
     async def test_a_remote_the_target_already_matches_is_not_written_at_all(self) -> None:
+        """F27 — a target copy matching in every respect costs no command."""
         context, _source, target = make_context(
             source_responses=derivation_source(),
             fake_target=FakeFlatpakTarget(remotes={"user": {"flathub": _SRC_URL}}),
@@ -889,6 +921,9 @@ class TestRemotesAreDerivedFromApprovedRefs:
 
     @pytest.mark.asyncio
     async def test_a_user_scope_ref_derives_only_the_user_scope_remote(self) -> None:
+        """F25, F141 — the same remote name in the other scope is not provisioned, and a user-scope
+        add never escalates.
+        """
         context, _source, target = make_context(
             source_responses=derivation_source(system_remotes=remote_row("flathub", _SRC_URL)),
             fake_target=FakeFlatpakTarget(),
@@ -904,7 +939,7 @@ class TestRemotesAreDerivedFromApprovedRefs:
 
     @pytest.mark.asyncio
     async def test_the_same_remote_in_two_scopes_is_derived_once_per_scope(self) -> None:
-        """A remote is per-installation even with a byte-identical URL, so a user ref and a
+        """F26 — A remote is per-installation even with a byte-identical URL, so a user ref and a
         system ref from `flathub` need two provisionings, not one.
         """
         system_app = "org.example.Sys\t1.0\tflathub\tsystem\torg.example.Sys/x86_64/stable\n"
@@ -924,7 +959,7 @@ class TestRemotesAreDerivedFromApprovedRefs:
 
     @pytest.mark.asyncio
     async def test_the_runtime_an_approved_app_needs_brings_its_own_remote(self) -> None:
-        """An app on one remote built against a runtime the source holds from another:
+        """F22 — An app on one remote built against a runtime the source holds from another:
         deriving from the app's origin alone leaves the install unable to resolve its
         runtime.
         """
@@ -944,6 +979,7 @@ class TestRemotesAreDerivedFromApprovedRefs:
 
     @pytest.mark.asyncio
     async def test_a_failed_derived_write_fails_only_the_ref_that_needed_it(self) -> None:
+        """F96 — an application from a remote that provisioned fine still installs."""
         second = "org.example.Other\t1.0\tsecond\tuser\torg.example.Other/x86_64/stable\n"
         target = FakeFlatpakTarget(
             responses={
@@ -966,6 +1002,7 @@ class TestRemotesAreDerivedFromApprovedRefs:
 
     @pytest.mark.asyncio
     async def test_a_failed_derived_write_names_the_remote_and_its_own_stderr(self) -> None:
+        """F95 — the remote fails no item of its own; the application that needed it carries flatpak's error."""
         target = FakeFlatpakTarget(
             responses={"remote-add": CommandResult(1, "", "GPG verification failed")},
         )
@@ -984,7 +1021,54 @@ class TestRemotesAreDerivedFromApprovedRefs:
         assert "GPG verification failed" in str(excinfo.value)
 
     @pytest.mark.asyncio
+    async def test_two_approved_refs_from_one_failed_remote_both_fail_naming_it(self) -> None:
+        """F97 — the D-39 attribution map is per ref, so one write failure is charged to each of them."""
+        second = "org.example.Other\t1.0\tflathub\tuser\torg.example.Other/x86_64/stable\n"
+        target = FakeFlatpakTarget(responses={"remote-add": CommandResult(1, "", "GPG verification failed")})
+        context, _source, _target = make_context(
+            source_responses=derivation_source(apps=_APP_LINE + second), fake_target=target
+        )
+        job = FlatpakSyncJob(context)
+        plan = await job.plan()
+        job.accept_review(
+            plan, ReviewOutcome(decisions={d.item_id: Decision.APPLY for d in plan.diffs}, was_interactive=True)
+        )
+
+        with pytest.raises(PackageItemFailures) as raised:
+            await job.apply()
+
+        failed = {diff.item_id: reason for diff, reason in raised.value.failures}
+        assert set(failed) == {_APP_ID, "flatpak:ref:user:org.example.Other/x86_64/stable"}
+        assert all("flathub" in reason for reason in failed.values())
+
+    @pytest.mark.asyncio
+    async def test_a_remote_the_source_does_not_report_fails_the_refs_that_named_it(self) -> None:
+        """F98 — the source's ref names an origin the source's own remote list does not carry, so the
+        write has nothing to replicate: the failure is recorded against the remote and charged to the
+        approved refs, never raised as an item of its own.
+        """
+        app = "org.example.NeedsRemote\t1.0\tcustomremote\tuser\torg.example.NeedsRemote/x86_64/stable\n"
+        context, _source, target = make_context(
+            source_responses=derivation_source(apps=app), fake_target=FakeFlatpakTarget()
+        )
+        job = FlatpakSyncJob(context)
+        plan = await job.plan()
+        job.accept_review(
+            plan, ReviewOutcome(decisions={d.item_id: Decision.APPLY for d in plan.diffs}, was_interactive=True)
+        )
+
+        with pytest.raises(PackageItemFailures) as raised:
+            await job.apply()
+
+        assert [diff.item_id for diff, _reason in raised.value.failures] == [
+            "flatpak:ref:user:org.example.NeedsRemote/x86_64/stable"
+        ]
+        assert "source-host reports no user-scope remote named 'customremote'" in raised.value.failures[0][1]
+        assert not any("remote-add" in cmd for cmd in all_calls(target))
+
+    @pytest.mark.asyncio
     async def test_every_derived_write_carries_mutates(self) -> None:
+        """F29 — every derived remote write is gated and traced."""
         context, _source, target = make_context(
             source_responses=derivation_source(),
             fake_target=FakeFlatpakTarget(remotes={"user": {"flathub": _TGT_URL}}),
@@ -999,6 +1083,7 @@ class TestRemotesAreDerivedFromApprovedRefs:
 
     @pytest.mark.asyncio
     async def test_a_dry_run_previews_the_derived_writes_and_issues_none(self) -> None:
+        """F28, J54 — the derived writes appear in the preview and no command is issued."""
         context, _source, target = make_context(
             source_responses=derivation_source(), fake_target=FakeFlatpakTarget(), dry_run=True
         )
@@ -1092,6 +1177,7 @@ class TestARepointThatMovesAMachineSpecificRefIsAsked:
 
     @pytest.mark.asyncio
     async def test_a_machine_specific_ref_turns_the_repoint_into_a_two_answer_entry(self) -> None:
+        """F48, H57 — the entry is labelled by remote and scope and offers two answers."""
         context, _source, _target = make_context(source_responses=derivation_source(), fake_target=conflict_target())
         job = FlatpakSyncJob(context)
 
@@ -1104,7 +1190,7 @@ class TestARepointThatMovesAMachineSpecificRefIsAsked:
 
     @pytest.mark.asyncio
     async def test_a_target_only_ref_is_not_machine_specific_and_the_repoint_stays_silent(self) -> None:
-        """The wording that matters. A ref the target has and the source does not is an
+        """F45, F52 — The wording that matters. A ref the target has and the source does not is an
         ordinary REMOVE candidate with a review line of its own; only an entry in the
         target's decision file makes a ref invisible enough to need this screen.
         """
@@ -1121,6 +1207,7 @@ class TestARepointThatMovesAMachineSpecificRefIsAsked:
 
     @pytest.mark.asyncio
     async def test_the_entry_shows_both_configurations_target_first_and_never_a_diff(self) -> None:
+        """F49 — both configurations in full, the target's first."""
         context, _source, _target = make_context(source_responses=derivation_source(), fake_target=conflict_target())
         job = FlatpakSyncJob(context)
 
@@ -1130,6 +1217,7 @@ class TestARepointThatMovesAMachineSpecificRefIsAsked:
 
     @pytest.mark.asyncio
     async def test_only_the_differing_facets_are_shown_and_a_trust_divergence_is_one_of_them(self) -> None:
+        """F50 — URL and verification both differ, and both sides show both."""
         context, _source, _target = make_context(
             source_responses=derivation_source(),
             fake_target=conflict_target(unverified={("user", "flathub")}),
@@ -1145,6 +1233,7 @@ class TestARepointThatMovesAMachineSpecificRefIsAsked:
 
     @pytest.mark.asyncio
     async def test_the_detail_names_the_machine_specific_refs_that_are_the_reason(self) -> None:
+        """F51 — every machine-specific application taking the remote as origin is named."""
         second = "org.example.AlsoKept/x86_64/stable"
         context, _source, _target = make_context(
             source_responses=derivation_source(),
@@ -1162,7 +1251,7 @@ class TestARepointThatMovesAMachineSpecificRefIsAsked:
 
     @pytest.mark.asyncio
     async def test_finding_the_conflict_costs_no_command_of_its_own(self) -> None:
-        """Unlike apt's file-level screen, which pays two `cat`s per entry: a remote's whole
+        """F59 — Unlike apt's file-level screen, which pays two `cat`s per entry: a remote's whole
         record is already on the item the diff was built from.
         """
         context, source, target = make_context(source_responses=derivation_source(), fake_target=conflict_target())
@@ -1178,7 +1267,7 @@ class TestARepointThatMovesAMachineSpecificRefIsAsked:
 
     @pytest.mark.asyncio
     async def test_a_remote_the_target_lacks_is_an_add_and_never_a_conflict(self) -> None:
-        """Nothing of the target's is being replaced, so there is nothing to put to the user
+        """F53 — Nothing of the target's is being replaced, so there is nothing to put to the user
         — even though the machine-specific ref names a remote the target cannot resolve.
         """
         context, _source, target = make_context(
@@ -1193,7 +1282,7 @@ class TestARepointThatMovesAMachineSpecificRefIsAsked:
 
     @pytest.mark.asyncio
     async def test_a_remote_no_approved_ref_could_need_is_never_a_conflict(self) -> None:
-        """A remote nothing derives is never written, so asking about it would describe a
+        """F54 — A remote nothing derives is never written, so asking about it would describe a
         change this run was not going to make. The source's app comes from `other`, and only
         the machine-specific ref uses `flathub`.
         """
@@ -1214,7 +1303,7 @@ class TestARepointThatMovesAMachineSpecificRefIsAsked:
 
     @pytest.mark.asyncio
     async def test_a_signing_key_difference_alone_stays_silent(self) -> None:
-        """`--gpg-import` merges into the remote's ostree keyring rather than replacing it,
+        """F47 — `--gpg-import` merges into the remote's ostree keyring rather than replacing it,
         so importing the source's key can neither move the ref's origin nor withdraw trust —
         there is no harm behind it to put to the user.
         """
@@ -1234,6 +1323,7 @@ class TestARepointThatMovesAMachineSpecificRefIsAsked:
 
     @pytest.mark.asyncio
     async def test_overwrite_repoints_the_remote_and_installs_the_ref(self) -> None:
+        """F55 — answering overwrite repoints the remote and the approved application installs."""
         context, _source, target = make_context(source_responses=derivation_source(), fake_target=conflict_target())
         job = FlatpakSyncJob(context)
 
@@ -1244,6 +1334,7 @@ class TestARepointThatMovesAMachineSpecificRefIsAsked:
 
     @pytest.mark.asyncio
     async def test_skip_once_leaves_the_targets_remote_exactly_as_it_was(self) -> None:
+        """F56 — a decline writes nothing to the target's remote."""
         context, _source, target = make_context(source_responses=derivation_source(), fake_target=conflict_target())
         job = FlatpakSyncJob(context)
 
@@ -1254,7 +1345,7 @@ class TestARepointThatMovesAMachineSpecificRefIsAsked:
 
     @pytest.mark.asyncio
     async def test_skip_once_fails_the_ref_that_needed_the_source_url_naming_the_decision(self) -> None:
-        """D-39, and the reason a skipped conflict is not the same as no conflict: the ref
+        """F56 — D-39, and the reason a skipped conflict is not the same as no conflict: the ref
         the user approved cannot be delivered from the origin they were shown, and installing
         it from the URL the target still has is the wrong-vendor outcome the whole origin
         guarantee exists to prevent.
@@ -1271,8 +1362,34 @@ class TestARepointThatMovesAMachineSpecificRefIsAsked:
         assert "flathub" in str(excinfo.value)
 
     @pytest.mark.asyncio
+    async def test_skip_once_fails_every_approved_ref_that_needed_the_source_url(self) -> None:
+        """F60 — one declined remote, two failures: the rule is per approved ref, not per remote."""
+        second_ref = "org.example.Second/x86_64/stable"
+        second = f"org.example.Second\t1.0\tflathub\tuser\t{second_ref}\n"
+        context, _source, _target = make_context(
+            source_responses=derivation_source(apps=_APP_LINE + second), fake_target=conflict_target()
+        )
+        job = FlatpakSyncJob(context)
+        plan = await job.plan()
+        job.accept_review(
+            plan,
+            ReviewOutcome(
+                decisions={diff.item_id: Decision.APPLY for diff in plan.diffs}
+                | {_FLATHUB_CONFLICT_ID: Decision.SKIP_ONCE},
+                was_interactive=True,
+            ),
+        )
+
+        with pytest.raises(PackageItemFailures) as raised:
+            await job.apply()
+
+        failed = {diff.item_id: reason for diff, reason in raised.value.failures}
+        assert set(failed) == {_APP_ID, f"flatpak:ref:user:{second_ref}"}
+        assert all("chose to keep target-host's own version" in reason for reason in failed.values())
+
+    @pytest.mark.asyncio
     async def test_an_undecided_conflict_is_a_skip_not_a_silent_overwrite(self) -> None:
-        """What a non-interactive run produces: `review_items` never presented the screen, so
+        """F57 — What a non-interactive run produces: `review_items` never presented the screen, so
         no decision exists for it. Anything other than an explicit overwrite must leave the
         target's remote alone.
         """
@@ -1284,7 +1401,7 @@ class TestARepointThatMovesAMachineSpecificRefIsAsked:
 
     @pytest.mark.asyncio
     async def test_the_conflict_screen_is_neither_a_removal_direction_nor_promotable(self) -> None:
-        """Two answers, recorded nowhere: the never-offer-again promotion must not follow it,
+        """F58 — Two answers, recorded nowhere: the never-offer-again promotion must not follow it,
         and it must not arrive unticked as if it were a deletion.
         """
         assert not _is_promotable_group(REPO_CONFLICT_REVIEW_ACTION)
@@ -1292,7 +1409,7 @@ class TestARepointThatMovesAMachineSpecificRefIsAsked:
 
     @pytest.mark.asyncio
     async def test_a_conflict_id_marked_skip_always_reaches_no_decision_file(self) -> None:
-        """Deliberate negative control — it must stay green. A conflict id labels no diff, so
+        """F58, F77 — Deliberate negative control — it must stay green. A conflict id labels no diff, so
         `_record_permanent_skips` cannot reach one however the decision arrived, including
         from a hand-assembled outcome; there is no prefix filter to break and this test
         exists to keep it that way. The ref decided the same way in the same run IS recorded,
@@ -1399,13 +1516,14 @@ class TestRemoteTrustCapture:
         assert _parse_keyring_digests(output) == {"my.remote.name": _SOURCE_KEY_DIGEST}
 
     def test_no_keyring_files_yields_no_digests(self) -> None:
-        """The glob matches nothing, `sha256sum` prints nothing and exits 1 — a scope
+        """F8 — The glob matches nothing, `sha256sum` prints nothing and exits 1 — a scope
         whose remotes all rely on a machine-level trust anchor, not an error.
         """
         assert _parse_keyring_digests("") == {}
 
     @pytest.mark.asyncio
     async def test_each_scope_reads_its_own_repo_directory_on_both_machines(self) -> None:
+        """F2 — each scope's keyring digests are read from that scope's own repo directory, per machine."""
         context, source, target = make_context(source_responses=SOURCE_RESPONSES, target_responses=TARGET_RESPONSES)
         job = FlatpakSyncJob(context)
 
@@ -1417,7 +1535,7 @@ class TestRemoteTrustCapture:
 
     @pytest.mark.asyncio
     async def test_same_name_remote_in_each_scope_carries_its_own_key(self) -> None:
-        """Scope stays identity: the two installations' `flathub` entries carry their own
+        """F2 — Scope stays identity: the two installations' `flathub` entries carry their own
         keyrings, so the captured items differ in exactly the scope whose key differs.
         """
         context, _source, _target = make_context(
@@ -1571,6 +1689,7 @@ class TestRemoteTrustTravelsWithTheDerivedWrite:
     async def test_signed_remote_is_added_with_the_sources_own_key(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """F31 — the remote is created verified, with the source's own key bytes."""
         job, target = trust_job(tmp_path, monkeypatch, remote_line=self._SIGNED, key_digest=_SOURCE_KEY_DIGEST)
 
         await run_job(job)
@@ -1587,7 +1706,7 @@ class TestRemoteTrustTravelsWithTheDerivedWrite:
     async def test_staging_stays_under_the_targets_own_home(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """`send_file` is plain SFTP as the SSH user, so every staged byte lands under
+        """F32 — `send_file` is plain SFTP as the SSH user, so every staged byte lands under
         that user's home — never `/etc`, never the flatpak store.
         """
         job, target = trust_job(tmp_path, monkeypatch, remote_line=self._SIGNED, key_digest=_SOURCE_KEY_DIGEST)
@@ -1600,6 +1719,7 @@ class TestRemoteTrustTravelsWithTheDerivedWrite:
 
     @pytest.mark.asyncio
     async def test_every_staging_write_carries_mutates(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """F32 — every staging write is gated and traced."""
         job, target = trust_job(tmp_path, monkeypatch, remote_line=self._SIGNED, key_digest=_SOURCE_KEY_DIGEST)
 
         await run_job(job)
@@ -1614,6 +1734,7 @@ class TestRemoteTrustTravelsWithTheDerivedWrite:
     async def test_staged_key_is_discarded_even_when_remote_add_fails(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """F32 — the staged copy goes even on the failure path."""
         job, target = trust_job(
             tmp_path,
             monkeypatch,
@@ -1630,6 +1751,7 @@ class TestRemoteTrustTravelsWithTheDerivedWrite:
     async def test_unverified_source_remote_replicates_as_unverified(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """F33 — no key is transferred for a remote the source does not verify."""
         job, target = trust_job(tmp_path, monkeypatch, remote_line=self._UNVERIFIED, key_digest=None)
 
         await run_job(job)
@@ -1643,6 +1765,7 @@ class TestRemoteTrustTravelsWithTheDerivedWrite:
     async def test_verified_source_remote_is_never_downgraded_even_if_the_target_is_unverified(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """F34, F46 — the target is lifted back to verified, never replicated as unverified."""
         job, target = trust_job(
             tmp_path,
             monkeypatch,
@@ -1666,7 +1789,7 @@ class TestRemoteTrustTravelsWithTheDerivedWrite:
     async def test_change_to_an_unverified_source_remote_disables_verification(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The source's own state is what replicates: an unverified source remote lands
+        """F35, F46 — The source's own state is what replicates: an unverified source remote lands
         unverified rather than converged into a lie.
         """
         job, target = trust_job(
@@ -1687,6 +1810,7 @@ class TestRemoteTrustTravelsWithTheDerivedWrite:
     async def test_system_scope_add_uses_sudo_and_still_stages_in_the_user_home(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """F141 — a system-scope remote add escalates and still stages its key in the target's own home."""
         job, target = trust_job(
             tmp_path, monkeypatch, remote_line=self._SIGNED, key_digest=_SOURCE_KEY_DIGEST, scope="system"
         )
@@ -1701,10 +1825,31 @@ class TestRemoteTrustTravelsWithTheDerivedWrite:
         assert "--gpg-import=/home/tester/.cache/pc-switcher/" in add_cmd
 
     @pytest.mark.asyncio
+    async def test_a_system_scope_repoint_runs_under_sudo(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """F143 — the repoint follows the same rule as the add and the delete: scope decides."""
+        job, target = trust_job(
+            tmp_path,
+            monkeypatch,
+            remote_line=self._SIGNED,
+            key_digest=_SOURCE_KEY_DIGEST,
+            scope="system",
+            target_remotes={"system": {"flathub": _TGT_URL}},
+        )
+
+        await run_job(job)
+
+        modify_cmd = next(c for c in all_calls(target) if "remote-modify" in c)
+        assert modify_cmd.startswith("sudo ")
+        assert "--system" in modify_cmd
+        assert target.remotes["system"]["flathub"] == self._URL
+
+    @pytest.mark.asyncio
     async def test_missing_source_keyring_fails_the_ref_rather_than_provisioning_a_dead_remote(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The digest was captured at plan time, so the file disappearing before the write
+        """F40 — The digest was captured at plan time, so the file disappearing before the write
         is a real inconsistency — never a provision-anyway. The derived write has no item,
         so the refusal lands on the ref that needed it (D-39).
         """
@@ -1736,7 +1881,7 @@ class TestRemoteTrustTravelsWithTheDerivedWrite:
     async def test_a_machine_level_anchor_the_target_lacks_becomes_the_remotes_own_key(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A remote verified through `/usr/share/ostree/trusted.gpg.d` holds no key of its
+        """F36 — A remote verified through `/usr/share/ostree/trusted.gpg.d` holds no key of its
         own, and replicating name, URL and `gpg-verify` alone leaves the target refusing every
         install from it. The anchor is imported into the replicated remote's OWN keyring, so
         the target's remote trusts what the source's remote trusted and no other remote gains
@@ -1759,7 +1904,7 @@ class TestRemoteTrustTravelsWithTheDerivedWrite:
     async def test_an_anchor_the_target_already_holds_is_not_imported_again(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Same digest on both machines: the target already trusts that key, so importing it
+        """F37 — Same digest on both machines: the target already trusts that key, so importing it
         would be a write per run for no change. Its file name on the target is irrelevant —
         the digest is the identity.
         """
@@ -1783,7 +1928,7 @@ class TestRemoteTrustTravelsWithTheDerivedWrite:
     async def test_the_anchor_reaches_a_remote_the_target_otherwise_already_matches(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Two anchor-trusted remotes compare equal whether or not the target holds the key,
+        """F38 — Two anchor-trusted remotes compare equal whether or not the target holds the key,
         so whole-item equality cannot be what decides this one.
         """
         job, target = trust_job(
@@ -1805,6 +1950,7 @@ class TestRemoteTrustTravelsWithTheDerivedWrite:
     async def test_the_anchor_import_says_so_in_its_mutates_phrase(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """F36 — the `mutates=` phrase names the machine-level key it carries."""
         job, target = trust_job(
             tmp_path, monkeypatch, remote_line=self._SIGNED, key_digest=None, source_anchor=_SOURCE_KEY_DIGEST
         )
@@ -1818,7 +1964,7 @@ class TestRemoteTrustTravelsWithTheDerivedWrite:
     async def test_a_verified_remote_with_no_key_anywhere_is_added_plainly_and_the_run_says_so(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """Nothing to sync, because the source holds nothing: that remote refuses every
+        """F39 — Nothing to sync, because the source holds nothing: that remote refuses every
         install on the source too, so the target inherits the source's own state — said out
         loud rather than left to flatpak's signature error on each ref.
         """
@@ -1840,7 +1986,7 @@ class TestRemoteTrustTravelsWithTheDerivedWrite:
     async def test_a_missing_anchor_file_fails_the_ref_rather_than_provisioning_a_dead_remote(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Same rule as a vanished per-remote keyring: the digest was captured at plan time,
+        """F40 — Same rule as a vanished per-remote keyring: the digest was captured at plan time,
         so the file disappearing before the write is a real inconsistency.
         """
         job, target = trust_job(
@@ -1873,6 +2019,7 @@ class TestRemoteTrustTravelsWithTheDerivedWrite:
 class TestPlanReadOnly:
     @pytest.mark.asyncio
     async def test_plan_issues_no_mutating_flatpak_command(self) -> None:
+        """H4."""
         context, _source, target = make_context(source_responses=SOURCE_RESPONSES, target_responses=TARGET_RESPONSES)
         job = FlatpakSyncJob(context)
 
@@ -1904,6 +2051,7 @@ def converge_target() -> FakeFlatpakTarget:
 class TestConverge:
     @pytest.mark.asyncio
     async def test_user_scope_ref_install_has_no_sudo_and_carries_user_flag(self) -> None:
+        """F137 — a user-scope install carries `--user` and never escalates."""
         context, _source, target = make_context(source_responses=SOURCE_RESPONSES, fake_target=converge_target())
         job = FlatpakSyncJob(context)
         plan = await job.plan()
@@ -1918,6 +2066,7 @@ class TestConverge:
 
     @pytest.mark.asyncio
     async def test_system_scope_ref_install_uses_sudo_and_system_flag(self) -> None:
+        """F137 — a system-scope install carries `--system` and runs under sudo."""
         target = converge_target()
         target.remotes["system"]["flathub"] = _FLATHUB_URL
         context, _source, _target = make_context(source_responses=SOURCE_RESPONSES, fake_target=target)
@@ -1935,6 +2084,7 @@ class TestConverge:
 
     @pytest.mark.asyncio
     async def test_ref_removal_never_needs_source_lookup(self) -> None:
+        """F138 — a user-scope uninstall carries `--user`, names the full reference and never escalates."""
         context, _source, target = make_context(source_responses=SOURCE_RESPONSES, fake_target=converge_target())
         job = FlatpakSyncJob(context)
         plan = await job.plan()
@@ -1942,11 +2092,40 @@ class TestConverge:
 
         await job.converge(diff)
 
-        commands = all_calls(target)
-        assert any("flatpak uninstall --assumeyes --user com.spotify.Client" in c for c in commands)
+        uninstall_cmd = next(c for c in all_calls(target) if "flatpak uninstall" in c)
+        assert uninstall_cmd == "flatpak uninstall --assumeyes --user com.spotify.Client/x86_64/stable"
+
+    @pytest.mark.asyncio
+    async def test_system_scope_ref_removal_uses_sudo_and_system_flag(self) -> None:
+        """F139 — the removal side of the privilege rule: scope decides, not the verb."""
+        context, _source, target = make_context(source_responses=SOURCE_RESPONSES, fake_target=converge_target())
+        job = FlatpakSyncJob(context)
+        plan = await job.plan()
+        diff = next(d for d in plan.diffs if d.item_id == "flatpak:ref:system:org.example.SplitScope/x86_64/stable")
+
+        await job.converge(diff)
+
+        uninstall_cmd = next(c for c in all_calls(target) if "flatpak uninstall" in c)
+        assert uninstall_cmd == "sudo flatpak uninstall --assumeyes --system org.example.SplitScope/x86_64/stable"
+
+    @pytest.mark.asyncio
+    async def test_an_install_names_the_ref_and_neither_a_version_nor_a_commit(self) -> None:
+        """F145 — the source holds 1.0 and the command says nothing about it, so the target ends on
+        whatever build its own copy of the remote serves and a difference is reported, never forced.
+        """
+        context, _source, target = make_context(source_responses=SOURCE_RESPONSES, fake_target=converge_target())
+        job = FlatpakSyncJob(context)
+        plan = await job.plan()
+        diff = next(d for d in plan.diffs if d.item_id == "flatpak:ref:user:org.example.SplitScope/x86_64/stable")
+
+        await job.converge(diff)
+
+        install_cmd = next(c for c in all_calls(target) if "flatpak install" in c)
+        assert install_cmd == "flatpak install --assumeyes --user flathub org.example.SplitScope/x86_64/stable"
 
     @pytest.mark.asyncio
     async def test_ref_with_missing_origin_remote_is_skipped_with_named_failure(self) -> None:
+        """F85 — an origin remote neither machine has refuses the application, naming it, and installs nothing."""
         context, _source, target = make_context(source_responses=SOURCE_RESPONSES, fake_target=converge_target())
         job = FlatpakSyncJob(context)
         plan = await job.plan()
@@ -1986,7 +2165,7 @@ class TestOriginIsReplicatedNotJustNamed:
 
     @pytest.mark.asyncio
     async def test_a_same_named_remote_pointing_elsewhere_refuses_the_install(self) -> None:
-        """The live wrong-vendor case: the remote change is declined, the ref install is
+        """F78 — The live wrong-vendor case: the remote change is declined, the ref install is
         approved, and both remotes are called `flathub`.
         """
         target = FakeFlatpakTarget(remotes={"user": {"flathub": _BETA_FLATHUB}})
@@ -2003,7 +2182,7 @@ class TestOriginIsReplicatedNotJustNamed:
 
     @pytest.mark.asyncio
     async def test_the_derived_write_repointing_the_remote_lets_the_same_install_through(self) -> None:
-        """The other half of the fixture above, and what keeps that test from passing on
+        """F81 — The other half of the fixture above, and what keeps that test from passing on
         the strength of something unrelated: once the derived write has really repointed the
         target's remote, the very same ref installs.
         """
@@ -2017,7 +2196,7 @@ class TestOriginIsReplicatedNotJustNamed:
 
     @pytest.mark.asyncio
     async def test_a_remote_add_that_exited_zero_and_changed_nothing_refuses_the_install(self) -> None:
-        """`flatpak remote-add --if-not-exists <name> <other url>` exits 0 and leaves the
+        """F80 — `flatpak remote-add --if-not-exists <name> <other url>` exits 0 and leaves the
         existing URL in place (measured), so neither the derived write's exit code nor the
         plan's own picture of the target is evidence — only re-reading the target is.
         """
@@ -2040,7 +2219,7 @@ class TestOriginIsReplicatedNotJustNamed:
 
     @pytest.mark.asyncio
     async def test_a_remote_written_after_a_refusal_is_seen_on_the_next_attempt(self) -> None:
-        """The read-back is cached per run, so a remote write has to discard it. Without
+        """F81, F86 — The read-back is cached per run, so a remote write has to discard it. Without
         that, the derived write would land and the ref install would still be judged against
         a picture of the target taken before this run wrote to it.
         """
@@ -2070,7 +2249,7 @@ class TestOriginIsReplicatedNotJustNamed:
 
     @pytest.mark.asyncio
     async def test_a_ref_that_landed_from_another_repository_fails_after_the_install(self) -> None:
-        """The read-back, not the pre-check: the target's remote is the source's, the
+        """F82 — The read-back, not the pre-check: the target's remote is the source's, the
         install exits 0, and the ref nevertheless reports an origin resolving to a
         different URL.
         """
@@ -2087,10 +2266,62 @@ class TestOriginIsReplicatedNotJustNamed:
 
         assert "mirror" in str(excinfo.value)
         assert _BETA_FLATHUB in str(excinfo.value)
+        assert _REAL_FLATHUB in str(excinfo.value)
         assert any("flatpak install" in cmd for cmd in all_calls(target))
 
     @pytest.mark.asyncio
+    async def test_a_ref_reporting_an_origin_the_target_does_not_configure_fails(self) -> None:
+        """F84 — an origin resolving to no remote at all leaves the URL comparison nothing to run on,
+        so the read-back says which origin it was rather than passing the ref.
+        """
+        target = FakeFlatpakTarget(remotes={"user": {"flathub": _REAL_FLATHUB}}, install_records_origin="ghost")
+        context, _source, _target = make_context(source_responses=self._SOURCE, fake_target=target)
+        job = FlatpakSyncJob(context)
+        plan = await job.plan()
+
+        with pytest.raises(ConvergeItemFailed) as excinfo:
+            await job.converge(self._ref_install(plan))
+
+        assert "ghost" in str(excinfo.value)
+        assert "does not configure" in str(excinfo.value)
+
+    @pytest.mark.asyncio
+    async def test_an_origin_refusal_fails_only_its_own_ref(self) -> None:
+        """F87 — the refusal is a property of one ref's origin, so a second approved ref from a remote
+        that does match still installs.
+        """
+        other_ref = "org.example.Other/x86_64/stable"
+        source = {
+            "flatpak list --app": CommandResult(
+                0,
+                f"org.mozilla.firefox\t153.0\tflathub\tuser\t{_APP_REF}\n"
+                f"org.example.Other\t1.0\tsecond\tuser\t{other_ref}\n",
+                "",
+            ),
+            "flatpak remotes --user": CommandResult(
+                0, remote_row("flathub", _REAL_FLATHUB) + remote_row("second", "https://second.example.org/repo/"), ""
+            ),
+        }
+        target = FakeFlatpakTarget()
+        context, _source, _target = make_context(source_responses=source, fake_target=target)
+        job = FlatpakSyncJob(context)
+        plan = await job.plan()
+        # Between plan and apply the target gains `flathub` pointing elsewhere, so the derived
+        # write is an `--if-not-exists` add that exits 0 and leaves that URL in place.
+        target.remotes["user"]["flathub"] = _BETA_FLATHUB
+        job.accept_review(
+            plan, ReviewOutcome(decisions={d.item_id: Decision.APPLY for d in plan.diffs}, was_interactive=True)
+        )
+
+        with pytest.raises(PackageItemFailures) as raised:
+            await job.apply()
+
+        assert [diff.item_id for diff, _reason in raised.value.failures] == [f"flatpak:ref:user:{_APP_REF}"]
+        assert ("user", other_ref) in target.refs
+
+    @pytest.mark.asyncio
     async def test_an_install_that_exited_zero_and_installed_nothing_fails_the_item(self) -> None:
+        """F83 — exit 0 with nothing listed on the target fails that application."""
         target = FakeFlatpakTarget(remotes={"user": {"flathub": _REAL_FLATHUB}}, install_lands=False)
         context, _source, _target = make_context(source_responses=self._SOURCE, fake_target=target)
         job = FlatpakSyncJob(context)
@@ -2101,7 +2332,7 @@ class TestOriginIsReplicatedNotJustNamed:
 
     @pytest.mark.asyncio
     async def test_a_recorded_source_remote_is_not_withheld_from_the_derivation(self) -> None:
-        """A source remote is not reviewable in any direction, so a `skip always` sitting
+        """F30 — A source remote is not reviewable in any direction, so a `skip always` sitting
         against one in the source's decision file must change nothing: it can neither
         withhold the remote an approved ref needs nor the URL its origin is checked against,
         and it must not turn the target's own copy into a removal proposal.
@@ -2135,6 +2366,7 @@ class TestMaskParse:
     """
 
     def test_parses_two_leading_space_format_and_wildcard_patterns(self) -> None:
+        """F132 — patterns are parsed as flatpak prints them."""
         output = (
             "  org.freedesktop.Platform.ffmpeg-full\n"
             "  app/com.example.Blocked/x86_64/*\n"
@@ -2151,6 +2383,7 @@ class TestMaskParse:
         assert all(item.scope == "user" for item in items)
 
     def test_blank_lines_skipped_and_scope_is_the_passed_argument(self) -> None:
+        """F132 — blank lines are dropped and the scope is the one asked for."""
         output = "\n  org.example.Blocked\n\n"
 
         items = _parse_flatpak_masks(output, "system")
@@ -2160,6 +2393,7 @@ class TestMaskParse:
         assert items[0].item_id == "flatpak:mask:system:org.example.Blocked"
 
     def test_no_masks_yields_empty_list(self) -> None:
+        """F132 — no masks is an empty list, not a failure."""
         assert _parse_flatpak_masks("", "user") == []
 
 
@@ -2170,6 +2404,7 @@ class TestMaskDiff:
 
     @pytest.mark.asyncio
     async def test_source_user_mask_absent_on_target_yields_install(self) -> None:
+        """F3, F122 — a source-only mask is its own item in the install direction."""
         context, _source, _target = make_context(
             source_responses={"flatpak --user mask": CommandResult(0, "  org.freedesktop.Platform.ffmpeg-full\n", "")},
         )
@@ -2186,6 +2421,7 @@ class TestMaskDiff:
 
     @pytest.mark.asyncio
     async def test_target_only_system_mask_yields_removal(self) -> None:
+        """F3, F123 — a target-only mask is offered for unmasking, in the removal direction."""
         context, _source, _target = make_context(
             target_responses={"flatpak --system mask": CommandResult(0, "  org.example.Blocked\n", "")},
         )
@@ -2205,6 +2441,7 @@ class TestMaskDiff:
 
     @pytest.mark.asyncio
     async def test_mask_present_on_both_yields_no_diff(self) -> None:
+        """F124 — the same pattern in the same scope on both is no item."""
         mask_line = "  org.example.Both\n"
         context, _source, _target = make_context(
             source_responses={"flatpak --user mask": CommandResult(0, mask_line, "")},
@@ -2218,6 +2455,7 @@ class TestMaskDiff:
 
     @pytest.mark.asyncio
     async def test_masks_ordered_after_refs_in_diffs_tuple(self) -> None:
+        """F128 — a mask lands after the applications, so it cannot suppress a dependency pulled in the same run."""
         # A ref install (source-only app) plus a mask install (source-only mask): the
         # mask diff must come AFTER the ref diff so it cannot suppress an auto-pulled
         # dependency of the ref being installed the same run (D-08).
@@ -2252,6 +2490,7 @@ class TestMaskEditsAndScopeMoves:
 
     @pytest.mark.asyncio
     async def test_edited_pattern_reads_as_two_membership_diffs_never_a_change(self) -> None:
+        """F125 — an edited pattern is reported as found: the old one off, the new one on."""
         context, _source, _target = make_context(
             source_responses={"flatpak --user mask": CommandResult(0, "  org.example.Blocked/x86_64/24.08\n", "")},
             target_responses={"flatpak --user mask": CommandResult(0, "  org.example.Blocked/x86_64/23.08\n", "")},
@@ -2269,7 +2508,7 @@ class TestMaskEditsAndScopeMoves:
 
     @pytest.mark.asyncio
     async def test_scope_move_reads_as_add_system_plus_remove_user(self) -> None:
-        """Scope is identity (module docstring), so the same pattern masked `system` on
+        """F126 — Scope is identity (module docstring), so the same pattern masked `system` on
         the source and `user` on the target is two independent items, not one move.
         """
         pattern = "org.freedesktop.Platform.ffmpeg-full"
@@ -2289,7 +2528,7 @@ class TestMaskEditsAndScopeMoves:
 
     @pytest.mark.asyncio
     async def test_mask_replicates_even_when_its_pattern_matches_no_installed_ref(self) -> None:
-        """#208 D-10 — masks are captured from `flatpak mask`, never filtered against
+        """F127 — #208 D-10 — masks are captured from `flatpak mask`, never filtered against
         `flatpak list`: a pattern matching nothing installed on EITHER machine is still
         replicated, because it encodes the user's intent about future installs.
         """
@@ -2321,7 +2560,7 @@ class TestMaskEditsAndScopeMoves:
 class TestMaskSkipAlways:
     @pytest.mark.asyncio
     async def test_recorded_mask_produces_no_diff_on_the_next_run(self) -> None:
-        """A `skip always` recorded for a mask in the machine-local decision file makes it
+        """F130, N6 — A `skip always` recorded for a mask in the machine-local decision file makes it
         inert on the next run: masks reach `filter_inert` under the SAME item_id the
         decision was written against, so `plan()` never re-emits the diff.
         """
@@ -2387,6 +2626,7 @@ class TestMaskReviewVerbs:
 
     @pytest.mark.asyncio
     async def test_mask_install_group_reads_mask_never_install(self) -> None:
+        """F122 — the group reads mask, never install."""
         plan = await self._mixed_plan()
 
         group = self._group_holding(plan, "flatpak:mask:user:org.example.MaskNew")
@@ -2397,6 +2637,7 @@ class TestMaskReviewVerbs:
 
     @pytest.mark.asyncio
     async def test_mask_remove_group_reads_unmask_and_is_removal_direction(self) -> None:
+        """F123 — the group reads unmask and arrives in the removal direction."""
         plan = await self._mixed_plan()
 
         group = self._group_holding(plan, "flatpak:mask:user:org.example.MaskOld")
@@ -2407,6 +2648,7 @@ class TestMaskReviewVerbs:
 
     @pytest.mark.asyncio
     async def test_ref_groups_keep_their_own_verbs_and_exclude_masks(self) -> None:
+        """F19, F129 — a mask has its own group, and neither ref group carries one — nor any remote."""
         plan = await self._mixed_plan()
 
         ref_install = self._group_holding(plan, "flatpak:ref:user:org.example.SourceOnly/x86_64/stable")
@@ -2453,6 +2695,8 @@ class TestUnusedRemoteIsDeleted:
 
     @pytest.mark.asyncio
     async def test_a_remote_nothing_uses_is_deleted_and_never_offered(self) -> None:
+        """F61, F73, F142, H141 —
+        a user-scope deletion runs unprivileged, and the remote was an item in no direction."""
         context, _source, target = make_context(
             source_responses=self._source(),
             fake_target=FakeFlatpakTarget(remotes={"user": {"customremote": self._URL}}),
@@ -2467,7 +2711,7 @@ class TestUnusedRemoteIsDeleted:
 
     @pytest.mark.asyncio
     async def test_a_remote_a_target_ref_still_uses_stays(self) -> None:
-        """The ref is installed on both machines, so it is not even a diff — and it is still
+        """F62 — The ref is installed on both machines, so it is not even a diff — and it is still
         what keeps the remote.
         """
         line = f"org.example.NeedsRemote\t1.0\tcustomremote\tuser\t{self._USER_REF}\n"
@@ -2485,8 +2729,51 @@ class TestUnusedRemoteIsDeleted:
         assert self._deletions(target) == []
 
     @pytest.mark.asyncio
+    async def test_the_run_names_the_refs_that_kept_the_remote(self, caplog: pytest.LogCaptureFixture) -> None:
+        """F63 — a remote that stays is otherwise silent: it has no item and no review line, so this
+        line is the only place the run says why it is still there.
+        """
+        line = f"org.example.NeedsRemote\t1.0\tcustomremote\tuser\t{self._USER_REF}\n"
+        context, _source, _target = make_context(
+            source_responses=self._source(remotes=remote_row("flathub", _FLATHUB_URL), apps=line),
+            fake_target=FakeFlatpakTarget(
+                remotes={"user": {"customremote": self._URL, "flathub": _FLATHUB_URL}},
+                refs={("user", self._USER_REF): "customremote"},
+            ),
+        )
+        job = FlatpakSyncJob(context)
+
+        with caplog.at_level(logging.DEBUG, logger="pcswitcher.jobs.base"):
+            await run_job(job)
+
+        assert any(
+            f"keeping user flatpak remote customremote: target-host still installs {self._USER_REF} from it"
+            in record.message
+            for record in caplog.records
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_ref_reported_as_an_origin_divergence_keeps_its_remote(self) -> None:
+        """F66 — the target's copy comes from a remote the source does not configure at all, so it is
+        a deletion candidate; the report-only ref installed from it counts exactly as any other does.
+        """
+        context, _source, target = make_context(
+            source_responses=self._source(remotes=remote_row("flathub", _FLATHUB_URL), apps=_APP_LINE),
+            fake_target=FakeFlatpakTarget(
+                remotes={"user": {"vendor-b": "https://vendor-b.example.org/repo/"}},
+                refs={("user", "org.example.App/x86_64/stable"): "vendor-b"},
+            ),
+        )
+        job = FlatpakSyncJob(context)
+
+        plan = await run_job(job)
+
+        assert [diff.diff_class for diff in plan.diffs] == [DiffClass.ORIGIN_MISMATCH]
+        assert self._deletions(target) == []
+
+    @pytest.mark.asyncio
     async def test_a_same_name_remote_in_the_other_scope_does_not_keep_it(self) -> None:
-        """A remote is per-installation, so only same-scope refs use it. The system-scope ref
+        """F70 — A remote is per-installation, so only same-scope refs use it. The system-scope ref
         below is installed on both machines, so nothing removes it and its own remote stays.
         """
         system_line = f"org.example.SystemOnly\t1.0\tcustomremote\tsystem\t{self._SYSTEM_REF}\n"
@@ -2505,7 +2792,7 @@ class TestUnusedRemoteIsDeleted:
 
     @pytest.mark.asyncio
     async def test_a_machine_specific_app_keeps_its_remote(self) -> None:
-        """A skip-always ref is dropped before the diff and produces no review line in any
+        """F64, N20 — A skip-always ref is dropped before the diff and produces no review line in any
         run, so counting anything but the machine's real state would delete the remote
         feeding software the user told this tool to leave alone.
         """
@@ -2534,7 +2821,7 @@ class TestUnusedRemoteIsDeleted:
 
     @pytest.mark.asyncio
     async def test_a_runtime_keeps_its_remote(self) -> None:
-        """Counted over every installed ref, runtimes included: a runtime installed from a
+        """F65 — Counted over every installed ref, runtimes included: a runtime installed from a
         remote loses its updates just as an app does.
         """
         runtime = "org.example.Platform/x86_64/24.08"
@@ -2552,6 +2839,7 @@ class TestUnusedRemoteIsDeleted:
 
     @pytest.mark.asyncio
     async def test_a_remote_the_source_has_is_never_deleted(self) -> None:
+        """F71 — used or not, a remote the source configures is left alone."""
         context, _source, target = make_context(
             source_responses=self._source(remotes=remote_row("customremote", self._URL)),
             fake_target=FakeFlatpakTarget(remotes={"user": {"customremote": self._URL}}),
@@ -2564,7 +2852,7 @@ class TestUnusedRemoteIsDeleted:
 
     @pytest.mark.asyncio
     async def test_the_count_runs_after_this_runs_approved_removals(self) -> None:
-        """The target's only user of the remote is uninstalled by this very run, so the
+        """F67, N19 — The target's only user of the remote is uninstalled by this very run, so the
         remote is free by the time the count happens.
         """
         context, _source, target = make_context(
@@ -2582,6 +2870,7 @@ class TestUnusedRemoteIsDeleted:
 
     @pytest.mark.asyncio
     async def test_a_removal_the_user_declined_keeps_the_remote(self) -> None:
+        """F68 — the application is still there, so its remote is still in use."""
         context, _source, target = make_context(
             source_responses=self._source(),
             fake_target=FakeFlatpakTarget(
@@ -2596,7 +2885,7 @@ class TestUnusedRemoteIsDeleted:
 
     @pytest.mark.asyncio
     async def test_a_removal_that_failed_keeps_the_remote(self) -> None:
-        """A measurement, not a prediction: the ref the user approved for removal is still
+        """F69 — A measurement, not a prediction: the ref the user approved for removal is still
         installed, so its remote is still in use.
         """
         context, _source, target = make_context(
@@ -2615,6 +2904,7 @@ class TestUnusedRemoteIsDeleted:
 
     @pytest.mark.asyncio
     async def test_a_system_scope_deletion_uses_sudo(self) -> None:
+        """F73, F142 — a system-scope deletion escalates; a user-scope one does not."""
         context, _source, target = make_context(
             source_responses=self._source(),
             fake_target=FakeFlatpakTarget(remotes={"system": {"customremote": self._URL}}),
@@ -2627,6 +2917,7 @@ class TestUnusedRemoteIsDeleted:
 
     @pytest.mark.asyncio
     async def test_the_deletion_carries_mutates(self) -> None:
+        """F74 — the deletion's `mutates=` phrase names the remote."""
         context, _source, target = make_context(
             source_responses=self._source(),
             fake_target=FakeFlatpakTarget(remotes={"user": {"customremote": self._URL}}),
@@ -2640,6 +2931,7 @@ class TestUnusedRemoteIsDeleted:
 
     @pytest.mark.asyncio
     async def test_a_dry_run_previews_the_deletion_and_issues_none(self, caplog: pytest.LogCaptureFixture) -> None:
+        """F75, J54 — an approved removal would free the remote, so the preview says it would be deleted."""
         context, _source, target = make_context(
             source_responses=self._source(),
             fake_target=FakeFlatpakTarget(
@@ -2659,7 +2951,7 @@ class TestUnusedRemoteIsDeleted:
 
     @pytest.mark.asyncio
     async def test_a_deletion_that_fails_warns_and_fails_no_item(self, caplog: pytest.LogCaptureFixture) -> None:
-        """No approved item depended on it, so there is nothing to charge the failure to."""
+        """F76 — No approved item depended on it, so there is nothing to charge the failure to."""
         context, _source, _target = make_context(
             source_responses=self._source(),
             fake_target=FakeFlatpakTarget(
@@ -2679,7 +2971,7 @@ class TestUnusedRemoteIsDeleted:
 
     @pytest.mark.asyncio
     async def test_no_decision_file_entry_is_ever_written_for_a_remote(self) -> None:
-        """Not merely unoffered: a SKIP_ALWAYS arriving from anywhere writes nothing."""
+        """F77 — Not merely unoffered: a SKIP_ALWAYS arriving from anywhere writes nothing."""
         context, source, target = make_context(
             source_responses=self._source(),
             fake_target=FakeFlatpakTarget(remotes={"user": {"customremote": self._URL}}),
@@ -2710,6 +3002,7 @@ class TestMaskConverge:
 
     @pytest.mark.asyncio
     async def test_user_scope_mask_install_runs_mask_without_sudo(self) -> None:
+        """F140 — a user-scope mask add carries `--user` and no sudo."""
         pattern = "org.freedesktop.Platform.ffmpeg-full"
         context, _source, target = make_context(
             source_responses={"flatpak --user mask": CommandResult(0, f"  {pattern}\n", "")},
@@ -2730,6 +3023,7 @@ class TestMaskConverge:
 
     @pytest.mark.asyncio
     async def test_system_scope_mask_removal_uses_sudo_and_remove_flag(self) -> None:
+        """F140, F147 — a system-scope unmask carries sudo, `--system` and `--remove`."""
         pattern = "org.example.Blocked"
         context, _source, target = make_context(
             target_responses={"flatpak --system mask": CommandResult(0, f"  {pattern}\n", "")},
@@ -2755,6 +3049,7 @@ class TestMaskSystemScopeGate:
 
     @pytest.mark.asyncio
     async def test_system_scope_mask_requires_target_sudo(self) -> None:
+        """F135, K56 — a mask is the only system-scope thing, and it still requires target sudo."""
         context, _source, _target = make_context(
             source_responses={"flatpak --system mask": CommandResult(0, "  org.example.Blocked\n", "")},
             target_responses={"sudo --non-interactive true": CommandResult(1, "", "sudo: a password is required")},
@@ -2767,6 +3062,7 @@ class TestMaskSystemScopeGate:
 
     @pytest.mark.asyncio
     async def test_user_scope_only_mask_never_checks_sudo(self) -> None:
+        """F133, K52 — the mask half of the same gate."""
         context, _source, target = make_context(
             source_responses={"flatpak --user mask": CommandResult(0, "  org.example.UserOnly\n", "")},
         )
@@ -2825,7 +3121,7 @@ class TestRemoteFilterReplicates:
         )
 
     def test_the_filter_column_is_read_next_to_the_options_column(self) -> None:
-        """Two independent columns: a filtered remote's verification state must parse exactly
+        """F107 — Two independent columns: a filtered remote's verification state must parse exactly
         as an unfiltered one's, and vice versa.
         """
         signed = _parse_flatpak_remotes(remote_row("a", "https://example.org/a/", ref_filter="/etc/a.f"), "user", {})
@@ -2839,7 +3135,7 @@ class TestRemoteFilterReplicates:
         assert (plain[0].filter_path, plain[0].gpg_verify) == (None, True)
 
     def test_a_filter_difference_never_makes_two_remotes_compare_unequal(self) -> None:
-        """`filter_path` is `compare=False` on purpose: the filter is converged by its own
+        """F107 — `filter_path` is `compare=False` on purpose: the filter is converged by its own
         later pass, so letting it into `__eq__` would make `_write_derived_remote`'s
         whole-item equality test miss and issue a `remote-modify --url` that changes nothing,
         on every run.
@@ -2851,6 +3147,7 @@ class TestRemoteFilterReplicates:
 
     @pytest.mark.asyncio
     async def test_the_file_is_copied_to_the_same_absolute_path_and_re_applied(self, tmp_path: Path) -> None:
+        """F99 — the filter file lands at the same absolute path and the remote is set to use it there."""
         path = self._filter_file(tmp_path)
         context, _source, target = make_context(source_responses=self._source(str(path)), fake_target=self._target())
         job = FlatpakSyncJob(context)
@@ -2865,7 +3162,7 @@ class TestRemoteFilterReplicates:
 
     @pytest.mark.asyncio
     async def test_the_filter_lands_after_the_app_it_could_exclude(self, tmp_path: Path) -> None:
-        """A filter can be narrower than what the source has installed, so applying it first
+        """F100 — A filter can be narrower than what the source has installed, so applying it first
         would exclude the very ref being replicated: flatpak refuses an install its remote's
         filter denies, measured on 1.14.6, and leaves an already-installed ref alone. The
         ordering is what turns the first into the second.
@@ -2883,7 +3180,7 @@ class TestRemoteFilterReplicates:
 
     @pytest.mark.asyncio
     async def test_the_filter_the_target_already_carries_comes_off_before_the_install(self, tmp_path: Path) -> None:
-        """The late pass covers the source's filter; the target's own is in force throughout
+        """F101 — The late pass covers the source's filter; the target's own is in force throughout
         the installs unless it is taken off first.
         """
         path = self._filter_file(tmp_path)
@@ -2903,7 +3200,7 @@ class TestRemoteFilterReplicates:
 
     @pytest.mark.asyncio
     async def test_a_filter_the_target_carries_does_not_refuse_the_app_being_replicated(self, tmp_path: Path) -> None:
-        """The end the ordering exists for, with flatpak's refusal modelled: the app installs
+        """F102 — The end the ordering exists for, with flatpak's refusal modelled: the app installs
         because no filter is in force while it does.
         """
         path = self._filter_file(tmp_path)
@@ -2919,7 +3216,7 @@ class TestRemoteFilterReplicates:
 
     @pytest.mark.asyncio
     async def test_a_filter_the_source_no_longer_has_is_taken_off_the_target(self, tmp_path: Path) -> None:
-        """`PKG-FR-MANAGER-CONVERGES`: the source-driven late pass has nothing to iterate for
+        """F103 — `PKG-FR-MANAGER-CONVERGES`: the source-driven late pass has nothing to iterate for
         an unfiltered source remote, so without the clear the target keeps its filter for good.
         """
         _ = self._filter_file(tmp_path)
@@ -2935,6 +3232,7 @@ class TestRemoteFilterReplicates:
 
     @pytest.mark.asyncio
     async def test_a_clear_that_fails_fails_the_app_naming_the_remote_and_the_filter(self, tmp_path: Path) -> None:
+        """F108 — no install is attempted once the target's own filter could not be taken off."""
         path = self._filter_file(tmp_path)
         context, _source, target = make_context(
             source_responses=self._source(str(path)),
@@ -2961,6 +3259,7 @@ class TestRemoteFilterReplicates:
     async def test_a_dry_run_previews_the_clear_and_issues_none(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
+        """F115, J54 — the target's own filter would come off, previewed and not issued."""
         path = self._filter_file(tmp_path)
         context, _source, target = make_context(
             source_responses=self._source(str(path)),
@@ -2977,7 +3276,7 @@ class TestRemoteFilterReplicates:
 
     @pytest.mark.asyncio
     async def test_a_remote_with_no_filter_on_either_machine_is_never_cleared(self, tmp_path: Path) -> None:
-        """Negative control: the clear runs on what the target reports, not on every remote."""
+        """F104 — Negative control: the clear runs on what the target reports, not on every remote."""
         _ = self._filter_file(tmp_path)
         context, _source, target = make_context(source_responses=self._source("-"), fake_target=self._target())
         job = FlatpakSyncJob(context)
@@ -2988,6 +3287,7 @@ class TestRemoteFilterReplicates:
 
     @pytest.mark.asyncio
     async def test_the_filter_is_no_review_item(self, tmp_path: Path) -> None:
+        """F106 — a filter is a review item in no direction."""
         path = self._filter_file(tmp_path)
         context, _source, _target = make_context(source_responses=self._source(str(path)), fake_target=self._target())
         job = FlatpakSyncJob(context)
@@ -2999,7 +3299,7 @@ class TestRemoteFilterReplicates:
 
     @pytest.mark.asyncio
     async def test_an_unfiltered_remote_applies_none(self, tmp_path: Path) -> None:
-        """Negative control: without it the pass could be running on every derived remote."""
+        """F104 — Negative control: without it the pass could be running on every derived remote."""
         _ = self._filter_file(tmp_path)
         context, _source, target = make_context(source_responses=self._source("-"), fake_target=self._target())
         job = FlatpakSyncJob(context)
@@ -3011,7 +3311,7 @@ class TestRemoteFilterReplicates:
 
     @pytest.mark.asyncio
     async def test_a_remote_no_approved_ref_needs_carries_no_filter_either(self, tmp_path: Path) -> None:
-        """A remote nothing derives is not provisioned (D-41), so there is nothing to filter."""
+        """F105 — A remote nothing derives is not provisioned (D-41), so there is nothing to filter."""
         path = self._filter_file(tmp_path)
         context, _source, target = make_context(
             source_responses=self._source(
@@ -3027,6 +3327,7 @@ class TestRemoteFilterReplicates:
 
     @pytest.mark.asyncio
     async def test_a_missing_source_file_fails_the_app_naming_the_remote_and_the_path(self, tmp_path: Path) -> None:
+        """F109 — the source's filter file gone at copy time fails every approved application from that remote."""
         path = tmp_path / "gone.filter"
         context, _source, _target = make_context(source_responses=self._source(str(path)), fake_target=self._target())
         job = FlatpakSyncJob(context)
@@ -3045,6 +3346,7 @@ class TestRemoteFilterReplicates:
 
     @pytest.mark.asyncio
     async def test_a_filter_flatpak_refuses_fails_the_app_and_quotes_the_error(self, tmp_path: Path) -> None:
+        """F110 — flatpak's own error, the remote and the path all reach the failure."""
         path = self._filter_file(tmp_path)
         context, _source, _target = make_context(
             source_responses=self._source(str(path)),
@@ -3061,10 +3363,128 @@ class TestRemoteFilterReplicates:
 
         assert [diff.item_id for diff, _reason in raised.value.failures] == [self._APP_ID]
         assert "error: no such remote" in raised.value.failures[0][1]
+        assert "customremote" in raised.value.failures[0][1]
+        assert str(path) in raised.value.failures[0][1]
+
+    @pytest.mark.asyncio
+    async def test_a_filter_directory_that_cannot_be_created_fails_the_app(self, tmp_path: Path) -> None:
+        """F111 — the filter's OWN parent directory, which the target may not have at all: the path is
+        the user's, so nothing guarantees it exists there.
+        """
+        path = self._filter_file(tmp_path)
+        context, _source, _target = make_context(
+            source_responses=self._source(str(path)),
+            fake_target=self._target(
+                {f"mkdir --parents {path.parent}": CommandResult(1, "", "mkdir: Permission denied\n")}
+            ),
+        )
+        job = FlatpakSyncJob(context)
+        plan = await job.plan()
+        job.accept_review(
+            plan, ReviewOutcome(decisions={d.item_id: Decision.APPLY for d in plan.diffs}, was_interactive=True)
+        )
+
+        with pytest.raises(PackageItemFailures) as raised:
+            await job.apply()
+
+        failed = {diff.item_id: reason for diff, reason in raised.value.failures}
+        assert list(failed) == [self._APP_ID]
+        assert "customremote" in failed[self._APP_ID]
+        assert str(path) in failed[self._APP_ID]
+        assert "mkdir: Permission denied" in failed[self._APP_ID]
+
+    @pytest.mark.asyncio
+    async def test_a_user_scope_filter_path_the_ssh_user_cannot_write_fails_naming_it(self, tmp_path: Path) -> None:
+        """F111, F144 — the write itself refused. A user-scope remote's filter is written as the SSH
+        user, so a path that user cannot write is a failure naming the path, never an escalation.
+        """
+        path = self._filter_file(tmp_path)
+        context, _source, target = make_context(
+            source_responses=self._source(str(path)),
+            fake_target=self._target({"install --mode=0644": CommandResult(1, "", "install: Permission denied\n")}),
+        )
+        job = FlatpakSyncJob(context)
+        plan = await job.plan()
+        job.accept_review(
+            plan, ReviewOutcome(decisions={d.item_id: Decision.APPLY for d in plan.diffs}, was_interactive=True)
+        )
+
+        with pytest.raises(PackageItemFailures) as raised:
+            await job.apply()
+
+        failed = {diff.item_id: reason for diff, reason in raised.value.failures}
+        assert list(failed) == [self._APP_ID]
+        assert "customremote" in failed[self._APP_ID]
+        assert str(path) in failed[self._APP_ID]
+        assert "install: Permission denied" in failed[self._APP_ID]
+        assert not any(cmd.startswith("sudo ") for cmd in all_calls(target))
+
+    @pytest.mark.asyncio
+    async def test_a_staging_failure_fails_the_app_naming_the_remote_and_the_path(self, tmp_path: Path) -> None:
+        """F112 — the filter never reaches the target's cache, which is the same outcome for the apps
+        as a write that refused: they fail naming the remote and the path.
+        """
+        path = self._filter_file(tmp_path)
+        context, _source, _target = make_context(
+            source_responses=self._source(str(path)),
+            fake_target=self._target(
+                {"mkdir --parents /home/tgt/.cache": CommandResult(1, "", "mkdir: Read-only file system\n")}
+            ),
+        )
+        job = FlatpakSyncJob(context)
+        plan = await job.plan()
+        job.accept_review(
+            plan, ReviewOutcome(decisions={d.item_id: Decision.APPLY for d in plan.diffs}, was_interactive=True)
+        )
+
+        with pytest.raises(PackageItemFailures) as raised:
+            await job.apply()
+
+        failed = {diff.item_id: reason for diff, reason in raised.value.failures}
+        assert list(failed) == [self._APP_ID]
+        assert "customremote" in failed[self._APP_ID]
+        assert str(path) in failed[self._APP_ID]
+        assert "Read-only file system" in failed[self._APP_ID]
+
+    @pytest.mark.asyncio
+    async def test_a_system_scope_filter_writes_and_applies_under_sudo(self, tmp_path: Path) -> None:
+        """F116 — both writes and the re-apply reach `/var/lib/flatpak` or a root-owned path, so all
+        three escalate; the staging copy still goes into the SSH user's own cache unprivileged.
+        """
+        path = self._filter_file(tmp_path)
+        system_app = "org.example.App\t1.0\tcustomremote\tsystem\torg.example.App/x86_64/stable\n"
+        context, _source, target = make_context(
+            source_responses=derivation_source(
+                remotes="",
+                system_remotes=remote_row("customremote", self._URL, ref_filter=str(path)),
+                apps=system_app,
+            ),
+            fake_target=self._target(),
+        )
+        job = FlatpakSyncJob(context)
+
+        await run_job(job)
+
+        calls = all_calls(target)
+        assert any(cmd.startswith(f"sudo mkdir --parents {path.parent}") for cmd in calls)
+        assert any(cmd.startswith("sudo install --mode=0644") and str(path) in cmd for cmd in calls)
+        assert any(f"sudo flatpak remote-modify --system --filter={path} customremote" in cmd for cmd in calls)
+        assert any(cmd.startswith("mkdir --parents /home/tgt/.cache") for cmd in calls)
+
+    @pytest.mark.asyncio
+    async def test_a_user_scope_filter_never_escalates(self, tmp_path: Path) -> None:
+        """F116 — the other half of the same rule, as a negative control over the whole run."""
+        path = self._filter_file(tmp_path)
+        context, _source, target = make_context(source_responses=self._source(str(path)), fake_target=self._target())
+        job = FlatpakSyncJob(context)
+
+        await run_job(job)
+
+        assert not any(cmd.startswith("sudo ") for cmd in all_calls(target))
 
     @pytest.mark.asyncio
     async def test_an_app_from_another_remote_is_untouched_by_the_failure(self, tmp_path: Path) -> None:
-        """ "Every approved application from that remote" is the app's OWN origin, so an app
+        """F113 —  "Every approved application from that remote" is the app's OWN origin, so an app
         whose origin is a different remote keeps its own outcome.
         """
         path = tmp_path / "gone.filter"
@@ -3089,6 +3509,7 @@ class TestRemoteFilterReplicates:
 
     @pytest.mark.asyncio
     async def test_the_staged_copy_is_discarded(self, tmp_path: Path) -> None:
+        """F114 — the staged filter is removed from the target's cache afterwards."""
         path = self._filter_file(tmp_path)
         context, _source, target = make_context(source_responses=self._source(str(path)), fake_target=self._target())
         job = FlatpakSyncJob(context)
@@ -3102,6 +3523,7 @@ class TestRemoteFilterReplicates:
     async def test_a_dry_run_previews_the_filter_and_issues_none(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
+        """F115 — the copy and re-apply are previewed, no command is issued and no file is transferred."""
         path = self._filter_file(tmp_path)
         context, _source, target = make_context(
             source_responses=self._source(str(path)), fake_target=self._target(), dry_run=True
@@ -3134,6 +3556,7 @@ class TestAnUnverifiedRemoteIsReported:
 
     @pytest.mark.asyncio
     async def test_an_unverified_source_remote_warns_once(self, caplog: pytest.LogCaptureFixture) -> None:
+        """F33 — an ordinary run's output says so, once per derived remote."""
         context, _source, target = make_context(
             source_responses=self._source(options="no-gpg-verify"), fake_target=FakeFlatpakTarget()
         )
@@ -3154,6 +3577,7 @@ class TestAnUnverifiedRemoteIsReported:
     async def test_a_verified_source_remote_with_its_own_key_produces_no_warning(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
+        """F41 — the negative control for the trust warning."""
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         _ = write_source_keyring(tmp_path / ".local" / "share" / "flatpak", "customremote")
         context, _source, _target = make_context(
@@ -3174,7 +3598,7 @@ class TestAnUnverifiedRemoteIsReported:
 
     @pytest.mark.asyncio
     async def test_the_warning_fires_in_a_dry_run_too(self, caplog: pytest.LogCaptureFixture) -> None:
-        """ADR-014 makes the preview the whole report, so a preview that hid this would
+        """F42 — ADR-014 makes the preview the whole report, so a preview that hid this would
         overstate the real run.
         """
         context, _source, target = make_context(
@@ -3191,6 +3615,7 @@ class TestAnUnverifiedRemoteIsReported:
 
 class TestExcludePaths:
     def test_returns_flatpak_data_dir_excludes_var_app(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """F4, K91 — the job claims the store and never `~/.var/app`."""
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
         paths = flatpak_sync_exclude_paths()
@@ -3202,6 +3627,7 @@ class TestExcludePaths:
 class TestValidate:
     @pytest.mark.asyncio
     async def test_flatpak_unavailable_on_source_yields_validation_error(self) -> None:
+        """F5, K58 — validation names the machine that lacks flatpak."""
         context, _source, _target = make_context(
             source_responses={"flatpak --version": CommandResult(127, "", "not found")}
         )
@@ -3213,6 +3639,7 @@ class TestValidate:
 
     @pytest.mark.asyncio
     async def test_flatpak_unavailable_on_target_yields_validation_error_and_does_not_raise(self) -> None:
+        """F5, K59 — the target half, reported rather than raised."""
         context, _source, _target = make_context(
             target_responses={"flatpak --version": CommandResult(127, "", "not found")}
         )
@@ -3224,6 +3651,7 @@ class TestValidate:
 
     @pytest.mark.asyncio
     async def test_valid_environment_with_no_system_scope_items_yields_no_errors(self) -> None:
+        """K61."""
         context, _source, _target = make_context()
         job = FlatpakSyncJob(context)
 
@@ -3233,6 +3661,8 @@ class TestValidate:
 
     @pytest.mark.asyncio
     async def test_system_scope_item_present_without_sudo_yields_validation_error(self) -> None:
+        """F134, K53 —
+        a system-scope application on either machine makes passwordless sudo on the target a precondition."""
         context, _source, _target = make_context(
             source_responses={
                 "flatpak list --app": CommandResult(
@@ -3248,7 +3678,23 @@ class TestValidate:
         assert any(e.host is Host.TARGET and "sudo" in e.message for e in errors)
 
     @pytest.mark.asyncio
+    async def test_a_system_scope_remote_alone_requires_target_sudo(self) -> None:
+        """F136 — no application and no mask anywhere: a system-scope remote on its own writes into
+        `/var/lib/flatpak`, so it flips the gate exactly as the other two do.
+        """
+        context, _source, _target = make_context(
+            source_responses={"flatpak remotes --system": CommandResult(0, _FLATHUB_REMOTE_LINE, "")},
+            target_responses={"sudo --non-interactive true": CommandResult(1, "", "sudo: a password is required")},
+        )
+        job = FlatpakSyncJob(context)
+
+        errors = await job.validate()
+
+        assert any(e.host is Host.TARGET and "sudo" in e.message for e in errors)
+
+    @pytest.mark.asyncio
     async def test_user_scope_only_never_checks_sudo(self) -> None:
+        """F133, K52 — nothing system-scope exists, so validation asks the target for no root."""
         context, _source, target = make_context(
             source_responses={
                 "flatpak list --app": CommandResult(
@@ -3267,6 +3713,7 @@ class TestValidate:
 class TestJobDiscovery:
     @pytest.mark.asyncio
     async def test_orchestrator_resolves_flatpak_sync_to_flatpak_sync_job(self) -> None:
+        """K37."""
         config = MagicMock(spec=Configuration)
         config.logging = MagicMock()
         config.logging.file = 10
@@ -3286,6 +3733,7 @@ class TestFlatpakItem:
         assert FlatpakItem.ITEM_CLASS == ItemClass.FLATPAK_REF
 
     def test_same_application_different_scope_yields_distinct_item_ids(self) -> None:
+        """F13 — scope is identity; the origin is not."""
         user_item = FlatpakItem(
             application="com.slack.Slack",
             version="4.50",
@@ -3324,6 +3772,7 @@ class TestFlatpakRemoteItem:
         assert FlatpakRemoteItem.ITEM_CLASS == ItemClass.FLATPAK_REMOTE
 
     def test_same_remote_name_byte_identical_url_different_scope_yields_distinct_item_ids(self) -> None:
+        """F14 — one remote name in two scopes is two configuration items."""
         url = "https://dl.flathub.org/repo/"
         user_remote = FlatpakRemoteItem(name="flathub", url=url, scope="user")
         system_remote = FlatpakRemoteItem(name="flathub", url=url, scope="system")
@@ -3350,6 +3799,7 @@ class TestAProbeThatDidNotAnswer:
 
     @pytest.mark.asyncio
     async def test_a_source_list_that_did_not_answer_fails_the_job(self) -> None:
+        """F6, J76, J78 — the job fails naming the command and flatpak's own error."""
         context, _source, _target = make_context(
             source_responses={
                 "flatpak list --app": CommandResult(1, "", "error: While opening repository: Permission denied\n"),
@@ -3367,7 +3817,7 @@ class TestAProbeThatDidNotAnswer:
 
     @pytest.mark.asyncio
     async def test_a_remotes_read_that_did_not_answer_fails_the_job(self) -> None:
-        """Only the user-scope remotes read fails; both list reads and the system-scope
+        """F6, J79 — Only the user-scope remotes read fails; both list reads and the system-scope
         remotes read answer normally, so nothing else can produce this."""
         context, _source, _target = make_context(
             source_responses={
@@ -3385,6 +3835,7 @@ class TestAProbeThatDidNotAnswer:
 
     @pytest.mark.asyncio
     async def test_a_mask_read_that_did_not_answer_fails_the_job(self) -> None:
+        """F6, J80 — the mask read is guarded exactly as the two listings are."""
         context, _source, _target = make_context(
             source_responses={**SOURCE_RESPONSES, "flatpak --user mask": CommandResult(1, "", "error: no repo\n")},
             target_responses=TARGET_RESPONSES,
@@ -3397,7 +3848,7 @@ class TestAProbeThatDidNotAnswer:
 
     @pytest.mark.asyncio
     async def test_a_keyring_digest_read_exiting_non_zero_is_not_a_failure(self) -> None:
-        """The counter-example a blanket exit-code rule would break. `sha256sum` over a
+        """F8, J91 — The counter-example a blanket exit-code rule would break. `sha256sum` over a
         glob that matches nothing exits 1, and that is the NORMAL answer for a scope whose
         remotes rely on a machine-level trust anchor — so this read is deliberately
         unguarded and the plan must complete.
@@ -3413,7 +3864,7 @@ class TestAProbeThatDidNotAnswer:
 
     @pytest.mark.asyncio
     async def test_a_target_with_nothing_installed_is_data_not_a_failure(self) -> None:
-        """The legitimate-empty half: every target read answers empty at exit 0, which is a
+        """F7 — The legitimate-empty half: every target read answers empty at exit 0, which is a
         machine with no flatpaks, and the source's apps must reach the diff as installs.
         """
         context, _source, _target = make_context(

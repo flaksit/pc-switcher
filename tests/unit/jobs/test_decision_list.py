@@ -205,6 +205,7 @@ class TestRenderRows:
         assert "downgrade vim" in lines[1] and lines[1].endswith("downgrade")
 
     def test_a_detail_lands_on_its_own_indented_line_under_the_item(self) -> None:
+        """H94 — an item's detail is on the screen before the answer is taken."""
         rows = [_row("a", "cmatrix", detail="from a vendor repository")]
 
         lines = _lines(render_rows(rows, THREE_ANSWERS, decisions={"a": "apply"}, focused=-1, total_width=100))
@@ -286,6 +287,7 @@ class TestLegend:
         assert "sets every row" in legend(THREE_ANSWERS)
 
     def test_a_two_answer_screen_is_short_by_exactly_the_answer_it_does_not_offer(self) -> None:
+        """H95 — a two-answer screen is the same legend, short by exactly the answer it does not offer."""
         assert "never install" not in legend(TWO_ANSWERS)
         assert "<s> skip now" in legend(TWO_ANSWERS)
 
@@ -305,7 +307,7 @@ class TestLegend:
         assert all(not line.strip().startswith("<") for line in continuations)
 
     def test_the_legend_does_not_offer_abandoning_the_sync(self) -> None:
-        """Ctrl-C still aborts; the legend is what to do with this screen, and an escape
+        """H159 — Ctrl-C still aborts; the legend is what to do with this screen, and an escape
         listed beside the answers gives it equal billing with the decision."""
         assert "ctrl" not in legend(THREE_ANSWERS).lower()
         assert "abort" not in legend(THREE_ANSWERS).lower()
@@ -335,7 +337,7 @@ class TestCursor:
 
 class TestConstruction:
     def test_a_key_may_not_be_the_abort_letter(self) -> None:
-        """`<a>` is conventionally Abort, so it can never be the key that sets a decision."""
+        """H158 — `<a>` is conventionally Abort, so it can never be the key that sets a decision."""
         options = (_ACT, DecisionOption(value="skip_always", key="a", word="always skip", glyph="⊘"))
         with pytest.raises(ValueError, match="abort"):
             decision_list("t", rows=[_row("a")], options=options)
@@ -354,6 +356,7 @@ class TestKeyHandling:
     """Driven through the real Application: keystrokes in, answer out."""
 
     def test_a_bare_enter_confirms_every_row_at_its_default(self) -> None:
+        """H34 — every row is already answered when the screen opens, so a bare Enter settles them all."""
         rows = [_row("a"), DecisionRow(row_id="b", label="pkg", default="skip_once")]
 
         assert _drive(_ENTER, rows=rows) == {"a": "apply", "b": "skip_once"}
@@ -375,6 +378,7 @@ class TestKeyHandling:
         assert _drive(f"{_DOWN}{_DOWN}{_DOWN}s{_ENTER}", rows=rows) == {"a": "apply", "b": "skip_once"}
 
     def test_shift_of_a_key_sets_every_row(self) -> None:
+        """H34 — the shift form of a key settles every row of the screen in one gesture."""
         rows = [_row("a"), _row("b"), _row("c")]
 
         assert _drive(f"S{_ENTER}", rows=rows) == dict.fromkeys("abc", "skip_once")

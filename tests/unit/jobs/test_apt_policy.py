@@ -156,7 +156,7 @@ class TestCandidateOrigins:
         assert result["git"] == frozenset({"https://ppa.launchpadcontent.net/git-core/ppa/ubuntu"})
 
     def test_a_candidate_supplied_only_by_dpkg_has_an_empty_origin_set(self) -> None:
-        """A hand-installed `.deb`: apt reports a candidate because dpkg's status entry
+        """A19 — A hand-installed `.deb`: apt reports a candidate because dpkg's status entry
         supplies one, and no repository can deliver it.
         """
         result = candidate_origins_by_package(POLICY_HAND_DEB)
@@ -201,6 +201,7 @@ class TestInstalledOriginsUnderTheSharedWalk:
 
 class TestNormaliseRepoUri:
     def test_the_trailing_slash_apt_strips_is_stripped(self) -> None:
+        """A20."""
         assert normalise_repo_uri("https://packages.microsoft.com/repos/azure-cli/") == (
             "https://packages.microsoft.com/repos/azure-cli"
         )

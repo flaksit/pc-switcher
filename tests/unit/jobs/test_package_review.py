@@ -15,14 +15,19 @@ import subprocess
 import sys
 import time
 from collections.abc import Sequence
+from dataclasses import fields
 from typing import Any, ClassVar, TypedDict
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import yaml
 from prompt_toolkit.keys import Keys
 from rich.console import Console
 
-from pcswitcher.config import Configuration
+from pcswitcher.config import (  # pyright: ignore[reportPrivateUsage]
+    Configuration,
+    _load_schema,
+)
 from pcswitcher.jobs.context import JobContext
 from pcswitcher.jobs.manual_installs_sync import ManualInstallsSyncJob
 from pcswitcher.jobs.packages.items import DiffAction, DiffClass, ItemClass, ItemDiff
@@ -122,6 +127,7 @@ class TestNonInteractive:
     """D-26: no TTY -> prompt for nothing, skip everything once, record nothing permanent."""
 
     async def test_no_prompt_constructed_and_everything_skipped_once(self) -> None:
+        """H160, J35, J36 — no terminal: no screen is built at all and every item comes back declined for this run."""
         console = _non_interactive_console()
         ui = MagicMock()
         groups = [ReviewGroup(manager="apt", action="install", title="Install packages", entries=[_entry("a")])]
@@ -139,7 +145,7 @@ class TestNonInteractive:
         ui.resume.assert_not_called()
 
     async def test_warns_naming_every_item_and_reports_groups(self) -> None:
-        """`PKG-FR-LOG-DECISIONS`: a count says which items were declined to nobody."""
+        """H161 — `PKG-FR-LOG-DECISIONS`: a count says which items were declined to nobody."""
         buffer = io.StringIO()
         console = Console(file=buffer)
         ui = MagicMock()
@@ -178,6 +184,7 @@ class TestInteractive:
     """Interactive runs pause/resume the live display around the blocking prompt."""
 
     async def test_every_row_comes_back_with_the_decision_its_screen_returned(self) -> None:
+        """H112 — every row comes back carrying the decision its screen returned for it."""
         console = _interactive_console()
         ui = MagicMock()
         groups = [
@@ -207,7 +214,7 @@ class TestInteractive:
         ui.resume.assert_called_once()
 
     async def test_one_screen_per_group_and_no_second_pass_over_the_leftovers(self) -> None:
-        """The rebuild's whole point: a group is presented once, not once to apply and
+        """H33 — The rebuild's whole point: a group is presented once, not once to apply and
         again to promote what was left."""
         console = _interactive_console()
         ui = MagicMock()
@@ -249,6 +256,7 @@ class TestInteractive:
         assert "Install packages" not in printed
 
     async def test_ui_resumed_when_prompt_raises(self) -> None:
+        """H156 — a raising screen still hands the live display back, from the `finally`."""
         console = _interactive_console()
         ui = MagicMock()
         groups = [ReviewGroup(manager="apt", action="install", title="Install packages", entries=[_entry("a")])]
@@ -265,7 +273,7 @@ class TestInteractive:
         ui.resume.assert_called_once()
 
     async def test_ctrl_c_at_a_decision_screen_aborts_the_entire_sync(self) -> None:
-        """Decision 10: Ctrl-C / EOF at a decision screen means the user wants to abort the
+        """H148 — Decision 10: Ctrl-C / EOF at a decision screen means the user wants to abort the
         whole sync, not silently skip the rest of the review."""
         console = _interactive_console()
         ui = MagicMock()
@@ -292,6 +300,7 @@ class TestInteractive:
         ui.resume.assert_called_once()
 
     async def test_install_rows_start_applied_and_removal_rows_start_skipped(self) -> None:
+        """H98, H102 — install rows open at the act; removal rows open declined."""
         console = _interactive_console()
         ui = MagicMock()
         install_group = ReviewGroup(manager="apt", action="install", title="Install packages", entries=[_entry("a")])
@@ -310,7 +319,7 @@ class TestInteractive:
         assert _screen_defaults(decision_list.call_args_list[1]) == {"b": Decision.SKIP_ONCE}
 
     async def test_a_change_that_overwrites_what_the_user_wrote_starts_skipped(self) -> None:
-        """`PKG-FR-HARMLESS-DEFAULT`: an `/etc/apt/apt.conf.d` file the target already holds
+        """H103, H104 — `PKG-FR-HARMLESS-DEFAULT`: an `/etc/apt/apt.conf.d` file the target already holds
         is the user's own work, and confirming the screen unread must not replace it. A snap
         moved to another revision starts applied on the same action — converging software
         the user asked for overwrites nothing they authored.
@@ -339,7 +348,7 @@ class TestInteractive:
         assert _screen_defaults(decision_list.call_args_list[1]) == {"snp": Decision.APPLY}
 
     async def test_the_permanent_answer_says_the_user_will_not_be_asked_again(self) -> None:
-        """`PKG-FR-EFFECT-NOT-MECHANISM`: what the mark stops pc-switcher doing is machinery.
+        """H64, H87, H88, H89, H90 — `PKG-FR-EFFECT-NOT-MECHANISM`: what the mark stops pc-switcher doing is machinery.
         What it costs to choose is never being asked about the item again, and the two skips
         read as one set — the same act clause, then the duration.
         """
@@ -386,7 +395,7 @@ class TestInteractive:
         assert not any("pc-switcher" in hint for hint in install_hints + removal_hints + change_hints)
 
     async def test_no_group_mixes_install_and_removal_entries_in_one_prompt(self) -> None:
-        """Removals never share a screen with installs (D-07/D-24)."""
+        """H97 — Removals never share a screen with installs (D-07/D-24)."""
         console = _interactive_console()
         ui = MagicMock()
         install_group = ReviewGroup(
@@ -419,6 +428,7 @@ class TestInteractive:
         assert set(outcome.decisions) == {"a", "b", "c", "d"}
 
     async def test_removal_group_title_names_concrete_verb(self) -> None:
+        """H83, H99 — a removal group's title says the deletion verb, so the screen says what it deletes."""
         group = ReviewGroup(
             manager="apt", action="remove", title="Remove packages", entries=[_entry("a", action_label="remove")]
         )
@@ -460,7 +470,7 @@ class TestInteractive:
         assert decision_list.call_args.kwargs["options"][0].word == "remove"
 
     async def test_every_removal_direction_still_offers_the_permanent_answer(self) -> None:
-        """ "Starts at skip-once" and "is offered permanence" are two independent properties
+        """H82, H106 — "Starts at skip-once" and "is offered permanence" are two independent properties
         of a group (`_REMOVAL_ACTIONS` vs `_PROMOTABLE_ACTIONS`), and ADR-020 D-07 makes them
         differ for the two-answer screens. Every ordinary removal direction keeps both.
         """
@@ -486,7 +496,7 @@ class TestInteractive:
         assert outcome.decisions == dict.fromkeys(("remove", "delete", "disable"), Decision.SKIP_ALWAYS)
 
     async def test_repo_removal_starts_skipped_and_is_never_offered_permanence(self) -> None:
-        """The two-answer screen (ADR-020 D-07). It is a removal direction, so it starts at
+        """H100, H107, H136 — The two-answer screen (ADR-020 D-07). It is a removal direction, so it starts at
         skip-once like any other; it is NOT promotable, so the permanent answer is absent
         from its options and `SKIP_ALWAYS` is unreachable — which is what "no registry entry"
         means at this layer.
@@ -512,7 +522,7 @@ class TestInteractive:
         assert outcome.decisions == {"apt:source:vendor.list": Decision.SKIP_ONCE}
 
     async def test_a_report_only_group_is_printed_and_asks_nothing(self) -> None:
-        """Ruled by the user: both answers it used to offer changed nothing on either
+        """H67, H111, H142, J6 — Ruled by the user: both answers it used to offer changed nothing on either
         machine and recorded nothing, so the condition came back next sync whichever was
         chosen. A report is printed and the review moves on.
         """
@@ -562,7 +572,7 @@ class TestTerminalUIReviewer:
         review_mock.assert_awaited_once_with(groups, console=console, ui=ui, logger=logger, **HOSTS)
 
     async def test_pause_and_resume_both_run_when_the_underlying_prompt_raises(self) -> None:
-        """The adapter keeps `review_items`'s pause/resume `finally`: even when the
+        """H156 — The adapter keeps `review_items`'s pause/resume `finally`: even when the
         blocking prompt raises, the live display is handed back.
         """
         console = _interactive_console()
@@ -624,6 +634,7 @@ class TestAskGate:
         assert [choice.title for choice in choices] == ["re-check and continue", "skip apt_sync"]
 
     async def test_no_tty_answers_none_without_constructing_a_prompt(self) -> None:
+        """J43."""
         ui = MagicMock()
         with (
             patch.object(sys, "stdin", _mock_isatty(False)),
@@ -636,7 +647,7 @@ class TestAskGate:
         ui.pause.assert_not_called()
 
     async def test_the_automation_env_hook_cannot_answer_a_gate(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Deliberate negative control: the review's scripted-answer hook must NOT reach
+        """H172 — Deliberate negative control: the review's scripted-answer hook must NOT reach
         here — no environment value can stand in for going and attaching the other machine.
         """
         monkeypatch.setenv(PACKAGE_REVIEW_AUTOMATION_ENV, "all")
@@ -648,6 +659,7 @@ class TestAskGate:
         select.assert_not_called()
 
     async def test_ctrl_c_aborts_the_whole_sync_and_hands_the_display_back(self) -> None:
+        """H154 — Ctrl-C at a machine gate ends the sync and hands the live display back."""
         ui = MagicMock()
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
@@ -742,12 +754,15 @@ class TestAutomationEnv:
 
     @pytest.mark.asyncio
     async def test_automation_env_returns_mapped_decisions_without_prompting(self) -> None:
+        """H164, H165, H173, J48 — mapped ids get their value, an unmapped one falls to a decline for
+        this run, and no screen is built for either.
+        """
         console = _non_interactive_console()
         ui = MagicMock()
         groups = [
             ReviewGroup(manager="apt", action="install", title="Install packages", entries=[_entry("a"), _entry("b")])
         ]
-        env = {PACKAGE_REVIEW_AUTOMATION_ENV: json.dumps({"a": "apply", "b": "skip_once"})}
+        env = {PACKAGE_REVIEW_AUTOMATION_ENV: json.dumps({"a": "apply"})}
 
         with (
             patch.dict("os.environ", env),
@@ -757,11 +772,35 @@ class TestAutomationEnv:
 
         decision_list.assert_not_called()
         ui.pause.assert_not_called()
+        # `b` is absent from the map and falls to a decline for this run.
         assert outcome.decisions == {"a": Decision.APPLY, "b": Decision.SKIP_ONCE}
 
     @pytest.mark.asyncio
+    async def test_the_variable_answers_a_review_on_a_terminal_too(self) -> None:
+        """H173 — the hook is read before the interactivity test, so a run WITH a terminal
+        is answered from the map just as silently: no screen, and the live display is never
+        paused. The accepted cost of a hook that exists for the integration suite.
+        """
+        console = _interactive_console()
+        ui = MagicMock()
+        groups = [ReviewGroup(manager="apt", action="install", title="Install packages", entries=[_entry("a")])]
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch.dict("os.environ", {PACKAGE_REVIEW_AUTOMATION_ENV: json.dumps({"a": "apply"})}),
+            patch("pcswitcher.jobs.packages.review.decision_list") as decision_list,
+        ):
+            outcome = await review_items(groups, console=console, ui=ui, **HOSTS)
+
+        decision_list.assert_not_called()
+        ui.pause.assert_not_called()
+        ui.resume.assert_not_called()
+        assert outcome.decisions == {"a": Decision.APPLY}
+        assert outcome.was_interactive is True
+
+    @pytest.mark.asyncio
     async def test_malformed_automation_json_fails_loudly_and_prompts_nothing(self) -> None:
-        """I15 — pins the ACTUAL behaviour: `_decisions_from_automation` hands the raw
+        """H168 — pins the ACTUAL behaviour: `_decisions_from_automation` hands the raw
         value straight to `json.loads` (review.py:230), so malformed JSON surfaces as
         `json.JSONDecodeError` out of `review_items`.
 
@@ -790,7 +829,7 @@ class TestAutomationEnv:
 
     @pytest.mark.asyncio
     async def test_unknown_decision_value_in_automation_json_fails_loudly(self) -> None:
-        """Same contract for well-formed JSON naming a decision that does not exist: the
+        """H169 — Same contract for well-formed JSON naming a decision that does not exist: the
         `Decision(...)` lookup raises `ValueError` rather than defaulting to a skip.
         """
         console = _non_interactive_console()
@@ -807,6 +846,7 @@ class TestAutomationEnv:
         decision_list.assert_not_called()
 
     def test_env_var_not_mentioned_in_cli_help(self) -> None:
+        """H170 — a hidden hook stays hidden: nothing in `sync --help` names it."""
         result = subprocess.run(
             ["uv", "run", "pc-switcher", "sync", "--help"],
             capture_output=True,
@@ -815,6 +855,24 @@ class TestAutomationEnv:
         )
         assert PACKAGE_REVIEW_AUTOMATION_ENV not in result.stdout
         assert PACKAGE_REVIEW_AUTOMATION_ENV not in result.stderr
+
+    def test_no_configuration_key_stands_in_for_an_answer(self) -> None:
+        """H163, H171 — `PKG-NG-UNATTENDED`: consent is given at the review or not at all,
+        so there is no standing-answers key. Asserted as an absence in both places a key
+        would have to exist: the schema the config file is validated against, and the
+        parsed `Configuration`'s own fields.
+
+        The env var is the only thing that can answer a review, and it is deliberately not
+        configurable — a config key would make unattended package syncs a supported mode.
+        """
+        schema = yaml.safe_dump(_load_schema())
+        assert PACKAGE_REVIEW_AUTOMATION_ENV not in schema
+        assert PACKAGE_REVIEW_AUTOMATION_ENV.lower() not in schema
+
+        field_names = {f.name for f in fields(Configuration)}
+        assert PACKAGE_REVIEW_AUTOMATION_ENV.lower() not in field_names
+        # Nor anything else that would read as an answer given ahead of the review.
+        assert not [name for name in field_names if "decision" in name or "review" in name or "answer" in name]
 
 
 @pytest.mark.asyncio
@@ -825,6 +883,7 @@ class TestUnreproducibleGroupResolution:
     """
 
     async def test_add_snippet_choice_captures_body_verbatim_including_whitespace(self) -> None:
+        """G31."""
         console = _interactive_console()
         ui = MagicMock()
         group = _unreproducible_group([_entry("u1", label="brscan3")])
@@ -843,6 +902,7 @@ class TestUnreproducibleGroupResolution:
         assert "u1" not in outcome.unresolved
 
     async def test_skip_always_choice_yields_skip_always_decision_and_no_snippet(self) -> None:
+        """G32."""
         console = _interactive_console()
         ui = MagicMock()
         group = _unreproducible_group([_entry("u1", label="brscan3")])
@@ -859,7 +919,7 @@ class TestUnreproducibleGroupResolution:
         assert "u1" not in outcome.unresolved
 
     async def test_explicit_skip_once_is_a_resolution_not_unresolved(self) -> None:
-        """D-21: an explicit "Skip for now" is a real decision, so the item is resolved
+        """G33, H115 — D-21: an explicit "Skip for now" is a real decision, so the item is resolved
         for this run and left OUT of `unresolved`."""
         console = _interactive_console()
         ui = MagicMock()
@@ -876,7 +936,7 @@ class TestUnreproducibleGroupResolution:
         assert "u1" not in outcome.unresolved
 
     async def test_cancelled_select_aborts_the_entire_sync(self) -> None:
-        """Decision 10: a cancelled select (`None`, i.e. Ctrl-C / EOF) means the user wants
+        """G38, H149 — Decision 10: a cancelled select (`None`, i.e. Ctrl-C / EOF) means the user wants
         to abort the whole sync, not skip this one item."""
         console = _interactive_console()
         ui = MagicMock()
@@ -893,7 +953,7 @@ class TestUnreproducibleGroupResolution:
         ui.resume.assert_called_once()
 
     async def test_empty_snippet_body_reprompts_until_a_real_choice(self) -> None:
-        """Decision 10: an empty snippet capture is NOT accepted and does NOT fall through
+        """G39 — Decision 10: an empty snippet capture is NOT accepted and does NOT fall through
         to 'unresolved' — the three-way choice is re-prompted until the user gives a real
         snippet or an explicit skip. Here the user submits an empty body, then chooses
         skip-once on the re-prompt."""
@@ -917,7 +977,7 @@ class TestUnreproducibleGroupResolution:
         assert outcome.unresolved == ()
 
     async def test_empty_snippet_then_real_snippet_is_captured(self) -> None:
-        """Decision 10: after an empty submission the user may re-choose add-snippet and
+        """G41 — Decision 10: after an empty submission the user may re-choose add-snippet and
         supply a real body, which is then captured verbatim."""
         console = _interactive_console()
         ui = MagicMock()
@@ -937,7 +997,7 @@ class TestUnreproducibleGroupResolution:
         assert outcome.unresolved == ()
 
     async def test_a_whitespace_only_snippet_is_not_a_resolution(self) -> None:
-        """A body of spaces and newlines replays as nothing at all, so accepting it would
+        """G40 — A body of spaces and newlines replays as nothing at all, so accepting it would
         record a "snippet" that resolves the item without installing anything."""
         console = _interactive_console()
         ui = MagicMock()
@@ -978,7 +1038,7 @@ class TestUnreproducibleGroupResolution:
         assert Keys.ControlD in bound
 
     async def test_the_three_answers_read_as_they_do_on_every_other_screen(self) -> None:
-        """Same keys, same order, same words as an install screen — the act first, then the
+        """H61, H81, H92 — Same keys, same order, same words as an install screen — the act first, then the
         one that lasts a sync, then the one that is recorded.
         """
         console = _interactive_console()
@@ -1022,6 +1082,7 @@ class TestUnreproducibleGroupResolution:
         ui.resume.assert_called_once()
 
     async def test_non_interactive_offers_no_capture_and_marks_every_item_unresolved(self) -> None:
+        """G46, J38."""
         console = _non_interactive_console()
         ui = MagicMock()
         group = _unreproducible_group([_entry("u1", label="brscan3"), _entry("u2", label="cnpg")])
@@ -1039,9 +1100,29 @@ class TestUnreproducibleGroupResolution:
         assert set(outcome.unresolved) == {"u1", "u2"}
         assert outcome.was_interactive is False
 
+    async def test_the_row_starts_at_writing_a_snippet(self) -> None:
+        """H110 — `PKG-FR-HARMLESS-DEFAULT`: an unreproducible item is an install, and an
+        install displaces nothing, so the row opens at the act. The act here is not a
+        `Decision` at all — it opens the snippet editor — which is why the default is
+        matched against the act option rather than against a decision value.
+        """
+        console = _interactive_console()
+        ui = MagicMock()
+        group = _unreproducible_group([_entry("u1", label="brscan3")])
+        screen = _fake_prompt(ask_return={"u1": "skip_once"})
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen) as decision_list,
+        ):
+            await review_items([group], console=console, ui=ui, **HOSTS)
+
+        act = next(option for option in decision_list.call_args.kwargs["options"] if option.is_act)
+        assert _screen_defaults(decision_list.call_args) == {"u1": act.value}
+
     async def test_each_item_gets_a_decision_screen_of_its_own(self) -> None:
-        """Ruled by the user: one question per item, because answering "install" opens an
-        editor for that item and a later item may need different words — but in the format
+        """G42, H40 — ruled by the user: one question per item, because answering "install" opens
+        an editor for that item and a later item may need different words — but in the format
         every other screen uses, not a picker of sentences.
         """
         console = _interactive_console()
@@ -1067,6 +1148,7 @@ class TestCollateralGroupResolution:
     """
 
     async def test_go_ahead_records_apply(self) -> None:
+        """H28 — letting the collateral happen records the act against the entry."""
         console = _interactive_console()
         ui = MagicMock()
         group = _collateral_group([_entry("apt:package:pkg-a", label="other-manual")])
@@ -1095,6 +1177,7 @@ class TestCollateralGroupResolution:
         assert outcome.decisions["apt:package:pkg-a"] == Decision.SKIP_ONCE
 
     async def test_abort_raises_sync_aborted_by_user_naming_the_collateral_package(self) -> None:
+        """D26, H153 — the explicit "stop the sync" answer ends the run, naming the package."""
         console = _interactive_console()
         ui = MagicMock()
         group = _collateral_group([_entry("apt:package:pkg-a", label="other-manual")])
@@ -1110,8 +1193,52 @@ class TestCollateralGroupResolution:
         ui.pause.assert_called_once()
         ui.resume.assert_called_once()
 
+    async def test_ctrl_c_at_a_collateral_screen_aborts_the_whole_sync(self) -> None:
+        """H151 — Ctrl-C is not the same gesture as the "stop the sync" answer, and it
+        reaches a different line of code: `_ask_about_one_item` sees `None` from the prompt
+        and raises before this group's own handling ever runs. It must still end the sync
+        rather than fall through as a decline, and it names the package the screen was
+        about.
+        """
+        console = _interactive_console()
+        ui = MagicMock()
+        group = _collateral_group(
+            [_entry("apt:package:pkg-a", label="other-manual"), _entry("apt:package:pkg-b", label="second-manual")]
+        )
+        screen = _fake_prompt(ask_return=None)
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen) as decision_list,
+            pytest.raises(SyncAbortedByUser, match="other-manual"),
+        ):
+            await review_items([group], console=console, ui=ui, **HOSTS)
+
+        # The second package is never put on a screen: the abort stops the whole review.
+        assert decision_list.call_count == 1
+        ui.resume.assert_called_once()
+
+    async def test_the_row_starts_at_keeping_the_package(self) -> None:
+        """H109 — `PKG-FR-HARMLESS-DEFAULT`: confirming this screen unread must protect the
+        package, so the row opens on the skip and not on the act that loses it.
+        """
+        console = _interactive_console()
+        ui = MagicMock()
+        group = _collateral_group([_entry("apt:package:pkg-a", label="other-manual")])
+        screen = _fake_prompt(ask_return={"apt:package:pkg-a": "skip_once"})
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen) as decision_list,
+        ):
+            await review_items([group], console=console, ui=ui, **HOSTS)
+
+        assert _screen_defaults(decision_list.call_args) == {"apt:package:pkg-a": Decision.SKIP_ONCE}
+        act = next(option for option in decision_list.call_args.kwargs["options"] if option.is_act)
+        assert decision_list.call_args.kwargs["rows"][0].default != act.value
+
     async def test_bracketed_collateral_label_renders_without_markup_error(self) -> None:
-        """T-02-02: a collateral package name containing bracket characters must not reach
+        """D27 — T-02-02: a collateral package name containing bracket characters must not reach
         a Rich `Panel`/console as a bare `str`, or markup parsing raises `MarkupError`.
         """
         console = _interactive_console()
@@ -1128,7 +1255,7 @@ class TestCollateralGroupResolution:
         assert outcome.decisions["apt:package:pkg-a"] == Decision.SKIP_ONCE
 
     async def test_each_package_gets_a_decision_screen_of_its_own(self) -> None:
-        """One question per package — the causes and effects differ per item, so one legend
+        """D18, H39 — One question per package — the causes and effects differ per item, so one legend
         could not phrase them — in the format every other screen uses.
         """
         console = _interactive_console()
@@ -1148,7 +1275,7 @@ class TestCollateralGroupResolution:
         assert [len(call.kwargs["rows"]) for call in decision_list.call_args_list] == [1, 1]
 
     async def test_non_interactive_collateral_entries_skip_once_and_are_not_unresolved(self) -> None:
-        """D-26: without a TTY a collateral entry comes back SKIP_ONCE like every other
+        """D28, J40 — D-26: without a TTY a collateral entry comes back SKIP_ONCE like every other
         item (the install it gates is simply not approved) and is never flagged unresolved
         — that status is reserved for unreproducible items.
         """
@@ -1212,7 +1339,7 @@ class TestRepoConflictGroupResolution:
         assert outcome.decisions == {"apt:conflict:vendor.list": Decision.APPLY}
 
     async def test_only_two_answers_are_offered_and_the_row_starts_skipped(self) -> None:
-        """An overwrite displaces software the target explicitly marked machine-specific,
+        """C31, H108, H116, H138 — An overwrite displaces software the target explicitly marked machine-specific,
         so it is chosen, never defaulted — and it records nothing either way.
         """
         console = _interactive_console()
@@ -1232,7 +1359,7 @@ class TestRepoConflictGroupResolution:
         assert _screen_defaults(decision_list.call_args) == {"apt:conflict:vendor.list": Decision.SKIP_ONCE}
 
     async def test_each_conflicting_file_is_answered_right_after_it_is_shown(self) -> None:
-        """Ruled by the user, replacing the batch: two whole file bodies per entry meant a
+        """C32, H38 — Ruled by the user, replacing the batch: two whole file bodies per entry meant a
         batched screen asked about definitions that had already scrolled off.
         """
         console = _interactive_console()
@@ -1262,7 +1389,7 @@ class TestRepoConflictGroupResolution:
         }
 
     async def test_both_whole_versions_are_shown_and_no_unified_diff(self) -> None:
-        """The user's own words: a diff of two repository definitions is not readable. The
+        """C29, H94 — The user's own words: a diff of two repository definitions is not readable. The
         target's current file comes first, then the source's, each whole.
         """
         out = io.StringIO()
@@ -1287,7 +1414,7 @@ class TestRepoConflictGroupResolution:
         assert "@@" not in printed and "\n-deb" not in printed
 
     async def test_each_version_panel_is_titled_with_the_machine_that_holds_it(self) -> None:
-        """The user's ruling: no screen says "the target". The two panels are titled with the
+        """C30, H65 — The user's ruling: no screen says "the target". The two panels are titled with the
         two machines' own names, and the target's says "now" because it is the one an
         overwrite would replace.
         """
@@ -1329,7 +1456,7 @@ class TestRepoConflictGroupResolution:
         assert lines[content + 1].startswith("╰"), lines[content : content + 3]
 
     async def test_a_bracketed_filename_in_a_conflict_panel_renders_without_markup_error(self) -> None:
-        """T-02-02: neither the filename nor either file body may reach Rich as a bare
+        """C40 — T-02-02: neither the filename nor either file body may reach Rich as a bare
         `str`. This screen is the only one that prints whole FILES, and a repository
         definition is exactly where a bracketed path shows up — one that Rich reads as a
         closing tag raises `MarkupError` and takes the review down with it.
@@ -1358,6 +1485,7 @@ class TestRepoConflictGroupResolution:
         assert outcome.decisions == {"apt:conflict:vendor[1].list": Decision.SKIP_ONCE}
 
     async def test_ctrl_c_aborts_the_sync_naming_the_screen(self) -> None:
+        """C41, H150 — Ctrl-C at a repository-conflict screen ends the sync, naming the file."""
         console = _interactive_console()
         ui = MagicMock()
         screen = _fake_prompt(ask_return=None)
@@ -1372,6 +1500,7 @@ class TestRepoConflictGroupResolution:
         ui.resume.assert_called_once()
 
     async def test_non_interactive_conflict_entries_skip_once_and_are_not_unresolved(self) -> None:
+        """C42, J41."""
         console = _non_interactive_console()
         ui = MagicMock()
 
@@ -1384,6 +1513,91 @@ class TestRepoConflictGroupResolution:
         decision_list.assert_not_called()
         assert outcome.decisions == {"apt:conflict:vendor.list": Decision.SKIP_ONCE}
         assert outcome.unresolved == ()
+
+
+@pytest.mark.asyncio
+class TestAnswerSentencesNameTheMachineAsASet:
+    """`PKG-FR-ANSWERS-AS-A-SET`: the answers on one screen are read together, so the
+    machine is named in every sentence or in none of them. A set where one answer says
+    "nomad" and its neighbour says nothing reads as though only the first one happens
+    there.
+
+    Asserted over every screen kind at once rather than incidentally per screen, because
+    the rule is about the SET and no single-screen assertion can state it.
+    """
+
+    _GROUPS: ClassVar[dict[str, ReviewGroup]] = {
+        "install": ReviewGroup(manager="apt", action="install", title="Install apt packages", entries=(_entry("a"),)),
+        "change": ReviewGroup(
+            manager="snap",
+            action="change",
+            title="Change snaps",
+            entries=(_entry("a", action_label="change"),),
+        ),
+        "remove": ReviewGroup(
+            manager="apt",
+            action="remove",
+            title="Remove apt packages",
+            entries=(_entry("a", action_label="remove"),),
+        ),
+        "repo_conflict": ReviewGroup(
+            manager="apt",
+            action=REPO_CONFLICT_REVIEW_ACTION,
+            title="Resolve apt repository conflicts",
+            entries=(_entry("a", label="vendor.list", action_label="overwrite"),),
+        ),
+        "repo_removal": ReviewGroup(
+            manager="apt",
+            action=REPO_REMOVAL_REVIEW_ACTION,
+            title="Delete pin files atlas no longer has (apt)",
+            entries=(_entry("a", label="99-vendor.pref", action_label="delete"),),
+        ),
+        "collateral": ReviewGroup(
+            manager="apt",
+            action=COLLATERAL_REVIEW_ACTION,
+            title="Resolve apt manual-collateral removals",
+            entries=(_entry("a", label="fortunes", action_label="install sl anyway"),),
+        ),
+        "unreproducible": ReviewGroup(
+            manager="apt",
+            action=UNREPRODUCIBLE_REVIEW_ACTION,
+            title="Resolve apt items with no reproducible install",
+            entries=(_entry("a", label="brscan3"),),
+        ),
+    }
+
+    @staticmethod
+    async def _hints(group: ReviewGroup) -> list[str]:
+        console = _interactive_console()
+        screen = _fake_prompt(ask_return={entry.item_id: "skip_once" for entry in group.entries})
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen) as decision_list,
+        ):
+            await review_items([group], console=console, ui=MagicMock(), **HOSTS)
+
+        return [option.hint for option in decision_list.call_args.kwargs["options"]]
+
+    @pytest.mark.parametrize("kind", list(_GROUPS))
+    async def test_every_answer_on_one_screen_names_a_machine_or_none_of_them_does(self, kind: str) -> None:
+        """H93, H96 — the two hostnames are the only machine words a hint may use, so a
+        hint that names neither is the odd one out whichever way the screen went.
+        """
+        hints = await self._hints(self._GROUPS[kind])
+
+        naming = [hint for hint in hints if "nomad" in hint or "atlas" in hint]
+        assert naming in ([], hints), hints
+
+    async def test_the_repository_conflict_screen_says_which_version_survives_a_skip(self) -> None:
+        """H93 — two answers, so the skip cannot be read as "nothing happens": it says whose
+        version stays and that the question returns next sync.
+        """
+        act_hint, skip_hint = await self._hints(self._GROUPS["repo_conflict"])
+
+        assert "nomad" in act_hint
+        assert "keep nomad's version" in skip_hint
+        assert "will be asked again next sync" in skip_hint
 
 
 # ---------------------------------------------------------------------------------
@@ -1452,6 +1666,7 @@ class TestUnresolvedNeverFailsTheJob:
         await job.apply()  # must not raise
 
     async def test_non_interactive_unresolved_does_not_raise_on_that_basis_alone(self) -> None:
+        """J39."""
         context = _unresolved_job_context()
         job = _FakeUnreproducibleJob(context)
         diff = _unreproducible_diff("unreproducible:apt-no-candidate:brscan3")
@@ -1461,6 +1676,7 @@ class TestUnresolvedNeverFailsTheJob:
         await job.apply()  # must not raise
 
     async def test_dry_run_unresolved_does_not_raise_on_that_basis_alone(self) -> None:
+        """J62."""
         context = _unresolved_job_context(dry_run=True)
         job = _FakeUnreproducibleJob(context)
         diff = _unreproducible_diff("unreproducible:apt-no-candidate:brscan3")
@@ -1494,6 +1710,7 @@ class TestRemovalGroupContent:
         )
 
     async def test_a_pin_file_is_printed_whole_under_the_machine_that_holds_it(self) -> None:
+        """H37, H66 — a pin offered for deletion is printed whole, titled with the machine that holds it."""
         out = io.StringIO()
         entry = ReviewEntry(
             item_id="apt:pin:99-vendor.pref",
@@ -1543,6 +1760,39 @@ class TestRemovalGroupContent:
 
         assert "[bold red]not-markup[/]" in out.getvalue()
 
+    async def test_ctrl_c_at_a_deletion_screen_aborts_the_whole_sync(self) -> None:
+        """H152 — a deletion screen goes through the same `_ask_about_one_item` as the
+        collateral one, so Ctrl-C here must end the sync and name the file rather than be
+        read as declining this one deletion and moving on to the next file.
+        """
+        out = io.StringIO()
+        console = Console(file=out, force_terminal=True, no_color=True, width=200)
+        group = _pin_removal_group(
+            [
+                ReviewEntry(
+                    item_id="apt:pin:99-vendor.pref",
+                    label="99-vendor.pref",
+                    action_label="delete pin file",
+                    content="Package: *\nPin-Priority: 900\n",
+                ),
+                ReviewEntry(item_id="apt:pin:98-other.pref", label="98-other.pref", action_label="delete pin file"),
+            ]
+        )
+        ui = MagicMock()
+        screen = _fake_prompt(ask_return=None)
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen) as decision_list,
+            pytest.raises(SyncAbortedByUser, match=r"99-vendor\.pref"),
+        ):
+            await review_items([group], console=console, ui=ui, **HOSTS)
+
+        # The second file is never reached, and neither deletion is answered.
+        assert decision_list.call_count == 1
+        assert "98-other.pref" not in out.getvalue()
+        ui.resume.assert_called_once()
+
 
 _SECRET_URL = "https://bearer:s3cr3t-token@packages.example.com/apt"
 _SAFE_URL = "https://***@packages.example.com/apt"
@@ -1571,6 +1821,7 @@ class TestCredentialsInPrintedFileBodies:
         return out.getvalue()
 
     async def test_neither_version_of_a_conflicting_repository_shows_the_credential(self) -> None:
+        """C37, J123."""
         entry = _conflict_entry(
             target_version=f"deb {_SECRET_URL} stable main\n", source_version=f"URIs: {_SECRET_URL}\n"
         )
@@ -1581,6 +1832,7 @@ class TestCredentialsInPrintedFileBodies:
         assert printed.count(_SAFE_URL) == 2
 
     async def test_a_pin_file_offered_for_deletion_shows_no_credential(self) -> None:
+        """C116, J124."""
         entry = ReviewEntry(
             item_id="apt:pin:99-vendor.pref",
             label="99-vendor.pref",
@@ -1637,7 +1889,7 @@ class TestCollateralPromptWording:
         return decision_list, out.getvalue()
 
     async def test_every_answer_names_the_machine_and_its_own_effect(self) -> None:
-        """The act and skip sentences come from the ENTRY: they name the change that causes
+        """D22, H64, H91 — The act and skip sentences come from the ENTRY: they name the change that causes
         the collateral, which differs per item — an install here, a removal on the next
         screen — so no screen-wide legend could state them.
         """
@@ -1657,7 +1909,7 @@ class TestCollateralPromptWording:
         assert "the target" not in " ".join(option.hint for option in options.values())
 
     async def test_the_reason_is_the_item_own_and_the_review_adds_nothing(self) -> None:
-        """Why the package is protected comes from the item: `Collateral.protected` is a union
+        """H94 — Why the package is protected comes from the item: `Collateral.protected` is a union
         of the target's manual set and its marks, so a sentence composed here would be false
         about a package a mark alone protects.
         """
@@ -1667,6 +1919,7 @@ class TestCollateralPromptWording:
         assert [row.detail for row in rows] == [_COLLATERAL_DETAIL]
 
     async def test_stopping_names_the_package_and_the_machine_in_the_abort(self) -> None:
+        """D26, H68 — the abort message names the package and the machine, never a role."""
         with pytest.raises(SyncAbortedByUser) as excinfo:
             await self._titles("stop_sync")
 
@@ -1681,6 +1934,7 @@ class TestTheOrchestratorNamesBothMachines:
     missing name would turn every screen back into "the target"."""
 
     async def test_the_reviewer_is_built_with_both_machine_names(self) -> None:
+        """H63 — both hostnames are required to build the reviewer; there is no default."""
         config = MagicMock(spec=Configuration)
         config.logging = MagicMock(file=10, tui=20, external=30)
         config.sync_jobs = {}

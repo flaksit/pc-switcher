@@ -115,6 +115,7 @@ class TestMutatesPhrases:
         assert any("install apt package" in text for _, _, text in phrases)
 
     def test_no_mutates_phrase_names_a_role(self) -> None:
+        """H72."""
         offenders = [(rel, line, text) for rel, line, text in self._phrases() if _role_words_in(text)]
         assert not offenders, f"`mutates=` phrases naming a role: {offenders}"
 
@@ -131,6 +132,7 @@ class TestStepLabels:
         assert any("Discover jobs" in text for _, _, text in labels)
 
     def test_no_step_label_names_a_role(self) -> None:
+        """H73."""
         offenders = [entry for entry in self._labels() if _role_words_in(entry[2])]
         assert not offenders, f"step labels naming a role: {offenders}"
 
@@ -160,6 +162,7 @@ class TestOutcomeMessages:
         assert any("no enabled folders configured" in text for _, _, text in messages)
 
     def test_no_outcome_message_names_a_role(self) -> None:
+        """H74."""
         offenders = [entry for entry in self._messages() if _role_words_in(entry[2])]
         assert not offenders, f"outcome messages naming a role: {offenders}"
 
@@ -168,6 +171,7 @@ class TestProbeFailure:
     """`require_answer`'s message, which reaches the user through the failure summary."""
 
     def test_the_message_names_the_machine(self) -> None:
+        """H75, J96."""
         with pytest.raises(ProbeFailed) as excinfo:
             require_answer("snap list --all", CommandResult(1, "", "cannot communicate with server"), NOMAD)
 
@@ -223,7 +227,7 @@ class TestOrchestratorQuestions:
     async def test_first_sync_question_names_both_machines(
         self, config: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """No readable history on the other machine — the overwrite question."""
+        """H76 — No readable history on the other machine — the overwrite question."""
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         title, message = await self._ask(_orchestrator(config, remote_stdout=""))
 
@@ -270,6 +274,7 @@ class TestConfigSyncQuestions:
         return Console(file=sink, width=200, no_color=True, legacy_windows=False), sink
 
     def test_new_config_question_names_both_machines(self) -> None:
+        """H77."""
         console, sink = self._console()
         with patch("pcswitcher.config_sync.Prompt.ask", return_value="n"):
             _prompt_new_config(console, "log_level: INFO", ATLAS, NOMAD)
@@ -290,6 +295,7 @@ class TestCommandLineHelp:
     may stand in for one either."""
 
     def test_sync_help_names_no_role(self) -> None:
+        """H78."""
         result = CliRunner().invoke(app, ["sync", "--help"])
         assert result.exit_code == 0
         assert not _role_words_in(result.output), result.output

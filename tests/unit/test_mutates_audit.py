@@ -26,6 +26,11 @@ not audited because `mutates` is a required argument there, so it cannot be forg
 The two tests divide the work: the first binds the tables to the real source, so they
 cannot rot into a rubber stamp; the second states the requirement the tables are measured
 against — every write is gated unless an issue says otherwise.
+
+`TestSourceWrites` and `TestFileTransfers` below audit the same call sites from the other
+side, for `PKG-FR-SOURCE-INTENT` / `PKG-FR-MANAGER-CONVERGES`: which MACHINE a gated write
+reaches, and what a package job is allowed to copy between the two. Same method, same
+tables-bound-to-the-source shape.
 """
 
 from __future__ import annotations
@@ -211,13 +216,13 @@ def _describe(sites: list[_CallSite]) -> str:
 
 class TestMutatesCoverage:
     def test_the_audit_sees_the_executor_call_sites(self) -> None:
-        """Guard against the audit silently matching nothing (moved package, renamed
+        """J162 — guard against the audit silently matching nothing (moved package, renamed
         methods): a rubber-stamp audit is worse than none."""
         ungated = _collect_ungated()
         assert len(ungated) > 40, f"only {len(ungated)} ungated call sites found — the AST walk is not finding them"
 
     def test_no_ungated_call_site_is_unaccounted_for(self) -> None:
-        """Every executor call without `mutates=` is listed above as a read or a known gap.
+        """J162 — every executor call without `mutates=` is listed above as a read or a known gap.
 
         This is the ratchet: a newly added write that forgets `mutates=` lands in a
         function whose expected count no longer matches, and fails here until it is either
@@ -251,7 +256,7 @@ class TestMutatesCoverage:
         assert not problems, "`mutates=` audit failed:\n\n" + "\n\n".join(problems)
 
     def test_every_ungated_write_is_tracked(self) -> None:
-        """The requirement: a write either carries `mutates=` or has an issue saying why not.
+        """J162 — the requirement: a write either carries `mutates=` or has an issue saying why not.
 
         Kept separate from the ratchet above so the two failures read differently — that one
         says "you added something unaccounted for", this one says "the codebase still has
@@ -265,3 +270,237 @@ class TestMutatesCoverage:
             if write.tracked_by is None
         )
         assert not untracked, "modifications reaching a machine without the gate:\n" + "\n".join(untracked)
+
+
+# ---------------------------------------------------------------------------------
+# Which machine a write reaches (`PKG-FR-SOURCE-INTENT`), and what may be copied
+# between them (`PKG-FR-MANAGER-CONVERGES`).
+# ---------------------------------------------------------------------------------
+
+# The write methods, plus `declare_modification` — the announcement an in-process write
+# makes — because a source write that never becomes a command is still a source write.
+_MACHINE_WRITES = _GATED_METHODS | {"declare_modification"}
+
+# Receiver expressions that name the machine being synced TO. A write through one of these
+# is the target's by construction, and unbounded: replicating software is what they are for.
+# Anything else — a handle named for neither machine, a parameter typed `Executor`, the
+# orchestrator's local executor — can reach the source and must be accounted for below.
+_TARGET_HANDLES = frozenset({"self.target", "self._target", "target", "self._remote_executor"})
+
+# The package-sync surface: the four jobs and their shared helpers. `orchestrator.py` is not
+# a path here — only the one function named in `_SOURCE_WRITES` belongs to this article.
+_PACKAGE_SYNC_PATHS = ("jobs/apt_sync/", "jobs/packages/")
+_PACKAGE_SYNC_MODULES = frozenset({"jobs/snap_sync.py", "jobs/flatpak_sync.py", "jobs/manual_installs_sync.py"})
+
+# `PKG-FR-SOURCE-INTENT`: the writes a sync makes on the source are exactly three, each
+# required by an article of its own. The value is that article and why the write exists.
+_SOURCE_WRITES: dict[str, str] = {
+    # Written through whichever machine holds the item, which is the source whenever the
+    # source is the one that has the software (D-08a) — hence source-capable, not target-only.
+    "jobs/packages/state.py::DecisionFile.record::run_command": (
+        "PKG-FR-MACHINE-SPECIFIC — the machine-specific mark, on the holding machine"
+    ),
+    "jobs/packages/state.py::SnippetRegistry.add::run_command": (
+        "PKG-FR-MANUAL-SAME-RUN — a snippet the review authored, into the source's registry"
+    ),
+    # One key, two calls: the local branch is the source's half of the pause, the remote
+    # branch the target's. Both are the same write, applied on both machines.
+    "orchestrator.py::Orchestrator._run_snap_hold_command::run_command": (
+        "PKG-FR-SNAP-REFRESH-PAUSE — the auto-refresh pause and its restore, which both machines take"
+    ),
+}
+
+# Source-capable writes that are not a package sync's: they belong to other jobs and other
+# requirements, and are listed only so this audit's ratchet stays closed over the whole
+# package. A key here may never be under `_PACKAGE_SYNC_PATHS`, which is asserted.
+_OUTSIDE_PACKAGE_SYNC: dict[str, str] = {
+    "btrfs_snapshots.py::create_snapshot::run_command": "the pre-sync snapshot, taken on both machines",
+    "btrfs_snapshots.py::validate_snapshots_directory::run_command": "creates /.snapshots on either machine",
+    "btrfs_snapshots.py::cleanup_snapshots::run_command": "expires old snapshots on either machine",
+    "btrfs_snapshots.py::delete_all_snapshots::run_command": "the `cleanup-snapshots` command, not a sync",
+    "jobs/btrfs.py::BtrfsSnapshotJob.execute::run_command": "the snapshot job's own session folder, per machine",
+    "orchestrator.py::Orchestrator._update_sync_history::declare_modification": (
+        "the tool's record of this machine's role in the run — not software, and not this article's subject"
+    ),
+}
+
+
+@dataclass(frozen=True)
+class _GatedCall:
+    """One `<method>` call that DID pass `mutates=`, with the handle it went through."""
+
+    key: str
+    relpath: str
+    lineno: int
+    receiver: str
+    reaches_target_only: bool
+    source: str
+
+
+def _remote_executor_params(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> frozenset[str]:
+    """Parameters annotated `RemoteExecutor`, which is only ever the machine being synced to.
+
+    `SnippetRegistry.replay(item_id, executor: RemoteExecutor)` is the case that needs this:
+    its handle is named for neither machine, and the type is what says which one it is.
+    """
+    args = fn.args
+    return frozenset(
+        arg.arg
+        for arg in (*args.posonlyargs, *args.args, *args.kwonlyargs)
+        if arg.annotation is not None and "RemoteExecutor" in ast.unparse(arg.annotation)
+    )
+
+
+def _collect_gated(methods: frozenset[str] = _MACHINE_WRITES, *, require_mutates: bool = True) -> list[_GatedCall]:
+    """Every `mutates=` call in `src/pcswitcher/`, keyed as `_collect_ungated` keys its own.
+
+    `require_mutates=False` takes every call to `methods` instead, gated or not — which is
+    what a transfer audit needs, since a `get_file` reading off a machine carries none.
+    """
+    calls: list[_GatedCall] = []
+
+    def visit(node: ast.AST, qualname: str, relpath: str, target_params: frozenset[str]) -> None:
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef):
+                name = f"{qualname}.{child.name}" if qualname else child.name
+                visit(child, name, relpath, _remote_executor_params(child))
+                continue
+            if isinstance(child, ast.ClassDef):
+                visit(child, f"{qualname}.{child.name}" if qualname else child.name, relpath, frozenset())
+                continue
+            if (
+                isinstance(child, ast.Call)
+                and isinstance(child.func, ast.Attribute)
+                and child.func.attr in methods
+                and (not require_mutates or any(keyword.arg == "mutates" for keyword in child.keywords))
+            ):
+                receiver = ast.unparse(child.func.value)
+                calls.append(
+                    _GatedCall(
+                        key=f"{relpath}::{qualname}::{child.func.attr}",
+                        relpath=relpath,
+                        lineno=child.lineno,
+                        receiver=receiver,
+                        reaches_target_only=receiver in _TARGET_HANDLES or receiver in target_params,
+                        source=ast.unparse(child),
+                    )
+                )
+            visit(child, qualname, relpath, target_params)
+
+    for path in sorted(_SRC.rglob("*.py")):
+        visit(ast.parse(path.read_text(encoding="utf-8")), "", path.relative_to(_SRC).as_posix(), frozenset())
+    return calls
+
+
+def _is_package_sync(relpath: str) -> bool:
+    return relpath.startswith(_PACKAGE_SYNC_PATHS) or relpath in _PACKAGE_SYNC_MODULES
+
+
+class TestSourceWrites:
+    """`PKG-FR-SOURCE-INTENT`: a sync changes what software the TARGET has, and makes
+    exactly three writes on the source.
+
+    The `mutates=` audit above classifies a call as read or write and stops there, so a
+    fourth source write would pass it unnoticed. This one asks the other question — which
+    machine does the write land on — by the handle the call goes through: `self.target` and
+    a parameter typed `RemoteExecutor` are the machine being synced to, everything else can
+    be the source and has to be named.
+
+    What it cannot see: a command that reaches the source through a callable passed by
+    reference, the same blind spot the module docstring records.
+    """
+
+    def test_the_audit_sees_the_gated_call_sites(self) -> None:
+        """J149 — guard against the walk silently matching nothing, as above."""
+        gated = _collect_gated()
+        assert len(gated) > 40, f"only {len(gated)} `mutates=` call sites found — the AST walk is not finding them"
+
+    def test_no_write_that_can_reach_the_source_is_unaccounted_for(self) -> None:
+        """J149 — the ratchet: a new write through a handle that is not the target's lands here.
+
+        Its author must either route it through the target, or name it — and naming a new
+        one inside a package job means adding a fourth entry to `_SOURCE_WRITES`, which the
+        test below refuses.
+        """
+        gated = _collect_gated()
+        accounted = set(_SOURCE_WRITES) | set(_OUTSIDE_PACKAGE_SYNC)
+        problems = [
+            f"{call.key}: writes through `{call.receiver}`, which is not the target's handle, and is "
+            f"listed in neither _SOURCE_WRITES nor _OUTSIDE_PACKAGE_SYNC.\n"
+            f"    {call.relpath}:{call.lineno}  {call.source}"
+            for call in gated
+            if not call.reaches_target_only and call.key not in accounted
+        ]
+
+        seen = {call.key for call in gated if not call.reaches_target_only}
+        problems.extend(
+            f"{key}: listed as a source-capable write but no such call exists — remove the entry."
+            for key in sorted(accounted - seen)
+        )
+        problems.extend(
+            f"{key}: listed as outside package sync, but it is a package-sync module."
+            for key in sorted(_OUTSIDE_PACKAGE_SYNC)
+            if _is_package_sync(key.split("::")[0])
+        )
+
+        assert not problems, "source-write audit failed:\n\n" + "\n\n".join(problems)
+
+    def test_a_package_sync_writes_exactly_three_things_on_the_source(self) -> None:
+        """J149 — the requirement itself, spelled out here as well as in the table so that neither
+        can be changed alone: the mark, the snippet, the refresh pause.
+        """
+        assert set(_SOURCE_WRITES) == {
+            "jobs/packages/state.py::DecisionFile.record::run_command",
+            "jobs/packages/state.py::SnippetRegistry.add::run_command",
+            "orchestrator.py::Orchestrator._run_snap_hold_command::run_command",
+        }
+
+
+# What each of the three transfers a package job makes carries. Enumerated rather than
+# path-matched because every destination is a variable at the call site; what this pins is
+# the SURFACE — a fourth transfer, in any package job, fails the test below.
+_PACKAGE_TRANSFERS: dict[str, str] = {
+    "jobs/apt_sync/files.py::TargetFiles.stage_and_promote::send_file": (
+        "one /etc/apt file — a repository, a pin, an apt.conf fragment or a signing key"
+    ),
+    "jobs/flatpak_sync.py::FlatpakSyncJob._stage_source_file::send_file": (
+        "a remote's ref filter or trust anchor, staged into the target's cache"
+    ),
+    "jobs/manual_installs_sync.py::ManualInstallsSyncJob._push_snippet_registry::send_file": (
+        "the install-snippet registry"
+    ),
+}
+
+
+class TestFileTransfers:
+    """`PKG-FR-MANAGER-CONVERGES`: software is replicated by the target's own package
+    managers, so no manager's database, store or unpacked files are copied between machines.
+
+    Stated as the transfer surface, which is what a static audit can hold: the three sites
+    above are every file a package job moves, and the direction is one-way — nothing is
+    fetched off the target at all. A `tar` piped through a shell command could still copy a
+    store without touching `send_file`; that is out of this audit's reach and is asserted
+    per manager by the jobs' own converge tests.
+    """
+
+    def test_a_package_job_transfers_only_the_three_files_it_is_allowed_to(self) -> None:
+        """J150 — the three files above are every one a package job copies to the target."""
+        transfers = {
+            call.key: call
+            for call in _collect_gated(frozenset({"send_file", "get_file"}), require_mutates=False)
+            if _is_package_sync(call.relpath)
+        }
+        assert set(transfers) == set(_PACKAGE_TRANSFERS), "the files a package job copies changed:\n" + "\n".join(
+            f"    {call.relpath}:{call.lineno}  {call.source}" for call in transfers.values()
+        )
+
+    def test_nothing_is_ever_fetched_off_the_target(self) -> None:
+        """J150 — no package job reads a file off the target machine: what a manager holds there is
+        queried with its own command, never copied back.
+        """
+        fetches = [
+            f"{call.relpath}:{call.lineno}  {call.source}"
+            for call in _collect_gated(frozenset({"get_file"}), require_mutates=False)
+            if _is_package_sync(call.relpath)
+        ]
+        assert not fetches, "a package job fetched a file from the target:\n" + "\n".join(fetches)

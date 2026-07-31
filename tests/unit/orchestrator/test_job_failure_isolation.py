@@ -89,6 +89,7 @@ class TestProbeFailedFailsOnlyItsOwnJob:
     async def test_the_orchestrator_records_it_failed_and_runs_the_next_job(
         self, wired_orchestrator: Orchestrator
     ) -> None:
+        """J29, J97, K18 — a dead read fails its own job and the next one still runs."""
         probe_failing = _ProbeFailingJob(make_context())
         following = _RanAfterJob(make_context())
 
@@ -102,14 +103,15 @@ class TestProbeFailedFailsOnlyItsOwnJob:
     async def test_the_failed_result_carries_the_command_that_did_not_answer(
         self, wired_orchestrator: Orchestrator
     ) -> None:
-        """`PKG-FR-FAIL-NAMED`: the reason reaches the report, not just the log."""
+        """J33, J95, K18 — `PKG-FR-FAIL-NAMED`: the command that did not answer reaches the
+        report, once, not just the log."""
         results = await wired_orchestrator._execute_jobs([_ProbeFailingJob(make_context())])  # pyright: ignore[reportPrivateUsage]
 
         assert results[0].error_message == _MESSAGE
 
     @pytest.mark.asyncio
     async def test_the_session_is_still_reported_failed(self, wired_orchestrator: Orchestrator) -> None:
-        """Continuing is not forgiving: the run's own outcome still records the failure."""
+        """J32 — continuing is not forgiving: the run's own outcome still records the failure."""
         results = await wired_orchestrator._execute_jobs(  # pyright: ignore[reportPrivateUsage]
             [_ProbeFailingJob(make_context()), _RanAfterJob(make_context())]
         )
@@ -122,6 +124,7 @@ class TestAnyFailureOfAPackageJobStaysInThatJob:
 
     @pytest.mark.asyncio
     async def test_a_generic_exception_does_not_stop_the_following_job(self, wired_orchestrator: Orchestrator) -> None:
+        """J27, K17 — any exception out of a package job stays in that job."""
         crashing = _CrashingPackageJob(make_context())
         following = _RanAfterJob(make_context())
 
@@ -132,13 +135,14 @@ class TestAnyFailureOfAPackageJobStaysInThatJob:
 
     @pytest.mark.asyncio
     async def test_the_failed_result_carries_what_went_wrong(self, wired_orchestrator: Orchestrator) -> None:
+        """J28, K17 — that job's reason reaches its `JobResult` verbatim."""
         results = await wired_orchestrator._execute_jobs([_CrashingPackageJob(make_context())])  # pyright: ignore[reportPrivateUsage]
 
         assert results[0].error_message == _CRASH
 
     @pytest.mark.asyncio
     async def test_a_lock_conflict_still_ends_the_run(self, wired_orchestrator: Orchestrator) -> None:
-        """This machine is no longer entitled to sync, so no later job may run."""
+        """J30, K19 — this machine is no longer entitled to sync, so no later job may run."""
         never_runs = _RanAfterJob(make_context())
 
         with pytest.raises(SyncLockedError):

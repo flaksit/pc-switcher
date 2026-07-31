@@ -81,11 +81,55 @@ async def record_skip_always(job: PackageSyncJob, item_id: str) -> PackagePlan:
     return plan
 
 
+class TestARunOfPureDeclines:
+    """`PKG-FR-SKIP-ONCE`: declining for this run records nothing, so a run whose EVERY
+    answer was a decline must leave both machines' decision files untouched — not merely
+    the machine that does not hold the item.
+
+    The other tests here always mark one item, so each of them proves only that the OTHER
+    machine wrote nothing. This one removes the mark entirely.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_run_whose_every_answer_is_a_decline_writes_no_decision_file(self) -> None:
+        """H113 — three items across three directions and two machines, all declined for
+        this run.
+        """
+        source_responses = {
+            "apt-mark showhold": CommandResult(0, "pkg-a\n", ""),
+            "apt-mark showmanual": CommandResult(0, "", ""),
+            "find /etc/apt/apt.conf.d": CommandResult(0, sha256_line("c1", "99recommends"), ""),
+        }
+        target_responses = {
+            "apt-mark showhold": NO_HOLDS,
+            "apt-mark showmanual": CommandResult(0, "", ""),
+            "find /etc/apt/sources.list.d": CommandResult(0, sha256_line("d1", "vendor.list"), ""),
+            "cat /etc/apt/sources.list.d/vendor.list": CommandResult(0, "deb https://vendor.example.com x y\n", ""),
+        }
+
+        context, source, target = make_context(source_responses=source_responses, target_responses=target_responses)
+        job = AptSyncJob(context)
+        plan = await job.plan()
+
+        assert {"apt:hold:pkg-a", "apt:config:99recommends", "apt:source:vendor.list"} <= {
+            diff.item_id for diff in plan.diffs
+        }
+        job.accept_review(
+            plan,
+            ReviewOutcome(decisions={diff.item_id: Decision.SKIP_ONCE for diff in plan.diffs}, was_interactive=True),
+        )
+        await job.apply()
+
+        assert not wrote_decision_file(source)
+        assert not wrote_decision_file(target)
+
+
 class TestAptHoldDecisions:
     """`apt:hold:<name>` — recorded on the source for a hold, the target for an unhold."""
 
     @pytest.mark.asyncio
     async def test_declined_hold_is_recorded_on_source_and_never_re_offered(self) -> None:
+        """H121, H127 — a marked apt hold is recorded on the machine that holds it and never diffed again."""
         source_responses = {"apt-mark showhold": CommandResult(0, "pkg-a\n", "")}
         target_responses = {"apt-mark showhold": NO_HOLDS}
 
@@ -107,6 +151,7 @@ class TestAptHoldDecisions:
 
     @pytest.mark.asyncio
     async def test_declined_unhold_is_recorded_on_target_and_never_re_offered(self) -> None:
+        """B43, H121, H127 — a marked unhold is recorded on the machine that holds the hold, and never diffed again."""
         source_responses = {"apt-mark showhold": NO_HOLDS}
         # The hold is a real one: pkg-a is installed on the target. A hold naming a package
         # the target lacks is a different item entirely (`PKG-FR-APT-HOLD-VERSION`).
@@ -132,7 +177,7 @@ class TestAptHoldDecisions:
 
     @pytest.mark.asyncio
     async def test_recorded_hold_is_read_back_from_the_machine_that_holds_it_only(self) -> None:
-        """The decision is machine-local (D-08a): the same file on the WRONG machine must
+        """B44 — The decision is machine-local (D-08a): the same file on the WRONG machine must
         not silence the diff, or the read path would be looking at the wrong end."""
         source_responses = {"apt-mark showhold": CommandResult(0, "pkg-a\n", "")}
         context, source, _target = make_context(
@@ -173,6 +218,7 @@ class TestAptHeldPackageSuppression:
 
     @pytest.mark.asyncio
     async def test_declined_unhold_does_not_re_propose_the_held_packages_upgrade(self) -> None:
+        """B45."""
         source_responses, target_responses = self._held_package_responses()
 
         context, _source, target = make_context(source_responses=source_responses, target_responses=target_responses)
@@ -191,6 +237,7 @@ class TestAptHeldPackageSuppression:
 
     @pytest.mark.asyncio
     async def test_unrelated_recorded_decision_leaves_the_hold_set_intact(self) -> None:
+        """B46, N4."""
         source_responses, target_responses = self._held_package_responses()
         # pkg-c is held on the target too; its unhold is the one declined.
         source_responses = {**source_responses, "apt-mark showmanual": CommandResult(0, "pkg-b\n", "")}
@@ -226,6 +273,8 @@ class TestAptRepoItemDecisions:
 
     @pytest.mark.asyncio
     async def test_declined_config_install_is_recorded_on_source_and_never_re_offered(self) -> None:
+        """C124, H53, H124, H127 —
+        an `/etc/apt/apt.conf.d` file is markable, recorded on its holder and never re-offered."""
         source_responses = {
             "apt-mark showmanual": CommandResult(0, "", ""),
             "find /etc/apt/apt.conf.d": CommandResult(0, sha256_line("c1", "99recommends"), ""),
@@ -247,7 +296,8 @@ class TestAptRepoItemDecisions:
 
     @pytest.mark.asyncio
     async def test_no_repository_or_pin_id_can_reach_a_decision_file(self) -> None:
-        """Rulings 5 and 12: a repository or pin DELETION takes two answers, so there is no
+        """C61, C115, C125, H116, H139 —
+        Rulings 5 and 12: a repository or pin DELETION takes two answers, so there is no
         third state to persist — and the model says "no registry entry", not "the prompt
         happens not to offer one". Asserted the hard way, with `SKIP_ALWAYS` forced onto
         every diff the plan produced, which is what an automation hook or a hand-built
@@ -284,7 +334,7 @@ class TestAptRepoItemDecisions:
 
     @pytest.mark.asyncio
     async def test_a_signing_key_is_never_offered_and_so_can_never_be_recorded(self) -> None:
-        """`orphan.gpg` exists only on the target and no repository references it — the
+        """H140 — `orphan.gpg` exists only on the target and no repository references it — the
         strongest candidate a key removal could ever have. It reaches neither `plan.diffs`
         nor a review group, so there is nothing for the user to decline and nothing
         `_record_permanent_skips` could ever write.
@@ -317,6 +367,7 @@ class TestSnapHoldDecisions:
 
     @pytest.mark.asyncio
     async def test_declined_hold_is_recorded_on_source_and_never_re_offered(self) -> None:
+        """H122 — a marked snap hold lands in snap's own decision file on the machine that holds it."""
         source_responses = {"snap list --all": CommandResult(0, SNAP_ALPHA_HELD, "")}
         target_responses = {"snap list --all": CommandResult(0, SNAP_ALPHA_UNHELD, "")}
 
@@ -338,6 +389,7 @@ class TestSnapHoldDecisions:
 
     @pytest.mark.asyncio
     async def test_declined_unhold_is_recorded_on_target_and_never_re_offered(self) -> None:
+        """E69, H122 — a marked snap unhold lands on the machine that holds the hold."""
         source_responses = {"snap list --all": CommandResult(0, SNAP_ALPHA_UNHELD, "")}
         target_responses = {"snap list --all": CommandResult(0, SNAP_ALPHA_HELD, "")}
 
@@ -358,7 +410,7 @@ class TestSnapHoldDecisions:
 
     @pytest.mark.asyncio
     async def test_recorded_hold_does_not_silence_the_snaps_own_presence_diff(self) -> None:
-        """A hold decision is about the hold, not the snap: `snap:alpha` must still be
+        """E70, H128 — A hold decision is about the hold, not the snap: `snap:alpha` must still be
         proposed for install when the target lacks it."""
         source_responses = {"snap list --all": CommandResult(0, SNAP_ALPHA_HELD, "")}
         context, source, _target = make_context(
@@ -385,6 +437,7 @@ class TestFlatpakMaskDecisions:
 
     @pytest.mark.asyncio
     async def test_declined_mask_is_recorded_on_source_and_never_re_offered(self) -> None:
+        """H123, N6 — a marked flatpak mask lands in flatpak's own decision file on the machine that holds it."""
         mask_id = "flatpak:mask:user:org.example.Blocked"
         source_responses = {"flatpak --user mask": CommandResult(0, "  org.example.Blocked\n", "")}
 
@@ -404,6 +457,7 @@ class TestFlatpakMaskDecisions:
 
     @pytest.mark.asyncio
     async def test_declined_unmask_is_recorded_on_target_and_never_re_offered(self) -> None:
+        """F131, H123, N6 — a marked flatpak unmask lands on the machine that holds the mask."""
         mask_id = "flatpak:mask:system:org.example.Blocked"
         target_responses = {"flatpak --system mask": CommandResult(0, "  org.example.Blocked\n", "")}
 
