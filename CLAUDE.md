@@ -39,6 +39,7 @@ pc-switcher cleanup-snapshots   # Clean up old btrfs snapshots
 
 ```bash
 uv run ruff check . && uv run ruff format .   # Lint and format
+uv run codespell                              # Spelling — CI's lint job fails on it
 uv run basedpyright                           # Type check
 uv run pytest                                 # Unit tests
 tests/run-integration-tests.sh                # Integration tests
