@@ -6,9 +6,13 @@ this machine is the source, not installed or removed when this machine is the ta
 D-19's whole argument for scanning aggressively — a finding produces noise exactly
 once, then never again — only holds if this durability is real.
 
-Which machine's file gets an entry follows which machine HOLDS the item (D-08a): a
-source-held item declined during review is recorded on the source, a target-held
-item whose removal is declined is recorded on the target. Because the file is
+Which machine's file gets an entry follows which machine HOLDS the item (D-08a): an
+install declined for good is recorded on the source, the only machine that has it; a
+removal and an overwrite are both recorded on the target, which is the machine whose
+copy the answer keeps. An overwrite is therefore the one direction whose mark can be
+sitting on either machine when a later run reads it, since the run that recorded it may
+have been launched the other way round — `PackageSyncJob._mark_holders` is where that
+asymmetry is stated once, for the write and the read together. Because the file is
 machine-local, the write must land on the correct END of the connection — on the
 target this means going through the remote executor, never a local `pathlib` write
 (ADR-002: the target has no direct filesystem access from here). `DecisionFile` takes
@@ -61,6 +65,7 @@ __all__ = [
     "SnippetRegistry",
     "filter_inert",
     "load_snippets_from_text",
+    "marks_on_either",
 ]
 
 _logger = logging.getLogger("pcswitcher.jobs.packages.state")
@@ -121,8 +126,43 @@ async def filter_inert[T: _HasItemId](items: Sequence[T], decisions: Mapping[str
     (drop recorded items from the manifest before it is even diffed) and the
     target-query side (drop recorded items from what would otherwise become a
     proposed install/remove) share exactly one definition of "inert" (D-08).
+
+    A job that captures an inventory from BOTH machines passes `marks_on_either` here
+    rather than each machine's own file; see that function for why.
     """
     return [item for item in items if item.item_id not in decisions]
+
+
+def marks_on_either(
+    source_decisions: Mapping[str, DecisionEntry], target_decisions: Mapping[str, DecisionEntry]
+) -> dict[str, DecisionEntry]:
+    """Both machines' marks as one mapping, for the `filter_inert` pass over an inventory
+    each machine has its own copy of.
+
+    Filtering a machine's inventory by its own file alone is wrong wherever the OTHER
+    machine can have the same item: the marked copy disappears from one side and the
+    unmarked copy survives on the other, so an item that should have produced NO diff
+    becomes a one-sided one pointing the wrong way — an install of software the target
+    already has, or a removal of software the source still has. Both are exactly what
+    `PKG-FR-MACHINE-SPECIFIC` forbids ("MUST NOT be proposed in any later review", "MUST
+    NOT be removed or overwritten by a sync from any other machine"), and the removal
+    direction destroys the copy the mark was given to protect. A snap whose revision
+    differs is the case that makes it unavoidable: the mark is recorded once, and the very
+    next run in the same direction offered the snap for removal.
+
+    It is also what a decision file already claims to mean — "inert on THIS machine in
+    both roles" — read from the other end of the connection: an entry on the target says
+    the item is not to be installed or removed there, whichever machine the run was
+    launched from.
+
+    Right-biased so a `label` or `reason` the target recorded wins on a shared id; only
+    membership is ever read here, so the choice is cosmetic.
+
+    `manual_installs_sync` is the one job that does not need this: it captures an
+    inventory from the source alone, so there is no second copy to leave behind, and
+    `PKG-FR-MANUAL-SOURCE-DECIDES` makes the source the only authority anyway.
+    """
+    return {**source_decisions, **target_decisions}
 
 
 def _serialize(entries: Mapping[str, DecisionEntry]) -> str:

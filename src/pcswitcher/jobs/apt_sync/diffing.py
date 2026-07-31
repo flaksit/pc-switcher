@@ -71,6 +71,8 @@ def diff_apt_packages(
     source_hold_names: frozenset[str] = frozenset(),
     target_hold_names: frozenset[str] = frozenset(),
     target_stale_holds: frozenset[str] = frozenset(),
+    source_marked_packages: frozenset[str] = frozenset(),
+    target_marked_packages: frozenset[str] = frozenset(),
 ) -> list[ItemDiff]:
     """One diff per item id present on either side, source-then-target order,
     followed by the `apt:hold:` membership diffs (#208, D5/D8 — holds emitted AFTER
@@ -105,6 +107,8 @@ def diff_apt_packages(
     target-held & source-not -> REMOVE (unhold); held on both or neither -> no diff. A
     stale target hold counts as "not held" for the ADD direction alone, so a package both
     machines hold and only the source has gets its hold registered after the install lands.
+    `*_marked_packages` are the package names each machine recorded machine-specific, which
+    make its own holds inert as well (`diff_apt_holds`).
     """
     source_by_id = {item.item_id: item for item in source_items}
     target_by_id = {item.item_id: item for item in target_items}
@@ -206,7 +210,15 @@ def diff_apt_packages(
 
     # Hold membership diffs (#208, D2/D8): emitted AFTER every package diff so a
     # package install lands before its hold when both are approved.
-    diffs.extend(diff_apt_holds(source_hold_names, target_hold_names, target_stale_holds))
+    diffs.extend(
+        diff_apt_holds(
+            source_hold_names,
+            target_hold_names,
+            target_stale_holds,
+            source_marked_packages,
+            target_marked_packages,
+        )
+    )
     return diffs
 
 
@@ -214,6 +226,8 @@ def diff_apt_holds(
     source_hold_names: frozenset[str],
     target_hold_names: frozenset[str],
     target_stale_holds: frozenset[str] = frozenset(),
+    source_marked_packages: frozenset[str] = frozenset(),
+    target_marked_packages: frozenset[str] = frozenset(),
 ) -> list[ItemDiff]:
     """`apt:hold:` membership diffs (#208, D2): source-held & target-not -> INSTALL
     (hold); target-held & source-not -> REMOVE (unhold); held on both or on neither
@@ -223,6 +237,17 @@ def diff_apt_holds(
     direction — it is still selection state the target carries and the source does not — and
     as NOT held for the ADD direction, which is what gives a package both machines hold and
     only the source has the hold item `PKG-FR-APT-HOLD-VERSION` requires once it lands.
+
+    A hold is also inert where its PACKAGE is marked machine-specific on the machine the
+    hold's own direction holds — the source for an add, the target for a removal. The mark
+    covers both (`PKG-FR-BLOCKS-REPLICATE`), but only a mark given on the merged question
+    records both ids; a package marked in an earlier run and held afterwards leaves a mark
+    against `apt:package:<name>` alone, which no lookup of the hold's own id can see. Adding
+    such a hold would freeze a package the target does not end the run with, since the mark
+    is what keeps its install out of the run (`PKG-FR-APT-HOLD-ITEM`), and removing one would
+    take a marked package's protection off it (`PKG-FR-MACHINE-SPECIFIC`). Read per direction
+    rather than subtracted from the hold sets, because a name dropped from the source set
+    would read as "the source does not hold it" and propose an unhold.
     """
     diffs: list[ItemDiff] = []
     for name in sorted(source_hold_names | target_hold_names):
@@ -234,6 +259,8 @@ def diff_apt_holds(
             # on neither side, so the hold becomes an item and lands after the package.
             in_target = False
         if in_source == in_target:
+            continue
+        if name in (source_marked_packages if in_source else target_marked_packages):
             continue
         hold_item = AptHoldItem(name=name)
         diffs.append(

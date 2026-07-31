@@ -1,9 +1,14 @@
 """Skip-always durability for block-state items (#208 D3, ADR-020 D-08/D-08a).
 
 A "skip always" recorded against a hold/mask item lands in the decision file of the
-machine that HOLDS it (INSTALL/CHANGE -> source, REMOVE -> target) and must never be
+machine that HOLDS it (INSTALL -> source, REMOVE -> target) and must never be
 re-emitted afterwards — least of all in the add direction, which comes back
 default-checked and so would be re-applied by a bulk accept.
+
+The two classes at the end cover the third direction, CHANGE, which is not a block-state
+item at all but shares the machinery and is where the holder rule stops following from
+the run's own direction: an `apt.conf.d` file and a snap's revision are on BOTH machines,
+so the mark keeps the target's copy, and the next run may be launched the other way round.
 
 Every case runs TWO rounds against the same stubbed state: round 1 records the decision
 and round 2 replays the exact file round 1 wrote back through the decision-file `cat`,
@@ -13,6 +18,7 @@ executor interactions are mocked; no real apt/snap/flatpak commands run.
 
 from __future__ import annotations
 
+import contextlib
 import shlex
 from unittest.mock import MagicMock
 
@@ -22,10 +28,17 @@ from pcswitcher.jobs.apt_sync import AptSyncJob
 from pcswitcher.jobs.flatpak_sync import FlatpakSyncJob
 from pcswitcher.jobs.packages.items import ItemClass
 from pcswitcher.jobs.packages.review import Decision, ReviewOutcome
-from pcswitcher.jobs.packages.sync_core import PackagePlan, PackageSyncJob
+from pcswitcher.jobs.packages.sync_core import PackageItemFailures, PackagePlan, PackageSyncJob
 from pcswitcher.jobs.snap_sync import SnapSyncJob
 from pcswitcher.models import CommandResult
-from tests.unit.jobs.apt.helpers import all_calls, installed_on_target, make_context, sha256_line
+from tests.unit.jobs.apt.helpers import (
+    all_calls,
+    decision_file,
+    differing_repo_context,
+    installed_on_target,
+    make_context,
+    sha256_line,
+)
 
 _SNAP_HEADER = "Name      Version    Rev    Tracking        Publisher    Notes\n"
 SNAP_ALPHA_HELD = _SNAP_HEADER + "alpha     1.0        10     latest/stable   pub✓         held\n"
@@ -381,6 +394,48 @@ class TestAptRepoItemDecisions:
         assert "apt:pin:" not in recorded
 
     @pytest.mark.asyncio
+    async def test_no_repository_conflict_answer_can_reach_a_decision_file(self) -> None:
+        """C33 — `PKG-FR-REPO-CONFLICT` says the answer "MUST NOT" be recorded, in EITHER
+        direction: overwriting is a one-off, and skipping leaves the two machines disagreeing
+        about where software comes from, which the next sync has to raise again.
+
+        Asserted the hard way like the row above it, with `SKIP_ALWAYS` forced onto the
+        conflict entry through a hand-built outcome — the shape an automation hook could
+        produce, and the only one the interactive prompt cannot.
+        """
+        context, source, target = differing_repo_context(recorded=decision_file("apt:package:curl"))
+        job = AptSyncJob(context)
+        plan = await job.plan()
+
+        approvals = {diff.item_id: Decision.APPLY for diff in plan.diffs}
+        second = await job.plan_second_round(plan, ReviewOutcome(decisions=approvals, was_interactive=True))
+        conflicts = {
+            entry.item_id
+            for group in second.groups
+            for entry in group.entries
+            if entry.item_id.startswith("apt:conflict:")
+        }
+        assert conflicts == {"apt:conflict:vendor.list"}
+
+        job.accept_review(
+            PackagePlan(manager=plan.manager, diffs=second.diffs, groups=(*plan.groups, *second.groups)),
+            ReviewOutcome(
+                decisions={**approvals, **dict.fromkeys(conflicts, Decision.SKIP_ALWAYS)}, was_interactive=True
+            ),
+        )
+        # Skipping the conflict fails the package whose origin needed the file (C35); the
+        # decision records are written before any of that, which is what this is about.
+        with contextlib.suppress(PackageItemFailures):
+            await job.apply()
+
+        # The conflict was this run's only permanent answer, so "nothing is recorded" is
+        # literally that neither machine's decision file was touched — and with nothing
+        # recorded, the next sync finds the same two versions and asks again.
+        assert not wrote_decision_file(source)
+        assert not wrote_decision_file(target)
+        assert not any("apt:conflict:" in cmd for cmd in all_calls(source) + all_calls(target))
+
+    @pytest.mark.asyncio
     async def test_a_signing_key_is_never_offered_and_so_can_never_be_recorded(self) -> None:
         """H140 — `orphan.gpg` exists only on the target and no repository references it — the
         strongest candidate a key removal could ever have. It reaches neither `plan.diffs`
@@ -407,6 +462,99 @@ class TestAptRepoItemDecisions:
 
         assert not wrote_decision_file(source)
         assert not wrote_decision_file(target)
+
+
+# One `apt.conf.d` filename both machines have, with different bytes: the C175 shape.
+_CONFIG_ON_BOTH = {
+    "apt-mark showmanual": CommandResult(0, "", ""),
+    "find /etc/apt/apt.conf.d": CommandResult(0, sha256_line("c1", "20update"), ""),
+}
+_CONFIG_ON_BOTH_OTHER_BYTES = {
+    "apt-mark showmanual": CommandResult(0, "", ""),
+    "find /etc/apt/apt.conf.d": CommandResult(0, sha256_line("c2", "20update"), ""),
+}
+
+
+class TestAptConfigOverwriteDecision:
+    """The overwrite direction of `apt:config:` — the one apt item both machines have.
+
+    An install and a deletion are on one machine each, so the run's own direction names
+    their holder. A file both machines have and disagree about is not: the answer keeps the
+    TARGET's copy, and the next run may be launched the other way round, which is the case
+    the whole `_mark_holders` pair exists for.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_marked_overwrite_is_recorded_on_the_target_and_inert_in_both_directions(self) -> None:
+        """C175, C178, N24 — the mark keeps the target's copy, so it lands there; and because the
+        roles swap with the direction the next run is launched in, the same mark must
+        silence the file whichever end it is read from.
+        """
+        context, source, target = make_context(
+            source_responses=_CONFIG_ON_BOTH, target_responses=_CONFIG_ON_BOTH_OTHER_BYTES
+        )
+        await record_skip_always(AptSyncJob(context), "apt:config:20update")
+        assert wrote_decision_file(target)
+        assert not wrote_decision_file(source)
+        recorded = recorded_decision_file(target)
+
+        # Run 2, same direction: the mark is on the target.
+        context, _source, _target = make_context(
+            source_responses=_CONFIG_ON_BOTH,
+            target_responses={**_CONFIG_ON_BOTH_OTHER_BYTES, decision_cat("apt"): CommandResult(0, recorded, "")},
+        )
+        plan = await AptSyncJob(context).plan()
+        assert "apt:config:20update" not in {diff.item_id for diff in plan.diffs}
+        assert "apt:config:20update" not in review_item_ids(plan)
+
+        # Run 3, launched from the machine holding the mark: it is now the SOURCE.
+        context, _source, _target = make_context(
+            source_responses={**_CONFIG_ON_BOTH_OTHER_BYTES, decision_cat("apt"): CommandResult(0, recorded, "")},
+            target_responses=_CONFIG_ON_BOTH,
+        )
+        plan = await AptSyncJob(context).plan()
+        assert "apt:config:20update" not in {diff.item_id for diff in plan.diffs}
+        assert "apt:config:20update" not in review_item_ids(plan)
+
+
+class TestSnapChangeDecisions:
+    """`snap:<name>` in the CHANGE direction — a snap both machines have at different
+    revisions, which is the case `filter_inert` used to half-drop.
+
+    A snap carries its own id into `filter_inert`, so a mark taken off ONE machine's
+    manifest left the other machine's copy unmatched — and an unmatched copy is a
+    one-sided item. Measured before the fix: the very next run in the same direction
+    offered the snap for REMOVAL from the machine whose copy the mark protects.
+    """
+
+    _SRC = _SNAP_HEADER + "alpha     1.0        10     latest/stable   pub                -\n"
+    _TGT = _SNAP_HEADER + "alpha     0.9        7      latest/edge     pub                -\n"
+
+    @pytest.mark.asyncio
+    async def test_a_marked_revision_change_leaves_no_item_in_either_direction(self) -> None:
+        """E117, E118, N24 — one answer, and neither a later run in the same direction nor one
+        launched from the other machine raises `alpha` again, in any direction.
+        """
+        source_responses = {"snap list --all": CommandResult(0, self._SRC, "")}
+        target_responses = {"snap list --all": CommandResult(0, self._TGT, "")}
+
+        context, source, target = make_context(source_responses=source_responses, target_responses=target_responses)
+        await record_skip_always(SnapSyncJob(context), "snap:alpha")
+        assert wrote_decision_file(target)
+        assert not wrote_decision_file(source)
+        recorded = recorded_decision_file(target)
+
+        context, _source, _target = make_context(
+            source_responses=source_responses,
+            target_responses={**target_responses, decision_cat("snap"): CommandResult(0, recorded, "")},
+        )
+        assert (await SnapSyncJob(context).plan()).diffs == ()
+
+        context, _source, _target = make_context(
+            source_responses={**target_responses, decision_cat("snap"): CommandResult(0, recorded, "")},
+            target_responses=source_responses,
+        )
+        assert (await SnapSyncJob(context).plan()).diffs == ()
 
 
 class TestSnapHoldDecisions:

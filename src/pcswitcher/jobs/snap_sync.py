@@ -69,7 +69,7 @@ from pcswitcher.jobs.packages.items import (
     build_version_mismatch_detail,
 )
 from pcswitcher.jobs.packages.probes import require_answer
-from pcswitcher.jobs.packages.state import DecisionFile, filter_inert
+from pcswitcher.jobs.packages.state import DecisionFile, filter_inert, marks_on_either
 from pcswitcher.jobs.packages.sync_core import ConvergeItemFailed, PackagePlan, PackageSyncJob
 from pcswitcher.models import CommandResult, FirstSyncScope, Host, LogLevel, ValidationError
 from pcswitcher.sudoers import passwordless_sudo_hint
@@ -559,8 +559,13 @@ class SnapSyncJob(PackageSyncJob):
         source_items, source_sideloaded = _partition_sideloaded(await self.capture_source_items())
         target_items, target_sideloaded = _partition_sideloaded(await self.query_target_items())
 
-        source_items = await filter_inert(source_items, source_decisions)
-        target_items = await filter_inert(target_items, target_decisions)
+        # Both files against BOTH manifests (`marks_on_either`): a snap present on both
+        # machines at different revisions is marked on ONE of them, and filtering each
+        # manifest by its own file alone would leave the other machine's copy unmatched —
+        # turning the change the mark silenced into a removal of the very copy it protects.
+        marked = marks_on_either(source_decisions, target_decisions)
+        source_items = await filter_inert(source_items, marked)
+        target_items = await filter_inert(target_items, marked)
         # A name sideloaded on ONE machine leaves the diff on BOTH. Dropping only the
         # machine holding the sideloaded copy would leave the other machine's entry
         # unmatched, and an unmatched entry is an item: a source-only install whose

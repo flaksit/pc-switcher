@@ -1722,6 +1722,43 @@ class TestUnresolvedNeverFailsTheJob:
         await job.apply()  # must not raise
 
 
+@pytest.mark.asyncio
+class TestAutomationEnvCannotResolveAnUnreproducibleItem:
+    """`PKG-NG-AUTOMATION-ENV`: the map carries decisions and nothing else.
+
+    An unreproducible item has two resolutions the map cannot tell apart from the outside —
+    a permanent answer and an authored install snippet — and only one of them is expressible
+    as a decision. Driven end to end rather than asserted on `_decisions_from_automation`,
+    because what the article promises is about what the run leaves on disk.
+    """
+
+    async def test_a_permanent_answer_from_the_map_marks_the_item_and_writes_no_snippet(self) -> None:
+        """H167 — the machine-specific mark is written and no snippet is: authoring one takes an
+        editor, which the map has no way to stand in for.
+        """
+        context = _unresolved_job_context()
+        job = _FakeUnreproducibleJob(context)
+        diff = _unreproducible_diff("unreproducible:apt-no-candidate:brscan3")
+        group = _unreproducible_group([_entry(diff.item_id, label=diff.label, action_label="resolve")])
+
+        with (
+            patch.dict("os.environ", {PACKAGE_REVIEW_AUTOMATION_ENV: json.dumps({diff.item_id: "skip_always"})}),
+            patch("pcswitcher.jobs.packages.review.decision_list") as decision_list,
+        ):
+            outcome = await review_items([group], console=_non_interactive_console(), ui=MagicMock(), **HOSTS)
+
+        decision_list.assert_not_called()
+        assert outcome.decisions == {diff.item_id: Decision.SKIP_ALWAYS}
+        assert outcome.snippets == {}
+
+        job.accept_review(PackagePlan(manager="fake", diffs=(diff,), groups=(group,)), outcome)
+        await job.apply()
+
+        written = [call.args[0] for call in context.source.run_command.call_args_list]  # pyright: ignore[reportAttributeAccessIssue]
+        assert any("mv --force" in cmd and "fake.decisions" in cmd for cmd in written)
+        assert not any("package-snippets" in cmd and "mv --force" in cmd for cmd in written)
+
+
 def _pin_removal_group(entries: Sequence[ReviewEntry]) -> ReviewGroup:
     return ReviewGroup(
         manager="apt",
@@ -1880,6 +1917,55 @@ class TestCredentialsInPrintedFileBodies:
 
         assert "s3cr3t-token" not in printed
         assert _SAFE_URL in printed
+
+
+@pytest.mark.asyncio
+class TestCredentialsInAReviewLine:
+    """`PKG-FR-CREDENTIAL-PRIVACY`: an item's own line is withheld on the screen that prints
+    it, not only in the value the line was built from.
+
+    Driven through the non-interactive path, which is the one where this module renders a
+    review line itself (`_render_group_panel`). An answered screen composes its rows in
+    `decision_list`, which every test here stubs out, so the panel is where a rendered line
+    can be read at all.
+    """
+
+    @staticmethod
+    async def _printed(group: ReviewGroup) -> str:
+        out = io.StringIO()
+        console = Console(file=out, no_color=True, width=200)
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(False)),
+            patch("pcswitcher.jobs.packages.review.decision_list") as decision_list,
+        ):
+            await review_items([group], console=console, ui=MagicMock(), **HOSTS)
+
+        decision_list.assert_not_called()
+        return out.getvalue()
+
+    async def test_a_credentialed_label_and_detail_reach_the_screen_withheld(self) -> None:
+        """J122 — a review item naming a credentialed repository shows the address without its
+        userinfo, in both the strings the user decides from.
+        """
+        group = ReviewGroup(
+            manager="apt",
+            action="install",
+            title="Install apt packages",
+            entries=[
+                ReviewEntry(
+                    item_id="apt:package:vendor-tool",
+                    label=f"vendor-tool ({_SECRET_URL})",
+                    action_label="install",
+                    detail=f"nomad would get it from {_SECRET_URL}",
+                )
+            ],
+        )
+
+        printed = await self._printed(group)
+
+        assert "s3cr3t-token" not in printed
+        assert printed.count(_SAFE_URL) == 2
 
 
 _COLLATERAL_DETAIL = (

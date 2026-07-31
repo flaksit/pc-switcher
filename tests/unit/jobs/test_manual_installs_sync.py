@@ -780,6 +780,37 @@ class TestPromptingSnippetCannotHang:
         assert not {"stdin", "input", "input_data"} & set(replay_calls[0].kwargs)
 
 
+class TestPlanIsReadOnly:
+    """`PKG-FR-REVIEW-FIRST`: nothing on the target may change before the user has answered,
+    and this job plans entirely off the source — a scan plus its own registry read.
+
+    Two halves, because this job has two ways to write: a command, and the registry transfer
+    `after_review()` makes. Both are asserted absent, so a push that drifted earlier in the
+    order would fail here rather than in the ordering test alone.
+    """
+
+    @pytest.mark.asyncio
+    async def test_plan_issues_no_mutating_command_and_transfers_nothing(self) -> None:
+        """H5 — planning reaches the target with neither a `mutates=` command nor a `send_file`."""
+        context, _source, target = make_context(
+            source_responses={
+                _STATUS_QUERY: installed_on_source("brscan3"),
+                "apt-cache policy": CommandResult(0, _hand_deb_policy("brscan3"), ""),
+                "for root in": CommandResult(0, "/usr/local/flux\n", ""),
+                "dpkg --search": CommandResult(0, DPKG_WITNESS_LINE, ""),
+            }
+        )
+        job = ManualInstallsSyncJob(context)
+
+        plan = await job.plan()
+
+        # Non-vacuous: the scan found something, so there was a plan to build at all.
+        assert plan.diffs
+        for call in target.run_command.call_args_list:
+            assert "mutates" not in call.kwargs, call.args[0]
+        target.send_file.assert_not_awaited()
+
+
 class TestInstallOnly:
     """G24: `manual_installs_sync` is install-only. Unreproducible items describe what the
     SOURCE has installed; there is no target-side manifest to be "extra" against, so no

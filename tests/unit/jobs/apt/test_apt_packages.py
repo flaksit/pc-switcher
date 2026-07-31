@@ -5,6 +5,7 @@ Split out of the former single `test_apt_sync.py`.
 
 from __future__ import annotations
 
+import dataclasses
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -14,6 +15,7 @@ from pcswitcher.jobs.apt_sync.commands import TARGET_SUDO_COMMANDS
 from pcswitcher.jobs.context import JobContext
 from pcswitcher.jobs.packages.items import DiffAction, DiffClass, ItemClass, ItemDiff
 from pcswitcher.jobs.packages.review import (
+    COLLATERAL_REVIEW_ACTION,
     Decision,
     ReviewOutcome,
 )
@@ -21,9 +23,11 @@ from pcswitcher.jobs.packages.sync_core import ConvergeItemFailed, PackageItemFa
 from pcswitcher.models import CommandResult, LogLevel
 from tests.unit.jobs.apt.helpers import (
     _APPROVE_PKG_A,
+    CountingReviewer,
     _policy_block,
     _repo_context,
     all_calls,
+    decision_file,
     foo_source_responses,
     foo_target_side_effect,
     index_of,
@@ -75,53 +79,135 @@ class TestConverge:
         ]
 
 
-class TestTransactionGuard:
+def _drifted_install_context(
+    *, drifted: str, extra: dict[str, CommandResult] | None = None
+) -> tuple[JobContext, MagicMock, MagicMock]:
+    """A run whose ONE approved install rehearses clean at plan time and, when the converger
+    simulates it again moments before the command, reports `drifted` as well.
+
+    The drifting package is manual on the target and identical on the source, so no review
+    saw it and nothing in the plan could have: the second simulation is the first statement
+    of the fact.
+    """
+    sim_cmd = "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a"
+    state = {"sim": 0}
+    static = {
+        "apt-mark showmanual": CommandResult(0, "manual-x\n", ""),
+        **(extra or {}),
+    }
+
+    def target_side_effect(cmd: str, **_: object) -> CommandResult:
+        if cmd == sim_cmd:
+            state["sim"] += 1
+            return CommandResult(0, "Inst pkg-a (1.0)\n" + (drifted if state["sim"] > 1 else ""), "")
+        if "dpkg-query" in cmd:
+            return CommandResult(0, "manual-x\t1.0\n", "")
+        if cmd.startswith("apt-cache policy"):
+            return CommandResult(0, target_offers("pkg-a"), "")
+        for pattern, result in static.items():
+            if pattern in cmd:
+                return result
+        return CommandResult(0, "", "")
+
+    context, source, target = make_context(
+        source_responses={
+            "apt-mark showmanual": CommandResult(0, "pkg-a\nmanual-x\n", ""),
+            "dpkg-query": CommandResult(0, "pkg-a\t1.0\nmanual-x\t1.0\n", ""),
+        },
+    )
+    target.run_command = AsyncMock(side_effect=target_side_effect)
+    return context, source, target
+
+
+def _collateral_entries(reviewer: CountingReviewer) -> set[str]:
+    """Every collateral item id the reviewer was asked about, across all its rounds."""
+    return {
+        entry.item_id
+        for groups in reviewer.calls
+        for group in groups
+        if group.action == COLLATERAL_REVIEW_ACTION
+        for entry in group.entries
+    }
+
+
+class TestTheDriftedTransactionIsAskedAbout:
+    """`PKG-FR-COLLATERAL-MANUAL` with `PKG-FR-ASK-AGAIN`: a protected package the REAL
+    transaction would take that no review saw is a fact younger than the review, so the three
+    answers are put immediately before the command rather than replaced by a refusal.
+
+    Keeping the package leaves the change unapplied and unfailed, which is the article's own
+    remedy — the same outcome the plan-time and repository-late questions produce.
+    """
+
     @pytest.mark.asyncio
-    async def test_guard_refuses_drifted_manual_removal_not_seen_at_plan_time(self) -> None:
-        """The apply-time guard is the last line of defence (D-30): a real transaction
-        that has drifted since plan time to remove a manually-installed package nobody
-        reviewed is still refused — D-30 changes what plan time asks, not whether apply
-        time verifies. `ghost-pkg` is manual on the target and matches the source, so it
-        never appears as a diff; the plan-time simulation is clean, but the apply-time
-        simulation removes it.
-        """
-        sim_cmd = "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a"
-        state = {"sim": 0}
+    async def test_a_drifted_manual_removal_is_asked_about_and_keeping_it_withdraws_the_install(self) -> None:
+        """D39 — the install's transaction drifts onto `manual-x`; the user is asked, keeps
+        it, and the install neither runs nor fails."""
+        context, _source, target = _drifted_install_context(drifted="Remv manual-x [1.0]\n")
+        job = AptSyncJob(context)
+        reviewer = CountingReviewer({"apt:package:pkg-a": Decision.APPLY})
+        job.context = dataclasses.replace(job.context, reviewer=reviewer)
 
-        def target_side_effect(cmd: str, **_: object) -> CommandResult:
-            if cmd == "apt-mark showmanual":
-                return CommandResult(0, "ghost-pkg\n", "")
-            if "dpkg-query" in cmd:
-                return CommandResult(0, "ghost-pkg\t1.0\n", "")
-            if cmd.startswith("apt-cache policy"):
-                return CommandResult(0, target_offers("pkg-a"), "")
-            if cmd == sim_cmd:
-                state["sim"] += 1
-                if state["sim"] == 1:
-                    return CommandResult(0, "Inst pkg-a (1.0)\n", "")
-                return CommandResult(0, "Inst pkg-a (1.0)\nRemv ghost-pkg [1.0]\n", "")
-            return CommandResult(0, "", "")
+        await job.execute()
 
-        context, _source, target = make_context(
-            source_responses={
-                "apt-mark showmanual": CommandResult(0, "pkg-a\nghost-pkg\n", ""),
-                "dpkg-query": CommandResult(0, "pkg-a\t1.0\nghost-pkg\t1.0\n", ""),
+        assert "apt:collateral:install:remove:manual-x" in _collateral_entries(reviewer)
+        assert real_installs(target) == []
+
+    @pytest.mark.asyncio
+    async def test_going_ahead_at_that_question_runs_the_install(self) -> None:
+        """The three answers are real ones: letting the consequence go ahead installs the
+        package the question was about, rather than the guard refusing it anyway."""
+        context, _source, target = _drifted_install_context(drifted="Remv manual-x [1.0]\n")
+        job = AptSyncJob(context)
+        install_reviewer(
+            job,
+            {"apt:package:pkg-a": Decision.APPLY, "apt:collateral:install:remove:manual-x": Decision.APPLY},
+        )
+
+        await job.execute()
+
+        assert len(real_installs(target)) == 1
+
+    @pytest.mark.asyncio
+    async def test_a_drifted_downgrade_is_asked_about_too(self) -> None:
+        """D41 — a version the transaction would move a protected package BACK to is the
+        same question a removal is."""
+        context, _source, target = _drifted_install_context(
+            drifted="Inst manual-x [1.0] (0.9)\n",
+            extra={"dpkg --compare-versions 0.9 lt 1.0": CommandResult(0, "", "")},
+        )
+        job = AptSyncJob(context)
+        reviewer = CountingReviewer({"apt:package:pkg-a": Decision.APPLY})
+        job.context = dataclasses.replace(job.context, reviewer=reviewer)
+
+        await job.execute()
+
+        assert "apt:collateral:install:downgrade:manual-x" in _collateral_entries(reviewer)
+        assert real_installs(target) == []
+
+    @pytest.mark.asyncio
+    async def test_a_drifted_upgrade_is_asked_about_too(self) -> None:
+        """D71 — an unasked-for upgrade moves a package the user chose off the version it was
+        on, which is the imposition a downgrade is; the apply-time question covers it as the
+        plan-time one does."""
+        context, _source, target = _drifted_install_context(
+            drifted="Inst manual-x [1.0] (2.0)\n",
+            extra={
+                "dpkg --compare-versions 2.0 lt 1.0": CommandResult(1, "", ""),
+                "dpkg --compare-versions 2.0 gt 1.0": CommandResult(0, "", ""),
             },
         )
-        target.run_command = AsyncMock(side_effect=target_side_effect)
         job = AptSyncJob(context)
-        install_reviewer(job, {"apt:package:pkg-a": Decision.APPLY})
+        reviewer = CountingReviewer({"apt:package:pkg-a": Decision.APPLY})
+        job.context = dataclasses.replace(job.context, reviewer=reviewer)
 
-        with pytest.raises(PackageItemFailures) as exc_info:
-            await job.execute()
+        await job.execute()
 
-        assert len(exc_info.value.failures) == 1
-        _diff, message = exc_info.value.failures[0]
-        assert "ghost-pkg" in message
+        assert "apt:collateral:install:upgrade:manual-x" in _collateral_entries(reviewer)
+        assert real_installs(target) == []
 
-        commands = all_calls(target)
-        assert not any("sudo" in cmd and "apt-get install" in cmd for cmd in commands)
 
+class TestTransactionGuard:
     @pytest.mark.asyncio
     async def test_install_whose_only_collateral_is_auto_deps_proceeds(self) -> None:
         """D2 — The D-30 win, at the guard: an install whose simulation removes only
@@ -509,6 +595,7 @@ class TestHoldOnAnAbsentPackage:
         )
 
 
+_PKG_A = "apt:package:pkg-a"
 _HELD_SOURCE = {
     "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
     "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
@@ -674,6 +761,71 @@ class TestAHeldPackageIsInstalledAtTheSourcesVersion:
         commands = all_calls(target)
         assert not any("apt-mark hold" in cmd for cmd in commands)
         assert not any("apt-get install" in cmd and "pkg-a" in cmd for cmd in commands)
+
+
+class TestAMarkOnThePackageCarriesItsHold:
+    """`PKG-FR-APT-HOLD-ITEM` with `PKG-FR-MACHINE-SPECIFIC`: a hold freezes an installed
+    copy, so a hold for a package the mark keeps off the target freezes nothing and blocks
+    every later install of the name.
+
+    A mark given on the merged question records both ids, so what this covers is the package
+    marked in an earlier run with the hold arriving on the source afterwards — a mark against
+    `apt:package:pkg-a` alone, which no lookup of the hold's own id can see.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_hold_whose_package_the_source_marked_travels_no_further_than_the_package(self) -> None:
+        """B27 — the package does not travel, so neither does its hold: no item, and no
+        `apt-mark hold` for a package the target does not have."""
+        context, _source, target = make_context(
+            source_responses={**_HELD_SOURCE, "apt.decisions.yaml": CommandResult(0, decision_file(_PKG_A), "")},
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "", ""),
+                "apt-mark showhold": CommandResult(0, "", ""),
+                "apt-cache policy": CommandResult(0, _target_offering("1.0"), ""),
+            },
+        )
+        job = AptSyncJob(context)
+        install_reviewer(job, {_PKG_A: Decision.APPLY, "apt:hold:pkg-a": Decision.APPLY})
+
+        await job.execute()
+
+        assert not any("apt-mark hold" in cmd for cmd in all_calls(target))
+        assert not any("apt-get install" in cmd and "pkg-a" in cmd for cmd in all_calls(target))
+
+
+class TestAHeldPackageWithNoCapturedVersion:
+    """`PKG-FR-APT-HOLD-VERSION` forbids the fallback, so the converger must have no way to
+    reach one — including from a capture that answered nothing about the version.
+
+    The state is unreachable through the shipped probe: `AptProbe._resolve_versions` fails the
+    job on a non-zero `dpkg-query`, and every name it queries comes from `apt-mark showmanual`
+    and is therefore installed. This pins the refusal so a future capture that does return an
+    empty version cannot float the install onto whatever the target offers instead.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_held_package_with_no_captured_version_is_refused_rather_than_floated(self) -> None:
+        """B28 — the pin is not silently dropped: the install fails as its own item and no
+        `apt-get install` names the package at any version."""
+        context, _source, target = make_context(
+            source_responses={**_HELD_SOURCE, "dpkg-query": CommandResult(0, "\n", "")},
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "", ""),
+                "apt-mark showhold": CommandResult(0, "", ""),
+                "apt-cache policy": CommandResult(0, _target_offering("2.0"), ""),
+                "sudo apt-get update": CommandResult(0, "", ""),
+            },
+        )
+        job = AptSyncJob(context)
+        install_reviewer(job, {_PKG_A: Decision.APPLY, "apt:hold:pkg-a": Decision.APPLY})
+
+        with pytest.raises(PackageItemFailures) as exc_info:
+            await job.execute()
+
+        failures = {diff.item_id: message for diff, message in exc_info.value.failures}
+        assert "no installed version was captured" in failures[_PKG_A]
+        assert not any("apt-get install" in cmd and "pkg-a" in cmd for cmd in all_calls(target))
 
 
 class TestAReplicatedHoldMovesNoVersion:
@@ -1139,10 +1291,13 @@ class TestRemovalGuard:
         assert any("sudo" in cmd and "apt-get remove" in cmd and "pkg-a" in cmd for cmd in commands)
 
     @pytest.mark.asyncio
-    async def test_drifted_manual_reverse_dep_removal_refused(self) -> None:
-        """A removal whose real transaction drifted to also remove a manually-installed
-        package nobody reviewed is still refused (D-30). `manual-b` is manual on both
-        machines and matches, so it is not a diff; the plan-time simulation is clean.
+    async def test_a_drifted_manual_reverse_dep_removal_is_asked_about(self) -> None:
+        """D40 — a removal whose real transaction drifted to also remove a manually-installed
+        package nobody reviewed gets the same three answers the install direction does
+        (`PKG-FR-COLLATERAL-MANUAL`, `PKG-FR-ASK-AGAIN`). `manual-b` is manual on both
+        machines and matches, so it is not a diff and not a removal candidate: the plan-time
+        simulation is clean and nothing could have asked earlier. Keeping it leaves the
+        removal unapplied and unfailed.
         """
         sim_cmd = "apt-get --dry-run remove --assume-yes pkg-a"
         state = {"sim": 0}
@@ -1167,16 +1322,13 @@ class TestRemovalGuard:
         )
         target.run_command = AsyncMock(side_effect=target_side_effect)
         job = AptSyncJob(context)
-        install_reviewer(job, {"apt:package:pkg-a": Decision.APPLY})
+        reviewer = CountingReviewer({"apt:package:pkg-a": Decision.APPLY})
+        job.context = dataclasses.replace(job.context, reviewer=reviewer)
 
-        with pytest.raises(PackageItemFailures) as exc_info:
-            await job.execute()
+        await job.execute()
 
-        _diff, message = exc_info.value.failures[0]
-        assert "manual-b" in message
-
-        commands = all_calls(target)
-        assert not any("sudo" in cmd and "apt-get remove" in cmd for cmd in commands)
+        assert "apt:collateral:remove:remove:manual-b" in _collateral_entries(reviewer)
+        assert not any("sudo" in cmd and "apt-get remove" in cmd for cmd in all_calls(target))
 
     @pytest.mark.asyncio
     async def test_both_removals_approved_the_first_proceeds(self) -> None:
@@ -1206,54 +1358,6 @@ class TestRemovalGuard:
 
 
 class TestDowngradeGuard:
-    @pytest.mark.asyncio
-    async def test_guard_refuses_drifted_manual_downgrade(self) -> None:
-        """The apply-time guard still refuses a downgrade of a manually-installed package
-        that drifted in after plan time (D-30, D-04). `manual-dg` is manual on the target
-        at 2.0 and matches the source, so it is not a diff; the plan-time simulation is
-        clean, but the apply-time simulation would downgrade it to 1.0.
-        """
-        sim_cmd = "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a"
-        state = {"sim": 0}
-
-        static = {
-            "apt-mark showmanual": CommandResult(0, "manual-dg\n", ""),
-            "dpkg --compare-versions 1.0 lt 2.0": CommandResult(0, "", ""),
-        }
-
-        def target_side_effect(cmd: str, **_: object) -> CommandResult:
-            if cmd == sim_cmd:
-                state["sim"] += 1
-                if state["sim"] == 1:
-                    return CommandResult(0, "Inst pkg-a (1.0)\n", "")
-                return CommandResult(0, "Inst pkg-a (1.0)\nInst manual-dg [2.0] (1.0)\n", "")
-            if "dpkg-query" in cmd:
-                return CommandResult(0, "manual-dg\t2.0\n", "")
-            if cmd.startswith("apt-cache policy"):
-                return CommandResult(0, target_offers("pkg-a"), "")
-            return static.get(cmd, CommandResult(0, "", ""))
-
-        context, _source, target = make_context(
-            source_responses={
-                "apt-mark showmanual": CommandResult(0, "pkg-a\nmanual-dg\n", ""),
-                "dpkg-query": CommandResult(0, "pkg-a\t1.0\nmanual-dg\t2.0\n", ""),
-            },
-        )
-        target.run_command = AsyncMock(side_effect=target_side_effect)
-        job = AptSyncJob(context)
-        install_reviewer(job, {"apt:package:pkg-a": Decision.APPLY})
-
-        with pytest.raises(PackageItemFailures) as exc_info:
-            await job.execute()
-
-        assert len(exc_info.value.failures) == 1
-        _diff, message = exc_info.value.failures[0]
-        assert "downgrade" in message.lower()
-        assert "manual-dg" in message
-
-        commands = all_calls(target)
-        assert not any("sudo" in cmd and "apt-get install" in cmd for cmd in commands)
-
     @pytest.mark.asyncio
     async def test_guard_allows_auto_downgrade(self) -> None:
         """D7 — An auto-installed package the simulation would downgrade proceeds silently —

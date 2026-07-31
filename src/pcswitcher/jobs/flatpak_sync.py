@@ -180,7 +180,7 @@ from pcswitcher.jobs.packages.review import (
     ReviewGroup,
     ReviewOutcome,
 )
-from pcswitcher.jobs.packages.state import DecisionEntry, DecisionFile, filter_inert
+from pcswitcher.jobs.packages.state import DecisionEntry, DecisionFile, filter_inert, marks_on_either
 from pcswitcher.jobs.packages.sync_core import (
     ConvergeItemFailed,
     PackageItemFailures,
@@ -1480,17 +1480,23 @@ class FlatpakSyncJob(PackageSyncJob):
         source_decisions = await DecisionFile(self.manager_id, self.source).load()
         target_decisions = await DecisionFile(self.manager_id, self.target).load()
 
-        source_refs = await filter_inert(await self.capture_source_items(), source_decisions)
+        # Both files against BOTH listings (`marks_on_either`): a ref or a mask the two
+        # machines share must vanish from the diff entirely once either machine records it,
+        # and filtering each listing by its own file alone leaves the other machine's copy
+        # unmatched — which is an install of an application the target already has, or a
+        # removal of one the source still has.
+        marked = marks_on_either(source_decisions, target_decisions)
+        source_refs = await filter_inert(await self.capture_source_items(), marked)
         installed_target_refs = await self.query_target_items()
-        target_refs = await filter_inert(installed_target_refs, target_decisions)
+        target_refs = await filter_inert(installed_target_refs, marked)
         source_remotes = await self._capture_all_source_remotes()
         # No `filter_inert` pass on either side's remotes: a remote is never a review item in
         # any direction, so a decision file has nothing to withhold — and withholding one
         # would hide the URL an origin comparison runs on or keep a dead remote configured
         # for good.
         installed_target_remotes = await self._query_all_target_remotes()
-        source_masks = await filter_inert(await self._capture_all_source_masks(), source_decisions)
-        target_masks = await filter_inert(await self._query_all_target_masks(), target_decisions)
+        source_masks = await filter_inert(await self._capture_all_source_masks(), marked)
+        target_masks = await filter_inert(await self._query_all_target_masks(), marked)
 
         self._source_refs_by_id = {item.item_id: item for item in source_refs}
         self._source_remotes_by_id = {item.item_id: item for item in source_remotes}

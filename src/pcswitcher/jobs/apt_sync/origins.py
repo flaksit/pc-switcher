@@ -291,14 +291,13 @@ class OriginClassifier:
         used is the policy read, never the simulation's exit code, which cannot separate the
         two causes (ADR-022 D-01).
 
-        What is given up, deliberately: an excluded package gets NO plan-time collateral
-        classification, because apt cannot say what it would remove for a package it cannot
-        resolve — the facts the three-way go-ahead/keep/stop question needs do not
-        exist yet. What still covers it is the per-item simulation the install converger runs
-        after the `/etc/apt` unit has landed and `apt-get update` has run, so apt CAN
-        resolve it there: unapproved manual collateral fails that one item (D-27) instead of
-        being installed over. The residual cost is that the user is told afterwards rather
-        than asked beforehand, and only for packages whose repository this run adds.
+        What this defers, rather than gives up: an excluded package gets no plan-time
+        collateral classification, because apt cannot say what it would remove for a package
+        it cannot resolve — the facts the three-way go-ahead/keep/stop question needs do not
+        exist yet. `LateCollateral.ensure_asked` puts that question once the `/etc/apt` unit
+        has landed and `apt-get update` has run, over every such install together and before
+        the first of them converges, so the same three answers are offered a few minutes
+        later than the rest (`PKG-FR-ASK-AGAIN`).
 
         A package whose origin can never be replicated needs no rule here: it is
         `REPO_UNAVAILABLE`/`REPORT_ONLY`, so it is never an install candidate at all.

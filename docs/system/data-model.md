@@ -261,6 +261,8 @@ class ItemDiff:
 
 One YAML file per package manager, at `~/.config/pc-switcher/<manager>.decisions.yaml` (e.g. `apt.decisions.yaml`). Records every "skip always" (machine-specific) choice made in a review. **Never synced** — excluded from `folder_sync` unconditionally and outside `config_sync`'s file set, since an entry describes what belongs to *this* machine, not a fact to propagate.
 
+An entry means "inert on this machine in both roles", so which file gets it follows which machine HOLDS the item: an install is recorded on the source, a removal and an overwrite on the target — the machine whose copy the answer keeps. An overwrite is the one direction whose holder the run's own direction cannot name, since both machines have the item and the recording machine takes the other role when the next sync is launched from the other end; a run therefore reads both machines' files before calling such an item unmarked. `PackageSyncJob._mark_holders` is where the write side and the read side of that are stated together.
+
 ```python
 @dataclass(frozen=True)
 class DecisionEntry:

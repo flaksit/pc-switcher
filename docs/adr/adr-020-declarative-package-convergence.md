@@ -92,7 +92,7 @@ Report-only diffs (version mismatch, origin mismatch, an origin that cannot be p
 
 ### Machine-local decision file (D-08, D-08a, D-09, D-10)
 
-One file per manager lives at `~/.config/pc-switcher/<manager>.decisions.yaml`, never synced, excluded from `folder_sync` non-overridably and outside `config_sync`. An entry on machine M makes the item inert on M in both roles — not pushed when M is the source, not installed or removed when M is the target. The entry is written on the end of the connection that holds the item: source-held item declined is recorded on the source, target-held item whose removal is declined is recorded on the target.
+One file per manager lives at `~/.config/pc-switcher/<manager>.decisions.yaml`, never synced, excluded from `folder_sync` non-overridably and outside `config_sync`. An entry on machine M makes the item inert on M in both roles — not pushed when M is the source, not installed or removed when M is the target. The entry is written on the end of the connection that holds the item, which is the machine whose copy the answer keeps: an install declined for good is recorded on the source, and both a declined removal and a declined overwrite on the target. An overwrite is the one direction whose holder the run's own direction cannot name — both machines have the item, and the machine that recorded the mark takes the other role as soon as the next sync is launched from the other end — so an item both machines have is read back from both files, and a marked item is filtered out of both machines' inventories rather than only its own.
 
 ### Repository configuration is derived mechanism (D-11, D-12, D-13, D-14)
 

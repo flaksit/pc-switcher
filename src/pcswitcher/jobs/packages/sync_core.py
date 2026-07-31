@@ -347,16 +347,34 @@ class PackageSyncJob(SyncJob):
         return Machines(source=self.context.source_hostname, target=self.context.target_hostname)
 
     @staticmethod
-    def _decision_holder_is_source(action: DiffAction) -> bool:
-        """D-08a's holder rule: an `INSTALL`/`CHANGE` diff is source-held (the source has
-        the item, or the version it should converge to), a `REMOVE` diff target-held.
+    def _mark_holders(action: DiffAction) -> tuple[bool, ...]:
+        """The machines a machine-specific mark on a diff of this action can sit on, as
+        "is it the source" flags, THE RECORDING MACHINE FIRST (D-08a,
+        `PKG-FR-MACHINE-SPECIFIC`).
 
-        One definition shared by the WRITE path (`_record_permanent_skips` picks the
-        executor whose file gets the entry) and the READ path (`_drop_inert_diffs` picks
-        the file to look the item up in), so the machine a skip-always lands on is by
-        construction the machine it is read back from.
+        One definition serving both halves, and the ordering is what makes them agree by
+        construction: the WRITE path (`_record_permanent_skips`) takes the first flag to
+        pick the executor whose file gets the entry, and the READ path
+        (`_drop_inert_diffs`) looks in every file the tuple names, which always includes
+        the one the write used.
+
+        The holding machine is "the one whose state the mark describes", and the action
+        states which machines have the item at all:
+
+        - `INSTALL` — only the source has it, so only the source can describe it.
+        - `REMOVE` — only the target has it.
+        - `CHANGE` — BOTH have it, with different content, and the answer keeps the
+          TARGET's copy: what the user refused permanently is the overwrite of the machine
+          they are syncing TO, which is the machine the review names in the same words
+          ("it is <target>'s own", `review._hints`). But which machine that was depends on
+          the direction the run that recorded the mark was launched in, and the direction
+          of a later run says nothing about it — so a change is read back from either
+          machine's file. Reading only one of them makes the mark hold in the direction it
+          was given and evaporate in the other.
         """
-        return action in (DiffAction.INSTALL, DiffAction.CHANGE)
+        if action is DiffAction.CHANGE:
+            return (False, True)
+        return (action is DiffAction.INSTALL,)
 
     def _drop_inert_diffs(
         self,
@@ -364,8 +382,8 @@ class PackageSyncJob(SyncJob):
         source_decisions: Mapping[str, DecisionEntry],
         target_decisions: Mapping[str, DecisionEntry],
     ) -> tuple[ItemDiff, ...]:
-        """Drop every diff whose `item_id` is recorded "skip always" on the machine that
-        holds it (D-08/D-08a) — the post-diff counterpart to `filter_inert`.
+        """Drop every diff whose `item_id` is recorded "skip always" on a machine that could
+        hold it (`_mark_holders`, D-08/D-08a) — the post-diff counterpart to `filter_inert`.
 
         Required for any diff whose identity does not exist on an input item and so cannot
         be filtered at the diff-input boundary: the block-state membership items
@@ -375,6 +393,12 @@ class PackageSyncJob(SyncJob):
         comes back default-checked, so a bulk accept applies the very hold the user
         declined.
 
+        Reading the holder off the ACTION is only correct while the action is a true
+        statement of which machines have the item, which is why `filter_inert` drops a
+        marked item from BOTH inventories rather than from its own machine's alone: a
+        surviving copy on the other machine turns "no item" into a one-sided item pointing
+        the wrong way, and this pass would then look the mark up in the wrong file.
+
         `REPORT_ONLY` diffs pass through untouched: they carry no converge verb, so
         `_record_permanent_skips` never records one and there is no holder to match.
         """
@@ -383,8 +407,10 @@ class PackageSyncJob(SyncJob):
             if diff.action not in (DiffAction.INSTALL, DiffAction.CHANGE, DiffAction.REMOVE):
                 kept.append(diff)
                 continue
-            holder = source_decisions if self._decision_holder_is_source(diff.action) else target_decisions
-            if diff.item_id not in holder:
+            holders = [
+                source_decisions if is_source else target_decisions for is_source in self._mark_holders(diff.action)
+            ]
+            if not any(diff.item_id in holder for holder in holders):
                 kept.append(diff)
         return tuple(kept)
 
@@ -784,11 +810,13 @@ class PackageSyncJob(SyncJob):
     async def _record_permanent_skips(self, plan: PackagePlan, decisions: Mapping[str, Decision]) -> None:
         """Persist a `DecisionEntry` for every `SKIP_ALWAYS`-decided, actionable diff.
 
-        D-08a decides WHICH machine's file gets the entry by which machine HOLDS the
-        item: `INSTALL`/`CHANGE` diffs are source-held (the source has the item, or the
-        version it should converge to), so they record on `self.source`; `REMOVE` diffs
-        are target-held (only the target has the item), so they record on `self.target`
-        — through the remote executor, never a local write (ADR-002).
+        D-08a decides WHICH machine's file gets the entry by which machine HOLDS the item
+        (`_mark_holders`, whose first flag is exactly this choice): an `INSTALL` diff is
+        source-held, since only the source has the item, so it records on `self.source`;
+        `REMOVE` and `CHANGE` diffs are target-held — the target is the only machine that
+        has a removal's item, and a change's answer keeps the target's own copy of an item
+        both machines have — so they record on `self.target`, through the remote executor,
+        never a local write (ADR-002).
 
         `REPORT_ONLY` diffs are skipped: they carry no converge verb (version-mismatch,
         repo-unavailable, origin-mismatch and unreproducible are informational only), so
@@ -809,7 +837,7 @@ class PackageSyncJob(SyncJob):
             if diff.action not in (DiffAction.INSTALL, DiffAction.CHANGE, DiffAction.REMOVE):
                 continue
 
-            executor = self.source if self._decision_holder_is_source(diff.action) else self.target
+            executor = self.source if self._mark_holders(diff.action)[0] else self.target
             await DecisionFile(self.manager_id, executor).record(
                 DecisionEntry(
                     item_id=diff.item_id,

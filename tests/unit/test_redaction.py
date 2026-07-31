@@ -142,8 +142,9 @@ class TestItemDiffText:
     def test_every_string_the_user_reads_while_deciding_is_redacted(self) -> None:
         """J122, J127 — every string an `ItemDiff` carries is withheld before anyone reads it.
 
-        Neither row is whole from here: J122 also wants a credentialed label driven through
-        a review screen, and J127 wants one followed into the decision file on disk.
+        The construction boundary alone. Each row is also driven end to end where it lands:
+        a review screen renders J122's label (`test_package_review`), and J127's reaches the
+        payload of the decision-file write (`test_package_state`).
         """
         diff = ItemDiff(
             item_class=ItemClass.APT_SOURCE,

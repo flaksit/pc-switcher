@@ -622,6 +622,7 @@ def _shared_key_context(
     content: str = _SHARED_SOURCES,
     origin: str = "https://vendor.example.com",
     source_shared: str = sha256_line("k1", "vendor.gpg"),
+    source_dpkg_output: str | None = None,
     target_shared: str = "",
     dpkg_output: str = "",
     target_overrides: dict[str, CommandResult] | None = None,
@@ -633,6 +634,9 @@ def _shared_key_context(
     `target_overrides` reaches the target's responder ahead of the policy sequence, which is
     how a test states what the target's apt says about a package that OWNS a key — a
     different question from the ones this run asks about `pkg-a`.
+
+    `source_dpkg_output` states what the SOURCE's dpkg would say owns its keys — the fact
+    that decides nothing, and so has to be stated for a test to be able to prove it.
     """
     context, source, target = _repo_context(
         source_responses={
@@ -642,6 +646,7 @@ def _shared_key_context(
             _SOURCE_SCAN_CMD: CommandResult(0, _scan_line(filename, content), ""),
             "find /etc/apt/sources.list.d": CommandResult(0, sha256_line("d1", filename), ""),
             "find /usr/share/keyrings": CommandResult(0, source_shared, ""),
+            **({"dpkg --search": CommandResult(0, source_dpkg_output, "")} if source_dpkg_output is not None else {}),
         },
     )
     target.run_command = AsyncMock(
@@ -786,6 +791,30 @@ class TestSharedKeyringsDirectory:
         await job.execute()
 
         assert key_writes(target) == ["/usr/share/keyrings/vendor.gpg"]
+
+    @pytest.mark.asyncio
+    async def test_a_key_a_source_package_owns_is_copied_like_any_other(self) -> None:
+        """C173 — the same vendor `.deb` as C82, on the other machine: on the source it really
+        did ship `vendor.sources` and `vendor.gpg` together, and dpkg there says so. The
+        target lacks the key, and `PKG-FR-KEY-COPY` says it is copied "whatever owns it on
+        the source" — byte-for-byte, from the source's own path.
+
+        The source is never asked the question at all, which is why it has to be stated in
+        the fixture: nothing would change if it answered differently, and only a scenario
+        that states the ownership can prove that.
+        """
+        context, source, target = _shared_key_context(
+            source_dpkg_output="vendor-keyring: /usr/share/keyrings/vendor.gpg\n"
+        )
+        job = AptSyncJob(context)
+        install_reviewer(job, _APPROVE_PKG_A)
+
+        await job.execute()
+
+        assert key_writes(target) == ["/usr/share/keyrings/vendor.gpg"]
+        staged = [call.args[0] for call in target.send_file.call_args_list]
+        assert Path("/usr/share/keyrings/vendor.gpg") in staged, "the source's own copy is what travels"
+        assert not any(cmd.startswith("dpkg --search") for cmd in all_calls(source))
 
     @pytest.mark.asyncio
     async def test_ownership_is_probed_once_for_every_key_directory(self) -> None:

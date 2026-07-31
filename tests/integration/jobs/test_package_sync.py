@@ -4405,3 +4405,142 @@ class TestADeletedFlatpakRemoteTakesItsKey:
                 login_shell=False,
                 timeout=60.0,
             )
+
+
+class TestASyncLeavesTheSourcesOwnSoftwareAlone:
+    """`PKG-FR-SOURCE-INTENT` on real machines: the source states the intent and a sync must
+    not change what software it has, nor where it gets it from.
+
+    The unit half is as far as a mock reaches — no command carrying `mutates=` is issued on
+    the source's executor while both directions are applied. It says nothing about the
+    machine: a source can be left changed by something that never went through that
+    executor at all, and only two real machines can show that it was not.
+    """
+
+    async def test_a_converging_run_leaves_the_sources_own_package_state_identical(
+        self,
+        pc1_executor: BashLoginRemoteExecutor,
+        pc2_executor: BashLoginRemoteExecutor,
+        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
+        pc2_with_pcswitcher: BashLoginRemoteExecutor,
+        reset_pcswitcher_state: None,
+    ) -> None:
+        """J145 — A run that genuinely installs, removes and re-revisions software on pc2 leaves
+        every piece of package state pc1 holds byte-identical.
+
+        A converging run, never a no-op: pc2 gains an apt package, loses another, and moves a
+        snap to pc1's revision, all in the one run. Those three are asserted on pc2 first —
+        without them "pc1 is unchanged" is what an empty run would also produce.
+
+        `_MachinePackageState` is the comparison, so "what software Atlas has" is its apt
+        manual, hold and installed sets, its snap revisions and its flatpak refs, and "where
+        it gets it from" is the digests of all five `/etc/apt` directories plus its own remote
+        table. All three managers are enabled, so all three read pc1 during the run and the
+        snap auto-refresh pause is genuinely engaged on it.
+
+        Nothing is answered permanently. A machine-specific mark is one of the exactly three
+        writes a sync IS allowed to make on the source, so a SKIP_ALWAYS anywhere here would
+        change pc1's decision file and prove the wrong thing; every decision below is APPLY.
+        The pause is the second of those three, and it moves pc1's `refresh.hold` — which is
+        why what is captured is software, never refresh policy.
+
+        The two apt subjects are vetted by `pick_safe_removal_candidates` before either
+        machine is touched, and the setup that makes them divergent happens BEFORE the
+        capture, so it is not part of what the run is being held to.
+        """
+        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
+
+        await _assert_flatpak_available(pc1_executor)
+        await _assert_flatpak_available(pc2_executor)
+
+        candidates = await _find_removable_candidates(pc1_executor, pc2_executor, count=2)
+        assert len(candidates) == 2, (
+            f"{_no_apt_candidate_message()} Needed 2 independent candidates, found {len(candidates)}."
+        )
+        install_candidate, removal_candidate = candidates
+
+        snap_name = await _snap_subject(pc1_executor, pc2_executor)
+        source_snap_revision = await _snap_revision(pc1_executor, snap_name)
+        target_snap_revision = await _snap_revision(pc2_executor, snap_name)
+        assert source_snap_revision and target_snap_revision, f"{snap_name} is not installed on both machines"
+        alternate_revision = await _alternate_snap_revision(pc2_executor, snap_name, source_snap_revision)
+
+        pc1_prior_hold = await _capture_system_refresh_hold(pc1_executor)
+        pc2_prior_hold = await _capture_system_refresh_hold(pc2_executor)
+
+        try:
+            await _engage_system_refresh_hold(pc1_executor)
+            await _engage_system_refresh_hold(pc2_executor)
+
+            # pc2 loses one package (so the run installs it) and pc1 loses another (so the
+            # run removes pc2's copy). Both happen before the capture below.
+            removed_on_target = await pc2_executor.run_command(
+                f"sudo DEBIAN_FRONTEND=noninteractive apt-get remove --assume-yes {shlex.quote(install_candidate)}",
+                login_shell=False,
+                timeout=120.0,
+            )
+            assert removed_on_target.success, (
+                f"Failed to remove {install_candidate} from pc2: {removed_on_target.stderr}"
+            )
+            removed_on_source = await pc1_executor.run_command(
+                f"sudo DEBIAN_FRONTEND=noninteractive apt-get remove --assume-yes {shlex.quote(removal_candidate)}",
+                login_shell=False,
+                timeout=120.0,
+            )
+            assert removed_on_source.success, (
+                f"Failed to remove {removal_candidate} from pc1: {removed_on_source.stderr}"
+            )
+            diverged = await pc2_executor.run_command(
+                f"sudo snap refresh --revision={shlex.quote(alternate_revision)} {shlex.quote(snap_name)}",
+                login_shell=False,
+                timeout=180.0,
+            )
+            assert diverged.success, (
+                f"Failed to move pc2's {snap_name} to revision {alternate_revision}: {diverged.stderr}"
+            )
+
+            await _write_package_sync_config(pc1_executor, apt_sync=True, snap_sync=True, flatpak_sync=True)
+
+            before = await _capture_machine_package_state(pc1_executor)
+
+            decisions = {
+                AptPackageItem(name=install_candidate, version="").item_id: Decision.APPLY,
+                AptPackageItem(name=removal_candidate, version="").item_id: Decision.APPLY,
+                f"snap:{snap_name}": Decision.APPLY,
+            }
+            sync_cmd = f"{_automation_env_assignment_multi(decisions)} pc-switcher sync pc2 --yes --allow-first-sync"
+            sync_result = await pc1_executor.run_command(sync_cmd, timeout=600.0, login_shell=True)
+            assert sync_result.success, (
+                f"pc-switcher sync exited {sync_result.exit_code}.\n"
+                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
+            )
+
+            # Non-vacuous first: the run really did install, remove and re-revision on pc2.
+            target_manual = nonblank_lines(
+                (await pc2_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0)).stdout
+            )
+            assert install_candidate in target_manual, (
+                f"{install_candidate} was not installed on pc2, so this run converged nothing and pc1 being "
+                f"unchanged says nothing.\nstdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
+            )
+            assert removal_candidate not in target_manual, (
+                f"{removal_candidate} was not removed from pc2, so the removal direction converged nothing.\n"
+                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
+            )
+            assert await _snap_revision(pc2_executor, snap_name) == source_snap_revision, (
+                f"pc2's {snap_name} did not converge to pc1's revision {source_snap_revision}, so the snap manager "
+                f"converged nothing.\nstdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
+            )
+
+            after = await _capture_machine_package_state(pc1_executor)
+            assert after == before, (
+                "the run changed pc1's own package state: a sync must not change what software the source has, nor "
+                f"where it gets it from.\nbefore: {before}\nafter: {after}"
+            )
+        finally:
+            await _restore_package(pc2_executor, install_candidate)
+            await _restore_package(pc1_executor, removal_candidate)
+            await _restore_package(pc2_executor, removal_candidate)
+            await _restore_snap(pc2_executor, snap_name, target_snap_revision)
+            await _restore_system_refresh_hold(pc1_executor, pc1_prior_hold)
+            await _restore_system_refresh_hold(pc2_executor, pc2_prior_hold)

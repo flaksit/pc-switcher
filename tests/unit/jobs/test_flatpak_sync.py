@@ -3875,9 +3875,46 @@ class TestAnUnverifiedRemoteIsReported:
         assert not any("remote-add" in cmd for cmd in all_calls(target))
 
 
+class TestWhatARunTransfers:
+    """`PKG-FR-DATA-BOUNDARY`: applications and their data belong to `folder_sync`, so the
+    only bytes this job carries between the machines are trust and configuration.
+
+    Asserted as the WHOLE transfer list of a run that has both kinds to carry — a verified
+    remote and a ref filter, the two things `_stage_source_file` exists for. "Sends only
+    these" is the claim; a run that also shipped part of the store would satisfy any
+    assertion that merely found the key.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_run_sends_the_remotes_signing_key_and_ref_filter_and_nothing_else(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """K91 — one verified, filtered remote: two transfers, both staged under the target user's
+        own cache, and nothing from `~/.var/app` or the flatpak store's applications.
+        """
+        ref_filter = tmp_path / "filters" / "custom.filter"
+        ref_filter.parent.mkdir(parents=True, exist_ok=True)
+        _ = ref_filter.write_text("org.example.*\n")
+        job, target = trust_job(
+            tmp_path,
+            monkeypatch,
+            remote_line=remote_row("flathub", _SRC_URL, ref_filter=str(ref_filter)),
+            key_digest=_SOURCE_KEY_DIGEST,
+        )
+
+        await run_job(job)
+
+        sent = [(call.args[0], call.args[1]) for call in target.send_file.await_args_list]
+        assert [local for local, _staged in sent] == [
+            tmp_path / ".local" / "share" / "flatpak" / "repo" / "flathub.trustedkeys.gpg",
+            ref_filter,
+        ]
+        assert all(staged.startswith("/home/tester/.cache/pc-switcher/flatpak-staging/") for _local, staged in sent)
+
+
 class TestExcludePaths:
     def test_returns_flatpak_data_dir_excludes_var_app(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """F4, K91 — the job claims the store and never `~/.var/app`."""
+        """F4 — the job claims the store and never `~/.var/app`."""
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
         paths = flatpak_sync_exclude_paths()

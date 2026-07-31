@@ -26,7 +26,7 @@ from pcswitcher.jobs.context import JobContext
 from pcswitcher.jobs.manual_installs_sync import ManualInstallsSyncJob
 from pcswitcher.jobs.packages.items import DiffAction, DiffClass, ItemClass, ItemDiff
 from pcswitcher.jobs.packages.review import Decision, ReviewGroup, ReviewOutcome, TerminalUIReviewer
-from pcswitcher.jobs.packages.state import DecisionFile, filter_inert
+from pcswitcher.jobs.packages.state import DecisionFile, filter_inert, marks_on_either
 from pcswitcher.jobs.packages.sync_core import (  # pyright: ignore[reportPrivateUsage]
     _ACTION_VOCABULARY,
     PackageItemFailures,
@@ -157,15 +157,16 @@ class FakeSyncJob(PackageSyncJob):
 
     async def plan(self) -> PackagePlan:
         """The skeleton every real `plan()` follows -- load both decision files, filter
-        each side through its own, diff, drop what is inert, build groups -- with the
-        simplest diff that exists: present on one side only.
+        both sides through both of them (`marks_on_either`), diff, drop what is inert,
+        build groups -- with the simplest diff that exists: present on one side only.
         """
         source_decisions = await DecisionFile(self.manager_id, self.source).load()
         target_decisions = await DecisionFile(self.manager_id, self.target).load()
         self._plan_decisions = (source_decisions, target_decisions)
 
-        source_items = await filter_inert(self._source_items, source_decisions)
-        target_items = await filter_inert(self._target_items, target_decisions)
+        marked = marks_on_either(source_decisions, target_decisions)
+        source_items = await filter_inert(self._source_items, marked)
+        target_items = await filter_inert(self._target_items, marked)
         source_ids = {item.item_id: item for item in source_items}
         target_ids = {item.item_id: item for item in target_items}
         diffs = [
@@ -746,7 +747,7 @@ class TestIdempotency:
 
     @pytest.mark.asyncio
     async def test_identical_source_and_target_produce_no_diff_no_group_and_no_mutation(self) -> None:
-        """H32, J145 — an already-converged pair produces no diff, no group, no converge and no `mutates=` command."""
+        """H32 — an already-converged pair produces no diff, no group, no converge and no `mutates=` command."""
         reviewer = FakeReviewer()
         context = make_context(reviewer=reviewer)
         items = [FakeItem(name="pkg-a"), FakeItem(name="pkg-b")]
@@ -765,6 +766,72 @@ class TestIdempotency:
         for executor in (context.source, context.target):
             for call in executor.run_command.call_args_list:  # pyright: ignore[reportAttributeAccessIssue]
                 assert "mutates" not in call.kwargs
+
+
+class TestTheSourceIsNeverConverged:
+    """`PKG-FR-SOURCE-INTENT`: the source states the intent and the target is what moves, so
+    a run that has real work to do still leaves the source alone.
+
+    The pair here DIVERGES in both directions, which is the case the idempotency test above
+    cannot speak to: there, nothing was applied to either machine because there was nothing
+    to apply. What a unit can settle is that no write reaches the source's executor while
+    installs and removals are being applied; that the software Atlas actually holds is
+    byte-identical afterwards is a question for two real machines.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_run_that_converges_the_target_issues_no_write_on_the_source(self) -> None:
+        """J145 — a divergent pair, both directions approved: every converge is dispatched and no
+        command carrying `mutates=` is issued on the source.
+        """
+        reviewer = FakeReviewer({"fake:pkg-a": Decision.APPLY, "fake:pkg-c": Decision.APPLY})
+        context = make_context(reviewer=reviewer)
+        job = FakeSyncJob(context, source_items=[FakeItem(name="pkg-a")], target_items=[FakeItem(name="pkg-c")])
+
+        await job.execute()
+
+        # Non-vacuous: the run really did have software to install and software to remove.
+        assert {diff.action for diff in job.converge_calls} == {DiffAction.INSTALL, DiffAction.REMOVE}
+        for call in context.source.run_command.call_args_list:  # pyright: ignore[reportAttributeAccessIssue]
+            assert "mutates" not in call.kwargs, call.args[0]
+
+
+class TestADryRunIsTheSameRunWithoutTheWrites:
+    """`PKG-FR-DRY-RUN`: a rehearsal must build the same plan and put the same review as a
+    real run.
+
+    Asserted on the shared pipeline so it holds for every manager: what a preview is worth is
+    that the run it previews would ask the same questions about the same items, and a
+    `dry_run` flag read anywhere between capture and review would break exactly that.
+    """
+
+    @staticmethod
+    async def _run(*, dry_run: bool) -> tuple[PackagePlan, FakeReviewer]:
+        reviewer = FakeReviewer({"fake:pkg-a": Decision.APPLY})
+        context = make_context(dry_run=dry_run, reviewer=reviewer)
+        job = FakeSyncJob(
+            context,
+            source_items=[FakeItem(name="pkg-a"), FakeItem(name="pkg-b")],
+            target_items=[FakeItem(name="pkg-b"), FakeItem(name="pkg-c")],
+        )
+        plan = await job.plan()
+        await job.execute()
+        return plan, reviewer
+
+    @pytest.mark.asyncio
+    async def test_the_plan_and_the_review_are_the_same_as_a_real_runs(self) -> None:
+        """J50 — two runs differing only in `dry_run`: the same diffs, the same groups, and the
+        same groups put to the reviewer.
+        """
+        real_plan, real_reviewer = await self._run(dry_run=False)
+        dry_plan, dry_reviewer = await self._run(dry_run=True)
+
+        # Non-vacuous: there was something to plan and something to be asked about.
+        assert {diff.action for diff in real_plan.diffs} == {DiffAction.INSTALL, DiffAction.REMOVE}
+        assert real_reviewer.groups_seen
+        assert dry_plan.diffs == real_plan.diffs
+        assert dry_plan.groups == real_plan.groups
+        assert dry_reviewer.groups_seen == real_reviewer.groups_seen
 
 
 def _unreproducible_diff(item_id: str, action: DiffAction = DiffAction.REPORT_ONLY) -> ItemDiff:

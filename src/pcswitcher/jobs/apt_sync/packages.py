@@ -17,7 +17,7 @@ import shlex
 from collections.abc import Mapping, Sequence
 
 from pcswitcher.executor import RemoteExecutor
-from pcswitcher.jobs.apt_sync.collateral import Collateral, LateCollateral
+from pcswitcher.jobs.apt_sync.collateral import Collateral, CollateralEffect, LateCollateral
 from pcswitcher.jobs.apt_sync.commands import (
     candidate_version,
     install_args,
@@ -154,7 +154,8 @@ class PackageConverger:
         before any of the transactions they are about (`PKG-FR-BATCHED`,
         `PKG-FR-CONSENT-BEFORE-CHANGE`). An install a kept package withdrew is DECLINED, not
         failed — that is the article's own remedy for keeping a package
-        (`PKG-FR-COLLATERAL-MANUAL`).
+        (`PKG-FR-COLLATERAL-MANUAL`), and it holds however late the answer came: the same
+        outcome covers a question this simulation's own drift raises.
         """
         name = package_name(diff.item_id)
         if self._late is not None:
@@ -165,6 +166,9 @@ class PackageConverger:
                 raise ConvergeItemDeclined(f"install of {name} withdrawn: {withdrawn}")
         try:
             result = await self._install(name, diff, diffs, decisions)
+        except ConvergeItemDeclined:
+            self._declined_installs.add(name)
+            raise
         except ConvergeItemFailed as exc:
             self._install_outcome[name] = str(exc)
             raise
@@ -206,7 +210,21 @@ class PackageConverger:
 
         # A held package is requested as `<name>=<version>` — apt's own way of asking for one
         # version and refusing rather than substituting another (`PKG-FR-APT-HOLD-VERSION`).
+        # An entry with no version is a held candidate whose version the source's own
+        # `dpkg-query` did not supply: there is nothing to ask apt for, and the article
+        # forbids falling back to whatever the target offers, so the install is refused. The
+        # capture guards make that state unreachable today (`AptProbe._resolve_versions`
+        # fails the job on a non-zero exit, and every name it queries comes from
+        # `apt-mark showmanual`, so it is installed and has a version); the branch exists so
+        # a future capture that does return an empty version cannot float the install.
         held = self._held_versions.get(name)
+        if held == "":
+            raise ConvergeItemFailed(
+                f"install of {name} refused: {self._machines.source} holds it and no installed version was "
+                f"captured there, so {self._machines.target} cannot be given {self._machines.source}'s version. "
+                "A held package is installed at that version or not at all, because a hold freezes whatever "
+                "version lands"
+            )
         args = install_args([name if held is None else f"{name}={held}"])
         try:
             preview = await simulate_apt_transaction(self._target, args, login_shell=False)
@@ -218,15 +236,38 @@ class PackageConverger:
         refused = await self._collateral.unapproved(preview, exempt=frozenset(), verb="Installing", subject=name)
         if refused:
             effects = ", ".join(effect.phrase for effect in refused)
-            raise ConvergeItemFailed(
-                f"install of {name} refused: apt-get --dry-run would {effects}, "
-                "which was not approved as collateral in this run (D-30)"
+            await self._settle_drift(
+                refused,
+                verb="Installing",
+                name=name,
+                refusal=(
+                    f"install of {name} refused: apt-get --dry-run would {effects}, "
+                    "which was not approved as collateral in this run (D-30)"
+                ),
             )
 
         real_cmd = f"sudo DEBIAN_FRONTEND=noninteractive apt-get {args}"
         return await self._target.run_command(
             real_cmd, login_shell=False, mutates=f"install apt package {name} on {self._machines.target}"
         )
+
+    async def _settle_drift(self, refused: Sequence[CollateralEffect], *, verb: str, name: str, refusal: str) -> None:
+        """Put the drifted transaction's collateral to the user, and return only where they
+        let it go ahead (`PKG-FR-COLLATERAL-MANUAL`, `PKG-FR-ASK-AGAIN`).
+
+        The guard found a protected package no review saw, which is a fact this run's own
+        earlier changes created: the article gives the user three answers to it, and telling
+        them instead is what this replaces. Keeping the package leaves the change unapplied
+        rather than failed, which is the article's own remedy; stopping raises out of the
+        reviewer. `refusal` is the last resort for a converger built without the late round
+        at all — with nobody to put the question to, refusing is still better than losing the
+        package.
+        """
+        if self._late is None:
+            raise ConvergeItemFailed(refusal)
+        withdrawn = await self._late.ask_about_drift(subject=name, verb=verb, effects=refused)
+        if withdrawn is not None:
+            raise ConvergeItemDeclined(withdrawn)
 
     async def _held_version_refusal(self, name: str, held: str, exc: ConvergeItemFailed) -> str:
         """Why a held package could not be installed at the source's version, naming BOTH
@@ -258,9 +299,17 @@ class PackageConverger:
         and is logged: removing a package legitimately removes the now-orphaned dependencies
         apt pulled in for it. A collateral change to a package `Collateral.protected` covers
         is refused unless it was itself an approved removal this run or was let go ahead as
-        collateral. This is also where the removal batch's own known gap lands: a candidate
-        the user skipped, carried off by another approved removal's cascade, is refused here
-        by name rather than asked about at plan time (see `collateral`).
+        collateral. Where the real transaction has DRIFTED onto a protected package nobody
+        saw, the three-way question is put here instead of a refusal (`_settle_drift`).
+
+        The two outcomes divide on whether the fact could have been established before this
+        run's first change, which is what `PKG-FR-ASK-AGAIN` licenses a late round for. A
+        casualty that is itself a removal CANDIDATE this run was in the plan-time batch and
+        merely exempt from it (`Collateral.plan_time`), so its question belonged before any
+        change and asking it here would put a round in the middle of the work
+        (`PKG-FR-BATCHED`). That is the removal batch's known gap, refused by name and
+        recorded as an accepted cost; everything else the guard sees is younger than the
+        review and is asked about.
         """
         name = package_name(diff.item_id)
         args = remove_args([name])
@@ -269,11 +318,20 @@ class PackageConverger:
         approved = self._collateral.approved_removals(diffs, decisions)
         refused = await self._collateral.unapproved(preview, exempt=approved | {name}, verb="Removing", subject=name)
         if refused:
-            effects = ", ".join(effect.phrase for effect in refused)
-            raise ConvergeItemFailed(
+            candidates = {
+                package_name(other.item_id)
+                for other in diffs
+                if other.item_class is ItemClass.APT_PACKAGE and other.action is DiffAction.REMOVE
+            }
+            knowable = [effect for effect in refused if effect.package in candidates]
+            effects = ", ".join(effect.phrase for effect in (knowable or refused))
+            refusal = (
                 f"removal of {name} refused: apt-get --dry-run would also {effects}, "
                 "which was neither an approved removal nor approved as collateral in this run (D-30)"
             )
+            if knowable:
+                raise ConvergeItemFailed(refusal)
+            await self._settle_drift(refused, verb="Removing", name=name, refusal=refusal)
 
         real_cmd = f"sudo DEBIAN_FRONTEND=noninteractive apt-get {args}"
         return await self._target.run_command(

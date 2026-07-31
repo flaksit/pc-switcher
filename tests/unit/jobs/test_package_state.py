@@ -385,6 +385,11 @@ def _remove_diff(item_id: str) -> ItemDiff:
     )
 
 
+# A private repository's address carries its credential inside itself, so the URL IS the
+# secret (`PKG-FR-CREDENTIAL-PRIVACY`).
+_CREDENTIALED_URL = "https://bearer:s3cr3t-token@packages.example.com/apt"
+
+
 def _install_diff(item_id: str) -> ItemDiff:
     return ItemDiff(
         item_class=ItemClass.APT_PACKAGE,
@@ -484,7 +489,7 @@ class TestPipelineWiring:
 
     @pytest.mark.asyncio
     async def test_skip_always_on_install_writes_to_source_not_target(self) -> None:
-        """H118, N1."""
+        """H118, J146, N1."""
         context = make_context()
         job = FakeSyncJob(context)
         diff = _install_diff("fake:brscan3")
@@ -499,10 +504,10 @@ class TestPipelineWiring:
         assert not any("mv --force" in cmd for cmd in target_cmds)
 
     @pytest.mark.asyncio
-    async def test_skip_always_on_change_writes_to_source_not_target(self) -> None:
-        """H119, J4, J146 — D-08a routes CHANGE with INSTALL, not with REMOVE: the SOURCE holds the value
-        the item would be converged TO, so the source is the machine that must stop
-        offering it. Sibling of the INSTALL and REMOVE cases above.
+    async def test_skip_always_on_change_writes_to_target_not_source(self) -> None:
+        """H119, J4 — D-08a routes CHANGE with REMOVE, not with INSTALL: both machines have
+        the item, and the answer keeps the TARGET's copy — the overwrite is what it
+        permanently refused. Sibling of the INSTALL and REMOVE cases above.
         """
         context = make_context()
         job = FakeSyncJob(context)
@@ -514,8 +519,92 @@ class TestPipelineWiring:
 
         target_cmds = [call.args[0] for call in context.target.run_command.call_args_list]  # pyright: ignore[reportAttributeAccessIssue]
         source_cmds = [call.args[0] for call in context.source.run_command.call_args_list]  # pyright: ignore[reportAttributeAccessIssue]
-        assert any("mv --force" in cmd for cmd in source_cmds)
-        assert not any("mv --force" in cmd for cmd in target_cmds)
+        assert any("mv --force" in cmd for cmd in target_cmds)
+        assert not any("mv --force" in cmd for cmd in source_cmds)
+
+    @pytest.mark.asyncio
+    async def test_a_marked_change_is_inert_whichever_machine_the_next_run_reads(self) -> None:
+        """H178 — the mark sits on ONE machine and the roles swap with the direction of the
+        run, so a change is read back from either machine's file.
+
+        Both halves in one test, because a read that consults one file passes half of it
+        whichever file it picks: the same recorded content is put on the source in one run
+        and on the target in the other, and the diff must be dropped both times.
+        """
+        diff = _change_diff("fake:drifting-tool")
+        recorded = _decision_file_contents(diff.item_id)
+
+        for held_by_source in (True, False):
+            context = make_context()
+            executor = context.source if held_by_source else context.target
+            executor.run_command = AsyncMock(side_effect=_respond_cat_with(recorded))  # pyright: ignore[reportAttributeAccessIssue]
+            job = FakeSyncJob(context)
+
+            kept = job._drop_inert_diffs(  # pyright: ignore[reportPrivateUsage]
+                [diff],
+                await DecisionFile(job.manager_id, context.source).load(),
+                await DecisionFile(job.manager_id, context.target).load(),
+            )
+
+            assert kept == (), f"the mark was ignored when it sat on the {'source' if held_by_source else 'target'}"
+
+    @pytest.mark.asyncio
+    async def test_an_item_both_machines_have_is_filtered_off_both_manifests(self) -> None:
+        """H179 — a mark on one machine must take that item out of BOTH inventories.
+
+        Dropping it from its own machine's alone leaves the other machine's copy unmatched,
+        and an unmatched copy is a one-sided item: an install of what the target already
+        has, or a removal of what the source still has. The mark is placed on the TARGET,
+        which is the holding machine for the change it was given on.
+        """
+        context = make_context()
+        context.target.run_command = AsyncMock(  # pyright: ignore[reportAttributeAccessIssue]
+            side_effect=_respond_cat_with(_decision_file_contents("fake:drifting-tool"))
+        )
+        job = FakeSyncJob(
+            context,
+            source_items=[FakeItem(name="drifting-tool")],
+            target_items=[FakeItem(name="drifting-tool")],
+        )
+
+        plan = await job.plan()
+
+        assert plan.diffs == ()
+
+    @pytest.mark.asyncio
+    async def test_a_credentialed_label_is_written_to_the_file_withheld(self) -> None:
+        """J127 — `PKG-FR-CREDENTIAL-PRIVACY`: the label a permanent decision keeps on disk is a
+        string the user reads back, so the file gets the address without its userinfo.
+
+        Followed into the payload of the write itself rather than stopping at the `ItemDiff`
+        it is built from: the decision file is the one place a redacted string outlives the
+        run that produced it.
+        """
+        context = make_context()
+        job = FakeSyncJob(context)
+        diff = _install_diff("fake:vendor-tool")
+        labelled = ItemDiff(
+            item_class=diff.item_class,
+            diff_class=diff.diff_class,
+            action=diff.action,
+            item_id=diff.item_id,
+            label=f"vendor-tool ({_CREDENTIALED_URL})",
+        )
+        plan = PackagePlan(manager="fake", diffs=(labelled,), groups=())
+        job.accept_review(
+            plan, ReviewOutcome(decisions={labelled.item_id: Decision.SKIP_ALWAYS}, was_interactive=True)
+        )
+
+        await job.apply()
+
+        writes = [
+            call.args[0]
+            for call in context.source.run_command.call_args_list  # pyright: ignore[reportAttributeAccessIssue]
+            if "mv --force" in call.args[0]
+        ]
+        assert len(writes) == 1
+        assert "s3cr3t-token" not in writes[0]
+        assert "https://***@packages.example.com/apt" in writes[0]
 
     @pytest.mark.asyncio
     async def test_no_record_call_when_dry_run(self) -> None:

@@ -865,7 +865,7 @@ class TestWhatAptItselfReads:
 
     @pytest.mark.asyncio
     async def test_sources_list_is_digested_on_both_machines_and_is_still_not_an_item(self) -> None:
-        """C8, C10 — `/etc/apt/sources.list` is a file, not a directory, so it appears in no `find`
+        """C8 — `/etc/apt/sources.list` is a file, not a directory, so it appears in no `find`
         listing and needs its own digest — which ADR-020 D-38's write-when-different rule
         compares. Capturing it must not turn it into a reviewable item.
         """
@@ -888,6 +888,36 @@ class TestWhatAptItselfReads:
         assert sum(1 for cmd in all_calls(source) if _SOURCES_LIST_DIGEST_CMD in cmd) == 1
         assert sum(1 for cmd in all_calls(target) if _SOURCES_LIST_DIGEST_CMD in cmd) == 1
         assert not any(d.item_id.endswith(":sources.list") for d in plan.diffs)
+
+    @pytest.mark.asyncio
+    async def test_a_sources_list_only_the_target_has_is_never_offered_for_deletion(self) -> None:
+        """C10 — the target-only direction of the same file. `/etc/apt/sources.list` appears in no
+        `find` listing, so the directory diff that turns a target-only repository into a
+        deletion never sees it — and `PKG-FR-DISTRO-FILES` forbids removing the
+        distribution's own files anyway. The source's `sha256sum` exits 1 (the file is not
+        there) while the target's answers, so the run holds a digest for one machine only.
+        """
+        context, _source, target = _repo_context(
+            source_responses={
+                **_NO_PACKAGES,
+                _SOURCES_LIST_DIGEST_CMD: CommandResult(1, "", "sha256sum: /etc/apt/sources.list: No such file\n"),
+            },
+            target_responses={
+                **_NO_PACKAGES,
+                _SOURCES_LIST_DIGEST_CMD: CommandResult(0, sha256_line("s2", "/etc/apt/sources.list"), ""),
+            },
+        )
+        job = AptSyncJob(context)
+        install_reviewer(job, {})
+
+        await job.execute()
+
+        # The asymmetry the branch needs really is in place: one machine has the file.
+        assert job._work.source_facts.sources_list_digest is None  # pyright: ignore[reportPrivateUsage]
+        assert job._work.target_facts.sources_list_digest == "s2"  # pyright: ignore[reportPrivateUsage]
+        assert not any(diff.item_id.endswith(":sources.list") for diff in job._accepted_plan.diffs)  # pyright: ignore[reportOptionalMemberAccess, reportPrivateUsage]
+        touched = [cmd.rsplit(" ", 1)[1] for cmd in all_calls(target) if cmd.startswith(("sudo install ", "sudo rm "))]
+        assert "/etc/apt/sources.list" not in touched
 
     @pytest.mark.asyncio
     async def test_an_absent_sources_list_yields_no_digest_rather_than_an_error(self) -> None:

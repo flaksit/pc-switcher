@@ -1129,6 +1129,86 @@ class TestAutoCollateralIsLogged:
         assert not any("dpkg --compare-versions" in cmd for cmd in all_calls(target))
 
 
+class TestAutoCollateralIsLoggedFromTheTransactionThatHappens:
+    """`PKG-FR-COLLATERAL-AUTO` binds the apply-time transaction as well as the rehearsal: a
+    change nobody is asked about still has to be a change somebody can see, and the one that
+    actually ran is the one the log owes an account of.
+    """
+
+    @pytest.mark.asyncio
+    async def test_an_auto_casualty_only_the_real_transaction_predicts_is_logged(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """D9 — the plan-time rehearsal is clean and the real transaction takes `auto-dep`:
+        the only line naming it comes from the transaction that happened."""
+        sim = "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a"
+        state = {"sim": 0}
+
+        def target_side_effect(cmd: str, **_: object) -> CommandResult:
+            if cmd == sim:
+                state["sim"] += 1
+                return CommandResult(
+                    0, "Inst pkg-a (1.0)\n" + ("Remv auto-dep [1.0]\n" if state["sim"] > 1 else ""), ""
+                )
+            if cmd.startswith("apt-cache policy"):
+                return CommandResult(0, target_offers("pkg-a"), "")
+            return CommandResult(0, "", "")
+
+        context, _source, target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+            },
+        )
+        target.run_command = AsyncMock(side_effect=target_side_effect)
+        job = AptSyncJob(context)
+        install_reviewer(job, _APPROVE_PKG_A)
+
+        with caplog.at_level(LogLevel.FULL):
+            await job.execute()
+
+        assert [record.message for record in caplog.records if "auto-dep" in record.message] == [
+            "Installing pkg-a on target-host would remove auto-dep "
+            "(auto-dep is installed automatically on target-host; not asked)"
+        ]
+        assert len(real_installs(target)) == 1
+
+    @pytest.mark.asyncio
+    async def test_the_same_casualty_is_logged_at_plan_time_and_again_from_the_real_transaction(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """J106 — two lines, not one: the rehearsal's names the whole batch it rehearsed, and
+        the apply-time one names the single install whose transaction ran."""
+        context, _source, _target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\npkg-b\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\npkg-b\t1.0\n", ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "", ""),
+                "apt-cache policy": CommandResult(0, target_offers("pkg-a", "pkg-b"), ""),
+                # Longest first: `respond_to` matches by substring, first match wins.
+                "--no-install-recommends pkg-a pkg-b": CommandResult(
+                    0, "Inst pkg-a (1.0)\nInst pkg-b (1.0)\nRemv auto-dep [1.0]\n", ""
+                ),
+                "--no-install-recommends pkg-a": CommandResult(0, "Inst pkg-a (1.0)\nRemv auto-dep [1.0]\n", ""),
+                "--no-install-recommends pkg-b": CommandResult(0, "Inst pkg-b (1.0)\n", ""),
+            },
+        )
+        job = AptSyncJob(context)
+        install_reviewer(job, {**_APPROVE_PKG_A, "apt:package:pkg-b": Decision.APPLY})
+
+        with caplog.at_level(LogLevel.FULL):
+            await job.execute()
+
+        assert [record.message for record in caplog.records if "auto-dep" in record.message] == [
+            "Installing pkg-a, pkg-b on target-host would remove auto-dep "
+            "(auto-dep is installed automatically on target-host; not asked)",
+            "Installing pkg-a on target-host would remove auto-dep "
+            "(auto-dep is installed automatically on target-host; not asked)",
+        ]
+
+
 class TestOnePackageTwoConsequences:
     """`PKG-FR-COLLATERAL-MANUAL` wants consent to the consequence, and one protected package
     can be the casualty of two of them in one run: an approved install's transaction and an
@@ -1202,10 +1282,10 @@ class TestOnePackageTwoConsequences:
 
     @pytest.mark.asyncio
     async def test_the_apply_time_guard_matches_the_consequence_not_the_package(self) -> None:
-        """D56 — the guard's own half of the same rule. The removal's transaction drifts after
-        plan time to take `victim` as well, so nothing cancelled it and only the guard
-        stands between the user and a package they never agreed to lose — while the
-        install's casualty, which they DID agree to, still goes ahead.
+        """D56 — the apply-time half of the same rule. The removal's transaction drifts after
+        plan time to take `victim` as well, and the go-ahead the user gave for the INSTALL's
+        casualty does not cover it: the removal raises its own question, which this run
+        leaves unanswered, so the removal is withdrawn while the install still runs.
         """
         removal = "apt-get --dry-run remove --assume-yes going"
         state = {"removals": 0}
@@ -1235,20 +1315,18 @@ class TestOnePackageTwoConsequences:
             target_side_effect=target_side_effect,
         )
         job = AptSyncJob(context)
-        install_reviewer(
-            job,
+        reviewer = CountingReviewer(
             {
                 "apt:package:pkg-a": Decision.APPLY,
                 "apt:package:going": Decision.APPLY,
                 "apt:collateral:install:remove:victim": Decision.APPLY,
-            },
+            }
         )
+        job.context = dataclasses.replace(job.context, reviewer=reviewer)
 
-        with pytest.raises(PackageItemFailures) as exc_info:
-            await job.execute()
+        await job.execute()
 
-        failures = {diff.item_id: message for diff, message in exc_info.value.failures}
-        assert "victim" in failures["apt:package:going"]
+        assert _collateral_entry_ids(reviewer)[-1] == {"apt:collateral:remove:remove:victim"}
         commands = all_calls(target)
         assert any("sudo" in cmd and "apt-get install" in cmd and "pkg-a" in cmd for cmd in commands)
         assert not any("sudo" in cmd and "apt-get remove" in cmd for cmd in commands)
@@ -1605,6 +1683,56 @@ class TestARepositoryWrittenForADeclinedInstall:
         ]
 
 
+def _two_late_casualties_context() -> tuple[JobContext, MagicMock, MagicMock]:
+    """`_two_late_installs_context`, except that each unsimulatable install takes a protected
+    package of its own — `pkg-a` takes `other-manual`, `pkg-b` takes `second-manual`.
+
+    Two DIFFERENT casualties, because one shared casualty is one consequence and so one entry
+    however many installs cause it: only two entries can show whether the round is one
+    question or one per install.
+    """
+    context, source, target = _repo_context(
+        source_responses=foo_source_responses(
+            **{
+                "apt-mark showmanual": CommandResult(0, "pkg-a\npkg-b\nother-manual\nsecond-manual\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\npkg-b\t1.0\nother-manual\t1.0\nsecond-manual\t1.0\n", ""),
+                "apt-cache policy": CommandResult(
+                    0,
+                    _policy_block("pkg-a", "https://example.com")
+                    + _policy_block("pkg-b", "https://example.com")
+                    + _policy_block("other-manual", "https://example.com")
+                    + _policy_block("second-manual", "https://example.com"),
+                    "",
+                ),
+            }
+        )
+    )
+    target.run_command = AsyncMock(
+        side_effect=respond_with_policy_sequence(
+            {
+                "echo $HOME": CommandResult(0, "/home/target-user", ""),
+                "apt-mark showmanual": CommandResult(0, "other-manual\nsecond-manual\n", ""),
+                "dpkg-query": CommandResult(0, "other-manual\t1.0\nsecond-manual\t1.0\n", ""),
+                "test -f": CommandResult(1, "", ""),
+                # Longest first: `respond_to` matches by substring, first match wins, and the
+                # batch command contains both single-candidate patterns.
+                "--no-install-recommends pkg-a pkg-b": CommandResult(
+                    0,
+                    "Inst pkg-a (1.0)\nInst pkg-b (1.0)\nRemv other-manual [1.0]\nRemv second-manual [1.0]\n",
+                    "",
+                ),
+                "--no-install-recommends pkg-a": CommandResult(0, "Inst pkg-a (1.0)\nRemv other-manual [1.0]\n", ""),
+                "--no-install-recommends pkg-b": CommandResult(0, "Inst pkg-b (1.0)\nRemv second-manual [1.0]\n", ""),
+            },
+            [
+                CommandResult(0, _no_candidate("pkg-a", "pkg-b"), ""),
+                CommandResult(0, target_offers("pkg-a", "pkg-b", origin="https://example.com"), ""),
+            ],
+        )
+    )
+    return context, source, target
+
+
 class _CommandCountingReviewer(CountingReviewer):
     """`CountingReviewer` that also records how many commands the target had been given at
     the moment of each review — the only way to put a question and a command on one timeline.
@@ -1625,6 +1753,26 @@ class TestTheLateQuestionIsPutOnceBeforeAnyTransaction:
     unsimulatable installs are asked about together, and the last answer comes before the
     first of the transactions they are about.
     """
+
+    @pytest.mark.asyncio
+    async def test_two_unsimulatable_installs_share_one_question(self) -> None:
+        """H43 — each install takes a protected package of its own, so the round carries two
+        entries; `PKG-FR-BATCHED` binds within it, so they come as one group in one call
+        rather than a question per install.
+        """
+        context, _source, _target = _two_late_casualties_context()
+        job = AptSyncJob(context)
+        reviewer = CountingReviewer({**_APPROVE_PKG_A, "apt:package:pkg-b": Decision.APPLY})
+        job.context = dataclasses.replace(job.context, reviewer=reviewer)
+
+        await job.execute()
+
+        assert len(reviewer.calls) == 2
+        assert [group.action for group in reviewer.calls[1]] == [COLLATERAL_REVIEW_ACTION]
+        assert {entry.item_id for entry in reviewer.calls[1][0].entries} == {
+            "apt:collateral:install:remove:other-manual",
+            "apt:collateral:install:remove:second-manual",
+        }
 
     @pytest.mark.asyncio
     async def test_two_late_installs_are_asked_about_once_and_before_the_first_install(self) -> None:

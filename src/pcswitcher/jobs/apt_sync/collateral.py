@@ -11,15 +11,20 @@ Two batched simulations per run, not one per package: a per-package simulation o
 150-package manual set would cost more than the sync itself. Attribution is what costs extra,
 and only on a run that actually found manual collateral.
 
-A third batch is possible and belongs to `LateCollateral`: an install whose repository this
-run writes cannot be simulated while the review is being built, so its question is asked
-once `/etc/apt` has converged (`PKG-FR-ASK-AGAIN`) rather than replaced by a late refusal.
+Two further rounds belong to `LateCollateral`, both licensed by `PKG-FR-ASK-AGAIN`: an
+install whose repository this run writes cannot be simulated while the review is being
+built, so its question is asked once `/etc/apt` has converged; and a real transaction that
+has drifted onto a protected package since plan time is asked about immediately before it
+runs. Neither fact could be established earlier, which is what separates them from a late
+refusal.
 
 Known gap, deliberately left: in the removal batch a candidate is exempt from its own
 transaction, so a removal the user skips can still be carried off by ANOTHER approved
-removal's cascade. The apply-time guard refuses that transaction and names the package, so
-nothing is lost — the user is told rather than asked. Closing it needs a per-candidate
-simulation on every run with removals, which is the cost this module exists to avoid.
+removal's cascade. That fact WAS available at plan time — the candidate was in the batch,
+merely exempt — so the late round is not licensed for it and the apply-time guard refuses
+the transaction and names the package: nothing is lost, but the user is told rather than
+asked. Closing it needs a per-candidate simulation on every run with removals, which is the
+cost this module exists to avoid.
 """
 
 from __future__ import annotations
@@ -299,6 +304,18 @@ class Collateral:
                 frozenset(f"{APT_PACKAGE_ID_PREFIX}{trigger}" for trigger in triggers[item.package]),
             )
             for item in found
+        ]
+
+    def items_for(self, effects: Sequence[CollateralEffect], verb: str, subject: str) -> list[ItemDiff]:
+        """The review items for collateral a REAL transaction revealed, attributed to the one
+        candidate whose transaction it is.
+
+        `for_direction`'s apply-time counterpart, and the phrasing step alone: there is
+        nothing to simulate — the preview IS the transaction about to run — and nothing to
+        narrow, since `subject` is its only cause.
+        """
+        return [
+            self._item(effect, subject, verb, frozenset({f"{APT_PACKAGE_ID_PREFIX}{subject}"})) for effect in effects
         ]
 
     @staticmethod
@@ -582,8 +599,15 @@ class Collateral:
 
 
 class LateCollateral:
-    """The collateral question for the installs plan time could not simulate
-    (`PKG-FR-ASK-AGAIN`, `PKG-FR-COLLATERAL-MANUAL`).
+    """Every collateral question that can only be put once the run has begun changing the
+    target (`PKG-FR-ASK-AGAIN`, `PKG-FR-COLLATERAL-MANUAL`). Two of them.
+
+    The first is the installs plan time could not simulate, asked together before the first
+    of them converges (`ensure_asked`). The second is the transaction that DRIFTED: a real
+    `apt-get --dry-run` issued moments before the command itself, reporting a protected
+    package the plan-time rehearsal never saw (`ask_about_drift`). Both give the same three
+    answers over the same wording, because they are the same question about the same kind of
+    fact — one nobody could have been asked earlier.
 
     An install whose repository this run writes is a name the target's apt has never heard,
     so `OriginClassifier.target_resolvable` keeps it out of the plan-time simulation — apt
@@ -634,6 +658,10 @@ class LateCollateral:
         # `{install item_id: why it was not applied}` — the installs a kept package cancels,
         # and only those (`PKG-FR-COLLATERAL-ATTRIBUTION`).
         self._declined: dict[str, str] = {}
+        # Destinations `_report_stranded` has already named. It reads the whole `_declined`
+        # set each time it runs, and a drifted transaction can make it run more than once
+        # per run, so without this the first answer's file is named again by the second's.
+        self._reported_stranded: set[str] = set()
 
     def declined(self, item_id: str) -> str | None:
         """Why this approved install is not being run, or `None` when nothing withdrew it."""
@@ -687,8 +715,27 @@ class LateCollateral:
         if found:
             await self._settle(found)
 
+    async def ask_about_drift(self, *, subject: str, verb: str, effects: Sequence[CollateralEffect]) -> str | None:
+        """Put the three-way question for collateral the REAL transaction has just revealed,
+        and answer whether that transaction may run: `None` to go ahead, otherwise why it was
+        withdrawn (`PKG-FR-COLLATERAL-MANUAL`, `PKG-FR-ASK-AGAIN`).
+
+        The fact does not exist until the transaction is simulated, which happens once this
+        run's own `/etc/apt` writes and installs have landed — so it could not have been put
+        at plan time, and refusing the change instead would tell the user about a loss the
+        article says they get to decide about. Asked immediately before the command it is
+        about, so the stopping answer still stops the sync ahead of it
+        (`PKG-FR-CONSENT-BEFORE-CHANGE`).
+
+        Every effect of the one transaction goes into a single question, which is
+        `PKG-FR-BATCHED` as it binds here: the round is this transaction's, and the next
+        transaction's drift is a different fact that nothing could have asked about sooner.
+        """
+        await self._settle(self._collateral.items_for(effects, verb, subject))
+        return self._declined.get(f"{APT_PACKAGE_ID_PREFIX}{subject}")
+
     async def _settle(self, found: Sequence[ItemDiff]) -> None:
-        """Ask, then turn the answers into the guard's approvals and the withdrawn installs.
+        """Ask, then turn the answers into the guard's approvals and the changes withdrawn.
 
         Stopping needs no branch: `_review_collateral_group` raises `SyncAbortedByUser`,
         which propagates out of `apply()` and through the orchestrator's per-job handler
@@ -730,6 +777,9 @@ class LateCollateral:
         if self._log is None:
             return
         for left in self._derived.stranded(frozenset(self._declined)):
+            if left.dest in self._reported_stranded:
+                continue
+            self._reported_stranded.add(left.dest)
             self._log(
                 Host.TARGET,
                 LogLevel.INFO,

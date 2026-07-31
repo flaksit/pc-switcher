@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import dataclasses
 import re
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -48,6 +48,8 @@ from tests.unit.jobs.apt.helpers import (
     all_calls,
     decision_file,
     differing_repo_context,
+    foo_source_responses,
+    foo_target_side_effect,
     install_reviewer,
     installed_on_target,
     make_context,
@@ -263,7 +265,7 @@ class TestValidate:
 
     @pytest.mark.asyncio
     async def test_apt_mark_unavailable_yields_validation_error(self) -> None:
-        """K43, K44."""
+        """K44."""
         context, _source, _target = make_context(
             target_responses={"apt-mark --version": CommandResult(127, "", "not found")}
         )
@@ -271,7 +273,23 @@ class TestValidate:
 
         errors = await job.validate()
 
-        assert any("apt-mark" in e.message for e in errors)
+        assert any(e.host is Host.TARGET and "apt-mark" in e.message for e in errors)
+
+    @pytest.mark.asyncio
+    async def test_apt_mark_unavailable_on_the_source_yields_validation_error(self) -> None:
+        """K43 — the source's own copy of the check. The manual set is read there and nowhere
+        else, so a source without `apt-mark` has nothing to say about what to sync — and the
+        error has to name that machine, or the user goes looking on the wrong one.
+        """
+        context, _source, _target = make_context(
+            source_responses={"apt-mark --version": CommandResult(127, "", "not found")},
+            target_responses={"fuser /var/lib/dpkg/lock-frontend": CommandResult(1, "", "")},
+        )
+        job = AptSyncJob(context)
+
+        errors = await job.validate()
+
+        assert [(e.host, "apt-mark" in e.message) for e in errors] == [(Host.SOURCE, True)]
 
     @pytest.mark.asyncio
     async def test_dpkg_lock_held_yields_distinct_validation_error(self) -> None:
@@ -284,6 +302,43 @@ class TestValidate:
         errors = await job.validate()
 
         assert any("lock" in e.message.lower() for e in errors)
+
+    @pytest.mark.asyncio
+    async def test_a_held_lock_is_probed_once_and_never_waited_on(self) -> None:
+        """K71 — `PKG-FR-APT-DPKG-LOCK` forbids waiting on the lock silently, so the refusal
+        must be the run's whole response to it: one `fuser` probe, no second one, and no
+        sleep between them. A retry loop would read as a hang to the user and would answer
+        the review against a machine something else is still moving.
+        """
+        context, source, target = make_context(
+            target_responses={"fuser /var/lib/dpkg/lock-frontend": CommandResult(0, "1234", "")}
+        )
+        job = AptSyncJob(context)
+
+        with patch("asyncio.sleep", new_callable=AsyncMock) as slept:
+            errors = await job.validate()
+
+        assert any("lock" in e.message.lower() for e in errors)
+        assert len([cmd for cmd in all_calls(target) if "fuser" in cmd]) == 1
+        assert not any("sleep" in cmd for cmd in all_calls(source) + all_calls(target))
+        slept.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_dry_run_still_refuses_to_start_while_the_lock_is_held(self) -> None:
+        """K72 — a dry run reads the two machines to say what it WOULD do, and a machine
+        another package operation is changing cannot answer that any more truthfully than it
+        can be changed. Validation is a precondition, not part of the work `--dry-run`
+        suppresses.
+        """
+        context, _source, _target = make_context(
+            target_responses={"fuser /var/lib/dpkg/lock-frontend": CommandResult(0, "1234", "")},
+            dry_run=True,
+        )
+        job = AptSyncJob(context)
+
+        errors = await job.validate()
+
+        assert [(e.host, "lock" in e.message.lower()) for e in errors] == [(Host.TARGET, True)]
 
     @pytest.mark.asyncio
     async def test_source_without_passwordless_sudo_yields_validation_error(self) -> None:
@@ -321,6 +376,42 @@ class TestValidate:
         target_sudo_errors = [e for e in errors if e.host is Host.TARGET and "sudo" in e.message]
         assert len(target_sudo_errors) == 1
         assert all(command in target_sudo_errors[0].message for command in TARGET_SUDO_COMMANDS)
+
+
+class TestTheDecisionStoreIsPerManager:
+    """`PKG-FR-JOB-INDEPENDENCE`: no package job's behaviour may depend on whether another
+    one is enabled — and the decision store is where the two could most easily be wired
+    together, because every manager's file lives in the same directory under the same
+    naming scheme.
+    """
+
+    @pytest.mark.asyncio
+    async def test_apt_sync_alone_neither_reads_nor_rewrites_the_snap_decision_file(self) -> None:
+        """K21 — `apt_sync` is the only job enabled and both machines carry a populated
+        `snap.decisions.yaml`. A run that read it would be reading another manager's marks;
+        one that rewrote it would drop the snap marks of a machine whose snap job is off.
+        """
+        snap_decisions = (
+            "machine_specific:\n"
+            '  "snap:alpha":\n'
+            "    item_class: snap\n"
+            '    label: "alpha"\n'
+            "    reason: null\n"
+            "    recorded_at: '2026-07-26T00:00:00Z'\n"
+        )
+        responses = {**_NO_PACKAGES, "snap.decisions.yaml": CommandResult(0, snap_decisions, "")}
+        context, source, target = make_context(source_responses=responses, target_responses=responses)
+        job = AptSyncJob(dataclasses.replace(context, enabled_sync_jobs={"apt_sync": True}))
+        install_reviewer(job, {})
+
+        await job.execute()
+
+        commands = all_calls(source) + all_calls(target)
+        assert not any("snap.decisions.yaml" in cmd for cmd in commands)
+        # Both machines' apt files ARE consulted, so the negative above is about the
+        # per-manager boundary and not about a run that touched no decision file at all.
+        assert any("apt.decisions.yaml" in cmd for cmd in all_calls(source))
+        assert any("apt.decisions.yaml" in cmd for cmd in all_calls(target))
 
 
 class TestJobDiscovery:
@@ -557,6 +648,60 @@ class TestRepoRemovalWithheldWhileInUse:
         )
 
     @pytest.mark.asyncio
+    async def test_a_removal_withdrawn_on_the_same_screens_takes_the_deletion_with_it(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """C176 — the one path the plan-time count cannot cover, and the only thing that still
+        reaches `AptSyncJob._withhold_repositories_still_in_use`.
+
+        `vendor-tool` is `vendor.list`'s last user and its removal is approved in the first
+        round, so the second round offers the deletion. That same round carries a collateral
+        question the first round's mark on `hand-tool` brought into being, and keeping
+        `hand-tool` withdraws the very removal the deletion was counted against — moments
+        after it was counted. The file must stay: nothing on the machine changed, so the
+        approval is taken back and logged rather than applied.
+        """
+        target_responses = {
+            **self._target_responses(
+                source_files={"vendor.list": _VENDOR_LIST},
+                source_digests=sha256_line("d1", "vendor.list"),
+                decisions="machine_specific: {}\n",
+                policy=(
+                    _policy_block("vendor-tool", "https://vendor.example.com/apt")
+                    + _policy_block("hand-tool", "http://ftp.belnet.be/ubuntu")
+                ),
+            ),
+            "apt-mark showmanual": CommandResult(0, "vendor-tool\nhand-tool\n", ""),
+            "dpkg-query": CommandResult(0, "vendor-tool\t1.0\nhand-tool\t1.0\n", ""),
+            # Removing `vendor-tool` takes `hand-tool` with it. Invisible at plan time:
+            # both are removal candidates there and so both are exempt from their own batch.
+            "apt-get --dry-run remove": CommandResult(0, "Remv vendor-tool [1.0]\nRemv hand-tool [1.0]\n", ""),
+        }
+        context, _source, target = _repo_context(source_responses=_NO_PACKAGES, target_responses=target_responses)
+        job = AptSyncJob(context)
+        reviewer = CountingReviewer(
+            {
+                "apt:package:vendor-tool": Decision.APPLY,
+                "apt:package:hand-tool": Decision.SKIP_ALWAYS,
+                "apt:source:vendor.list": Decision.APPLY,
+            }
+        )
+        job.context = dataclasses.replace(job.context, reviewer=reviewer)
+
+        with caplog.at_level(1):
+            await job.execute()
+
+        second_round = {entry.item_id for group in reviewer.calls[1] for entry in group.entries}
+        assert "apt:source:vendor.list" in second_round, "the count that raised it still held when it was offered"
+        assert any(item_id.startswith("apt:collateral:") for item_id in second_round)
+        assert "sudo rm --force /etc/apt/sources.list.d/vendor.list" not in all_calls(target)
+        assert not any("apt-get remove" in cmd and "--dry-run" not in cmd for cmd in all_calls(target))
+        assert (
+            "keeping repository vendor.list: target-host still installs vendor-tool from it, "
+            "so its approved deletion is not applied" in caplog.text
+        )
+
+    @pytest.mark.asyncio
     async def test_the_machine_specific_package_itself_still_produces_no_diff(self) -> None:
         """C52 — the inertness this detail exists to compensate for must not regress: naming
         the package in a removal's detail is NOT the same as re-proposing it (D-08).
@@ -743,6 +888,40 @@ def _pinned_target_only_package_context(
     reviewer = CountingReviewer({"apt:package:curl": Decision.APPLY, **extra_decisions})
     job.context = dataclasses.replace(job.context, reviewer=reviewer)
     return job, target, reviewer
+
+
+class TestARepositoryWrittenForAnInstallThatFailed:
+    """`PKG-FR-REPO-STRANDED` is about an install the USER withdrew, and says nothing about
+    one that was attempted and failed — which is why `DerivedWrites.stranded()` is keyed on
+    the declined set alone.
+    """
+
+    @pytest.mark.asyncio
+    async def test_the_repository_stays_and_the_run_owes_no_line_about_it(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """C70 — `foo.sources` lands, then `pkg-a`'s own `apt-get install` fails. Rolling the
+        file back would undo a write nobody asked to undo, and the failure the run already
+        reports names the package the file was written for — so the file stays, and the
+        stranded line the declined case owes is not owed here.
+        """
+        context, _source, target = _repo_context(source_responses=foo_source_responses())
+        target.run_command = AsyncMock(
+            side_effect=foo_target_side_effect(
+                {"apt-get install --assume-yes": CommandResult(100, "", "E: Unable to fetch some archives")}
+            )
+        )
+        job = AptSyncJob(context)
+        install_reviewer(job, {"apt:package:pkg-a": Decision.APPLY})
+
+        with caplog.at_level(1), pytest.raises(PackageItemFailures) as exc_info:
+            await job.execute()
+
+        assert [diff.item_id for diff, _ in exc_info.value.failures] == ["apt:package:pkg-a"]
+        commands = all_calls(target)
+        assert any(cmd.endswith("/etc/apt/sources.list.d/foo.sources") for cmd in commands if "sudo install" in cmd)
+        assert not any(cmd.startswith("sudo rm --force") and "foo.sources" in cmd for cmd in commands)
+        assert not any("stays on target-host" in record.message for record in caplog.records)
 
 
 class TestAPinNeverSpeaksForAPackage:

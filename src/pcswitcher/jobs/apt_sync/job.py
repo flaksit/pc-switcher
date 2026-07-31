@@ -65,7 +65,7 @@ from pcswitcher.jobs.packages.review import (
     ReviewGroup,
     ReviewOutcome,
 )
-from pcswitcher.jobs.packages.state import DecisionFile, filter_inert
+from pcswitcher.jobs.packages.state import DecisionEntry, DecisionFile, filter_inert, marks_on_either
 from pcswitcher.jobs.packages.sync_core import ConvergeItemFailed, PackagePlan, PackageSyncJob
 from pcswitcher.models import CommandResult, FirstSyncScope, Host, LogLevel, ValidationError
 from pcswitcher.sudoers import passwordless_sudo_hint
@@ -353,13 +353,19 @@ class AptSyncJob(PackageSyncJob):
         target_decisions = await DecisionFile(self.manager_id, self.target).load()
         self._plan_decisions = (source_decisions, target_decisions)
 
+        # Both files against BOTH manifests (`marks_on_either`): a package both machines
+        # have must vanish from the diff entirely once either machine records it, and
+        # filtering each manifest by its own file alone leaves the other machine's copy
+        # unmatched — an install of a package the target already has, or a removal of one
+        # the source still has.
+        marked = marks_on_either(source_decisions, target_decisions)
         captured, source_origins = await self._probe.capture_source_items()
-        source_items = await filter_inert(captured, source_decisions)
+        source_items = await filter_inert(captured, marked)
         # Both manifests drop the hand-`.deb` installs `manual_installs_sync` owns before
         # anything is diffed (`PKG-FR-DEB-OWNERSHIP`), and the target's exclusion rides in
         # the same batched policy call that answers this run's origin questions.
         target_captured, policy = await self._probe.capture_target_items([item.name for item in source_items])
-        target_items = await filter_inert(target_captured, target_decisions)
+        target_items = await filter_inert(target_captured, marked)
         source_hold_names, target_hold_names = await self._probe.collect_hold_sets()
         # A hold naming a package the target does not have is dpkg selection state that
         # freezes nothing and refuses the install the source is asking for. Kept apart from
@@ -377,6 +383,8 @@ class AptSyncJob(PackageSyncJob):
                 source_hold_names,
                 target_hold_names,
                 self._stale_holds,
+                self._marked_packages(source_decisions),
+                self._marked_packages(target_decisions),
             ),
             source_decisions,
             target_decisions,
@@ -386,7 +394,12 @@ class AptSyncJob(PackageSyncJob):
         # otherwise freeze the target permanently on whatever its repositories happened to
         # offer, and nothing moves a held package again. Read off the surviving diffs so a
         # package `filter_inert` dropped cannot pin a version nothing will install.
-        source_versions = {item.name: item.version for item in source_items if item.version}
+        #
+        # A held candidate enters this map whatever `dpkg-query` said about it, empty version
+        # included: dropping it here is what let the install float onto whatever the target
+        # offered, which the article forbids. `PackageConverger._install` refuses the empty
+        # entry instead of falling back.
+        source_versions = {item.name: item.version for item in source_items}
         self._held_versions = {
             name: source_versions[name]
             for diff in diffs
@@ -402,6 +415,16 @@ class AptSyncJob(PackageSyncJob):
             self._target_installed = await self._probe.capture_target_installed()
         return self._target_installed
 
+    @staticmethod
+    def _marked_packages(decisions: Mapping[str, DecisionEntry]) -> frozenset[str]:
+        """The package NAMES one machine's decision file records machine-specific.
+
+        Two callers need the same fact about different files: the collateral question reads
+        the target's (`PKG-FR-COLLATERAL-MARKED`), and the hold diff reads each machine's own
+        so a mark on a package makes its hold inert too (`diff_apt_holds`).
+        """
+        return frozenset(package_name(item_id) for item_id in decisions if item_id.startswith(APT_PACKAGE_ID_PREFIX))
+
     def _target_marked_packages(self) -> frozenset[str]:
         """Package names the TARGET recorded machine-specific, from the decision file
         `_plan_packages` has just read (`PKG-FR-COLLATERAL-MARKED`).
@@ -411,9 +434,7 @@ class AptSyncJob(PackageSyncJob):
         the user can be told a mark is about to be overrun.
         """
         _source_decisions, target_decisions = self._plan_decisions
-        return frozenset(
-            package_name(item_id) for item_id in target_decisions if item_id.startswith(APT_PACKAGE_ID_PREFIX)
-        )
+        return self._marked_packages(target_decisions)
 
     @staticmethod
     def _files_an_approval_would_write(package_diffs: Sequence[ItemDiff], origins: OriginClassifier) -> frozenset[str]:
