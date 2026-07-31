@@ -5,8 +5,7 @@
   "branch": "gsd/phase-02-package-management-sync",
   "checkpoints_count": 1,
   "files_touched": [
-    "docs/adr/adr-003-implementation-language.md",
-    "docs/adr/adr-012-documentation-structure.md"
+    "docs/adr/adr-003-implementation-language.md"
   ],
   "sessions": [
     {
@@ -14,14 +13,14 @@
       "transcript": "/22/e569609485/0/full.jsonl",
       "compact_transcript": "/22/e569609485/0/transcript.jsonl",
       "content_hash": "/22/e569609485/0/content_hash.txt",
-      "prompt": "/22/e569609485/0/prompt.txt"
+      "prompt": ""
     }
   ],
   "token_usage": {
-    "input_tokens": 21,
-    "cache_creation_tokens": 110159,
-    "cache_read_tokens": 1409234,
-    "output_tokens": 10810,
-    "api_call_count": 12
+    "input_tokens": 2,
+    "cache_creation_tokens": 631,
+    "cache_read_tokens": 135220,
+    "output_tokens": 560,
+    "api_call_count": 1
   }
 }
