@@ -39,7 +39,7 @@ class TestDiff:
                 "dpkg-query": CommandResult(0, "pkg-b\t2.0\n", ""),
             },
         )
-        probe = AptProbe(context.source, context.target)
+        probe = AptProbe(context.source, context.target, MACHINES)
 
         source_items, _origins = await probe.capture_source_items()
         target_items = await probe.query_target_items()

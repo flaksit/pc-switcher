@@ -29,6 +29,7 @@ from tests.unit.jobs.apt.helpers import (
     _SOURCE_SCAN_CMD,
     _VENDOR_LIST,
     DPKG_QUERY_3,
+    MACHINES,
     SHOWMANUAL_3,
     _policy_block,
     _repo_context,
@@ -65,7 +66,7 @@ class TestCapture:
                 "dpkg-query": CommandResult(0, DPKG_QUERY_3, ""),
             }
         )
-        probe = AptProbe(context.source, context.target)
+        probe = AptProbe(context.source, context.target, MACHINES)
 
         items, _origins = await probe.capture_source_items()
 
@@ -81,7 +82,7 @@ class TestCapture:
                 "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
             }
         )
-        probe = AptProbe(context.source, context.target)
+        probe = AptProbe(context.source, context.target, MACHINES)
 
         await probe.capture_source_items()
 
@@ -155,7 +156,7 @@ class TestHoldPinCapture:
             source_responses={"apt-mark showhold": CommandResult(0, "pkg-src-held\n", "")},
             target_responses={"apt-mark showhold": CommandResult(0, "pkg-tgt-held\n", "")},
         )
-        probe = AptProbe(context.source, context.target)
+        probe = AptProbe(context.source, context.target, MACHINES)
 
         source_holds, target_holds = await probe.collect_hold_sets()
 
@@ -1263,9 +1264,8 @@ class TestAReadThatDidNotAnswer:
         with pytest.raises(ProbeFailed) as excinfo:
             await AptSyncJob(context).plan()
 
-        # "probe on the source", not a bare "source": the path itself contains that word.
         assert "sudo cat /etc/apt/sources.list.d/vendor.list" in str(excinfo.value)
-        assert "probe on the source" in str(excinfo.value)
+        assert "probe on source-host" in str(excinfo.value)
         assert "Permission denied" in str(excinfo.value)
 
     @pytest.mark.asyncio
@@ -1289,7 +1289,7 @@ class TestAReadThatDidNotAnswer:
             await AptSyncJob(context).plan()
 
         assert "sudo cat /etc/apt/sources.list.d/gone.list" in str(excinfo.value)
-        assert "probe on the target" in str(excinfo.value)
+        assert "probe on target-host" in str(excinfo.value)
 
     @pytest.mark.asyncio
     async def test_a_removal_impact_read_that_did_not_answer_fails_the_job(self) -> None:

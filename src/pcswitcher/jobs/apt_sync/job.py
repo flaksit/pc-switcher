@@ -110,7 +110,7 @@ class AptSyncJob(PackageSyncJob):
 
     def __init__(self, context: JobContext) -> None:
         super().__init__(context)
-        self._probe = AptProbe(self.source, self.target)
+        self._probe = AptProbe(self.source, self.target, self.machines)
         self._files = TargetFiles(self.target)
         self._refresh = MetadataRefresh()
         self._esm = EsmGate(
@@ -526,7 +526,7 @@ class AptSyncJob(PackageSyncJob):
             )
         )
         pin_diffs, self._pin_contents = await diff_apt_pins(
-            self._probe.target_run, source_repo.pin_digests, target_repo.pin_digests
+            self._probe.target_run, source_repo.pin_digests, target_repo.pin_digests, self.machines
         )
         diffs.extend(pin_diffs)
         diffs.extend(diff_apt_configs(source_repo.conf_digests, target_repo.conf_digests, self.machines))

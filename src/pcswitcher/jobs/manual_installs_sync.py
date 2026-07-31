@@ -289,12 +289,12 @@ class ManualInstallsSyncJob(PackageSyncJob):
             mutates=f"create the pc-switcher config directory on {self.machines.target}",
         )
         if not mkdir.success:
-            raise RuntimeError(f"Failed to create config directory on target: {mkdir.stderr}")
+            raise RuntimeError(f"Failed to create the config directory on {self.machines.target}: {mkdir.stderr}")
 
         # send_file needs an absolute remote path, so expand the target's ~ once.
         home = await self.target.run_command("echo $HOME")
         if not home.success:
-            raise RuntimeError("Failed to get home directory on target")
+            raise RuntimeError(f"Failed to read the home directory on {self.machines.target}")
         absolute_remote_path = f"{home.stdout.strip()}/{SNIPPET_REGISTRY_RELPATH}"
         await self.target.send_file(
             source_path, absolute_remote_path, mutates=f"push the install-snippet registry to {self.machines.target}"
@@ -416,7 +416,7 @@ class ManualInstallsSyncJob(PackageSyncJob):
         require_answer(
             command,
             result,
-            Host.SOURCE,
+            self.machines.source,
             answers=len(installed_origins_by_package(result.stdout)),
             answer_noun="package block",
         )
@@ -464,7 +464,7 @@ class ManualInstallsSyncJob(PackageSyncJob):
             'find "$root" -mindepth 1 -maxdepth 1 || exit 1; done'
         )
         listing = await self.source.run_command(listing_command)
-        require_answer(listing_command, listing, Host.SOURCE)
+        require_answer(listing_command, listing, self.machines.source)
         candidates = _lines(listing.stdout)
         if not candidates:
             return []
@@ -475,7 +475,7 @@ class ManualInstallsSyncJob(PackageSyncJob):
         owned = _owned_paths_from_dpkg_s(ownership.stdout)
         if _DPKG_OWNERSHIP_WITNESS not in owned:
             raise ProbeFailed(
-                f"probe on the {Host.SOURCE.value} did not answer — `{ownership_command}` reported no owner for "
+                f"probe on {self.machines.source} did not answer — `{ownership_command}` reported no owner for "
                 f"{_DPKG_OWNERSHIP_WITNESS}, which dpkg owns on every machine, so its silence about the other "
                 f"paths is not an answer about them: {ownership.stderr.strip()}"
             )
@@ -498,7 +498,7 @@ class ManualInstallsSyncJob(PackageSyncJob):
         """
         command = "apt-mark showmanual"
         manual = await self.source.run_command(command)
-        require_answer(command, manual, Host.SOURCE)
+        require_answer(command, manual, self.machines.source)
         manual_names = _lines(manual.stdout)
         return [
             *await self._scan_no_candidate_apt_packages(manual_names),

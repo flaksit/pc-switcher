@@ -29,7 +29,7 @@ alone — measured, in a stock `ubuntu:24.04` container unless noted:
 
 from __future__ import annotations
 
-from pcswitcher.models import CommandResult, Host
+from pcswitcher.models import CommandResult
 
 __all__ = ["ProbeFailed", "require_answer"]
 
@@ -54,7 +54,7 @@ class ProbeFailed(RuntimeError):
 def require_answer(
     command: str,
     result: CommandResult,
-    host: Host,
+    machine: str,
     *,
     answers: int | None = None,
     answer_noun: str = "answer",
@@ -74,6 +74,10 @@ def require_answer(
     a set nothing could be done with anyway. A per-name absence INSIDE an answered probe is
     left alone: that is the tool saying it does not know that one name, which is evidence
     about that one request.
+
+    `machine` is a hostname, never a role: this message reaches the user through the run's
+    failure summary, where "the source" names this run's plumbing rather than either
+    computer in front of them (`PKG-FR-NAME-THE-MACHINES`).
     """
     if result.success and answers != 0:
         return
@@ -83,4 +87,4 @@ def require_answer(
         else f"exited 0 but printed no {answer_noun}, so its output is not an answer"
     )
     detail = f": {result.stderr.strip()}" if result.stderr.strip() else ""
-    raise ProbeFailed(f"probe on the {host.value} did not answer — `{command}` {condition}{detail}")
+    raise ProbeFailed(f"probe on {machine} did not answer — `{command}` {condition}{detail}")

@@ -490,14 +490,14 @@ class SnapSyncJob(PackageSyncJob):
         """
         command = "snap list --all"
         result = await self.source.run_command(command)
-        require_answer(command, result, Host.SOURCE)
+        require_answer(command, result, self.machines.source)
         return _parse_snap_list(result.stdout)
 
     async def query_target_items(self) -> Sequence[SnapItem]:  # pyright: ignore[reportIncompatibleMethodOverride]
         """The target's own `snap list --all` (same reasoning as `capture_source_items`)."""
         command = "snap list --all"
         result = await self.target.run_command(command, login_shell=False)
-        require_answer(command, result, Host.TARGET)
+        require_answer(command, result, self.machines.target)
         return _parse_snap_list(result.stdout)
 
     def _warn_sideloaded(self, host: Host, sideloaded: Sequence[SnapItem]) -> None:
@@ -588,7 +588,7 @@ class SnapSyncJob(PackageSyncJob):
         source_item = self._source_items_by_id.get(diff.item_id)
         if source_item is None:
             raise ConvergeItemFailed(
-                f"no captured source snap for {diff.label} (item_id={diff.item_id!r}); "
+                f"no snap captured from {self.machines.source} for {diff.label} (item_id={diff.item_id!r}); "
                 "was plan() run before converge()?"
             )
 

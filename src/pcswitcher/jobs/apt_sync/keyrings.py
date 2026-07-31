@@ -299,7 +299,7 @@ class Keyrings:
         )
         if not candidates:
             return
-        references = await scan_source_file_references(self._probe.target_run, Host.TARGET)
+        references = await scan_source_file_references(self._probe.target_run, self._machines.target)
         referenced = {Path(ref).name for ref in references.all_refs()}
 
         for filename in sorted(candidates - referenced):

@@ -55,9 +55,9 @@ What can still fail there is a lock, a broken apt, or a candidate set apt cannot
 
 `ProbeFailed` (`packages/probes.py`) is a `RuntimeError` deliberately outside the `ConvergeItemFailed` hierarchy, so it escapes the per-item loops in `PackageSyncJob.apply()` and propagates out of `execute()`. One type across all four jobs, because the code that must react to it is the orchestrator, which has no reason to care which manager's read went dark.
 
-What the user sees is one line naming the host, the command as it was run, why it did not answer, and the tool's own stderr:
+What the user sees is one line naming the machine by hostname (`PKG-FR-NAME-THE-MACHINES`), the command as it was run, why it did not answer, and the tool's own stderr:
 
-> probe on the source did not answer — `apt-mark showmanual` exited 100: E: Problem opening /var/lib/dpkg/status
+> probe on Atlas did not answer — `apt-mark showmanual` exited 100: E: Problem opening /var/lib/dpkg/status
 
 Naming the command verbatim is the point. The failure the old behaviour produced was a screenful of package removals with the real cause appearing nowhere.
 

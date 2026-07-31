@@ -46,8 +46,9 @@ from pcswitcher.jobs.packages.apt_policy import (
     normalise_repo_uri,
     packages_installed_from_no_repository,
 )
+from pcswitcher.jobs.packages.items import Machines
 from pcswitcher.jobs.packages.probes import require_answer
-from pcswitcher.models import CommandResult, Host
+from pcswitcher.models import CommandResult
 
 _SIGNED_BY_RE = re.compile(r"^Signed-By:\s*(?P<path>\S+)", re.IGNORECASE)
 _LEGACY_SIGNED_BY_RE = re.compile(r"signed-by=(?P<path>[^\]\s,]+)")
@@ -325,7 +326,7 @@ class RepoConflict:
 
 
 async def capture_dir_digests(
-    run: Run, directory: str, host: Host, *, extensions: Sequence[str] = ()
+    run: Run, directory: str, machine: str, *, extensions: Sequence[str] = ()
 ) -> dict[str, str]:
     """One `if sudo test -d <dir>; then sudo find <dir> -maxdepth 1 -type f -exec sha256sum
     {} +; fi` per directory — a single batched command, never one `sha256sum` per file.
@@ -363,7 +364,7 @@ async def capture_dir_digests(
         f"if sudo test -d {quoted}; then sudo find {quoted} -maxdepth 1 -type f {predicate}-exec sha256sum {{}} +; fi"
     )
     result = await run(command)
-    require_answer(command, result, host)
+    require_answer(command, result, machine)
     return parse_sha256sum(result.stdout)
 
 
@@ -379,7 +380,7 @@ async def capture_file_digest(run: Run, path: str) -> str | None:
     return parse_sha256sum(result.stdout).get(Path(path).name)
 
 
-async def read_file_content(run: Run, path: str, host: Host) -> str:
+async def read_file_content(run: Run, path: str, machine: str) -> str:
     """One `sudo cat <path>` — used only for a file a diff actually implicates.
 
     `sudo`-qualified to match `capture_dir_digests`'s `sudo find ... sha256sum`
@@ -401,11 +402,11 @@ async def read_file_content(run: Run, path: str, host: Host) -> str:
     """
     command = f"sudo cat {shlex.quote(path)}"
     result = await run(command)
-    require_answer(command, result, host)
+    require_answer(command, result, machine)
     return result.stdout
 
 
-async def scan_source_file_references(run: Run, host: Host) -> SourceFileRefs:
+async def scan_source_file_references(run: Run, machine: str) -> SourceFileRefs:
     """`{filename: (keyring_refs, repository URIs)}` for EVERY source file on a machine,
     from ONE batched command — `sources.list.d` AND `/etc/apt/sources.list`.
 
@@ -451,7 +452,7 @@ async def scan_source_file_references(run: Run, host: Host) -> SourceFileRefs:
         f"sudo find {shlex.quote(APT_ROOT_DIR)} -maxdepth 2 -type f {selector} -exec awk {shlex.quote(awk)} {{}} +"
     )
     result = await run(command)
-    require_answer(command, result, host)
+    require_answer(command, result, machine)
     lines_by_file: dict[str, list[str]] = {}
     for line in result.stdout.splitlines():
         path, tab, rest = line.partition("\t")
@@ -471,9 +472,10 @@ class AptProbe:
     storing them, so nothing here can be consulted before it was captured.
     """
 
-    def __init__(self, source: Executor, target: RemoteExecutor) -> None:
+    def __init__(self, source: Executor, target: RemoteExecutor, machines: Machines) -> None:
         self._source = source
         self._target = target
+        self._machines = machines
 
     async def source_run(self, cmd: str) -> CommandResult:
         return await self._source.run_command(cmd)
@@ -494,7 +496,7 @@ class AptProbe:
         """
         command = "apt-mark showmanual"
         result = await self._source.run_command(command)
-        require_answer(command, result, Host.SOURCE)
+        require_answer(command, result, self._machines.source)
         return lines(result.stdout)
 
     async def source_policy(self, manual_names: Sequence[str]) -> str:
@@ -523,7 +525,9 @@ class AptProbe:
         result = await self._source.run_command(command)
         # A second walk over output already in memory, so the guard can count blocks without
         # the caller having to hand its own parse back down here.
-        require_apt_answer(command, result, Host.SOURCE, blocks=len(installed_origins_by_package(result.stdout)))
+        require_apt_answer(
+            command, result, self._machines.source, blocks=len(installed_origins_by_package(result.stdout))
+        )
         return result.stdout
 
     async def capture_source_items(self) -> tuple[list[AptPackageItem], Mapping[str, frozenset[str]]]:
@@ -545,7 +549,7 @@ class AptProbe:
         policy = await self.source_policy(names)
         origins = installed_origins_by_package(policy)
         bare_debs = packages_installed_from_no_repository(policy, names)
-        items = await self._resolve_versions(names, self.source_run, Host.SOURCE)
+        items = await self._resolve_versions(names, self.source_run, self._machines.source)
         return [item for item in items if item.name not in bare_debs], origins
 
     async def query_target_items(self) -> list[AptPackageItem]:
@@ -558,11 +562,11 @@ class AptProbe:
         """
         command = "apt-mark showmanual"
         manual = await self._target.run_command(command, login_shell=False)
-        require_answer(command, manual, Host.TARGET)
-        return await self._resolve_versions(lines(manual.stdout), self.target_run, Host.TARGET)
+        require_answer(command, manual, self._machines.target)
+        return await self._resolve_versions(lines(manual.stdout), self.target_run, self._machines.target)
 
     @staticmethod
-    async def _resolve_versions(names: Sequence[str], run: Run, host: Host) -> list[AptPackageItem]:
+    async def _resolve_versions(names: Sequence[str], run: Run, machine: str) -> list[AptPackageItem]:
         """Resolve every name's version with ONE `dpkg-query` call (RESEARCH.md).
 
         Guarded on the exit code alone (ADR-022). A version this call fails to supply
@@ -584,7 +588,7 @@ class AptProbe:
         # backslash sequences for dpkg-query to expand into real tab/newline.
         versions_command = "dpkg-query --show --showformat='${Package}\\t${Version}\\n' " + quoted
         versions_result = await run(versions_command)
-        require_answer(versions_command, versions_result, host)
+        require_answer(versions_command, versions_result, machine)
 
         versions: dict[str, str] = {}
         for line in versions_result.stdout.splitlines():
@@ -609,9 +613,9 @@ class AptProbe:
         """
         command = "apt-mark showhold"
         source_hold = await self._source.run_command(command)
-        require_answer(command, source_hold, Host.SOURCE)
+        require_answer(command, source_hold, self._machines.source)
         target_hold = await self._target.run_command(command, login_shell=False)
-        require_answer(command, target_hold, Host.TARGET)
+        require_answer(command, target_hold, self._machines.target)
         return frozenset(lines(source_hold.stdout)), frozenset(lines(target_hold.stdout))
 
     async def capture_target_installed(self) -> frozenset[str]:
@@ -644,7 +648,7 @@ class AptProbe:
         result = await self._target.run_command(command, login_shell=False)
         fields = (line.partition("\t") for line in lines(result.stdout))
         installed = frozenset(name for name, _, status in fields if status == "installed")
-        require_answer(command, result, Host.TARGET, answers=len(installed), answer_noun="installed package")
+        require_answer(command, result, self._machines.target, answers=len(installed), answer_noun="installed package")
         return installed
 
     async def collect_target_policy(self, names: Sequence[str]) -> TargetPolicy:
@@ -667,7 +671,7 @@ class AptProbe:
 
         command = policy_command(sorted(names))
         result = await self._target.run_command(command, login_shell=False)
-        require_apt_answer(command, result, Host.TARGET)
+        require_apt_answer(command, result, self._machines.target)
         return TargetPolicy(
             candidate_origins=candidate_origins_by_package(result.stdout),
             installed_origins=installed_origins_by_package(result.stdout),
@@ -685,7 +689,7 @@ class AptProbe:
         """
         command = "apt-mark showmanual"
         result = await self._target.run_command(command, login_shell=False)
-        require_answer(command, result, Host.TARGET)
+        require_answer(command, result, self._machines.target)
         return frozenset(lines(result.stdout))
 
     # -- `/etc/apt` ---------------------------------------------------------------------
@@ -712,20 +716,20 @@ class AptProbe:
         # One `sha256sum` listing per key directory per machine, driven by `KEY_DIRS` so
         # capture, reference resolution and provisioning can never disagree about which
         # directories exist.
-        source_keys = {d: await capture_dir_digests(self.source_run, d, Host.SOURCE) for d in KEY_DIRS}
-        target_keys = {d: await capture_dir_digests(self.target_run, d, Host.TARGET) for d in KEY_DIRS}
+        source_keys = {d: await capture_dir_digests(self.source_run, d, self._machines.source) for d in KEY_DIRS}
+        target_keys = {d: await capture_dir_digests(self.target_run, d, self._machines.target) for d in KEY_DIRS}
 
         source_sources = await capture_dir_digests(
-            self.source_run, APT_SOURCES_DIR, Host.SOURCE, extensions=APT_SOURCE_EXTENSIONS
+            self.source_run, APT_SOURCES_DIR, self._machines.source, extensions=APT_SOURCE_EXTENSIONS
         )
         target_sources = await capture_dir_digests(
-            self.target_run, APT_SOURCES_DIR, Host.TARGET, extensions=APT_SOURCE_EXTENSIONS
+            self.target_run, APT_SOURCES_DIR, self._machines.target, extensions=APT_SOURCE_EXTENSIONS
         )
         source_list_digest = await capture_file_digest(self.source_run, APT_SOURCES_LIST)
         target_list_digest = await capture_file_digest(self.target_run, APT_SOURCES_LIST)
 
-        target_refs = await scan_source_file_references(self.target_run, Host.TARGET)
-        source_refs = await scan_source_file_references(self.source_run, Host.SOURCE)
+        target_refs = await scan_source_file_references(self.target_run, self._machines.target)
+        source_refs = await scan_source_file_references(self.source_run, self._machines.source)
 
         return (
             OriginFacts(
@@ -747,10 +751,10 @@ class AptProbe:
         digest: one batched `sha256sum` listing per directory per machine. Returns
         `(source, target)`.
         """
-        source_pins = await capture_dir_digests(self.source_run, APT_PREFERENCES_DIR, Host.SOURCE)
-        target_pins = await capture_dir_digests(self.target_run, APT_PREFERENCES_DIR, Host.TARGET)
-        source_configs = await capture_dir_digests(self.source_run, APT_CONF_DIR, Host.SOURCE)
-        target_configs = await capture_dir_digests(self.target_run, APT_CONF_DIR, Host.TARGET)
+        source_pins = await capture_dir_digests(self.source_run, APT_PREFERENCES_DIR, self._machines.source)
+        target_pins = await capture_dir_digests(self.target_run, APT_PREFERENCES_DIR, self._machines.target)
+        source_configs = await capture_dir_digests(self.source_run, APT_CONF_DIR, self._machines.source)
+        target_configs = await capture_dir_digests(self.target_run, APT_CONF_DIR, self._machines.target)
         return (
             RepoFacts(pin_digests=source_pins, conf_digests=source_configs),
             RepoFacts(pin_digests=target_pins, conf_digests=target_configs),
@@ -826,7 +830,7 @@ class AptProbe:
         names = sorted(set(names))
         command = policy_command(names)
         policy = await self.target_run(command)
-        require_apt_answer(command, policy, Host.TARGET)
+        require_apt_answer(command, policy, self._machines.target)
         origins_by_package = installed_origins_by_package(policy.stdout)
         packages_by_origin: dict[str, list[str]] = {}
         for name in names:
@@ -853,8 +857,8 @@ class AptProbe:
         conflicts: dict[str, RepoConflict] = {}
         for filename, packages in machine_specific.items():
             path = source_file_destination(filename)
-            target_version = await read_file_content(self.target_run, path, Host.TARGET)
-            source_version = await read_file_content(self.source_run, path, Host.SOURCE)
+            target_version = await read_file_content(self.target_run, path, self._machines.target)
+            source_version = await read_file_content(self.source_run, path, self._machines.source)
             conflicts[filename] = RepoConflict(
                 packages=tuple(packages), target_version=target_version, source_version=source_version
             )

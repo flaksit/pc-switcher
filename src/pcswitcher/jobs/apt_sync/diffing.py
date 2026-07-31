@@ -43,7 +43,6 @@ from pcswitcher.jobs.packages.items import (
     Machines,
     build_version_mismatch_detail,
 )
-from pcswitcher.models import Host
 
 
 @dataclass(frozen=True)
@@ -272,6 +271,7 @@ async def diff_apt_pins(
     target_run: Run,
     source_digests: Mapping[str, str],
     target_digests: Mapping[str, str],
+    machines: Machines,
 ) -> tuple[list[ItemDiff], dict[str, str]]:
     """Pin-file diffs — the REMOVAL direction only — plus each offered file's content.
 
@@ -302,7 +302,7 @@ async def diff_apt_pins(
     diffs: list[ItemDiff] = []
     contents: dict[str, str] = {}
     for filename in sorted(names.extra):
-        contents[filename] = await read_file_content(target_run, f"{APT_PREFERENCES_DIR}/{filename}", Host.TARGET)
+        contents[filename] = await read_file_content(target_run, f"{APT_PREFERENCES_DIR}/{filename}", machines.target)
         diffs.append(
             file_diff(
                 AptPinItem(filename=filename, digest=target_digests[filename]),
@@ -369,7 +369,7 @@ async def diff_apt_sources(
     diffs: list[ItemDiff] = []
 
     for filename in sorted(names.extra - DISTRO_SOURCE_FILENAMES - in_use):
-        content = await read_file_content(target_run, f"{APT_SOURCES_DIR}/{filename}", Host.TARGET)
+        content = await read_file_content(target_run, f"{APT_SOURCES_DIR}/{filename}", machines.target)
         fmt, _refs, uris = parse_source_file(filename, content)
         item = AptSourceItem(filename=filename, digest=target_digests[filename], fmt=fmt)
         diffs.append(

@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from pcswitcher.executor import Executor, RemoteExecutor
 from pcswitcher.jobs.packages.probes import require_answer
 from pcswitcher.jobs.packages.sync_core import ConvergeItemFailed
-from pcswitcher.models import CommandResult, Host
+from pcswitcher.models import CommandResult
 
 # Binaries this job runs under sudo, quoted back to the user when the passwordless-sudo
 # check fails. A lower bound on what must be permitted, not an exact scope (ADR-013).
@@ -55,7 +55,7 @@ def lines(output: str) -> list[str]:
     return [line.strip() for line in output.splitlines() if line.strip()]
 
 
-def require_apt_answer(command: str, result: CommandResult, host: Host, *, blocks: int | None = None) -> None:
+def require_apt_answer(command: str, result: CommandResult, machine: str, *, blocks: int | None = None) -> None:
     """`require_answer` with apt's own evidence for what "did not answer" means (ADR-022).
 
     Two conditions, and no others, mean apt did not answer:
@@ -71,7 +71,7 @@ def require_apt_answer(command: str, result: CommandResult, host: Host, *, block
       has already established the machine has a candidate for. A caller asking about names
       the machine may legitimately never have heard of passes nothing.
     """
-    require_answer(command, result, host, answers=blocks, answer_noun="package block")
+    require_answer(command, result, machine, answers=blocks, answer_noun="package block")
 
 
 def install_args(names: Sequence[str], *, allow_held: bool = False) -> str:

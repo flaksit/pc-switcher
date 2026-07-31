@@ -28,7 +28,7 @@ from pcswitcher.models import (
 from pcswitcher.orchestrator import Orchestrator, _summarize_job_outcomes  # pyright: ignore[reportPrivateUsage]
 from tests.unit.jobs.test_package_sync_core import make_context
 
-_MESSAGE = "probe on the target did not answer — `snap list --all` exited 1: cannot communicate with server"
+_MESSAGE = "probe on nomad did not answer — `snap list --all` exited 1: cannot communicate with server"
 _CRASH = "snippet registry transfer to the target failed: rsync exited 12"
 
 

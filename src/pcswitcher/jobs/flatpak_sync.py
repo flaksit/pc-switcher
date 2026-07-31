@@ -1245,13 +1245,13 @@ class FlatpakSyncJob(PackageSyncJob):
         is a machine with no apps — an ordinary machine, and never a failure.
         """
         result = await self.source.run_command(_FLATPAK_LIST_CMD)
-        require_answer(_FLATPAK_LIST_CMD, result, Host.SOURCE)
+        require_answer(_FLATPAK_LIST_CMD, result, self.machines.source)
         return _parse_flatpak_list(result.stdout)
 
     async def query_target_items(self) -> Sequence[FlatpakItem]:  # pyright: ignore[reportIncompatibleMethodOverride]
         """The target's own `flatpak list --app` (same reasoning as `capture_source_items`)."""
         result = await self.target.run_command(_FLATPAK_LIST_CMD, login_shell=False)
-        require_answer(_FLATPAK_LIST_CMD, result, Host.TARGET)
+        require_answer(_FLATPAK_LIST_CMD, result, self.machines.target)
         return _parse_flatpak_list(result.stdout)
 
     async def _capture_source_remotes(self, scope: Literal["user", "system"]) -> list[FlatpakRemoteItem]:
@@ -1267,14 +1267,14 @@ class FlatpakSyncJob(PackageSyncJob):
         keys = await self.source.run_command(_keyring_digests_cmd(scope))
         command = _FLATPAK_REMOTES_CMD_TEMPLATE.format(flag=_scope_flag(scope))
         result = await self.source.run_command(command)
-        require_answer(command, result, Host.SOURCE)
+        require_answer(command, result, self.machines.source)
         return _parse_flatpak_remotes(result.stdout, scope, _parse_keyring_digests(keys.stdout))
 
     async def _query_target_remotes(self, scope: Literal["user", "system"]) -> list[FlatpakRemoteItem]:
         keys = await self.target.run_command(_keyring_digests_cmd(scope), login_shell=False)
         command = _FLATPAK_REMOTES_CMD_TEMPLATE.format(flag=_scope_flag(scope))
         result = await self.target.run_command(command, login_shell=False)
-        require_answer(command, result, Host.TARGET)
+        require_answer(command, result, self.machines.target)
         return _parse_flatpak_remotes(result.stdout, scope, _parse_keyring_digests(keys.stdout))
 
     async def _capture_all_source_remotes(self) -> list[FlatpakRemoteItem]:
@@ -1295,13 +1295,13 @@ class FlatpakSyncJob(PackageSyncJob):
     async def _capture_source_masks(self, scope: Literal["user", "system"]) -> list[FlatpakMaskItem]:
         cmd = _FLATPAK_MASK_CMD_TEMPLATE.format(flag=_scope_flag(scope))
         result = await self.source.run_command(cmd)
-        require_answer(cmd, result, Host.SOURCE)
+        require_answer(cmd, result, self.machines.source)
         return _parse_flatpak_masks(result.stdout, scope)
 
     async def _query_target_masks(self, scope: Literal["user", "system"]) -> list[FlatpakMaskItem]:
         cmd = _FLATPAK_MASK_CMD_TEMPLATE.format(flag=_scope_flag(scope))
         result = await self.target.run_command(cmd, login_shell=False)
-        require_answer(cmd, result, Host.TARGET)
+        require_answer(cmd, result, self.machines.target)
         return _parse_flatpak_masks(result.stdout, scope)
 
     async def _capture_all_source_masks(self) -> list[FlatpakMaskItem]:
@@ -1327,7 +1327,7 @@ class FlatpakSyncJob(PackageSyncJob):
         exit code for the same measured reason `capture_source_items` is.
         """
         result = await self.source.run_command(_FLATPAK_ALL_REFS_CMD)
-        require_answer(_FLATPAK_ALL_REFS_CMD, result, Host.SOURCE)
+        require_answer(_FLATPAK_ALL_REFS_CMD, result, self.machines.source)
         return {(item.scope, item.ref): item.origin for item in _parse_flatpak_list(result.stdout)}
 
     async def _capture_source_runtimes(self, source_refs: Sequence[FlatpakItem]) -> dict[str, str]:
@@ -1345,7 +1345,7 @@ class FlatpakSyncJob(PackageSyncJob):
         for item in source_refs:
             cmd = _FLATPAK_RUNTIME_CMD_TEMPLATE.format(flag=_scope_flag(item.scope), ref=shlex.quote(item.ref))
             result = await self.source.run_command(cmd)
-            require_answer(cmd, result, Host.SOURCE)
+            require_answer(cmd, result, self.machines.source)
             runtime = result.stdout.strip()
             if runtime:
                 runtimes[item.item_id] = runtime
@@ -2096,7 +2096,7 @@ class FlatpakSyncJob(PackageSyncJob):
             source_item = self._source_refs_by_id.get(diff.item_id)
             if source_item is None:
                 raise ConvergeItemFailed(
-                    f"no captured source ref for {diff.label} (item_id={diff.item_id!r}); "
+                    f"no ref captured from {self.machines.source} for {diff.label} (item_id={diff.item_id!r}); "
                     "was plan() run before converge()?"
                 )
             # D-39 first: a derived write that failed has no item of its own, and its own
@@ -2284,7 +2284,7 @@ class FlatpakSyncJob(PackageSyncJob):
         run's successful removals are already absent from it.
         """
         result = await self.target.run_command(_FLATPAK_ALL_REFS_CMD, login_shell=False)
-        require_answer(_FLATPAK_ALL_REFS_CMD, result, Host.TARGET)
+        require_answer(_FLATPAK_ALL_REFS_CMD, result, self.machines.target)
         return _parse_flatpak_list(result.stdout)
 
     async def _origin_refusal(self, scope: str, origin: str) -> str | None:
@@ -2347,7 +2347,7 @@ class FlatpakSyncJob(PackageSyncJob):
         passes it.
         """
         result = await self.target.run_command(_FLATPAK_LIST_CMD, login_shell=False)
-        require_answer(_FLATPAK_LIST_CMD, result, Host.TARGET)
+        require_answer(_FLATPAK_LIST_CMD, result, self.machines.target)
         landed = next(
             (item for item in _parse_flatpak_list(result.stdout) if item.scope == scope and item.ref == ref), None
         )
