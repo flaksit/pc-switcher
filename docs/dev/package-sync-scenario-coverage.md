@@ -1,0 +1,1757 @@
+# Package sync — scenario coverage
+
+Every situation the package sync requirements distinguish, with the test that proves each one. Sections A–K enumerate single-run branches; section N composes them into the behaviours that only appear across runs or when the two machines swap roles.
+
+## Navigation
+
+- [Package sync — user requirements](../planning/package-sync-user-requirements.md) — the intent every scenario here comes from
+- [Package sync conformance criteria](../planning/package-sync-conformance-criteria.md) — the 130 articles each section decomposes
+- [Package sync specification](../system/package-sync.md) — how the behaviour is built
+- [Package sync job behaviour](../jobs/package-sync.md) — what the user sees
+- [Testing guide](testing-guide.md) — how to write the tests named here
+
+## Who this is for
+
+- **Writing a test**: find the branch, write the test the Cov column says is missing, put the scenario id in the test's docstring.
+- **Validating by hand**: the Scenario column is the situation to set up; the Expected column is what to look for. Rows marked `‼` are where the tool knowingly does not do what the requirements say.
+- **Validating by reading**: the Test column is the proof. A row with no test is unproven behaviour, whether or not the code looks right.
+
+## How this document is kept true
+
+Scenarios are derived from the requirements, never from the code's control flow. A branch is a situation the requirements say produces a distinguishable outcome: every "except", "unless", "where X", every ordering an article fixes, every failure an article names. Where the code disagrees with an article, the row keeps the article's wording and is marked `‼`.
+
+Where an article forbids something, the scenario asserts the absence. Those rows matter most — nothing else stops a later change from re-introducing what the requirements ruled out.
+
+A scenario id is stable. Tests cite it in their docstring, so renumbering breaks the cross-reference; add new ids at the end of a section instead. Coverage marks state what was verified by reading the test, not what its name suggests.
+
+## Legend
+
+| Mark | Meaning |
+| --- | --- |
+| U | a unit test asserts this branch |
+| V | a VM integration test asserts this branch |
+| P | partial — a test is close, but one named aspect is unasserted |
+| — | nothing asserts it |
+| ‼ | the code does not do what the requirement says, or the requirement is knowingly unmet |
+
+`U V` where both exist. Evidence is symbol names, because the code moves; module shorthands are listed with each part.
+
+## A. Apt package identity, presence, version and origin
+
+### A.1 What becomes an item (articles: PKG-FR-APT-SCOPE, PKG-FR-DEB-OWNERSHIP)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| A1 | `pkg-a` is in Atlas's `apt-mark showmanual` and absent from Nomad's | One install item for `pkg-a`; approving it installs it on Nomad | U V | `test_apt_diffing:TestDiff::test_diff_yields_exactly_two_missing_items`; `test_package_sync:TestAptSyncEndToEnd::test_apt_sync_installs_missing_package` |
+| A2 | `libdep` is installed on Atlas only as a dependency — dpkg knows it, `apt-mark showmanual` does not | No item of any kind, and no command on Nomad ever names it | U | `test_apt_probe:TestManifestIsShowmanualOnly::test_auto_installed_dependency_produces_no_diff_of_any_kind` |
+| A3 | `auto-dep` is installed on Nomad as a dependency (absent from Nomad's `showmanual`) and Atlas does not have it | No removal item | — | — |
+| A4 | Atlas's `apt-mark showmanual` answers zero lines at exit 0; Nomad has `pkg-a`, `pkg-b` | Both are removal items in a removal-direction group, none pre-approved | U | `test_apt_probe:TestManifestIsShowmanualOnly::test_empty_source_manifest_offers_every_target_package_as_an_unticked_removal` |
+| A5 | Atlas's `apt-mark showmanual` exits non-zero | The apt job fails naming the command; silence is not read as "Atlas has no packages" | U | `test_apt_probe:TestAReadThatDidNotAnswer::test_a_source_manual_set_read_that_did_not_answer_fails_the_job` |
+| A6 | Nomad's `apt-mark showmanual` exits non-zero | Same, naming Nomad | U | `test_apt_probe:TestAReadThatDidNotAnswer::test_a_target_manifest_read_that_did_not_answer_fails_the_job` |
+| A7 | Atlas's manual set is genuinely empty and the read exits 0 | Ordinary data — the run proceeds to A4's removals, it does not fail | U | `test_apt_probe:TestAReadThatDidNotAnswer::test_an_empty_source_manual_set_at_exit_zero_is_still_data` |
+| A8 | The `dpkg-query` version read on either machine exits non-zero | The apt job fails; no name gets an empty version that would read as drift | U | `test_apt_probe:TestAReadThatDidNotAnswer::test_a_version_read_that_did_not_answer_fails_the_job` |
+| A9 | `code` is installed on Atlas from a hand-downloaded `.deb` — its installed version comes from no configured repository | No item, no review line, no `apt-get install` anywhere in the run | U | `test_apt_probe:TestBareDebPackagesAreNotAptSyncsBusiness::test_bare_deb_package_produces_no_diff_and_no_review_entry`, `::test_bare_deb_package_reaches_no_apt_get_install` |
+| A10 | Atlas's manual set holds `code` (hand `.deb`), `gh` (vendor repo), `docker.io` (pinned), `7zip` (also an auto dep elsewhere) | Only `code` is dropped; the other three are items. One batched `apt-cache policy` covers all four | U | `test_apt_probe:TestBareDebPackagesAreNotAptSyncsBusiness::test_one_source_policy_call_covers_the_whole_manual_set` |
+| A11 | Atlas's policy answers, but prints no block for `ghost-pkg` | `ghost-pkg` is NOT dropped — silence inside an answered probe is not evidence of a hand `.deb` | U | `test_apt_probe:TestBareDebPackagesAreNotAptSyncsBusiness::test_a_name_an_answered_policy_printed_no_block_for_is_not_excluded` |
+| A12 | Atlas's `apt-cache policy` exits 100 while still printing a parseable block | The run fails naming the command and the exit code; nothing is dropped and nothing is exempted from the origin check | U | `test_apt_probe:TestBareDebPackagesAreNotAptSyncsBusiness::test_a_source_policy_that_did_not_run_fails_the_run_naming_the_command` |
+| A13 | Atlas's `apt-cache policy` exits 0 and prints no block at all over names apt owes a block for | The run fails saying apt printed no package block | U | `test_apt_probe:TestBareDebPackagesAreNotAptSyncsBusiness::test_a_source_policy_that_printed_nothing_at_all_fails_the_run` |
+| A14 | `code` was installed from a hand `.deb` on Atlas AND is in Nomad's `apt-mark showmanual` | No item at all | ‼ | — |
+| A15 | `code` is in Nomad's `apt-mark showmanual` from a hand `.deb`; Atlas does not have it | Per PKG-FR-DEB-OWNERSHIP, no apt item; per PKG-FR-APT-REMOVE, a removal item. The two articles collide — see Notes | ‼ | — |
+| A16 | A package dropped as a hand `.deb` at capture | It reaches neither the plan-time `apt-get --dry-run` batch nor the target's `apt-cache policy` probe | U | `test_apt_probe:TestBareDebPackagesAreNotAptSyncsBusiness::test_excluded_package_reaches_neither_the_simulation_nor_the_availability_probe` |
+
+### A.2 Where a package comes from, and what "the distribution" means per machine (articles: PKG-FR-APT-IDENTITY, PKG-FR-DISTRO-ORIGIN)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| A17 | Atlas has `firefox` installed from Mozilla while its apt candidate is Ubuntu's transitional build | The origin recorded for Atlas is the INSTALLED row's (`***`), never the candidate row's | U | `test_apt_probe:TestOriginCapture::test_the_source_origin_map_holds_the_installed_row_not_the_candidate_one`; `test_apt_policy:TestInstalledOriginsUnderTheSharedWalk::test_only_the_installed_rows_origins_count` |
+| A18 | Atlas's whole manual set needs both its origins and its hand-`.deb` exclusion answered | One `apt-cache policy` call for the machine, parsed twice — never one call per package and never one per question | U | `test_apt_probe:TestOriginCapture::test_the_source_policy_call_answers_both_questions_asked_of_it` |
+| A19 | An installed package's policy block lists `/var/lib/dpkg/status` alongside a repository | `/var/lib/dpkg/status` is not counted as an origin | U | `test_apt_policy:TestCandidateOrigins::test_a_candidate_supplied_only_by_dpkg_has_an_empty_origin_set` |
+| A20 | A `.sources` file writes `URIs: https://vendor.example.com/apt/` while apt prints the origin without the trailing slash | The two match, so the file is found to serve the origin | U | `test_apt_job:TestRepoRemovalWithheldWhileInUse::test_deb822_uris_match_the_policy_origin_despite_the_trailing_slash`; `test_apt_policy:TestNormaliseRepoUri::test_the_trailing_slash_apt_strips_is_stripped` |
+| A21 | Atlas's `ubuntu.sources` names `ftp.belnet.be/ubuntu` | That URI counts as a distribution origin FOR ATLAS; Nomad's own distribution files decide Nomad's | U | `test_apt_probe:TestOriginCapture::test_distribution_origins_come_from_the_machines_own_distribution_files` |
+| A22 | Atlas has a file the user named `ubuntu-esm-mine.sources` | It is not a distribution file, so its URIs are a vendor origin | U | `test_apt_probe:TestOriginCapture::test_a_user_named_esm_lookalike_is_not_a_distribution_file` |
+| A23 | Atlas is on `ftp.belnet.be/ubuntu`, Nomad on `archive.ubuntu.com/ubuntu`, both with `pkg-a` from the archive | One origin, not two: no origin divergence for any package | U | `test_apt_origins:TestOriginClassification::test_two_machines_on_different_ubuntu_mirrors_produce_no_origin_mismatch` |
+| A24 | Atlas declares an origin in two source files, one of which also declares another repository | Every file declaring the origin is taken as serving it — the union, not a pick | U | `test_apt_probe:TestOriginCapture::test_source_files_serving_is_the_union_of_every_file_declaring_an_origin` |
+| A25 | Atlas has an origin no file on Atlas declares | No file serves it | U | `test_apt_probe:TestOriginCapture::test_an_origin_no_file_declares_serves_from_nowhere` |
+
+### A.3 Installing — every edge of the Installing flowchart (articles: PKG-FR-APT-ORIGIN-DISCLOSURE, PKG-FR-APT-ORIGIN-DERIVED, PKG-FR-APT-ORIGIN-UNREPLICABLE, PKG-FR-APT-ORIGIN-VERIFY)
+
+Flowchart edges are named in the Scenario column as `A→B`, `B→C`, etc.
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| A26 | `A→B`. `pkg-a` is on Atlas and absent on Nomad | The origin question is asked for it; a package present on both never has its serving files looked up | U | `test_apt_origins:TestOriginClassification::test_same_origin_install_derives_no_repository_write` (source_files skipped for the present-on-both case is structural in `OriginClassifier.classify`) |
+| A27 | `B→C`. Atlas has `pkg-a` from its own `ubuntu.sources` mirror | Ordinary install; the review line names no origin | U | `test_apt_origins:TestOriginClassification::test_a_distribution_origin_install_names_no_origin` |
+| A28 | `B→D→C`. Atlas has `pkg-a` from `vendor.example.com`, and Nomad's own candidate already comes from `vendor.example.com` | Ordinary install; no repository file is derived | U | `test_apt_origins:TestOriginClassification::test_same_origin_install_derives_no_repository_write` |
+| A29 | `B→D→E→F`. Atlas has Mozilla's `firefox`; Nomad's candidate is Ubuntu's epoch-1 transitional build | Install offered, naming `packages.mozilla.org/apt`, and Atlas's `mozilla.sources` is what the approval carries | U | `test_apt_origins:TestOriginClassification::test_different_origin_install_derives_the_sources_own_repository` |
+| A30 | `B→D→E→F`, class 3. Nomad's apt has never heard the name (`apt-get --dry-run` exits 100 "Unable to locate package") | Still an install item; the plan-time rehearsal excludes the name instead of aborting the whole plan, and the user sees the package | U V | `test_apt_origins:TestAPackageTheTargetCannotResolveYet::test_plan_survives_a_candidate_the_targets_apt_cannot_locate`, `::test_the_resolvable_candidates_are_still_rehearsed_and_still_protected`; `test_package_sync:TestAptSyncEndToEnd::test_a_package_the_targets_apt_cannot_locate_still_reaches_the_review` |
+| A31 | Nomad answers `Candidate: (none)` and apt names no repository origin for Atlas's copy | Report only — apt answered, and its answer was no | U | `test_apt_origins:TestAPackageTheTargetCannotResolveYet::test_an_explicit_no_candidate_is_excluded_on_the_same_evidence`, `TestOriginOutcome::test_an_explicit_no_candidate_with_no_origin_to_replicate_is_unreplicable` |
+| A32 | Nomad's policy printed no block at all for the name, and apt names no repository origin for Atlas's copy | Still an install — apt's silence condemns nothing at plan time | U | `test_apt_origins:TestOriginOutcome::test_apt_silence_on_the_target_does_not_condemn_a_package`; `test_apt_probe:TestBareDebPackagesAreNotAptSyncsBusiness::test_repo_installed_package_the_target_has_never_heard_of_is_still_offered` |
+| A33 | `E→G`, cause 1. Atlas has `pkg-a` from `gone.example.com`, and no file in Atlas's `/etc/apt` declares that URI any more | Report only, naming the origin and saying no repository file on Atlas declares it; no `apt-get install` | U | `test_apt_origins:TestOriginClassification::test_unreplicable_origin_is_report_only_naming_the_origin`; `test_apt_diffing:TestDiffEngine::test_an_origin_no_source_file_declares_yields_repo_unavailable_not_install` |
+| A34 | `E→G`, cause 2. The only file declaring the origin has `signed-by=/etc/apt/keyrings/vendor.gpg` and Atlas holds no such key | Report only, naming the file and the missing keyring | U | `test_apt_origins:TestOriginClassification::test_a_dangling_keyring_makes_the_package_unavailable` |
+| A35 | Two files declare the origin, one with a dangling key and one sound | Replicable — one writable file is enough | U | `test_apt_origins:TestOriginClassification::test_one_writable_serving_file_is_enough` |
+| A36 | A package reported under `E→G` | No repository file is derived for it (a report-only item derives nothing) | P | `test_apt_origins:TestOriginClassification::test_unreplicable_origin_is_report_only_naming_the_origin` asserts no install, not the empty derived set |
+| A37 | An install would come from `https://packages.mozilla.org/apt/` | The review names `packages.mozilla.org/apt` — scheme stripped, full path kept (not the bare host) | U | `test_apt_messages:TestOriginDetailWording::test_origin_detail_strips_the_scheme_and_names_the_full_path` |
+| A38 | An install would come from two vendors at once | Both are named, comma-separated and sorted | U | `test_apt_messages:TestOriginDetailWording::test_several_vendors_are_named_comma_separated` |
+| A39 | An install would come from the distribution | No origin text at all | U | `test_apt_messages:TestOriginDetailWording::test_origin_detail_is_omitted_for_a_distribution_origin` |
+| A40 | The origin URL carries a credential (`https://user:pw@repo.example.com/apt`) | The userinfo is withheld wherever the user reads the origin | P | `test_redaction` covers the redactor; no test asserts an apt origin detail or label passes through it |
+| A41 | `F→H→I`. After the run's single `apt-get update`, Nomad's candidate for `firefox` comes from `packages.mozilla.org` | The install runs | U | `test_apt_origins:TestOriginEnforcement::test_an_origin_the_converged_target_now_offers_lets_the_install_through` |
+| A42 | `F→H→J`. The repository did not land or did not win, and Nomad's candidate is still Ubuntu's build | That one install is refused, naming BOTH origins; no `apt-get install` for it | U | `test_apt_origins:TestOriginEnforcement::test_install_is_refused_when_the_post_update_candidate_is_from_the_wrong_origin`; `test_apt_messages:TestOriginRefusalWording::test_both_the_wanted_and_the_offered_origin_are_named` |
+| A43 | `J` and the rest of the run. `pkg-a` is refused; `pkg-b` from the same vendor checks out | `pkg-b` installs; only `pkg-a` is reported failed | U | `test_apt_origins:TestOriginEnforcement::test_a_name_the_answered_verification_skipped_refuses_only_that_install` |
+| A44 | Nomad's verification answers, but prints no block for `pkg-a` | `pkg-a` is refused, and the refusal says Nomad offers it from no repository at all | U | `test_apt_origins:TestOriginEnforcement::test_a_name_the_answered_verification_skipped_refuses_only_that_install`; `test_apt_messages:TestOriginRefusalWording::test_a_target_with_no_candidate_origin_says_so_rather_than_naming_nothing` |
+| A45 | Three approved vendor installs | The verification is one batched `apt-cache policy` after the refresh — never one per package | U | `test_apt_origins:TestOriginEnforcement::test_the_origin_verification_costs_one_batched_policy_call` |
+| A46 | The verification happens after repository convergence and before the first install | The policy call falls after the run's `sudo apt-get update`, and a refused package never reaches a real install command | U | `test_apt_origins:TestOriginEnforcement::test_the_origin_verification_costs_one_batched_policy_call` (helper `_policy_calls_after_the_update`), `::test_install_is_refused_when_the_post_update_candidate_is_from_the_wrong_origin` |
+| A47 | `pkg-b` was left unticked | It is neither refused nor named in the verification command | U | `test_apt_origins:TestOriginEnforcement::test_a_skipped_install_is_never_named_in_the_verification` |
+| A48 | Every origin of Atlas's copy is one of Atlas's own distribution origins | The package is exempt — no verification call is issued at all, whatever mirror Nomad answers with | U | `test_apt_origins:TestOriginEnforcement::test_a_distribution_origin_package_is_not_origin_verified` |
+| A49 | The verification probe exits non-zero over three approved vendor installs | ONE job-level failure naming the command; not three provenance failures, and nothing installs | U | `test_apt_origins:TestOriginEnforcement::test_a_verification_probe_that_did_not_answer_fails_once_not_per_package` |
+| A50 | The verification probe exits 0 and prints no block at all | Same: one failure saying apt printed no package block; nothing installs | U | `test_apt_origins:TestOriginEnforcement::test_a_verification_probe_that_printed_nothing_fails_once_not_per_package` |
+| A51 | Approving `pkg-a` carries Atlas's `foo.sources` and its key; both land and the install proceeds | The user is asked exactly once for the whole run — no separate question for the repository, and none after it lands | U | `test_apt_job:TestOneReviewPerRun::test_a_package_the_target_had_no_candidate_for_is_installed_in_one_review` |
+
+### A.4 Removing (article: PKG-FR-APT-REMOVE)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| A52 | Nomad has `pkg-extra` in its manual set and Atlas does not | A removal item; approving it issues `apt-get remove` for that package alone, and no install | U | `test_apt_packages:TestRemovalConverge::test_remove_diff_issues_real_apt_get_remove_for_that_package_alone` |
+| A53 | A removal is approved | The command removes without purging the package's configuration | P | `test_apt_packages:TestRemovalConverge::test_remove_diff_issues_real_apt_get_remove_for_that_package_alone` matches `apt-get remove` by substring; nothing asserts `purge` is absent (`test_snap_sync:::test_removal_never_passes_purge` is the shape this needs) |
+| A54 | The same removal item across three runs: proposed, left undecided, then approved | Undecided leaves the package installed; approved removes it | V | `test_package_sync:TestCrossDirectionRoundTrips::test_install_propagates_then_reversed_removal_needs_approval` |
+| A55 | Two approved removals where the first's transaction also takes the second | The first proceeds — an approved removal is not unapproved collateral | U | `test_apt_packages:TestRemovalGuard::test_both_removals_approved_the_first_proceeds` |
+
+### A.5 Reporting without acting (articles: PKG-FR-APT-SAME, PKG-FR-APT-VERSION-DIFF, PKG-FR-APT-ORIGIN-DIFF, PKG-FR-VERSION-FLOAT, PKG-NG-VERSION-CONVERGE, PKG-NG-ORIGIN-CONVERGE, PKG-NG-APT-IDENTICAL)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| A56 | `pkg-a` is on both machines at the same version from the same origin | No item at all | U V | `test_apt_diffing:TestDiffEngine::test_equal_versions_yields_no_diff`; `test_package_sync:TestPackageSyncIdempotency::test_second_consecutive_sync_has_nothing_to_do` |
+| A57 | `pkg-a` is 1.0 on Atlas and 2.0 on Nomad, same origin | A report naming both versions; no install, no upgrade, no downgrade | U | `test_apt_diffing:TestDiffEngine::test_version_mismatch_yields_report_only_with_both_versions` |
+| A58 | An install is approved for a package neither machine holds | The command installs by NAME, with no `=<version>` — Nomad's own repositories decide the version | P | `test_apt_packages:TestConverge::test_only_apply_decision_installs_skip_once_never_sent` asserts the install runs; the fixture matcher is substring-based, so a stray `=<version>` would still pass. Only the held-package path (`TestAHeldPackageIsInstalledAtTheSourcesVersion::test_the_install_names_the_sources_version`) asserts a version IS named |
+| A59 | `pkg-a` is on both machines at the same version, Atlas's from `vendor.example.com` and Nomad's from `rival.example.com` | Reported as an origin divergence naming both; report-only, converged by nothing | U | `test_apt_origins:TestOriginClassification::test_divergent_vendor_provenance_reports_origin_mismatch` |
+| A60 | `pkg-a` is from two different vendors AND at two different versions | The origin divergence is what is reported; the version difference is not | — | — (the one test above uses 1.0 on both sides, so the precedence branch is unexercised) |
+| A61 | `pkg-a` comes from `ftp.belnet.be/ubuntu` on Atlas and `archive.ubuntu.com/ubuntu` on Nomad | No origin divergence | U | `test_apt_origins:TestOriginClassification::test_two_machines_on_different_ubuntu_mirrors_produce_no_origin_mismatch` |
+| A62 | Atlas has `gh` from `cli.github.com` and Nomad has `gh` from the Ubuntu archive — the requirement's own example | An origin divergence naming both | ‼ | — (`origins.is_origin_mismatch` requires a vendor origin on BOTH sides, so a vendor-versus-distribution split is never raised) |
+| A63 | Same as A62, and both copies are at the same version string | Per A62 this should still be a divergence | ‼ | — (no item at all is produced) |
+| A64 | A report-only finding of any kind (version, origin, unreplicable origin) | No converge command is issued for it | U | `test_apt_origins:TestOriginClassification::test_unreplicable_origin_is_report_only_naming_the_origin` (asserts no `apt-get install`); `REPORT_ONLY` is skipped by the base loop |
+| A65 | Atlas has a repository file Nomad lacks that feeds no package this run syncs | Nothing about it is written and nothing about it is reviewed — the two `/etc/apt` trees are converged for what packages need, not made identical | V | `test_package_sync:TestAptSyncEndToEnd::test_apt_repository_state_dry_run_previews_derived_writes_and_reviews_no_repository` |
+
+### A.6 The commands and the version arithmetic behind the facts
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| A66 | The installed version of every package in a machine's manual set is needed | One `dpkg-query --show --showformat='${Package}\t${Version}\n'` per machine — never `apt list --installed`, never one call per package | U | `test_apt_probe:TestCapture::test_capture_source_items_returns_three_items_with_versions`, `::test_dpkg_query_used_not_apt_list_installed` |
+| A67 | Whether two dpkg version strings differ at all | Decided by string inequality of the two `dpkg-query` answers — no ordering is needed to say "different" | U | `test_apt_diffing:TestDiffEngine::test_version_mismatch_yields_report_only_with_both_versions`, `::test_equal_versions_yields_no_diff` |
+| A68 | Which of two versions is newer (epoch, tilde, Debian revision) | Delegated to `dpkg --compare-versions`: `2:1.0` outranks `10.0`, `1.0-1` is below `1.0-2` | U | `test_apt_commands:TestCompareDebVersions::test_gt_for_epoch_beats_larger_upstream_number`, `::test_lt_for_debian_revision_ordering`, `::test_real_dpkg_confirms_epoch_and_revision_ordering` |
+| A69 | Two byte-identical version strings compared | Equal, with no subprocess at all | U | `test_apt_commands:TestCompareDebVersions::test_equal_for_identical_strings_without_a_second_executor_call` |
+| A70 | A version string containing shell metacharacters | Both operands are quoted before they reach the shell | U | `test_apt_commands:TestCompareDebVersions::test_shells_out_with_shlex_quoted_operands` |
+| A71 | The version Nomad would install for a held package that could not be obtained | Read from the named block's own `Candidate:`, `(none)` and "no block" both reading as no version | U | `test_apt_commands:TestCandidateVersion::test_the_named_blocks_own_candidate_and_not_a_neighbours`, `::test_apt_saying_it_will_install_nothing_reads_as_no_version`, `::test_a_name_apt_printed_no_block_for_reads_as_no_version` |
+| A72 | Nomad's candidate origins for the whole of Atlas's package set are needed | One batched `apt-cache policy` on Nomad over Atlas's names, parsed for both the candidate and the installed rows | U | `test_apt_probe:TestUnavailableCapture::test_one_batched_policy_call_covers_every_package`; `test_apt_policy:TestCandidateOrigins::test_candidate_origins_come_from_the_candidate_row_not_the_installed_one` |
+| A73 | That target policy read exits non-zero | The job fails naming the command | U | `test_apt_probe:TestAReadThatDidNotAnswer::test_a_target_policy_read_that_did_not_answer_fails_the_job` |
+| A74 | That target policy read answers, knowing none of Atlas's names | Ordinary data — no block is owed for a name the target may legitimately never have heard of | U | `test_apt_probe:TestAReadThatDidNotAnswer::test_a_target_policy_that_knows_none_of_the_source_names_is_data` |
+
+
+## B. Apt holds
+
+### B.1 The hold is its own item (articles: PKG-FR-BLOCKS-REPLICATE — apt half, PKG-FR-APT-HOLD-ITEM)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| B1 | Atlas holds `pkg-a`; Nomad has `pkg-a` at the same version and does not hold it | One item, `pkg-a (hold)`, in a group whose verb is "hold"; approving it registers the hold on Nomad and issues no install or upgrade | U | `test_apt_packages:TestAptHold::test_source_held_yields_install_hold_item_and_converge_runs_apt_mark_hold`; `test_apt_diffing:TestDiffEngine::test_source_hold_only_yields_apt_hold_install` |
+| B2 | Nomad holds `pkg-a` (and has it); Atlas has `pkg-a` and does not hold it | One item, `pkg-a (hold)`, in an "unhold" group; approving it removes the hold from Nomad | U | `test_apt_packages:TestAptHold::test_target_held_only_yields_remove_unhold_item`; `test_apt_diffing:TestDiffEngine::test_target_hold_only_yields_apt_hold_remove_and_suppresses_package_action` |
+| B3 | Both machines hold `pkg-a` and both have it | No hold item at all | U | `test_apt_packages:TestAptHold::test_held_on_both_yields_no_hold_diff`; `test_apt_diffing:TestDiffEngine::test_held_on_both_yields_no_diff` |
+| B4 | Neither machine holds anything | No hold item at all | U | `test_apt_diffing:TestDiffEngine::test_equal_versions_yields_no_diff` |
+| B5 | One run carrying an install, a removal, a hold add and a hold removal | The two hold items sit in their own groups reading "hold"/"unhold"; the package items keep "install"/"remove", and no hold appears under a package group | U | `test_apt_job:TestHoldReviewVerbs::test_hold_items_get_their_own_group_with_hold_and_unhold_verbs` |
+| B6 | The same run's hold group and unhold group | The unhold group is removal-direction (rows start unticked); the hold group is not | U | `test_apt_job:TestHoldReviewVerbs::test_unhold_group_is_removal_direction_and_the_hold_group_is_not` |
+| B7 | Atlas holds `pkg-a`, Nomad lacks it; the user approves the install and declines the hold | `pkg-a` is installed on Nomad at Atlas's version and is left unheld — the two decisions are independent in that direction too | — | none |
+| B8 | A hold-only run (no package work) | No `apt-get --dry-run` is issued at plan time or at apply time — a hold is selection state, not a transaction | U | `test_apt_packages:TestHoldsDriveNoSimulation::test_hold_only_run_issues_zero_apt_get_simulations` |
+| B9 | The approved hold names something apt has never heard of, so `apt-mark` exits non-zero | That item alone fails; every other approved item in the run still converges | U | `test_apt_packages:TestHoldOnAnAbsentPackage::test_failed_apt_mark_hold_fails_only_that_item` |
+| B10 | A hold add offered in the review | The permanent answer is available for it ("never hold") | U | `test_review_skip_always:TestBlockStateItemsArePromotable::test_hold_add_direction_can_be_made_permanent` |
+
+### B.2 A package Nomad has and holds (article: PKG-FR-APT-HELD-TARGET, first half)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| B11 | `pkg-a` on both, Nomad holds it, versions differ | No package item of any kind — not an install, not an upgrade, not a version-difference report; the hold is the only item | U | `test_apt_packages:TestAptHold::test_held_package_yields_hold_item_not_a_duplicate_package_report`; `test_apt_diffing:TestDiffEngine::test_target_hold_only_yields_apt_hold_remove_and_suppresses_package_action` |
+| B12 | `pkg-a` on both, both hold it, Nomad has it | The run proposes nothing at all | U | `test_apt_packages:TestAStaleTargetHoldDoesNotStrandThePackage::test_a_hold_on_a_package_the_target_has_still_suppresses_its_install` |
+| B13 | Nomad holds `pkg-a`, which apt installed there automatically (so it is outside Nomad's manual set); Atlas has it manually | Still no install item; the hold is still an item | U | `test_apt_diffing:TestDiffEngine::test_a_held_package_outside_the_targets_manual_set_is_still_not_proposed` |
+| B14 | Nomad has and holds `pkg-a`; Atlas does not have it at all | No removal item for `pkg-a` (it produces no package-level item in any direction); the unhold is offered | — | none |
+| B15 | A version difference on a package Nomad holds | Never converged and never reported as a package item — the hold item is the whole of what the user sees | U | same as B11 |
+
+### B.3 A hold naming a package the machine does not have (article: PKG-FR-APT-HELD-TARGET, second half)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| B16 | Nomad records a hold for `pkg-a` but does not have `pkg-a`; Atlas has it and holds it | `pkg-a` is offered for install like any other package, and its hold is offered as a second item that lands after the install | U | `test_apt_diffing:TestDiffEngine::test_a_hold_for_a_package_the_target_lacks_still_proposes_the_install` |
+| B17 | Same, but Atlas does not hold `pkg-a` | `pkg-a` is offered for install, and Nomad's own bookkeeping hold is offered for removal | U | `test_apt_diffing:TestDiffEngine::test_a_stale_hold_the_source_does_not_share_proposes_install_and_unhold` |
+| B18 | Nomad records a hold for `pkg-a`; neither machine has `pkg-a` installed | No package item; the hold is still offered for removal (Nomad carries selection state Atlas does not) | — | none |
+| B19 | Approved install of a package Nomad holds without having, run through | Nomad's bookkeeping hold is cleared, then the package is installed, then the hold Atlas asked for is registered — in that order | U | `test_apt_packages:TestAStaleTargetHoldDoesNotStrandThePackage::test_the_stale_hold_is_cleared_the_package_installed_and_the_hold_restored` |
+| B20 | Planning a run whose install batch contains a name Nomad holds without having | Planning still produces its collateral findings instead of ending on apt's refusal of the whole batch | U | `test_apt_collateral:TestTheRehearsalSurvivesAStaleTargetHold::test_the_install_rehearsal_asks_apt_to_allow_the_held_name` |
+| B21 | Planning a run with no such name | Nothing in the run asks apt to move held packages | U | `test_apt_collateral:TestTheRehearsalSurvivesAStaleTargetHold::test_an_ordinary_run_never_asks_for_it` |
+
+### B.4 The exact-version obligation (article: PKG-FR-APT-HOLD-VERSION)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| B22 | Atlas holds `pkg-a` at 1.0; Nomad lacks it and its repositories offer 1.0 | The install asks for 1.0 by name, not for whatever Nomad's repositories currently offer | U | `test_apt_packages:TestAHeldPackageIsInstalledAtTheSourcesVersion::test_the_install_names_the_sources_version` |
+| B23 | Atlas holds `pkg-a` at 1.0; Nomad's repositories offer only 2.0 | That install fails as its own item, naming 1.0 as Atlas's version and 2.0 as what Nomad offers; the rest of the run continues | U | `test_apt_packages:TestAHeldPackageIsInstalledAtTheSourcesVersion::test_a_version_the_target_cannot_supply_fails_naming_both` |
+| B24 | Same | No install of `pkg-a` at any other version is attempted | P | same test — it asserts the absence of the *version-pinned* command only, so a fallback to an unpinned `apt-get install pkg-a` would pass |
+| B25 | Same, but Nomad's apt offers no candidate for `pkg-a` at all (or the candidate read comes back unusable) | The refusal still names Atlas's version and says Nomad offers no other | P | `test_apt_commands:TestCandidateVersion::test_apt_saying_it_will_install_nothing_reads_as_no_version` and `::test_a_name_apt_printed_no_block_for_reads_as_no_version` assert the parser; no test reaches the wording of the refusal |
+| B26 | The run is done and both items were approved | `pkg-a` is on Nomad at Atlas's version and Nomad records the hold | U | `test_apt_packages:TestAHeldPackageIsInstalledAtTheSourcesVersion::test_the_install_names_the_sources_version` (asserts both the pinned install and `apt-mark hold`) |
+| B27 | Atlas holds `pkg-a`, Nomad lacks it, and `pkg-a` was earlier marked machine-specific on Atlas | The package does not travel — and neither does its hold, since there is nothing on Nomad to freeze | ‼ | none. The hold item is still emitted and, if approved, `apt-mark hold` runs on Nomad for a package it does not have. See Gaps. |
+| B28 | Atlas holds `pkg-a` but the version capture yields nothing for it | The install is refused rather than floated onto whatever Nomad offers | ‼ | none; the version pin is silently dropped and the install floats. See Gaps. |
+
+### B.5 Replicating a hold changes no version (article: PKG-FR-APT-HOLD-INERT, first sentence)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| B29 | Atlas holds `pkg-a` at 1.0; Nomad has `pkg-a` at 2.0 and does not hold it | The version difference is reported, the hold is registered on Nomad, and no install, upgrade or downgrade of `pkg-a` runs — the two machines end held at different versions | — | none (only the equal-version shape is covered, by B1) |
+| B30 | Any approved hold add | The converge issues `apt-mark` and nothing else | U | `test_apt_packages:TestAptHold::test_source_held_yields_install_hold_item_and_converge_runs_apt_mark_hold`; `test_apt_packages:TestHoldsDriveNoSimulation::test_hold_only_run_issues_zero_apt_get_simulations` |
+
+### B.6 The four outcomes for a hold whose package did not arrive (article: PKG-FR-APT-HOLD-INERT)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| B31 | Atlas holds `pkg-a`, Nomad lacks it; the user approves the hold and declines the install at the review | The hold is reported as declined, not as a failure; no `apt-mark hold` runs; the job does not fail | U | `test_apt_packages:TestAHoldNeedsItsPackage::test_a_hold_whose_install_was_skipped_is_declined_not_failed` |
+| B32 | Same, but the install is withdrawn by a collateral answer given while planning (the user kept a package on Nomad that installing `pkg-a` would have removed) | Same outcome: declined, no failure, nothing logged as an error | U | `test_apt_packages:TestAHoldNeedsItsPackage::test_a_hold_whose_install_a_collateral_answer_cancelled_is_declined_too` |
+| B33 | Same, but the collateral question is only answerable after `/etc/apt` has converged (the repository `pkg-a` needs is one this run writes), and the user keeps the other package | The hold is declined for that reason and named as such; not a failure | — | none |
+| B34 | The install was approved and then failed | The hold fails too, and both the package and the hold are named as failed items | U | `test_apt_packages:TestAHoldNeedsItsPackage::test_a_hold_whose_install_failed_fails_too` |
+| B35 | Atlas holds `pkg-a` and gets it from a repository this run cannot reproduce, so `pkg-a` is reported rather than installed; the user approves the hold | The hold fails alone, saying `pkg-a` is not on Nomad and the run cannot reproduce the repository it comes from | — | none |
+| B36 | Atlas holds `pkg-a`; Nomad already has `pkg-a`, so there is no install item at all | The hold applies normally — the guard must not touch the ordinary case | U | `test_apt_packages:TestAHoldNeedsItsPackage::test_a_hold_on_a_package_the_target_already_has_still_runs` |
+| B37 | A run in which one hold was declined for any of B31–B33 | The run's report separates "not applied, by the user's answer" from failed items, and the job's outcome is not a failure | U | `test_apt_packages:TestAHoldNeedsItsPackage::test_a_hold_whose_install_was_skipped_is_declined_not_failed` (asserts no record at ERROR or above) |
+
+### B.7 Ordering against the package's own install (article: PKG-FR-APT-HOLD-VERSION / PKG-FR-APT-HOLD-INERT — the hold must follow what it freezes)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| B38 | `pkg-a` missing on Nomad and held on Atlas; both items approved; the run has a repository item that is left unapproved | The install runs before the hold | U | `test_apt_packages:TestInstallBeforeHoldOrdering::test_hold_follows_install_on_the_plain_plan_sort_path` |
+| B39 | Same, but the run also writes a repository, so `/etc/apt` work is scheduled ahead of the packages | Key, then `apt-get update`, then the install, then the hold | U | `test_apt_packages:TestInstallBeforeHoldOrdering::test_hold_follows_install_on_the_accept_review_reorder_path` |
+| B40 | A bookkeeping hold on Nomad for a package this run installs | Clear, install, hold — and the plan-time/apply-time rehearsal also comes after the clear | U | `test_apt_packages:TestAStaleTargetHoldDoesNotStrandThePackage::test_the_stale_hold_is_cleared_the_package_installed_and_the_hold_restored` |
+| B41 | Atlas holds `pkg-a` but does not have it in its manual set, while Nomad has `pkg-a` manually; the user approves both the removal and the hold | `pkg-a` is removed from Nomad and no hold is left recorded for it | — | none; the hold is applied after the removal. See Notes. |
+
+### B.8 Which machine records a declined hold (articles: PKG-FR-APT-HOLD-ITEM "both when it is added and when it is removed", with PKG-FR-MACHINE-SPECIFIC)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| B42 | The hold add for `pkg-a` is marked machine-specific | The mark is written on Atlas (the machine that holds the hold), not on Nomad, and `pkg-a`'s hold is never offered again | U V | `test_block_state_decisions:TestAptHoldDecisions::test_declined_hold_is_recorded_on_source_and_never_re_offered`; `test_package_sync:TestBlockStateDecisionRoundTrip::test_skip_always_on_an_apt_hold_is_inert_next_run` |
+| B43 | The unhold for `pkg-a` (a real hold on Nomad) is marked machine-specific | The mark is written on Nomad, not on Atlas, and the unhold is never offered again | U | `test_block_state_decisions:TestAptHoldDecisions::test_declined_unhold_is_recorded_on_target_and_never_re_offered` |
+| B44 | The same decision file content is present on the machine that does *not* hold the item | The hold is still offered — the mark only counts on its holding machine | U | `test_block_state_decisions:TestAptHoldDecisions::test_recorded_hold_is_read_back_from_the_machine_that_holds_it_only` |
+| B45 | An unhold was marked machine-specific; the held package's version still differs between the machines | The held package's upgrade is not re-proposed in a later run — silencing the unhold must not un-silence the package | U | `test_block_state_decisions:TestAptHeldPackageSuppression::test_declined_unhold_does_not_re_propose_the_held_packages_upgrade` |
+| B46 | One hold among several is marked machine-specific | Only that one goes quiet; the other holds keep being offered | U | `test_block_state_decisions:TestAptHeldPackageSuppression::test_unrelated_recorded_decision_leaves_the_hold_set_intact` |
+| B47 | A marked hold add, on a later run whose review answers everything "apply" | The hold still does not land on Nomad | V | `test_package_sync:TestBlockStateDecisionRoundTrip::test_skip_always_on_an_apt_hold_is_inert_next_run` |
+
+### B.9 Reading the hold sets (overlaps ADR-022; listed here because the reads are hold-specific)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| B48 | Both machines' hold sets are read | Each machine's holds are attributed to that machine | U | `test_apt_probe:TestHoldPinCapture::test_hold_sets_from_both_machines_surface` |
+| B49 | The hold read fails or is refused on either machine | The job fails naming the command, rather than treating the silence as "holds nothing" | U | `test_apt_probe:TestAReadThatDidNotAnswer::test_a_hold_read_that_did_not_answer_fails_the_job` |
+| B50 | A machine genuinely holds nothing | That is data, not a failure | U | `test_apt_probe:TestAReadThatDidNotAnswer::test_an_empty_hold_set_is_data_not_a_failure` |
+| B51 | Nomad holds nothing and the run found no target-only repository | Nomad's installed-package set is never read (the real/bookkeeping split has nothing to decide) | U | `test_apt_probe:TestAReadThatDidNotAnswer::test_a_machine_holding_nothing_is_never_asked_what_it_has_installed` |
+
+
+## C. Apt repositories, keys, pins, apt configuration, Ubuntu Pro, and applying repository changes
+
+### C.1 The file classes under `/etc/apt` and what each may be (articles: PKG-FR-APT-IGNORES, PKG-FR-DISTRO-FILES, PKG-FR-KEY-NOT-ITEM, PKG-NG-APT-LINE-CONTROL)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| C1 | `sources.list.d/foo.sources` on Atlas only, and an approved install comes from the repository it declares | the file lands on Nomad; the review showed the package and no line for the file | U | `test_apt_etc_apt:TestRepoGroupOrdering::test_key_then_source_then_update_then_package_install`; `test_apt_keyrings:TestKeysAreNotItems::test_key_of_a_derived_repo_is_provisioned_with_no_decision_of_its_own` |
+| C2 | `sources.list.d` file on Atlas only that feeds no package this run syncs | not written to Nomad, and offered in no direction | U V | `test_apt_probe:TestRepoStateCapture::test_a_repository_never_appears_as_a_review_entry_in_the_add_or_change_direction`; `test_apt_probe:TestWhatAptItselfReads::test_the_distribution_files_are_written_when_they_differ`; integration:`TestAptSyncEndToEnd::test_apt_repository_state_dry_run_previews_derived_writes_and_reviews_no_repository` |
+| C3 | repository file byte-identical on both machines | no item, no write, no key work, and no `apt-get update` at all | U | `test_apt_keyrings:TestKeysAreNotItems::test_a_matching_keyring_is_never_written` |
+| C4 | repository file on Nomad only | reaches the user only as a deletion (rows C-D), never as add or change | U | `test_apt_probe:TestRepoStateCapture::test_deb822_and_legacy_source_each_record_own_format` |
+| C5 | `vendor.list` and `vendor.list.save` both on Nomad, `vendor.list` absent on Atlas | only `vendor.list` becomes an item; the `.save` copy is never captured | U | `test_apt_probe:TestWhatAptItselfReads::test_a_save_file_in_sources_list_d_is_never_captured` |
+| C6 | extensionless files in `preferences.d` and `apt.conf.d` | captured on both machines, with no `-name` narrowing, and diffed as items | U | `test_apt_probe:TestWhatAptItselfReads::test_preferences_d_and_apt_conf_d_keep_no_extension_filter` |
+| C7 | `99-vendor.bak` / `99conf.dpkg-dist` in `preferences.d` or `apt.conf.d` — filenames apt's own ignore rules skip | should be invisible to the sync in every direction | ‼ | — (see Gaps) |
+| C8 | `/etc/apt/sources.list` differs on the two machines | overwritten from Atlas, and never appears as a review item | U | `test_apt_probe:TestWhatAptItselfReads::test_sources_list_is_digested_on_both_machines_and_is_still_not_an_item`, `::test_the_distribution_files_are_written_when_they_differ` |
+| C9 | `/etc/apt/sources.list` absent on Atlas | no digest is recorded, no write is derived, and the run does not fail | U | `test_apt_probe:TestWhatAptItselfReads::test_an_absent_sources_list_yields_no_digest_rather_than_an_error` |
+| C10 | `/etc/apt/sources.list` on Nomad and not on Atlas | never offered for deletion | P | `test_apt_probe:TestWhatAptItselfReads::test_sources_list_is_digested_on_both_machines_and_is_still_not_an_item` asserts no `:sources.list` diff only for the both-present case |
+| C11 | `ubuntu.sources` and `ubuntu-esm-apps.sources` on Nomad, absent on Atlas | neither is offered for removal | U | `test_apt_probe:TestWhatAptItselfReads::test_ubuntu_sources_is_never_offered_for_removal` |
+| C12 | `ubuntu-esm-mine.sources` (a user file with a distribution-lookalike name) on Nomad only | treated as an ordinary repository and offered for removal | U | same test |
+| C13 | distribution source file present on both with different bytes | overwritten from Atlas with no review line | U | `test_apt_probe:TestWhatAptItselfReads::test_the_distribution_files_are_written_when_they_differ` (via `/etc/apt/sources.list`) |
+| C14 | `ubuntu.sources` on Atlas, absent on Nomad | written to Nomad with no review line | U | same test |
+| C15 | keys present/absent/differing across `/etc/apt/keyrings`, `/etc/apt/trusted.gpg.d`, `/usr/share/keyrings` | no `apt:key:` id in any diff, any review group, or any decision file, in any direction | U | `test_apt_keyrings:TestKeysAreNotItems::test_no_key_reaches_a_diff_or_a_review_group_in_any_direction`; `tests/unit/jobs/test_block_state_decisions.py:TestAptRepoItemDecisions::test_a_signing_key_is_never_offered_and_so_can_never_be_recorded` |
+| C16 | a machine has no `/etc/apt/preferences.d` (or any other captured directory) at all | answers "nothing" at exit 0; no error, no removal proposals against the other machine | U | `test_apt_probe:TestAReadThatDidNotAnswer::test_an_absent_directory_answers_nothing_rather_than_failing` |
+| C17 | a `/etc/apt` digest listing exits non-zero | the job fails naming the command; nothing is read as an empty directory | U | `test_apt_probe:TestAReadThatDidNotAnswer::test_a_directory_digest_read_that_did_not_answer_fails_the_job` |
+| C18 | the source-file/`Signed-By:` scan exits non-zero on either machine | the job fails naming the command | U | `test_apt_probe:TestAReadThatDidNotAnswer::test_a_source_file_scan_that_did_not_answer_fails_the_job` |
+| C19 | `apt.conf.d` file in any of the three directions | an ordinary reviewed item (rows C-G), never derived | U | `test_apt_probe:TestRepoStateCapture::test_pin_and_config_diff_missing_extra_and_changed` |
+
+### C.2 Adding a repository — derived, never asked (articles: PKG-FR-REPO-DERIVED, PKG-NG-APT-LINE-CONTROL)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| C20 | Atlas has one repository Nomad lacks, one that differs, one pin Nomad lacks and one pin that differs; no package diverges | the plan has zero diffs and zero review groups — the user is asked about none of the four | U | `test_apt_probe:TestRepoStateCapture::test_a_repository_never_appears_as_a_review_entry_in_the_add_or_change_direction` |
+| C21 | an approved install whose origin the target already serves from a place Atlas also uses | no repository file travels for it | U | `test_apt_origins:TestOriginClassification::test_same_origin_install_derives_no_repository_write` |
+| C22 | an approved install whose origin only Atlas's repository declares | exactly that repository file travels | U | `test_apt_origins:TestOriginClassification::test_different_origin_install_derives_the_sources_own_repository` |
+| C23 | an install offered from a vendor repository, and the user declines it at the review | the repository is not written to Nomad at all | — | — (see Gaps) |
+| C24 | a package that is `REPORT_ONLY` because its origin cannot be replicated | no repository is derived for it | U | `test_apt_origins:TestOriginClassification::test_unreplicable_origin_is_report_only_naming_the_origin` (asserts the report; `OriginPlan.derived_files` is empty by construction for `UNREPLICABLE`) |
+| C25 | one repository file serving two approved installs | one write, not two, and both packages are attributed to it | P | `test_apt_collateral:TestARepositoryWrittenForADeclinedInstall::test_a_repository_a_surviving_install_still_needs_is_not_named` sets this shape up but asserts the stranding rule, not the write count |
+| C26 | a repository the user could tick or untick | no such control exists — the only way to decline it is to decline the package | U | C20 + `test_apt_etc_apt:TestRepoGroupOrdering::test_pins_travel_without_a_review_line_and_land_before_the_sources` (`actionable_entry_ids` is exactly the package) |
+
+### C.3 Overwriting a repository, and the one conflict question (articles: PKG-FR-REPO-OVERWRITE, PKG-FR-REPO-CONFLICT, PKG-FR-NO-MARK-ON-ORIGIN)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| C27 | `vendor.list` differs on the two machines, an approved install needs it, and nothing on Nomad is marked machine-specific | overwritten with Atlas's version, silently, no question | U | `test_apt_job:TestRepositoryConflicts::test_a_changed_repository_with_no_machine_specific_package_is_overwritten_silently` |
+| C28 | the same file, and Nomad installs a package it marked machine-specific from it | the user is asked before anything is written | U | `test_apt_job:TestRepositoryConflicts::test_a_changed_repository_feeding_a_machine_specific_package_asks_and_shows_both_versions` |
+| C29 | that question's content | both whole file versions, Nomad's first, and a detail naming the marked packages and why they are protected | U | same test; `tests/unit/jobs/test_package_review.py:TestRepoConflictGroupResolution::test_both_whole_versions_are_shown_and_no_unified_diff` |
+| C30 | the two version panels | each titled with the machine that holds it; the words "the target"/"the source" appear nowhere | U | `tests/unit/jobs/test_package_review.py:TestRepoConflictGroupResolution::test_each_version_panel_is_titled_with_the_machine_that_holds_it` |
+| C31 | the question's answers | exactly two — overwrite, skip now — and the row starts on skip | U | `tests/unit/jobs/test_package_review.py:TestRepoConflictGroupResolution::test_only_two_answers_are_offered_and_the_row_starts_skipped` |
+| C32 | two conflicting files in one run | each is answered right after its own two panels, never batched behind both | U | `tests/unit/jobs/test_package_review.py:TestRepoConflictGroupResolution::test_each_conflicting_file_is_answered_right_after_it_is_shown` |
+| C33 | either answer to the conflict question | nothing is recorded — the file is offered again on the next sync | — | — (see Gaps) |
+| C34 | the answer is "overwrite" | Atlas's version of the file is written to Nomad | U | `test_apt_job:TestRepositoryConflicts::test_overwriting_a_conflict_writes_the_sources_version` |
+| C35 | the answer is "skip" | the file is not written, and every approved package whose origin depended on it fails naming the file; no install runs | U | `test_apt_job:TestRepositoryConflicts::test_skipping_a_conflict_writes_nothing_and_fails_the_package_that_needed_it` |
+| C36 | a repository that differs and feeds a marked package, but that no install this run proposes would write | no question is raised, and the file is not written | — | — (see Gaps) |
+| C37 | a conflicting file whose body contains a URL with embedded credentials | neither panel shows the credential | U | `tests/unit/jobs/test_package_review.py:TestCredentialsInPrintedFileBodies::test_neither_version_of_a_conflicting_repository_shows_the_credential` |
+| C38 | reading either machine's copy of the conflicting file fails | the job fails naming the `cat` command rather than showing an empty panel | U | `test_apt_probe:TestAReadThatDidNotAnswer::test_a_conflict_content_read_that_did_not_answer_fails_the_job` |
+| C39 | a run with both a target-only repository to judge and a conflict to trigger | one batched `apt-cache policy` over Nomad's own packages, not two | U | `test_apt_job:TestRepositoryConflicts::test_the_conflict_computation_costs_one_batched_policy_call` |
+| C40 | a bracketed filename or body in a conflict panel | renders without a markup error | U | `tests/unit/jobs/test_package_review.py:TestRepoConflictGroupResolution::test_a_bracketed_filename_in_a_conflict_panel_renders_without_markup_error` |
+| C41 | Ctrl-C at the conflict screen | the whole sync aborts; it is not read as declining the file | U | `tests/unit/jobs/test_package_review.py:TestRepoConflictGroupResolution::test_ctrl_c_aborts_the_sync_naming_the_screen` |
+| C42 | a non-interactive run with a conflict pending | the entry is `SKIP_ONCE`, not unresolved, and nothing is written | U | `tests/unit/jobs/test_package_review.py:TestRepoConflictGroupResolution::test_non_interactive_conflict_entries_skip_once_and_are_not_unresolved` |
+
+### C.4 Deleting a repository, and the conditions that gate it (article: PKG-FR-REPO-DELETE)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| C43 | `vendor.list` on Nomad only, and nothing installed on Nomad comes from its URLs | offered for deletion, with a detail naming the URLs the file declares | U | `test_apt_job:TestRepoRemovalWithheldWhileInUse::test_a_repository_nothing_installs_from_is_offered_with_its_urls` |
+| C44 | that offer as the user reads it | reaches them as a review entry carrying the same URL text | U | `test_apt_job:TestRepoRemovalWithheldWhileInUse::test_detail_reaches_the_user_through_the_review_entry` |
+| C45 | a target-only repository whose file declares no parsable URL | the detail says so rather than trailing off | U | `test_apt_messages:TestRepoRemovalWording::test_a_file_declaring_no_url_says_so_rather_than_trailing_off` |
+| C46 | a target-only repository that declares several URLs | all of them are named | U | `test_apt_messages:TestRepoRemovalWording::test_every_url_the_file_declares_is_named` |
+| C47 | Nomad still installs a package it marked machine-specific from the repository | the repository is not raised as an item at all — not offered with a warning | U | `test_apt_job:TestRepoRemovalWithheldWhileInUse::test_a_repository_a_machine_specific_package_uses_is_not_raised_at_all` |
+| C48 | Nomad installs an ordinary package from it that both machines have (so it has no diff of its own) | withheld | U | `test_apt_job:TestRepoRemovalWithheldWhileInUse::test_a_repository_an_ordinary_target_package_uses_is_withheld_too` |
+| C49 | only an automatically-installed package on Nomad comes from it | withheld — automatic packages count as usage | U | `test_apt_job:TestRepoRemovalWithheldWhileInUse::test_a_repository_only_an_automatic_package_uses_is_withheld` |
+| C50 | the only packages coming from it are ones this run proposes to remove | offered, alongside the removals — usage is counted after this run's removal candidates | U | `test_apt_job:TestRepoRemovalWithheldWhileInUse::test_a_repository_only_this_runs_removals_use_is_offered` |
+| C51 | a `.sources` file writing `URIs: https://…/apt/` while `apt-cache policy` prints the origin without the trailing slash | still recognised as in use, so the repository is withheld | U | `test_apt_job:TestRepoRemovalWithheldWhileInUse::test_deb822_uris_match_the_policy_origin_despite_the_trailing_slash` |
+| C52 | the machine-specific package that caused a withholding | still produces no diff of its own — naming it in the counting does not re-propose it | U | `test_apt_job:TestRepoRemovalWithheldWhileInUse::test_the_machine_specific_package_itself_still_produces_no_diff` |
+| C53 | twelve packages counted against one repository | one batched `apt-cache policy`, never one per package | U | `test_apt_job:TestRepoRemovalWithheldWhileInUse::test_one_apt_cache_policy_call_regardless_of_package_count` |
+| C54 | a run with no target-only and no conflicting repository | no `apt-cache policy` over Nomad's own packages is issued at all | U | `test_apt_job:TestRepoRemovalWithheldWhileInUse::test_no_policy_call_when_nothing_is_offered_for_removal` |
+| C55 | the usage probe (`apt-cache policy`) does not answer | the job fails naming the command rather than reading "this repository feeds nothing" | U | `test_apt_probe:TestAReadThatDidNotAnswer::test_a_removal_impact_read_that_did_not_answer_fails_the_job` |
+| C56 | reading a target-only repository's own body fails | the job fails naming the `cat` command | U | `test_apt_probe:TestAReadThatDidNotAnswer::test_a_removal_content_read_that_did_not_answer_fails_the_job` |
+| C57 | the deletion screen's shape | its own screen titled "Delete repositories <Atlas> no longer has (apt)", starting unticked, offering exactly two answers | U | `test_apt_job:TestTwoAnswerRemovals::test_each_two_answer_screen_is_titled_in_correct_english`, `::test_a_two_answer_group_is_unticked_and_never_offered_permanence` |
+| C58 | a repository entry on that screen | carries its URL detail and no whole-file block | U | `test_apt_job:TestTwoAnswerRemovals::test_a_repository_offered_for_deletion_carries_no_content_block` |
+| C59 | the deletion is approved | one `sudo rm --force` naming that file, and nothing else under `/etc/apt` | U | `test_apt_etc_apt:TestRepoGroupOrdering::test_remove_source_issues_single_rm_naming_that_file` |
+| C60 | a repository and a pin are both approved for deletion | the repository goes first, the pin second — the reverse of the write order | U | `test_apt_job:TestTwoAnswerRemovals::test_the_repository_goes_before_the_pin_that_prefers_it` |
+| C61 | the deletion is declined | nothing is recorded, so the file is offered again on the next sync | U | `tests/unit/jobs/test_block_state_decisions.py:TestAptRepoItemDecisions::test_no_repository_or_pin_id_can_reach_a_decision_file` (records nothing even when `SKIP_ALWAYS` is forced) |
+| C62 | a legacy `.list` and a deb822 `.sources` both offered for deletion | each entry names its own format | U | `test_apt_probe:TestRepoStateCapture::test_deb822_and_legacy_source_each_record_own_format` |
+| C63 | a real target-only repository with an unreachable host, deleted on a VM | the file and its key leave `/etc/apt`, and `apt-get update` stops naming that host and still exits 0 | V | integration:`TestCrossDirectionRoundTrips::test_apt_source_and_its_key_removed_together` |
+
+### C.5 A repository stranded by a declined install (article: PKG-FR-REPO-STRANDED)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| C64 | a repository was written for `pkg-a`, and the user then keeps a protected package, withdrawing `pkg-a` | the file stays on Nomad — it is not removed | U | `test_apt_collateral:TestARepositoryWrittenForADeclinedInstall::test_the_repository_is_named_by_url_and_filename` (no `rm` is issued for it) |
+| C65 | the same run's account of that file | one line naming both the path and the URL, saying nothing on Nomad installs from it and that it was left in place | U | same test |
+| C66 | the severity of that line | INFO — not a failure and not a warning; the run has no warning at all | U | `test_apt_collateral:TestARepositoryWrittenForADeclinedInstall::test_it_does_not_read_as_something_broken` |
+| C67 | `pkg-a` is withdrawn but `pkg-b` from the same repository survives | the repository is not named at all | U | `test_apt_collateral:TestARepositoryWrittenForADeclinedInstall::test_a_repository_a_surviving_install_still_needs_is_not_named` |
+| C68 | a repository whose own write failed, for an install then withdrawn | not named as stranded — nothing landed on Nomad | P | no test; `DerivedWrites.stranded` excludes `self._failed` by construction |
+| C69 | a pin or a distribution file, on a run where an install is withdrawn | never named as stranded — they travel because Atlas has them, not because a package was approved | P | no test; `stranded` intersects `_repo_writes` only |
+| C70 | an approved install that FAILS (rather than being declined) after its repository landed | the repository stays; the article does not require it to be named | — | — (deliberate: `stranded()` is keyed on the declined set only) |
+
+### C.6 Keys (articles: PKG-FR-KEY-NOT-ITEM, PKG-FR-KEY-COPY, PKG-FR-KEY-REFRESH, PKG-FR-KEY-CLEANUP)
+
+#### Copying and refreshing
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| C71 | a repository this run writes names a keyring Nomad lacks | the key is copied byte-for-byte from Atlas and lands before the repository file, which lands before the install | U | `test_apt_keyrings:TestKeysAreNotItems::test_key_of_a_derived_repo_is_provisioned_with_no_decision_of_its_own` |
+| C72 | any key operation | not one command reaches for a URL | U | `test_apt_etc_apt:TestRepoGroupOrdering::test_no_key_command_contains_a_url` |
+| C73 | a repository present on both that this run overwrites, whose `Signed-By:` is part of what differs | the newly-named key is provisioned too | U | `test_apt_keyrings:TestKeysAreNotItems::test_key_of_an_overwritten_repo_is_provisioned_too` |
+| C74 | a keyring with identical bytes on both machines | never written, never transferred | U | `test_apt_keyrings:TestKeysAreNotItems::test_a_matching_keyring_is_never_written` |
+| C75 | the vendor rotated a key: differing bytes, but the repository file is byte-identical so it produces no diff | the key is refreshed anyway, from Atlas's own file, promoted with `sudo install --owner=root --group=root --mode=0644` | U | `test_apt_etc_apt:TestRepoGroupRemovalAndKeyChange::test_rotated_keyring_is_refreshed_although_its_source_file_is_identical` |
+| C76 | one rotated key named by three source files | exactly one write | U | `test_apt_keyrings:TestKeysAreNotItems::test_one_rotated_key_serving_three_repos_is_written_once` |
+| C77 | `/etc/apt/trusted.gpg.d` keys — one missing on Nomad, one differing | both replicated: nothing references ambient trust, so content is the only signal | U | `test_apt_keyrings:TestKeysAreNotItems::test_global_trust_keys_are_replicated_whether_missing_or_differing` |
+| C78 | an `/etc/apt/keyrings` file on Atlas that no source file references | never copied — the directory is not mirrored wholesale | U | `test_apt_keyrings:TestKeysAreNotItems::test_an_unreferenced_source_keyring_is_not_copied_to_the_target` |
+| C79 | a `/usr/share/keyrings` key a written repository references | resolved and copied | U | `test_apt_keyrings:TestSharedKeyringsDirectory::test_a_usr_share_keyrings_reference_resolves_and_the_repo_is_replicable`, `::test_a_hand_placed_key_the_target_lacks_is_provisioned` |
+| C80 | a `/usr/share/keyrings` key nothing references | never copied — mostly the distribution's own | U | `test_apt_keyrings:TestSharedKeyringsDirectory::test_a_shared_keyring_no_source_references_is_never_copied` |
+| C81 | Nomad has the key with different bytes and Nomad's own dpkg owns that path | left alone; the repository is still written | U | `test_apt_keyrings:TestSharedKeyringsDirectory::test_a_package_owned_key_present_with_different_bytes_is_not_overwritten` |
+| C82 | dpkg on Nomad owns the path but the file is absent (a vendor `.deb` shipping repository + keyring) | copied anyway — ownership gates the overwrite, never the copy | U | `test_apt_keyrings:TestSharedKeyringsDirectory::test_a_package_owned_key_the_target_is_missing_is_copied_anyway` |
+| C83 | ownership determination across all three key directories | one batched `dpkg --search` naming every key Nomad has; its non-zero exit is not read as an answer | U | `test_apt_keyrings:TestSharedKeyringsDirectory::test_ownership_is_probed_once_for_every_key_directory` |
+| C84 | a deb822 `Signed-By:` carrying an inline armored block on continuation lines | yields no key reference at all | U | `test_apt_keyrings:TestKeysAreNotItems::test_inline_armored_signed_by_names_no_keyring` |
+| C85 | a PPA whose `Signed-By:` puts the armor's first line on the field line | yields no reference, the repository installs normally, no key is written | U | `test_apt_keyrings:TestInlineArmoredSignedBy::test_the_armor_first_line_on_the_field_line_yields_no_ref`, `::test_a_ppa_with_an_inline_key_installs_normally_and_needs_no_keyring` |
+
+#### Every way a key reference fails to resolve
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| C86 | a source file's `Signed-By:` names a key that exists in none of Atlas's three key directories | the package that needed that repository is reported, not installed, naming the missing key path; no repository item echoes the same fact | U | `test_apt_keyrings:TestSharedKeyringsDirectory::test_a_genuinely_missing_key_is_still_reported_dangling`; `test_apt_origins:TestOriginClassification::test_a_dangling_keyring_makes_the_package_unavailable` |
+| C87 | a package served by two files, one with a dangling reference and one sound | still replicable — one writable file is enough | U | `test_apt_origins:TestOriginClassification::test_one_writable_serving_file_is_enough` |
+| C88 | the key's own promotion to Nomad fails | the repository is deliberately NOT written, and the failure lands on the package naming both the repository path and the key | U | `test_apt_etc_apt:TestRepoGroupOrdering::test_a_failed_derived_repository_write_fails_the_package_that_needed_it` |
+| C89 | `/etc/apt/keyrings` does not exist on a fresh Nomad | the directory is created before the key is promoted into it | U | `test_apt_etc_apt:TestKeyringsDirectoryEnsured::test_promotion_ensures_keyrings_directory_before_install` |
+| C90 | creating that directory fails | the package fails naming the key; the key promotion is never attempted | U | `test_apt_etc_apt:TestKeyringsDirectoryEnsured::test_directory_preparation_failure_fails_the_item_not_the_run` |
+
+#### Collecting unused keys
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| C91 | this run removed no repository | the collection pass does not run at all — not even its re-scan | U | `test_apt_keyrings:TestUnusedKeyringCollection::test_no_source_removed_means_no_collection_pass_at_all` |
+| C92 | an approved repository deletion leaves its `/etc/apt/keyrings` key referenced by nothing | the key is deleted, after the repository's own deletion and before the single `apt-get update` | U | `test_apt_keyrings:TestUnusedKeyringCollection::test_key_left_unreferenced_by_an_approved_removal_is_deleted` |
+| C93 | another repository on Nomad that this run does not touch still names the key | kept | U | `test_apt_keyrings:TestUnusedKeyringCollection::test_key_still_referenced_by_a_surviving_repo_is_kept` |
+| C94 | the key is named only by `/etc/apt/sources.list`, which this tool never syncs | kept | U | `test_apt_keyrings:TestUnusedKeyringCollection::test_key_referenced_only_by_a_file_pc_switcher_never_syncs_is_kept` |
+| C95 | the repository naming the key had its deletion declined, while another repository's deletion was approved | kept | U | `test_apt_keyrings:TestUnusedKeyringCollection::test_key_referenced_by_a_repo_whose_removal_was_declined_is_kept` |
+| C96 | the key is named only by a repository Nomad recorded machine-specific (so it appears in no review) | kept | U | `test_apt_keyrings:TestUnusedKeyringCollection::test_key_referenced_by_a_machine_specific_repo_is_kept` |
+| C97 | Atlas still holds the same key | never collected, even with nothing on Nomad referencing it | U | `test_apt_keyrings:TestUnusedKeyringCollection::test_a_key_the_source_machine_still_has_is_never_collected` |
+| C98 | an orphan key in `/etc/apt/trusted.gpg.d` on a run with an approved repository deletion | never collected — ambient trust is not reference-countable | U | `test_apt_keyrings:TestUnusedKeyringCollection::test_a_global_trust_key_is_never_collected` |
+| C99 | an orphan key in `/usr/share/keyrings` on the same run | never collected — distribution-owned territory | — | — (see Gaps) |
+| C100 | the key of a departing repository differs on the two machines | not refreshed first and then collected — no write at all | U | `test_apt_keyrings:TestUnusedKeyringCollection::test_a_key_only_the_departing_repo_needs_is_not_refreshed_first` |
+| C101 | a collected key | backed up into the unit's backup directory before deletion, and its deletion declares `mutates=` | U | `test_apt_keyrings:TestUnusedKeyringCollection::test_a_collected_key_is_backed_up_and_gated_as_a_modification` |
+| C102 | backing up an about-to-be-collected key fails | the key is kept rather than deleted unbacked-up, with a warning | — | — (see Gaps) |
+| C103 | the `rm` of an unused key fails | a warning names the key; the run continues | — | — (see Gaps) |
+| C104 | a key that this run collects, on a VM, after a real repository deletion | both files are gone from `/etc/apt` and `apt-get update` no longer reaches the repository | V | integration:`TestCrossDirectionRoundTrips::test_apt_source_and_its_key_removed_together` |
+
+### C.7 Pins (articles: PKG-FR-PIN-ALWAYS, PKG-FR-PIN-DELETE, PKG-FR-PIN-NOT-INVENTORY, PKG-NG-PIN-LOCAL)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| C105 | a `preferences.d` file Atlas has and Nomad lacks, on a run with no package diffs at all | the pin lands on Nomad, and the reviewer is handed nothing | U V | `test_apt_derived:TestPinsStillTravelAsFiles::test_a_pin_file_the_target_lacks_is_written_with_no_review_line`; integration:`TestAptSyncEndToEnd::test_apt_repository_state_dry_run_previews_derived_writes_and_reviews_no_repository` |
+| C106 | a pin present on both with different bytes | overwritten with Atlas's version, with no review line | U | `test_apt_derived:TestPinsStillTravelAsFiles::test_a_differing_pin_is_overwritten_rather_than_reviewed`; `test_apt_probe:TestRepoStateCapture::test_pin_and_config_diff_missing_extra_and_changed` |
+| C107 | pins and repositories both travelling in one run | the pin is written before the repository files and before the refresh | U | `test_apt_etc_apt:TestRepoGroupOrdering::test_pins_travel_without_a_review_line_and_land_before_the_sources` |
+| C108 | a pin naming an origin Nomad does not have | still replicated — inert, so always-sync cannot get a derivation wrong | P | implied by C105 (nothing conditions the pin bucket on origins); no test names this case |
+| C109 | a pin file that travels | its contents are never read on Atlas — only its digest and its bytes | U | `test_apt_derived:TestPinsStillTravelAsFiles::test_the_pin_file_needs_no_read_of_its_contents` |
+| C110 | a `preferences.d` file on Nomad only | offered for deletion on its own screen titled "Delete pin files <Atlas> no longer has (apt)", separate from the repository screen | U | `test_apt_job:TestTwoAnswerRemovals::test_repository_and_pin_removals_get_two_separate_two_answer_screens`, `::test_each_two_answer_screen_is_titled_in_correct_english` |
+| C111 | that entry's content | the pin file's whole body, printed under the machine that holds it, read with one `sudo cat` | U | `test_apt_job:TestTwoAnswerRemovals::test_a_pin_offered_for_deletion_carries_its_whole_content`; `tests/unit/jobs/test_package_review.py:TestRemovalGroupContent::test_a_pin_file_is_printed_whole_under_the_machine_that_holds_it` |
+| C112 | that screen's answers | two — remove, leave it for now — starting on skip, never offering permanence | U | `test_apt_job:TestTwoAnswerRemovals::test_a_two_answer_group_is_unticked_and_never_offered_permanence`; `tests/unit/jobs/test_package_review.py:TestInteractive::test_repo_removal_starts_skipped_and_is_never_offered_permanence` |
+| C113 | reading a pin file offered for deletion fails | the job fails naming the `cat` command rather than showing an empty block | U | `test_apt_job:TestTwoAnswerRemovals::test_a_pin_read_that_did_not_answer_fails_the_job` |
+| C114 | approving a pin deletion | that file, and only that file, is removed | U | `test_apt_job:TestTwoAnswerRemovals::test_approving_a_pin_removal_deletes_the_file` |
+| C115 | declining a pin deletion (or forcing `SKIP_ALWAYS` from an automation hook) | nothing is written to any decision file, so it is asked again next run | U | `tests/unit/jobs/test_block_state_decisions.py:TestAptRepoItemDecisions::test_no_repository_or_pin_id_can_reach_a_decision_file` |
+| C116 | a pin body containing a credentialed URL, shown for deletion | the credential is withheld from the printed body | U | `tests/unit/jobs/test_package_review.py:TestCredentialsInPrintedFileBodies::test_a_pin_file_offered_for_deletion_shows_no_credential` |
+| C117 | a package present only on Nomad that a Nomad pin names | offered for removal as an ordinary package item — the pin says nothing about it | U | `test_apt_job:TestAPinNeverSpeaksForAPackage::test_a_target_only_package_named_by_a_pin_is_offered_for_removal`, `::test_the_removal_reaches_the_user_as_an_actionable_review_entry`, `::test_approving_it_actually_removes_the_package` |
+| C118 | any run with pins | no command asks which packages a pin file names | U | `test_apt_job:TestAPinNeverSpeaksForAPackage::test_no_command_asks_the_target_which_packages_its_pins_name` |
+| C119 | a pin the user wants on Nomad only | impossible — it is re-offered every run until Atlas drops it | P | C115 covers "nothing recorded"; the re-offer on a second run is not asserted for a pin |
+
+### C.8 apt's own configuration (article: PKG-FR-APTCONF)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| C120 | `apt.conf.d/10add` on Atlas only | reviewed as an addition, in a group titled "Add apt configuration files" with the action word "add" | U | `test_apt_job:TestAptConfigVocabulary::test_each_direction_names_the_config_file_not_a_package` |
+| C121 | `apt.conf.d/20update` present on both with different bytes | reviewed as a change ("Update apt configuration files" / "update") — never overwritten silently | U | same test; `test_apt_probe:TestRepoStateCapture::test_pin_and_config_diff_missing_extra_and_changed` |
+| C122 | `apt.conf.d/30delete` on Nomad only | reviewed as a deletion ("Delete apt configuration files" / "delete") — the ordinary three-answer group, not the repository/pin two-answer one | U | same tests; `test_apt_job:TestTwoAnswerRemovals::test_repository_and_pin_removals_get_two_separate_two_answer_screens` (asserts the config group keeps the ordinary action) |
+| C123 | any apt-config group's wording | never claims to be about packages | U | `test_apt_job:TestAptConfigVocabulary::test_no_apt_config_group_claims_to_be_about_packages` |
+| C124 | an apt-config addition marked machine-specific | recorded on Atlas (the holding machine) and never offered again | U | `tests/unit/jobs/test_block_state_decisions.py:TestAptRepoItemDecisions::test_declined_config_install_is_recorded_on_source_and_never_re_offered` |
+| C125 | an apt-config deletion marked machine-specific | recorded on Nomad; the same run's repository and pin ids are not | U | `tests/unit/jobs/test_block_state_decisions.py:TestAptRepoItemDecisions::test_no_repository_or_pin_id_can_reach_a_decision_file` |
+| C126 | an approved apt-config write | staged under Nomad's home then promoted with `sudo install --owner=root --group=root --mode=0644`, never `mv`; the staging copy is removed on success and on failure; nothing is SFTP'd into `/etc` | U | `test_apt_etc_apt:TestRepoGroupOrdering::test_promotion_uses_sudo_install_with_owner_group_mode_never_mv`, `::test_staging_file_removed_after_success_and_after_failure`, `::test_send_file_destinations_start_with_home_never_contain_etc` |
+
+### C.9 Ubuntu Pro and ESM (articles: PKG-FR-ESM-GATE, PKG-FR-ESM-VERIFY, PKG-FR-ESM-SKIP-WHOLE-JOB, PKG-FR-ESM-NO-ASK, PKG-FR-ESM-PRIVACY, PKG-NG-ESM-PARTIAL)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| C127 | Atlas carries `ubuntu-esm-apps.sources` and `ubuntu-esm-infra.sources`, Nomad reports no Pro attachment | the user is asked before the job's first write and before any other apt question | U | `test_apt_esm_gate:TestTheESMAttachmentGate::test_an_unattached_target_is_asked_about_before_anything_is_written` (asserts zero `mutates=` commands at the moment of the gate, and that no review was presented) |
+| C128 | the gate's message | names both ESM files, the `pro attach` and `pro enable` commands, and the Ubuntu tutorial link | U | same test |
+| C129 | the gate's shape | a title naming Nomad, and exactly two answers: "I have attached <Nomad> — check again and continue" / "Skip apt_sync this run (every other job still runs)" | U | `test_apt_esm_gate:TestTheESMAttachmentGate::test_the_gate_offers_exactly_two_answers_and_names_both_of_them` |
+| C130 | the user answers "I have attached it" and Nomad now reports attached | the claim is re-probed rather than believed, and the ESM sources are then written | U | `test_apt_esm_gate:TestTheESMAttachmentGate::test_attach_now_re_probes_and_continues_when_the_target_became_attached` |
+| C131 | the user answers "I have attached it" ten times without attaching, then skips | every answer re-probes; no bound cuts the loop short | U | `test_apt_esm_gate:TestTheESMAttachmentGate::test_attach_now_can_be_answered_any_number_of_times` |
+| C132 | the user chooses to skip | the whole apt job is skipped, no review is presented, and Nomad receives not one write | U V | `test_apt_esm_gate:TestTheESMAttachmentGate::test_choosing_skip_raises_job_skipped_and_writes_nothing`; integration:`TestTheESMAttachmentGateOnVMs::test_an_unattached_target_skips_apt_sync_and_leaves_etc_apt_untouched` |
+| C133 | the same skip, with a pin Atlas has that Nomad lacks | the pin does NOT land — skipping withholds the whole job, not only the ESM sources | V | integration: same test (the load-bearing `test ! -e` on the synthetic pin) |
+| C134 | the skip's effect on the rest of the run | every other job still runs and the exit code is unaffected | V | integration: same test (asserts `snap_sync` ran and the sync exited 0) |
+| C135 | a run with no interactive terminal and pending ESM writes | takes the skip and says why, naming both files and the absence of a TTY | U V | `test_apt_esm_gate:TestTheESMAttachmentGate::test_a_non_interactive_run_skips_the_whole_job`; integration: same test |
+| C136 | a dry run with pending ESM writes | asks nothing, warns exactly once that a real run would skip apt_sync entirely, and previews no ESM write | U | `test_apt_esm_gate:TestTheESMAttachmentGate::test_a_dry_run_never_prompts_about_attachment` |
+| C137 | Nomad is attached | no question at all, one probe, and both ESM sources are written with no warning | U | `test_apt_esm_gate:TestTheESMAttachmentGate::test_esm_sources_are_written_to_an_attached_target` |
+| C138 | Atlas has no ESM sources | the attachment is never probed and no question is asked | U | `test_apt_esm_gate:TestTheESMAttachmentGate::test_a_source_with_no_esm_sources_never_probes_at_all` |
+| C139 | Nomad already holds an ESM file with the same bytes | nothing to write, so nothing to ask — no probe at all | U | `test_apt_esm_gate:TestTheESMAttachmentGate::test_an_esm_file_the_target_already_matches_is_not_gated` |
+| C140 | `pro` is missing / exits non-zero / prints non-JSON / prints a JSON array / prints an object with no `attached` key | each is treated as unattached, so the question is asked and nothing is written | U | `test_apt_esm_gate:TestTheESMAttachmentGate::test_an_unreadable_pro_probe_is_treated_as_unattached` (five parametrised cases) |
+| C141 | the `pro status` payload naming the subscriber's account id and email, attached or unattached | neither reaches the log nor any string put in front of the user | U | `test_apt_esm_gate:TestTheESMAttachmentGate::test_the_probe_payload_is_never_logged` |
+
+### C.10 The atomic `/etc/apt` unit (article: PKG-FR-APT-CONFIG-ATOMIC)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| C142 | a run approving a pin, an apt-config file and a key write | exactly one `sudo apt-get update`, after all of them | U | `test_apt_etc_apt:TestRepoGroupOrdering::test_apt_get_update_runs_exactly_once_for_three_repo_items` |
+| C143 | a run whose `/etc/apt` work and package installs both happen | still exactly one refresh — the install path's own refresh is a no-op | P | ordering is asserted (`test_key_then_source_then_update_then_package_install`) but the refresh COUNT on such a run is not |
+| C144 | the write order within the unit | keys, then pins and apt config, then the distribution's sources, then the derived vendor repositories, then approved deletions, then unused-key collection, then the refresh | U | `test_apt_etc_apt:TestRepoGroupOrdering::test_key_then_source_then_update_then_package_install`, `::test_pins_travel_without_a_review_line_and_land_before_the_sources`; `test_apt_keyrings:TestUnusedKeyringCollection::test_key_left_unreferenced_by_an_approved_removal_is_deleted` |
+| C145 | every file the unit will touch | backed up first, into one run-scoped backup directory | U | `test_apt_etc_apt:TestRepoGroupTransaction::test_failed_update_restores_changed_deletes_created_records_group_failures` |
+| C146 | a backup that fails | the unit aborts before ANY write, every group item is failed, every derived write is recorded failed, and no `KeyError` escapes | U | `test_apt_etc_apt:TestRepoGroupBackupFailure::test_backup_failure_fails_every_group_item_without_crashing` |
+| C147 | the refresh succeeds | no restore command is issued and the backup directory is discarded | U | `test_apt_etc_apt:TestRepoGroupTransaction::test_successful_update_issues_no_restore_command` |
+| C148 | the refresh fails | every file that existed before is restored, every file this run created is deleted, and the backup is discarded after a clean rollback | U | `test_apt_etc_apt:TestRepoGroupTransaction::test_failed_update_restores_changed_deletes_created_records_group_failures` |
+| C149 | the refresh fails | every approved group item is reported failed, including ones whose own write had succeeded | U | same test |
+| C150 | the refresh fails | every derived write is charged as failed too, so a package depending on one cannot install against the pre-run `/etc/apt` | U | same test (asserts `/etc/apt/preferences.d/curl-pin` in `derived.failed`) |
+| C151 | after a rollback | apt is re-probed and the run says whether Nomad recovered | P | the second `apt-get update` is asserted; the "recovered / still broken" phrasing in the failure text is not |
+| C152 | a rollback step that itself fails | the failure names the file, the message says ROLLBACK INCOMPLETE, and the backup directory is kept with its path named | U | `test_apt_etc_apt:TestRepoGroupTransaction::test_failed_rollback_step_warns_and_keeps_the_backup` |
+| C153 | a rollback where one file cannot be restored | the remaining files are still attempted rather than left in their post-run state | P | no test issues two failing restores; the loop's `continue`-on-failure shape is untested |
+| C154 | packages approved on a run whose repository unit rolled back but whose packages did not depend on it | still attempted, and not reported failed | U | `test_apt_etc_apt:TestRepoGroupTransaction::test_rollback_does_not_prevent_package_items_from_being_attempted` |
+| C155 | installs running after a rollback whose re-probe succeeded | issue no further `apt-get update` — exactly two for the whole run | U | `test_apt_etc_apt:TestRepoGroupTransaction::test_post_rollback_install_issues_no_further_apt_get_update` |
+| C156 | a run whose only `/etc/apt` work is a rotated key (identical repository files) | the unit still runs, and the refresh happens | U | `test_apt_etc_apt:TestRepoGroupRemovalAndKeyChange::test_rotated_keyring_is_refreshed_although_its_source_file_is_identical` |
+| C157 | a repository and its now-unused key both removed | each gets its own `rm`, and the single refresh follows both | U | `test_apt_etc_apt:TestRepoGroupRemovalAndKeyChange::test_source_and_its_key_both_removed_with_one_update_after_both` |
+| C158 | the metadata-refresh marker is present but the unit finds nothing to do | the marker succeeds with "no repository changes to refresh for" and no `apt-get update` is issued | — | — (see Gaps) |
+
+### C.11 A derived write's failure and its visibility (articles: PKG-FR-DERIVED-FAILURE, PKG-FR-DERIVED-VISIBLE)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| C159 | a derived repository file whose own `sudo install` fails | no item fails for the file; the approved package that needed it fails, naming the path and apt's error | U | `test_apt_etc_apt:TestRepoGroupOrdering::test_a_repository_whose_own_promotion_fails_also_fails_its_package` |
+| C160 | a derived write that fails and was needed by two approved packages | BOTH fail, including one that would otherwise have installed | — | — (see Gaps) |
+| C161 | one approved package's own install failing | the repository stays, and the other packages sharing it are untouched | P | `test_apt_job:TestContinueOnFailure::test_second_of_three_fails_all_attempted_one_failure_raised` proves per-item isolation but with no shared derived file |
+| C162 | a derived `/etc/apt` file landing on a real run | logged as it lands, naming the destination and Atlas | — | — (see Gaps) |
+| C163 | a signing key landing on a real run | logged as it lands, naming the destination and Atlas | U | `test_apt_keyrings:TestKeyWritesAreVisible::test_a_provisioned_key_is_logged_as_it_lands` |
+| C164 | a signing key collected on a real run | logged as it goes | U | `test_apt_keyrings:TestKeyWritesAreVisible::test_a_collected_key_is_logged_as_it_goes` |
+| C165 | a dry run whose only `/etc/apt` work is a derived pin | previews "Would write /etc/apt/preferences.d/… from <Atlas>" and issues no `sudo install` and no `send_file` | U V | `test_apt_probe:TestWhatAptItselfReads::test_a_dry_run_previews_the_derived_writes_and_issues_none`; integration:`TestAptSyncEndToEnd::test_apt_repository_state_dry_run_previews_derived_writes_and_reviews_no_repository` |
+| C166 | a dry run with a key to write | previews "Would write signing key …" and writes none | U | `test_apt_keyrings:TestKeyWritesAreVisible::test_a_dry_run_previews_the_key_it_would_write` |
+| C167 | a dry run with an approved repository deletion that would orphan a key | previews "Would delete signing key …, which no repository would reference" and deletes none | U | `test_apt_keyrings:TestKeyWritesAreVisible::test_a_dry_run_previews_the_key_it_would_collect` |
+| C168 | a dry run's account of the refresh | reports the metadata-refresh marker by its own label | V | integration:`TestAptSyncEndToEnd::test_apt_repository_state_dry_run_previews_derived_writes_and_reviews_no_repository` |
+| C169 | a dry run for a repository that feeds no approved package | previews neither the repository nor its key | V | integration: same test |
+| C170 | a repository withheld from the review because Nomad still installs from it | named in the log with what keeps it | — | — (see Gaps) |
+
+
+## D. Collateral damage from an approved apt change
+
+### D.1 Collateral that touches only automatically-installed packages (articles: PKG-FR-COLLATERAL-AUTO)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| D1 | Nomad's apt would remove `auto-dep` — a package apt installed automatically there — to install an approved `pkg-a` | No question anywhere in the review; no collateral entry; `pkg-a` stays an ordinary approvable install | U | apt/collateral:`TestPlanTimeCollateral::test_auto_collateral_removal_produces_no_review_item` |
+| D2 | Same run reaches apply | The real install runs; the guard does not refuse it | U | apt/packages:`TestTransactionGuard::test_install_whose_only_collateral_is_auto_deps_proceeds` |
+| D3 | Same run's log is read afterwards | A line names `auto-dep`, the change (`would remove auto-dep`), and that it is installed automatically on Nomad so nobody was asked | U | apt/collateral:`TestAutoCollateralIsLogged::test_auto_collateral_removal_is_named_in_the_log` |
+| D4 | An approved removal of `pkg-a` also removes the auto-installed `pkg-b` | The removal runs; no question | U | apt/packages:`TestRemovalGuard::test_auto_reverse_dep_removal_proceeds` |
+| D5 | Same, log read afterwards | A line names `pkg-b` and the removal that took it (`Removing …`) | — | nothing asserts the `Removing` direction's auto log line |
+| D6 | An approved install would downgrade `auto-dg`, automatically installed on Nomad | No collateral entry, no question | U | apt/collateral:`TestPlanTimeCollateral::test_manual_downgrade_becomes_item_auto_downgrade_does_not` |
+| D7 | Same at apply time (the drift case: the real transaction downgrades an auto package) | The install proceeds, no refusal | U | apt/packages:`TestDowngradeGuard::test_guard_allows_auto_downgrade` |
+| D8 | An approved install would change auto-installed `auto-dep` from 1.0 to 2.0 | Log names both versions; the run spends no `dpkg --compare-versions` on it (direction is on the page without a command) | U | apt/collateral:`TestAutoCollateralIsLogged::test_an_auto_version_change_is_logged_without_a_version_comparison` |
+| D9 | The real (apply-time) transaction drifts and takes an auto package plan time did not predict | That change is named in the log too — it is the transaction that actually happened | — | `Collateral.unapproved` calls `_log_auto`; no test reads the log on an apply-time path |
+
+### D.2 Collateral that touches a package installed by hand on Nomad (articles: PKG-FR-COLLATERAL-MANUAL)
+
+#### The question exists and says the three things
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| D10 | Approved install of `pkg-a` would remove `other-manual`, which Nomad's apt has marked manually installed | Exactly one collateral item, in its own group, not on the install checkbox screen; `pkg-a` remains an approvable install | U | apt/collateral:`TestPlanTimeCollateral::test_manual_collateral_removal_becomes_a_collateral_review_item` |
+| D11 | Approved install would downgrade `manual-dg` 2.0 → 1.0 | Its own item, worded as a downgrade | U | apt/collateral:`TestPlanTimeCollateral::test_manual_downgrade_becomes_item_auto_downgrade_does_not` |
+| D12 | Approved install would upgrade `manual-up` 1.0 → 2.0 | Its own item: "Installing pkg-a on Nomad would upgrade manual-up from 1.0 to 2.0" — an unasked-for upgrade is the same imposition as a downgrade | U | apt/collateral:`TestCollateralUpgrade::test_manual_upgrade_becomes_a_collateral_item` |
+| D13 | Approved removal of `going` would also remove the manually-installed `victim` | Its own item naming the removal as the cause | U | apt/collateral:`TestOnePackageTwoConsequences::test_each_consequence_is_its_own_item_with_its_own_cause` |
+| D14 | apt reports a "version change" for a protected package whose old and new versions compare equal | No item, no question — nothing is actually moved | — | `Collateral.classify` returns early on `order == 0`; nothing asserts it |
+| D15 | The question is read | It names the affected package and what the approved change would do to it, as the first line of the detail | U | apt/collateral:`TestPlanTimeCollateral::test_manual_collateral_removal_becomes_a_collateral_review_item`, `TestTheReasonNamesTheGroundThatApplies::test_a_manually_installed_package_says_apt_has_it_marked_manual` |
+| D16 | Same question, second line | It says why the package is protected — that apt on Nomad has it marked manually installed, i.e. something asked for it there rather than it arriving as a dependency | U | apt/collateral:`TestTheReasonNamesTheGroundThatApplies::test_a_manually_installed_package_says_apt_has_it_marked_manual` |
+| D17 | Several collateral packages in one run, protected on different grounds | One heading over all of them, naming both grounds ("installed on Nomad or marked as its own") | U | apt/collateral:`TestTheReasonNamesTheGroundThatApplies::test_the_group_title_names_both_grounds` |
+| D18 | Two collateral packages in one group | One decision screen each — the causes and effects differ per item | U | review:`TestCollateralGroupResolution::test_each_package_gets_a_decision_screen_of_its_own` |
+
+#### The three answers
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| D19 | The screen is shown | Three answers: go ahead, keep the package, stop the sync — and only those three; no "never offer again" | U | skip_always:`TestGroupsNeverOfferedPermanence::test_collateral_group_is_never_offered_permanence` |
+| D20 | The go-ahead answer is read | It states its own effect, naming the causing change and the consequence: "install sl on nomad, so fortunes is removed as well"; the word on the row is the effect verb (`remove`/`downgrade`/`upgrade`) | P | review:`TestCollateralPromptWording::test_every_answer_names_the_machine_and_its_own_effect` asserts the rendering of hand-written hints; nothing asserts that `Collateral._item` composes those sentences |
+| D21 | The keep answer is read | It states its own effect: keep the package on Nomad, the causing change will not be installed/removed, will be asked again next sync | P | same as D20 — the item's own `answer_hints` are never asserted |
+| D22 | The stop answer is read | It says how far it reaches: nothing more is changed on Nomad, and what earlier jobs already did stays done | U | review:`TestCollateralPromptWording::test_every_answer_names_the_machine_and_its_own_effect` |
+| D23 | The user answers "go ahead" | The causing install runs, and the apply-time guard lets the collateral removal through | U | apt/collateral:`TestCollateralFlow::test_install_anyway_proceeds_and_guard_allows_the_collateral_removal` |
+| D24 | The user answers "keep the package" | The causing install is left unapplied — no install command is issued | U | apt/collateral:`TestCollateralFlow::test_skip_leaves_the_triggering_install_unapproved` |
+| D25 | Same run's outcome is read | The withdrawn change is reported as not applied, not as a failure ("leaving the changes unapplied rather than failing later") | P | apt/packages:`TestAHoldNeedsItsPackage::test_a_hold_whose_install_a_collateral_answer_cancelled_is_declined_too` asserts no ERROR-level record; no test asserts the item's own status on the plan-time path |
+| D26 | The user answers "stop the sync" | `SyncAbortedByUser` naming the package and Nomad; the whole sync ends, not just the apt job | U | review:`TestCollateralGroupResolution::test_abort_raises_sync_aborted_by_user_naming_the_collateral_package`, `TestCollateralPromptWording::test_stopping_names_the_package_and_the_machine_in_the_abort` |
+| D27 | A collateral package name contains bracket characters | The screen renders; no Rich markup error | U | review:`TestCollateralGroupResolution::test_bracketed_collateral_label_renders_without_markup_error` |
+| D28 | The run has no interactive terminal | No screen is drawn; the entry comes back skipped for this run; it is not flagged unresolved | U | review:`TestCollateralGroupResolution::test_non_interactive_collateral_entries_skip_once_and_are_not_unresolved` |
+
+#### What counts as "manually installed on Nomad"
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| D29 | `src-only` is manual on Atlas and automatic on Nomad; an approved install would remove it | No question — the target's own apt owns it (deliberate loss under ADR-020 D-40) | U | apt/collateral:`TestSourceOnlyCollateral::test_source_only_manual_collateral_removal_is_not_a_review_item` |
+| D30 | Same, at apply time | The guard also lets it go | U | apt/collateral:`TestSourceOnlyCollateral::test_apply_time_guard_allows_source_only_manual_collateral` |
+| D31 | `code` was installed on Atlas from a bare `.deb` (dropped from the manifest) and is automatic on Nomad; an approved install would remove it | No question, no item | U | apt/probe:`test_an_excluded_bare_deb_package_is_not_protected_from_collateral` |
+| D32 | Nomad's `apt-mark showmanual` (the protection read, the second of the two) does not answer | The job fails rather than proceeding with an empty protection set, which would classify every collateral package as automatic | U | apt/probe:`test_a_collateral_protection_read_that_did_not_answer_fails_the_job` |
+
+#### A package that is itself under review for removal
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| D33 | `old-tool` is on Nomad only (so it is a removal candidate) and manually installed there; installing approved `pkg-a` would take it | The user is still asked — being offered for removal is not consent to be removed. Its own removal item is untouched | U | apt/collateral:`TestRemovalCandidateKeepsItsProtection::test_a_removal_candidate_taken_by_an_install_is_still_asked_about` |
+| D34 | The user skips `old-tool`'s removal for this run and keeps it at the collateral question | Neither the install nor the removal runs | U | apt/collateral:`TestRemovalCandidateKeepsItsProtection::test_skipping_that_removal_leaves_the_install_unapplied` |
+| D35 | `old-tool` is a removal candidate and the removal batch's own rehearsal reports it | It is not collateral of its own batch — no question about itself | U | apt/collateral:`TestRemovalCandidateKeepsItsProtection::test_a_removal_candidate_is_not_collateral_of_its_own_batch` |
+| D36 | The user APPROVED removing both `pkg-a` and `pkg-b`; removing `pkg-a` also removes `pkg-b` | Both removals run — an approved removal exempts its package from the protection | U | apt/packages:`TestRemovalGuard::test_both_removals_approved_the_first_proceeds` |
+| D37 ‼ | The user SKIPPED `pkg-b`'s removal for this run; the approved removal of `pkg-a` would carry `pkg-b` off anyway | The requirement says a skipped candidate keeps its protection, so the user must be ASKED. The tool tells instead: `plan_time` exempts every removal candidate from the removal batch, so no question is built, and `PackageConverger.remove`'s guard refuses `pkg-a`'s transaction naming `pkg-b`. Nothing is lost; the answer is never offered. Accepted cost: closing it needs one `apt-get --dry-run` per candidate on every run with removals | — | no test sets this up at all — neither the refusal nor the missing question |
+| D38 ‼ | Nomad holds `pkg-a` without having it installed, and `pkg-a` is in this run's install batch | `Collateral.plan_time` rehearses with `--allow-change-held-packages`, which the real install withholds, so apt may report changes to OTHER held packages that the real command would refuse outright — the question can be about collateral that would never happen. Accepted: over-asks, never under-asks | U (for the flag; the over-ask itself is unasserted) | apt/collateral:`TestTheRehearsalSurvivesAStaleTargetHold::test_the_install_rehearsal_asks_apt_to_allow_the_held_name`, `::test_an_ordinary_run_never_asks_for_it` |
+
+#### The guard behind the question
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| D39 | The real install's transaction drifts after plan time and would remove a manually-installed package nobody saw | The install is refused as its own failed item naming that package; no install command runs | U | apt/packages:`TestTransactionGuard::test_guard_refuses_drifted_manual_removal_not_seen_at_plan_time` |
+| D40 | The real removal's transaction drifts and would remove a manually-installed package nobody saw | The removal is refused naming that package | U | apt/packages:`TestRemovalGuard::test_drifted_manual_reverse_dep_removal_refused` |
+| D41 | The real transaction would downgrade a manually-installed package nobody saw | Refused naming the package | U | apt/packages:`TestDowngradeGuard::test_guard_refuses_drifted_manual_downgrade` |
+
+### D.3 The collateral package is marked machine-specific (articles: PKG-FR-COLLATERAL-MARKED)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| D42 | `vendor-tool` is marked as Nomad's own and is NOT in Nomad's manual set; an approved install would remove it | A question is asked, and it says explicitly that the package is marked as Nomad's own — and claims nothing about apt's bookkeeping | U | apt/collateral:`TestTheReasonNamesTheGroundThatApplies::test_a_package_only_a_mark_protects_says_so_and_claims_nothing_about_apt` |
+| D43 | Same, with `ghost-tool` marked and automatic on Nomad | The mark alone protects it; the collateral group exists | U | state:`TestDecisionScopeReachesCollateral::test_a_mark_protects_a_package_apt_considers_auto_installed` |
+| D44 | `vendor-tool` is both marked as Nomad's own and in Nomad's manual set | The question states both grounds and says either alone would protect it | U | apt/collateral:`TestTheReasonNamesTheGroundThatApplies::test_a_package_both_grounds_cover_states_both` |
+| D45 | A marked package appears in a run | It produces no diff and no review line of its own anywhere — the collateral question is the only place its mark is ever named | U | state:`TestDecisionScopeReachesCollateral::test_manual_set_membership_protects_the_same_item_on_its_own` |
+| D46 | The user answers "never offer again" to `pkg-y`'s removal earlier in THIS run, then an approved removal's cascade would take `pkg-y` | The mark counts from that moment: `pkg-y` is protected, and the transaction that would take it is refused rather than proceeding | — | `Collateral.resolve` builds `_run_marked` from same-run `SKIP_ALWAYS` removal decisions and `protected()` unions it in; no test drives a transaction after such a mark |
+| D47 ‼ | Same as D46, but read as a question rather than a guard | The article wants the mark to count; the tool counts it only at the apply-time guard. Plan-time items — and therefore every question and every "why it is protected" sentence — are built before any answer exists, and `Collateral._reason` deliberately does not consult `_run_marked`. So a same-run mark yields a refusal, never a question naming the mark | — | inferred from `Collateral._reason`'s docstring and `resolve`'s ordering; no test, and the criteria's gap list does not name this one |
+
+### D.4 Which approved changes a decline cancels (articles: PKG-FR-COLLATERAL-ATTRIBUTION)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| D48 | Two approved removals, `pkg-x` and `pkg-y`; only `pkg-x`'s own transaction takes `other-manual`. The user keeps `other-manual` | Only `pkg-x` is cancelled; `pkg-y` is still removed | U | apt/collateral:`TestCollateralAttribution::test_skip_cancels_only_the_candidate_whose_transaction_causes_it` |
+| D49 | Same setup, question read before answering | The question names `pkg-x`, not "the selected packages" | U | apt/collateral:`TestCollateralAttribution::test_the_narrowing_names_the_causing_candidate_in_the_question` |
+| D50 | Neither `pkg-x` nor `pkg-y` alone drops `other-manual`; only both together do. The user keeps `other-manual` | The whole set is cancelled — neither removal runs | U | apt/collateral:`TestCollateralAttribution::test_collateral_no_single_candidate_reproduces_is_blamed_on_the_whole_batch` |
+| D51 | Same, question read before answering | The question says so: it refers to the whole batch ("the packages listed earlier") rather than naming one package | U | apt/collateral:`TestCollateralAttribution::test_joint_causation_names_the_whole_batch_rather_than_one_package` |
+| D52 | A run whose batched rehearsal finds no manual collateral | No per-candidate narrowing is paid for — one rehearsal per direction | U | apt/collateral:`TestCollateralAttribution::test_a_clean_batch_costs_no_extra_rehearsal`, `TestPlanTimeCollateral::test_at_most_two_apt_get_dash_s_commands_regardless_of_package_count` |
+| D53 | A run whose batch found manual collateral, with a single candidate in that direction | The single candidate is its own answer and is not rehearsed a second time | — | `for_direction` guards the narrowing with `len(candidates) > 1`; no test counts rehearsals on a single-candidate collateral run |
+| D54 | `victim` is manually installed on Nomad; installing approved `pkg-a` takes it AND removing approved `going` takes it | Two separate questions, each naming its own cause and its own consequence | U | apt/collateral:`TestOnePackageTwoConsequences::test_each_consequence_is_its_own_item_with_its_own_cause` |
+| D55 | The user lets the install's consequence go ahead and keeps `victim` against the removal's | The install runs; the removal is cancelled. Consenting to one consequence does not exempt the package from the other | U | apt/collateral:`TestOnePackageTwoConsequences::test_letting_the_installs_casualty_go_ahead_does_not_release_the_removals` |
+| D56 | Same, but the removal's transaction only drifts onto `victim` after plan time, so nothing cancelled it | The apply-time guard refuses the removal naming `victim`, while the install whose consequence WAS consented to still runs — the consent is matched on the consequence, not the package | U | apt/collateral:`TestOnePackageTwoConsequences::test_the_apply_time_guard_matches_the_consequence_not_the_package` |
+| D57 | A consequence already let go ahead at plan time comes up again in the late (post-`/etc/apt`) question | It is not asked twice — the id is the consequence, so the earlier answer covers this cause | — | `LateCollateral.ensure_asked` filters on `Collateral.approved`; the late tests never seed a plan-time approval for the same id |
+| D58 | A consequence DECLINED at plan time recurs as a late question about different changes | It is asked again — the earlier answer cancelled the changes it was about, and these are other changes | — | same code path; no test |
+
+### D.5 A cancellation must not overwrite a decision the user gave (articles: PKG-FR-COLLATERAL-KEEPS-MARKS)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| D59 | The user answers "never offer again" to `pkg-y`'s removal, and a kept collateral package cancels `pkg-y` too (both candidates really cause it) | `pkg-y` is not removed, and its machine-specific mark is still recorded on Nomad | U | apt/collateral:`TestCollateralAttribution::test_a_collateral_skip_does_not_discard_a_trigger_own_skip_always` |
+| D60 | Same mark on a package that is NOT a trigger of the collateral | Untouched — nothing about it is re-decided, and the mark is recorded | U | apt/collateral:`TestCollateralAttribution::test_a_collateral_skip_does_not_discard_an_unrelated_skip_always` |
+| D61 | A change the user already declined is among the collateral's triggers | It is not re-decided; only an APPLY is ever overridden | P | covered only through D59 (the `SKIP_ALWAYS` case). A trigger already `SKIP_ONCE` is unobservable — overriding it to `SKIP_ONCE` is a no-op |
+
+### D.6 When the question is asked (articles: PKG-FR-COLLATERAL-MANUAL with PKG-FR-ASK-AGAIN, PKG-FR-BATCHED, PKG-FR-CONSENT-BEFORE-CHANGE, PKG-FR-NO-TERMINAL, PKG-FR-LOG-DECISIONS)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| D62 | Every approved install is a package Nomad's apt can already resolve | The collateral question is put while planning, in the one review; the converge loop asks nothing more and issues no extra rehearsal | U | apt/collateral:`TestCollateralForARepositoryThisRunWrites::test_the_question_costs_nothing_on_a_run_with_no_late_install` |
+| D63 | `pkg-a` comes from a repository this run writes, so Nomad's apt has never heard the name | Nothing is asked at plan time and no rehearsal is issued — the facts genuinely do not exist yet | U | apt/collateral:`TestCollateralForARepositoryThisRunWrites::test_the_question_is_absent_from_the_plan_time_review` |
+| D64 | Same run, once `/etc/apt` has converged and the run's `apt-get update` has run | The question is put then, with the same three answers and the same heading, in a second review round | U | apt/collateral:`TestCollateralForARepositoryThisRunWrites::test_keeping_the_package_leaves_the_install_unapplied_and_unfailed` (asserts exactly two review calls, the second carrying the collateral entry) |
+| D65 | Two such installs in one run | The question is asked ONCE, over both together, before the first of them converges — no package transaction has happened when the last of them is answered | P | `LateCollateral.ensure_asked` is idempotent by design; `_two_late_installs_context` exists but the run it drives withdraws `pkg-a`, so nothing asserts the ordering against a surviving install |
+| D66 | The user keeps the package at the late question | The install does not run, the package survives, and the job reports no failed item | U | apt/collateral:`TestCollateralForARepositoryThisRunWrites::test_keeping_the_package_leaves_the_install_unapplied_and_unfailed` |
+| D67 | The user lets it go ahead at the late question | The install runs and the guard allows the collateral removal | U | apt/collateral:`TestCollateralForARepositoryThisRunWrites::test_going_ahead_installs_and_the_guard_allows_the_collateral_removal` |
+| D68 | The user stops the sync at the late question | The whole sync ends — the stopping answer reaches as far mid-apply as it does at plan time — and no install runs | U | apt/collateral:`TestCollateralForARepositoryThisRunWrites::test_stopping_ends_the_whole_sync` |
+| D69 | The late question is reached on a run with nobody to ask | Every such item is declined for this run: the install is withheld, not pushed through and not failed | U | apt/collateral:`TestCollateralForARepositoryThisRunWrites::test_a_run_with_no_terminal_declines_it` |
+| D70 | The late question's answer is read back from the log | The log names the item and the answer it got ("reviewed other-manual (collateral): skip now"), and names the install that was not applied — the plan's own decision pass cannot see this question | U | apt/collateral:`TestCollateralForARepositoryThisRunWrites::test_the_decision_is_named_in_the_log` |
+
+
+## E. Snap
+
+### E.1 Scope and identity (articles: PKG-FR-SNAP-SCOPE, PKG-FR-SNAP-IDENTITY, PKG-NG-SNAP-ORIGIN)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| E1 | Atlas has snaps installed; run `snap_sync` | Each snap is captured with its name, its installed revision and the channel it tracks | U | `test_snap_sync:TestCapture::test_capture_source_items_parses_name_rev_tracking_by_header` |
+| E2 | Atlas has a classic snap and a devmode snap | The confinement mode of each is captured alongside its revision and channel | U | `test_snap_sync:TestParseConfinement::test_classic_note_sets_item_classic`, `::test_devmode_note_sets_item_devmode` |
+| E3 | Atlas has a snap with a per-snap refresh hold set | The hold state is captured as part of that machine's snap state | U | `test_snap_sync:TestParseHeld::test_held_note_sets_item_held` |
+| E4 | The same snap name is installed on Atlas and Nomad from listings whose Publisher columns differ | The two are one item; the publisher plays no part in matching them | — | nothing asserts the publisher column is ignored |
+| E5 | A full snap review is presented for a plan with installs, changes, removals and holds | No question, group or item ever asks the user where a snap comes from — no store, publisher, remote or key item exists | — | no test asserts the absence of an origin item for snap |
+| E6 | A snap item is written to a decision file or shown in the review | Its identity is the name alone (`snap:<name>`), stable across runs | U | `test_snap_sync:TestSnapItem::test_reports_its_item_class` (asserts `item_id == "snap:firefox"`) |
+
+### E.2 Presence, revision and channel cases (articles: PKG-FR-SNAP-CASES, PKG-FR-SNAP-REVISION)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| E7 | `alpha` is on Atlas and not on Nomad | Offered for install on Nomad | U | `test_snap_sync:TestDiff::test_missing_on_target_yields_install_diff` |
+| E8 | Approving that install | Nomad gets Atlas's exact revision, named in the command | U | `test_snap_sync:TestNoHold::test_install_command_contains_an_explicit_revision` |
+| E9 | Approving that install, where Atlas tracks `latest/edge` | Nomad ends the run tracking `latest/edge` too — the channel is set as part of the install | P | `test_snap_sync:TestNoHold::test_install_change_retrack_and_removal_never_set_a_hold` converges the install but never asserts the following `snap switch --channel=...` |
+| E10 | `delta` is on Nomad only | Offered for removal from Nomad, in a group of its own separate from the installs | U | `test_snap_sync:TestDiff::test_extra_on_target_yields_remove_diff_in_its_own_group` |
+| E11 | `beta` is revision 20 on Atlas and 15 on Nomad, same channel | One change naming both revisions | U | `test_snap_sync:TestDiff::test_revision_change_yields_change_diff_naming_both_revisions` |
+| E12 | Approving E11 | Nomad is moved to revision 20; no channel switch is issued, because the channel already matches | P | `test_snap_sync:TestSideloadedSnaps::test_store_snaps_in_the_same_listing_still_diff_and_converge` asserts the `--revision=20` refresh; nothing asserts the absence of a switch on the success path |
+| E13 | `gamma` is revision 30 on both but `latest/edge` on Atlas and `latest/stable` on Nomad | One change naming both channels | U | `test_snap_sync:TestDiff::test_same_revision_different_channel_yields_change_diff_naming_both_channels` |
+| E14 | Approving E13 | Nomad is retracked to Atlas's channel and no revision refresh is issued | P | `test_snap_sync:TestHoldAndRevisionFailuresArePerItem::test_unfetchable_revision_is_a_clean_per_item_failure_not_a_crash` asserts `snap switch --channel=latest/stable gamma`; that no `--revision` refresh accompanies it is unasserted |
+| E15 | `beta` differs in BOTH revision and channel | One single item, whose line names both pairs of values | U | `test_snap_sync:TestDiff::test_revision_and_channel_both_differing_names_both_pairs` |
+| E16 | Approving E15 | Both the revision move and the channel retrack happen for that one item | — | no test converges a both-differ item and asserts both commands |
+| E17 | `epsilon` is at the same revision and channel on both machines | No item at all | U V | `test_snap_sync:TestDiff::test_identical_snap_yields_no_diff`; `test_package_sync:TestPackageSyncIdempotency::test_second_consecutive_sync_has_nothing_to_do` (snap revisions in the before/after state witness) |
+| E18 | A revision/channel difference reaches the review | It is a change to apply, never a report-only finding (unlike an apt version difference) | U | `test_snap_sync:TestDiff::test_revision_change_yields_change_diff_naming_both_revisions` (asserts `DiffAction.CHANGE`) |
+| E19 | A plan carrying a revision/channel change is reviewed | The change group reads as a change, distinct from the install and remove groups | — | `TestHoldReviewVerbs` asserts install/remove/hold/unhold group titles; no CHANGE group title is asserted for snap |
+| E20 | Neither machine has any snap | No items, no failure | — | not tested; each empty half is (E17/E26) |
+| E21 | A real sync converges a snap divergence between two VMs | Nomad ends on Atlas's revision | V | `test_package_sync:TestPackageSyncWholeRunContracts::test_snap_revision_converges_without_hold` |
+
+### E.3 Reading `snap list` (articles: PKG-FR-SNAP-SCOPE, PKG-FR-READ-FAILS-JOB as it binds snap)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| E22 | `snap list` output in the stock column order | Name, revision, channel and notes read from the columns those headers name | U | `test_snap_sync:TestCapture::test_capture_source_items_parses_name_rev_tracking_by_header` |
+| E23 | A future snapd emits the same columns in a different order | Values are still correct — nothing is read by position | U | `test_snap_sync:TestCapture::test_column_reordered_header_still_parses_correctly` |
+| E24 | A snap has a retained older revision, whose line is marked `disabled` | Only the active revision becomes an item | U | `test_snap_sync:TestCapture::test_disabled_revision_line_produces_no_item` |
+| E25 | The disabled older line ALSO carries `classic` in the same Notes list | It is still skipped; the active classic line is the item | U | `test_snap_sync:TestParseConfinement::test_disabled_classic_line_is_still_skipped` |
+| E26 | A machine with no snaps answers "No snaps are installed yet." at exit 0 | Read as an empty machine, not a crash and not a failure; the other machine's snaps are offered for removal | U | `test_snap_sync:TestCapture::test_no_snaps_installed_yields_empty_list_not_a_crash`, `TestAProbeThatDidNotAnswer::test_a_source_with_no_snaps_installed_is_data_not_a_failure` |
+| E27 | snapd is unreachable on Atlas and `snap list` exits non-zero | `snap_sync` fails naming the command that did not answer; the silence is never read as "no snaps" | U | `test_snap_sync:TestAProbeThatDidNotAnswer::test_a_source_list_that_did_not_answer_fails_the_job` |
+| E28 | Same on Nomad | Same | U | `test_snap_sync:TestAProbeThatDidNotAnswer::test_a_target_list_that_did_not_answer_fails_the_job` |
+| E29 | A `snap list` line has fewer columns than the header declares | The line is ignored rather than producing a wrong revision | — | nothing asserts the short-line skip |
+
+### E.4 Confinement (article: PKG-FR-SNAP-CONFINEMENT)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| E30 | Atlas has a classic snap Nomad lacks; the install is approved | Nomad's install carries the classic confirmation, so snapd does not refuse it | U | `test_snap_sync:TestConvergeConfinement::test_install_of_classic_snap_passes_classic` |
+| E31 | Atlas has a devmode snap Nomad lacks | The install carries the devmode confirmation and never the classic one | U | `test_snap_sync:TestConvergeConfinement::test_install_of_devmode_snap_passes_devmode_and_never_classic` |
+| E32 | Atlas has a strictly confined snap Nomad lacks | The install carries neither confirmation flag | U | `test_snap_sync:TestConvergeConfinement::test_install_of_strict_snap_passes_no_confinement_flag` |
+| E33 | A revision change where Atlas's revision is classic and Nomad's current one is strict | The refresh carries Atlas's confinement, not Nomad's | U | `test_snap_sync:TestConvergeConfinement::test_refresh_passes_classic_when_target_is_strict` |
+| E34 | The reverse skew: Atlas strict, Nomad classic, revision differs | The refresh carries no confinement flag and Nomad's confinement is left as it is | — | no test converges the reverse skew |
+| E35 | Same name, revision and channel on both, but the Notes disagree about confinement | No item — confinement alone is nothing to converge | U | `test_snap_sync:TestConvergeConfinement::test_confinement_difference_alone_produces_no_diff` |
+
+### E.5 Removal (article: PKG-FR-SNAP-REMOVE-SNAPSHOT)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| E36 | An approved removal of a snap from Nomad | The snap is removed and snapd's own pre-removal snapshot is left in place | P | `test_snap_sync:TestConvergeRemoval::test_removal_never_passes_purge` asserts the command carries no purge; nothing observes the snapshot surviving |
+| E37 | After a real removal through a sync, the user runs `snap saved` on Nomad | The snapshot for the removed snap is listed | — | no VM test removes a snap through a sync |
+
+### E.6 Sideloaded snaps (article: PKG-FR-SNAP-SIDELOAD)
+
+A sideload is a snap whose bytes came from a local `.snap` file; `snap list` shows it at an `x`-prefixed revision. All rows here assert the same outcome shape: no item in any direction, no command, one named warning per machine.
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| E38 | Atlas has a sideloaded snap Nomad lacks | No install is offered; the run names it as unmanaged | U | `test_snap_sync:TestSideloadedSnaps::test_sideloaded_source_snap_produces_no_diff`, `::test_one_warning_names_the_skipped_sideloaded_snaps` |
+| E39 | Nomad has a sideloaded snap Atlas lacks | No removal is offered; the run names it | U | `test_snap_sync:TestSideloadedSnaps::test_target_only_sideloaded_snap_is_not_offered_for_removal` |
+| E40 | Both machines have a sideload of the same name, at different revisions | No item in either direction | U | `test_snap_sync:TestSideloadedSnaps::test_sideloaded_snap_present_on_both_is_not_proposed_for_removal` |
+| E41 | Both machines have sideloads (different names, one each) | Each machine's sideloads are named — two findings, one per machine | P | `::test_one_warning_names_the_skipped_sideloaded_snaps` covers a source-only machine; no test has sideloads on both and asserts a warning per machine |
+| E42 | `beta` is a store snap on Atlas and a sideload of the same name on Nomad | Nothing at all: no install of `beta` on Nomad, no removal | U | `test_snap_sync:TestSideloadedSnaps::test_store_snap_the_target_sideloaded_under_the_same_name_produces_no_diff` |
+| E43 | `beta` is a sideload on Atlas and a store snap on Nomad | Nothing at all: `beta` is not offered for removal from Nomad | — | the withholding is symmetric in the code, but only the E42 direction is tested |
+| E44 | Atlas's sideload also carries a per-snap hold | No hold item is proposed for it | U | `test_snap_sync:TestSideloadedSnaps::test_sideloaded_snap_that_is_held_produces_no_hold_diff_either` |
+| E45 | Nomad holds a sideload whose name is a store snap on Atlas | No hold item either, because the name is withheld on both machines | — | untested |
+| E46 | A sideload the user previously marked as this machine's own | Still named as unmanaged, still no item — the mark silences items, not the finding | U | `test_snap_sync:TestSideloadedSnaps::test_a_marked_sideloaded_snap_is_still_named_and_still_produces_no_diff` |
+| E47 | A run whose listing mixes a sideload and ordinary store snaps | The store snaps converge normally; no command ever names the sideload | U | `test_snap_sync:TestSideloadedSnaps::test_store_snaps_in_the_same_listing_still_diff_and_converge` |
+| E48 | Two sideloads on one machine | One finding names both, rather than one line each | U | `test_snap_sync:TestSideloadedSnaps::test_one_warning_names_the_skipped_sideloaded_snaps` (asserts a single record naming both) |
+| E49 | A real run on a VM carrying a sideloaded snap | The run finishes naming it, and the sideload is neither installed nor removed on either machine | — | no VM coverage of sideloads |
+
+### E.7 A snap that cannot be converged (article: PKG-FR-SNAP-FAIL-ITEM)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| E50 | Two approved snap changes; Nomad's snapd cannot fetch the revision the first one names | That snap fails alone, naming it; the second still converges | U | `test_snap_sync:TestHoldAndRevisionFailuresArePerItem::test_unfetchable_revision_is_a_clean_per_item_failure_not_a_crash` |
+| E51 | The same failing item also needed a channel retrack | The retrack is not attempted after the revision move failed | U | same test (asserts no `snap switch` for the failed snap) |
+| E52 | An approved snap removal fails on Nomad | It fails as its own item and the rest of the run continues | — | the per-item loop is generic (`sync_core`); no snap removal failure is asserted |
+| E53 | A real run on VMs where one snap item fails | The run reports that item as failed and everything else it approved still landed | — | `test_package_sync:TestPackageSyncWholeRunContracts::test_continue_on_item_failure` is apt-only |
+
+### E.8 Per-snap refresh holds (articles: PKG-FR-SNAP-HOLD, PKG-FR-BLOCKS-REPLICATE)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| E54 | Atlas holds `alpha`; Nomad does not | A hold item of its own, separate from `alpha` itself, proposing to add the hold on Nomad | U | `test_snap_sync:TestHolds::test_source_held_yields_install_hold_diff_and_converges_hold_forever` |
+| E55 | Approving E54 | Nomad's `alpha` ends the run held | U V | same test (asserts `snap refresh --hold=forever alpha`); `test_package_sync:TestSnapHoldCaptureTiming::test_per_snap_hold_replicates_through_a_real_sync_window` |
+| E56 | Nomad holds `alpha`; Atlas does not | A hold item proposing to lift Nomad's hold | U | `test_snap_sync:TestHolds::test_target_held_only_yields_remove_hold_diff_and_converges_unhold` |
+| E57 | Approving E56 | Nomad's hold on `alpha` is lifted | U | same test (asserts `snap refresh --unhold alpha`) |
+| E58 | Both machines hold `alpha` | No hold item | U | `test_snap_sync:TestHolds::test_both_held_yields_no_hold_diff` |
+| E59 | Neither machine holds `alpha` | No hold item | U | implicit in every non-hold fixture, e.g. `TestDiff::test_identical_snap_yields_no_diff` |
+| E60 | Nomad holds `orphan`, which Atlas no longer has at all | No hold item; `orphan` itself is still offered for removal | U | `test_snap_sync:TestHoldIntentIsSourceAuthoritative::test_hold_on_a_snap_the_source_does_not_have_yields_no_hold_diff` |
+| E61 | A plan carrying snap installs, snap removals and holds in both directions | Hold items sit in their own groups reading "hold"/"unhold", never inside the install or remove groups | U | `test_snap_sync:TestHoldReviewVerbs::test_hold_install_group_reads_hold_never_install`, `::test_hold_remove_group_reads_unhold_and_is_removal_direction`, `::test_snap_groups_keep_their_own_verbs_and_exclude_hold_items` |
+| E62 | The group that lifts a hold is presented | It is a removal-direction group, so it is not approved by not choosing | U | `::test_hold_remove_group_reads_unhold_and_is_removal_direction` |
+| E63 | `alpha` is new on Nomad AND held on Atlas | The install is settled and applied before the hold, so the hold lands on a snap that exists | U | `test_snap_sync:TestHolds::test_hold_diff_emitted_after_presence_diffs` |
+| E64 | The user declines `alpha`'s install but approves its hold | The hold fails as its own item; the other approved holds still land | U | `test_snap_sync:TestHoldAndRevisionFailuresArePerItem::test_hold_for_a_snap_absent_on_target_fails_only_that_item` |
+| E65 | A run that installs, changes, retracks and removes snaps | Not one of those commands sets a refresh hold as a side effect | U | `test_snap_sync:TestNoHold::test_install_change_retrack_and_removal_never_set_a_hold` |
+| E66 | The hold-add command is built for a snap | It always names the snap; the bare form that would hold every snap on the machine is never issued | U | `test_snap_sync:TestHolds::test_hold_converge_never_emits_bare_hold` |
+| E67 | A real sync converges a snap revision on VMs | Neither machine's system-wide refresh policy is different afterwards from what it was before | V | `test_package_sync:TestPackageSyncWholeRunContracts::test_snap_revision_converges_without_hold` |
+| E68 | The user answers "never ask again" to a hold Atlas holds | The mark is recorded on Atlas, and the hold is never offered again | U V | `test_block_state_decisions:TestSnapHoldDecisions::test_declined_hold_is_recorded_on_source_and_never_re_offered`; `test_package_sync:TestBlockStateDecisionRoundTrip::test_skip_always_on_a_snap_hold_is_inert_next_run` |
+| E69 | The user answers "never ask again" to an unhold, where Nomad holds it | The mark is recorded on Nomad, and it is never offered again | U | `test_block_state_decisions:TestSnapHoldDecisions::test_declined_unhold_is_recorded_on_target_and_never_re_offered` |
+| E70 | A hold was permanently declined; the snap itself is still missing on Nomad | The snap is still offered for install — the hold decision is about the hold only | U | `test_block_state_decisions:TestSnapHoldDecisions::test_recorded_hold_does_not_silence_the_snaps_own_presence_diff` |
+| E71 | The sync's own auto-refresh pause is in force while holds are captured | A per-snap hold still reads as held, and a snap without one does not acquire the note | V | `test_package_sync:TestSnapHoldCaptureTiming::test_system_refresh_hold_does_not_mask_a_per_snap_held_note` |
+
+### E.9 The auto-refresh pause (article: PKG-FR-SNAP-REFRESH-PAUSE)
+
+Driven by the orchestrator around the whole job window; listed here because the obligation is snap's.
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| E72 | `snap_sync` is enabled and the run is real | Automatic snap refreshes are suspended on BOTH machines for the run | U | `test_snap_autorefresh_hold:TestHoldEngaged::test_hold_set_on_both_hosts_when_snap_sync_enabled` |
+| E73 | The suspension is about to be set | Each machine's existing refresh policy is read first, and reading it changes nothing | U | `test_snap_autorefresh_hold:TestHoldEngaged::test_capture_is_read_only_and_precedes_the_set`, `TestConfirmEachCommandGate::test_apply_and_restore_declare_mutations_on_both_hosts` |
+| E74 | The policy is read on a machine where reading it needs privilege | The read is privileged, so a permission failure is never mistaken for "no policy set" | U | `test_snap_autorefresh_hold:TestCaptureIsPrivileged::test_capture_reads_under_sudo_on_both_hosts` |
+| E75 | Atlas's policy cannot be read; Nomad's is genuinely unset | The two are told apart | U | `test_snap_autorefresh_hold:TestCaptureIsPrivileged::test_a_denied_read_is_not_reported_as_no_hold` |
+| E76 | Atlas had its own refresh hold set to a date; the run ends | Atlas's own hold is back, exactly as it was | U | `test_snap_autorefresh_hold:TestUserHoldIsNeverDestroyed::test_a_prior_hold_survives_the_sync_window[2026-07-24T18:00:00Z]` |
+| E77 | Atlas had an INDEFINITE hold of its own; the run ends | The indefinite hold is back, not a timed one and not none | U | `::test_a_prior_hold_survives_the_sync_window[forever]` |
+| E78 | Neither machine had a hold; the run ends | The suspension the run set is cleared and nothing else is | U | `test_snap_autorefresh_hold:TestUserHoldIsNeverDestroyed::test_only_a_genuinely_absent_hold_is_cleared`, `TestRestore::test_restore_unsets_when_no_prior_hold` |
+| E79 | Different prior policies on the two machines (a date on Atlas, indefinite on Nomad) | Each machine gets its own value back | U | `test_snap_autorefresh_hold:TestRestore::test_restore_preserves_prior_hold_per_host` |
+| E80 | A machine's prior policy cannot be read | Nothing is written there — the run does not pause that machine at all | U | `test_snap_autorefresh_hold:TestUserHoldIsNeverDestroyed::test_an_unreadable_hold_is_never_written_in_the_first_place` |
+| E81 | Same machine at the end of the run | Its policy is left exactly as found, never cleared | U | `::test_an_unreadable_hold_is_left_alone_rather_than_cleared` |
+| E82 | Atlas's policy is unreadable, Nomad's is fine | Nomad is still paused; one machine's failure does not cost the other its guard | U | `::test_the_readable_host_is_still_paused_when_the_other_is_not` |
+| E83 | Setting the suspension fails on a machine | The run says so, names the machine, and continues with that machine unpaused | U | `test_snap_autorefresh_hold:TestWarningsNameTheMachines::test_a_failed_pause_names_the_machine` |
+| E84 | The set command succeeds but the policy still reads unchanged afterwards | The run says the machine is NOT paused, names it, and continues | U | `test_snap_autorefresh_hold:TestApplyIsVerified::test_warns_when_the_hold_did_not_stick`, `TestWarningsNameTheMachines::test_a_hold_that_did_not_stick_names_the_machine` |
+| E85 | The confirmation read is refused | The run says it could not confirm the pause, names the machine, and continues | U | `test_snap_autorefresh_hold:TestApplyIsVerified::test_warns_when_the_read_back_is_denied`, `TestWarningsNameTheMachines::test_a_pause_that_cannot_be_confirmed_names_the_machine` |
+| E86 | The confirmation read raises (connection lost) | The run continues; the pause stays engaged so it is still restored at the end | U | `test_snap_autorefresh_hold:TestApplyIsVerified::test_a_read_back_that_raises_never_fails_the_sync` |
+| E87 | Everything works | No warning is emitted at all | U | `test_snap_autorefresh_hold:TestApplyIsVerified::test_no_warning_when_the_hold_took_effect` |
+| E88 | The suspension is written | It is a timed value computed on that machine's own clock, so it lapses on its own | P | `test_snap_autorefresh_hold:TestHoldEngaged::test_hold_set_on_both_hosts_when_snap_sync_enabled` asserts the value is date-computed and that the indefinite verb is never used; nothing observes the expiry |
+| E89 | A run dies without cleaning up | Neither machine is left with automatic refreshes suspended once the timed value lapses | — | untested |
+| E90 | The pause is in force while `snap_sync` converges revisions | It does not block the run's own revision moves — only automatic refreshes are gated | U V | `test_snap_autorefresh_hold:TestHoldDoesNotBlockConvergence::test_hold_only_writes_refresh_hold_never_a_snap_refresh_command`; `test_package_sync:TestPackageSyncWholeRunContracts::test_snap_revision_converges_without_hold` |
+| E91 | A dry run | Nothing is suspended on either machine | U | `test_snap_autorefresh_hold:TestHoldEngaged::test_hold_skipped_in_dry_run` |
+| E92 | `snap_sync` is not enabled | Nothing is suspended on either machine | U | `test_snap_autorefresh_hold:TestHoldEngaged::test_hold_not_set_when_snap_sync_disabled` |
+| E93 | A run that never engaged the pause reaches cleanup | No command is issued | U | `test_snap_autorefresh_hold:TestRestore::test_restore_is_noop_when_no_hold_engaged` |
+| E94 | Cleanup runs twice | The restore happens once | U | `test_snap_autorefresh_hold:TestRestore::test_restore_is_idempotent` |
+| E95 | The run is started with per-command confirmation | Both the pause and the restore are shown to the user as changes; the policy read is not | U | `test_snap_autorefresh_hold:TestConfirmEachCommandGate::test_apply_and_restore_declare_mutations_on_both_hosts` |
+| E96 | The restore is shown for confirmation on a machine whose own hold was overwritten | The prompt names the value being written back | U | `test_snap_autorefresh_hold:TestConfirmEachCommandGate::test_restore_names_the_prior_value_it_is_writing_back` |
+| E97 | The user declines the restore at that prompt | The write does not happen, and the run still releases the lock on Nomad and its connection | U | `test_snap_autorefresh_hold:TestConfirmEachCommandGate::test_abort_at_restore_is_not_swallowed_by_the_best_effort_handler`, `::test_cleanup_honours_the_abort_but_still_releases_resources` |
+| E98 | The restore command fails, or the connection is already gone | The run says so, names the machine, and finishes tearing down | U | `test_snap_autorefresh_hold:TestWarningsNameTheMachines::test_a_failed_restore_names_the_machine`, `::test_a_restore_that_raises_names_the_machine` |
+| E99 | The restore for Nomad is attempted | It happens while the connection it needs is still up | — | ordering is only implicit in `test_cleanup_honours_the_abort_but_still_releases_resources` |
+| E100 | Any of the pause's warnings is read by the user | Each names the machine by hostname; neither role word appears | U | `test_snap_autorefresh_hold:TestWarningsNameTheMachines` (`_named` asserts the absence of both role words across every warning) |
+| E101 | Atlas cannot run privileged commands without a password | Validation fails naming Atlas, saying the pause is why the source needs it | U | `test_snap_sync:TestValidate::test_source_without_passwordless_sudo_yields_validation_error` |
+| E102 | Nomad cannot run privileged commands without a password | Validation fails naming Nomad | U | `test_snap_sync:TestValidate::test_target_without_passwordless_sudo_yields_validation_error` |
+| E103 | snap is absent on either machine | Validation fails naming that machine | U | `test_snap_sync:TestValidate::test_snap_unavailable_on_source_yields_validation_error`, `::test_snap_unavailable_on_target_yields_validation_error` |
+
+### E.10 The `~/snap` data boundary (article: PKG-FR-SNAP-DATA-BOUNDARY)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| E104 | Atlas's `~/snap/firefox` holds the active revision's data directory and a retained older one | Only the active revision's directory is mirrored; the older one is not | U | `test_snap_sync:TestExcludePaths::test_excludes_old_revisions_keeps_current_common_and_current_symlink` |
+| E105 | The same app's revision-independent data directory and the pointer to the active revision | Both are mirrored | U | same test |
+| E106 | The pointer to the active revision is dangling | No revision directory for that app is mirrored | U | `test_snap_sync:TestExcludePaths::test_dangling_current_falls_back_to_excluding_all_revisions` |
+| E107 | The pointer is missing entirely | Same | U | `test_snap_sync:TestExcludePaths::test_missing_current_symlink_falls_back_to_excluding_all_revisions` |
+| E108 | Atlas has no `~/snap` at all | Nothing is excluded and nothing fails | U | `test_snap_sync:TestExcludePaths::test_no_snap_directory_returns_empty` |
+| E109 | `folder_sync` builds the transfer for the folder holding `~/snap` with `snap_sync` enabled | The retained revision directories are excluded from the transfer | U | `test_folder_sync:TestSnapSyncExcludeFilters::test_old_revision_excluded_current_kept`, `TestPackageJobExcludeFiltersGating::test_snap_sync_enabled_includes_revision_exclusion` |
+| E110 | `snap_sync` is not enabled | `folder_sync` excludes nothing on snap's account | U | `test_folder_sync:TestPackageJobExcludeFiltersGating::test_snap_sync_disabled_excludes_nothing`, `::test_missing_enabled_sync_jobs_omits_both_exclusions_without_raising` |
+| E111 | The folder being synced does not contain `~/snap` | No snap exclusion is added to that transfer | U | `test_folder_sync:TestSnapSyncExcludeFilters::test_revision_dir_outside_synced_folder_is_skipped`, `::test_no_snap_directory_yields_no_filters` |
+| E112 | The transfer carries both the snap exclusions and the user's own filter file | The exclusions take effect ahead of the user's filter | U | `test_folder_sync:TestPackageJobExcludeFiltersGating::test_both_package_exclusions_precede_merge_filter` |
+| E113 | A real sync of two VMs with `snap_sync` and `folder_sync` both on | Nomad ends with no data directory for a revision its own snapd never installed | — | no VM coverage of the `~/snap` boundary |
+
+
+## F. Flatpak
+
+### F.1 Scope of the job (articles: PKG-FR-FLATPAK-SCOPE, PKG-FR-DATA-BOUNDARY, PKG-FR-READ-FAILS-JOB)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| F1 | Atlas has applications in the user installation and in the system installation | Both are items, each carrying its own scope | U | `test_flatpak_sync:TestCapture::test_same_application_both_scopes_yields_two_distinct_identities`, `TestPlanDiff::test_full_diff_taxonomy` |
+| F2 | Both machines configure remotes in both scopes | Each scope's remote list and each scope's keyring digests are read separately, per machine | U | `test_flatpak_sync:TestRemoteTrustCapture::test_each_scope_reads_its_own_repo_directory_on_both_machines`, `TestRemoteTrustCapture::test_same_name_remote_in_each_scope_carries_its_own_key` |
+| F3 | Atlas masks a pattern in the user scope, Nomad in the system scope | Both scopes' mask lists are read, each naming its scope | U | `test_flatpak_sync:TestMaskDiff::test_source_user_mask_absent_on_target_yields_install`, `TestMaskDiff::test_target_only_system_mask_yields_removal` |
+| F4 | Applications keep per-app data under `~/.var/app` and the store under `~/.local/share/flatpak` | The job claims only the store; `~/.var/app` is never excluded from folder sync and never touched here | U | `test_flatpak_sync:TestExcludePaths::test_returns_flatpak_data_dir_excludes_var_app`, `test_folder_sync:TestFlatpakSyncExcludeFilters::test_flatpak_data_dir_included_var_app_never_mentioned`, `TestPackageJobExcludeFiltersGating::test_flatpak_sync_enabled_includes_data_dir_exclusion_not_var_app` |
+| F5 | flatpak is not installed on Atlas, or not on Nomad | Validation fails naming the machine that lacks it; no flatpak work runs | U | `test_flatpak_sync:TestValidate::test_flatpak_unavailable_on_source_yields_validation_error`, `TestValidate::test_flatpak_unavailable_on_target_yields_validation_error_and_does_not_raise` |
+| F6 | One of the job's own reads (`list`, `remotes`, `mask`) exits non-zero | The flatpak job fails naming that command and its error; other jobs continue | U | `test_flatpak_sync:TestAProbeThatDidNotAnswer::test_a_source_list_that_did_not_answer_fails_the_job`, `::test_a_remotes_read_that_did_not_answer_fails_the_job`, `::test_a_mask_read_that_did_not_answer_fails_the_job` |
+| F7 | Nomad has no flatpaks at all — every read answers empty at exit 0 | Ordinary data: Atlas's applications are offered for install, nothing fails | U | `test_flatpak_sync:TestAProbeThatDidNotAnswer::test_a_target_with_nothing_installed_is_data_not_a_failure`, `TestCapture::test_no_apps_installed_yields_empty_list_not_a_crash` |
+| F8 | A scope holds no per-remote keyring, so the digest read exits 1 with no output | Not a failure: the plan completes and the remotes read as carrying no key of their own | U | `test_flatpak_sync:TestAProbeThatDidNotAnswer::test_a_keyring_digest_read_exiting_non_zero_is_not_a_failure`, `TestRemoteTrustCapture::test_no_keyring_files_yields_no_digests` |
+
+### F.2 Identity (articles: PKG-FR-FLATPAK-IDENTITY, PKG-FR-FLATPAK-ORIGIN-NOT-IDENTITY)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| F9 | The same application is installed in the user scope on Atlas and the system scope on Nomad | Two independent items: one install, one removal — never one change | U | `test_flatpak_sync:TestPlanDiff::test_full_diff_taxonomy`, `TestRefOriginMismatch::test_a_scope_split_is_two_items_not_an_origin_mismatch` |
+| F10 | Atlas has two branches of one application id in one scope | Two items, both listed; neither folds into the other | U | `test_flatpak_sync:TestRefIdentityCarriesTheBranch::test_two_branches_of_one_application_in_one_scope_are_two_items` |
+| F11 | Atlas has the `beta` branch, Nomad the `stable` branch of one application | One install and one removal, not a version report | U | `test_flatpak_sync:TestRefIdentityCarriesTheBranch::test_a_branch_change_reads_as_install_plus_removal_never_a_version_mismatch` |
+| F12 | An item's identity is displayed or used as a command argument | The full `<application>/<arch>/<branch>` reference is used, scope included, for both install and uninstall | U | `test_flatpak_sync:TestRefIdentityCarriesTheBranch::test_capture_asks_for_the_ref_column_and_keeps_it_on_the_item`, `::test_install_names_the_full_ref_after_the_remote`, `::test_uninstall_names_the_full_ref` |
+| F13 | The same reference, same scope, installed from two different remotes | One item, not two: the origin is not part of what identifies it | U | `test_flatpak_sync:TestRefIdentityCarriesTheBranch::test_origin_stays_out_of_the_identity`, `TestFlatpakItem::test_same_application_different_scope_yields_distinct_item_ids` |
+| F14 | A remote of the same name and byte-identical URL exists in both scopes | Two separate configuration items, one per scope | U | `test_flatpak_sync:TestFlatpakRemoteItem::test_same_remote_name_byte_identical_url_different_scope_yields_distinct_item_ids` |
+
+### F.3 The four presence/version cases (article: PKG-FR-FLATPAK-CASES, PKG-FR-VERSION-FLOAT)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| F15 | An application is on Atlas only | Offered for install | U V | `test_flatpak_sync:TestPlanDiff::test_full_diff_taxonomy`; `test_package_sync:TestPackageSyncWholeRunContracts::test_flatpak_derives_the_remote_its_ref_needs_and_carries_its_key` |
+| F16 | An application is on Nomad only | Offered for removal, in the removal group and not the install group | U | `test_flatpak_sync:TestPlanDiff::test_full_diff_taxonomy` |
+| F17 | The same application, scope and branch at different versions, one vendor | Reported only, both versions named; no install and no uninstall issued | U | `test_flatpak_sync:TestPlanDiff::test_full_diff_taxonomy` |
+| F18 | The same application, scope, branch, version and vendor on both machines | No item at all | U | `test_flatpak_sync:TestPlanDiff::test_full_diff_taxonomy`, `TestRefOriginMismatch::test_one_vendor_and_one_version_still_produces_no_diff` |
+
+### F.4 A remote is derived, and lands first (articles: PKG-FR-FLATPAK-REMOTE-DERIVED, PKG-FR-FLATPAK-REMOTE-FIRST, PKG-FR-ASK-ABOUT-SOFTWARE)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| F19 | A run that must add a remote Nomad lacks | No remote appears anywhere in the review; the remote is still written | U V | `test_flatpak_sync:TestRemotesAreDerivedFromApprovedRefs::test_no_remote_appears_in_any_review_group`, `TestMaskReviewVerbs::test_ref_groups_keep_their_own_verbs_and_exclude_masks`; `test_package_sync:TestPackageSyncWholeRunContracts::test_flatpak_derives_the_remote_its_ref_needs_and_carries_its_key` |
+| F20 | A remote both machines have whose URL differs, and an approved application comes from it | Repointed with no review line | U | `test_flatpak_sync:TestRemotesAreDerivedFromApprovedRefs::test_a_differing_url_is_repointed_with_no_review_line` |
+| F21 | An approved application's own origin remote is missing on Nomad | The remote is provisioned before the first install runs | U V | `test_flatpak_sync:TestRemotesAreDerivedFromApprovedRefs::test_a_remote_is_provisioned_before_the_ref_that_needed_it`; `test_package_sync:::test_flatpak_derives_the_remote_its_ref_needs_and_carries_its_key` (asserts the ordering from the run's own log) |
+| F22 | An approved application is built against a runtime Atlas holds from a different remote | That runtime's remote is provisioned too | U | `test_flatpak_sync:TestRemotesAreDerivedFromApprovedRefs::test_the_runtime_an_approved_app_needs_brings_its_own_remote` |
+| F23 | Atlas configures a remote no approved application comes from — including Flathub itself, since no remote is exempt | It does not travel | U V | `test_flatpak_sync:TestRemotesAreDerivedFromApprovedRefs::test_a_remote_no_approved_ref_needs_does_not_travel`; `test_package_sync:TestPackageSyncWholeRunContracts::test_a_flatpak_remote_no_synced_ref_needs_does_not_travel` |
+| F24 | The user declines the only application that would have needed a remote | No remote write happens; declining the application is the only way to decline the remote | U | `test_flatpak_sync:TestRemotesAreDerivedFromApprovedRefs::test_declining_the_ref_declines_its_remote` |
+| F25 | An approved application is user-scope and the same remote name exists in the system scope on Atlas | Only the user-scope remote is provisioned | U | `test_flatpak_sync:TestRemotesAreDerivedFromApprovedRefs::test_a_user_scope_ref_derives_only_the_user_scope_remote` |
+| F26 | Approved applications from one remote name, one in each scope | The remote is provisioned once per scope | U | `test_flatpak_sync:TestRemotesAreDerivedFromApprovedRefs::test_the_same_remote_in_two_scopes_is_derived_once_per_scope` |
+| F27 | Nomad's copy of the remote already matches Atlas's in every respect | No remote command is issued at all | U | `test_flatpak_sync:TestRemotesAreDerivedFromApprovedRefs::test_a_remote_the_target_already_matches_is_not_written_at_all` |
+| F28 | A dry run of the same plan | The derived remote writes appear in the preview and no command is issued | U | `test_flatpak_sync:TestRemotesAreDerivedFromApprovedRefs::test_a_dry_run_previews_the_derived_writes_and_issues_none` |
+| F29 | Any derived remote write | Carries a `mutates=` phrase, so `--confirm-each-command` and the trace show it | U | `test_flatpak_sync:TestRemotesAreDerivedFromApprovedRefs::test_every_derived_write_carries_mutates` |
+| F30 | Atlas's decision file records a remote skip-always | It changes nothing: the remote is still derived, its URL still used for the origin check, and Nomad's copy is not proposed for removal | U | `test_flatpak_sync:TestOriginIsReplicatedNotJustNamed::test_a_recorded_source_remote_is_not_withheld_from_the_derivation` |
+
+### F.5 A remote's trust (article: PKG-FR-FLATPAK-REMOTE-TRUST)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| F31 | Atlas verifies the remote and holds a keyring of the remote's own | Nomad's remote is created verified, with Atlas's key bytes imported; the bytes come from Atlas's own file and are never fetched from a vendor | U V | `test_flatpak_sync:TestRemoteTrustTravelsWithTheDerivedWrite::test_signed_remote_is_added_with_the_sources_own_key`; `test_package_sync:TestPackageSyncWholeRunContracts::test_flatpak_derives_the_remote_its_ref_needs_and_carries_its_key` (Nomad's only Flathub trust is deleted first, so the install can only succeed on the carried key) |
+| F32 | The key must be handed to flatpak on Nomad | It is staged under Nomad's own home and discarded afterwards, including when the remote write fails | U | `test_flatpak_sync:TestRemoteTrustTravelsWithTheDerivedWrite::test_staging_stays_under_the_targets_own_home`, `::test_staged_key_is_discarded_even_when_remote_add_fails`, `::test_every_staging_write_carries_mutates` |
+| F33 | Atlas does not verify the remote's signatures | Nomad's remote is created unverified, no key transferred, and the user is told in an ordinary run's output | U | `test_flatpak_sync:TestRemoteTrustTravelsWithTheDerivedWrite::test_unverified_source_remote_replicates_as_unverified`, `TestAnUnverifiedRemoteIsReported::test_an_unverified_source_remote_warns_once` |
+| F34 | Atlas verifies it and Nomad's same-named remote does not | Nomad's is lifted back to verified; it is never replicated as unverified | U | `test_flatpak_sync:TestRemoteTrustTravelsWithTheDerivedWrite::test_verified_source_remote_is_never_downgraded_even_if_the_target_is_unverified` |
+| F35 | Atlas does not verify it and Nomad's does | Verification is disabled on Nomad — Atlas's own state is what replicates | U | `test_flatpak_sync:TestRemoteTrustTravelsWithTheDerivedWrite::test_change_to_an_unverified_source_remote_disables_verification` |
+| F36 | The remote is verified with no keyring of its own; Atlas's trust rests on a machine-level anchor Nomad lacks | The anchor file is copied and becomes that remote's own key on Nomad; nothing else on Nomad gains trust; the change is named in the `mutates=` phrase | U | `test_flatpak_sync:TestRemoteTrustTravelsWithTheDerivedWrite::test_a_machine_level_anchor_the_target_lacks_becomes_the_remotes_own_key`, `::test_the_anchor_import_says_so_in_its_mutates_phrase` |
+| F37 | The same anchor key is already on Nomad, under any file name | Nothing is imported and nothing is transferred | U | `test_flatpak_sync:TestRemoteTrustTravelsWithTheDerivedWrite::test_an_anchor_the_target_already_holds_is_not_imported_again` |
+| F38 | The remote is otherwise identical on both machines but Nomad lacks Atlas's anchor | The anchor still reaches it — equality of the visible fields does not settle it | U | `test_flatpak_sync:TestRemoteTrustTravelsWithTheDerivedWrite::test_the_anchor_reaches_a_remote_the_target_otherwise_already_matches` |
+| F39 | Atlas verifies the remote and holds no key material for it anywhere | The remote is replicated as Atlas has it, with one warning saying installs will fail the signature check on both machines; the approved applications are NOT failed | U | `test_flatpak_sync:TestRemoteTrustTravelsWithTheDerivedWrite::test_a_verified_remote_with_no_key_anywhere_is_added_plainly_and_the_run_says_so` |
+| F40 | Atlas's keyring file, or the anchor file, has vanished between the plan and the write | The remote is not provisioned; the applications that needed it fail naming the missing key | U | `test_flatpak_sync:TestRemoteTrustTravelsWithTheDerivedWrite::test_missing_source_keyring_fails_the_ref_rather_than_provisioning_a_dead_remote`, `::test_a_missing_anchor_file_fails_the_ref_rather_than_provisioning_a_dead_remote` |
+| F41 | A verified source remote with its own key, provisioned successfully | No trust warning is emitted (negative control) | U | `test_flatpak_sync:TestAnUnverifiedRemoteIsReported::test_a_verified_source_remote_with_its_own_key_produces_no_warning` |
+| F42 | A dry run of a run that provisions an unverified remote | The warning still appears, and no command is issued | U | `test_flatpak_sync:TestAnUnverifiedRemoteIsReported::test_the_warning_fires_in_a_dry_run_too` |
+| F43 | ‼ Atlas verifies a remote whose key it holds through the ostree per-remote option `gpgkeypath` | Required: the key travels. Actual: `_stage_source_keys` reads only `<remote>.trustedkeys.gpg` and the machine-level anchor directory, so the remote is replicated as holding no key at all and installs from it fail the signature check on Nomad. Accepted cost, recorded in the criteria: flatpak never writes that option and only a hand-edited repo config can set it | ‼ | none |
+| F44 | Atlas's anchor directory holds several keys and one verified keyless remote is provisioned | Required: "that anchor" — the trust the remote rests on. Actual: every anchor file Nomad lacks is imported into that one remote's keyring, so the remote gains trust in keys Atlas's remote may not have used | — | none |
+
+### F.6 Repointing a remote, and the one question it can raise (article: PKG-FR-FLATPAK-REPOINT)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| F45 | A remote both machines have, URL differs, no machine-specific application depends on it | Repointed in place — the applications naming it as origin are not uninstalled or re-added — with no review line | U | `test_flatpak_sync:TestRemotesAreDerivedFromApprovedRefs::test_a_differing_url_is_repointed_with_no_review_line`, `TestARepointThatMovesAMachineSpecificRefIsAsked::test_a_target_only_ref_is_not_machine_specific_and_the_repoint_stays_silent` |
+| F46 | The verification setting differs and nothing machine-specific depends on it | Repointed silently, verification brought to Atlas's | U | `test_flatpak_sync:TestRemoteTrustTravelsWithTheDerivedWrite::test_verified_source_remote_is_never_downgraded_even_if_the_target_is_unverified`, `::test_change_to_an_unverified_source_remote_disables_verification` |
+| F47 | Only the signing key differs | No question is raised; the key is imported silently | U | `test_flatpak_sync:TestARepointThatMovesAMachineSpecificRefIsAsked::test_a_signing_key_difference_alone_stays_silent` |
+| F48 | Nomad marked an application machine-specific and it takes that remote as its origin, in the same scope | The repoint becomes a question with two answers, labelled by remote and scope | U | `test_flatpak_sync:TestARepointThatMovesAMachineSpecificRefIsAsked::test_a_machine_specific_ref_turns_the_repoint_into_a_two_answer_entry` |
+| F49 | That question is shown | It shows both configurations in full, Nomad's first, never a rendered difference | U | `test_flatpak_sync:TestARepointThatMovesAMachineSpecificRefIsAsked::test_the_entry_shows_both_configurations_target_first_and_never_a_diff` |
+| F50 | The two configurations differ in URL and in verification | Only the facets that differ are shown, on both sides, and trust is one of them | U | `test_flatpak_sync:TestARepointThatMovesAMachineSpecificRefIsAsked::test_only_the_differing_facets_are_shown_and_a_trust_divergence_is_one_of_them` |
+| F51 | Two machine-specific applications on Nomad take the remote as origin | The question names both of them as the reason | U | `test_flatpak_sync:TestARepointThatMovesAMachineSpecificRefIsAsked::test_the_detail_names_the_machine_specific_refs_that_are_the_reason` |
+| F52 | The application on Nomad is target-only but NOT marked machine-specific | No question: it has a removal line of its own, and the repoint stays silent | U | `test_flatpak_sync:TestARepointThatMovesAMachineSpecificRefIsAsked::test_a_target_only_ref_is_not_machine_specific_and_the_repoint_stays_silent` |
+| F53 | Nomad does not have the remote at all, and a machine-specific application names it | An add, not a repoint: nothing of Nomad's is replaced, so no question | U | `test_flatpak_sync:TestARepointThatMovesAMachineSpecificRefIsAsked::test_a_remote_the_target_lacks_is_an_add_and_never_a_conflict` |
+| F54 | The differing remote feeds only a machine-specific application and no application approved this run | No question, and Nomad's remote is left exactly as it was | U | `test_flatpak_sync:TestARepointThatMovesAMachineSpecificRefIsAsked::test_a_remote_no_approved_ref_could_need_is_never_a_conflict` |
+| F55 | The user answers "overwrite" | The remote is repointed and the approved application installs | U | `test_flatpak_sync:TestARepointThatMovesAMachineSpecificRefIsAsked::test_overwrite_repoints_the_remote_and_installs_the_ref` |
+| F56 | The user declines | Nomad's remote is untouched, and every approved application that needed Atlas's URL fails citing the user's own decision rather than installing from Nomad's URL | U | `test_flatpak_sync:TestARepointThatMovesAMachineSpecificRefIsAsked::test_skip_once_leaves_the_targets_remote_exactly_as_it_was`, `::test_skip_once_fails_the_ref_that_needed_the_source_url_naming_the_decision` |
+| F57 | The question is never put (no terminal), so no answer exists | Read as a decline, never as a silent overwrite | U | `test_flatpak_sync:TestARepointThatMovesAMachineSpecificRefIsAsked::test_an_undecided_conflict_is_a_skip_not_a_silent_overwrite` |
+| F58 | The answer, either way | Nothing is recorded: the question is not promotable, is not a removal direction, and a permanent answer arriving from anywhere reaches no decision file | U | `test_flatpak_sync:TestARepointThatMovesAMachineSpecificRefIsAsked::test_the_conflict_screen_is_neither_a_removal_direction_nor_promotable`, `::test_a_conflict_id_marked_skip_always_reaches_no_decision_file` |
+| F59 | Finding the question at all | Costs no command beyond what the plan already read | U | `test_flatpak_sync:TestARepointThatMovesAMachineSpecificRefIsAsked::test_finding_the_conflict_costs_no_command_of_its_own` |
+| F60 | Two approved applications come from the declined remote | Both fail, each naming the decision | — | none (every conflict test has one approved application) |
+
+### F.7 Deleting a remote (article: PKG-FR-FLATPAK-REMOTE-DELETE, PKG-FR-NO-MARK-ON-ORIGIN)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| F61 | Nomad has a remote Atlas does not, and nothing on Nomad installs from it | It is deleted, and it was never offered as an item | U | `test_flatpak_sync:TestUnusedRemoteIsDeleted::test_a_remote_nothing_uses_is_deleted_and_never_offered` |
+| F62 | An application installed identically on both machines — so it produces no item at all — comes from that remote | The remote stays | U | `test_flatpak_sync:TestUnusedRemoteIsDeleted::test_a_remote_a_target_ref_still_uses_stays` |
+| F63 | While it stays, the run says which applications kept it | A log line naming them | P | `test_flatpak_sync:TestUnusedRemoteIsDeleted::test_a_remote_a_target_ref_still_uses_stays` asserts only that no deletion ran; the "keeping … still installs …" line is unasserted |
+| F64 | An application Nomad marked machine-specific comes from it | The remote stays — the count runs over what the machine actually has, not over the review | U | `test_flatpak_sync:TestUnusedRemoteIsDeleted::test_a_machine_specific_app_keeps_its_remote` |
+| F65 | Only a runtime, not an application, comes from it | The remote stays | U | `test_flatpak_sync:TestUnusedRemoteIsDeleted::test_a_runtime_keeps_its_remote` |
+| F66 | An application reported as an origin divergence comes from it (Nomad's remote name is one Atlas does not have) | The remote stays | — | none |
+| F67 | The only application using it is removed by this run's approved removal | The count runs after the removal, so the remote is deleted in the same run | U | `test_flatpak_sync:TestUnusedRemoteIsDeleted::test_the_count_runs_after_this_runs_approved_removals` |
+| F68 | The user declined that removal | The application is still there, so the remote stays | U | `test_flatpak_sync:TestUnusedRemoteIsDeleted::test_a_removal_the_user_declined_keeps_the_remote` |
+| F69 | The approved removal was attempted and failed | The application is still there, so the remote stays — measured, not predicted | U | `test_flatpak_sync:TestUnusedRemoteIsDeleted::test_a_removal_that_failed_keeps_the_remote` |
+| F70 | A remote of the same name in the other scope is still in use | It does not keep this scope's copy alive | U | `test_flatpak_sync:TestUnusedRemoteIsDeleted::test_a_same_name_remote_in_the_other_scope_does_not_keep_it` |
+| F71 | Atlas has the remote too | It is never deleted, used or not | U | `test_flatpak_sync:TestUnusedRemoteIsDeleted::test_a_remote_the_source_has_is_never_deleted` |
+| F72 | A remote is deleted | Its signing key goes with it, so nothing on Nomad still trusts that vendor | — | relied on as flatpak's own behaviour; the VM test depends on it implicitly (`test_package_sync:::test_flatpak_derives_the_remote_its_ref_needs_and_carries_its_key` deletes Nomad's Flathub to remove its only trust) but asserts nothing about the keyring file |
+| F73 | The unused remote is system-scope | The deletion runs under sudo; a user-scope one does not | U | `test_flatpak_sync:TestUnusedRemoteIsDeleted::test_a_system_scope_deletion_uses_sudo`, `::test_a_remote_nothing_uses_is_deleted_and_never_offered` |
+| F74 | Any deletion | Carries a `mutates=` phrase naming the remote | U | `test_flatpak_sync:TestUnusedRemoteIsDeleted::test_the_deletion_carries_mutates` |
+| F75 | A dry run where an approved removal would free the remote | The preview says the remote would be deleted, and issues nothing | U | `test_flatpak_sync:TestUnusedRemoteIsDeleted::test_a_dry_run_previews_the_deletion_and_issues_none` |
+| F76 | The deletion command fails | One warning naming the remote and quoting flatpak's error; no item fails and the run still succeeds | U | `test_flatpak_sync:TestUnusedRemoteIsDeleted::test_a_deletion_that_fails_warns_and_fails_no_item` |
+| F77 | A permanent "never again" answer arrives against a remote id from any source | Nothing is written to any decision file — there is no mark to make on a remote | U | `test_flatpak_sync:TestUnusedRemoteIsDeleted::test_no_decision_file_entry_is_ever_written_for_a_remote`, `TestARepointThatMovesAMachineSpecificRefIsAsked::test_a_conflict_id_marked_skip_always_reaches_no_decision_file` |
+
+### F.8 Installing from the source's remote (articles: PKG-FR-FLATPAK-INSTALL-ORIGIN, PKG-FR-FLATPAK-MISSING-REMOTE)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| F78 | Nomad has a remote of the same name pointing at a different URL | The install is refused before it runs, naming both URLs; no install command is issued | U | `test_flatpak_sync:TestOriginIsReplicatedNotJustNamed::test_a_same_named_remote_pointing_elsewhere_refuses_the_install` |
+| F79 | Nomad's same-named remote has verification disabled while Atlas's has it on | The install is refused before it runs, naming the two settings | U | `test_flatpak_sync:TestOriginIsReplicatedNotJustNamed::test_a_target_remote_that_does_not_verify_signatures_refuses_the_install` |
+| F80 | The derived add exits 0 but changes nothing (the name already existed pointing elsewhere) | Still refused: Nomad's own answer is the evidence, not the exit code | U | `test_flatpak_sync:TestOriginIsReplicatedNotJustNamed::test_a_remote_add_that_exited_zero_and_changed_nothing_refuses_the_install` |
+| F81 | The derived write really did repoint the remote | The same install then proceeds — the pre-check reads Nomad again rather than a stale picture | U | `test_flatpak_sync:TestOriginIsReplicatedNotJustNamed::test_the_derived_write_repointing_the_remote_lets_the_same_install_through`, `::test_a_remote_written_after_a_refusal_is_seen_on_the_next_attempt` |
+| F82 | The install exits 0 but the application reports an origin resolving to a different URL | That application fails after the install, naming both URLs | P | `test_flatpak_sync:TestOriginIsReplicatedNotJustNamed::test_a_ref_that_landed_from_another_repository_fails_after_the_install` asserts the landed remote name and its URL; Atlas's URL is in the message but unasserted |
+| F83 | The install exits 0 and the application is not listed on Nomad at all | That application fails | U | `test_flatpak_sync:TestOriginIsReplicatedNotJustNamed::test_an_install_that_exited_zero_and_installed_nothing_fails_the_item` |
+| F84 | After the install the application reports an origin Nomad does not configure | That application fails naming the unconfigured origin | — | none |
+| F85 | An application's origin remote exists on neither machine and among no addition this run makes | It is refused as its own item, naming the missing remote; nothing is installed under that name | U | `test_flatpak_sync:TestConverge::test_ref_with_missing_origin_remote_is_skipped_with_named_failure` |
+| F86 | The origin remote is absent from Nomad and this run has not (yet) added it | Refused, naming the remote and the scope | U | `test_flatpak_sync:TestOriginIsReplicatedNotJustNamed::test_a_remote_written_after_a_refusal_is_seen_on_the_next_attempt` (first attempt raises "not configured on target-host") |
+| F87 | One application is refused on origin grounds while others are approved | Only that application fails; the rest of the run continues | P | covered for a failed derived write (`TestRemotesAreDerivedFromApprovedRefs::test_a_failed_derived_write_fails_only_the_ref_that_needed_it`) and for the filter (`TestRemoteFilterReplicates::test_an_app_from_another_remote_is_untouched_by_the_failure`); no test pairs an origin refusal with a second, surviving application |
+
+### F.9 Origin divergence (article: PKG-FR-FLATPAK-ORIGIN-DIFF)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| F88 | One application, one scope, one branch, installed from differently named remotes with different URLs | Reported as an origin divergence naming both remotes and both URLs, and the report reaches the review screen | U V | `test_flatpak_sync:TestRefOriginMismatch::test_two_differently_named_remotes_yield_one_report_only_diff`; `test_package_sync:TestPackageSyncWholeRunContracts::test_one_ref_from_two_vendors_is_reported_with_both_urls` |
+| F89 | The two copies also differ in version | The origin finding wins; no version line is produced | U | `test_flatpak_sync:TestRefOriginMismatch::test_origin_mismatch_outranks_a_version_mismatch` |
+| F90 | Both machines' remotes are called `flathub` and point at different repositories | Still reported — the comparison is by URL, so a name comparison's blindness is the discriminator | U V | `test_flatpak_sync:TestRefOriginMismatch::test_one_name_pointing_at_two_vendors_is_a_mismatch`; `test_package_sync:::test_one_ref_from_two_vendors_is_reported_with_both_urls` (asserts both machines print the same origin name before the run) |
+| F91 | One vendor configured under two different remote names | No finding: a rename is not a divergence | U | `test_flatpak_sync:TestRefOriginMismatch::test_a_remote_the_two_machines_merely_named_differently_is_not_a_mismatch` |
+| F92 | A machine names an origin whose remote it no longer configures | The absent URL matches nothing, so the pair is reported, and the detail says the machine configures no such remote instead of printing a bare name | U | `test_flatpak_sync:TestRefOriginMismatch::test_an_origin_naming_no_configured_remote_matches_nothing`, `::test_a_side_with_no_url_says_so_rather_than_printing_a_bare_name`, `::test_an_unresolvable_origin_with_a_different_name_is_still_reported` |
+| F93 | The divergence entry is approved anyway | Nothing is converged: no install, no uninstall, no remote write | U V | `test_flatpak_sync:TestRefOriginMismatch::test_the_mismatch_is_reported_and_never_converged`; `test_package_sync:::test_one_ref_from_two_vendors_is_reported_with_both_urls` (Nomad's installed set is unchanged) |
+| F94 | Nomad recorded its own remote machine-specific | The divergence is still reported — a machine-local mark cannot withdraw the URL the comparison runs on | U | `test_flatpak_sync:TestRefOriginMismatch::test_a_skip_always_on_the_targets_own_remote_does_not_hide_the_mismatch` |
+
+### F.10 A remote that cannot be provisioned (article: PKG-FR-FLATPAK-REMOTE-FAILURE)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| F95 | The remote write fails on Nomad | No item of its own fails; the approved application that needed it fails, naming the remote and quoting flatpak's error | U | `test_flatpak_sync:TestRemotesAreDerivedFromApprovedRefs::test_a_failed_derived_write_names_the_remote_and_its_own_stderr` |
+| F96 | Another approved application comes from a remote that provisioned fine | It installs; only the affected one fails | U | `test_flatpak_sync:TestRemotesAreDerivedFromApprovedRefs::test_a_failed_derived_write_fails_only_the_ref_that_needed_it` |
+| F97 | Two approved applications come from the one remote that failed | Both fail, each naming the remote | — | none |
+| F98 | Atlas no longer reports the remote when the write is about to run | The failure is recorded against the remote and charged to the applications that needed it | — | none (`_write_derived_remote`'s "reports no …-scope remote named" branch) |
+
+### F.11 The remote's filter (article: PKG-FR-FLATPAK-FILTER)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| F99 | Atlas restricts a remote with a filter file, and an approved application comes from that remote | The file is copied to the same absolute path on Nomad and the remote is set to use it there | U V | `test_flatpak_sync:TestRemoteFilterReplicates::test_the_file_is_copied_to_the_same_absolute_path_and_re_applied`; `test_package_sync:TestPackageSyncWholeRunContracts::test_a_source_filter_replicates_and_a_target_only_filter_comes_off` (run 1: same path, byte-identical content, filter recorded on Nomad) |
+| F100 | The filter is narrower than what Atlas has installed | It is applied only after the approved applications from that remote have landed | U V | `test_flatpak_sync:TestRemoteFilterReplicates::test_the_filter_lands_after_the_app_it_could_exclude`; `test_package_sync:::test_a_source_filter_replicates_and_a_target_only_filter_comes_off` |
+| F101 | Nomad already carries a filter of its own on a remote this run provisions | It is taken off before the first install and Atlas's is applied after — clear, install, apply, in that order | U V | `test_flatpak_sync:TestRemoteFilterReplicates::test_the_filter_the_target_already_carries_comes_off_before_the_install`; `test_package_sync:::test_a_source_filter_replicates_and_a_target_only_filter_comes_off` (run 2) |
+| F102 | Nomad's own filter would deny the very application being replicated | The application installs anyway, because no filter is in force while it does | U | `test_flatpak_sync:TestRemoteFilterReplicates::test_a_filter_the_target_carries_does_not_refuse_the_app_being_replicated` |
+| F103 | Atlas no longer restricts a remote Nomad still restricts | Nomad ends the run unfiltered on that remote; nothing is re-applied | U V | `test_flatpak_sync:TestRemoteFilterReplicates::test_a_filter_the_source_no_longer_has_is_taken_off_the_target`; `test_package_sync:::test_a_source_filter_replicates_and_a_target_only_filter_comes_off` (run 2) |
+| F104 | Neither machine filters the remote | Nothing is cleared and nothing is applied (negative controls) | U | `test_flatpak_sync:TestRemoteFilterReplicates::test_a_remote_with_no_filter_on_either_machine_is_never_cleared`, `::test_an_unfiltered_remote_applies_none` |
+| F105 | Atlas filters a remote no approved application comes from | Neither the file nor the filter travels | U | `test_flatpak_sync:TestRemoteFilterReplicates::test_a_remote_no_approved_ref_needs_carries_no_filter_either` |
+| F106 | A run with a filtered remote | The filter is a review item in no direction, exactly like a signing key | U | `test_flatpak_sync:TestRemoteFilterReplicates::test_the_filter_is_no_review_item` |
+| F107 | Two remotes differ only in their filter path | They compare equal, so no pointless repoint is issued each run | U | `test_flatpak_sync:TestRemoteFilterReplicates::test_a_filter_difference_never_makes_two_remotes_compare_unequal`, `::test_the_filter_column_is_read_next_to_the_options_column` |
+| F108 | Taking Nomad's own filter off fails | Every approved application from that remote fails, naming the remote and the filter path, and no install is attempted | U | `test_flatpak_sync:TestRemoteFilterReplicates::test_a_clear_that_fails_fails_the_app_naming_the_remote_and_the_filter` |
+| F109 | Atlas's filter file is gone when the copy runs | Every approved application from that remote fails, naming the remote and the path | U | `test_flatpak_sync:TestRemoteFilterReplicates::test_a_missing_source_file_fails_the_app_naming_the_remote_and_the_path` |
+| F110 | flatpak refuses to re-apply the filter | Every approved application from that remote fails, quoting flatpak's error and naming the remote and path | P | `test_flatpak_sync:TestRemoteFilterReplicates::test_a_filter_flatpak_refuses_fails_the_app_and_quotes_the_error` asserts the quoted error only; the remote name and path are in the message but unasserted |
+| F111 | The directory for the filter path cannot be created, or the file cannot be written, on Nomad | Every approved application from that remote fails, naming the remote and the path | — | none (`_replicate_remote_filter`'s mkdir and `install` branches) |
+| F112 | Staging the filter onto Nomad fails (staging directory or transfer) | Same: the applications from that remote fail, naming the remote and the path | — | none |
+| F113 | An approved application from a different remote in the same run | Untouched by the filter failure — "every approved application from that remote" is the application's own origin, not the remote that supplied its runtime | U | `test_flatpak_sync:TestRemoteFilterReplicates::test_an_app_from_another_remote_is_untouched_by_the_failure` |
+| F114 | The filter has been copied | The staged copy is removed from Nomad's cache afterwards | U | `test_flatpak_sync:TestRemoteFilterReplicates::test_the_staged_copy_is_discarded` |
+| F115 | A dry run of a filtered remote, with Nomad carrying its own | Both the clear and the copy/apply appear in the preview; no command is issued and no file is transferred | U | `test_flatpak_sync:TestRemoteFilterReplicates::test_a_dry_run_previews_the_clear_and_issues_none`, `::test_a_dry_run_previews_the_filter_and_issues_none` |
+| F116 | The remote is system-scope, so both the filter write and the re-apply need root | The writes run under sudo and a user-scope one never escalates | — | none |
+| F117 | ‼ The clear succeeds, the applications install, and the re-apply then fails | Required: the applications fail saying so — which they do. Accepted cost, recorded in the criteria: until the next run Nomad's remote offers more than either machine meant | ‼ | `test_flatpak_sync:TestRemoteFilterReplicates::test_a_filter_flatpak_refuses_fails_the_app_and_quotes_the_error` asserts the failure; nothing asserts (or can repair) the unfiltered end state |
+| F118 | Nomad restricts a remote both machines have that no approved application needs this run | Nothing happens to it — the remote is not provisioned, so its filter is neither cleared nor converged | — | none; and see Notes, this is where the article's "a remote the source does not restrict MUST NOT stay restricted" reads two ways |
+
+### F.12 The third installation scope (article: PKG-FR-FLATPAK-THIRD-SCOPE)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| F119 | An application is installed in a named installation that is neither `user` nor `system` | It is skipped: no item, no install, no removal | U | `test_flatpak_sync:TestCapture::test_unrecognized_installation_value_is_skipped` |
+| F120 | That installation has remotes and masks of its own | They are never read — only the user and system installations are asked | — | true by construction (every remotes/mask command carries `--user` or `--system`); no test names the absence |
+| F121 | Nomad holds an application in a third installation whose origin is a remote Atlas lacks | Required: the third scope is out of scope. Actual: the deletion count parses the same listing and drops third-scope rows, so such a remote — if it appears in the `--user`/`--system` remote list — could be deleted under it | — | none; needs a decision before a test (see Notes) |
+
+### F.13 Masks (articles: PKG-FR-FLATPAK-MASK, PKG-FR-BLOCKS-REPLICATE)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| F122 | Atlas masks a pattern Nomad does not | Offered as its own item, in a group that reads "Mask flatpak applications" with the verb "mask" — never as an install of software | U | `test_flatpak_sync:TestMaskDiff::test_source_user_mask_absent_on_target_yields_install`, `TestMaskReviewVerbs::test_mask_install_group_reads_mask_never_install` |
+| F123 | Nomad masks a pattern Atlas does not | Offered for unmasking, in the removal direction, with the verb "unmask" | U | `test_flatpak_sync:TestMaskDiff::test_target_only_system_mask_yields_removal`, `TestMaskReviewVerbs::test_mask_remove_group_reads_unmask_and_is_removal_direction` |
+| F124 | Both machines mask the same pattern in the same scope | No item | U | `test_flatpak_sync:TestMaskDiff::test_mask_present_on_both_yields_no_diff` |
+| F125 | The pattern was edited on Atlas | Reported as found: the old one comes off and the new one goes on, never one normalised change | U | `test_flatpak_sync:TestMaskEditsAndScopeMoves::test_edited_pattern_reads_as_two_membership_diffs_never_a_change` |
+| F126 | The same pattern is masked system-scope on Atlas and user-scope on Nomad | Two items: one add, one remove | U | `test_flatpak_sync:TestMaskEditsAndScopeMoves::test_scope_move_reads_as_add_system_plus_remove_user` |
+| F127 | The masked pattern matches nothing installed on either machine | It still replicates | U | `test_flatpak_sync:TestMaskEditsAndScopeMoves::test_mask_replicates_even_when_its_pattern_matches_no_installed_ref` |
+| F128 | A run with both an application install and a mask add | The mask lands after the applications, so it cannot suppress a dependency being pulled in the same run | U | `test_flatpak_sync:TestMaskDiff::test_masks_ordered_after_refs_in_diffs_tuple` |
+| F129 | A mask covering an application the same run installs | Two separate decisions: the mask has its own item and its own group; the application groups contain no mask | U | `test_flatpak_sync:TestMaskReviewVerbs::test_ref_groups_keep_their_own_verbs_and_exclude_masks` |
+| F130 | The user permanently declines a mask Atlas has | Recorded on Atlas, the machine that holds it, and never offered again | U | `test_block_state_decisions:TestFlatpakMaskDecisions::test_declined_mask_is_recorded_on_source_and_never_re_offered`, `test_flatpak_sync:TestMaskSkipAlways::test_recorded_mask_produces_no_diff_on_the_next_run` |
+| F131 | The user permanently declines an unmask of a pattern only Nomad has | Recorded on Nomad, and never offered again | U | `test_block_state_decisions:TestFlatpakMaskDecisions::test_declined_unmask_is_recorded_on_target_and_never_re_offered` |
+| F132 | Mask patterns as flatpak prints them (two leading spaces, wildcards, blank lines) | Parsed as written, per scope | U | `test_flatpak_sync:TestMaskParse::test_parses_two_leading_space_format_and_wildcard_patterns`, `::test_blank_lines_skipped_and_scope_is_the_passed_argument`, `::test_no_masks_yields_empty_list` |
+
+### F.14 Privilege (articles: PKG-FR-FLATPAK-PRIVILEGE, PKG-FR-SUDO-PRECONDITION's flatpak row)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| F133 | Nothing system-scope exists on either machine — no application, no remote, no mask | Validation never asks for sudo on Nomad, and the run needs no root | U | `test_flatpak_sync:TestValidate::test_user_scope_only_never_checks_sudo`, `TestMaskSystemScopeGate::test_user_scope_only_mask_never_checks_sudo` |
+| F134 | A system-scope application exists on either machine and Nomad has no passwordless sudo | Validation fails naming Nomad | U | `test_flatpak_sync:TestValidate::test_system_scope_item_present_without_sudo_yields_validation_error` |
+| F135 | The only system-scope thing is a mask | It still requires sudo on Nomad | U | `test_flatpak_sync:TestMaskSystemScopeGate::test_system_scope_mask_requires_target_sudo` |
+| F136 | The only system-scope thing is a remote | It still requires sudo on Nomad | — | none (`_system_scope_in_play` checks system remotes on both machines; no test drives that arm alone) |
+| F137 | A user-scope install and a system-scope install | The user one carries `--user` and no sudo; the system one carries `--system` and sudo | U | `test_flatpak_sync:TestConverge::test_user_scope_ref_install_has_no_sudo_and_carries_user_flag`, `::test_system_scope_ref_install_uses_sudo_and_system_flag` |
+| F138 | A user-scope uninstall | Carries `--user` and no sudo | P | `test_flatpak_sync:TestConverge::test_ref_removal_never_needs_source_lookup` matches the command as a substring, so a `sudo ` prefix would still pass |
+| F139 | A system-scope uninstall | Runs under sudo with `--system` | — | none |
+| F140 | A user-scope mask add and a system-scope unmask | The first carries `--user` and no sudo; the second sudo, `--system` and `--remove` | U | `test_flatpak_sync:TestMaskConverge::test_user_scope_mask_install_runs_mask_without_sudo`, `::test_system_scope_mask_removal_uses_sudo_and_remove_flag` |
+| F141 | A user-scope remote add and a system-scope remote add | The first carries `--user` and no sudo; the second sudo and `--system`, while still staging the key in Nomad's own home | U | `test_flatpak_sync:TestRemotesAreDerivedFromApprovedRefs::test_a_user_scope_ref_derives_only_the_user_scope_remote`, `TestRemoteTrustTravelsWithTheDerivedWrite::test_system_scope_add_uses_sudo_and_still_stages_in_the_user_home` |
+| F142 | A user-scope and a system-scope remote deletion | The first has no sudo, the second does | U | `test_flatpak_sync:TestUnusedRemoteIsDeleted::test_a_remote_nothing_uses_is_deleted_and_never_offered` (exact command, no prefix), `::test_a_system_scope_deletion_uses_sudo` |
+| F143 | A system-scope repoint | Runs under sudo | — | none (only user-scope repoints are asserted) |
+| F144 | A user-scope filter written to a path the SSH user cannot write | Fails naming that path rather than escalating the user-scope run to root | — | none |
+
+
+## G. Software no package manager can reproduce, and the snippet registry
+
+### G.1 What the job detects (articles: PKG-FR-MANUAL-SCOPE, PKG-FR-DEB-OWNERSHIP)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| G1 | Atlas has `code` installed from a hand-downloaded `.deb`; its installed version's only version-table origin is dpkg's own status file | It is presented as an item Nomad cannot get from any package manager, identified as `unreproducible:apt-no-candidate:code` | U | `test_manual_installs_sync:TestNoCandidateDetection::test_package_whose_only_origin_is_dpkg_status_is_unreproducible` |
+| G2 | Atlas has `gh` from its vendor repository (its policy block also lists `/var/lib/dpkg/status`, as every installed package's does) | Not presented — it is reproducible from a repository | U | `test_manual_installs_sync:TestNoCandidateDetection::test_repo_installed_package_is_not_unreproducible` |
+| G3 | Atlas has `docker.io` fully repo-available but pinned below zero, so apt reports `Candidate: (none)` | Not presented — a pin does not make software unreproducible | U | `test_manual_installs_sync:TestNoCandidateDetection::test_negatively_pinned_package_is_not_unreproducible` |
+| G4 | Atlas has a repo-installed package whose installed version comes from an ESM origin | Not presented | U | `test_manual_installs_sync:TestNoCandidateDetection::test_package_installed_from_a_repo_as_an_automatic_dependency_is_not_unreproducible` |
+| G5 | Atlas has a hand-installed `.deb` that apt marks automatically-installed (absent from `apt-mark showmanual`) | Not presented — the scan covers the manual set only | — | none |
+| G6 | Atlas has a package hand-installed at a version NEWER than any repository offers: its `***` row has no repository origin while older rows do | Presented — the repository cannot supply the version this machine has | — | none |
+| G7 | Atlas's whole manual set (four packages, one hand-`.deb`) is examined | Exactly one examination of apt's policy for the whole set, never one per package, and only the hand-`.deb` is presented | U | `test_manual_installs_sync:TestNoCandidateDetection::test_one_batched_scan_separates_the_hand_deb_from_the_repo_installed` |
+| G8 | apt answers about the manual set but says nothing about one queried name | That name is not presented; its silence indicts nothing | U | `test_manual_installs_sync:TestNoCandidateDetection::test_no_block_inside_an_answered_policy_read_indicts_nothing` |
+| G9 | apt's policy read fails (package lists unreadable) | The job fails once naming the command and its error; nothing is proposed | U | `test_manual_installs_sync:TestNoCandidateDetection::test_a_policy_read_that_did_not_answer_fails_the_job` |
+| G10 | apt's policy read exits 0 having said nothing about any package | The job fails once naming the command — silence is not "this machine has none" | U | `test_manual_installs_sync:TestNoCandidateDetection::test_a_policy_read_that_printed_no_block_at_all_fails_the_job` |
+| G11 | Atlas's entire manual set was hand-installed from `.deb` files, so apt reports every one of them with no repository | An ordinary answer: every one is presented | U | `test_manual_installs_sync:TestNoCandidateDetection::test_a_policy_read_over_only_bare_deb_packages_still_answers` |
+| G12 | Reading Atlas's manually-installed set fails | The job fails once naming that read; the run continues with the other jobs | U | `test_manual_installs_sync:TestNoCandidateDetection::test_a_manual_set_read_that_did_not_answer_fails_the_job` |
+| G13 | Atlas has four entries under `/usr/local` and `/opt`, two of them owned by a package | Only the two unowned ones are presented, each named by its path | U | `test_manual_installs_sync:TestUnownedScan::test_scan_unowned_installs_yields_two_items_from_four_candidates` |
+| G14 | Atlas has a deep tree of unowned files under `/opt/vendor/...` | The scan names the top-level finding and does not walk the tree: exactly `/usr/local`, `/opt`, `/usr/local/bin`, `/usr/local/lib`, one level deep each, in one command | U | `test_manual_installs_sync:TestUnownedScan::test_unowned_scan_queries_only_usr_local_and_opt` |
+| G15 | Atlas has no `/opt` at all | That root is skipped; the scan is not an error | U | `test_manual_installs_sync:TestUnownedScan::test_a_scan_root_that_is_not_there_is_skipped_not_an_error` |
+| G16 | A scan root exists but cannot be read (permission denied) | The job fails naming the error; it never reports "nothing installed by hand here" | U | `test_manual_installs_sync:TestUnownedScan::test_a_find_that_could_not_run_fails_the_job_rather_than_reporting_nothing` |
+| G17 | Atlas has nothing under either root and nothing hand-installed | Nothing is presented, nothing is applied, the job is clean | U | `test_manual_installs_sync:TestEmptyDetection::test_empty_detection_produces_no_group_and_applies_nothing` |
+| G18 | The ownership question itself cannot be answered (dpkg's file lists are unreadable) | The job fails naming the path dpkg owns on every machine; it does not declare every entry under `/opt` and `/usr/local` unowned | U | `test_manual_installs_sync:TestUnownedScan::test_a_dpkg_that_did_not_answer_does_not_make_every_path_unowned` |
+| G19 | Every queried path really is unowned, so the ownership query reports a failure exit code | An ordinary answer: all of them are presented | U | `test_manual_installs_sync:TestUnownedScan::test_a_batch_where_every_path_is_unowned_is_an_ordinary_answer` |
+| G20 | The scan asks about one path dpkg is certain to own, to prove it answered | That path is never presented as a finding | U | `test_manual_installs_sync:TestUnownedScan::test_the_witness_is_never_reported_as_a_finding` |
+| G21 | Atlas has a package named `brscan3` and, separately, a path whose last component is `brscan3` | Two independent items, one per kind of finding | U | `test_manual_installs_sync:TestUnreproducibleItem::test_same_identifier_different_origin_yields_distinct_item_ids` |
+| G22 | Nomad holds hand-installed software of its own | Nomad is never asked what it has; nothing of Nomad's is presented | U | `test_manual_installs_sync:TestInstallOnly::test_no_removal_diff_or_group_even_when_the_target_holds_items` |
+| G23 | `apt-cache` is missing on Atlas | Validation fails before anything runs, naming Atlas and the missing tool | U | `test_manual_installs_sync:TestValidate::test_apt_cache_unavailable_on_source_yields_validation_error` |
+| G24 | `dpkg` is missing on Atlas | Validation fails before anything runs, naming Atlas and the missing tool | U | `test_manual_installs_sync:TestValidate::test_dpkg_unavailable_on_source_yields_validation_error` |
+| G25 | Both tools present on Atlas | No validation error, and no administrative-rights precondition is imposed on Nomad (a snippet's own needs are unknowable) | U | `test_manual_installs_sync:TestValidate::test_valid_environment_yields_no_errors` |
+| G26 | Only this job is enabled — apt sync is not in the configuration at all | The hand-`.deb` finding is still detected and presented; the job asks apt and dpkg its own questions | U V | `test_manual_installs_sync:TestExecuteIndependentOfApt::test_plan_runs_with_apt_absent_from_config_and_manual_enabled`; `test_package_sync:TestManualInstallsSyncEndToEnd::test_manual_installs_sync_pushes_registry_and_replays_snippet` |
+| G27 | A genuine hand-downloaded `.deb` installed on a real machine | Presented as an item needing a snippet | — | none (no VM test installs a bare `.deb`) |
+| G28 | A stock Ubuntu 24.04 machine's own `/usr/local` and `/opt` are scanned | The findings are few enough to review by hand; the scan roots themselves are not reported as findings | — | none |
+
+### G.2 The three end states (articles: PKG-FR-MANUAL-RESOLUTION, PKG-FR-MANUAL-SOURCE-DECIDES)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| G29 | A detected item for which Atlas holds no snippet | It appears in its own "no package manager can install these on Nomad" question, and in no other list | U | `test_manual_installs_sync:TestSnippetResolution::test_item_without_snippet_is_report_only_and_grouped_separately` |
+| G30 | A detected item for which Atlas holds a snippet | It appears as an ordinary install for Nomad, alongside the rest | U | `test_manual_installs_sync:TestTracerEndToEnd::test_detect_plan_and_replay_end_to_end` |
+| G31 | At the question the user chooses to write a command that installs it, and writes one | The item is resolved by that snippet; the text is taken exactly as typed, blank lines and indentation included | U | `test_package_review:TestUnreproducibleGroupResolution::test_add_snippet_choice_captures_body_verbatim_including_whitespace` |
+| G32 | At the question the user chooses "never install it on Nomad" | The item is resolved permanently; no snippet is written | U | `test_package_review:TestUnreproducibleGroupResolution::test_skip_always_choice_yields_skip_always_decision_and_no_snippet` |
+| G33 | At the question the user chooses "not for now" | The item is resolved for this run — this is a real answer, not an item left hanging | U | `test_package_review:TestUnreproducibleGroupResolution::test_explicit_skip_once_is_a_resolution_not_unresolved` |
+| G34 | A run whose only findings were all answered "not for now" | The run ends clean; nothing failed | U | `test_manual_installs_sync:TestSkipOnceResolution::test_run_whose_only_items_were_skipped_once_passes` |
+| G35 | An item answered "not for now" this run | Nothing is written anywhere, so the next sync asks about it again | — | none (no assertion that a skip-for-now writes no record for this job) |
+| G36 | An item answered "never install it on Nomad" | The mark is written on Atlas, the machine that holds the software — not on Nomad | — | none (`_finalize_unreproducible`'s permanent-mark branch is unasserted) |
+| G37 | Atlas holds a mark from an earlier run for a still-present finding | It is not presented again, in any list | U | `test_manual_installs_sync:TestInertFiltering::test_machine_specific_item_is_filtered_before_becoming_a_diff` |
+| G38 | The user interrupts at the resolution question (Ctrl-C / EOF) | The whole sync aborts naming the item; the item is not silently left undecided | U | `test_package_review:TestUnreproducibleGroupResolution::test_cancelled_select_aborts_the_entire_sync` |
+| G39 | The user chooses to write a snippet and submits nothing | The choice is put again; there is no fourth "undecided" outcome | U | `test_package_review:TestUnreproducibleGroupResolution::test_empty_snippet_body_reprompts_until_a_real_choice` |
+| G40 | The user submits a body of spaces and newlines only | Refused, the choice is put again | U | `test_package_review:TestUnreproducibleGroupResolution::test_a_whitespace_only_snippet_is_not_a_resolution` |
+| G41 | After an empty submission the user writes a real snippet | Captured; the item resolves by snippet | U | `test_package_review:TestUnreproducibleGroupResolution::test_empty_snippet_then_real_snippet_is_captured` |
+| G42 | Each of two findings is put to the user | One question per finding, in the same form as every other question | U | `test_package_review:TestUnreproducibleGroupResolution::test_each_item_gets_a_decision_screen_of_its_own` |
+| G43 | Nomad holds a snippet for the finding, Atlas holds none | Still unresolved: the user is asked to resolve it | U | `test_manual_installs_sync:TestClassificationAuthority::test_target_only_snippet_stays_report_only` |
+| G44 | Atlas holds a snippet, Nomad holds none | Resolved: presented as an install | U | `test_manual_installs_sync:TestClassificationAuthority::test_source_snippet_classifies_install` |
+| G45 | Nomad holds a permanent mark for the item; Atlas holds none | The item is still presented — only Atlas's marks silence an Atlas-held finding | — | none (inferred from `plan()` reading Atlas's decision file only) |
+| G46 | A run with no terminal, and findings to resolve | Nothing is asked, no snippet is written, no mark recorded, and every finding is reported as unanswered | U | `test_package_review:TestUnreproducibleGroupResolution::test_non_interactive_offers_no_capture_and_marks_every_item_unresolved` |
+| G47 | A run with no terminal, and findings to resolve | The job reports skipped before it touches Nomad | P | `test_package_sync_core:TestExecuteSelfContained::test_a_non_interactive_package_review_skips_the_job_instead_of_applying_nothing` — asserted on a stand-in job, not on this one |
+| G48 | An answered run where an item somehow arrives unanswered | The job does not fail on that basis | U | `test_manual_installs_sync:TestSkipOnceResolution::test_interactive_unresolved_no_longer_fails_the_run`; `test_package_review:TestUnresolvedNeverFailsTheJob::test_interactive_unresolved_does_not_raise` |
+
+### G.3 Written now, used now (article: PKG-FR-MANUAL-SAME-RUN)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| G49 | The user writes a snippet during the review | It is stored in Atlas's registry BEFORE that registry travels to Nomad, so the copy Nomad receives contains it | U | `test_manual_installs_sync:TestSnippetPush::test_snippet_authored_in_review_is_persisted_before_the_push` |
+| G50 | A run that replays a snippet on Nomad | The registry reaches Nomad first, the replay second | U V | `test_manual_installs_sync:TestSnippetPush::test_push_runs_after_review_and_before_replay_in_execute`; `test_package_sync:TestManualInstallsSyncEndToEnd::test_manual_installs_sync_pushes_registry_and_replays_snippet` |
+| G51 | A finding with no snippet at the start of the run, resolved by a snippet written during the review | It is installed on Nomad in that same run, not the next one | U | `test_manual_installs_sync:TestSameRunApplication::test_on_the_fly_snippet_is_replayed_the_same_run` |
+| G52 | A run that writes one snippet and then continues to the install stage | The snippet's record is stamped once, and Atlas's and Nomad's copies of the registry are identical afterwards | — | none (the once-per-run guard is unasserted) |
+| G53 | A rehearsal (`--dry-run`) where a snippet is written during the review | The item is previewed as an install on Nomad, no command runs on Nomad, and Atlas's registry file is not written | U | `test_manual_installs_sync:TestClassificationAuthority::test_dry_run_previews_on_the_fly_install_without_replay_or_write` |
+| G54 | A rehearsal where Atlas already holds a snippet for a finding | Previewed as an install on Nomad, naming the item; nothing runs there | P | same as G53 — only the written-during-review variant is asserted |
+| G55 | A rehearsal where a finding is answered "never install it on Nomad" | No mark is written on Atlas | P | `test_package_state:TestPipelineWiring::test_no_record_call_when_dry_run` covers the shared path on a stand-in job; this job's own permanent-mark branch is unasserted |
+
+### G.4 The snippet itself (article: PKG-FR-SNIPPET-VERBATIM)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| G56 | A snippet written with leading indentation and blank lines between commands | Stored and read back byte for byte | U | `test_package_state:TestSnippetRegistry::test_add_then_get_round_trips_body_verbatim_including_whitespace` |
+| G57 | A snippet is replayed on Nomad | Run exactly as written, as one unit, as the SSH user, with nothing added around it — no elevation, no login shell | U | `test_package_state:TestSnippetRegistry::test_replay_passes_body_as_one_quoted_argument_with_login_shell_false` |
+| G58 | A snippet whose command asks a question (a debconf prompt) | It fails as its own item rather than hanging the sync — nothing is ever fed to its input | U | `test_manual_installs_sync:TestPromptingSnippetCannotHang::test_replay_supplies_no_stdin_and_a_prompting_snippet_is_a_plain_item_failure` |
+| G59 | A snippet that exits non-zero while printing nothing recognisable | Its exit code alone decides: failed | U | `test_package_state:TestSnippetRegistry::test_replay_exit_code_alone_decides_success` |
+| G60 | A snippet whose body contains shell metacharacters and square-bracketed text | Stored, displayed and replayed unchanged; nothing tries to interpret it | P | escaping for display is exercised only through the registry-overwrite question (G70); no test stores/replays a bracket- or metacharacter-heavy body |
+| G61 | The user is about to write a snippet | Before the editor opens they are told that Nomad runs it with nobody watching, and shown a worked non-interactive shape | — | none |
+| G62 | A second snippet is written for a different item | The first is preserved; the registry accumulates | U | `test_package_state:TestSnippetRegistry::test_add_preserves_an_unrelated_pre_existing_entry` |
+| G63 | The registry file is being written when the machine dies | The file is never left half written (written aside, then moved into place) | U | `test_package_state:TestSnippetRegistry::test_write_is_atomic_temp_then_move` |
+| G64 | The registry file is absent, empty, or corrupt | Read as "no snippets"; a corrupt one warns naming the file | U | `test_package_state:TestSnippetRegistry::test_absent_file_returns_empty_mapping`, `::test_empty_file_returns_empty_mapping`, `::test_malformed_registry_returns_empty_mapping_and_warns_naming_the_path` |
+
+### G.5 The registry travels (articles: PKG-FR-REGISTRY-SYNCS, PKG-FR-REGISTRY-CONSENT)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| G65 | A run in which Atlas holds a registry and Nomad does not | Nomad ends the run holding Atlas's registry, under the SSH user's own home — never under a system directory | U V | `test_manual_installs_sync:TestSnippetPush::test_push_sends_source_registry_under_the_user_home_never_etc`; `test_package_sync:TestManualInstallsSyncEndToEnd::test_manual_installs_sync_pushes_registry_and_replays_snippet` |
+| G66 | Atlas has never had a snippet written on it | Nothing is transferred and nothing fails | U | `test_manual_installs_sync:TestSnippetPush::test_absent_source_registry_makes_push_a_noop` |
+| G67 | Only this job is enabled — no configuration sync, no folder sync | The registry still reaches Nomad | V | `test_package_sync:TestManualInstallsSyncEndToEnd::test_manual_installs_sync_pushes_registry_and_replays_snippet` (the run's configuration enables this job alone) |
+| G68 | Nomad's registry is a subset of Atlas's, or holds nothing at all | The transfer happens with no question asked | U | `test_manual_installs_sync:TestSnippetRegistryOverwriteGuard::test_additive_overwrite_proceeds_without_confirming` |
+| G69 | Nomad holds exactly the same entry, word for word | Still no question — nothing is lost or changed | U | `test_manual_installs_sync:TestSnippetRegistryOverwriteGuard::test_identical_target_entry_is_additive` |
+| G70 | Nomad holds a snippet Atlas does not have | The user is asked, shown which entry would be lost and its text; approving completes the transfer | U | `test_manual_installs_sync:TestSnippetRegistryOverwriteGuard::test_lost_target_entry_prompts_and_proceeds_on_confirm` |
+| G71 | Nomad holds the same item with a different body | The user is asked, shown both bodies, named as a change | U | `test_manual_installs_sync:TestSnippetRegistryOverwriteGuard::test_changed_body_is_non_additive_and_prompts` |
+| G72 | Nomad holds the same item with the same body but a different label or authoring record | Treated as no change and overwritten without asking | ‼ | the comparison is on the body alone (`_guard_registry_overwrite`); no test |
+| G73 | The user declines that question | The whole sync stops so the two registries can be reconciled by hand; nothing is sent | U | `test_manual_installs_sync:TestSnippetRegistryOverwriteGuard::test_lost_target_entry_aborts_on_decline` |
+| G74 | The user declines, and other jobs were still to run | The run ends there rather than continuing with the remaining jobs | P | the unit test asserts the abort is raised; the run-level effect rests on the orchestrator's shared abort handling, untested for this call site |
+| G75 | A run with no terminal (or `--yes`) where the transfer would lose a Nomad entry | It aborts — there is no flag that approves this | U | `test_manual_installs_sync:TestSnippetRegistryOverwriteGuard::test_non_interactive_non_additive_aborts` |
+| G76 | A non-additive transfer with nothing wired up to ask the question | The run fails loudly and sends nothing | U | `test_manual_installs_sync:TestSnippetRegistryOverwriteGuard::test_non_additive_push_without_a_confirmer_fails_and_sends_nothing` (fails as a bare assertion — loud but not a user-readable message) |
+| G77 | A snippet body that fetches a private package with a credential in its address, shown in that question | The credential is withheld from what the user reads, while the file that travels and the command that runs keep the author's exact bytes | U | `test_manual_installs_sync:TestSnippetRegistryOverwriteGuard::test_a_credential_in_a_snippet_body_is_withheld_from_the_question` |
+| G78 | A snippet label or body containing square-bracketed text reaches that question | Shown as written; the display does not break | — | none |
+| G79 | Nomad's registry file is corrupt | Read as holding nothing, so the transfer is treated as purely additive and overwrites it without asking | — | none; the degrade rule is asserted in isolation (G64) but not its consequence for consent |
+| G80 | Atlas's registry file on disk is corrupt at transfer time | Every Nomad entry counts as lost, so the user is asked — and approving sends the corrupt file | — | none |
+| G81 | A rehearsal (`--dry-run`) | No registry is transferred and no question is asked | U | `test_manual_installs_sync:TestSnippetPush::test_dry_run_pushes_nothing` |
+| G82 | A run with no terminal whose scan found nothing to review | The job succeeds and still transfers no registry — the file holds entries from earlier runs that nobody approved sending | U | `test_manual_installs_sync:TestSnippetPush::test_a_run_with_no_terminal_pushes_nothing_even_with_nothing_to_review` |
+| G83 | A run at a terminal whose scan found nothing to review | The registry still travels: an empty review means nothing new to decide, not nothing to carry | — | none |
+| G84 | Creating the destination directory on Nomad fails, or Nomad's home cannot be resolved | The job fails naming Nomad; nothing is half-transferred | — | none |
+
+### G.6 When a snippet does not work (article: PKG-FR-MANUAL-FAIL-ITEM)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| G85 | A snippet that existed when the run was planned is gone by the time it would run | That item fails on its own, naming it; the run continues and the job does not crash | U | `test_manual_installs_sync:TestSnippetResolution::test_missing_snippet_at_converge_is_a_failed_result_not_a_crash` |
+| G86 | Three items, the middle one's snippet exits non-zero | The first and third are installed on Nomad, the middle is reported failed with its own output, and the sync's exit code is non-zero | U V | `test_manual_installs_sync:TestContinueOnFailure::test_failed_snippet_replay_is_a_per_item_failure_and_does_not_stop_the_job`; `test_package_sync:TestPackageSyncWholeRunContracts::test_continue_on_item_failure` |
+| G87 | A snippet that needs administrative rights it does not have on Nomad | Fails as its own item and is reported like any other; the job did not pre-check for it | P | covered as an ordinary non-zero replay (G86); no test uses the missing-rights shape specifically |
+
+### G.7 What is never done (articles: PKG-NG-MANUAL-REMOVE, PKG-FR-JOB-INDEPENDENCE for this job)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| G88 | Nomad holds hand-installed software Atlas does not have | No removal is ever offered, in any list | U | `test_manual_installs_sync:TestInstallOnly::test_no_removal_diff_or_group_even_when_the_target_holds_items` |
+| G89 | Nomad is asked what unreproducible software it holds | It is never asked — there is no such question to put to it | U | `test_manual_installs_sync:TestInstallOnly::test_target_query_is_empty_by_design` |
+| G90 | A run replays two snippets successfully on Nomad | Nothing on Nomad records what this job put there; a later run has no memory of it | — | none (no assertion that the only file this job writes on Nomad is the registry) |
+| G91 | The job is named in the configuration | It resolves to its own job and runs on its own switch | U | `test_manual_installs_sync:TestJobDiscovery::test_orchestrator_resolves_manual_installs_sync_to_its_job` |
+| G92 | A first sync where this job is enabled | The scope it announces names replaying install snippets as what it will do to Nomad | — | none (`describe_first_sync_scope` unasserted) |
+
+
+## H. Consent, the review, the answers, and the memory of a decision
+
+### H.1 Nothing is modified before its approval, per job (articles: PKG-FR-REVIEW-FIRST, PKG-FR-CONSENT-BEFORE-CHANGE)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| H1 | A package job runs with items to decide. | The job plans, reviews, accepts the outcome, runs its after-review seam, then applies — in that order, and never applies before the review returns. | U | `package_sync_core:TestExecuteSelfContained::test_call_order_is_plan_review_accept_review_apply` |
+| H2 | `apt_sync` plans against Atlas and Nomad. | No mutating command reaches Nomad during planning: no `apt-get install`, no `sudo install`, no `sudo rm`, no `sudo apt-get`, no `sudo cp`. | U | `apt/test_apt_job:TestPlanApplySplit::test_plan_issues_no_mutating_command` |
+| H3 | `snap_sync` plans against a diverged pair. | No `snap install`, `snap refresh`, `snap switch` or `snap remove` is issued while planning. | U | `snap_sync:TestPlanReadOnly::test_plan_issues_no_mutating_snap_command` |
+| H4 | `flatpak_sync` plans against a diverged pair. | No `flatpak install`, `flatpak uninstall`, `remote-add` or `remote-delete` is issued while planning. | U | `flatpak_sync:TestPlanReadOnly::test_plan_issues_no_mutating_flatpak_command` |
+| H5 | `manual_installs_sync` plans (scan + registry read). | No mutating command and no `send_file` reaches Nomad while planning. | — | — |
+| H6 | Any job plans while a decision file exists on either machine. | No decision-file write (`mv --force`) is issued on either machine during planning. | U | `package_state:TestPipelineWiring::test_plan_issues_no_decision_file_write` |
+| H7 | A job's `plan()` raises. | The failure propagates out of `execute()` unchanged and the review is never reached. | U | `package_sync_core:TestExecuteSelfContained::test_plan_failure_propagates_out_of_execute_unchanged` |
+| H8 | A job is executed with no reviewer injected. | `execute()` fails loudly before any converge; no command reaches Nomad. | U | `package_sync_core:TestExecuteSelfContained::test_missing_reviewer_raises_and_issues_no_converge`; `apt/test_apt_job:TestPlanApplySplit::test_execute_without_a_reviewer_raises_and_issues_no_command` |
+| H9 | A run with no terminal has a non-empty plan. | The job reports skipped before any mutating command; nothing is applied and the after-review seam never runs. | U V | `package_sync_core:TestExecuteSelfContained::test_a_non_interactive_package_review_skips_the_job_instead_of_applying_nothing`; integration:`TestPackageSyncWholeRunContracts::test_non_interactive_skip_all` |
+| H10 | A run with no terminal has an empty plan. | The job reports success, nothing converges, and the after-review seam is still skipped (no registry transfer). | U | `package_sync_core:TestExecuteSelfContained::test_an_empty_plan_is_still_a_success_and_transfers_nothing`; `manual_installs_sync:TestSnippetPush::test_a_run_with_no_terminal_pushes_nothing_even_with_nothing_to_review` |
+| H11 | `manual_installs_sync` authors a snippet in its review. | The registry is persisted and pushed to Nomad after the review returns and before any snippet replays. | U | `manual_installs_sync:TestSnippetPush::test_push_runs_after_review_and_before_replay_in_execute`; `…::test_snippet_authored_in_review_is_persisted_before_the_push` |
+| H12 | Two package jobs are enabled and both machines are diverged (VM). | Each manager's own approved item lands on Nomad's own package manager, so each reviewed before it mutated. | V | integration:`TestPackageSyncWholeRunContracts::test_each_manager_reviews_before_its_own_mutation` |
+| H13 | `apt_sync` writes `/etc/apt`, refreshes and installs in one run. | The user is asked exactly once, before the first of those writes. | U | `apt/test_apt_job:TestOneReviewPerRun::test_a_run_that_rewrites_etc_apt_still_reviews_exactly_once`; `…::test_a_package_the_target_had_no_candidate_for_is_installed_in_one_review` |
+| H14 | A decision record is about to be written (the mark itself), on either machine. | The write passes through the per-command confirmation with a `mutates=` phrase naming the item and the file; declining stops the write; the preceding read prompts for nothing. | U | `tests/unit/test_step_gate.py:TestStateWritesReachTheGate::test_recording_a_decision_is_gated`; `…::test_aborting_leaves_the_file_untouched` |
+| H15 | The snippet registry is about to be written, on either machine, or pushed to Nomad. | Both pass through the per-command confirmation with a `mutates=` phrase. | U | `tests/unit/test_step_gate.py:TestStateWritesReachTheGate::test_adding_a_snippet_is_gated`; `…::test_pushing_the_registry_to_the_target_is_gated` |
+| H16 | A registry transfer would lose an entry Nomad holds. | Consent is obtained before the transfer; declining aborts the run and sends nothing. | U | `manual_installs_sync:TestSnippetRegistryOverwriteGuard::test_lost_target_entry_prompts_and_proceeds_on_confirm`; `…::test_lost_target_entry_aborts_on_decline` |
+| H17 | An install whose repository this run writes would take a protected package with it. | The question is put after `/etc/apt` converged but before that install's own command runs. | U | `apt/test_apt_collateral:TestCollateralForARepositoryThisRunWrites::test_keeping_the_package_leaves_the_install_unapplied_and_unfailed`; `…::test_going_ahead_installs_and_the_guard_allows_the_collateral_removal` |
+| H18 | A machine-gate question exists for the job (Ubuntu Pro). | It is asked before any group is built and before anything is written. | U | `apt/test_apt_esm_gate:TestTheESMAttachmentGate::test_an_unattached_target_is_asked_about_before_anything_is_written` |
+
+### H.2 Only approved work is applied (articles: PKG-FR-ONLY-APPROVED)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| H19 | An install-direction item is answered with the act. | Exactly one converge runs for it. | U | `package_sync_core:TestConvergeDispatchByAction::test_ticking_only_install_group_yields_zero_removal_commands` |
+| H20 | A removal-direction item is answered with the act. | Exactly one converge runs, and it is the removal. | U | `package_sync_core:TestConvergeDispatchByAction::test_remove_diff_produces_exactly_one_target_converge_call` |
+| H21 | A change-direction item is answered with the act. | Exactly one converge runs for it. | U | `package_sync_core:TestConvergeDispatchByAction::test_change_diff_reaches_converge_alongside_install_and_remove` |
+| H22 | An item is declined for this run. | Nothing converges for it; the run's other approved items still converge. | U | `package_sync_core:TestConvergeDispatchByAction::test_ticking_only_install_group_yields_zero_removal_commands`; `package_sync_core:TestDecisionsReachTheLog::test_a_skipped_item_leaves_a_line_where_nothing_else_would` |
+| H23 | An item is marked machine-specific. | Nothing converges for it; only the mark is written. | P | `package_state:TestPipelineWiring::test_skip_always_on_remove_writes_to_target_not_source` — asserts the write, never asserts `converge_calls == []` |
+| H24 | A report-only finding carries an `APPLY` decision (forced). | No converge is ever attempted for it. | U | `package_sync_core:TestConvergeDispatchByAction::test_report_only_diff_produces_zero_target_commands` |
+| H25 | A dry run has approved items of all four action kinds. | No converge command is issued for any of them. | U | `package_sync_core:TestConvergeDispatchByAction::test_dry_run_zero_mutating_commands_across_all_four_action_types`; `apt/test_apt_job:TestDryRun::test_dry_run_issues_no_mutating_command` |
+| H26 | A repository conflict is answered "overwrite". | Atlas's version of the file is written to Nomad. | U | `apt/test_apt_job:TestRepositoryConflicts::test_overwriting_a_conflict_writes_the_sources_version` |
+| H27 | A repository conflict is declined for this run. | Nothing is written, and every approved package whose origin depended on it fails naming it. | U | `apt/test_apt_job:TestRepositoryConflicts::test_skipping_a_conflict_writes_nothing_and_fails_the_package_that_needed_it` |
+| H28 | A collateral question is answered "go ahead". | The change that causes it proceeds and the apply-time guard allows the collateral loss. | U | `package_review:TestCollateralGroupResolution::test_go_ahead_records_apply`; `apt/test_apt_collateral:TestCollateralFlow::test_install_anyway_proceeds_and_guard_allows_the_collateral_removal` |
+| H29 | A collateral question is answered "keep the package". | Exactly the changes that cause the loss are left unapplied; no other approved change is cancelled. | U | `apt/test_apt_collateral:TestCollateralFlow::test_skip_leaves_the_triggering_install_unapproved`; `apt/test_apt_collateral:TestCollateralAttribution::test_skip_cancels_only_the_candidate_whose_transaction_causes_it` |
+| H30 | An unreproducible item is resolved by writing a snippet. | The snippet is persisted, transferred and replayed in the same run — nothing else is applied for it. | U V | `manual_installs_sync:TestSameRunApplication::test_on_the_fly_snippet_is_replayed_the_same_run`; integration:`TestManualInstallsSyncEndToEnd::test_manual_installs_sync_pushes_registry_and_replays_snippet` |
+| H31 | A removal-direction item is left declined across a whole VM run (Nomad→Atlas). | Atlas keeps the package; the same item approved on the next run removes it. | V | integration:`TestCrossDirectionRoundTrips::test_install_propagates_then_reversed_removal_needs_approval` |
+| H32 | An already-converged pair is synced. | Zero diffs, zero groups, zero converges, and no command carrying `mutates=`. | U V | `package_sync_core:TestIdempotency::test_identical_source_and_target_produce_no_diff_no_group_and_no_mutation`; integration:`TestPackageSyncIdempotency::test_second_consecutive_sync_has_nothing_to_do` |
+
+### H.3 What batching permits and forbids (articles: PKG-FR-BATCHED, PKG-FR-ASK-AGAIN)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| H33 | A group of same-kind items is reviewed. | One screen carries every item with its own decision; there is no second pass over the leftovers. | U | `package_review:TestInteractive::test_one_screen_per_group_and_no_second_pass_over_the_leftovers`; `review_skip_always:TestThePermanentAnswer::test_no_group_is_ever_asked_about_permanence_a_second_time` |
+| H34 | A screen carries several rows of one kind. | Every row is settled in the single pass; the shift-key form sets every row at once. | U | `decision_list:TestKeyHandling::test_shift_of_a_key_sets_every_row`; `decision_list:TestKeyHandling::test_a_bare_enter_confirms_every_row_at_its_default` |
+| H35 | Several groups are reviewed in one round. | The screens come one after another with no executor command between them. | — | — (no test asserts the absence of work between screens) |
+| H36 | An `apt_sync` run rewrites `/etc/apt` and installs packages. | The user is asked exactly once for the whole round. | U | `apt/test_apt_job:TestOneReviewPerRun::test_a_run_that_rewrites_etc_apt_still_reviews_exactly_once` |
+| H37 | A question must show a whole file before it can be answered (a pin offered for deletion). | That file is printed and answered on its own screen, not batched behind three other bodies. | U | `package_review:TestRemovalGroupContent::test_a_pin_file_is_printed_whole_under_the_machine_that_holds_it` |
+| H38 | A question must show two whole versions (a repository conflict). | Each file is answered right after its own two versions are shown. | U | `package_review:TestRepoConflictGroupResolution::test_each_conflicting_file_is_answered_right_after_it_is_shown` |
+| H39 | A collateral question names a per-item cause. | Each package gets its own screen with its own answer sentences. | U | `package_review:TestCollateralGroupResolution::test_each_package_gets_a_decision_screen_of_its_own` |
+| H40 | An unreproducible item's act opens an editor. | Each item gets its own screen. | U | `package_review:TestUnreproducibleGroupResolution::test_each_item_gets_a_decision_screen_of_its_own` |
+| H41 | An install's origin is a repository this run has not written yet. | Nothing is asked about its collateral at plan time; no simulation is even attempted. | U | `apt/test_apt_collateral:TestCollateralForARepositoryThisRunWrites::test_the_question_is_absent_from_the_plan_time_review` |
+| H42 | The same install, after `/etc/apt` has converged and refreshed. | A second round is asked, carrying the three answers the article requires. | U | `apt/test_apt_collateral:TestCollateralForARepositoryThisRunWrites::test_keeping_the_package_leaves_the_install_unapplied_and_unfailed` (asserts exactly two review rounds, the second carrying the collateral entry) |
+| H43 | Two such installs, both unsimulatable at plan time. | The second round asks about both together, in one question, not one per install. | — | — |
+| H44 | The converge loop reaches its second, third… approved install. | The second round is not re-asked: the question is put once per run. | P | `apt/test_apt_collateral:TestCollateralForARepositoryThisRunWrites::test_keeping_the_package_leaves_the_install_unapplied_and_unfailed` — proves two rounds for one install; nothing proves idempotence across several |
+| H45 | A run in which every install is resolvable on Nomad at plan time. | No second round at all — one review call, no extra rehearsal command. | U | `apt/test_apt_collateral:TestCollateralForARepositoryThisRunWrites::test_the_question_costs_nothing_on_a_run_with_no_late_install` |
+| H46 | The second round's answer withdraws an install. | The item is neither applied nor failed; the run names it as not applied by the user's answer. | U | `apt/test_apt_collateral:TestCollateralForARepositoryThisRunWrites::test_the_decision_is_named_in_the_log`; `package_sync_core` `ConvergeItemDeclined` path via `apply()` |
+| H47 | The second round is reached with nobody to ask. | Every item is declined for this run — the install is withheld, not pushed through and not failed. | U | `apt/test_apt_collateral:TestCollateralForARepositoryThisRunWrites::test_a_run_with_no_terminal_declines_it` |
+| H48 | The permission to ask again is claimed for something the plan already knew. | Not permitted — a consequence already approved at plan time is not put twice. | U | `apt/test_apt_collateral:TestCollateralForARepositoryThisRunWrites` (the `item_id not in approved` filter); `apt/test_apt_collateral:TestOnePackageTwoConsequences::test_letting_the_installs_casualty_go_ahead_does_not_release_the_removals` |
+
+### H.4 Which questions are asked, and which are never asked separately (articles: PKG-FR-ASK-ABOUT-SOFTWARE, PKG-FR-ASK-WHEN-NOT-DERIVABLE)
+
+Rows H49–H52 assert an absence: the machinery derived from an approved package is never its own question.
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| H49 | An approved package comes from a repository Nomad lacks. | The repository appears in no review group in the add or change direction; approving the package is what carries it. | U | `apt/test_apt_probe:TestRepoStateCapture::test_a_repository_never_appears_as_a_review_entry_in_the_add_or_change_direction` |
+| H50 | That repository names a signing key. | The key appears in no diff and no review group, in any direction. | U | `apt/test_apt_keyrings:TestKeysAreNotItems::test_no_key_reaches_a_diff_or_a_review_group_in_any_direction` |
+| H51 | Atlas holds a pin. | The pin travels with no review line at all. | U | `apt/test_apt_derived:TestPinsStillTravelAsFiles::test_a_pin_file_the_target_lacks_is_written_with_no_review_line`; `apt/test_apt_etc_apt:TestRepoGroupOrdering::test_pins_travel_without_a_review_line_and_land_before_the_sources` |
+| H52 | An approved flatpak application needs a remote (and its runtime's remote). | No remote appears in any review group; declining the application is the only way to decline the remote. | U | `flatpak_sync:TestRemotesAreDerivedFromApprovedRefs::test_no_remote_appears_in_any_review_group` |
+| H53 | Atlas holds an `/etc/apt/apt.conf.d` file Nomad lacks, differs on, or lacks the other way. | It IS asked, in all three directions, with the ordinary decision and the permanent mark. | U | `apt/test_apt_job:TestAptConfigVocabulary::test_each_direction_names_the_config_file_not_a_package`; `block_state_decisions:TestAptRepoItemDecisions::test_declined_config_install_is_recorded_on_source_and_never_re_offered` |
+| H54 | Atlas carries ESM repositories and Nomad reports no Ubuntu Pro attachment. | It IS asked, before anything is written and before the job's other questions. | U V | `apt/test_apt_esm_gate:TestTheESMAttachmentGate::test_an_unattached_target_is_asked_about_before_anything_is_written`; integration:`TestTheESMAttachmentGateOnVMs::test_an_unattached_target_skips_apt_sync_and_leaves_etc_apt_untouched` |
+| H55 | An approved change would remove, downgrade or upgrade a package installed by hand on Nomad. | It IS asked, per affected package, with three answers. | U | `apt/test_apt_collateral:TestPlanTimeCollateral::test_manual_collateral_removal_becomes_a_collateral_review_item` |
+| H56 | Overwriting a repository would repoint the origin of software Nomad marked machine-specific. | It IS asked, showing both machines' versions in full. | U | `apt/test_apt_job:TestRepositoryConflicts::test_a_changed_repository_feeding_a_machine_specific_package_asks_and_shows_both_versions` |
+| H57 | Repointing a flatpak remote would move the origin of an application Nomad marked machine-specific. | It IS asked, as a two-answer entry showing both configurations; without the mark the repoint stays silent. | U | `flatpak_sync:TestARepointThatMovesAMachineSpecificRefIsAsked::test_a_machine_specific_ref_turns_the_repoint_into_a_two_answer_entry`; `…::test_a_target_only_ref_is_not_machine_specific_and_the_repoint_stays_silent` |
+| H58 | Nomad holds a repository Atlas does not, and nothing on Nomad uses it. | It IS asked, naming the repository URLs the file declares. | U | `apt/test_apt_job:TestRepoRemovalWithheldWhileInUse::test_a_repository_nothing_installs_from_is_offered_with_its_urls` |
+| H59 | Nomad holds a pin Atlas does not. | It IS asked, showing the file's content in full. | U | `apt/test_apt_job:TestTwoAnswerRemovals::test_a_pin_offered_for_deletion_carries_its_whole_content` |
+| H60 | A registry transfer would lose or change an entry Nomad holds. | It IS asked, naming the affected entries; declining aborts. | U | `manual_installs_sync:TestSnippetRegistryOverwriteGuard::test_lost_target_entry_aborts_on_decline`; `…::test_changed_body_is_non_additive_and_prompts` |
+| H61 | Software no manager can reproduce is found on Atlas. | It IS asked — how Nomad should get it — with three answers. | U | `package_review:TestUnreproducibleGroupResolution::test_the_three_answers_read_as_they_do_on_every_other_screen` |
+| H62 | A collateral removal touches only automatically-installed packages. | Nothing is asked; the change is named in the log instead. | U | `apt/test_apt_collateral:TestPlanTimeCollateral::test_auto_collateral_removal_produces_no_review_item`; `apt/test_apt_collateral:TestAutoCollateralIsLogged::test_auto_collateral_removal_is_named_in_the_log` |
+
+### H.5 Naming the machines (articles: PKG-FR-NAME-THE-MACHINES)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| H63 | The orchestrator builds the reviewer for a run Atlas→Nomad. | Both hostnames are required and carried into every screen; there is no default. | U | `package_review:TestTheOrchestratorNamesBothMachines::test_the_reviewer_is_built_with_both_machine_names` |
+| H64 | Any answer's explanatory sentence is read. | It names a machine by hostname and never says "source" or "target". | U | `package_review:TestInteractive::test_the_permanent_answer_says_the_user_will_not_be_asked_again`; `package_review:TestCollateralPromptWording::test_every_answer_names_the_machine_and_its_own_effect` |
+| H65 | A repository-conflict screen prints both versions. | The panels are titled with the two hostnames ("On nomad now", "On atlas"); neither role word appears. | U | `package_review:TestRepoConflictGroupResolution::test_each_version_panel_is_titled_with_the_machine_that_holds_it` |
+| H66 | A pin offered for deletion is printed. | The panel is titled with the hostname that holds it; "the target" does not appear. | U | `package_review:TestRemovalGroupContent::test_a_pin_file_is_printed_whole_under_the_machine_that_holds_it` |
+| H67 | A report-only group is printed. | The line under it names the machine ("Nothing on nomad changes for these."). | U | `package_review:TestInteractive::test_a_report_only_group_is_printed_and_asks_nothing` |
+| H68 | An abort message names the item and where the loss would have happened. | The hostname is named, never the role. | U | `package_review:TestCollateralPromptWording::test_stopping_names_the_package_and_the_machine_in_the_abort` |
+| H69 | A report group's title names the machine that cannot reproduce an origin. | The hostname appears in the title. | U | `package_sync_core:TestReviewGroupsByAction::test_a_report_group_is_titled_by_its_cause_not_by_the_word_report` (title template `Origins {target} cannot reproduce` formatted with the hostname) — P: the origin-unavailable title itself is not asserted with a hostname |
+| H70 | The per-command confirmation is shown. | Its heading names the machine by hostname (`apt_sync → nomad`), and the word "target" does not appear. | U | `tests/unit/test_step_gate.py:TestTerminalUIStepGate::test_the_panel_names_the_machine_by_hostname` |
+| H71 | The per-command confirmation is aborted. | The abort message names the hostname, not the role. | U | `tests/unit/test_step_gate.py:TestTerminalUIStepGate::test_the_abort_message_names_the_machine_by_hostname` |
+| H72 | Every `mutates=` phrase in the source is read. | None names a role — the heading already names the machine, so the phrase need not repeat it. | U | `tests/unit/test_machine_naming.py:TestMutatesPhrases::test_no_mutates_phrase_names_a_role` (+ `::test_the_audit_sees_the_real_call_sites`) |
+| H73 | Every step label the status bar shows is read. | None names a role. | U | `tests/unit/test_machine_naming.py:TestStepLabels::test_no_step_label_names_a_role` |
+| H74 | Every outcome message (`JobSkipped`, `ProbeFailed`, `SyncAbortedByUser`, `ConvergeItem*`) is read. | None names a role. | U | `tests/unit/test_machine_naming.py:TestOutcomeMessages::test_no_outcome_message_names_a_role` |
+| H75 | A probe cannot be answered on Nomad. | The failure message names Nomad by hostname. | U | `tests/unit/test_machine_naming.py:TestProbeFailure::test_the_message_names_the_machine` |
+| H76 | The orchestrator's own pre-job questions are shown (first sync, third machine, consecutive push). | Every machine involved is named by hostname; no role word appears. | U | `tests/unit/test_machine_naming.py:TestOrchestratorQuestions::*` (three tests) |
+| H77 | The config-sync questions are shown. | Both hostnames appear; no role word. | U | `tests/unit/test_machine_naming.py:TestConfigSyncQuestions::*` |
+| H78 | `pc-switcher sync --help` is read before any run. | No role word stands in for a hostname. | U | `tests/unit/test_machine_naming.py:TestCommandLineHelp::test_sync_help_names_no_role` |
+| H79 | Exemption: a log record. | It may use the role words in prose because it carries the machine it concerns as a field of its own. | P | Host field carried on every `_log`/`_announce` call; the naming audit deliberately excludes logs. No test asserts the field is always present on a package-job log record |
+| H80 | Exemption: a validation failure. | It may use the role words; the run ends before there is anything to decide. | — | — (deliberately untested by `test_machine_naming.py`; no positive assertion of the exemption exists) |
+
+### H.6 An answer states its effect, its machine and its duration (articles: PKG-FR-EFFECT-NOT-MECHANISM, PKG-FR-ANSWERS-AS-A-SET)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| H81 | An install screen's answers are read. | "install", "skip now", "never install" — never "apply", "skip once", "skip always". | U | `package_review:TestUnreproducibleGroupResolution::test_the_three_answers_read_as_they_do_on_every_other_screen`; `review_skip_always:TestThePermanentAnswer::test_the_screen_names_the_permanent_answer_as_this_screen_s_own_act` |
+| H82 | A removal screen's answers are read. | The act is the concrete verb ("remove"); the permanent answer is "keep for good", not "always skip". | U | `package_review:TestInteractive::test_every_removal_direction_still_offers_the_permanent_answer`; `review_skip_always:TestBlockStateItemsArePromotable::test_mask_removal_direction_can_be_made_permanent` |
+| H83 | Any group's title is read. | It names the concrete verb for the item class, never "Apply". | U | `package_sync_core:TestReviewGroupsByAction::test_removal_group_title_names_a_removal_verb_never_apply`; `package_review:TestInteractive::test_removal_group_title_names_concrete_verb` |
+| H84 | A hold or mask item is reviewed. | Its verb is "hold"/"unhold"/"mask"/"unmask", never "install"/"remove", and it does not display under a package group. | U | `apt/test_apt_job:TestHoldReviewVerbs::test_hold_items_get_their_own_group_with_hold_and_unhold_verbs`; `review_skip_always:TestBlockStateItemsArePromotable::*` |
+| H85 | An `/etc/apt/apt.conf.d` group's title is read. | It names apt configuration files, not "apt packages". | U | `apt/test_apt_job:TestAptConfigVocabulary::test_no_apt_config_group_claims_to_be_about_packages` |
+| H86 | A flatpak group's title is read. | It says "applications" and, for an origin divergence, "remotes" — never "packages"/"repositories". | U | `package_sync_core:TestReviewGroupsByAction::test_each_manager_names_its_own_software_and_its_own_origins`; `…::test_a_flatpak_action_group_says_applications_too` |
+| H87 | The install screen's three sentences are read together. | Each says the act on Nomad, then its duration; the permanent one says it will not be asked again and whose machine the item becomes. | U | `package_review:TestInteractive::test_the_permanent_answer_says_the_user_will_not_be_asked_again` |
+| H88 | The removal screen's three sentences are read together. | Same grammar, keeping the item on Nomad rather than refusing an arrival. | U | same test |
+| H89 | The change screen's three sentences are read together. | Same grammar; the permanent answer names Nomad as the holder, not Atlas. | U | same test |
+| H90 | Any answer sentence is checked for internal vocabulary. | "pc-switcher", "apply", "skip always" and "never offer again" do not appear in a hint. | U | `package_review:TestInteractive::test_the_permanent_answer_says_the_user_will_not_be_asked_again` (asserts no `pc-switcher`); `review_skip_always:TestThePermanentAnswer::test_the_screen_names_the_permanent_answer_as_this_screen_s_own_act` |
+| H91 | A collateral screen's three sentences are read together. | Each states its own effect on Nomad; the stopping one says how far it reaches ("nothing more is changed on nomad; what earlier jobs already did stays done"). | U | `package_review:TestCollateralPromptWording::test_every_answer_names_the_machine_and_its_own_effect` |
+| H92 | The unreproducible screen's three sentences are read together. | Each names Nomad; the permanent one names Atlas as the holder and says it will not be asked again. | U | `package_review:TestUnreproducibleGroupResolution::test_the_three_answers_read_as_they_do_on_every_other_screen` |
+| H93 | The repository-conflict screen's two sentences are read together. | Both name a machine; the skip says which version survives and that it will be asked again. | P | `review_skip_always:TestGroupsNeverOfferedPermanence::test_two_answer_screens_omit_the_permanent_option` — asserts the option set, not the hint text. The act hint `"nomad changes this sync"` is a declarative clause beside an imperative one; no test checks the one-grammar rule |
+| H94 | Any question is answered before it has said what the change would do. | Impossible: the item's detail (or its file bodies) is on the screen before the answer is taken. | U | `package_review:TestCollateralPromptWording::test_the_reason_is_the_item_own_and_the_review_adds_nothing`; `package_review:TestRepoConflictGroupResolution::test_both_whole_versions_are_shown_and_no_unified_diff`; `decision_list:TestRenderRows::test_a_detail_lands_on_its_own_indented_line_under_the_item` |
+| H95 | A screen offers only two answers. | The set is short by exactly the answer it does not offer — same widget, shorter legend. | U | `decision_list:TestLegend::test_a_two_answer_screen_is_short_by_exactly_the_answer_it_does_not_offer`; `review_skip_always:TestGroupsNeverOfferedPermanence::test_two_answer_screens_omit_the_permanent_option` |
+| H96 | The machine is named in one answer's sentence but not the others. | Forbidden — the machine is named in every sentence or in none. | — | — (asserted incidentally per screen; no test states the set rule) |
+
+### H.7 Removals take a distinct gesture (articles: PKG-FR-REMOVAL-DISTINCT)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| H97 | A run proposes installs and removals in the same job. | They never share a screen; each direction has its own group. | U | `package_review:TestInteractive::test_no_group_mixes_install_and_removal_entries_in_one_prompt`; `package_sync_core:TestReviewGroupsByAction::test_four_diffs_produce_four_groups_keyed_by_action` |
+| H98 | A removal screen is confirmed unread. | Nothing is removed — every row starts declined. | U | `package_review:TestInteractive::test_install_rows_start_applied_and_removal_rows_start_skipped` |
+| H99 | A removal screen is read. | The user is told the approval deletes something: the group title and the act word are the deletion verb. | U | `package_review:TestInteractive::test_removal_group_title_names_concrete_verb`; `apt/test_apt_job:TestTwoAnswerRemovals::test_each_two_answer_screen_is_titled_in_correct_english` |
+| H100 | A repository/pin deletion screen is confirmed unread. | Nothing is deleted. | U | `package_review:TestInteractive::test_repo_removal_starts_skipped_and_is_never_offered_permanence`; `apt/test_apt_job:TestTwoAnswerRemovals::test_a_two_answer_group_is_unticked_and_never_offered_permanence` |
+| H101 | An unhold or unmask (removal-direction block state) screen is confirmed unread. | Nothing is unheld or unmasked. | P | `review_skip_always:TestThePermanentAnswer::test_every_promotable_direction_offers_all_three_answers` covers the option set for `remove`/`delete`/`disable`; the default for an unhold/unmask group is covered only by the generic `_default_decision` test |
+
+### H.8 The harmless default, per item kind (articles: PKG-FR-HARMLESS-DEFAULT)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| H102 | An install-direction group opens. | Every row starts at the act. | U | `package_review:TestInteractive::test_install_rows_start_applied_and_removal_rows_start_skipped` |
+| H103 | A change that converges software the user asked for (a snap revision/channel) opens. | Every row starts at the act — nothing the user authored is displaced. | U | `package_review:TestInteractive::test_a_change_that_overwrites_what_the_user_wrote_starts_skipped` (the snap half); `package_sync_core:TestReviewGroupsByAction::test_only_an_apt_config_change_is_flagged_as_overwriting_the_users_own_content` |
+| H104 | A change that overwrites an `/etc/apt/apt.conf.d` file Nomad already holds opens. | Every row starts declined. | U | `package_review:TestInteractive::test_a_change_that_overwrites_what_the_user_wrote_starts_skipped`; `package_sync_core:TestReviewGroupsByAction::test_only_an_apt_config_change_is_flagged_as_overwriting_the_users_own_content` |
+| H105 | An `/etc/apt/apt.conf.d` file Nomad does not have yet is offered. | It starts at the act — it displaces nothing. | U | `package_sync_core:TestReviewGroupsByAction::test_an_apt_config_install_is_not_an_overwrite` |
+| H106 | A remove/delete/disable group opens. | Every row starts declined. | U | `package_review:TestInteractive::test_every_removal_direction_still_offers_the_permanent_answer` |
+| H107 | A repository/pin deletion group opens. | Every row starts declined. | U | `package_review:TestInteractive::test_repo_removal_starts_skipped_and_is_never_offered_permanence` |
+| H108 | A repository-conflict screen (an overwrite) opens. | It starts declined — the overwrite is chosen, never defaulted. | U | `package_review:TestRepoConflictGroupResolution::test_only_two_answers_are_offered_and_the_row_starts_skipped` |
+| H109 | A collateral screen opens. | It starts at "keep the package", not at "go ahead". | — | — (code default is `Decision.SKIP_ONCE`; no test reads the row's default) |
+| H110 | An unreproducible screen opens. | It starts at the act (writing a snippet) — the item is an install. | — | — (code default is the snippet act; no test reads it) |
+| H111 | A report-only group is reached. | It has no default at all: nothing is answerable. | U | `package_review:TestInteractive::test_a_report_only_group_is_printed_and_asks_nothing` |
+
+### H.9 Declining for this run records nothing and returns (articles: PKG-FR-SKIP-ONCE)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| H112 | Any reviewed item is declined for this run. | The decision comes back as decline-for-now and nothing converges. | U | `package_review:TestInteractive::test_every_row_comes_back_with_the_decision_its_screen_returned` |
+| H113 | A run whose only answers were declines completes. | No decision file is created or written on either machine. | P | `block_state_decisions` helper `record_skip_always` declines everything but the one marked item and asserts the OTHER machine wrote nothing; no test declines every item and asserts neither machine wrote |
+| H114 | The item declined last run is planned again. | It is diffed and offered again — the decline left no trace to filter it out. | V | integration:`TestCrossDirectionRoundTrips::test_install_propagates_then_reversed_removal_needs_approval` (run 2 declines, run 3 is offered the same item and applies it) |
+| H115 | An unreproducible item is answered "skip for now". | That is a real resolution: the item is resolved for this run, not left unresolved, and no snippet is written. | U | `package_review:TestUnreproducibleGroupResolution::test_explicit_skip_once_is_a_resolution_not_unresolved`; `manual_installs_sync:TestSkipOnceResolution::test_run_whose_only_items_were_skipped_once_passes` |
+| H116 | A repository conflict is declined for this run. | Nothing is recorded either way. | U | `package_review:TestRepoConflictGroupResolution::test_only_two_answers_are_offered_and_the_row_starts_skipped`; `block_state_decisions:TestAptRepoItemDecisions::test_no_repository_or_pin_id_can_reach_a_decision_file` |
+| H117 | A collateral question is answered "keep the package". | Nothing about the collateral package is recorded. | U | `review_skip_always:TestGroupsNeverOfferedPermanence::test_collateral_group_is_never_offered_permanence` |
+
+### H.10 The machine-specific mark (articles: PKG-FR-MACHINE-SPECIFIC, PKG-FR-NO-MARK-ON-ORIGIN, PKG-FR-NO-MARK-ON-REPORT, PKG-NG-MARK-ORIGIN, PKG-NG-MARK-PORTABILITY)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| H118 | An install-direction item is marked machine-specific. | The mark is written on Atlas, the machine that holds the item; Nomad's file is untouched. | U | `package_state:TestPipelineWiring::test_skip_always_on_install_writes_to_source_not_target` |
+| H119 | A change-direction item is marked machine-specific. | The mark is written on Atlas — it holds the value the item would converge to. | U | `package_state:TestPipelineWiring::test_skip_always_on_change_writes_to_source_not_target` |
+| H120 | A removal-direction item is marked machine-specific. | The mark is written on Nomad, the only machine holding it. | U | `package_state:TestPipelineWiring::test_skip_always_on_remove_writes_to_target_not_source` |
+| H121 | An apt hold add / unhold is marked. | Recorded on Atlas for the add, Nomad for the unhold, and never re-offered. | U | `block_state_decisions:TestAptHoldDecisions::test_declined_hold_is_recorded_on_source_and_never_re_offered`; `…::test_declined_unhold_is_recorded_on_target_and_never_re_offered` |
+| H122 | A snap hold add / unhold is marked. | Same, in the snap decision file. | U V | `block_state_decisions:TestSnapHoldDecisions::*`; integration:`TestBlockStateDecisionRoundTrip::test_skip_always_on_a_snap_hold_is_inert_next_run` |
+| H123 | A flatpak mask add / unmask is marked. | Same, in the flatpak decision file. | U | `block_state_decisions:TestFlatpakMaskDecisions::*` |
+| H124 | An `/etc/apt/apt.conf.d` file is marked. | Recorded and never re-offered — apt's own configuration is markable. | U | `block_state_decisions:TestAptRepoItemDecisions::test_declined_config_install_is_recorded_on_source_and_never_re_offered` |
+| H125 | A marked item is planned again on the machine that holds it, in the source role. | It is filtered out before the diff and appears in no group. | U V | `package_state:TestPipelineWiring::test_source_held_inert_item_absent_from_the_plans_diffs`; integration:`TestPackageSyncWholeRunContracts::test_skip_always_is_inert_in_both_roles` |
+| H126 | The same machine plays the target role in a later run. | The item is still inert: it is neither installed nor removed there, even if a decision is forced onto it. | U V | `package_state:TestPipelineWiring::test_target_held_inert_item_absent_even_though_source_also_differs`; integration:`TestPackageSyncWholeRunContracts::test_skip_always_is_inert_in_both_roles` (reversed direction) |
+| H127 | A marked item whose identity exists on no input item (a hold, a digest-derived config). | The post-diff pass drops it too, so it never comes back default-checked. | U | `block_state_decisions:TestAptHoldDecisions::*`; `block_state_decisions:TestAptRepoItemDecisions::test_declined_config_install_is_recorded_on_source_and_never_re_offered` |
+| H128 | A hold is marked but the snap itself is not. | Only the hold goes inert; the snap is still offered for install. | U | `block_state_decisions:TestSnapHoldDecisions::test_recorded_hold_does_not_silence_the_snaps_own_presence_diff` |
+| H129 | An approved change would touch a marked package regardless. | The user is asked, and the question says the package is marked. | U | `package_state:TestDecisionScopeReachesCollateral::test_a_mark_protects_a_package_apt_considers_auto_installed`; `apt/test_apt_collateral:TestTheReasonNamesTheGroundThatApplies::test_a_package_only_a_mark_protects_says_so_and_claims_nothing_about_apt` |
+| H130 | Marks are recorded and a `folder_sync` run follows. | Every `*.decisions.yaml` is excluded from the transfer, unconditionally, and a `+` rule in the user's own filter cannot re-expose it. | U | `folder_sync:TestDecisionFileExcludeFilters::test_home_under_synced_folder_anchors_the_glob_under_user_subdir`; `…::test_user_plus_rule_for_decision_file_does_not_change_command_ordering`; `…::test_unconditional_regardless_of_which_folder_is_synced` |
+| H131 | `config_sync` runs. | Only `config.yaml` is sent; no decision file travels. | U | `package_state:TestConfigSyncScope::test_copy_config_to_target_sends_only_config_yaml` |
+| H132 | Two managers both mark an item on the same machine. | Each mark lands in its own manager's file; one manager's marks never reach another's. | U | `package_state:TestRelpathConstants::test_relpath_template_places_file_under_config_pc_switcher`; `block_state_decisions` (per-manager `decision_cat` fixtures) |
+| H133 | A third machine, Vega, is synced for the first time. | It holds no marks; every item is decided again there. | — | — (follows from H130/H131 but is not asserted end to end) |
+| H134 | A dry run answers an item permanently. | Nothing is recorded. | U | `package_state:TestPipelineWiring::test_no_record_call_when_dry_run` |
+| H135 | A run with no terminal produces a permanent decision (forced). | Nothing is recorded. | U | `package_state:TestPipelineWiring::test_no_record_call_when_outcome_was_not_interactive`; `review_skip_always:TestGroupsNeverOfferedPermanence::test_non_interactive_run_prompts_nothing` |
+| H136 | A repository deletion screen is shown. | The permanent answer is absent from it — a repository cannot be marked. | U | `package_review:TestInteractive::test_repo_removal_starts_skipped_and_is_never_offered_permanence`; `review_skip_always:TestGroupsNeverOfferedPermanence::test_two_answer_screens_omit_the_permanent_option` |
+| H137 | A pin deletion screen is shown. | The permanent answer is absent from it. | U | `apt/test_apt_job:TestTwoAnswerRemovals::test_a_two_answer_group_is_unticked_and_never_offered_permanence` |
+| H138 | A repository overwrite (conflict) screen is shown. | The permanent answer is absent from it. | U | `review_skip_always:TestGroupsNeverOfferedPermanence::test_two_answer_screens_omit_the_permanent_option`; `package_review:TestRepoConflictGroupResolution::test_only_two_answers_are_offered_and_the_row_starts_skipped` |
+| H139 | A permanent decision is forced onto every diff of a run holding a repository, a pin and an apt config file. | Only the apt config id reaches a decision file; no `apt:source:` or `apt:pin:` id is ever recorded. | U | `block_state_decisions:TestAptRepoItemDecisions::test_no_repository_or_pin_id_can_reach_a_decision_file` |
+| H140 | A signing key exists only on Nomad and nothing references it. | It is never offered, so there is nothing to mark and nothing that could be recorded. | U | `block_state_decisions:TestAptRepoItemDecisions::test_a_signing_key_is_never_offered_and_so_can_never_be_recorded` |
+| H141 | A flatpak remote is unused on Nomad. | It is deleted without ever being offered, so there is nothing to mark. | U | `flatpak_sync:TestUnusedRemoteIsDeleted::test_a_remote_nothing_uses_is_deleted_and_never_offered` |
+| H142 | A report-only finding is reached in the review. | It is printed, not answered — no mark can be chosen for it. | U | `package_review:TestInteractive::test_a_report_only_group_is_printed_and_asks_nothing` |
+| H143 | A permanent decision is forced onto a report-only diff. | Nothing is recorded for it. | U | `package_sync_core:TestBaseHooksAreNoOps::test_base_finalize_hook_writes_nothing` (a `REPORT_ONLY` diff decided `SKIP_ALWAYS` writes no `fake.decisions`) |
+| H144 | An unreproducible item is answered "never install here". | The mark is recorded on Atlas (unreproducible items are always source-held). | U | `manual_installs_sync` `_finalize_unreproducible` path; `package_sync_core:TestFinalizeUnreproducible::*` |
+| H145 | The user deletes one entry from a decision file by hand. | That item is live again next run; the entries left in place stay inert. | U | `package_state:TestHandEditedDecisionFile::test_entry_deleted_by_hand_makes_that_item_live_again_next_run` |
+| H146 | The user deletes the whole decision file. | Every previously-marked item is offered again. | U | `package_state:TestHandEditedDecisionFile::test_deleting_the_whole_file_makes_every_item_live_again` |
+| H147 | A decision file is malformed or absent. | It degrades to "no permanent decisions"; only the malformed case warns, naming the path. | U | `package_state:TestDecisionFileLoad::*` (absent / empty / malformed / missing key) |
+
+### H.11 Abort (articles: PKG-FR-ABORT)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| H148 | Ctrl-C at an ordinary decision screen. | The whole sync aborts; the next group's screen is never built. | U | `package_review:TestInteractive::test_ctrl_c_at_a_decision_screen_aborts_the_entire_sync`; `review_skip_always:TestAbortAndTeardown::test_ctrl_c_at_a_decision_screen_aborts_the_whole_sync` |
+| H149 | Ctrl-C at an unreproducible item's screen. | The whole sync aborts, naming the item; the item is not skipped. | U | `package_review:TestUnreproducibleGroupResolution::test_cancelled_select_aborts_the_entire_sync` |
+| H150 | Ctrl-C at a repository-conflict screen. | The whole sync aborts, naming the file. | U | `package_review:TestRepoConflictGroupResolution::test_ctrl_c_aborts_the_sync_naming_the_screen` |
+| H151 | Ctrl-C at a collateral screen. | The whole sync aborts, naming the package. | — | — (code path is `_ask_about_one_item`; only the explicit stop ANSWER is tested) |
+| H152 | Ctrl-C at a repository/pin deletion screen. | The whole sync aborts, naming the file. | — | — (same shared code path, untested for this group) |
+| H153 | The explicit "stop the sync" answer on a collateral screen. | The whole sync stops, naming the package and the machine; the answer is not read as declining that one item. | U | `package_review:TestCollateralGroupResolution::test_abort_raises_sync_aborted_by_user_naming_the_collateral_package`; `apt/test_apt_collateral:TestCollateralForARepositoryThisRunWrites::test_stopping_ends_the_whole_sync` |
+| H154 | Ctrl-C at a machine gate (Ubuntu Pro). | The whole sync aborts and the live display is handed back. | U | `package_review:TestAskGate::test_ctrl_c_aborts_the_whole_sync_and_hands_the_display_back` |
+| H155 | Abort at the per-command confirmation, by answer or by Ctrl-C/EOF. | The sync aborts; an unanswerable prompt is never read as approval. | U | `tests/unit/test_step_gate.py:TestTerminalUIStepGate::test_abort_raises_and_resumes_ui`; `…::test_unanswerable_prompt_aborts_never_proceeds` |
+| H156 | Any review screen raises. | The live display is resumed in a `finally`, so the terminal is always handed back. | U | `package_review:TestInteractive::test_ui_resumed_when_prompt_raises`; `package_review:TestUnreproducibleGroupResolution::test_ui_resumed_when_snippet_capture_raises`; `package_review:TestTerminalUIReviewer::test_pause_and_resume_both_run_when_the_underlying_prompt_raises` |
+| H157 | An abort raised inside a package job reaches the orchestrator. | It is re-raised untouched: no later job runs and the session is recorded aborted, not the job failed. | P | `package_review:TestInteractive::test_ctrl_c_at_a_decision_screen_aborts_the_entire_sync` proves the review stops; the orchestrator's `except SyncAbortedByUser: raise` branch has no test of its own |
+| H158 | The letter `a` is proposed as a decision key. | Rejected — `a` is conventionally abort and may never set a decision. | U | `decision_list:TestConstruction::test_a_key_may_not_be_the_abort_letter` |
+| H159 | The legend is read at any screen. | Abort is not offered beside the answers — it is not listed. | U | `decision_list:TestLegend::test_the_legend_does_not_offer_abandoning_the_sync` |
+
+### H.12 Unattended runs and the automation variable (articles: PKG-NG-UNATTENDED, PKG-NG-AUTOMATION-ENV)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| H160 | A run with no terminal reaches a package review. | No prompt is constructed at all; every item comes back declined for this run. | U | `package_review:TestNonInteractive::test_no_prompt_constructed_and_everything_skipped_once`; `review_skip_always:TestGroupsNeverOfferedPermanence::test_non_interactive_run_prompts_nothing` |
+| H161 | The same run's items are read afterwards. | Each one is NAMED as not asked and declined for this run, and the groups are printed as the report. | U V | `package_review:TestNonInteractive::test_warns_naming_every_item_and_reports_groups`; integration:`TestPackageSyncWholeRunContracts::test_non_interactive_skip_all` |
+| H162 | `--yes` is passed on a run with no terminal. | It does not answer the review: the apt job is still reported skipped and nothing is applied. | V | integration:`TestPackageSyncWholeRunContracts::test_non_interactive_skip_all` (the run uses `--yes --allow-first-sync`) |
+| H163 | The configuration is searched for a standing-answers key. | There is none — no config key answers a review. | — | — (verified by reading `config.py`; no test asserts the absence) |
+| H164 | The automation variable is set to a JSON map of item id to decision. | The review is answered from it, no prompt is constructed and the live display is never paused. | U V | `package_review:TestAutomationEnv::test_automation_env_returns_mapped_decisions_without_prompting`; integration:`TestPackageSyncWholeRunContracts::test_skip_always_is_inert_in_both_roles` |
+| H165 | An item is absent from the map. | It defaults to declined for this run. | U | `package_review:TestAutomationEnv::test_automation_env_returns_mapped_decisions_without_prompting` (only mapped ids get their value; `_decisions_from_automation` fills the rest) |
+| H166 | The map names a permanent decision. | It counts as the user's own: the machine-specific mark is written. | V | integration:`TestPackageSyncWholeRunContracts::test_skip_always_is_inert_in_both_roles` |
+| H167 | The map names a permanent decision for an unreproducible item. | Per the article, a permanent answer may also write an install snippet. In the code it cannot: the automation path returns no snippets, so only the mark is written. | ‼ | — |
+| H168 | The map is malformed JSON. | The run fails loudly before any prompt and before the display is paused. | U | `package_review:TestAutomationEnv::test_malformed_automation_json_fails_loudly_and_prompts_nothing` |
+| H169 | The map names a decision that does not exist. | The run fails loudly rather than defaulting to a decline. | U | `package_review:TestAutomationEnv::test_unknown_decision_value_in_automation_json_fails_loudly` |
+| H170 | `pc-switcher sync --help` is read. | The variable is not mentioned. | U | `package_review:TestAutomationEnv::test_env_var_not_mentioned_in_cli_help` |
+| H171 | The configuration schema is read. | The variable is not a key there. | — | — |
+| H172 | The variable is set and a machine gate (Ubuntu Pro) is reached. | It cannot answer the gate: with no terminal the gate answers "nobody was there", and no prompt is built. | U | `package_review:TestAskGate::test_the_automation_env_hook_cannot_answer_a_gate` |
+| H173 | The variable is set on a run that DOES have a terminal. | It still answers the review silently, unprompted — the accepted cost. | U | `package_review:TestAutomationEnv::test_automation_env_returns_mapped_decisions_without_prompting` (the branch is read before the interactivity test) — P: the test uses a non-interactive console, so "on a terminal too" is inferred from the code, not asserted |
+
+
+## J. Outcomes, failure isolation, the dry run, the no-terminal run, the log and what it withholds
+
+### J.1 Success (article: PKG-FR-OUTCOME-SUCCESS)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| J1 | Atlas has one package Nomad lacks; the user approves it and the install succeeds | The job reports success and the package is on Nomad | U V | `test_apt_job:TestContinueOnFailure` (converse); `test_package_sync:TestAptSyncEndToEnd::test_apt_sync_installs_missing_package` |
+| J2 | Atlas and Nomad hold identical item sets, so the job presents nothing | The job reports success; the review is still consulted once, with no groups; no command carrying `mutates=` is issued | U V | `test_package_sync_core:TestIdempotency::test_identical_source_and_target_produce_no_diff_no_group_and_no_mutation`; `test_package_sync:TestPackageSyncIdempotency::test_second_consecutive_sync_has_nothing_to_do` |
+| J3 | Every item presented is answered "skip this run" | The job reports success; nothing converges | U | `test_package_sync_core:TestDecisionsReachTheLog::test_a_skipped_item_leaves_a_line_where_nothing_else_would` |
+| J4 | Every item presented is answered "always skip" | The job reports success; each mark is recorded on its holding machine; nothing converges | U | `test_package_state:TestPipelineWiring::test_skip_always_on_change_writes_to_source_not_target` |
+| J5 | An approved install is withdrawn by a question this run's own first change made answerable (late collateral) | It is counted neither applied nor failed; the job does not fail on its account; the withdrawal and its reason are named | U | `test_apt_collateral:TestCollateralForARepositoryThisRunWrites::test_the_decision_is_named_in_the_log` |
+| J6 | The plan holds only report-only findings and a terminal is present | Nothing converges; the job reports success | U | `test_package_review:TestInteractive::test_a_report_only_group_is_printed_and_asks_nothing` |
+| J7 | A run whose only items were unreproducible and all answered "skip this run" | Skip-once counts as a resolution; the job reports success | U | `test_manual_installs_sync:TestSkipOnceResolution::test_run_whose_only_items_were_skipped_once_passes` |
+| J8 | A job presented nothing and the run has no terminal | Success, not skipped — the target already matches | U | `test_package_sync_core:TestExecuteSelfContained::test_an_empty_plan_is_still_a_success_and_transfers_nothing` |
+
+### J.2 Skipped (article: PKG-FR-OUTCOME-SKIPPED; the two named causes)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| J9 | The run has no terminal and a job's review is non-empty | That job reports skipped, naming why; it does not report success | U V | `test_package_sync_core:TestExecuteSelfContained::test_a_non_interactive_package_review_skips_the_job_instead_of_applying_nothing`; `test_package_sync:TestPackageSyncWholeRunContracts::test_non_interactive_skip_all` |
+| J10 | Nomad reports no Ubuntu Pro attachment and the user chooses to skip | `apt_sync` reports skipped naming the ESM files and the reason; `/etc/apt` on Nomad is exactly as found | U V | `test_apt_esm_gate:TestTheESMAttachmentGate::test_choosing_skip_raises_job_skipped_and_writes_nothing`; `test_package_sync:TestTheESMAttachmentGateOnVMs::test_an_unattached_target_skips_apt_sync_and_leaves_etc_apt_untouched` |
+| J11 | Nomad reports no Ubuntu Pro attachment and there is no terminal to ask at | `apt_sync` reports skipped, saying no TTY was available to choose between attaching and skipping | U | `test_apt_esm_gate:TestTheESMAttachmentGate::test_a_non_interactive_run_skips_the_whole_job` |
+| J12 | A skipped job's items included a "always skip" answer that could not be given | No decision file is created or changed on either machine | U V | `test_package_state:TestPipelineWiring::test_no_record_call_when_outcome_was_not_interactive`; `test_package_sync:TestPackageSyncWholeRunContracts::test_non_interactive_skip_all` |
+| J13 | A skipped `manual_installs_sync` run | No snippet registry is transferred to Nomad | U | `test_manual_installs_sync:TestSnippetPush::test_a_run_with_no_terminal_pushes_nothing_even_with_nothing_to_review` |
+| J14 | A skipped job | The target is untouched — the skip is raised before any mutating command | U V | `test_package_sync_core:TestExecuteSelfContained::test_a_non_interactive_package_review_skips_the_job_instead_of_applying_nothing`; `test_package_sync:TestPackageSyncWholeRunContracts::test_non_interactive_skip_all` |
+| J15 | A job reports skipped, three other jobs follow | The run continues and each following job executes | U | `test_skipped_jobs:TestSkippedJobArm::test_the_orchestrator_records_a_skipped_job_and_runs_the_next_one` |
+| J16 | A run in which one job was skipped and no job failed | The session is COMPLETED and the exit code is 0 | U | `test_skipped_jobs:TestSkippedJobArm::test_the_orchestrator_records_a_skipped_job_and_runs_the_next_one`; `test_session_status_from_job_results:TestSessionStatusReflectsJobResults::test_skipped_job_result_is_not_a_failure` |
+| J17 | A skipped job's reason | Reaches the run's own report, not only the log | U | `test_skipped_jobs:TestSkippedJobArm::test_the_orchestrator_records_a_skipped_job_and_runs_the_next_one` |
+| J18 | Skipped is distinguished from "answered no": a job the user answered entirely with declines | Reports success (J3), while a job nobody could answer reports skipped (J9) | U | J3 + J9 read together |
+
+### J.3 Failure and its isolation (articles: PKG-FR-OUTCOME-FAILED, PKG-FR-FAIL-NAMED)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| J19 | One approved item's converge command exits non-zero | The job reports failure | U | `test_apt_job:TestContinueOnFailure::test_second_of_three_fails_all_attempted_one_failure_raised` |
+| J20 | Three approved items, the middle one fails | All three are attempted; the third still converges | U V | `test_apt_job:TestContinueOnFailure::test_second_of_three_fails_all_attempted_one_failure_raised`; `test_package_sync:TestPackageSyncWholeRunContracts::test_continue_on_item_failure` |
+| J21 | Several items fail in one job | The failures are collected and raised once, after the loop, naming each item | U | `test_snap_sync:TestHoldAndRevisionFailuresArePerItem`; `test_apt_etc_apt:TestRepoGroupTransaction::test_failed_update_restores_changed_deletes_created_records_group_failures`; `test_apt_etc_apt:TestRepoGroupBackupFailure::test_backup_failure_fails_every_group_item_without_crashing` |
+| J22 | A converge step refuses an item without attempting the command (a transaction guard) | That item alone fails, naming what it concerns; the loop continues | U | `test_apt_etc_apt:TestRepoGroupOrdering::test_a_failed_derived_repository_write_fails_the_package_that_needed_it`; `test_apt_etc_apt:TestKeyringsDirectoryEnsured::test_directory_preparation_failure_fails_the_item_not_the_run` |
+| J23 | Forty items fail in one job | The end-of-run message adds one line for that job, not forty | U | `test_session_status_from_job_results:TestTheOutcomeMessageNamesWhatFailed::test_a_job_with_many_failed_items_stays_on_one_line` |
+| J24 | Two jobs fail | The end-of-run message names both jobs and both reasons | U | `test_session_status_from_job_results:TestTheOutcomeMessageNamesWhatFailed::test_each_failed_jobs_reason_reaches_the_message` |
+| J25 | A failed job with no recorded reason | The message still names the job | U | `test_session_status_from_job_results:TestTheOutcomeMessageNamesWhatFailed::test_a_failure_without_a_recorded_reason_still_names_its_job` |
+| J26 | `apt_sync` fails its items; `snap_sync` follows | `snap_sync` still runs — one failed job does not stop the others | U V | `test_package_sync_core:TestOrchestratorPackageItemFailuresContinuation::test_failing_package_job_does_not_cancel_remaining_jobs`; `test_package_sync:TestPackageSyncWholeRunContracts::test_continue_on_item_failure` |
+| J27 | A package job raises an ordinary exception that is neither a converge failure nor a dead read (a registry transfer error, a parser defect) | That job alone fails; the following jobs run — "any exception out of a package job stays in that job" | U | `test_job_failure_isolation:TestAnyFailureOfAPackageJobStaysInThatJob::test_a_generic_exception_does_not_stop_the_following_job` |
+| J28 | That job's failure reason | Reaches its `JobResult` verbatim | U | `test_job_failure_isolation:TestAnyFailureOfAPackageJobStaysInThatJob::test_the_failed_result_carries_what_went_wrong` |
+| J29 | A dead read (`ProbeFailed`) out of any job, package or not | Fails only that job; the following job runs | U | `test_job_failure_isolation:TestProbeFailedFailsOnlyItsOwnJob::test_the_orchestrator_records_it_failed_and_runs_the_next_job` |
+| J30 | A lock conflict surfaces inside a package job | The whole run ends; no later job runs | U | `test_job_failure_isolation:TestAnyFailureOfAPackageJobStaysInThatJob::test_a_lock_conflict_still_ends_the_run` |
+| J31 | A job outside package sync fails | The run still aborts (the #220 boundary this article does not cover) | U | `test_package_sync_core:TestOrchestratorPackageItemFailuresContinuation::test_other_exception_types_still_abort_the_run` |
+| J32 | A run that continued past a failed job | The session is FAILED and the CLI exits non-zero | U V | `test_job_failure_isolation:TestProbeFailedFailsOnlyItsOwnJob::test_the_session_is_still_reported_failed`; `test_session_status_from_job_results:TestCliExitCodeFromSessionStatus::test_failed_session_exits_non_zero`; `test_package_sync:TestPackageSyncWholeRunContracts::test_continue_on_item_failure` |
+| J33 | Any failure message a job emits | Names the item, package or file it concerns, and never a role ("the target") | U | `test_machine_naming:TestOutcomeMessages::test_no_outcome_message_names_a_role`; `test_job_failure_isolation:TestProbeFailedFailsOnlyItsOwnJob::test_the_failed_result_carries_the_command_that_did_not_answer` |
+| J34 | A converge command's stderr | Is carried into the failure line and the run's summary | U V | `test_package_sync_core` (`_converge_one` path, asserted per manager); `test_package_sync:TestPackageSyncWholeRunContracts::test_continue_on_item_failure` |
+
+### J.4 The run with no terminal (article: PKG-FR-NO-TERMINAL)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| J35 | No TTY, groups to present | No prompt is constructed at all | U | `test_package_review:TestNonInteractive::test_no_prompt_constructed_and_everything_skipped_once` |
+| J36 | No TTY | Every reviewable item comes back declined for this run | U | `test_package_review:TestNonInteractive::test_no_prompt_constructed_and_everything_skipped_once` |
+| J37 | No TTY | Each item is NAMED as unasked and declined, never counted | U V | `test_package_review:TestNonInteractive::test_warns_naming_every_item_and_reports_groups`; `test_package_sync:TestPackageSyncWholeRunContracts::test_non_interactive_skip_all` |
+| J38 | No TTY, unreproducible items | No snippet capture is offered; every such item is unresolved and none is a written snippet | U | `test_package_review:TestUnreproducibleGroupResolution::test_non_interactive_offers_no_capture_and_marks_every_item_unresolved` |
+| J39 | No TTY, unreproducible items unresolved | The job is skipped for having a non-empty review, not failed for the unresolved items | U | `test_package_review:TestUnresolvedNeverFailsTheJob::test_non_interactive_unresolved_does_not_raise_on_that_basis_alone` |
+| J40 | No TTY, apt collateral entries in the plan | They come back declined for this run and are not unresolved | U | `test_package_review:TestCollateralGroupResolution::test_non_interactive_collateral_entries_skip_once_and_are_not_unresolved` |
+| J41 | No TTY, a repository-conflict entry in the plan | It comes back declined for this run; the overwrite does not happen | U | `test_package_review:TestRepoConflictGroupResolution::test_non_interactive_conflict_entries_skip_once_and_are_not_unresolved` |
+| J42 | No TTY, a collateral question raised after the run's first change | The item is withheld rather than pushed through or failed | U | `test_apt_collateral:TestCollateralForARepositoryThisRunWrites::test_a_run_with_no_terminal_declines_it` |
+| J43 | No TTY, a gate question that is not about an item (Ubuntu Pro) | Answers "nobody there" without constructing a prompt; the caller decides the fallback | U | `test_package_review:TestAskGate::test_no_tty_answers_none_without_constructing_a_prompt` |
+| J44 | No TTY — what must NOT be written: a decision record | No decision file is written on either machine | U V | `test_package_state:TestPipelineWiring::test_no_record_call_when_outcome_was_not_interactive`; `test_package_sync:TestPackageSyncWholeRunContracts::test_non_interactive_skip_all` |
+| J45 | No TTY — what must NOT be written: a snippet | No snippet is added to the source registry | U | `test_package_sync_core:TestFinalizeUnreproducible::test_no_finalize_writes_when_outcome_not_interactive` |
+| J46 | No TTY — what must NOT be written: the registry transfer | No registry is pushed to the target, even when this run's review was empty | U | `test_manual_installs_sync:TestSnippetPush::test_a_run_with_no_terminal_pushes_nothing_even_with_nothing_to_review` |
+| J47 | No TTY, empty review | The job reports success and `after_review()` is still skipped | U | `test_package_sync_core:TestExecuteSelfContained::test_an_empty_plan_is_still_a_success_and_transfers_nothing` |
+| J48 | The undocumented automation environment variable is set | Its answers count as the user's own (`was_interactive` is true), so permanent answers are honoured; it appears in no help text | U | `test_package_review:TestAutomationEnv::test_automation_env_returns_mapped_decisions_without_prompting`, `::test_env_var_not_mentioned_in_cli_help` |
+| J49 | Whole non-interactive run against two real machines, one item diverged in each direction | Nothing applied, no decision file created, each item named, `apt_sync` reported skipped, exit code 0 | V | `test_package_sync:TestPackageSyncWholeRunContracts::test_non_interactive_skip_all` |
+
+### J.5 The dry run (article: PKG-FR-DRY-RUN)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| J50 | `--dry-run` on a terminal | The same plan is built and the same review is put to the user as in a real run | P | `test_apt_job:TestDryRun::test_dry_run_issues_no_mutating_command` and `test_manual_installs_sync:TestClassificationAuthority::test_dry_run_previews_on_the_fly_install_without_replay_or_write` drive `execute()` through a reviewer, so the review IS reached; no test compares a dry run's plan/groups against the same fixture's real run |
+| J51 | `--dry-run` with install, change, remove and report-only diffs all approved | No converge command is issued for any of them | U | `test_package_sync_core:TestConvergeDispatchByAction::test_dry_run_zero_mutating_commands_across_all_four_action_types` |
+| J52 | `--dry-run` preview of an item whose meaning lives in its detail | The preview line carries the item's detail, not just its name | U | `test_package_sync_core:TestConvergeDispatchByAction::test_dry_run_preview_carries_each_items_detail` |
+| J53 | `--dry-run` with derived apt writes (a pin, a repository, a signing key, the metadata refresh) | Each derived change that a real run would make appears in the preview; one that no approved package needs does not | U V | `test_apt_probe:TestWhatAptItselfReads::test_a_dry_run_previews_the_derived_writes_and_issues_none`; `test_package_sync:TestAptSyncEndToEnd::test_apt_repository_state_dry_run_previews_derived_writes_and_reviews_no_repository` |
+| J54 | `--dry-run` with a derived flatpak remote / a remote deletion / a filter clear | Each is previewed and none is issued | U | `test_flatpak_sync:TestRemotesAreDerivedFromApprovedRefs::test_a_dry_run_previews_the_derived_writes_and_issues_none`; `test_flatpak_sync:TestUnusedRemoteIsDeleted::test_a_dry_run_previews_the_deletion_and_issues_none`; `test_flatpak_sync:TestRemoteFilterReplicates::test_a_dry_run_previews_the_clear_and_issues_none` |
+| J55 | `--dry-run` with a "always skip" answer | No decision file is written | U | `test_package_state:TestPipelineWiring::test_no_record_call_when_dry_run`; `test_package_sync_core:TestFinalizeUnreproducible::test_no_finalize_writes_during_dry_run` |
+| J56 | `--dry-run` with a snippet authored during the review | The item is previewed as an install; no replay reaches the target and no registry write happens | U | `test_manual_installs_sync:TestClassificationAuthority::test_dry_run_previews_on_the_fly_install_without_replay_or_write` |
+| J57 | `--dry-run` pushes the snippet registry | It does not | U | `test_manual_installs_sync:TestSnippetPush::test_dry_run_pushes_nothing` |
+| J58 | `--dry-run` against a real machine | The target's `apt-mark showmanual` is byte-identical before and after | V | `test_package_sync:TestAptSyncEndToEnd::test_apt_sync_dry_run_changes_nothing` |
+| J59 | `--dry-run` on a terminal, plan non-empty | The job reports success | V | `test_package_sync:TestAptSyncEndToEnd::test_apt_sync_dry_run_changes_nothing` (asserts the run's exit code is 0) |
+| J60 | `--dry-run` with no terminal and a non-empty plan | The job reports skipped, for the same reason a real run does | — | see Gaps |
+| J61 | `--dry-run` against an unattached Ubuntu Pro target | Nothing is asked; a warning says a real run would skip the whole apt job | U | `test_apt_esm_gate:TestTheESMAttachmentGate::test_a_dry_run_never_prompts_about_attachment` |
+| J62 | `--dry-run` with unresolved unreproducible items | The run does not fail on that basis | U | `test_package_review:TestUnresolvedNeverFailsTheJob::test_dry_run_unresolved_does_not_raise_on_that_basis_alone` |
+
+### J.6 A read that cannot be answered (article: PKG-FR-READ-FAILS-JOB)
+
+Per machine, per job, for a package-manager query and for a job's own scan.
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| J63 | `apt-mark showmanual` on Atlas exits 100 | `apt_sync` fails naming the command, its exit code and apt's own stderr; nothing is proposed | U | `test_apt_probe:TestAReadThatDidNotAnswer::test_a_source_manual_set_read_that_did_not_answer_fails_the_job` |
+| J64 | The target's manifest read does not answer | `apt_sync` fails naming the command and the machine | U | `test_apt_probe:TestAReadThatDidNotAnswer::test_a_target_manifest_read_that_did_not_answer_fails_the_job` |
+| J65 | The read apt's collateral protection rests on does not answer | `apt_sync` fails rather than classifying every casualty as automatic | U | `test_apt_probe:TestAReadThatDidNotAnswer::test_a_collateral_protection_read_that_did_not_answer_fails_the_job` |
+| J66 | The installed-version read does not answer | `apt_sync` fails | U | `test_apt_probe:TestAReadThatDidNotAnswer::test_a_version_read_that_did_not_answer_fails_the_job` |
+| J67 | The hold-set read does not answer | `apt_sync` fails | U | `test_apt_probe:TestAReadThatDidNotAnswer::test_a_hold_read_that_did_not_answer_fails_the_job` |
+| J68 | The target's installed-set read does not answer | `apt_sync` fails | U | `test_apt_probe:TestAReadThatDidNotAnswer::test_an_unanswered_installed_set_read_fails_the_job` |
+| J69 | The target's `apt-cache policy` does not answer | `apt_sync` fails | U | `test_apt_probe:TestAReadThatDidNotAnswer::test_a_target_policy_read_that_did_not_answer_fails_the_job` |
+| J70 | A `/etc/apt` directory digest listing does not answer | `apt_sync` fails naming the directory | U | `test_apt_probe:TestAReadThatDidNotAnswer::test_a_directory_digest_read_that_did_not_answer_fails_the_job` |
+| J71 | The source-file reference scan does not answer | `apt_sync` fails | U | `test_apt_probe:TestAReadThatDidNotAnswer::test_a_source_file_scan_that_did_not_answer_fails_the_job` |
+| J72 | A file a conflict question would print whole cannot be read | `apt_sync` fails naming the path and the machine, rather than showing an empty pane | U | `test_apt_probe:TestAReadThatDidNotAnswer::test_a_conflict_content_read_that_did_not_answer_fails_the_job` |
+| J73 | A file offered for removal cannot be read | `apt_sync` fails naming the path and the machine | U | `test_apt_probe:TestAReadThatDidNotAnswer::test_a_removal_content_read_that_did_not_answer_fails_the_job` |
+| J74 | The read that decides whether a repository still feeds anything does not answer | `apt_sync` fails rather than answering "it strands nothing" | U | `test_apt_probe:TestAReadThatDidNotAnswer::test_a_removal_impact_read_that_did_not_answer_fails_the_job` |
+| J75 | The source's `apt-cache policy` runs but prints no block at all | `apt_sync` fails — the guard where at least one answer is owed | U | `test_apt_probe:TestBareDebPackagesAreNotAptSyncsBusiness::test_a_source_policy_that_printed_nothing_at_all_fails_the_run` |
+| J76 | `snap list --all` on Atlas exits 1 (snapd unreachable) | `snap_sync` fails naming the command, exit code and stderr | U | `test_snap_sync:TestAProbeThatDidNotAnswer::test_a_source_list_that_did_not_answer_fails_the_job` |
+| J77 | `snap list --all` on Nomad exits 1 | `snap_sync` fails | U | `test_snap_sync:TestAProbeThatDidNotAnswer::test_a_target_list_that_did_not_answer_fails_the_job` |
+| J78 | `flatpak list` cannot open the installation | `flatpak_sync` fails naming the command and flatpak's error | U | `test_flatpak_sync:TestAProbeThatDidNotAnswer::test_a_source_list_that_did_not_answer_fails_the_job` |
+| J79 | `flatpak remotes` cannot parse its config | `flatpak_sync` fails naming the scope's command | U | `test_flatpak_sync:TestAProbeThatDidNotAnswer::test_a_remotes_read_that_did_not_answer_fails_the_job` |
+| J80 | `flatpak mask` does not answer | `flatpak_sync` fails | U | `test_flatpak_sync:TestAProbeThatDidNotAnswer::test_a_mask_read_that_did_not_answer_fails_the_job` |
+| J81 | `manual_installs_sync`'s own `apt-cache policy` detection read does not answer | The job fails naming the command | U | `test_manual_installs_sync:TestNoCandidateDetection::test_a_policy_read_that_did_not_answer_fails_the_job` |
+| J82 | The same read answers with no block at all | The job fails — the two jobs asking the identical command carry the identical guard | U | `test_manual_installs_sync:TestNoCandidateDetection::test_a_policy_read_that_printed_no_block_at_all_fails_the_job` |
+| J83 | `apt-mark showmanual` for the detection scan does not answer | The job fails | U | `test_manual_installs_sync:TestNoCandidateDetection::test_a_manual_set_read_that_did_not_answer_fails_the_job` |
+| J84 | A job's OWN scan: the `/usr/local` + `/opt` walk cannot run | `manual_installs_sync` fails naming the failure, rather than reporting nothing found | U | `test_manual_installs_sync:TestUnownedScan::test_a_find_that_could_not_run_fails_the_job_rather_than_reporting_nothing` |
+| J85 | A job's OWN scan: `dpkg --search` is dead, so every scanned path looks unowned | The job fails, because the witness path dpkg owns on every machine is absent from the reply | U | `test_manual_installs_sync:TestUnownedScan::test_a_dpkg_that_did_not_answer_does_not_make_every_path_unowned` |
+| J86 | Silence must not be read as an empty installed set: `apt-mark showmanual` exits 0 with no output | Ordinary data — the target's packages become removal proposals | U | `test_apt_probe:TestAReadThatDidNotAnswer::test_an_empty_source_manual_set_at_exit_zero_is_still_data` |
+| J87 | Silence must not be read as broken: `snap list --all` exits 0 with no snaps | Ordinary data | U | `test_snap_sync:TestAProbeThatDidNotAnswer::test_a_source_with_no_snaps_installed_is_data_not_a_failure` |
+| J88 | An empty hold set | Ordinary data | U | `test_apt_probe:TestAReadThatDidNotAnswer::test_an_empty_hold_set_is_data_not_a_failure` |
+| J89 | A `/etc/apt` directory that does not exist | Answers "nothing" at exit 0 and is planned through — the reshaped command, tested with the same privilege as the query it wraps | U | `test_apt_probe:TestAReadThatDidNotAnswer::test_an_absent_directory_answers_nothing_rather_than_failing` |
+| J90 | A scan root that is not there | Skipped by the loop, so it never reaches the exit code | U | `test_manual_installs_sync:TestUnownedScan::test_a_scan_root_that_is_not_there_is_skipped_not_an_error` |
+| J91 | `sha256sum` over a glob matching nothing (a scope with no remote keyring) exits 1 | Not a failure — this read is deliberately unguarded | U | `test_flatpak_sync:TestAProbeThatDidNotAnswer::test_a_keyring_digest_read_exiting_non_zero_is_not_a_failure` |
+| J92 | `dpkg --search` exits 1 because every queried path is genuinely unowned | Ordinary data — those paths become items | U | `test_manual_installs_sync:TestUnownedScan::test_a_batch_where_every_path_is_unowned_is_an_ordinary_answer` |
+| J93 | The target's policy knows none of the source's names | Ordinary data; no answer was owed | U | `test_apt_probe:TestAReadThatDidNotAnswer::test_a_target_policy_that_knows_none_of_the_source_names_is_data` |
+| J94 | A machine holding nothing | Is never asked what it has installed | U | `test_apt_probe:TestAReadThatDidNotAnswer::test_a_machine_holding_nothing_is_never_asked_what_it_has_installed` |
+| J95 | A dead read fails ONCE for the command, not once per item that depended on it | One failure line naming the command; no per-item reports | U | `test_machine_naming:TestProbeFailure::test_the_message_names_the_machine` (message shape); `test_job_failure_isolation:TestProbeFailedFailsOnlyItsOwnJob::test_the_failed_result_carries_the_command_that_did_not_answer` |
+| J96 | The dead-read message | Names the machine by hostname, the command verbatim, the failing condition and the tool's own stderr — never a role | U | `test_machine_naming:TestProbeFailure::test_the_message_names_the_machine`; J63/J76/J78 assert command, condition and stderr |
+| J97 | A dead read in one manager | Fails only that job; the other jobs still run | U | `test_job_failure_isolation:TestProbeFailedFailsOnlyItsOwnJob::test_the_orchestrator_records_it_failed_and_runs_the_next_job` |
+| J98 | A request that is wrong rather than a tool that did not answer (a package the target's apt has never heard of) | Stays a per-item outcome and is never promoted to a job failure | U | `test_apt_probe:TestBareDebPackagesAreNotAptSyncsBusiness::test_a_name_an_answered_policy_printed_no_block_for_is_not_excluded`; `test_package_sync:TestAptSyncEndToEnd::test_a_package_the_targets_apt_cannot_locate_still_reaches_the_review` |
+
+### J.7 What the log records (article: PKG-FR-LOG-DECISIONS)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| J99 | A job presents three items answered apply / skip once / always skip | The log names all three with the decision each received | U | `test_package_sync_core:TestDecisionsReachTheLog::test_every_presented_item_is_named_with_its_decision` |
+| J100 | An item the user skipped, which converges nothing and enters no report | It still produces a log line — the only record it was offered | U | `test_package_sync_core:TestDecisionsReachTheLog::test_a_skipped_item_leaves_a_line_where_nothing_else_would` |
+| J101 | The words the log uses for a decision | The answer's own words ("skipped this run", "marked as this machine's own"), not the internal names | U | `test_package_sync_core:TestDecisionsReachTheLog::test_every_presented_item_is_named_with_its_decision` |
+| J102 | A question asked outside the plan (a collateral question raised after the run's first change) | Its item and decision are named in the log too | U | `test_apt_collateral:TestCollateralForARepositoryThisRunWrites::test_the_decision_is_named_in_the_log` |
+| J103 | A run with no terminal | Each unasked item is named in a warning; no count stands in for the record | U V | `test_package_review:TestNonInteractive::test_warns_naming_every_item_and_reports_groups`; `test_package_sync:TestPackageSyncWholeRunContracts::test_non_interactive_skip_all` |
+| J104 | An approved install makes apt remove a package apt installed automatically | The removal is named in the log although nobody was asked | U | `test_apt_collateral:TestAutoCollateralIsLogged::test_auto_collateral_removal_is_named_in_the_log` |
+| J105 | An approved install makes apt change an automatically-installed package's version | The log names both versions, without a second command to compare them | U | `test_apt_collateral:TestAutoCollateralIsLogged::test_an_auto_version_change_is_logged_without_a_version_comparison` |
+| J106 | The same automatic collateral at apply time, from the transaction that actually happens | Logged there as well as at plan time | P | `Collateral.unapproved` calls `_log_auto`; the apply-time call is exercised by the apt converge tests but no test asserts the apply-time log line specifically |
+| J107 | A manager makes a self-directed change other than apt's dependency resolution | Logged the same way | — | apt's collateral is the only case that exists today (ADR-021); nothing to test |
+
+### J.8 Verbatim manager output (article: PKG-FR-LOG-VERBATIM)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| J108 | Any command a job issues, read or write | The literal string handed to the shell is in the debug log before it runs | U | `test_step_gate:TestExecutorDebugTrace::test_read_and_write_are_both_traced` |
+| J109 | A write | Its trace line carries the declared intent alongside the verbatim command | U | `test_step_gate:TestExecutorDebugTrace::test_read_and_write_are_both_traced` |
+| J110 | A package manager prints to stdout and stderr | Both are recorded verbatim at debug, as separate records | U | `test_step_gate:TestExecutorDebugTrace::test_what_the_command_said_is_traced_too` |
+| J111 | A command that printed nothing | Adds no output lines | U | `test_step_gate:TestExecutorDebugTrace::test_a_silent_command_adds_no_output_lines` |
+| J112 | The user aborts at the confirmation prompt | The command was already traced — "what was I about to be asked" survives | U | `test_step_gate:TestExecutorDebugTrace::test_trace_is_written_before_the_gate_can_abort` |
+| J113 | The trace's attribution | Each record carries the job and the machine it concerns | U | `test_step_gate:TestExecutorDebugTrace::test_trace_carries_job_and_host` |
+| J114 | A login-shell-wrapped command | What is traced and prompted is byte-for-byte what the remote shell receives | U | `test_step_gate:TestExecutorGate::test_gate_sees_the_login_shell_wrapped_command` |
+| J115 | The Ubuntu Pro attachment check's output, which names the subscriber | Only whether the target is attached may be logged | ‼ | `esm_gate` never logs the payload (`test_apt_esm_gate:TestTheESMAttachmentGate::test_the_probe_payload_is_never_logged`), but the executor traces every command's stdout verbatim (`executor._trace_output`, reached from `RemoteExecutor.run_command`), and `AptProbe.target_pro_attached` runs `pro status --format json` through it. See Gaps. |
+| J116 | Verbatim output against a real package manager | The run's own log carries the manager's words | V | `test_package_sync:TestAptSyncEndToEnd::test_apt_repository_state_dry_run_previews_derived_writes_and_reviews_no_repository` (relies on the DEBUG trace of `sha256sum` output) |
+
+### J.9 The credential a URL carries (article: PKG-FR-CREDENTIAL-PRIVACY)
+
+Five exits, then the `userinfo` grammar boundary.
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| J117 | A log line whose message text contains a credentialed URL | The userinfo is withheld | U | `test_redaction:TestCredentialRedactionFilter::test_the_message_is_redacted` |
+| J118 | A package manager's own output reaching the log through a record argument | The userinfo is withheld | U | `test_redaction:TestCredentialRedactionFilter::test_a_credential_arriving_through_args_is_redacted` |
+| J119 | A credentialed URL in a record's structured context (a command's stderr) | The userinfo is withheld | U | `test_redaction:TestCredentialRedactionFilter::test_structured_context_is_redacted` |
+| J120 | The filter is actually on every route into the log | A line written through the configured logging stack reaches the file redacted | — | see Gaps: the filter is installed on both queue handlers in `logger.setup_logging`, but only the filter class is tested, never its installation |
+| J121 | The per-command confirmation for a command carrying a credentialed URL | Neither the command nor the phrase shows the userinfo | U | `test_step_gate:TestExecutorDebugTrace::test_the_confirmation_prompt_withholds_a_url_credential` |
+| J122 | A review line whose label or detail contains a credentialed URL | Shown redacted | P | `test_redaction:TestItemDiffText::test_every_string_the_user_reads_while_deciding_is_redacted` covers `ItemDiff`; `ReviewEntry` redacts label/detail/answer_hints identically but no test drives a credentialed label through a review screen |
+| J123 | A repository file printed in full for a conflict decision, on both machines' panes | Neither pane shows the userinfo | U | `test_package_review:TestCredentialsInPrintedFileBodies::test_neither_version_of_a_conflicting_repository_shows_the_credential` |
+| J124 | A pin file printed in full for a deletion decision | Shown redacted | U | `test_package_review:TestCredentialsInPrintedFileBodies::test_a_pin_file_offered_for_deletion_shows_no_credential` |
+| J125 | The two snippet bodies the registry-overwrite question displays | Both shown redacted | U | `test_manual_installs_sync:TestSnippetRegistryOverwriteGuard::test_a_credential_in_a_snippet_body_is_withheld_from_the_question` |
+| J126 | The snippet the tool stores and replays | Keeps its author's bytes exactly | U | `test_manual_installs_sync:TestSnippetRegistryOverwriteGuard::test_a_credential_in_a_snippet_body_is_withheld_from_the_question` (asserts the source file still holds the token) |
+| J127 | The label a permanent decision keeps on disk | Written redacted | P | `test_redaction:TestItemDiffText::test_every_string_the_user_reads_while_deciding_is_redacted` proves `ItemDiff.label` is redacted; no test follows that label into the decision file |
+| J128 | The item id a decision is keyed on | Left alone — rewriting it would make the decision unfindable | U | `test_redaction:TestItemDiffText::test_the_item_id_is_left_alone` |
+| J129 | A failure naming the item, package or file it concerns | Not redacted away | U | J33 read with J128 |
+| J130 | `https://bearer:TOKEN@host/...` — a token where a username belongs | The WHOLE userinfo goes, not just the part after the colon | U | `test_redaction:TestRedactCredentials::test_the_whole_userinfo_goes_not_only_the_password` |
+| J131 | `https://token-only@host/...` — userinfo with no colon | Withheld | U | `test_redaction:TestRedactCredentials::test_the_whole_userinfo_goes_not_only_the_password` |
+| J132 | A password containing each RFC 3986 sub-delimiter `! $ & ' ( ) * + , ; =` | No permitted character ends the withholding early — asserted per character | U | `test_redaction:TestRedactCredentials::test_every_character_rfc_3986_allows_in_a_userinfo_is_matched` |
+| J133 | A password containing each unreserved punctuation character `- . _ ~` | Same | U | same test (the loop covers `-._~`) |
+| J134 | A userinfo containing `:` | Same | U | same test |
+| J135 | Unreserved alphanumerics in userinfo | Matched | U | `test_redaction:TestRedactCredentials::test_the_whole_userinfo_goes_not_only_the_password` |
+| J136 | A percent-encoded userinfo (`us%40er:p%3Ass`) | Matched | U | `test_redaction:TestRedactCredentials::test_a_percent_encoded_userinfo_is_matched` |
+| J137 | A userinfo of nothing but legal punctuation | Matched | U | `test_redaction:TestRedactCredentials::test_a_userinfo_of_nothing_but_legal_punctuation_is_matched` |
+| J138 | Boundary: `/` is illegal in userinfo, so a shell command carrying a URL and an unrelated address later | Redacts nothing | U | `test_redaction:TestRedactCredentials::test_a_quoted_url_does_not_swallow_a_later_address` |
+| J139 | Boundary: `?` ends the authority, so an `@` in a query string | Left alone | U | `test_redaction:TestRedactCredentials::test_an_at_sign_in_a_query_string_is_left_alone` |
+| J140 | Boundary: an scp-style `user@host:path` (no `://`) | Left alone | U | `test_redaction:TestRedactCredentials::test_an_scp_style_target_is_untouched` |
+| J141 | Boundary: `#` and whitespace inside a longer line | Only the URL's userinfo is rewritten; the rest of the line survives | P | `test_redaction:TestRedactCredentials::test_a_credential_inside_a_longer_line_redacts_only_the_url` covers whitespace/newlines; `#` has no test of its own |
+| J142 | A URL with no credential | Untouched | U | `test_redaction:TestRedactCredentials::test_a_url_without_a_credential_is_untouched` |
+| J143 | A string that passes two redaction exits | Not double-redacted | U | `test_redaction:TestRedactCredentials::test_it_is_idempotent` |
+
+### J.10 What a sync writes on the source, and what it never copies (articles: PKG-FR-SOURCE-INTENT, PKG-FR-MANAGER-CONVERGES)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| J144 | Planning | The target answers read-only questions only; no mutating command reaches it before the review | U V | `test_snap_sync:TestPlanReadOnly::test_plan_issues_no_mutating_snap_command`; `test_flatpak_sync:TestPlanReadOnly`; `test_package_sync:TestPackageSyncWholeRunContracts::test_each_manager_reviews_before_its_own_mutation` |
+| J145 | A whole sync | What software Atlas has, and where it gets it from, is unchanged | P | `test_package_sync_core:TestIdempotency::test_identical_source_and_target_produce_no_diff_no_group_and_no_mutation` proves it for an identical pair only; no test asserts Atlas's own package state is unchanged after a converging run |
+| J146 | Source write 1: a "always skip" answer about an item Atlas holds | A mark is recorded on Atlas and nowhere else | U | `test_package_state:TestPipelineWiring::test_skip_always_on_change_writes_to_source_not_target` |
+| J147 | Source write 2: a snippet authored during the review | Written to Atlas's registry, not Nomad's | U | `test_package_sync_core:TestFinalizeUnreproducible::test_authored_snippet_is_written_to_the_source_registry_not_target` |
+| J148 | Source write 3: the snap refresh pause | Applied on Atlas as well as Nomad, and restored afterwards | U | `test_snap_autorefresh_hold:TestConfirmEachCommandGate::test_apply_and_restore_declare_mutations_on_both_hosts` |
+| J149 | No fourth source write exists | Every ungated executor call site in the codebase is accounted for as a read or a tracked gap; a new write fails the audit | P | `test_mutates_audit:TestMutatesCoverage::test_no_ungated_call_site_is_unaccounted_for` binds every call site, but classifies by read/write, never by machine — nothing pins the source-write count at three |
+| J150 | No package manager's database, store or unpacked files travel between the machines | Only decisions plus the configuration a manager needs travel; the only file transfers a package job makes are repository/pin/config files, signing keys, remote filters and the snippet registry | — | no test states the prohibition; the nearest evidence is the enumerated `send_file` sites in `apt_sync/files.py`, `flatpak_sync.py` and `manual_installs_sync.py` |
+
+### J.11 The per-command confirmation (article: PKG-FR-CONFIRM-EACH)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| J151 | A converge command under `--confirm-each-command` | The user sees the verbatim command and must proceed or abort | U | `test_step_gate:TestExecutorGate::test_write_is_gated_with_the_verbatim_command` |
+| J152 | The decision record, on the machine that holds the item — either machine | Gated, naming the item and the file | U | `test_step_gate:TestStateWritesReachTheGate::test_recording_a_decision_is_gated` (parametrised over both hosts) |
+| J153 | Adding a snippet to the registry, on either machine | Gated, naming the item and the file | U | `test_step_gate:TestStateWritesReachTheGate::test_adding_a_snippet_is_gated` |
+| J154 | Pushing the snippet registry to the target | Gated as a modification of the target, naming both paths | U | `test_step_gate:TestStateWritesReachTheGate::test_pushing_the_registry_to_the_target_is_gated`; `test_step_gate:TestExecutorGate::test_send_file_shows_both_paths_and_aborts_before_transfer` |
+| J155 | Replaying a snippet on the target | Gated, naming the item | U | `test_package_state:TestSnippetRegistry` (asserts the replay call passes `mutates="replay install snippet for x"`) |
+| J156 | The snap refresh pause and its restore, on both machines | Both gated; the read that captures the prior policy is not | U | `test_snap_autorefresh_hold:TestConfirmEachCommandGate::test_apply_and_restore_declare_mutations_on_both_hosts` |
+| J157 | The restore's prompt | Names the prior value it is writing back, so skipping it is a visible loss | U | `test_snap_autorefresh_hold:TestConfirmEachCommandGate::test_restore_names_the_prior_value_it_is_writing_back` |
+| J158 | Aborting at the restore | Is honoured rather than absorbed by the best-effort teardown, and still releases the lock and the connection | U | `test_snap_autorefresh_hold:TestConfirmEachCommandGate::test_abort_at_restore_is_not_swallowed_by_the_best_effort_handler`, `::test_cleanup_honours_the_abort_but_still_releases_resources` |
+| J159 | A read | Never prompts — including reads of the decision file and the snippet registry | U | `test_step_gate:TestExecutorGate::test_read_is_never_gated`; `test_step_gate:TestStateWritesReachTheGate::test_reading_either_store_never_prompts` |
+| J160 | The user answers "abort" | The command is not issued and the file is untouched | U | `test_step_gate:TestExecutorGate::test_abort_prevents_the_command`; `test_step_gate:TestStateWritesReachTheGate::test_aborting_leaves_the_file_untouched` |
+| J161 | An in-process write that is neither a command nor a transfer | Gated through the same funnel | U | `test_step_gate:TestExecutorGate::test_declare_modification_gates_an_in_process_write` |
+| J162 | No write a package job makes may bypass the gate | Every ungated executor call site is enumerated as a read or a tracked defect; the only tracked ungated write is `folder_sync`'s rsync pass (#209), which is not a package job | U | `test_mutates_audit:TestMutatesCoverage::test_no_ungated_call_site_is_unaccounted_for`, `::test_every_ungated_write_is_tracked`, `::test_the_audit_sees_the_executor_call_sites` |
+| J163 | The prompt names the machine | By hostname, in the heading; never by role | U | `test_step_gate:TestTerminalUIStepGate::test_the_panel_names_the_machine_by_hostname`, `::test_the_abort_message_names_the_machine_by_hostname` |
+| J164 | The prompt has no default | An accidental Enter re-prompts rather than choosing | P | `test_step_gate:TestTerminalUIStepGate` asserts proceed and abort; no test asserts `Prompt.ask` is called without a `default=` |
+| J165 | The prompt cannot be answered (EOF / Ctrl-C) | Aborts the sync; never silently proceeds; the display is handed back | U | `test_step_gate:TestTerminalUIStepGate::test_unanswerable_prompt_aborts_never_proceeds` |
+| J166 | `--confirm-each-command` on a run with no terminal | Refused before config is loaded or anything is connected, naming the flag | U | `test_commands:TestConfirmEachCommandFlag::test_refused_without_a_tty`, `::test_accepted_and_forwarded_on_a_tty`, `::test_a_non_interactive_run_without_the_flag_is_not_refused` |
+| J167 | A command containing Rich markup characters (a snippet body, a bracketed filename) | Renders literally rather than raising mid-prompt | U | `test_step_gate:TestTerminalUIStepGate::test_command_with_markup_characters_does_not_raise` |
+| J168 | The prompt's label | Names the job issuing the command | U | `test_step_gate:TestExecutorGate::test_active_job_labels_the_prompt` |
+
+
+## K. Opting in, job independence and order, validation preconditions, the `folder_sync` boundary
+
+### K.1 Opting in and the shipped default (articles: PKG-FR-OPT-IN)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| K1 | Run `pc-switcher init` on Atlas and read the config it created | `apt_sync` is present and off; no sync installs or removes an apt package until the user turns it on | — | `unit/orchestrator/test_config_system:TestShippedDefaultConfig::test_package_jobs_ship_disabled` asserts the other three only |
+| K2 | Same, for `snap_sync` | present and off | U | `unit/orchestrator/test_config_system:TestShippedDefaultConfig::test_package_jobs_ship_disabled` |
+| K3 | Same, for `flatpak_sync` | present and off | U | same test |
+| K4 | Same, for `manual_installs_sync` | present and off | U | same test |
+| K5 | The shipped `default-config.yaml` is loaded | It validates against the shipped schema and yields `folder_sync`/`vscode_state_sync` on | U | `unit/orchestrator/test_config_system:TestShippedDefaultConfig::test_shipped_default_config_loads` |
+| K6 | Read the shipped config for a per-job settings section | No top-level `apt_sync`/`snap_sync`/`flatpak_sync`/`manual_installs_sync` section ships; each job's resolved config is empty | U | `…:TestShippedDefaultConfig::test_shipped_config_omits_empty_package_sections` |
+| K7 | A hand-written config enables all four package jobs and writes no section for any of them | Loads without error; each job's config is empty | U | `…:TestShippedDefaultConfig::test_config_omitting_package_sections_validates` |
+| K8 | A config with no `sync_jobs` block at all | No package job is instantiated; nothing is installed or removed | U | `unit/orchestrator/test_config_system:TestEmptyConfig::test_core_empty_config_file` (asserts the empty config loads; job discovery over the empty map is the inferred consequence) |
+| K9 | Atlas's config enables `apt_sync` and nothing else; Nomad diverges by one apt package | The package converges on Nomad; no snap, flatpak or snippet work happens | V | `integration/jobs/test_package_sync:TestAptSyncEndToEnd::test_apt_sync_installs_missing_package` |
+| K10 | Config enables `snap_sync` alone | The snap revision converges; nothing else runs | V | `integration/jobs/test_package_sync:TestPackageSyncWholeRunContracts::test_snap_revision_converges_without_hold` |
+| K11 | Config enables `flatpak_sync` alone | The ref and its derived remote land; nothing else runs | V | `…:TestPackageSyncWholeRunContracts::test_flatpak_derives_the_remote_its_ref_needs_and_carries_its_key` |
+| K12 | Config enables `manual_installs_sync` alone | The registry is pushed and the snippet replayed; nothing else runs | V | `integration/jobs/test_package_sync:TestManualInstallsSyncEndToEnd::test_manual_installs_sync_pushes_registry_and_replays_snippet` |
+| K13 | A config names a job key that is not one of the shipped names | Load fails naming the unknown key | U | `unit/orchestrator/test_config_system:TestJobEnableDisable::test_core_edge_unknown_job_in_config` |
+| K14 | A config turns one package job on and leaves the other three absent | Only the named job is discovered and run; the absent ones are never instantiated | P | K9–K12 each configure exactly one job, but none asserts that the other three produced no result and issued no command |
+
+### K.2 Job independence (articles: PKG-FR-JOB-INDEPENDENCE)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| K15 | `apt_sync` on, `manual_installs_sync` off; Atlas holds a package installed from a hand-downloaded `.deb` | `apt_sync` produces no item, no review line and no install for it — the same as when `manual_installs_sync` is on | P | `unit/jobs/apt/test_apt_probe:TestBareDebPackagesAreNotAptSyncsBusiness::test_bare_deb_package_produces_no_diff_and_no_review_entry`, `::test_bare_deb_package_reaches_no_apt_get_install`; neither varies the sibling's enable flag (no package job reads it — verified by reading `src/pcswitcher/jobs/`) |
+| K16 | `manual_installs_sync` on, every other package job off | It transfers the snippet registry itself, before any replay, without any other job running | U V | `unit/jobs/test_manual_installs_sync:TestSnippetPush::test_push_sends_source_registry_under_the_user_home_never_etc`; `integration/…:TestManualInstallsSyncEndToEnd::test_manual_installs_sync_pushes_registry_and_replays_snippet` |
+| K17 | Two package jobs enabled; the first raises an unexpected exception mid-run | It is recorded failed with its reason; the second job still runs and reports its own outcome | U | `unit/orchestrator/test_job_failure_isolation:TestAnyFailureOfAPackageJobStaysInThatJob::test_a_generic_exception_does_not_stop_the_following_job`, `::test_the_failed_result_carries_what_went_wrong` |
+| K18 | The first job's package manager cannot be queried at all | That job fails naming the command; the next job runs | U | `unit/orchestrator/test_job_failure_isolation:TestProbeFailedFailsOnlyItsOwnJob::test_the_orchestrator_records_it_failed_and_runs_the_next_job`, `::test_the_failed_result_carries_the_command_that_did_not_answer` |
+| K19 | A package job surfaces a lock conflict | The run ends; no later job runs (the one failure that is not isolated) | U | `…:TestAnyFailureOfAPackageJobStaysInThatJob::test_a_lock_conflict_still_ends_the_run` |
+| K20 | Two package jobs enabled, both machines diverged for both | Each manager settles its own review before that same manager changes Nomad; neither waits on the other's review | V | `integration/jobs/test_package_sync:TestPackageSyncWholeRunContracts::test_each_manager_reviews_before_its_own_mutation` |
+| K21 | `apt_sync` enabled alone, with a `snap.decisions.yaml` present on the machine | The snap decision file is neither read nor rewritten | — | nothing asserts the per-manager isolation of the decision store from the enable flags |
+| K22 | `snap_sync` disabled, other package jobs enabled | No snapd refresh pause is written on either machine | U | `unit/orchestrator/test_snap_autorefresh_hold:TestHoldEngaged::test_hold_not_set_when_snap_sync_disabled` (and `::test_hold_set_on_both_hosts_when_snap_sync_enabled` for the converse) |
+| K23 | `folder_sync` enabled; `snap_sync`/`flatpak_sync` toggled | `folder_sync`'s own transfer changes: with them off it mirrors `~/snap/<app>/<rev>` and `~/.local/share/flatpak`, with them on it does not | ‼ | The behaviour is asserted (`unit/jobs/test_folder_sync:TestPackageJobExcludeFiltersGating::*`), but it is a job whose behaviour depends on whether another job is enabled — read literally, the article forbids it. Deliberate (D-29); see Notes |
+
+### K.3 The four package jobs run before `folder_sync` (articles: PKG-FR-JOB-ORDER)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| K24 | Read the shipped config's `sync_jobs` key order | All four package jobs are listed before `folder_sync` | U | `unit/orchestrator/test_config_system:TestShippedDefaultConfig::test_package_jobs_precede_folder_sync` |
+| K25 | A hand-edited config enables `flatpak_sync` on a line after `folder_sync: true` | One configuration error naming `flatpak_sync` and `folder_sync` | U | `…:TestPackageJobsBeforeFolderSyncStructuralCheck::test_package_job_after_folder_sync_yields_config_error` |
+| K26 | Same, for `manual_installs_sync` | One error naming `manual_installs_sync` | U | `…::test_manual_installs_after_folder_sync_yields_a_config_error` |
+| K27 | Same, for `apt_sync` | One error naming `apt_sync` | P | only reached inside `…::test_all_four_package_jobs_after_folder_sync_yield_four_errors`, which asserts the set of job names, not `apt_sync` alone |
+| K28 | Same, for `snap_sync` | One error naming `snap_sync` | P | same as K27 |
+| K29 | All four listed after `folder_sync` | Four errors, one per job | U | `…::test_all_four_package_jobs_after_folder_sync_yield_four_errors` |
+| K30 | All four listed before `folder_sync` | No error; the run proceeds | U | `…::test_package_jobs_before_folder_sync_yields_no_error` |
+| K31 | A package job listed after `folder_sync` but disabled | No error — only enabled jobs can race | U | `…::test_disabled_package_job_after_folder_sync_yields_no_error` |
+| K32 | `folder_sync` disabled (or absent) with a package job listed after it | No error | U | `…::test_folder_sync_disabled_yields_no_error_regardless_of_order` |
+| K33 | A misordered config is used for a real sync | The run refuses to start: it stops at job discovery, no job executes, nothing is changed on either machine | P | the errors are asserted; nothing asserts that discovery raises and that no job then executes |
+| K34 | A correctly ordered config with several jobs enabled | Jobs execute one after another in the config's key order, package jobs first | P | `unit/orchestrator/test_skipped_jobs`/`test_job_failure_isolation` prove sequential execution of a given list; no test binds the executed order to the configured order |
+
+### K.4 Job discovery (articles: PKG-FR-OPT-IN, PKG-FR-JOB-INDEPENDENCE)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| K35 | `apt_sync` enabled | Resolves to the apt job class | U | `unit/jobs/apt/test_apt_job:TestJobDiscovery::test_orchestrator_resolves_apt_sync_to_apt_sync_job` |
+| K36 | `snap_sync` enabled | Resolves to the snap job class | U | `unit/jobs/test_snap_sync:TestJobDiscovery::test_orchestrator_resolves_snap_sync_to_snap_sync_job` |
+| K37 | `flatpak_sync` enabled | Resolves to the flatpak job class | U | `unit/jobs/test_flatpak_sync:TestJobDiscovery::test_orchestrator_resolves_flatpak_sync_to_flatpak_sync_job` |
+| K38 | `manual_installs_sync` enabled | Resolves to the manual-installs job class | U | `unit/jobs/test_manual_installs_sync:TestJobDiscovery::test_orchestrator_resolves_manual_installs_sync_to_its_job` |
+| K39 | An enabled name resolves to no class | It is reported skipped with a reason; the run continues and the exit code is unaffected | U | `unit/orchestrator/test_skipped_jobs:TestUnresolvableEnabledJob::test_an_unresolvable_enabled_job_is_recorded_skipped` |
+| K40 | A resolvable name | Leaves no skipped result behind | U | `…:TestUnresolvableEnabledJob::test_a_resolvable_job_leaves_no_skipped_result` |
+
+### K.5 Validation preconditions (articles: PKG-FR-SUDO-PRECONDITION)
+
+The table's four jobs × two machines. `apt_sync` and `snap_sync`: required on both. `flatpak_sync`: none on the source, target only where a system-scope item exists on either machine. `manual_installs_sync`: none on either.
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| K41 | `apt_sync` enabled; Atlas has no passwordless sudo | Validation fails saying so for Atlas; the run does not start and nothing is captured or written | U | `unit/jobs/apt/test_apt_job:TestValidate::test_source_without_passwordless_sudo_yields_validation_error` |
+| K42 | `apt_sync` enabled; Nomad has no passwordless sudo | Validation fails saying so for Nomad, listing every binary the grant must permit | U | `…:TestValidate::test_target_without_passwordless_sudo_yields_validation_error_naming_the_binaries` |
+| K43 | `apt_sync` enabled; `apt-mark` missing on Atlas | Validation fails naming Atlas | P | `…:TestValidate::test_apt_mark_unavailable_yields_validation_error` exercises the target only |
+| K44 | `apt_sync` enabled; `apt-mark` missing on Nomad | Validation fails naming Nomad | U | `…:TestValidate::test_apt_mark_unavailable_yields_validation_error` |
+| K45 | `apt_sync` enabled; both machines healthy, lock free | No validation error | U | `…:TestValidate::test_all_checks_pass_returns_no_errors` |
+| K46 | `snap_sync` enabled; Atlas has no passwordless sudo | Validation fails naming Atlas (the refresh pause writes there too) | U | `unit/jobs/test_snap_sync:TestValidate::test_source_without_passwordless_sudo_yields_validation_error` |
+| K47 | `snap_sync` enabled; Nomad has no passwordless sudo | Validation fails naming Nomad | U | `…:TestValidate::test_target_without_passwordless_sudo_yields_validation_error` |
+| K48 | `snap_sync` enabled; `snap` missing on Atlas | Validation fails naming Atlas | U | `…:TestValidate::test_snap_unavailable_on_source_yields_validation_error` |
+| K49 | `snap_sync` enabled; `snap` missing on Nomad | Validation fails naming Nomad | U | `…:TestValidate::test_snap_unavailable_on_target_yields_validation_error` |
+| K50 | `snap_sync` enabled; both machines healthy | No validation error | U | `…:TestValidate::test_valid_environment_yields_no_errors` |
+| K51 | `snap_sync` enabled; a machine already carries a standing refresh hold | Validation records it and does not fail | P | the read is logged, never appended to errors (`SnapSyncJob.validate`); `::test_valid_environment_yields_no_errors` passes with the default hold response but asserts nothing about the log line |
+| K52 | `flatpak_sync` enabled; every item, remote and mask on both machines is user scope | Validation asks Nomad for no sudo at all and returns no error | U | `unit/jobs/test_flatpak_sync:TestValidate::test_user_scope_only_never_checks_sudo`; `…:TestMaskSystemScopeGate::test_user_scope_only_mask_never_checks_sudo` |
+| K53 | `flatpak_sync` enabled; a system-scope application exists on Atlas; Nomad has no passwordless sudo | Validation fails naming Nomad and the system-scope operations that need it | U | `…:TestValidate::test_system_scope_item_present_without_sudo_yields_validation_error` |
+| K54 | Same, but the system-scope application exists only on Nomad | Validation fails naming Nomad | — | no test drives the target-side branch of the scope gate |
+| K55 | Same, but what exists is a system-scope remote (either machine) | Validation fails naming Nomad | — | no test drives the remote branches of the scope gate |
+| K56 | Same, but what exists is a system-scope mask on Atlas | Validation fails naming Nomad | U | `…:TestMaskSystemScopeGate::test_system_scope_mask_requires_target_sudo` |
+| K57 | Same, but the system-scope mask exists only on Nomad | Validation fails naming Nomad | — | target-side mask branch undriven |
+| K58 | `flatpak_sync` enabled; `flatpak` missing on Atlas | Validation fails naming Atlas, without raising | U | `…:TestValidate::test_flatpak_unavailable_on_source_yields_validation_error` |
+| K59 | `flatpak_sync` enabled; `flatpak` missing on Nomad | Validation fails naming Nomad and saying what to install there | U | `…:TestValidate::test_flatpak_unavailable_on_target_yields_validation_error_and_does_not_raise` |
+| K60 | `flatpak_sync` enabled; `flatpak` missing on a machine | The scope gate is not evaluated and no sudo probe is issued | — | the code short-circuits on both version checks; nothing asserts it |
+| K61 | `flatpak_sync` enabled; both machines healthy, no system-scope anything | No validation error | U | `…:TestValidate::test_valid_environment_with_no_system_scope_items_yields_no_errors` |
+| K62 | `manual_installs_sync` enabled; neither machine grants passwordless sudo | Validation passes — this job requires none on either machine | P | `unit/jobs/test_manual_installs_sync:TestValidate::test_valid_environment_yields_no_errors` returns no error but does not assert that no sudo probe was issued to either machine |
+| K63 | `manual_installs_sync` enabled; `apt-cache` missing on Atlas | Validation fails naming Atlas | U | `…:TestValidate::test_apt_cache_unavailable_on_source_yields_validation_error` |
+| K64 | `manual_installs_sync` enabled; `dpkg` missing on Atlas | Validation fails naming Atlas | U | `…:TestValidate::test_dpkg_unavailable_on_source_yields_validation_error` |
+| K65 | Any of the above failures | The message carries copy-paste remediation: the drop-in path, the `visudo --file` command, the grant line with the connecting account substituted, and a verification command | U | `unit/test_sudoers:TestPasswordlessSudoHint::test_names_every_required_binary`, `::test_uses_the_drop_in_not_etc_sudoers`, `::test_directs_the_user_through_visudo`, `::test_includes_a_verification_command`, `::test_substitutes_a_known_user_into_the_grant_line`, `::test_flags_the_placeholder_when_the_user_is_unknown`, `::test_says_a_broader_grant_is_acceptable` |
+| K66 | Any of the above failures | The failing machine is identified in the reported error | U | every `TestValidate` case above asserts `e.host` |
+| K67 | A precondition is missing | It is discovered in the validation step, never mid-execute: no job re-probes sudo or the dpkg lock while applying, and none degrades to a reduced capture | — | verified by reading `src/pcswitcher/` (the only `sudo --non-interactive true` and `fuser` call sites are the four `validate()` bodies); no test guards it |
+| K68 | One enabled job fails validation while the others would pass | The whole run refuses to start before any job executes; nothing is changed on either machine | — | `unit/orchestrator/test_job_lifecycle:TestUS1AS5ValidationErrorsHaltSync::test_core_us_job_arch_as5_validation_errors_halt_sync` calls `validate()` directly and simulates the orchestrator; the raise in discovery is unasserted |
+
+### K.6 The dpkg lock (articles: PKG-FR-APT-DPKG-LOCK)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| K69 | `apt_sync` enabled; unattended-upgrades holds Nomad's dpkg frontend lock | Validation fails saying the lock is held on Nomad and to retry once it finishes; the run does not start | U | `unit/jobs/apt/test_apt_job:TestValidate::test_dpkg_lock_held_yields_distinct_validation_error` |
+| K70 | Same, but the lock is free | No lock error | U | `…:TestValidate::test_all_checks_pass_returns_no_errors` (the probe's non-zero exit is the "all clear") |
+| K71 | The lock is held | The run neither waits nor retries: the refusal is immediate and states the reason | P | K69 asserts the message; nothing asserts the absence of a wait/retry (there is none in the code — single `fuser` probe, no loop) |
+| K72 | A dry run while the lock is held | Still refuses to start — validation is not skipped for a dry run | — | `validate()` is called unconditionally by discovery; no test covers the dry-run branch |
+
+### K.7 The boundary with `folder_sync` (articles: PKG-FR-DATA-BOUNDARY, PKG-FR-SNAP-DATA-BOUNDARY, PKG-FR-MACHINE-SPECIFIC)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| K73 | A sync of `/home` with every package job disabled | The machine-local decision files (`~/.config/pc-switcher/*.decisions.yaml`) are still excluded from the mirror — a machine's own "always skip" list never reaches the other machine | U | `unit/jobs/test_folder_sync:TestDecisionFileExcludeFilters::test_unconditional_regardless_of_which_folder_is_synced`, `::test_home_under_synced_folder_anchors_the_glob_under_user_subdir` |
+| K74 | A sync of `/root` by a user whose home is `/home/alice` | Nothing is excluded on that folder's behalf; the exclusion follows the invoking user's home | U | `…:TestDecisionFileExcludeFilters::test_glob_outside_synced_folder_is_skipped`, `::test_root_invoker_excludes_under_root` |
+| K75 | The decision-file exclusion versus the user's own filter file | It is emitted before the central filter is merged, so no user rule is consulted first | U | `…:TestDecisionFileExcludeFilters::test_decision_file_exclude_precedes_merge_filter` |
+| K76 | The user writes a `+` rule for the decision file in their own filter | The file stays excluded — the rule cannot re-expose it | U | `…:TestDecisionFileExcludeFilters::test_user_plus_rule_for_decision_file_does_not_change_command_ordering` |
+| K77 | `snap_sync` enabled; Atlas keeps an older retained `~/snap/<app>/<rev>` beside the current one | The retained older revision's data directory is not mirrored; the current revision's is | U | `unit/jobs/test_snap_sync:TestExcludePaths::test_excludes_old_revisions_keeps_current_common_and_current_symlink`; `unit/jobs/test_folder_sync:TestSnapSyncExcludeFilters::test_old_revision_excluded_current_kept`; `…:TestPackageJobExcludeFiltersGating::test_snap_sync_enabled_includes_revision_exclusion` |
+| K78 | `~/snap/<app>/current` is missing or dangling | Every revision directory of that app is excluded | U | `unit/jobs/test_snap_sync:TestExcludePaths::test_dangling_current_falls_back_to_excluding_all_revisions`, `::test_missing_current_symlink_falls_back_to_excluding_all_revisions` |
+| K79 | No `~/snap` directory at all | Nothing is excluded on snap's behalf | U | `unit/jobs/test_snap_sync:TestExcludePaths::test_no_snap_directory_returns_empty`; `unit/jobs/test_folder_sync:TestSnapSyncExcludeFilters::test_no_snap_directory_yields_no_filters` |
+| K80 | `~/snap/<app>/common` and the `current` symlink | Always mirrored — never excluded | U | `unit/jobs/test_snap_sync:TestExcludePaths::test_excludes_old_revisions_keeps_current_common_and_current_symlink` |
+| K81 | `snap_sync` disabled, `folder_sync` enabled; Atlas and Nomad are on different revisions of an app | Data directories for revisions Nomad's snapd never installed do not land on Nomad | ‼ | `unit/jobs/test_folder_sync:TestPackageJobExcludeFiltersGating::test_snap_sync_disabled_excludes_nothing` asserts the opposite behaviour: with `snap_sync` off, every revision directory is mirrored |
+| K82 | `snap_sync` enabled but the user skips the revision change for one app (or it fails) | The current-revision data directory of an app whose revision did not converge does not land on Nomad | ‼ | the exclude set is computed from Atlas's filesystem alone, before and independently of the review's outcome (`snap_sync_exclude_paths`, called only from `folder_sync`); nothing narrows it after the review |
+| K83 | `flatpak_sync` enabled | `~/.local/share/flatpak` is excluded from the mirror; `~/.var/app` is not | U | `unit/jobs/test_flatpak_sync:TestExcludePaths::test_returns_flatpak_data_dir_excludes_var_app`; `unit/jobs/test_folder_sync:TestFlatpakSyncExcludeFilters::test_flatpak_data_dir_included_var_app_never_mentioned`, `…:TestPackageJobExcludeFiltersGating::test_flatpak_sync_enabled_includes_data_dir_exclusion_not_var_app` |
+| K84 | `flatpak_sync` disabled | `~/.local/share/flatpak` is mirrored like any other data | U | `…:TestPackageJobExcludeFiltersGating::test_flatpak_sync_disabled_excludes_nothing` |
+| K85 | A `/root` sync while the flatpak store is under `/home/alice` | Nothing is excluded on flatpak's behalf | U | `unit/jobs/test_folder_sync:TestFlatpakSyncExcludeFilters::test_flatpak_data_dir_outside_synced_folder_is_skipped`; `…:TestSnapSyncExcludeFilters::test_revision_dir_outside_synced_folder_is_skipped` for the snap equivalent |
+| K86 | The package exclusions versus the user's own filter file | Both are emitted before the central merge, so no user rule can re-expose them | U | `…:TestPackageJobExcludeFiltersGating::test_both_package_exclusions_precede_merge_filter` |
+| K87 | No sibling-enablement information is available to `folder_sync` | Neither package exclusion is emitted and the run does not fail | U | `…:TestPackageJobExcludeFiltersGating::test_missing_enabled_sync_jobs_omits_both_exclusions_without_raising` |
+| K88 | `manual_installs_sync` skipped (no terminal) or declined, `folder_sync` enabled | Nomad's snippet registry is not overwritten by this run | ‼ | `~/.config/pc-switcher/package-snippets.yaml` is matched by no exclusion (the decision glob is `*.decisions.yaml`, and neither shipped filter file mentions it), so `folder_sync` mirrors it regardless — bypassing `PKG-FR-REGISTRY-CONSENT` and the "no registry transferred" half of `PKG-FR-OUTCOME-SKIPPED`/`PKG-FR-NO-TERMINAL` |
+| K89 | `apt_sync` enabled with `folder_sync` | No `folder_sync` exclusion is needed for apt: everything `apt_sync` writes lives outside the synced folders (`/etc/apt`, the dpkg database) | — | nothing asserts it; it is a claim about the absence of apt paths under `/home` and `/root` |
+| K90 | A run of `apt_sync` | It transfers only repository files, pins and keyring bytes — no application data | — | verified by reading `apt_sync/files.py` (its only `send_file`); no test states the boundary |
+| K91 | A run of `flatpak_sync` | It transfers only signing keys and remote filter files — never `~/.var/app` or the flatpak store | P | `unit/jobs/test_flatpak_sync:TestExcludePaths::test_returns_flatpak_data_dir_excludes_var_app` covers the exclusion side only |
+| K92 | A run of `snap_sync` | It transfers no file between machines at all — convergence is `snap install/refresh/remove` on Nomad | — | no `send_file`/`get_file` exists in `snap_sync.py` (read); unasserted |
+| K93 | A run of `manual_installs_sync` | The only file it transfers is the snippet registry | P | `unit/jobs/test_manual_installs_sync:TestSnippetPush::test_push_sends_source_registry_under_the_user_home_never_etc` asserts what it sends, not that it sends nothing else |
+
+
+## N. Cross-run and two-machine compositions
+
+### N.1 N. Across runs and across the two roles
+
+| # | Narrative | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| N1 | Atlas has `wireshark`, Vega lacks it. Run 1 from Atlas, the user answers "never install on Vega" | the mark lands on Atlas, the holding machine. Run 2 from Atlas offers nothing | | |
+| N2 | Same mark, then run 3 from Vega — roles reversed, so `wireshark` is now target-only | still no item: the mark protects it from removal by a sync from the other machine, not only from being installed | | |
+| N3 | Vega has `steam`, Atlas does not. Run 1 from Atlas, the user answers "keep on Vega for good" | the mark lands on Vega. Neither Atlas→Vega nor Vega→Atlas raises `steam` again | | |
+| N4 | An apt hold marked machine-specific in run 1 | run 2 raises no hold item, and the package's own item is unaffected | | |
+| N5 | A snap refresh hold marked machine-specific in run 1 | run 2 raises no hold item; the snap's own presence item stays live | | |
+| N6 | A flatpak mask marked machine-specific in run 1 | run 2 raises no mask item | | |
+| N7 | Any item declined for this run only in run 1 | run 2 offers it again, unchanged, and run 1 recorded nothing | | |
+| N8 | A run converged everything it was approved to converge | the next run between the same two machines presents nothing and issues no change | | |
+| N9 | Run 1 Atlas→Vega installs `P`. The user then removes `P` on Vega by hand. Run 2 Vega→Atlas | `P` is offered for removal from Atlas, unticked; leaving it undecided changes nothing; approving it removes it | | |
+| N10 | Atlas gains a repository, its key and a package from it. Run 1 Atlas→Vega | one question — the package. Key, repository and pins land in apt's required order before the install, and the run asks nothing about any of them | | |
+| N11 | Run 1 writes a repository for an install a late collateral answer then withdrew | the repository stays. The run names it by URL and filename and says nothing on Vega installs from it, as neither a failure nor a warning. Run 2 does not offer it for deletion — Atlas still has the file | | |
+| N12 | Vega has repository `S` and package `R` from it; Atlas has neither. Run 1 from Atlas, `R`'s removal declined | `S` is not raised at all — something on Vega still uses it | | |
+| N13 | Same, but `R`'s removal approved | `S` becomes deletable in that same run: asked once, naming the URLs it declares, and its now-unreferenced key goes with it | | |
+| N14 | Same, but Vega marked `R` machine-specific | `S` is never raised, in that run or any later one, even though `R` appears in no review | | |
+| N15 | A package manual on Atlas arrives on Vega as an automatic dependency of something else. A later run's approved change would remove it | not protected: Vega's own manual set is what protects, and Vega's apt installed this one itself | | |
+| N16 | A dependency-only package `Q` that Vega's apt keeps or drops across an install-then-remove round trip of `P` | pc-switcher never proposes, installs or removes `Q` in either run | | |
+| N17 | A snippet authored on Atlas in run 1; run 2 launched from Vega, whose registry holds an entry Atlas lacks | the transfer stops and asks, naming the entries at risk; declining ends the run and sends nothing | | |
+| N18 | Vega reports no Ubuntu Pro attachment and Atlas carries ESM repositories. Run 1 | apt is skipped whole, `/etc/apt` on Vega is exactly as it was, and the other jobs run. After Vega is attached, run 2 converges apt normally | | |
+| N19 | The last flatpak application from a remote is removed on approval in run 1 | the remote and its signing key go with it; run 2 has neither to raise | | |
+| N20 | A flatpak application marked machine-specific on Vega is the only user of a remote Atlas lacks | the remote is never deleted, in any run | | |
+| N21 | Snap revisions converged in run 1, `folder_sync` running after | Vega's `~/snap/<app>/<revision>` matches Atlas's, so the data lands where the target's snapd will read it | | |
+| N22 | Two machines, all four package jobs enabled, a full run | every job reviews before its own first change, one job's failure leaves the others' work intact, and the exit code reflects what failed | | |
