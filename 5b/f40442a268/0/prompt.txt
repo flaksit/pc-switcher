@@ -790,3 +790,63 @@ Rows B27, B28, D9, D39, D40, D41, D71, H43, J106 lose `‼`/`—` and cite their
 Note: `job.py` belongs to another agent. My edits there are three: the `DecisionEntry` import, the two `_marked_packages(...)` arguments plus that new static helper, and dropping `if item.version` from `source_versions`.</result>
 <usage><subagent_tokens>337220</subagent_tokens><tool_uses>122</tool_uses><duration_ms>1358953</duration_ms></usage>
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>aa8c0e92ffceb68d7</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/81c7a538-876b-47ee-bd10-6f31ec117d7e/tasks/aa8c0e92ffceb68d7.output</output-file>
+<status>completed</status>
+<summary>Agent "Which machine holds a CHANGE mark" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done. C175 is fixed and no longer `‼`.
+
+## Per-item-kind analysis
+
+I enumerated every `CHANGE` producer in the codebase. There are only two the user can ever mark, and both are the same shape — the item is on **both** machines:
+
+| CHANGE item | Article | Whose state the mark describes |
+| --- | --- | --- |
+| `apt:config:&lt;file&gt;` (`/etc/apt/apt.conf.d`) | `PKG-FR-APTCONF` | **Target.** The answer refuses the overwrite of the target's copy. |
+| `snap:&lt;name&gt;` (revision and/or channel) | `PKG-FR-SNAP-CASES`, `PKG-FR-SNAP-REVISION` | **Target.** Same: it keeps the target's revision/channel. |
+| `apt:metadata-refresh` (synthetic) | — | Never reviewed; `accept_review` forces it to `APPLY`, so it can never be marked. Unreachable, left alone. |
+
+Nothing else produces a `CHANGE`. A flatpak repoint is *not* a review item (`PKG-FR-FLATPAK-REPOINT` — the conflict screen records nothing), a flatpak mask edit is a removal plus an addition (`PKG-FR-FLATPAK-MASK`), and `manual_installs_sync` emits only `INSTALL`/`REPORT_ONLY`. So **no CHANGE kind is genuinely source-held** — the apt-config answer does generalise, and the review's own legend already said so (`review._hints` line 484 names the *target* as the holder for a change, contradicting the write path).
+
+Two findings beyond C175, both measured:
+
+- **The snap case was worse than the apt one.** A `SnapItem` carries its own id into `filter_inert`, so the mark took the snap off *one* manifest and left the other machine's copy unmatched. Measured on stubs before the fix: after marking a revision change, the very next run **in the same direction offered the snap for removal from the target** — destroying the copy the mark was given to protect — and the reversed run offered it for install.
+- **`B44` is code-derived, not article-derived.** It asserts "the mark only counts on its holding machine", which a strict reading of "MUST NOT be proposed in any later review" does not support (a stale entry on the non-holding machine should arguably still silence the item). I left it alone: no article requires the change, and it is a separate behaviour question. Flagging it as open.
+
+## What changed
+
+- `sync_core.py`: `_decision_holder_is_source(action) -&gt; bool` replaced by `_mark_holders(action) -&gt; tuple[bool, ...]` — the machines a mark can sit on, **recording machine first**. The write takes `[0]`, the read consults all of them, so the two halves agree structurally. `INSTALL` → `(source,)`; `REMOVE` → `(target,)`; `CHANGE` → `(target, source)`.
+- `state.py`: new `marks_on_either(source, target)`. A job capturing an inventory from both machines now filters **both** manifests through **both** files. Reading the holder off the action is only sound while the action truthfully states presence, and per-side filtering made it lie. `manual_installs_sync` is exempt (source-only inventory, `PKG-FR-MANUAL-SOURCE-DECIDES`) and is unchanged.
+- Call sites updated: `snap_sync.py`, `flatpak_sync.py`, `apt_sync/job.py`, and `FakeSyncJob` in `test_package_sync_core.py`. None are the other agent's files (`collateral.py`, `packages.py`, `items.py`, `diffing.py` untouched).
+- Article `PKG-FR-MACHINE-SPECIFIC`: now defines the holding machine for an item both machines have, and requires a later run to read both records where either machine could be the holder, with its own "Why".
+
+## Rows
+
+- **C175** — `‼` dropped, now `U`; **C178** added (reverse direction).
+- **H119** — flipped to Nomad; **H178**, **H179** added (read-both-files; filter-off-both-manifests).
+- **E117**, **E118** added (snap change mark: where it lands, inert both directions).
+- **N24** added (the cross-role case).
+- **J4**, **J146** re-cited (J146 now points at the install test — a change is no longer a source write).
+- **C124, C125, B42–B47, N1–N6** re-read and unchanged: holds and masks are `INSTALL`/`REMOVE`, so their holder still follows the run's own direction. B44 in particular still holds.
+- Coverage doc's "Where the tool does not do what the requirements say" no longer refers to C175.
+
+Also updated: `docs/system/package-sync.md` (new paragraph on where a mark lands and where a run looks for it), `docs/system/data-model.md` (decision-file section), `docs/jobs/package-sync.md` (user-facing rule), ADR-020's D-08a paragraph.
+
+## Verification
+
+`uv run pytest -q` 4376 passed · `ruff format .` 164 unchanged · `ruff check .` all passed · `basedpyright` 0 errors · `codespell` clean.
+
+Each new test was confirmed to fail against the old rule before being kept.
+
+## Open
+
+- **B44 / union semantics** (above) — whether a mark should count from the non-holding machine's file for `INSTALL`/`REMOVE` too. Needs an article decision, not a code one.
+- The integration suite (`V` rows) has not been run; `TestPackageSyncWholeRunContracts::test_skip_always_is_inert_in_both_roles` covers installs/removals only, so nothing there exercises the changed path, but a VM run would be worth having before merge.</result>
+<usage><subagent_tokens>282422</subagent_tokens><tool_uses>102</tool_uses><duration_ms>1025474</duration_ms></usage>
+</task-notification>
