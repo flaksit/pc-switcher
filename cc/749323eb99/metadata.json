@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "cc749323eb99",
+  "strategy": "manual-commit",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/02-package-management-sync/coverage-sweep/N-cross-run.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/cc/749323eb99/0/metadata.json",
+      "transcript": "/cc/749323eb99/0/full.jsonl",
+      "compact_transcript": "/cc/749323eb99/0/transcript.jsonl",
+      "content_hash": "/cc/749323eb99/0/content_hash.txt",
+      "prompt": "/cc/749323eb99/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 8818,
+    "cache_creation_tokens": 277918,
+    "cache_read_tokens": 12687926,
+    "output_tokens": 61187,
+    "api_call_count": 68
+  }
+}
