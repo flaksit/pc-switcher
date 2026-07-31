@@ -556,7 +556,7 @@ def _source_keyring_path(item: FlatpakRemoteItem) -> Path:
     """The LOCAL path of the source machine's own keyring file for `item`.
 
     `send_file` transfers from the local filesystem, and the source executor runs on
-    this machine as this user (the same assumption `AptSyncJob._write_or_remove_repo_item`
+    this machine as this user (the same assumption `apt_sync.etc_apt.EtcApt._write_or_remove`
     makes for `/etc/apt`), so `Path.home()` resolves the very directory
     `_repo_dir_expression("user")`'s `$HOME` expands to on the source side.
     """
@@ -814,13 +814,13 @@ def _diff_flatpak_refs(
     machines: Machines,
 ) -> list[ItemDiff]:
     """One diff per ref `item_id` present on either side, source-then-target order —
-    same shape as `PackageSyncJob._diff_apt_packages`/`snap_sync._diff_snap_items`.
+    same shape as `apt_sync.diffing.diff_apt_packages`/`snap_sync._diff_snap_items`.
     Scope already lives inside `item_id`, so an application installed in a different
     scope on each machine naturally produces one install-side entry and one
     remove-side entry here, never a single combined diff.
 
     Present on both, the origin comparison runs BEFORE the version comparison, exactly as
-    `_diff_apt_packages` orders its own two provenance-and-version branches: two vendors'
+    `diff_apt_packages` orders its own two provenance-and-version branches: two vendors'
     builds of one ref share no version scale — Flathub's and Flathub-beta's `org.mozilla.
     firefox` are numbered independently — so reporting "source has X, target has Y" would
     state a difference of degree where the real difference is of provenance, and would hide
@@ -1557,9 +1557,9 @@ class FlatpakSyncJob(PackageSyncJob):
         """Turn the approved ref installs into the remotes this run provisions, before the
         base stores the accepted pair.
 
-        Here rather than in `plan()` for the same reason `AptSyncJob._build_derived_writes`
-        is: the input is the set of APPROVED items, which does not exist until the review
-        returns. Every fact it reads was captured in `plan()`, so this stays synchronous.
+        Here rather than in `plan()` for the same reason `apt_sync.derived.DerivedWrites`
+        is built where it is: the input is the set of APPROVED items, which does not exist
+        until the review returns. Every fact it reads was captured in `plan()`, so this stays synchronous.
 
         A conflict the user declined (ruling 6) leaves the derived set but stays in the D-39
         attribution map, and that asymmetry IS the rule: the remote is not repointed, and
@@ -2211,7 +2211,7 @@ class FlatpakSyncJob(PackageSyncJob):
 
         `RemoteExecutor.send_file` is plain SFTP as the ordinary SSH user with no sudo path,
         so it can only write under that user's home — the same constraint
-        `AptSyncJob._write_or_remove_repo_item` solves by staging under `~/.cache/pc-switcher/`,
+        `apt_sync.etc_apt.EtcApt._write_or_remove` solves by staging under `~/.cache/pc-switcher/`,
         reused here rather than reinvented. `staged_name` carries a remote id, so its `:` and
         `/` are flattened into one path component.
         """
@@ -2246,7 +2246,7 @@ class FlatpakSyncJob(PackageSyncJob):
 
     async def _target_home_dir(self) -> str:
         """The target user's home directory, resolved once per run via `echo $HOME` and
-        cached (`AptSyncJob._target_home_dir`'s established pattern) — every staged key
+        cached (`apt_sync.files.TargetFiles.home`'s established pattern) — every staged key
         needs the same absolute path.
         """
         if self._target_home is None:

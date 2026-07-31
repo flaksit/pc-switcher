@@ -4,7 +4,7 @@ dispatch across all four `DiffAction`s, decision-file routing and `execute()`'s 
 
 `FakeSyncJob` is a minimal concrete `PackageSyncJob` whose `plan()` diffs items by bare
 presence and whose `converge()` only records calls. Deliberately not apt-shaped: a
-manager's own diff is that manager's (`_diff_apt_packages` is tested in
+manager's own diff is that manager's (`diff_apt_packages` is tested in
 `test_apt_sync.py`), and a fake borrowing one would make these tests pass or fail for
 reasons that have nothing to do with the shared pipeline.
 """

@@ -152,7 +152,7 @@ class TestAptHoldDecisions:
 
 class TestAptHeldPackageSuppression:
     """The target hold SET keeps suppressing a held package's own install/upgrade action
-    (`_diff_apt_packages`), whatever is recorded — which is why inertness is filtered on
+    (`diff_apt_packages`), whatever is recorded — which is why inertness is filtered on
     the resulting `ItemDiff`s and never on the hold-name sets feeding the diff."""
 
     @staticmethod

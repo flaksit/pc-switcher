@@ -332,7 +332,7 @@ class PackageSyncJob(SyncJob):
 
         Emission order: `_ACTION_ORDER` (install, change, remove, report) outer, and
         within one action the item classes in first-seen order — which, because
-        `_diff_apt_packages` emits package diffs before hold diffs, keeps a package group
+        `diff_apt_packages` emits package diffs before hold diffs, keeps a package group
         ahead of its hold group.
         """
         # A reported condition is keyed by its CAUSE as well (ruled by the user): version

@@ -351,7 +351,7 @@ def _diff_snap_items(
     source_items: Sequence[SnapItem], target_items: Sequence[SnapItem], machines: Machines
 ) -> list[ItemDiff]:
     """One diff per snap name present on either side, source-then-target order — same
-    shape as `PackageSyncJob._diff_apt_packages`, but with D-06's own convergence rule.
+    shape as `apt_sync.diffing.diff_apt_packages`, but with D-06's own convergence rule.
     Per-snap hold membership diffs follow the presence diffs (D8: install-before-hold).
     """
     source_by_id = {item.item_id: item for item in source_items}
