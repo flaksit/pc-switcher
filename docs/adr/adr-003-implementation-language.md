@@ -3,6 +3,8 @@
 Status: Accepted
 Date: 2025-11-14
 
+Updated 2026-07-31 to fit the current state
+
 ## TL;DR
 Use Python as the primary orchestration language for PC-switcher CLI, with task-specific languages (bash, etc.) for individual sync operations.
 
@@ -64,26 +66,24 @@ See `docs/adr/considerations/adr-003-implementation-language-analysis.md` for de
 - **Architecture pattern:**
   ```plain
   pc-switcher/
-  ├── pyproject.toml      # uv project configuration
-  ├── uv.lock             # Locked dependencies
+  ├── pyproject.toml         # uv project + `pc-switcher` console script
+  ├── uv.lock                # Locked dependencies
   ├── README.md
   ├── src/
-  │   └── pcswitcher/     # Installable Python package
+  │   └── pcswitcher/        # Installable Python package
   │       ├── __init__.py
-  │       ├── cli.py      # CLI entry point
+  │       ├── cli.py         # CLI entry point (Typer)
   │       ├── orchestrator.py # Main sync orchestration
-  │       ├── ssh.py      # Remote execution
-  │       ├── conflict.py # Conflict detection
-  │       └── ui.py       # Terminal UI
-  ├── scripts/            # Task-specific scripts (bundled with package)
-  │   ├── sync-apt.sh
-  │   ├── sync-docker.sh
-  │   └── ...
-  └── tests/              # Test suite
+  │       ├── connection.py  # SSH remote execution (asyncssh)
+  │       ├── executor.py    # Gated command/transfer execution
+  │       ├── ui.py          # Terminal UI (Rich)
+  │       └── jobs/          # One module/package per sync operation (folder_sync, apt_sync, …)
+  └── tests/                 # Test suite
       └── ...
   ```
-  - CLI entry point configured in `pyproject.toml` as `pcsync` console script
-  - Installable via `uv pip install .` or `uv tool install .`
+  Individual sync operations are Python jobs under `jobs/`; bash (or other languages) allowed for a job to delegate to when appropriate.
+  - CLI entry point configured in `pyproject.toml` as the `pc-switcher` console script
+  - Installable via `uv tool install .`
 
 - **Python version selection (as of 2025-11-29):**
   - Target: Python 3.14
