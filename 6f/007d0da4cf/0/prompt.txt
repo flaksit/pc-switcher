@@ -746,3 +746,71 @@ H31: "A removal item is left declined for a whole run, on a VM". What the hell i
 
 Are you 100% sure that A-K only contained scenarios about single source->target Atlas->Nomad runs or consecutive Atlas->Nomad runs, and not any with Atlas->Nomad and back-sync Nomad->Atlas?
 I thought there were scenarios building on top of previous scenarios. Are they always doing a consecutive Atlas->Nomad run? Or were some of the "follow-up scenarios" actually about a back-sync?
+
+---
+
+<task-notification>
+<task-id>af5728cd4e1f504d7</task-id>
+<tool-use-id>toolu_01QXT5wat3JgEchBCdcgLwof</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/79395195-eaac-4280-9fbf-7a7610dd3e3a/tasks/af5728cd4e1f504d7.output</output-file>
+<status>completed</status>
+<summary>Agent "Find back-syncs hiding in A–K" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I mapped this from both ends: the row wording sweep in A–K, and — as ground truth — every `pc-switcher sync` invocation in the integration suite plus a search for role-swapped wiring in the unit suite.
+
+Ground-truth direction facts (verified, not inferred):
+
+- `/home/janfr/dev/pc-switcher/tests/integration/jobs/test_package_sync.py` contains exactly six tests that issue more than one `pc-switcher sync`. Only **two** reverse the roles:
+  - `TestPackageSyncWholeRunContracts::test_skip_always_is_inert_in_both_roles` — run 1 `pc1→pc2`, run 2 `pc1→pc2`, run 3 `pc2_executor` + `sync pc1` = **pc2→pc1**.
+  - `TestCrossDirectionRoundTrips::test_install_propagates_then_reversed_removal_needs_approval` — run 1 `pc1→pc2`, runs 2 and 3 **pc2→pc1**.
+  - The other four (`test_a_source_filter_replicates_and_a_target_only_filter_comes_off`, `test_second_consecutive_sync_has_nothing_to_do`, `test_skip_always_on_an_apt_hold_is_inert_next_run`, `test_skip_always_on_a_snap_hold_is_inert_next_run`) are `pc1→pc2` on every run.
+- `grep -rn "sync pc1" tests/` returns 5 hits: 3 in the two tests above, 2 in `tests/integration/test_end_to_end_sync.py`, which **no A–K row cites** (and which the legend excludes as a source of `V`).
+- No unit test reverses roles. The "round 2" unit pattern (`tests/unit/jobs/test_block_state_decisions.py:record_skip_always` + a second `make_context`, `tests/unit/jobs/test_package_state.py:TestHandEditedDecisionFile`) re-plans in the **same** direction with the recorded decision file replayed into the same side. `grep` for `source_responses=target*`, `target_responses=source*`, `source=target`, `target=source` across `tests/` returns nothing.
+
+## Rows that require a back-sync
+
+**None.** No A–K branch is unreachable without reversing the roles. Every row whose evidence reverses can be — and in four cases already is — proven forward:
+
+- H126 is the closest call. Its `V` evidence genuinely cannot exist without the reversal: the mark is written on pc1 in run 1, so making the mark-holder the *target* demands a `pc2→pc1` run. But the branch itself ("the machine being changed holds the mark") is reachable forward — a declined removal writes the mark on the target — and its `U` evidence, `tests/unit/jobs/test_package_state.py:TestPipelineWiring::test_target_held_inert_item_absent_even_though_source_also_differs`, does exactly that with a single forward `plan()`. Direction-neutral branch, reversal-only integration proof.
+
+## Rows proven by a back-sync but direction-neutral
+
+Seven A–K rows, all citing one of the two reversing tests.
+
+- **A54** — `TestCrossDirectionRoundTrips::test_install_propagates_then_reversed_removal_needs_approval`. The branch (a removal item left undecided in one run, approved in the next) is direction-neutral; runs 2 and 3 that prove it are both `pc2→pc1`. The row's Expected already narrates the reversal ("The run proving it is a back-sync…"), which directly contradicts the document's §"machines" claim that A–K is one direction.
+- **H31** — same test, same runs. Row wording discloses it ("Proven on a back-sync."). Same contradiction.
+- **H114** — *(new)* `…test_install_propagates_then_reversed_removal_needs_approval`, and the row itself pins the runs: "(run 2 declines, run 3 is offered the same item and applies it)". **Both of those runs are `pc2→pc1`.** `Cov` is `V` only, so H114 has *no* forward evidence at all. The row's wording claims no direction, but line 9 explicitly lists H114 among rows that "span more than one run **in that one direction**" — that statement is false.
+- **H125** — *(new to the direction question, but clear on its branch)* cites `test_skip_always_is_inert_in_both_roles`. The cited test as a whole reverses, but the runs that prove H125's branch (mark held by the machine being *read*) are runs 1–2, both `pc1→pc2`. Run 3 of that same test proves H126, not H125. Forward on its own branch; listed here only because the citation is to a test containing a back-sync.
+- **H126** — *(new)* `test_skip_always_is_inert_in_both_roles`, run 3, `pc2→pc1`. The row already flags "(reversed direction)". Its wording *does* contradict its evidence in one respect: it says the mark-holder is "Nomad", but in run 3 the mark-holder is pc1 — the machine the document fixes as **Atlas**. Under the A–K role assignment the row's machine names are inverted relative to the run that proves it.
+- **H164** — *(new)* cites `test_skip_always_is_inert_in_both_roles`. The automation variable is used in all three runs; run 1 is forward, so forward evidence exists. Direction-neutral.
+- **H166** — *(new)* cites `test_skip_always_is_inert_in_both_roles` with `Cov: V` only. The assertion that proves it (the decision-file read at `test_package_sync.py:2319-2322`) happens after **run 1, `pc1→pc2`**. Forward; listed only because the cited test later reverses.
+
+## Rows checked and clear
+
+Multi-run rows whose every run is `Atlas→Nomad` (or whose evidence is a single forward run):
+
+A56, B42, B43, B45, B47, C33 (no test at all — nothing to check), C52, C61, C63, C104, C115, C119, C124, D21, D58, E6, E17, E68, E69, E94, F99, F100, F101, F103, F117, F130, F131, G35, G37, G82, G90, G92, H32, H44, H121, H122, H124, H145, H146, J2, J143, J145.
+
+Two traps worth naming: **C63** and **C104** cite `TestCrossDirectionRoundTrips::test_apt_source_and_its_key_removed_together`. Despite the class name, that test issues a **single** `pc1→pc2` sync. Clear.
+
+## Verdict
+
+**Roughly 42 A–K rows involve more than one run** (counting rows whose branch concerns state carried between runs *or* whose cited test executes more than one sync/plan cycle): A54, A56, B42, B43, B45, B47, C33, C61, C115, C119, C124, D21, E6, E17, E68, E69, F99, F100, F101, F103, F117, F130, F131, G35, G37, G82, G90, G92, H31, H32, H114, H121, H122, H124, H125, H126, H145, H146, H164, H166, J2, J145 — plus C52, D58, E94, H44 if you count second *review rounds* inside one run. The document's §"machines" list of 14 ("A54, B45, B47, C33, C61, C115, C119, D21, G35, G37, G82, G90, H114, H145") is therefore substantially incomplete, independently of the direction question.
+
+**Seven A–K rows touch a back-sync**: A54, H31, H114, H125, H126, H164, H166. Of those, three (H114, H125, H166) have `Cov: V` with no unit evidence, and **H114 is the only one whose entire evidence is reversed runs with no disclosure in its own wording**. H126 discloses the reversal but names the machines the wrong way round relative to the A–K role assignment.
+
+**The document's claim is false as written.** Line 7 ("Sections A–K are launched from Atlas") and line 9 ("About a dozen A–K rows do span more than one run **in that one direction**") are both contradicted — by H114 and H126, which the line-9 sentence either mislabels or omits, and self-contradicted by A54 and H31, whose own Expected text says "back-sync" while sitting in a section the preamble declares single-direction. Line 9's stated exception ("One row is deliberately direction-agnostic: C175") is not the only one.
+
+**Zero rows require moving to section N on grounds of necessity** — every branch involved is direction-neutral. The defect is documentary: the blanket A–K direction claim, and the incomplete multi-run list, not the placement of the branches.</result>
+<usage><subagent_tokens>98233</subagent_tokens><tool_uses>30</tool_uses><duration_ms>318990</duration_ms></usage>
+</task-notification>
+
+---
+
+No, H31 was good: it is only about source->target and again source->target. That this is tested by a test that does other things before, is not relevant at all. scenario-coverage is the definition of the scenarios; tests only an implementation and tests can choose to combine multiple scenarios into one.
+Possibly, the other cases are similar (scenarios combined in a large test; which does not say anything about the scenarios being really entangled).
+I'm afraid you went head-over-heels without understanding my question. I meant, (ficitious example): B17 does A>N. B18 says "when we first did something like B17, and then we do N>A and user decides X, then result should by Y".
+By your first maybe-too-eager sweep, you changed B18 and said A>N, because B18 itself does only a single sync. But B18 should actually be interpreted as B17+B18, which does a sync and then back-sync.
+
+Take a step back. Reason. Am I right or mistaken?
+Take another step back. How will we get out of this mess?
