@@ -897,3 +897,34 @@ Refactor: `_docstrings()` now parses the tree once and both `_tests()` and the n
 Nothing committed or staged.</result>
 <usage><subagent_tokens>91622</subagent_tokens><tool_uses>40</tool_uses><duration_ms>319600</duration_ms></usage>
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>a318213cb2a3ebd06</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/81c7a538-876b-47ee-bd10-6f31ec117d7e/tasks/a318213cb2a3ebd06.output</output-file>
+<status>completed</status>
+<summary>Agent "Prune the gaps register" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The register is reconciled and all five checks pass.
+
+## What was done
+
+**Deleted 110 of the 115 entries.** 108 carried a `STALE` audit verdict — the aspect each named is asserted verbatim by a test its row cites. The other two, **D61** and **J107**, are documented compositions (both already in `COMPOSITIONS`, both stating the composition in their own Test column, exactly like F121 and H133 which carry no entry); their entries only restated "nothing to test here", which contradicts a register of what to test next.
+
+**Kept 4: K67, K82, K88, K89.**
+- K67, K89 — the two `P` rows whose entry names what is still missing. K89 narrowed: the staging copy's removal on both paths *is* now asserted (`test_apt_etc_apt:TestRepoGroupOrdering::test_staging_file_removed_after_success_and_after_failure`, as C126); what is left is that `home.filter`'s `- .cache/*` covers `.cache/pc-switcher`, which nothing reads. Its row's Test column was corrected to match.
+- K82, K88 — kept as VM-tier entries, rows left at `U`. **I diverged from the brief here.** `U` means "a unit test asserts this branch", not "fully covered"; neither row claims `V`, so neither mark is wrong, and the register's own intro provides for `VM` entries. Their unit halves genuinely assert the branch (`test_snap_sync:TestExcludePaths`, `test_folder_sync:TestSnippetRegistryExcludeFilters` and siblings). Marking them `P` would have understated real unit coverage.
+
+**Rows re-marked: none.** The 12 entries the audits marked `PARTIAL` had all been deleted before I started, so I verified each against the newly cited tests rather than the mark. All 12 — C10, A36, E36, E88, K43, J50, J122, J127, J145, G74, G87, K91 — were genuinely closed by tests that landed today; evidence read line by line. Three rows whose Test column lied were fixed instead: **H69** and **H173** still carried inline "— P:" annotations the new tests had made false, and **K8** cited a weaker test with an admission that discovery was "the inferred consequence".
+
+**The seven `P` rows are now six** (another agent closed K51 with a new test mid-task): D61, F121, H133, J107 are documented compositions; K67 and K89 have entries. The four `‼` rows each still say what its criteria entry says — D37 and D38 are the two `PKG-FR-COLLATERAL-MANUAL` costs, F117 is `PKG-FR-FLATPAK-FILTER`, F43 is `PKG-FR-FLATPAK-REMOTE-TRUST`/`gpgkeypath` — and none appears in the register.
+
+**Intro rewritten** to state what the register now holds and to bind it to the marks. **All four "no VM coverage at all" bullets verified against `tests/integration/jobs/test_package_sync.py`** and still true: no real install from a derived vendor repository, no hold that travels (the one apt-hold VM test proves a hold *never* lands), collateral appears only in a comment, and the registry-exclusion run does not exist. **Added to "How this document is kept true":** closing a gap is one change — test, mark, Test column and the register entry, deleted together.
+
+Verification: `pytest -q` 4378 passed / 94 deselected · `ruff format` 164 unchanged · `ruff check` passed · `basedpyright` 0 errors · `codespell` clean.
+
+Two things to flag: another agent is editing this tree concurrently (it modified `tests/unit/jobs/test_snap_sync.py` and `tests/unit/test_scenario_coverage_matrix.py`, and closed K51, while I worked) — my edits were targeted and the suite is green over the combined state. Nothing was committed or staged.</result>
+<usage><subagent_tokens>154512</subagent_tokens><tool_uses>57</tool_uses><duration_ms>511023</duration_ms></usage>
+</task-notification>
