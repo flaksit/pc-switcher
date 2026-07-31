@@ -577,3 +577,74 @@ Conversely, sections J, K and N cite tests that live in **my** module (`J54, J78
 - No test failed because the code was wrong. Nothing in `src/` was touched.</result>
 <usage><subagent_tokens>264065</subagent_tokens><tool_uses>42</tool_uses><duration_ms>812471</duration_ms></usage>
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>a0964ecf406fb67e0</task-id>
+<tool-use-id>toolu_018iapdR3abZPb2CFuroMd5f</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/79395195-eaac-4280-9fbf-7a7610dd3e3a/tasks/a0964ecf406fb67e0.output</output-file>
+<status>completed</status>
+<summary>Agent "Phase 2: apt /etc/apt and collateral" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Everything passes: `334 passed` in `tests/unit/jobs/apt`, full unit suite `1753 passed`, ruff format/check clean, basedpyright `0 errors`. Nothing outside my eight modules was edited; nothing committed.
+
+## Rows now covered
+
+**New tests**
+
+- C23 — `test_apt_derived:TestARepositoryTravelsOnlyForAnApprovedInstall::test_a_declined_install_writes_neither_its_repository_nor_its_key`
+- C25 — `test_apt_etc_apt:TestOneRepositoryServingTwoPackages::test_one_repository_two_approved_installs_is_written_once`
+- C36 — `test_apt_job:TestRepositoryConflicts::test_a_differing_repository_no_install_would_write_raises_no_question`
+- C68 — `test_apt_collateral:TestARepositoryWrittenForADeclinedInstall::test_a_repository_whose_own_write_failed_is_not_named`
+- C69 — `test_apt_collateral:TestARepositoryWrittenForADeclinedInstall::test_a_derived_pin_is_never_named_as_stranded`
+- C99 — `test_apt_keyrings:TestUnusedKeyringCollection::test_a_shared_keyring_orphan_is_never_collected`
+- C102 — `test_apt_keyrings:TestUnusedKeyringCollection::test_a_key_that_cannot_be_backed_up_is_kept_rather_than_deleted`
+- C103 — `test_apt_keyrings:TestUnusedKeyringCollection::test_a_deletion_that_fails_warns_and_the_run_carries_on`
+- C119 — `test_apt_job:TestTwoAnswerRemovals::test_a_declined_pin_deletion_is_offered_again_on_the_next_run`
+- C151 — `test_apt_etc_apt:TestRepoGroupTransaction::test_a_reprobe_that_also_fails_says_the_target_is_still_broken`
+- C153 — `test_apt_etc_apt:TestRepoGroupTransaction::test_a_rollback_attempts_every_file_even_after_one_step_fails`
+- C158 — `test_apt_etc_apt:TestAnEmptyRepositoryUnit::test_the_marker_succeeds_with_no_refresh_when_the_unit_has_nothing_to_do`
+- C160 — `test_apt_etc_apt:TestOneRepositoryServingTwoPackages::test_a_failed_repository_write_fails_both_packages_that_needed_it`
+- C161 — `test_apt_etc_apt:TestOneRepositoryServingTwoPackages::test_one_packages_own_install_failure_is_not_charged_to_the_repository`
+- C162 — `test_apt_etc_apt:TestDerivedWritesAreVisible::test_a_derived_pin_is_logged_as_it_lands`
+- C171 — `test_apt_job:TestRepositoryConflicts::test_skipping_a_conflict_fails_every_package_whose_origin_needed_it` (no register entry; written because the row was `—` and the fixture was one edit away)
+- D5 — `test_apt_collateral:TestAutoCollateralIsLogged::test_an_approved_removals_auto_casualty_is_named_in_the_log`
+- D14 — `test_apt_collateral:TestPlanTimeCollateral::test_a_version_change_whose_two_versions_compare_equal_is_not_an_item`
+- D20, D21 — `test_apt_collateral:TestTheAnswersTheItemComposes::test_an_install_cause_phrases_both_answers_around_the_install`; D21's removal half (`remove … from`, `will not be removed`) — `::test_a_removal_cause_flips_the_preposition_and_the_verb`
+- D25 — `test_apt_collateral:TestCollateralFlow::test_the_withdrawn_install_is_reported_skipped_rather_than_failed`
+- D37 — `test_apt_collateral:TestASkippedRemovalKeepsItsProtectionAtTheGuard::test_a_skipped_candidate_is_refused_by_name_rather_than_asked_about`
+- D38 (the over-ask) — `test_apt_collateral:TestTheRehearsalSurvivesAStaleTargetHold::test_the_flag_can_raise_a_question_about_collateral_the_real_install_would_refuse`
+- D46 — `test_apt_collateral:TestASkippedRemovalKeepsItsProtectionAtTheGuard::test_a_mark_made_in_this_same_review_protects_its_package_from_the_cascade`
+- D53 — `test_apt_collateral:TestCollateralAttribution::test_a_single_candidate_is_its_own_answer_and_is_not_rehearsed_twice`
+- D57 — `test_apt_collateral:TestAConsequenceAlreadyAnsweredAtPlanTime::test_a_go_ahead_given_at_plan_time_is_not_asked_for_again`
+- D58 — `test_apt_collateral:TestAConsequenceAlreadyAnsweredAtPlanTime::test_a_decline_given_at_plan_time_is_asked_again_about_the_other_changes`
+- D65 — `test_apt_collateral:TestTheLateQuestionIsPutOnceBeforeAnyTransaction::test_two_late_installs_are_asked_about_once_and_before_the_first_install`
+
+**Folded into an existing test (assertion added, row now `U`)**
+
+- C143 — `test_apt_etc_apt:TestRepoGroupOrdering::test_key_then_source_then_update_then_package_install` (`sudo apt-get update` count == 1)
+- C170 — `test_apt_job:TestRepoRemovalWithheldWhileInUse::test_a_repository_an_ordinary_target_package_uses_is_withheld_too` (caplog: `keeping repository vendor.list: …`)
+- C108 — `test_apt_derived:TestPinsStillTravelAsFiles::test_a_pin_file_the_target_lacks_is_written_with_no_review_line`; that target has no repository at all, so the pin's origin is by construction one it lacks. No separate test written — a second one would only re-assert C105.
+
+**Tagged, not rewritten**: every other test my two sections cite in the eight modules I own now carries its scenario ids at the start of its docstring — 177 distinct C/D ids in all. The nine `‼` rows are untagged and untouched.
+
+## Rows left open
+
+- **C10** — `test_apt_probe`, another agent's module. Register entry: source `sha256sum /etc/apt/sources.list` exits 1, target succeeds; assert no diff and no write naming `sources.list`.
+- **C33** — `tests/unit/jobs/test_block_state_decisions.py`, another agent's module (`TestAptRepoItemDecisions` shape).
+- **D9** — `tests/unit/jobs/apt/test_apt_packages.py`, another agent's module (`TestTransactionGuard::test_install_whose_only_collateral_is_auto_deps_proceeds` + caplog).
+- **D47** — no gap-register entry, and the row itself says the criteria's gap list does not name it. It is an unresolved reading (should a same-run mark produce a question or only a guard refusal?), not a branch a test can settle. Needs a ruling first.
+- **D61** — register states no test is needed: overriding a `SKIP_ONCE` to `SKIP_ONCE` is unobservable.
+- **C7, C50, C81, C172, C174, D39, D40, D41, D71** — `‼`, left alone as instructed.
+
+## Findings
+
+- **No test had to be reverted.** Nothing in `src/` contradicted a row I wrote against; no source file was changed.
+- **C3's remaining half is already asserted.** The row says "nothing asserts the absence of a write for the file alone". `test_apt_etc_apt:TestRepoGroupRemovalAndKeyChange::test_rotated_keyring_is_refreshed_although_its_source_file_is_identical` asserts `len(transfers) == 1` and that the single transfer is `foo.gpg` — since every `/etc/apt` write goes through `send_file`, that is exactly the absence of a write for the identical repository file. C3 can be `U` citing that test alongside the keyring one.
+- **C158's register recipe is self-contradictory.** It proposes "a rotated key whose reference does not survive because its only source file is approved for removal on the other side", but an approved source removal is itself a group diff, so `EtcApt.ensure_converged`'s early return is unreachable that way. The branch I used instead: the source's rotated `foo.gpg` is referenced only by a source-only repository file that no approved install makes travel, so `Keyrings.pending_work` (which unions both machines' refs) raises the marker while `surviving_refs` is empty.
+- **D25's log line carries the version in the label** — `reviewed pkg-a (1.0) (install): skipped this run`, not `reviewed pkg-a (install): …`. Worth knowing for anyone asserting that line elsewhere.
+- **D37 and D38 are `‼` in the table but were not in the nine I was told to leave.** Both rows describe accepted costs with a prescribed register test ("write it so the day the gap closes the test flips"), so I wrote them; both pass against current behaviour and add no failing test. If the intent was to exclude them, `test_apt_collateral:TestASkippedRemovalKeepsItsProtectionAtTheGuard` and `…::test_the_flag_can_raise_a_question_about_collateral_the_real_install_would_refuse` are the two to drop.
+- **Shared fixture touched**: `_late_collateral_context` in `test_apt_collateral.py` gained `source_extra` / `target_extra` keyword arguments (defaults preserve every existing caller). `helpers.py` was not modified.</result>
+<usage><subagent_tokens>405476</subagent_tokens><tool_uses>115</tool_uses><duration_ms>1324968</duration_ms></usage>
+</task-notification>
