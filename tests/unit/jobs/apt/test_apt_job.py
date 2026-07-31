@@ -53,6 +53,8 @@ from tests.unit.jobs.apt.helpers import (
     make_context,
     real_installs,
     respond_to,
+    review_rounds,
+    reviewed_groups,
     sha256_line,
     target_offers,
 )
@@ -493,10 +495,10 @@ class TestRepoRemovalWithheldWhileInUse:
         assert by_id["apt:source:vendor.list"].action == DiffAction.REMOVE
 
     @staticmethod
-    def _one_removal_context(*, decisions: dict[str, Decision]) -> tuple[AptSyncJob, MagicMock]:
+    def _one_removal_context(*, decisions: dict[str, Decision]) -> tuple[AptSyncJob, MagicMock, CountingReviewer]:
         """`vendor.list` on the target only, feeding exactly one target package the source
-        does not have — so this run proposes to remove `vendor-tool` AND offers the
-        repository it is the last user of, in one review.
+        does not have — so this run proposes to remove `vendor-tool` AND, once that removal
+        is approved, offers the repository it is the last user of.
         """
         target_responses = {
             **TestRepoRemovalWithheldWhileInUse._target_responses(
@@ -510,21 +512,23 @@ class TestRepoRemovalWithheldWhileInUse:
         }
         context, _source, target = _repo_context(source_responses=_NO_PACKAGES, target_responses=target_responses)
         job = AptSyncJob(context)
-        install_reviewer(job, decisions)
-        return job, target
+        reviewer = CountingReviewer(decisions)
+        job.context = dataclasses.replace(job.context, reviewer=reviewer)
+        return job, target, reviewer
 
     @pytest.mark.asyncio
     async def test_a_repository_goes_with_the_removal_the_user_approved(self) -> None:
         """C50, N13 — removing a repository together with the packages it feeds is the case the
-        withholding rule must not swallow: both were approved, so by the time the file goes
-        nothing on the target installs from it.
+        withholding rule must not swallow: the removal is approved in the first round, so the
+        second offers the file, and by the time it goes nothing on the target installs from it.
         """
-        job, target = self._one_removal_context(
+        job, target, reviewer = self._one_removal_context(
             decisions={"apt:source:vendor.list": Decision.APPLY, "apt:package:vendor-tool": Decision.APPLY}
         )
 
         await job.execute()
 
+        assert "apt:source:vendor.list" in {entry.item_id for group in reviewer.calls[1] for entry in group.entries}
         assert "sudo rm --force /etc/apt/sources.list.d/vendor.list" in all_calls(target)
         assert any("apt-get remove" in c and "vendor-tool" in c and "--dry-run" not in c for c in all_calls(target))
 
@@ -532,22 +536,24 @@ class TestRepoRemovalWithheldWhileInUse:
     async def test_a_repository_whose_packages_removal_was_declined_is_not_deleted(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """C172, N12 — the answer the plan-time reading cannot know: the user approves the
-        repository's deletion and declines its package's removal. `vendor-tool` stays, so
-        something on the target still installs from the file, and deleting it would strand an
-        installed package with no origin. The approval is taken back, not failed, and the
-        file is offered again next run.
+        """C172, N12 — the count the article asks for: `vendor-tool`'s removal is declined, so
+        it stays on the target and something still installs from the file. The deletion is
+        never put to the user at all — the second round is built out of the answers the first
+        one returned — and the log says what keeps the file.
         """
-        job, target = self._one_removal_context(decisions={"apt:source:vendor.list": Decision.APPLY})
+        job, target, reviewer = self._one_removal_context(decisions={"apt:source:vendor.list": Decision.APPLY})
 
         with caplog.at_level(1):
             await job.execute()
 
+        assert "apt:source:vendor.list" not in {
+            entry.item_id for rounds in reviewer.calls for group in rounds for entry in group.entries
+        }
         assert "sudo rm --force /etc/apt/sources.list.d/vendor.list" not in all_calls(target)
         assert not any("apt-get remove" in c for c in all_calls(target))
         assert (
             "keeping repository vendor.list: target-host still installs vendor-tool from it, "
-            "so its approved deletion is not applied" in caplog.text
+            "so its deletion is not offered" in caplog.text
         )
 
     @pytest.mark.asyncio
@@ -635,9 +641,9 @@ class TestRepoRemovalWithheldWhileInUse:
         )
         job = AptSyncJob(context)
 
-        plan = await job.plan()
+        groups = await reviewed_groups(job)
 
-        group = next(g for g in plan.groups if g.action in _REMOVAL_ACTIONS)
+        group = next(g for g in groups if g.action in _REMOVAL_ACTIONS)
         entry = next(e for e in group.entries if e.item_id == "apt:source:vendor.list")
         assert entry.detail is not None and "https://vendor.example.com/apt" in entry.detail
 
@@ -818,9 +824,9 @@ class TestTwoAnswerRemovals:
         """
         context, _source, _target = self._target_only_repo_state()
 
-        plan = await AptSyncJob(context).plan()
+        groups = await reviewed_groups(AptSyncJob(context))
 
-        by_action = {(group.action, group.entries[0].item_id.split(":")[1]): group for group in plan.groups}
+        by_action = {(group.action, group.entries[0].item_id.split(":")[1]): group for group in groups}
         assert (REPO_REMOVAL_REVIEW_ACTION, "source") in by_action
         assert (REPO_REMOVAL_REVIEW_ACTION, "pin") in by_action
         # Both read "remove" in the decision column; what is being removed is the group
@@ -839,9 +845,9 @@ class TestTwoAnswerRemovals:
         """
         context, _source, _target = self._target_only_repo_state()
 
-        plan = await AptSyncJob(context).plan()
+        groups = await reviewed_groups(AptSyncJob(context))
 
-        titles = {group.title for group in plan.groups if group.action == REPO_REMOVAL_REVIEW_ACTION}
+        titles = {group.title for group in groups if group.action == REPO_REMOVAL_REVIEW_ACTION}
         assert titles == {
             "Delete repositories source-host no longer has (apt)",
             "Delete pin files source-host no longer has (apt)",
@@ -854,11 +860,11 @@ class TestTwoAnswerRemovals:
         """
         context, _source, target = self._target_only_repo_state()
 
-        plan = await AptSyncJob(context).plan()
+        groups = await reviewed_groups(AptSyncJob(context))
 
         pins = next(
             group
-            for group in plan.groups
+            for group in groups
             if group.action == REPO_REMOVAL_REVIEW_ACTION and group.entries[0].item_id.startswith("apt:pin:")
         )
         assert pins.entries[0].content == _VENDOR_PIN
@@ -889,11 +895,11 @@ class TestTwoAnswerRemovals:
         twice, and a `.sources` body is mostly fields the user is not deciding on."""
         context, _source, _target = self._target_only_repo_state()
 
-        plan = await AptSyncJob(context).plan()
+        groups = await reviewed_groups(AptSyncJob(context))
 
         repos = next(
             group
-            for group in plan.groups
+            for group in groups
             if group.action == REPO_REMOVAL_REVIEW_ACTION and group.entries[0].item_id.startswith("apt:source:")
         )
         assert repos.entries[0].content is None
@@ -909,9 +915,9 @@ class TestTwoAnswerRemovals:
         """
         context, _source, _target = self._target_only_repo_state()
 
-        plan = await AptSyncJob(context).plan()
+        groups = await reviewed_groups(AptSyncJob(context))
 
-        two_answer = [group for group in plan.groups if group.action == REPO_REMOVAL_REVIEW_ACTION]
+        two_answer = [group for group in groups if group.action == REPO_REMOVAL_REVIEW_ACTION]
         assert len(two_answer) == 2, "the repository and the pin deletion each need their own screen"
         for group in two_answer:
             assert _is_removal_direction(group.action)
@@ -1061,9 +1067,11 @@ class TestRepositoryConflicts:
         """
         context, _source, _target = differing_repo_context(recorded=decision_file("apt:package:curl"))
 
-        plan = await AptSyncJob(context).plan()
+        rounds = await review_rounds(
+            AptSyncJob(context), {"apt:package:vendor-tool": Decision.APPLY}, ignore_item_failures=True
+        )
 
-        group = next(g for g in plan.groups if g.action == REPO_CONFLICT_REVIEW_ACTION)
+        group = next(g for g in rounds[1] if g.action == REPO_CONFLICT_REVIEW_ACTION)
         entry = group.entries[0]
         assert entry.label == "vendor.list"
         assert entry.versions == (_VENDOR_LIST, _CHANGED_VENDOR)
@@ -1074,9 +1082,15 @@ class TestRepositoryConflicts:
         """C34, H26 — answering "overwrite" writes the source's version of the file."""
         context, _source, target = differing_repo_context(recorded=decision_file("apt:package:curl"))
         job = AptSyncJob(context)
-        install_reviewer(job, {"apt:conflict:vendor.list": Decision.APPLY})
 
-        await job.execute()
+        # The install that carries the file is what raises the question, and this fixture's
+        # target offers no origin for it after the refresh — so the item fails D-35 once the
+        # file has landed, which is the write under test.
+        await review_rounds(
+            job,
+            {"apt:package:vendor-tool": Decision.APPLY, "apt:conflict:vendor.list": Decision.APPLY},
+            ignore_item_failures=True,
+        )
 
         assert any(
             "sudo install" in c and c.endswith("/etc/apt/sources.list.d/vendor.list") for c in all_calls(target)
@@ -1168,6 +1182,24 @@ class TestRepositoryConflicts:
         assert not real_installs(target)
 
     @pytest.mark.asyncio
+    async def test_a_conflict_whose_only_install_was_declined_is_never_asked_about(self) -> None:
+        """C177 — the article's own gate, read exactly: the question is raised only for a
+        repository this run writes because an APPROVED package comes from it. `vendor-tool`
+        is declined, so nothing writes `vendor.list` and there is nothing to decide — which
+        is why the question waits for the first round's answers rather than being built from
+        the installs merely proposed.
+        """
+        context, _source, target = differing_repo_context(recorded=decision_file("apt:package:curl"))
+        job = AptSyncJob(context)
+
+        rounds = await review_rounds(job, {})
+
+        assert not any(group.action == REPO_CONFLICT_REVIEW_ACTION for rnd in rounds for group in rnd)
+        assert not any(
+            "sudo install" in cmd and cmd.endswith("/etc/apt/sources.list.d/vendor.list") for cmd in all_calls(target)
+        )
+
+    @pytest.mark.asyncio
     async def test_a_differing_repository_no_install_would_write_raises_no_question(self) -> None:
         """C36 — the gate D-37 puts in front of the question: `vendor-tool` is on both
         machines, so no install proposes to write `vendor.list`, and a file this run would
@@ -1249,9 +1281,10 @@ class TestRepositoryConflicts:
             },
         )
 
-        plan = await AptSyncJob(context).plan()
+        job = AptSyncJob(context)
+        rounds = await review_rounds(job, {"apt:package:vendor-tool": Decision.APPLY}, ignore_item_failures=True)
 
-        assert any(g.action == REPO_CONFLICT_REVIEW_ACTION for g in plan.groups)
+        assert any(g.action == REPO_CONFLICT_REVIEW_ACTION for g in rounds[1])
         # Exactly two policy calls reach the target at plan time: the manifest/origin one
         # (`capture_target_items`), and ONE shared by both `/etc/apt` follow-ups — never one
         # follow-up call each.

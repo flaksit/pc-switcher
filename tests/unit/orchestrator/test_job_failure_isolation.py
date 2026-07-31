@@ -22,6 +22,7 @@ from pcswitcher.models import (
     CommandResult,
     JobStatus,
     SessionStatus,
+    SyncAbortedByUser,
     SyncLockedError,
     ValidationError,
 )
@@ -30,6 +31,7 @@ from tests.unit.jobs.test_package_sync_core import make_context
 
 _MESSAGE = "probe on nomad did not answer — `snap list --all` exited 1: cannot communicate with server"
 _CRASH = "snippet registry transfer to the target failed: rsync exited 12"
+_DECLINED = "snippet registry overwrite declined on nomad"
 
 
 class _ProbeFailingJob(SyncJob):
@@ -68,6 +70,17 @@ class _LockedPackageJob(_CrashingPackageJob):
 
     async def execute(self) -> None:
         raise SyncLockedError("Target pc2 is already involved in a sync.")
+
+
+class _DecliningPackageJob(_CrashingPackageJob):
+    """A package job whose consent prompt the user declined — the registry-overwrite gate
+    of `manual_installs_sync` is the one `PKG-FR-REGISTRY-CONSENT` names.
+    """
+
+    name: ClassVar[str] = "stub_declining_package"
+
+    async def execute(self) -> None:
+        raise SyncAbortedByUser(_DECLINED)
 
 
 class _RanAfterJob(SyncJob):
@@ -147,5 +160,19 @@ class TestAnyFailureOfAPackageJobStaysInThatJob:
 
         with pytest.raises(SyncLockedError):
             await wired_orchestrator._execute_jobs([_LockedPackageJob(make_context()), never_runs])  # pyright: ignore[reportPrivateUsage]
+
+        assert not never_runs.ran
+
+
+class TestADeclinedConsentEndsTheRun:
+    """Isolation is about failures. A decline is not one: the user said stop."""
+
+    @pytest.mark.asyncio
+    async def test_the_remaining_jobs_do_not_run(self, wired_orchestrator: Orchestrator) -> None:
+        """G74 — `PKG-FR-REGISTRY-CONSENT`: declining ends the run, not just the job that asked."""
+        never_runs = _RanAfterJob(make_context())
+
+        with pytest.raises(SyncAbortedByUser, match=_DECLINED):
+            await wired_orchestrator._execute_jobs([_DecliningPackageJob(make_context()), never_runs])  # pyright: ignore[reportPrivateUsage]
 
         assert not never_runs.ran

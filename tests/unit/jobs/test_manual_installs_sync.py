@@ -1318,9 +1318,8 @@ class TestSkipOnceResolution:
 class TestContinueOnFailure:
     @pytest.mark.asyncio
     async def test_failed_snippet_replay_is_a_per_item_failure_and_does_not_stop_the_job(self) -> None:
-        """G86, G87 — one of two approved snippets exits non-zero: the other still runs, and
-        only the failing item is reported failed. A snippet lacking administrative rights
-        on the target arrives here as the same ordinary non-zero replay."""
+        """G86 — one of two approved snippets exits non-zero: the other still runs, and
+        only the failing item is reported failed."""
         registry_yaml = (
             "snippets:\n"
             "  unreproducible:apt-no-candidate:brscan3:\n"
@@ -1362,6 +1361,49 @@ class TestContinueOnFailure:
         failed_ids = {diff.item_id for diff, _stderr in exc_info.value.failures}
         assert failed_ids == {"unreproducible:apt-no-candidate:cnpg"}
 
+    @pytest.mark.asyncio
+    async def test_a_snippet_denied_administrative_rights_fails_like_any_other_item(self) -> None:
+        """G87 — a snippet needing administrative rights it does not have on the target is not a
+        special case: sudo's refusal is an ordinary non-zero replay, reported against its own
+        item with what the machine said. Nothing establishes the right beforehand — what a
+        snippet's body needs is unknowable, so there is nothing to pre-check.
+        """
+        registry_yaml = (
+            "snippets:\n"
+            "  unreproducible:apt-no-candidate:brscan3:\n"
+            "    label: brscan3 (no apt candidate)\n"
+            "    body: sudo dpkg --install /tmp/brscan3.deb\n"
+            "    authored_at: '2026-01-01T00:00:00+00:00'\n"
+            "    authored_on: laptop\n"
+        )
+        denial = "sudo: a terminal is required to read the password"
+        context, _source, target = make_context(
+            source_responses={
+                _STATUS_QUERY: installed_on_source("brscan3"),
+                "apt-cache policy": CommandResult(0, _hand_deb_policy("brscan3"), ""),
+                "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, registry_yaml, ""),
+            },
+            target_responses={
+                "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, registry_yaml, ""),
+                "bash -c 'sudo dpkg --install /tmp/brscan3.deb'": CommandResult(1, "", denial),
+            },
+        )
+        job = ManualInstallsSyncJob(context)
+
+        plan = await job.plan()
+        job.accept_review(
+            plan,
+            ReviewOutcome(decisions={"unreproducible:apt-no-candidate:brscan3": Decision.APPLY}, was_interactive=True),
+        )
+
+        with pytest.raises(PackageItemFailures) as exc_info:
+            await job.apply()
+
+        assert [(diff.item_id, stderr) for diff, stderr in exc_info.value.failures] == [
+            ("unreproducible:apt-no-candidate:brscan3", denial)
+        ]
+        assert not any("sudo --non-interactive" in cmd or "sudo -n " in cmd for cmd in all_calls(target))
+
 
 class TestValidate:
     @pytest.mark.asyncio
@@ -1391,13 +1433,15 @@ class TestValidate:
     @pytest.mark.asyncio
     async def test_valid_environment_yields_no_errors(self) -> None:
         """G25, K50, K51, K62 — with both tools present nothing fails, and no administrative-rights
-        precondition is imposed on the target: a snippet's own needs are unknowable."""
-        context, _source, _target = make_context()
+        precondition is imposed on either machine: a snippet's own needs are unknowable,
+        so there is nothing to probe for and passing is not conditional on sudo."""
+        context, source, target = make_context()
         job = ManualInstallsSyncJob(context)
 
         errors: list[ValidationError] = await job.validate()
 
         assert errors == []
+        assert not any("sudo --non-interactive true" in cmd for cmd in all_calls(source) + all_calls(target))
 
 
 class TestSnippetPush:

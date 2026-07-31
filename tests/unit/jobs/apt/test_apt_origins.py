@@ -284,6 +284,10 @@ class TestOriginClassification:
         assert (diff.diff_class, diff.action) == (DiffClass.REPO_UNAVAILABLE, DiffAction.REPORT_ONLY)
         assert diff.detail is not None and "gone.example.com/apt" in diff.detail
         assert not any("apt-get install" in cmd for cmd in all_calls(target))
+        # Deriving no repository file is a separate mechanism from issuing no install:
+        # ruling 4 derives files from the packages APPROVED from them, and a report-only
+        # package is never approved.
+        assert job._work.origins.plans["apt:package:pkg-a"].derived_files == frozenset()  # pyright: ignore[reportPrivateUsage]
 
     @pytest.mark.asyncio
     async def test_a_dangling_keyring_makes_the_package_unavailable(self) -> None:

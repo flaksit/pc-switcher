@@ -122,8 +122,12 @@ class AptSyncJob(PackageSyncJob):
             log=self._log,
         )
         # `{filename: RepoConflict}` for the differing repository files that feed
-        # machine-specific packages (ruling 6). Captured in `plan()`, consumed by the
-        # conflict review group and then by the derived write set.
+        # machine-specific packages (ruling 6). Captured in `plan()` over every file a
+        # PROPOSED install would write, narrowed by `plan_second_round` to the ones an
+        # APPROVED install writes (`PKG-FR-REPO-CONFLICT`), then consumed by the conflict
+        # review group and the derived write set. Narrowed rather than captured late so a
+        # path that never reaches the second round still treats the file as unanswered,
+        # which fails the packages that needed it rather than overwriting it silently.
         self._conflicts: dict[str, RepoConflict] = {}
         # `{filename: content}` for the pin files this run OFFERS to delete, read by
         # `diff_apt_pins` and shown whole on that screen — a pin filename alone gives the
@@ -135,9 +139,9 @@ class AptSyncJob(PackageSyncJob):
         # `{filename: the target packages installed from it}` for every target-only
         # repository this run considered offering for deletion, counted before any removal
         # was taken out. `PKG-FR-REPO-DELETE` counts usage after this run's APPROVED
-        # removals, and those exist only once the review has returned, so the count is
-        # taken twice: `_plan_repo_diffs` decides what to offer, `accept_review` decides
-        # what may actually go.
+        # removals, which exist only once the first review round has returned, so the count
+        # is taken again there: `_plan_repo_diffs` decides which files are even candidates,
+        # `plan_second_round` decides which are raised at all.
         self._repo_users: dict[str, list[str]] = {}
         # Every package dpkg reports installed on the target, read at most once per run and
         # only by a run that has something to ask it: the hold handling
@@ -302,7 +306,7 @@ class AptSyncJob(PackageSyncJob):
 
         repo_diffs = await self._plan_repo_diffs(source_facts, target_facts, origins, collateral, base_plan.diffs)
 
-        if not collateral_diffs and not repo_diffs and not self._conflicts:
+        if not collateral_diffs and not repo_diffs:
             return base_plan
 
         # Ordering is an apt FACT (key before source before packages, T-02-16), not a
@@ -413,13 +417,16 @@ class AptSyncJob(PackageSyncJob):
 
     @staticmethod
     def _files_an_approval_would_write(package_diffs: Sequence[ItemDiff], origins: OriginClassifier) -> frozenset[str]:
-        """The repository filenames this run would derive if the review approved every
-        install it proposes — a superset of what `DerivedWrites.build` finally writes, since
-        the review has not happened yet.
+        """The repository filenames the given package diffs would derive a write for.
 
-        Gating the conflict question on it is what keeps D-37's rule intact: a repository
-        travels because an approved package comes from it, so a file no install needs is not
-        a question, and answering "overwrite" cannot by itself make one travel.
+        Called twice with two different sets, which is what makes `PKG-FR-REPO-CONFLICT`'s
+        "only for a repository this run writes because an APPROVED package comes from it"
+        exact rather than approximate: `_plan_repo_diffs` passes every proposed install, and
+        the answer decides which files are worth reading both machines' copies of;
+        `plan_second_round` passes the approved ones, and the answer decides which are
+        actually asked about. A repository travels because an approved package comes from it,
+        so a file no approved install needs is not a question, and answering "overwrite"
+        cannot by itself make one travel.
         """
         return frozenset(
             filename
@@ -445,22 +452,23 @@ class AptSyncJob(PackageSyncJob):
         a proxy or a `no-install-recommends` policy should be replicated (D-37).
 
         Both surviving repository questions are narrowed here, against what the TARGET still
-        installs, before any diff is built:
+        installs, before any diff is built — and narrowed AGAIN in `plan_second_round`, which
+        is where each article's own gate falls, because both are written in terms of what
+        this run approves:
 
         - a repository the source no longer has is WITHHELD outright while the target still
           gets software from it (`PKG-FR-REPO-DELETE`). "Anything" is every package installed
           there, automatic ones included, plus its machine-specific marks. Usage is counted
-          here after this run's removal CANDIDATES, which is the approve-everything reading
-          the review has not happened yet to improve on; marks count as usage always, since
-          they are never removal candidates. The article counts after the APPROVED removals,
-          which only exist once the review has returned, so this reading decides only whether
-          the file is offered — `_withhold_repositories_still_in_use` re-counts against the
-          real answers and is what decides whether it is deleted.
-        - a repository the two machines disagree about becomes a question only when it is
-          also one this run would write for an approved package (`PKG-FR-REPO-CONFLICT`), the
-          same gate `flatpak_sync._capture_remote_conflicts` applies. Every other differing
-          file is overwritten silently under D-37, so asking about it would put a decision to
-          the user that changes nothing.
+          here after this run's removal CANDIDATES, which withholds every file with a user
+          this run does not even propose to remove; marks count as usage always, since they
+          are never removal candidates. Whether the surviving candidates' removals were
+          APPROVED is the second round's count.
+        - a repository the two machines disagree about is worth READING both copies of only
+          where this run might write it, which is what the proposed installs decide (the same
+          gate `flatpak_sync._capture_remote_conflicts` applies). Whether it becomes a
+          question is the second round's, against the approved installs
+          (`PKG-FR-REPO-CONFLICT`). Every other differing file is overwritten silently under
+          D-37, so asking about it would put a decision to the user that changes nothing.
 
         This is also where the collaborators that need the full `/etc/apt` picture are
         assembled, since every fact they decide over exists by the end of it.
@@ -568,50 +576,54 @@ class AptSyncJob(PackageSyncJob):
 
     @override
     def _build_review_groups(self, diffs: Sequence[ItemDiff]) -> tuple[ReviewGroup, ...]:
-        """Carve apt's two non-standard screens out of the ordinary decision groups.
+        """Carve apt's non-standard screens out of the ordinary decision groups — the FIRST
+        round's share of them.
 
-        Repository and pin DELETIONS (ADR-020 D-07) become
-        `REPO_REMOVAL_REVIEW_ACTION` groups: the same decision screen starting at skip-once, but
-        offered only two answers because a permanent machine-local mark on a file whose
-        purpose is to feed packages would silently change where those packages come from
-        forever. Manual-collateral diffs (D-30) become a `COLLATERAL_REVIEW_ACTION` group
-        whose entries take the three-way go-ahead / keep-the-package / stop-the-sync
-        resolution.
+        Pin DELETIONS (ADR-020 D-07) become a `REPO_REMOVAL_REVIEW_ACTION` group: the same
+        decision screen starting at skip-once, but offered only two answers because a
+        permanent machine-local mark on a file whose purpose is to feed packages would
+        silently change where those packages come from forever. Manual-collateral diffs
+        (D-30) become a `COLLATERAL_REVIEW_ACTION` group whose entries take the three-way
+        go-ahead / keep-the-package / stop-the-sync resolution.
 
         Both trail the base groups — packages and apt config — so the user sees the bulk of
         the diff before being asked to resolve anything, and collateral comes last because
         it is the only screen that can abort the run.
+
+        The two `/etc/apt` questions whose article scopes them to APPROVED work — a
+        repository DELETION and a repository CONFLICT — are absent here and built in
+        `plan_second_round`. A repository removal diff is still carved out of the ordinary
+        groups, so it never reaches a checkbox screen on the way past.
 
         The unreproducible carve-out is gone (D-18: that concern moved to
         `manual_installs_sync`).
         """
         collateral = [diff for diff in diffs if is_collateral_diff(diff)]
         removals = [diff for diff in diffs if is_repo_removal_diff(diff)]
-        if not collateral and not removals and not self._conflicts:
+        if not collateral and not removals:
             return super()._build_review_groups(diffs)
 
         carved_ids = {diff.item_id for diff in (*collateral, *removals)}
         rest = [diff for diff in diffs if diff.item_id not in carved_ids]
         groups = list(super()._build_review_groups(rest))
-        if self._conflicts:
-            groups.append(
-                ReviewGroup(
-                    manager=self.manager_id,
-                    action=REPO_CONFLICT_REVIEW_ACTION,
-                    title=f"Resolve {self.manager_id} repository conflicts",
-                    entries=tuple(
-                        ReviewEntry(
-                            item_id=f"{CONFLICT_ID_PREFIX}{filename}",
-                            label=filename,
-                            action_label="overwrite",
-                            detail=build_repo_conflict_detail(filename, conflict.packages, self.machines),
-                            versions=(conflict.target_version, conflict.source_version),
-                        )
-                        for filename, conflict in sorted(self._conflicts.items())
-                    ),
-                )
-            )
+        groups.extend(self._repo_removal_groups(removals, ItemClass.APT_PIN))
+        if collateral:
+            groups.append(self._collateral_group(collateral))
+        return tuple(groups)
+
+    def _repo_removal_groups(self, removals: Sequence[ItemDiff], *classes: ItemClass) -> list[ReviewGroup]:
+        """The two-answer deletion screens for the named `/etc/apt` classes, in
+        `REPO_REMOVAL_VERBS` order.
+
+        One sentinel, one group per class: repositories and pins reach the user as separate
+        screens with separate titles, and the two are built in different review rounds — a
+        pin's deletion depends on nothing anyone answers, a repository's depends on this
+        run's approved removals (`PKG-FR-REPO-DELETE`).
+        """
+        groups: list[ReviewGroup] = []
         for item_class, words in REPO_REMOVAL_VERBS.items():
+            if item_class not in classes:
+                continue
             entries = [diff for diff in removals if diff.item_class is item_class]
             if not entries:
                 continue
@@ -634,25 +646,148 @@ class AptSyncJob(PackageSyncJob):
                     ),
                 )
             )
-        if collateral:
-            groups.append(
-                ReviewGroup(
-                    manager=self.manager_id,
-                    action=COLLATERAL_REVIEW_ACTION,
-                    title=build_collateral_group_title(self.machines, self.manager_id),
-                    entries=tuple(
-                        ReviewEntry(
-                            item_id=diff.item_id,
-                            label=diff.label,
-                            action_label=diff.act_word or "resolve",
-                            detail=diff.detail,
-                            answer_hints=diff.answer_hints,
-                        )
-                        for diff in collateral
-                    ),
+        return groups
+
+    def _collateral_group(self, collateral: Sequence[ItemDiff]) -> ReviewGroup:
+        """One `COLLATERAL_REVIEW_ACTION` screen over the given manual-collateral diffs."""
+        return ReviewGroup(
+            manager=self.manager_id,
+            action=COLLATERAL_REVIEW_ACTION,
+            title=build_collateral_group_title(self.machines, self.manager_id),
+            entries=tuple(
+                ReviewEntry(
+                    item_id=diff.item_id,
+                    label=diff.label,
+                    action_label=diff.act_word or "resolve",
+                    detail=diff.detail,
+                    answer_hints=diff.answer_hints,
                 )
-            )
-        return tuple(groups)
+                for diff in collateral
+            ),
+        )
+
+    def _conflict_group(self) -> ReviewGroup:
+        """The two-answer overwrite screen for the repository files still in conflict."""
+        return ReviewGroup(
+            manager=self.manager_id,
+            action=REPO_CONFLICT_REVIEW_ACTION,
+            title=f"Resolve {self.manager_id} repository conflicts",
+            entries=tuple(
+                ReviewEntry(
+                    item_id=f"{CONFLICT_ID_PREFIX}{filename}",
+                    label=filename,
+                    action_label="overwrite",
+                    detail=build_repo_conflict_detail(filename, conflict.packages, self.machines),
+                    versions=(conflict.target_version, conflict.source_version),
+                )
+                for filename, conflict in sorted(self._conflicts.items())
+            ),
+        )
+
+    # -- the second review round --------------------------------------------------------
+
+    @override
+    async def plan_second_round(self, plan: PackagePlan, outcome: ReviewOutcome) -> PackagePlan:
+        """apt's three questions about the work this run APPROVED, put once the first round's
+        answers exist and before anything is written.
+
+        Each of them is an article scoping its question to approvals rather than to
+        candidates, which no plan-time computation can hold:
+
+        - `PKG-FR-REPO-DELETE`: a repository the target still gets software from "MUST NOT be
+          raised as an item at all", counted after this run's APPROVED removals. Its item is
+          dropped here — not merely left unapplied — so the user is never offered a deletion
+          the run would then withhold, and the log says what keeps the file.
+        - `PKG-FR-REPO-CONFLICT`: the overwrite question is "raised only for a repository this
+          run writes because an approved package comes from it". A file whose only install was
+          declined is written by nothing, so there is nothing to ask about.
+        - `PKG-FR-COLLATERAL-MARKED`: a mark recorded earlier in the same run counts, so a
+          package the user has just marked as the target's own gets the collateral question
+          its plan-time exemption as a removal candidate could not produce
+          (`Collateral.after_marks`).
+
+        The first round's manual-collateral answers are resolved before any of it, because
+        one of them can withdraw an approved removal (`Collateral.resolve`): counting a
+        repository's users against a removal a kept package has already cancelled would raise
+        the very item this round exists to withhold. `accept_review` resolves again over the
+        final decisions — the same computation, and idempotent — since a collateral question
+        put in THIS round can withdraw a removal after it.
+
+        Reads only — one `apt-get --dry-run` for the collateral pass, and nothing at all for
+        the two `/etc/apt` questions, whose facts were captured while planning. Nothing here
+        may write: the second round is still a review (`PKG-FR-REVIEW-FIRST`).
+        """
+        work = self._work
+        decisions = work.collateral.resolve(plan.diffs, outcome).decisions
+        diffs = list(plan.diffs)
+        groups: list[ReviewGroup] = []
+
+        kept = self._repositories_still_in_use(plan.diffs, decisions)
+        if kept:
+            withheld_ids = {f"{APT_SOURCE_ID_PREFIX}{filename}" for filename in kept}
+            diffs = [diff for diff in diffs if diff.item_id not in withheld_ids]
+        deletions = [diff for diff in diffs if is_repo_removal_diff(diff) and diff.item_class is ItemClass.APT_SOURCE]
+        groups.extend(self._repo_removal_groups(deletions, ItemClass.APT_SOURCE))
+
+        written = self._files_an_approval_would_write(
+            [diff for diff in plan.diffs if decisions.get(diff.item_id) == Decision.APPLY], work.origins
+        )
+        self._conflicts = {filename: conflict for filename, conflict in self._conflicts.items() if filename in written}
+        if self._conflicts:
+            groups.append(self._conflict_group())
+
+        newly_protected = await work.collateral.after_marks(plan.diffs, decisions)
+        if newly_protected:
+            diffs.extend(newly_protected)
+            groups.append(self._collateral_group(newly_protected))
+
+        return PackagePlan(manager=plan.manager, diffs=tuple(diffs), groups=tuple(groups))
+
+    def _repositories_still_in_use(
+        self, diffs: Sequence[ItemDiff], decisions: Mapping[str, Decision]
+    ) -> dict[str, list[str]]:
+        """`{filename: what still installs from it}` for the repository deletions this run
+        must not raise, counted after the APPROVED removals (`PKG-FR-REPO-DELETE`).
+
+        The plan-time narrowing already withheld every file with a user this run does not even
+        propose to remove. What it could not know is which of the proposed removals the user
+        would actually approve: a file whose last user's removal is declined is a file the
+        target still installs from, and deleting it would leave an installed package with no
+        origin — the outcome the article forbids in the strongest terms it uses about
+        repositories.
+
+        Counted against the decisions rather than a fresh read of the machine, for a reason
+        that is apt's rather than a shortcut: the repository unit converges BEFORE the package
+        removals do, so a read taken at deletion time would still see every package the run is
+        about to remove. `flatpak_sync` counts against the real machine because its remote
+        deletion runs after its converge loop; the decisions are the same fact, known earlier.
+        A removal that is approved and then FAILS is outside the article, which counts
+        approved removals.
+
+        The log line is the plan-time withholding's own, because it is the same fact: a file
+        the review never mentions reaches the user nowhere else.
+        """
+        kept: dict[str, list[str]] = {}
+        for diff in diffs:
+            if diff.item_class is not ItemClass.APT_SOURCE or diff.action is not DiffAction.REMOVE:
+                continue
+            if diff.item_id == METADATA_REFRESH_ITEM_ID:
+                continue
+            filename = diff.item_id.removeprefix(APT_SOURCE_ID_PREFIX)
+            keeping = [
+                name
+                for name in self._repo_users.get(filename, [])
+                if decisions.get(f"{APT_PACKAGE_ID_PREFIX}{name}") != Decision.APPLY
+            ]
+            if keeping:
+                kept[filename] = keeping
+                self._log(
+                    Host.TARGET,
+                    LogLevel.FULL,
+                    f"keeping repository {filename}: {self.machines.target} still installs "
+                    f"{', '.join(keeping)} from it, so its deletion is not offered",
+                )
+        return kept
 
     # -- review -> work -----------------------------------------------------------------
 
@@ -684,11 +819,12 @@ class AptSyncJob(PackageSyncJob):
         packages that cause that collateral, so a declined collateral cleanly leaves them
         unapproved rather than failing them at the guard.
 
-        A repository deletion is then re-counted against those final answers
-        (`_withhold_repositories_still_in_use`), which is where `PKG-FR-REPO-DELETE`'s
-        "after this run's approved removals" is actually enforced. It runs after the
-        collateral resolution on purpose: a removal a declined collateral withdrew is a
-        package that stays, and so a repository that must stay with it.
+        That resolution can withdraw a removal the second round already counted a repository
+        against (`plan_second_round`), which is the one direction the ordering can go wrong:
+        the repository is offered, its last user's removal is then cancelled by a collateral
+        answer, and the file would go with an installed package still pointing at it. The
+        recount below is the same one, run over the FINAL decisions, and it takes the
+        approval back rather than reopening a question the review has closed.
         """
         work = self._work
         outcome = work.collateral.resolve(plan.diffs, outcome)
@@ -723,28 +859,20 @@ class AptSyncJob(PackageSyncJob):
         super().accept_review(plan, outcome)
 
     def _withhold_repositories_still_in_use(self, plan: PackagePlan, outcome: ReviewOutcome) -> ReviewOutcome:
-        """Take back the approval of any repository deletion the target still installs
-        something from, once this run's REAL removal answers are known (`PKG-FR-REPO-DELETE`).
+        """The backstop behind `plan_second_round`'s count: take back the approval of any
+        repository deletion the target still installs something from (`PKG-FR-REPO-DELETE`).
 
-        The plan-time narrowing offers a file whose only users are this run's removal
-        CANDIDATES, which is the only reading available before the review — and it is the
-        right one, because that is exactly the case the article means to allow: the packages
-        and the repository they came from go together in one review. What it cannot know is
-        that the user may approve the file's deletion and decline the package's removal, and
-        the file's deletion would then leave an installed package with no origin — the
-        outcome the article forbids in the strongest terms it uses about repositories.
-
-        The recount is against the decisions rather than against a fresh read of the machine,
-        for a reason that is apt's rather than a shortcut: the repository unit converges
-        BEFORE the package removals do, so a read taken at deletion time would still see
-        every package the run is about to remove. `flatpak_sync` counts against the real
-        machine because its remote deletion runs after its converge loop; the decisions are
-        the same fact, known earlier. A removal that is approved and then FAILS is outside
-        the article, which counts approved removals.
+        The deletion is offered in the second round, over decisions that already carry the
+        first round's collateral resolution, so the ordinary paths never reach this. What can
+        still reach it is a collateral question put in that SAME round: keeping the package
+        withdraws the removals that cause it (`Collateral.resolve`), and one of those may be
+        the removal a repository was counted against moments earlier on the same screen.
+        A deletion this job never offered cannot be approved by the review, but a
+        hand-assembled `ReviewOutcome` can carry one, and the machine is protected either way.
 
         Withdrawn rather than failed: nothing went wrong, and the file is offered again next
-        run. The log line names the file and what keeps it, in the words the plan-time
-        withholding uses, because a taken-back approval reaches the user nowhere else.
+        run. The log line names the file and what keeps it, because an approval taken back
+        reaches the user nowhere else.
         """
         approved_deletions = [
             diff.item_id.removeprefix(APT_SOURCE_ID_PREFIX)

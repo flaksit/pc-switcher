@@ -531,10 +531,13 @@ SNAP_LIST_TARGET_MIXED_HOLDS = (
     + "zeta      1.0        60     latest/stable   pub✓         held\n"
 )
 
-# The same plan plus a revision/channel CHANGE, so every action snap can review — install,
-# change, remove, hold and unhold — is present at once.
+# The same plan plus a revision/channel CHANGE and a hold that rides its own snap's install,
+# so every shape snap can review — install, change, remove, hold, unhold, and a hold merged
+# into the question of the snap it belongs to — is present at once.
 SNAP_LIST_SOURCE_EVERY_ACTION = (
-    SNAP_LIST_SOURCE_MIXED_HOLDS + "beta      2.0        20     latest/edge     pub✓         -\n"
+    SNAP_LIST_SOURCE_MIXED_HOLDS
+    + "beta      2.0        20     latest/edge     pub✓         -\n"
+    + "theta     3.0        30     latest/stable   pub✓         held\n"
 )
 SNAP_LIST_TARGET_EVERY_ACTION = (
     SNAP_LIST_TARGET_MIXED_HOLDS + "beta      1.5        15     latest/stable   pub✓         -\n"
@@ -752,7 +755,8 @@ class TestHoldReviewVerbs:
 
 class TestAFullSnapReview:
     """One plan carrying every action snap reviews — install, change, remove, hold and
-    unhold — used for the claims that are about the review as a whole.
+    unhold — plus a hold merged into the install of the snap it belongs to, used for the
+    claims that are about the review as a whole.
     """
 
     @staticmethod
@@ -779,7 +783,7 @@ class TestAFullSnapReview:
 
     @pytest.mark.asyncio
     async def test_no_item_or_group_ever_asks_where_a_snap_comes_from(self) -> None:
-        """E5, `PKG-NG-SNAP-ORIGIN` — one store serves the device and snapd pins name ->
+        """E5 — `PKG-NG-SNAP-ORIGIN`: one store serves the device and snapd pins name ->
         publisher itself, so snap has no store, publisher, remote or key for the user to
         decide about. Nothing but this test stands between the article and a future change
         that adds an origin screen by analogy with apt or flatpak.
@@ -793,9 +797,17 @@ class TestAFullSnapReview:
             ("snap:delta", DiffAction.REMOVE),
             ("snap:hold:epsilon", DiffAction.INSTALL),
             ("snap:hold:zeta", DiffAction.REMOVE),
+            ("snap:theta", DiffAction.INSTALL),
+            ("snap:hold:theta", DiffAction.INSTALL),
         }
 
         assert {d.item_class for d in plan.diffs} == {ItemClass.SNAP, ItemClass.SNAP_HOLD}
+        entries = {entry.item_id: entry for group in plan.groups for entry in group.entries}
+        # `theta`'s hold rides its install, so the sweep also covers the sentence the merged
+        # question composes rather than only the rows built one diff at a time.
+        assert "snap:hold:theta" not in entries
+        assert "holding its refreshes" in (entries["snap:theta"].detail or "")
+
         origin_words = ("store", "publisher", "remote", "key", "vendor", "origin")
         for group in plan.groups:
             text = " ".join(

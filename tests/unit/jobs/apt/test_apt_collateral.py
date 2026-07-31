@@ -399,8 +399,10 @@ class TestASkippedRemovalKeepsItsProtectionAtTheGuard:
     candidate exempt from its own batch can still be carried off by ANOTHER approved
     removal's cascade, and the tool refuses that transaction instead of asking.
 
-    Both tests below assert the refusal. The day the gap closes — one `apt-get --dry-run` per
-    candidate on every run with removals — they become assertions that a question was put.
+    The first test asserts that refusal. The day the gap closes — one `apt-get --dry-run` per
+    candidate on every run with removals — it becomes an assertion that a question was put,
+    which is what the two below it already are: a candidate the user MARKED as the target's
+    own is no longer a candidate, and the second round asks about it (`after_marks`).
     """
 
     @staticmethod
@@ -448,20 +450,40 @@ class TestASkippedRemovalKeepsItsProtectionAtTheGuard:
 
     @pytest.mark.asyncio
     async def test_a_mark_made_in_this_same_review_protects_its_package_from_the_cascade(self) -> None:
-        """D46 — "never offer again" answered minutes earlier counts from that moment: the
-        guard runs after the review, so `pkg-y`'s mark refuses `pkg-x`'s transaction.
+        """D46 — "never offer again" answered minutes earlier counts from that moment: keeping
+        `pkg-y` leaves `pkg-x`'s removal unapplied, so nothing takes the marked package, and
+        the run reports no failure — the answer withdrew the change rather than breaking it.
         """
         context, _source, target = self._context()
         job = AptSyncJob(context)
         install_reviewer(job, {"apt:package:pkg-x": Decision.APPLY, "apt:package:pkg-y": Decision.SKIP_ALWAYS})
 
-        with pytest.raises(PackageItemFailures) as exc_info:
-            await job.execute()
+        await job.execute()
 
-        failures = {diff.item_id: message for diff, message in exc_info.value.failures}
-        assert set(failures) == {"apt:package:pkg-x"}
-        assert "pkg-y" in failures["apt:package:pkg-x"]
         assert not any("sudo" in cmd and "apt-get remove" in cmd for cmd in all_calls(target))
+
+    @pytest.mark.asyncio
+    async def test_the_question_names_the_mark_given_earlier_in_the_same_review(self) -> None:
+        """D47 — the mark counts as a QUESTION and not only as a guard: `pkg-y` was exempt from
+        the plan-time removal batch, so the second round is the only place it can be asked
+        about, and the detail says the package was marked as the target's own in this review.
+        """
+        context, _source, _target = self._context()
+        job = AptSyncJob(context)
+        reviewer = CountingReviewer({"apt:package:pkg-x": Decision.APPLY, "apt:package:pkg-y": Decision.SKIP_ALWAYS})
+        job.context = dataclasses.replace(job.context, reviewer=reviewer)
+
+        await job.execute()
+
+        assert len(reviewer.calls) == 2, "the question exists only once the marks do"
+        entries = [entry for group in reviewer.calls[1] for entry in group.entries]
+        assert [group.action for group in reviewer.calls[1]] == [COLLATERAL_REVIEW_ACTION]
+        assert [entry.label for entry in entries] == ["pkg-y"]
+        assert entries[0].detail == (
+            "Removing pkg-x on target-host would remove pkg-y\n"
+            "apt on target-host has pkg-y marked as manually installed, and it was marked as "
+            "target-host's own earlier in this review — either ground alone would protect it."
+        )
 
 
 class TestTheAnswersTheItemComposes:

@@ -16,6 +16,10 @@ review-before-any-change ordering checkable and testable per job:
   calls — `filter_inert` (`packages/state.py`) on the way in, `_drop_inert_diffs` on the
   way out for identities no input item carries (`apt:hold:`, `snap:hold:`), and
   `_build_review_groups` at the end. Every implementation issues READ commands only.
+- `plan_second_round()` is the seam for a question an article scopes to APPROVED work: it
+  runs after the first round's answers exist and before anything is written, and returns
+  the run's final item set plus the groups of a second review round. No-op on the base;
+  only `apt_sync` has such questions today.
 - `accept_review()` stores this job's plan plus the outcome its own review returned, so
   `apply()` and the apt guards read a consistent pair. It is also where a block-state item
   that rode its software's question takes that software's decision
@@ -109,7 +113,12 @@ class PackagePlan:
 
     `groups` are pre-built `ReviewGroup`s (one per action, removals in their own group,
     per D-07/D-24) so `execute()` passes them straight to the reviewer without re-deriving
-    them.
+    them — the FIRST round's groups, since a question scoped to approved work has no
+    answers to be built from yet.
+
+    `plan_second_round()` returns the same shape with the two halves read differently: the
+    run's FINAL item set as `diffs` (an item the answers withdrew is gone from it, one the
+    answers brought into being is in it), and the SECOND round's groups alone.
     """
 
     manager: str
@@ -245,6 +254,22 @@ _BLOCK_RIDER_CLAUSE: dict[tuple[ItemClass, DiffAction], str] = {
 # The clause for a freeze block whose software is leaving the target: nothing is registered,
 # because there would be nothing on that machine to freeze.
 _FREEZE_BLOCK_DROPPED_CLAUSE = "{target} is left holding nothing for it"
+
+
+def _merge_rounds(first: ReviewOutcome, second: ReviewOutcome) -> ReviewOutcome:
+    """One outcome from a job's two review rounds.
+
+    The second round's answers win on a shared id, which never arises today — a question is
+    put in exactly one round — but a later id decided twice means the later answer is the
+    user's current one. Interactivity is the AND: a round nobody answered leaves its items
+    undecided, and `_record_permanent_skips` must not write a mark off that.
+    """
+    return ReviewOutcome(
+        decisions={**first.decisions, **second.decisions},
+        was_interactive=first.was_interactive and second.was_interactive,
+        snippets={**first.snippets, **second.snippets},
+        unresolved=(*first.unresolved, *second.unresolved),
+    )
 
 
 def _with_rider_clauses(detail: str | None, clauses: Sequence[str]) -> str | None:
@@ -516,6 +541,33 @@ class PackageSyncJob(SyncJob):
         return tuple(groups)
 
     # -- plan() / accept_review() / apply() / execute() -------------------------------
+
+    async def plan_second_round(self, plan: PackagePlan, outcome: ReviewOutcome) -> PackagePlan:
+        """Hook: the questions this job can only put once the first round's answers exist.
+
+        Returns the run's FINAL item set as `diffs` and the SECOND round's groups as
+        `groups` — nothing on the base, since only `apt_sync` has such a question today.
+        `execute()` puts those groups to the same reviewer immediately after the first round
+        returns and merges the two answer sets, so both rounds precede every change this job
+        makes (`PKG-FR-REVIEW-FIRST`, `PKG-FR-CONSENT-BEFORE-CHANGE`).
+
+        It exists because an article can scope its question to the work this run APPROVES,
+        which is a fact no plan-time computation holds: `PKG-FR-REPO-CONFLICT` raises its
+        question "only for a repository this run writes because an approved package comes
+        from it", `PKG-FR-REPO-DELETE` counts a repository's users "after this run's approved
+        removals" and forbids raising the item at all while any remain, and
+        `PKG-FR-COLLATERAL-MARKED` requires a mark recorded earlier in the same run to count.
+        Building every item before any answer exists is what made those three questions
+        approximations of what their articles ask for.
+
+        `PKG-FR-BATCHED` is what licenses the second round: the questions still come one
+        after another with no work between them — an implementation may issue READS here,
+        never a change — and each recurring kind of decision is still settled in one pass.
+        `PKG-FR-ASK-AGAIN` is a different permission for a different case, asking after the
+        target has already been changed, which is `LateCollateral`'s round rather than this
+        one.
+        """
+        return PackagePlan(manager=plan.manager, diffs=plan.diffs, groups=())
 
     def accept_review(self, plan: PackagePlan, outcome: ReviewOutcome) -> None:
         """Store this job's plan plus the outcome its own review returned, with each riding
@@ -805,11 +857,16 @@ class PackageSyncJob(SyncJob):
         """The `SyncJob` entry point the orchestrator's sequential job loop calls.
 
         Self-contained (D-24): plan this job's diffs, review its own groups through the
-        injected `JobContext.reviewer`, accept the outcome, run the `after_review()` hook
-        (the seam where `manual_installs_sync` pushes its snippet registry, D-23), then
-        apply. No component outside the job owns its review, and no fallback applies diffs
-        that never came back from one — a missing reviewer fails loudly here rather than
-        silently skipping the review and converging unreviewed diffs (T-02-38).
+        injected `JobContext.reviewer`, put the second round `plan_second_round()` builds out
+        of those answers, accept the merged outcome, run the `after_review()` hook (the seam
+        where `manual_installs_sync` pushes its snippet registry, D-23), then apply. No
+        component outside the job owns its review, and no fallback applies diffs that never
+        came back from one — a missing reviewer fails loudly here rather than silently
+        skipping the review and converging unreviewed diffs (T-02-38).
+
+        Both rounds run here rather than inside a job, so the plan/review/apply order has one
+        definition: every question precedes every change, and the second round's own groups
+        are reviewed through the same injected reviewer as the first's.
 
         A `plan()` failure propagates unchanged, so the orchestrator's per-job exception
         handling attributes it to this job's own `JobResult`.
@@ -817,11 +874,13 @@ class PackageSyncJob(SyncJob):
         A non-interactive run whose review held something to DECIDE raises `JobSkipped`:
         D-26 forces every such item to SKIP_ONCE with nobody present to answer, so
         continuing would converge nothing and report SUCCESS. It is raised before any
-        mutating command, as `JobSkipped` requires. What counts is a group that asks
-        (`review.asks_for_a_decision`), not a group that prints: a plan of nothing but
-        report-only findings — two machines differing only in versions — was never
-        answerable in either direction, so nobody's absence changed its outcome and it
-        stays SUCCESS, exactly as an empty plan does (`PKG-FR-NO-TERMINAL`).
+        mutating command, as `JobSkipped` requires, and before the second round is put:
+        asking a screen nobody can answer would print the same items twice for nothing.
+        What counts is a group that asks (`review.asks_for_a_decision`), in EITHER round,
+        not a group that prints: a plan of nothing but report-only findings — two machines
+        differing only in versions — was never answerable in either direction, so nobody's
+        absence changed its outcome and it stays SUCCESS, exactly as an empty plan does
+        (`PKG-FR-NO-TERMINAL`).
 
         `after_review()` runs only when a human answered (`PKG-FR-NO-TERMINAL`: a
         non-interactive run transfers no registry). The two SUCCESS cases above are
@@ -836,11 +895,16 @@ class PackageSyncJob(SyncJob):
         )
         plan = await self.plan()
         outcome = await self.context.reviewer.review(plan.groups)
-        if any(asks_for_a_decision(group) for group in plan.groups) and not outcome.was_interactive:
+        second = await self.plan_second_round(plan, outcome)
+        groups = (*plan.groups, *second.groups)
+        if any(asks_for_a_decision(group) for group in groups) and not outcome.was_interactive:
             raise JobSkipped(
                 self.name,
                 f"non-interactive run left every {self.manager_id} review item undecided",
             )
+        if second.groups:
+            outcome = _merge_rounds(outcome, await self.context.reviewer.review(second.groups))
+        plan = PackagePlan(manager=plan.manager, diffs=second.diffs, groups=groups)
         self.accept_review(plan, outcome)
         if outcome.was_interactive:
             await self.after_review()

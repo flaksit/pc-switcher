@@ -64,12 +64,13 @@ trust configuration (`_FIXTURE_FLATPAK_APP`).
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import shlex
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Literal
 from uuid import uuid4
 
@@ -335,11 +336,15 @@ async def _restore_auto_marked_package(executor: BashLoginRemoteExecutor, name: 
         print(f"[cleanup] failed to mark {name} auto again on pc2: {result.stderr}")
 
 
-def _package_sync_test_config(**enabled_jobs: bool) -> str:
+def _package_sync_test_config(*, extra_sections: str = "", **enabled_jobs: bool) -> str:
     """Minimal test config enabling exactly the given `sync_jobs` keys (e.g.
     `apt_sync=True, snap_sync=True`). `Configuration.sync_jobs` is iterated as-is from
     the YAML dict (config.py), with no schema-default injection, so a job name absent
     here is never instantiated -- no explicit `false` entries needed.
+
+    `extra_sections` is appended verbatim: a job whose own config section is not optional
+    (`folder_sync`, which needs its `folders` list) carries it there rather than forcing
+    every caller to hand-write a whole config.
     """
     jobs_block = "\n".join(f"  {name}: true" for name, enabled in enabled_jobs.items() if enabled)
     return (
@@ -359,14 +364,24 @@ def _package_sync_test_config(**enabled_jobs: bool) -> str:
         '    - "@"\n'
         '    - "@home"\n'
         "  keep_recent: 2\n"
+        f"{extra_sections}"
     )
 
 
-async def _write_package_sync_config(executor: BashLoginRemoteExecutor, **enabled_jobs: bool) -> None:
+def _folder_sync_section(folder_path: str) -> str:
+    """A `folder_sync` config section mirroring exactly `folder_path`, with no central
+    filter file (the schema makes `filter_file` optional).
+    """
+    return f"folder_sync:\n  folders:\n    - path: {folder_path}\n      enabled: true\n"
+
+
+async def _write_package_sync_config(
+    executor: BashLoginRemoteExecutor, *, extra_sections: str = "", **enabled_jobs: bool
+) -> None:
     """Write a package-sync test config enabling exactly `enabled_jobs` to `executor`
     (always the machine acting as source for the sync under test).
     """
-    config = _package_sync_test_config(**enabled_jobs)
+    config = _package_sync_test_config(extra_sections=extra_sections, **enabled_jobs)
     result = await executor.run_command(
         f"mkdir --parents ~/.config/pc-switcher"
         f" && cat > ~/.config/pc-switcher/config.yaml << 'CONF_EOF'\n{config}CONF_EOF",
@@ -449,6 +464,24 @@ _CONTINUE_TEST_MARKERS = (
 # this is what fails BEFORE the three jobs whose work the test then checks survived.
 _WHOLE_RUN_FAILURE_MARKER = f"{_CONTINUE_TEST_MARKER_ROOT}/pcswitcher-it-whole-run-fail"
 _WHOLE_RUN_FAILURE_MESSAGE = "deliberate whole-run integration-test failure"
+
+
+# The four directories `manual_installs_sync` scans one level deep, restated rather than
+# imported (the same rule this module's snap/flatpak parsers follow): the claim is about
+# what a real machine's own `/usr/local` and `/opt` contain, so a test agreeing with
+# whatever the shipped constant currently says would assert nothing.
+_UNOWNED_SCAN_ROOTS = ("/usr/local", "/opt", "/usr/local/bin", "/usr/local/lib")
+
+# What a run with nobody to ask writes about each item it could not ask about
+# (`packages.review._warn_every_item_unasked`). It is the only place a run writes down its
+# WHOLE finding set, one line per item, which is what makes it countable.
+_UNASKED_ITEM_MARKER = "not asked, declined for this run (no TTY): "
+
+# How many unreproducible findings a user can still answer one at a time. Not a measured
+# figure — the criterion says "few enough to review by hand", and this is the number past
+# which that stops being true. It is deliberately loose: the test's subject is an order of
+# magnitude, not an exact inventory.
+_HAND_REVIEWABLE_FINDING_LIMIT = 25
 
 
 def _unowned_item_id(path: str) -> str:
@@ -618,6 +651,178 @@ async def _snap_notes(executor: BashLoginRemoteExecutor, name: str) -> set[str]:
     """
     result = await executor.run_command("snap list --all", login_shell=False, timeout=20.0)
     return parse_snap_list_notes(result.stdout).get(name, set())
+
+
+def parse_snap_saved_rows(output: str) -> list[tuple[str, str]]:
+    """Parse `snap saved` into `(set_id, snap_name)` pairs by HEADER column names, the same
+    discipline as the `snap list` parsers above (never fixed column offsets).
+
+    `snap saved` prints `No snapshots found.` and no header on a machine holding none,
+    which parses to an empty list rather than a crash.
+    """
+    lines = [line for line in output.splitlines() if line.strip()]
+    if not lines:
+        return []
+    header = lines[0].split()
+    try:
+        set_idx = header.index("Set")
+        snap_idx = header.index("Snap")
+    except ValueError:
+        return []
+    max_idx = max(set_idx, snap_idx)
+    rows: list[tuple[str, str]] = []
+    for line in lines[1:]:
+        fields = line.split()
+        if len(fields) <= max_idx:
+            continue
+        rows.append((fields[set_idx], fields[snap_idx]))
+    return rows
+
+
+async def _snap_saved_rows(executor: BashLoginRemoteExecutor) -> list[tuple[str, str]]:
+    """Every `(set_id, snap_name)` snapshot pair snapd currently holds on `executor`'s
+    machine.
+
+    Under sudo, like every other snapd read in this module: the snapshot snapd takes when a
+    snap is removed covers system data as well as the invoking user's, and an unprivileged
+    listing is not the whole picture of what the machine holds.
+    """
+    result = await executor.run_command("sudo snap saved", login_shell=False, timeout=20.0)
+    return parse_snap_saved_rows(result.stdout)
+
+
+async def _snap_revision(executor: BashLoginRemoteExecutor, name: str) -> str | None:
+    """The revision `name` is active at on `executor`'s machine, or None when it is absent."""
+    result = await executor.run_command("snap list --all", login_shell=False, timeout=20.0)
+    return parse_snap_list_names_revisions(result.stdout).get(name)
+
+
+async def _restore_snap(executor: BashLoginRemoteExecutor, name: str, revision: str) -> None:
+    """Idempotently put `name` back at `revision` on `executor`'s machine, whether the test
+    removed it or moved it: install when absent, refresh when present at another revision.
+
+    Same shape as the snap restore the whole-run tests already use, in one command so the
+    two cases cost one SSH round trip rather than a read plus a write.
+    """
+    quoted = shlex.quote(name)
+    rev = shlex.quote(revision)
+    result = await executor.run_command(
+        f"sudo snap install --revision={rev} {quoted} || sudo snap refresh --revision={rev} {quoted}",
+        login_shell=False,
+        timeout=300.0,
+    )
+    if not result.success:
+        print(f"[cleanup] failed to restore snap {name} at revision {revision}: {result.stderr}")
+
+
+# A sideloaded snap needs a base its machine already has, or snapd downloads one. Read off
+# the machine rather than hardcoded (`_installed_base_snap`): which core* snap a stock
+# Ubuntu 24.04 carries depends on what else is installed, and the preference order below
+# only decides which of the present ones to declare.
+_SIDELOAD_BASE_PREFERENCE = ("core24", "core22", "core20", "core18", "core16", "core")
+
+
+async def _installed_base_snap(executor: BashLoginRemoteExecutor) -> str:
+    """A base snap already installed on `executor`'s machine, for a sideload's `snap.yaml`."""
+    result = await executor.run_command("snap list --all", login_shell=False, timeout=20.0)
+    installed = set(parse_snap_list_names_revisions(result.stdout))
+    for base in _SIDELOAD_BASE_PREFERENCE:
+        if base in installed:
+            return base
+    raise AssertionError(
+        f"No base snap out of {_SIDELOAD_BASE_PREFERENCE} is installed, so a sideload declaring one would make "
+        f"snapd download it.\n{result.stdout}"
+    )
+
+
+async def _create_sideloaded_snap(executor: BashLoginRemoteExecutor, directory: str, name: str, base: str) -> None:
+    """Install `name` on `executor`'s machine from LOCAL bytes, so `snap list` reports it at
+    an `x`-prefixed revision — the shape `PKG-FR-SNAP-SIDELOAD` puts out of scope.
+
+    `snap try <dir>` rather than `snap pack` + `snap install --dangerous`: it produces the
+    same sideloaded identity from a directory, with no squashfs build in between. The
+    snap declares no apps and no hooks, so there is nothing to confine and nothing to run;
+    `base` is one the machine already holds, so snapd fetches nothing.
+
+    `/var/tmp` rather than `/opt` or `/usr/local`: those two are `manual_installs_sync`'s
+    scan roots, and a directory left there by a failed cleanup would show up as somebody
+    else's finding.
+    """
+    snap_yaml = (
+        f"name: {name}\n"
+        "version: '1.0'\n"
+        "summary: pc-switcher integration-test sideload\n"
+        "description: A snap installed from local bytes, which a sync must leave alone.\n"
+        f"base: {base}\n"
+        "confinement: strict\n"
+        "grade: stable\n"
+    )
+    result = await executor.run_command(
+        f"sudo mkdir --parents {shlex.quote(f'{directory}/meta')} && "
+        f"printf %s {shlex.quote(snap_yaml)} | sudo tee {shlex.quote(f'{directory}/meta/snap.yaml')} > /dev/null && "
+        f"sudo snap try {shlex.quote(directory)}",
+        login_shell=False,
+        timeout=180.0,
+    )
+    assert result.success, (
+        f"`snap try {directory}` failed, so there is no sideloaded snap to test with: {result.stderr}"
+    )
+
+
+async def _remove_sideloaded_snap(executor: BashLoginRemoteExecutor, directory: str, name: str) -> None:
+    """Undo `_create_sideloaded_snap`, unconditionally (`;`, not `&&`) so a setup that
+    failed halfway still has the rest of itself removed.
+    """
+    await executor.run_command(
+        f"sudo snap remove --purge {shlex.quote(name)}; sudo rm --recursive --force {shlex.quote(directory)}",
+        login_shell=False,
+        timeout=180.0,
+    )
+
+
+# snapd's own switch for a machine that must not reach the store (snapd 2.60+). It is what
+# makes ONE snap item fail for a real reason while the rest of the run still lands: an
+# install or a refresh needs the store, a removal does not.
+_SNAP_STORE_OFFLINE_CMD = "sudo snap set system store.access=offline"
+_SNAP_STORE_ONLINE_CMD = "sudo snap unset system store.access"
+
+
+async def _home_dir(executor: BashLoginRemoteExecutor) -> str:
+    """The absolute home directory of the SSH user on `executor`'s machine.
+
+    Read rather than composed from the test's own environment: `snap_sync_exclude_paths()`
+    resolves `~/snap` against the home of the process running the sync, so the folder the
+    boundary test mirrors has to be that same directory.
+    """
+    result = await executor.run_command('printf %s "$HOME"', login_shell=False, timeout=10.0)
+    home = result.stdout.strip()
+    assert result.success and home.startswith("/"), f"could not read $HOME: {result.stdout!r} {result.stderr!r}"
+    return home
+
+
+async def _machine_utc_now(executor: BashLoginRemoteExecutor) -> datetime:
+    """`executor`'s own idea of the current UTC instant.
+
+    The suspension's expiry is computed on each machine's clock, so what it must be
+    compared against is that machine's clock — never this test runner's.
+    """
+    result = await executor.run_command("date --utc +%Y-%m-%dT%H:%M:%SZ", login_shell=False, timeout=10.0)
+    assert result.success, f"could not read the machine's clock: {result.stderr}"
+    return parse_rfc3339_utc(result.stdout)
+
+
+def parse_rfc3339_utc(value: str) -> datetime:
+    """Parse an RFC3339 instant, the shape snapd's `refresh.hold` validator accepts.
+
+    Anything that is not an instant at all — notably snapd's `forever` — raises
+    `AssertionError` naming what was read, rather than the bare `ValueError` a caller
+    reading a machine's own answer cannot interpret.
+    """
+    text = value.strip()
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError as exc:
+        raise AssertionError(f"{text!r} is not an RFC3339 instant: {exc}") from exc
 
 
 async def _apt_holds(executor: BashLoginRemoteExecutor) -> set[str]:
@@ -1051,6 +1256,52 @@ async def _remove_local_repo_package(
     )
 
 
+async def _install_a_hand_downloaded_deb(executor: BashLoginRemoteExecutor) -> str:
+    """On `executor`: build a trivial `.deb` and `dpkg --install` it, the way a user who
+    downloaded a vendor package does. Returns the package name.
+
+    No repository anywhere declares it, so apt reports the INSTALLED version as the whole of
+    that package's version table and names no repository origin for it — the fact
+    `PKG-FR-DEB-OWNERSHIP` and `PKG-FR-MANUAL-SCOPE` turn on, and the one a mocked
+    `apt-cache policy` can only assert about output somebody wrote by hand.
+
+    Deliberately not `_install_from_a_repo_the_target_lacks`: that one publishes its package
+    in a `file:` repository precisely so apt DOES name an origin for it. Here there is no
+    repository at all.
+
+    The package is empty — control metadata only, no files — so installing it changes
+    nothing about the machine beyond dpkg's own records.
+    """
+    uniq = uuid4().hex[:12]
+    name = f"pcswitcher-it-handdeb-{uniq}"
+    control = (
+        f"Package: {name}\nVersion: 1.0\nArchitecture: all\n"
+        "Maintainer: pc-switcher integration tests <nobody@example.invalid>\n"
+        "Description: synthetic hand-downloaded package for pc-switcher integration tests\n"
+    )
+    build = "\n".join(
+        (
+            "set -eu",
+            f"build=$(mktemp --directory)/{name}",
+            'mkdir --parents "$build/DEBIAN"',
+            f'printf %s {shlex.quote(control)} > "$build/DEBIAN/control"',
+            'dpkg-deb --build "$build" "$build.deb" > /dev/null',
+            'sudo dpkg --install "$build.deb"',
+        )
+    )
+    result = await executor.run_command(build, login_shell=False, timeout=120.0)
+    assert result.success, f"Failed to build and install the hand-downloaded .deb on the source: {result.stderr}"
+    return name
+
+
+def _no_candidate_item_id(name: str) -> str:
+    """The `UnreproducibleItem.item_id` an installed package no repository supplies produces
+    (`unreproducible:apt-no-candidate:<name>`), built from the shipped dataclass rather than
+    from a literal so a change to the identity fails here.
+    """
+    return UnreproducibleItem(origin="apt-no-candidate", identifier=name, label=name).item_id
+
+
 async def _create_synthetic_pin(executor: BashLoginRemoteExecutor) -> str:
     """Create a uuid-suffixed `/etc/apt/preferences.d` file the target lacks, and return its
     filename.
@@ -1073,16 +1324,17 @@ async def _create_synthetic_pin(executor: BashLoginRemoteExecutor) -> str:
     return filename
 
 
-async def _take_apt_paths_aside(executor: BashLoginRemoteExecutor, paths: Sequence[str]) -> str:
+async def _take_paths_aside(executor: BashLoginRemoteExecutor, paths: Sequence[str]) -> str:
     """Move whichever of `paths` exist into a fresh backup directory, and return it for
-    `_put_apt_paths_back`.
+    `_put_paths_back`.
 
-    A move, not a captured copy: everything under `/etc/apt` is root-owned and some of it
-    is dpkg-shipped, and moving the file itself is the only restoration that is exact in
-    content, mode, ownership and timestamp without reproducing any of them. The backup sits
-    outside `/etc/apt` so apt never parses it while it is set aside.
+    A move, not a captured copy: the paths this is used on are root-owned and dpkg-shipped
+    (`/etc/apt`) or snapd-managed (`~/snap`), and moving the file itself is the only
+    restoration that is exact in content, mode, ownership and timestamp without reproducing
+    any of them. The backup sits under `/var/tmp`, outside every tree a test hands to apt or
+    to rsync, so nothing reads it while it is set aside.
     """
-    backup_dir = f"/var/tmp/pcswitcher-it-apt-aside-{uuid4().hex[:12]}"
+    backup_dir = f"/var/tmp/pcswitcher-it-aside-{uuid4().hex[:12]}"
     parents = sorted({backup_dir + path.rsplit("/", 1)[0] for path in paths})
     command = " && ".join(
         [f"sudo mkdir --parents {shlex.quote(parent)}" for parent in parents]
@@ -1096,15 +1348,15 @@ async def _take_apt_paths_aside(executor: BashLoginRemoteExecutor, paths: Sequen
     return backup_dir
 
 
-async def _put_apt_paths_back(executor: BashLoginRemoteExecutor, backup_dir: str, paths: Sequence[str]) -> None:
-    """Undo `_take_apt_paths_aside`: each path ends as whatever was there before, present or
+async def _put_paths_back(executor: BashLoginRemoteExecutor, backup_dir: str, paths: Sequence[str]) -> None:
+    """Undo `_take_paths_aside`: each path ends as whatever was there before, present or
     absent.
 
     Every step runs unconditionally (`;`, not `&&`) so a test that failed halfway still
-    leaves the machine's `/etc/apt` as it found it.
+    leaves the machine as it found it.
     """
     steps = [
-        f"sudo rm --force {shlex.quote(path)}; "
+        f"sudo rm --recursive --force {shlex.quote(path)}; "
         f"test ! -e {shlex.quote(backup_dir + path)} || sudo mv {shlex.quote(backup_dir + path)} {shlex.quote(path)}"
         for path in paths
     ]
@@ -2672,6 +2924,147 @@ class TestManualInstallsSyncEndToEnd:
             )
             await pc1_executor.run_command(f"rm --force {registry_relpath}", login_shell=False, timeout=15.0)
 
+    async def test_a_real_hand_downloaded_deb_is_presented_as_needing_a_snippet(
+        self,
+        pc1_executor: BashLoginRemoteExecutor,
+        pc2_executor: BashLoginRemoteExecutor,
+        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
+        pc2_with_pcswitcher: BashLoginRemoteExecutor,
+        reset_pcswitcher_state: None,
+    ) -> None:
+        """G27 — A `.deb` installed by hand on a real machine reaches the review as an item no
+        package manager can install on pc2.
+
+        What only a real apt can establish: a package installed straight from a `.deb` has
+        its INSTALLED version as its own candidate and no repository origin at all, so the
+        detection rests on what apt genuinely prints for such a package rather than on
+        policy output a test author composed. It is not marked manually installed by anything
+        here either — `dpkg --install` is the whole setup — and the scan reads the INSTALLED
+        set, so `apt-mark showmanual` is not the boundary being relied on.
+
+        The witness is state, not log text: SKIP_ALWAYS is recorded against an item only if
+        the review presented it (`_finalize_unreproducible`), and it is recorded on pc1
+        because an unreproducible item is always source-held (D-08a). pc1 holds no decision
+        file before the run (`reset_pcswitcher_state`), so the entry's presence afterwards
+        can only come from this item having been offered.
+        """
+        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
+        _ = pc2_executor
+
+        name = ""
+        try:
+            name = await _install_a_hand_downloaded_deb(pc1_executor)
+            item_id = _no_candidate_item_id(name)
+
+            # The precondition, asserted rather than assumed: apt must name no repository for
+            # the installed version, or the item this run is about was never detectable.
+            policy = await pc1_executor.run_command(
+                f"LC_ALL=C apt-cache policy {shlex.quote(name)}", login_shell=False, timeout=30.0
+            )
+            assert policy.success and "1.0" in policy.stdout, (
+                f"apt says nothing about the hand-installed {name}.\nstdout: {policy.stdout}\nstderr: {policy.stderr}"
+            )
+            assert "http" not in policy.stdout, (
+                f"apt names a repository origin for the hand-installed {name}, so it is reproducible after all and "
+                f"this run cannot exercise the branch.\n{policy.stdout}"
+            )
+
+            await _write_package_sync_config(pc1_executor, manual_installs_sync=True)
+
+            decisions = {item_id: Decision.SKIP_ALWAYS}
+            sync_cmd = f"{_automation_env_assignment_multi(decisions)} pc-switcher sync pc2 --yes --allow-first-sync"
+            sync_result = await pc1_executor.run_command(sync_cmd, timeout=300.0, login_shell=True)
+            assert sync_result.success, (
+                f"pc-switcher sync exited {sync_result.exit_code}.\n"
+                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
+            )
+
+            entries = await DecisionFile("manual", pc1_executor).load()
+            assert item_id in entries, (
+                f"{name} was never presented as an item needing an install snippet: no decision was recorded for "
+                f"{item_id} on pc1 although the review was answered SKIP_ALWAYS for it.\n"
+                f"recorded: {sorted(entries)}"
+            )
+        finally:
+            if name:
+                await pc1_executor.run_command(
+                    f"sudo DEBIAN_FRONTEND=noninteractive dpkg --purge {shlex.quote(name)}",
+                    login_shell=False,
+                    timeout=120.0,
+                )
+
+    async def test_the_scan_of_a_real_machine_names_few_findings_and_never_its_own_roots(
+        self,
+        pc1_executor: BashLoginRemoteExecutor,
+        pc2_executor: BashLoginRemoteExecutor,
+        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
+        pc2_with_pcswitcher: BashLoginRemoteExecutor,
+        reset_pcswitcher_state: None,
+    ) -> None:
+        """G28 — What the unreproducible scan actually names on a stock Ubuntu 24.04 machine:
+        few enough findings to review by hand, and never one of the four directories the scan
+        walks.
+
+        A characterisation test, so it asserts the PROPERTY rather than a golden list: the
+        set of things under `/usr/local` and `/opt` on a real machine is not this project's
+        to fix, and a list of them would fail on every unrelated package that ships one.
+
+        The roots matter because two of them (`/usr/local/bin`, `/usr/local/lib`) are also
+        entries of another root (`/usr/local`), so they are queried twice and reach the
+        ownership check like any other candidate. That they are not reported rests on dpkg
+        owning them on a real machine — exactly the kind of fact no mocked `dpkg --search`
+        can settle.
+
+        Run non-interactively on purpose, and with only this job enabled: with nobody to ask,
+        the run NAMES every item it could not ask about (`PKG-FR-LOG-DECISIONS`,
+        `_warn_every_item_unasked`), which is the one place the whole finding set is written
+        down. Every such line here is therefore this job's.
+
+        One unowned marker of the test's own is created under `/opt` and asserted to be
+        among the findings: without it a scan that found nothing at all would pass this
+        vacuously.
+        """
+        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
+        _ = pc2_executor
+
+        witness_path = f"/opt/pcswitcher-it-g28-{uuid4().hex[:12]}"
+        try:
+            await _create_unowned_marker(pc1_executor, witness_path)
+
+            await _write_package_sync_config(pc1_executor, manual_installs_sync=True)
+
+            # No automation env and no pty: the non-interactive path names every item.
+            sync_result = await pc1_executor.run_command(
+                "pc-switcher sync pc2 --yes --allow-first-sync", timeout=300.0, login_shell=True
+            )
+            assert sync_result.success, (
+                f"a run with nobody to ask must not fail.\nstdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
+            )
+
+            combined_output = sync_result.stdout + sync_result.stderr
+            # A trailing space so the last finding on the line has the same right-hand
+            # boundary as every other one (see the root check below).
+            collapsed = f"{_collapse_run_output(combined_output)} "
+            findings = collapsed.count(_UNASKED_ITEM_MARKER)
+            assert f"{_UNASKED_ITEM_MARKER}{witness_path} " in collapsed, (
+                f"the scan did not name {witness_path}, so this run says nothing about what it names.\n"
+                f"{combined_output}"
+            )
+            assert findings <= _HAND_REVIEWABLE_FINDING_LIMIT, (
+                f"the scan named {findings} items on a stock machine, more than the "
+                f"{_HAND_REVIEWABLE_FINDING_LIMIT} a user can reasonably answer one at a time.\n{combined_output}"
+            )
+            for root in _UNOWNED_SCAN_ROOTS:
+                # The trailing space is the boundary: `/usr/local/bin` must not satisfy the
+                # check for `/usr/local`.
+                assert f"{_UNASKED_ITEM_MARKER}{root} " not in collapsed, (
+                    f"the scan reported its own root {root} as a finding, so dpkg does not own it on this machine "
+                    f"and every user would be asked to write an install snippet for a directory the distribution "
+                    f"ships.\n{combined_output}"
+                )
+        finally:
+            await _remove_unowned_marker(pc1_executor, witness_path)
+
 
 # `snap:hold:<name>` has no `SnapHoldItem` dataclass to build the id from -- `snap_sync`
 # constructs the `ItemDiff` inline (02-208-HOLD-MASK-REPLICATION.md's own deviation note),
@@ -3337,8 +3730,8 @@ class TestTheESMAttachmentGateOnVMs:
             # it already: pc2 carrying neither file — a target copy with the source's digest
             # is not a pending write, so the gate would never fire — and pc1 carrying both
             # with the bodies below, whatever either machine came with.
-            target_aside = await _take_apt_paths_aside(pc2_executor, esm_dests)
-            source_aside = await _take_apt_paths_aside(pc1_executor, esm_dests)
+            target_aside = await _take_paths_aside(pc2_executor, esm_dests)
+            source_aside = await _take_paths_aside(pc1_executor, esm_dests)
             writes = [
                 f"printf %s {shlex.quote(body)} | sudo tee {shlex.quote(f'{_APT_SOURCES_DIR}/{name}')} > /dev/null"
                 for name, body in _ESM_SOURCE_BODIES.items()
@@ -3385,6 +3778,630 @@ class TestTheESMAttachmentGateOnVMs:
                 await pc1_executor.run_command(f"sudo rm --force {cleanup}", login_shell=False, timeout=15.0)
                 await pc2_executor.run_command(f"sudo rm --force {cleanup}", login_shell=False, timeout=15.0)
             if source_aside:
-                await _put_apt_paths_back(pc1_executor, source_aside, esm_dests)
+                await _put_paths_back(pc1_executor, source_aside, esm_dests)
             if target_aside:
-                await _put_apt_paths_back(pc2_executor, target_aside, esm_dests)
+                await _put_paths_back(pc2_executor, target_aside, esm_dests)
+
+
+class TestSnapRemovalKeepsSnapdsSnapshot:
+    """`PKG-FR-SNAP-REMOVE-SNAPSHOT` on real machines: a removal made through a sync leaves
+    snapd's own pre-removal snapshot behind, so the data the removed snap held is still
+    recoverable.
+
+    The unit test proves the command shape — the removal never passes `--purge`. What it
+    cannot show is the consequence the article is actually about, which lives entirely in
+    snapd: that a removal without `--purge` really does take a snapshot, and that it is
+    still there once the run has finished.
+    """
+
+    async def test_a_removal_through_a_sync_leaves_a_snapshot_snap_saved_lists(
+        self,
+        pc1_executor: BashLoginRemoteExecutor,
+        pc2_executor: BashLoginRemoteExecutor,
+        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
+        pc2_with_pcswitcher: BashLoginRemoteExecutor,
+        reset_pcswitcher_state: None,
+    ) -> None:
+        """E36, E37 — A snap the source no longer has is removed from pc2 by an approved item,
+        and `snap saved` on pc2 then lists a snapshot for it.
+
+        The subject is made target-only by removing it from pc1 with `--purge`, so pc1 keeps
+        no snapshot of its own and the one found on pc2 afterwards can only be this run's.
+        The snap is given system data first: a snapshot of a snap that never held any is not
+        the case the article is about, and asserting on one would leave the test passing for
+        a reason nobody intended.
+
+        `_FIXTURE_SNAPS[1]` rather than `[0]`: the first fixture snap is the one carrying
+        distinct revisions across channels, which `_alternate_snap_revision` needs intact.
+        """
+        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
+
+        name = (await _snap_subjects(pc1_executor, pc2_executor, count=2))[1]
+        quoted = shlex.quote(name)
+        source_revision = await _snap_revision(pc1_executor, name)
+        target_revision = await _snap_revision(pc2_executor, name)
+        assert source_revision and target_revision, f"{name} is not installed on both machines"
+        sets_before = {set_id for set_id, _snap in await _snap_saved_rows(pc2_executor)}
+
+        uniq = uuid4().hex[:12]
+        data_file = f"/var/snap/{name}/common/pcswitcher-it-{uniq}"
+        try:
+            seeded = await pc2_executor.run_command(
+                f"sudo mkdir --parents {shlex.quote(f'/var/snap/{name}/common')} && "
+                f"printf %s pcswitcher-it-{uniq} | sudo tee {shlex.quote(data_file)} > /dev/null",
+                login_shell=False,
+                timeout=30.0,
+            )
+            assert seeded.success, f"could not give {name} data on pc2 to snapshot: {seeded.stderr}"
+
+            removed = await pc1_executor.run_command(
+                f"sudo snap remove --purge {quoted}", login_shell=False, timeout=180.0
+            )
+            assert removed.success, f"Failed to remove {name} from pc1: {removed.stderr}"
+
+            await _write_package_sync_config(pc1_executor, snap_sync=True)
+
+            sync_cmd = f"{_automation_env_assignment(f'snap:{name}')} pc-switcher sync pc2 --yes --allow-first-sync"
+            sync_result = await pc1_executor.run_command(sync_cmd, timeout=300.0, login_shell=True)
+            assert sync_result.success, (
+                f"pc-switcher sync exited {sync_result.exit_code}.\n"
+                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
+            )
+
+            still_there = await pc2_executor.run_command(f"snap list {quoted}", login_shell=False, timeout=15.0)
+            assert not still_there.success, (
+                f"{name} is still installed on pc2, so no removal happened and the snapshot check below would say "
+                f"nothing.\n{still_there.stdout}"
+            )
+
+            saved = await _snap_saved_rows(pc2_executor)
+            assert any(snap == name for _set_id, snap in saved), (
+                f"snapd kept no snapshot for {name} after the sync removed it from pc2 — the removal took the "
+                f"machine's data with it.\nsnap saved: {saved}"
+            )
+        finally:
+            for set_id, snap in await _snap_saved_rows(pc2_executor):
+                if snap == name and set_id not in sets_before:
+                    await pc2_executor.run_command(
+                        f"sudo snap forget {shlex.quote(set_id)}", login_shell=False, timeout=60.0
+                    )
+            await _restore_snap(pc1_executor, name, source_revision)
+            await _restore_snap(pc2_executor, name, target_revision)
+            await pc2_executor.run_command(
+                f"sudo rm --force {shlex.quote(data_file)}", login_shell=False, timeout=15.0
+            )
+
+
+class TestSideloadedSnapsThroughARealRun:
+    """`PKG-FR-SNAP-SIDELOAD` end to end: a snap installed from local bytes is out of scope
+    entirely, so a whole run leaves it exactly where it was.
+
+    The unit coverage of the branch set is dense, and every one of those tests asserts about
+    a `snap list` listing this project composed. This asserts about one snapd produced for a
+    snap that genuinely has no store revision.
+    """
+
+    async def test_a_sideloaded_snap_survives_a_whole_run_untouched(
+        self,
+        pc1_executor: BashLoginRemoteExecutor,
+        pc2_executor: BashLoginRemoteExecutor,
+        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
+        pc2_with_pcswitcher: BashLoginRemoteExecutor,
+        reset_pcswitcher_state: None,
+    ) -> None:
+        """E49 — pc1 carries a sideloaded snap when the run starts; the run finishes and both
+        machines' `snap list` are exactly what they were.
+
+        Both machines' whole listings are compared, not just the sideload's row: "the run
+        does nothing about it" includes not installing it on pc2, not removing it from pc1,
+        and not moving anything else while it is there.
+
+        snapd's automatic refresh is paused on both machines for the whole test (the same
+        timed `refresh.hold` a sync engages, restored exactly afterwards), so a background
+        refresh cannot change a revision between the two listings and be read as the run's
+        doing.
+        """
+        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
+
+        uniq = uuid4().hex[:12]
+        name = f"pcswitcher-it-sideload-{uniq}"
+        directory = f"/var/tmp/pcswitcher-it-sideload-{uniq}"
+        pc1_prior_hold = await _capture_system_refresh_hold(pc1_executor)
+        pc2_prior_hold = await _capture_system_refresh_hold(pc2_executor)
+
+        try:
+            await _engage_system_refresh_hold(pc1_executor)
+            await _engage_system_refresh_hold(pc2_executor)
+
+            base = await _installed_base_snap(pc1_executor)
+            await _create_sideloaded_snap(pc1_executor, directory, name, base)
+
+            pc1_before = parse_snap_list_names_revisions(
+                (await pc1_executor.run_command("snap list --all", login_shell=False, timeout=20.0)).stdout
+            )
+            pc2_before = parse_snap_list_names_revisions(
+                (await pc2_executor.run_command("snap list --all", login_shell=False, timeout=20.0)).stdout
+            )
+            assert pc1_before.get(name, "").startswith("x"), (
+                f"pc1's {name} is at revision {pc1_before.get(name)!r}, not a sideloaded `x`-prefixed one, so this "
+                "run cannot exercise the sideload branch"
+            )
+            assert name not in pc2_before, f"{name} is somehow already on pc2"
+
+            await _write_package_sync_config(pc1_executor, snap_sync=True)
+
+            # An empty automation map: the review is answered, and nothing is approved. A
+            # sideload must produce no item at all, so there is nothing here to answer.
+            sync_cmd = f"{_automation_env_assignment_multi({})} pc-switcher sync pc2 --yes --allow-first-sync"
+            sync_result = await pc1_executor.run_command(sync_cmd, timeout=300.0, login_shell=True)
+            assert sync_result.success, (
+                f"pc-switcher sync exited {sync_result.exit_code} with a sideloaded snap on the source.\n"
+                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
+            )
+
+            pc1_after = parse_snap_list_names_revisions(
+                (await pc1_executor.run_command("snap list --all", login_shell=False, timeout=20.0)).stdout
+            )
+            pc2_after = parse_snap_list_names_revisions(
+                (await pc2_executor.run_command("snap list --all", login_shell=False, timeout=20.0)).stdout
+            )
+            assert pc1_after == pc1_before, (
+                f"the run changed pc1's own snaps.\nbefore: {pc1_before}\nafter: {pc1_after}"
+            )
+            assert pc2_after == pc2_before, (
+                f"the run changed pc2's snaps although the only divergence was a sideload.\n"
+                f"before: {pc2_before}\nafter: {pc2_after}"
+            )
+        finally:
+            await _remove_sideloaded_snap(pc1_executor, directory, name)
+            await _restore_system_refresh_hold(pc1_executor, pc1_prior_hold)
+            await _restore_system_refresh_hold(pc2_executor, pc2_prior_hold)
+
+
+class TestSnapPerItemFailureOnVMs:
+    """`PKG-FR-SNAP-FAIL-ITEM` on real machines: one snap item failing costs that item and
+    nothing else.
+
+    The failure is real snapd's, not a mock's: pc2 is put offline as far as the store is
+    concerned (`snap set system store.access=offline`), which is precisely the split the
+    claim needs — an install has to reach the store and a removal does not.
+    """
+
+    async def test_one_snap_item_fails_and_the_item_after_it_still_lands(
+        self,
+        pc1_executor: BashLoginRemoteExecutor,
+        pc2_executor: BashLoginRemoteExecutor,
+        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
+        pc2_with_pcswitcher: BashLoginRemoteExecutor,
+        reset_pcswitcher_state: None,
+    ) -> None:
+        """E53 — Two approved snap items, the first of which pc2's snapd cannot carry out: it
+        fails alone, the second still lands, and the sync's own exit code reports it.
+
+        Ordering is what makes "the rest still landed" a real claim rather than an accident:
+        `_diff_snap_items` walks the SOURCE's snaps before the target-only ones, so the
+        install is converged before the removal. The install is the item that fails.
+
+        Both subjects are fixture snaps, made divergent by removing one from each machine
+        with `--purge` (no snapshot to clean up afterwards), and both are put back at their
+        original revisions in the `finally`.
+        """
+        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
+
+        removal_subject, install_subject = await _snap_subjects(pc1_executor, pc2_executor, count=2)
+        removal_revision = await _snap_revision(pc2_executor, removal_subject)
+        install_revision = await _snap_revision(pc1_executor, install_subject)
+        source_removal_revision = await _snap_revision(pc1_executor, removal_subject)
+        target_install_revision = await _snap_revision(pc2_executor, install_subject)
+        assert removal_revision and install_revision and source_removal_revision and target_install_revision, (
+            f"{removal_subject} and {install_subject} must both be installed on both machines"
+        )
+
+        store_offline = False
+        try:
+            purged = await pc2_executor.run_command(
+                f"sudo snap remove --purge {shlex.quote(install_subject)}", login_shell=False, timeout=180.0
+            )
+            assert purged.success, f"Failed to remove {install_subject} from pc2: {purged.stderr}"
+            purged_source = await pc1_executor.run_command(
+                f"sudo snap remove --purge {shlex.quote(removal_subject)}", login_shell=False, timeout=180.0
+            )
+            assert purged_source.success, f"Failed to remove {removal_subject} from pc1: {purged_source.stderr}"
+
+            offline = await pc2_executor.run_command(_SNAP_STORE_OFFLINE_CMD, login_shell=False, timeout=60.0)
+            assert offline.success, (
+                f"`{_SNAP_STORE_OFFLINE_CMD}` failed, so pc2's snapd cannot be made to refuse an install and this "
+                f"run has no per-item failure to observe: {offline.stderr}"
+            )
+            store_offline = True
+            # The precondition, asserted rather than assumed: a store pc2 can still reach
+            # would install the snap and leave nothing to fail.
+            reachable = await pc2_executor.run_command(
+                f"snap info {shlex.quote(install_subject)}", login_shell=False, timeout=60.0
+            )
+            assert not reachable.success, (
+                f"pc2 still reaches the store for {install_subject}, so the install below would succeed.\n"
+                f"stdout: {reachable.stdout}\nstderr: {reachable.stderr}"
+            )
+
+            await _write_package_sync_config(pc1_executor, snap_sync=True)
+
+            decisions = {f"snap:{install_subject}": Decision.APPLY, f"snap:{removal_subject}": Decision.APPLY}
+            sync_cmd = f"{_automation_env_assignment_multi(decisions)} pc-switcher sync pc2 --yes --allow-first-sync"
+            sync_result = await pc1_executor.run_command(sync_cmd, timeout=300.0, login_shell=True)
+
+            assert not sync_result.success, (
+                "a run with a failed snap item must exit non-zero.\n"
+                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
+            )
+
+            failed_item = await pc2_executor.run_command(
+                f"snap list {shlex.quote(install_subject)}", login_shell=False, timeout=15.0
+            )
+            assert not failed_item.success, (
+                f"{install_subject} was installed on pc2 although its store is unreachable, so nothing failed and "
+                f"this run proves nothing.\n{failed_item.stdout}"
+            )
+            landed_item = await pc2_executor.run_command(
+                f"snap list {shlex.quote(removal_subject)}", login_shell=False, timeout=15.0
+            )
+            assert not landed_item.success, (
+                f"{removal_subject} is still on pc2: the item ordered after the failing one was never converged.\n"
+                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
+            )
+
+            # Secondary confirmation only — the exit code and pc2's own snapd above are the
+            # primary evidence. This says exactly one item failed rather than the whole job
+            # having collapsed, which the exit code cannot distinguish.
+            collapsed = _collapse_run_output(sync_result.stdout + sync_result.stderr)
+            assert "1 snap item(s) failed" in collapsed, (
+                f"the run did not report exactly one failed snap item.\n{sync_result.stdout}\n{sync_result.stderr}"
+            )
+        finally:
+            if store_offline:
+                restored = await pc2_executor.run_command(_SNAP_STORE_ONLINE_CMD, login_shell=False, timeout=60.0)
+                if not restored.success:
+                    print(f"[cleanup] failed to put pc2's snapd back online: {restored.stderr}")
+            await _restore_snap(pc1_executor, removal_subject, source_removal_revision)
+            await _restore_snap(pc2_executor, removal_subject, removal_revision)
+            await _restore_snap(pc2_executor, install_subject, target_install_revision)
+
+
+# How long to wait for a running sync to engage its sync-window hold, and how often to look.
+# The poll is what makes "inside the window" a measurement rather than a guess about how
+# long the steps before RUN_JOBS take on a given machine.
+_HOLD_POLL_TIMEOUT_SECONDS = 180.0
+_HOLD_POLL_INTERVAL_SECONDS = 0.5
+
+# `pkill --full` matches on the whole command line, and the shell that RUNS pkill has the
+# pattern in its own. The bracket makes the two differ: this regex matches `pc-switcher
+# sync`, and the literal text `pc-switcher[ ]sync` sitting in the shell's command line does
+# not match it — so the kill reaches the sync and not the shell asking for it.
+_KILL_RUNNING_SYNC_CMD = "pkill --signal KILL --full 'pc-switcher[ ]sync'"
+
+# How far ahead of the writing machine's own clock the sync-window suspension lapses, and
+# how much of that may already have elapsed by the time the value is read back. Restated
+# rather than imported, exactly as `_SYSTEM_REFRESH_HOLD_SET_CMD` above is: the point is
+# that the value snapd holds IS a near-future instant, which a test agreeing with whatever
+# the orchestrator's private constant currently says would not assert.
+_SNAP_HOLD_EXPECTED_DURATION = timedelta(hours=6)
+_SNAP_HOLD_DURATION_SLACK = timedelta(minutes=15)
+
+
+class TestTheSyncWindowHoldIsTimed:
+    """`PKG-FR-SNAP-REFRESH-PAUSE`'s self-healing half: the suspension a run writes is a
+    timed value on each machine's own clock, so a run that dies without cleaning up leaves
+    a hold that lapses rather than one that never does.
+
+    Only a real run can show it. The value is written by the orchestrator and put back by
+    its own cleanup, so the only moment it exists is inside the sync window — and the only
+    way it survives to be read is a run that never reaches its cleanup.
+    """
+
+    async def test_a_killed_run_leaves_a_timed_hold_on_each_machines_own_clock(
+        self,
+        pc1_executor: BashLoginRemoteExecutor,
+        pc2_executor: BashLoginRemoteExecutor,
+        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
+        pc2_with_pcswitcher: BashLoginRemoteExecutor,
+        reset_pcswitcher_state: None,
+    ) -> None:
+        """E88, E89 — A sync is killed inside its own window, and what snapd is left holding on
+        BOTH machines is an instant in that machine's own near future — never `forever`.
+
+        Killed with SIGKILL so no cleanup path can run: an orchestrator that restored the
+        prior value would leave nothing to read, and a run that exited normally would say
+        nothing about the case the article is about.
+
+        `dummy_success` is enabled after `snap_sync` purely to widen the window: it sleeps
+        for its configured default on each machine, which is what gives the poll below
+        something to catch the run in the middle of. Both machines' `refresh.hold` is
+        cleared first, so "a hold is set at all" is an unambiguous signal that the run wrote
+        one, and both are put back exactly as found in the `finally`.
+
+        The comparison is against each machine's OWN clock, never this runner's: an expiry
+        computed anywhere else would still look like a future instant here, and would lapse
+        at the wrong moment on the machine that has to honour it.
+        """
+        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
+
+        pc1_prior_hold = await _capture_system_refresh_hold(pc1_executor)
+        pc2_prior_hold = await _capture_system_refresh_hold(pc2_executor)
+        run_log = f"/var/tmp/pcswitcher-it-killed-sync-{uuid4().hex[:12]}.log"
+
+        try:
+            await _restore_system_refresh_hold(pc1_executor, None)
+            await _restore_system_refresh_hold(pc2_executor, None)
+            assert await _capture_system_refresh_hold(pc1_executor) is None, "pc1 still holds a refresh.hold"
+            assert await _capture_system_refresh_hold(pc2_executor) is None, "pc2 still holds a refresh.hold"
+
+            await _write_package_sync_config(pc1_executor, snap_sync=True, dummy_success=True)
+
+            started = await pc1_executor.run_command(
+                f"setsid nohup pc-switcher sync pc2 --yes --allow-first-sync > {run_log} 2>&1 < /dev/null &",
+                timeout=60.0,
+                login_shell=True,
+            )
+            assert started.success, f"could not start a sync in the background: {started.stderr}"
+
+            engaged_source: str | None = None
+            engaged_target: str | None = None
+            deadline = asyncio.get_running_loop().time() + _HOLD_POLL_TIMEOUT_SECONDS
+            while asyncio.get_running_loop().time() < deadline:
+                engaged_source = await _capture_system_refresh_hold(pc1_executor)
+                engaged_target = await _capture_system_refresh_hold(pc2_executor)
+                if engaged_source and engaged_target:
+                    break
+                await asyncio.sleep(_HOLD_POLL_INTERVAL_SECONDS)
+            log = await pc1_executor.run_command(f"cat {run_log}", login_shell=False, timeout=30.0)
+            assert engaged_source and engaged_target, (
+                "the run never paused snapd auto-refresh on both machines, so there is no window to die inside "
+                f"(pc1: {engaged_source!r}, pc2: {engaged_target!r}).\n{log.stdout}"
+            )
+
+            killed = await pc1_executor.run_command(_KILL_RUNNING_SYNC_CMD, login_shell=False, timeout=30.0)
+            assert killed.success, (
+                f"no running sync to kill — the run had already finished and restored both machines.\n{log.stdout}"
+            )
+
+            for executor, machine in ((pc1_executor, "pc1"), (pc2_executor, "pc2")):
+                left = await _capture_system_refresh_hold(executor)
+                assert left is not None, (
+                    f"{machine} was left with no refresh.hold at all by a run that died inside its own window"
+                )
+                assert left != "forever", (
+                    f"{machine} was left with an INDEFINITE snapd refresh.hold by a run that died: nothing will ever "
+                    "lift it, so that machine stops refreshing its snaps for good"
+                )
+                lapses = parse_rfc3339_utc(left)
+                now = await _machine_utc_now(executor)
+                assert lapses > now, (
+                    f"{machine}'s refresh.hold {left!r} is not in its own future (its clock reads {now}), so the "
+                    "suspension either never took effect or was computed against another machine's clock"
+                )
+                assert lapses - now <= _SNAP_HOLD_EXPECTED_DURATION, (
+                    f"{machine}'s refresh.hold {left!r} lapses {lapses - now} from now, further ahead than the "
+                    f"{_SNAP_HOLD_EXPECTED_DURATION} a sync window asks for"
+                )
+                assert lapses - now >= _SNAP_HOLD_EXPECTED_DURATION - _SNAP_HOLD_DURATION_SLACK, (
+                    f"{machine}'s refresh.hold {left!r} lapses {lapses - now} from now, far sooner than the "
+                    f"{_SNAP_HOLD_EXPECTED_DURATION} a sync window asks for"
+                )
+        finally:
+            await pc1_executor.run_command(_KILL_RUNNING_SYNC_CMD, login_shell=False, timeout=30.0)
+            await _restore_system_refresh_hold(pc1_executor, pc1_prior_hold)
+            await _restore_system_refresh_hold(pc2_executor, pc2_prior_hold)
+            await pc1_executor.run_command(f"rm --force {run_log}", login_shell=False, timeout=15.0)
+
+
+class TestTheSnapDataBoundaryOnVMs:
+    """`PKG-FR-SNAP-DATA-BOUNDARY` with both jobs on: what `~/snap` actually looks like on
+    the target after a real transfer.
+
+    The unit tests assert which absolute paths `snap_sync` hands `folder_sync` and which
+    rsync filters that produces. Neither runs rsync, so neither shows the one thing the
+    article is about: that the directories those rules name really do stay home while the
+    rest of the tree travels.
+    """
+
+    async def test_only_the_revision_the_target_holds_arrives_under_snap(
+        self,
+        pc1_executor: BashLoginRemoteExecutor,
+        pc2_executor: BashLoginRemoteExecutor,
+        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
+        pc2_with_pcswitcher: BashLoginRemoteExecutor,
+        reset_pcswitcher_state: None,
+    ) -> None:
+        """E113, E115 — With `snap_sync` and `folder_sync` both enabled, pc2 ends the run holding
+        the data directory of the revision its OWN snapd is on, and none of the others.
+
+        Two apps, because the boundary has two sides. One is a snap pc2 genuinely holds:
+        its active revision's directory travels, its retained older one does not. The other
+        is a name pc2's snapd has never heard of, standing for a snap whose install was
+        declined, failed, or never offered: not one of its revision directories may arrive.
+        Both keep their revision-independent `common` directory, which is what separates
+        "the boundary held" from "nothing was transferred at all".
+
+        The revision the first app's `current` points at is read off PC2 — the exclusion set
+        is computed from the target's own `snap list --all`, so a directory travels because
+        the target holds that revision, not because the source does.
+
+        `~/snap` alone is the synced folder, and both machines' real one is set aside for the
+        duration: the mirror is a `--delete` one, so a hermetic tree is the only way the
+        transfer's outcome is exactly what this test built.
+        """
+        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
+
+        home = await _home_dir(pc1_executor)
+        assert await _home_dir(pc2_executor) == home, (
+            "the two machines' SSH users have different home directories, so `~/snap` is not one path to mirror"
+        )
+        snap_root = f"{home}/snap"
+
+        held_app = await _snap_subject(pc1_executor, pc2_executor)
+        held_revision = await _snap_revision(pc2_executor, held_app)
+        assert held_revision, f"{held_app} is not installed on pc2, so pc2 holds no revision of it"
+        stale_revision = str(int(held_revision) + 1000) if held_revision.isdigit() else f"{held_revision}0"
+
+        uniq = uuid4().hex[:12]
+        absent_app = f"pcswitcher-it-nosnap-{uniq}"
+        absent_revision = "1"
+        markers = {
+            "held-active": f"{snap_root}/{held_app}/{held_revision}/pcswitcher-it-{uniq}",
+            "held-stale": f"{snap_root}/{held_app}/{stale_revision}/pcswitcher-it-{uniq}",
+            "held-common": f"{snap_root}/{held_app}/common/pcswitcher-it-{uniq}",
+            "absent-revision": f"{snap_root}/{absent_app}/{absent_revision}/pcswitcher-it-{uniq}",
+            "absent-common": f"{snap_root}/{absent_app}/common/pcswitcher-it-{uniq}",
+        }
+
+        source_aside = ""
+        target_aside = ""
+        try:
+            source_aside = await _take_paths_aside(pc1_executor, [snap_root])
+            target_aside = await _take_paths_aside(pc2_executor, [snap_root])
+
+            build = "\n".join(
+                ["set -eu"]
+                + [f"mkdir --parents {shlex.quote(path.rsplit('/', 1)[0])}" for path in markers.values()]
+                + [f"printf %s {uniq} > {shlex.quote(path)}" for path in markers.values()]
+                + [
+                    f"ln --symbolic --no-dereference --force {shlex.quote(revision)} "
+                    f"{shlex.quote(f'{snap_root}/{app}/current')}"
+                    for app, revision in ((held_app, held_revision), (absent_app, absent_revision))
+                ]
+            )
+            built = await pc1_executor.run_command(build, login_shell=False, timeout=30.0)
+            assert built.success, f"could not build the ~/snap fixture on pc1: {built.stderr}"
+
+            await _write_package_sync_config(
+                pc1_executor,
+                extra_sections=_folder_sync_section(snap_root),
+                snap_sync=True,
+                folder_sync=True,
+            )
+
+            # An empty automation map: both machines are converged on the snaps themselves,
+            # and what this asserts is the transfer, not a convergence.
+            sync_cmd = f"{_automation_env_assignment_multi({})} pc-switcher sync pc2 --yes --allow-first-sync"
+            sync_result = await pc1_executor.run_command(sync_cmd, timeout=600.0, login_shell=True)
+            assert sync_result.success, (
+                f"pc-switcher sync exited {sync_result.exit_code}.\n"
+                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
+            )
+
+            listing = await pc2_executor.run_command(
+                f"find {shlex.quote(snap_root)} -mindepth 1 | sort", login_shell=False, timeout=30.0
+            )
+            assert listing.success, f"could not read pc2's {snap_root}: {listing.stderr}"
+            arrived = set(nonblank_lines(listing.stdout))
+
+            for key in ("held-active", "held-common", "absent-common"):
+                assert markers[key] in arrived, (
+                    f"{markers[key]} did not reach pc2, although nothing excludes it.\n{listing.stdout}"
+                )
+            assert markers["held-stale"] not in arrived, (
+                f"{markers['held-stale']} reached pc2, which is on revision {held_revision} of {held_app} and has "
+                f"no snapd that ever installed {stale_revision}.\n{listing.stdout}"
+            )
+            stale_dir = f"{snap_root}/{held_app}/{stale_revision}"
+            assert not any(path == stale_dir or path.startswith(f"{stale_dir}/") for path in arrived), (
+                f"a data directory for revision {stale_revision} of {held_app} exists on pc2.\n{listing.stdout}"
+            )
+            absent_dir = f"{snap_root}/{absent_app}/{absent_revision}"
+            assert not any(path == absent_dir or path.startswith(f"{absent_dir}/") for path in arrived), (
+                f"a data directory arrived on pc2 for {absent_app}, a snap its own snapd has never installed.\n"
+                f"{listing.stdout}"
+            )
+        finally:
+            if source_aside:
+                await _put_paths_back(pc1_executor, source_aside, [snap_root])
+            if target_aside:
+                await _put_paths_back(pc2_executor, target_aside, [snap_root])
+
+
+class TestADeletedFlatpakRemoteTakesItsKey:
+    """`PKG-FR-FLATPAK-REMOTE-DELETE`'s last sentence: deleting a remote takes its signing
+    key with it.
+
+    Delegated to flatpak — this job issues `flatpak remote-delete` and nothing else — so the
+    claim is about what flatpak does, and no mocked executor can say anything about it. What
+    is at stake is trust: a keyring left behind is a vendor the machine still trusts for a
+    remote it no longer has.
+    """
+
+    async def test_deleting_an_unused_target_remote_removes_its_keyring_file(
+        self,
+        pc1_executor: BashLoginRemoteExecutor,
+        pc2_executor: BashLoginRemoteExecutor,
+        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
+        pc2_with_pcswitcher: BashLoginRemoteExecutor,
+        reset_pcswitcher_state: None,
+    ) -> None:
+        """F72 — After a run deletes a remote pc1 does not have and nothing on pc2 installs
+        from, `<installation>/repo/<remote>.trustedkeys.gpg` is gone from pc2.
+
+        The remote is added on pc2 from Flathub's own `.flatpakrepo`, under a uuid-suffixed
+        name pc1 provably lacks: a real signing key, so the keyring file genuinely exists
+        beforehand — asserted, which is what makes its absence afterwards a witness rather
+        than a tautology.
+
+        The review is answered with an empty automation map. A remote is a review item in no
+        direction, so this deletion needs no answer; what the map buys is a run that reaches
+        `apply()` at all, where the deletion is derived after the converge loop.
+        """
+        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
+
+        await _assert_flatpak_available(pc1_executor)
+        await _assert_flatpak_available(pc2_executor)
+
+        scope_flag = "--user"
+        remote_name = f"pcswitcher-it-vendor-{uuid4().hex[:12]}"
+        keyring = f"$HOME/.local/share/flatpak/repo/{remote_name}.trustedkeys.gpg"
+
+        try:
+            added = await pc2_executor.run_command(
+                f"flatpak remote-add {scope_flag} {shlex.quote(remote_name)} {shlex.quote(_FIXTURE_FLATPAK_REPOFILE)}",
+                login_shell=False,
+                timeout=180.0,
+            )
+            assert added.success, f"could not add the target-only remote {remote_name} to pc2: {added.stderr}"
+
+            source_remotes = await pc1_executor.run_command(
+                f"flatpak remotes {scope_flag} --columns=name", login_shell=False, timeout=15.0
+            )
+            assert remote_name not in nonblank_lines(source_remotes.stdout), (
+                f"{remote_name} is configured on pc1 too, so it is not a remote the source lacks"
+            )
+            key_before = await pc2_executor.run_command(f"test -f {keyring}", login_shell=False, timeout=15.0)
+            assert key_before.success, (
+                f"pc2 holds no {keyring} for {remote_name}, so this flatpak does not keep a per-remote keyring and "
+                "its absence after the deletion would prove nothing"
+            )
+
+            await _write_package_sync_config(pc1_executor, flatpak_sync=True)
+
+            sync_cmd = f"{_automation_env_assignment_multi({})} pc-switcher sync pc2 --yes --allow-first-sync"
+            sync_result = await pc1_executor.run_command(sync_cmd, timeout=900.0, login_shell=True)
+            assert sync_result.success, (
+                f"pc-switcher sync exited {sync_result.exit_code}.\n"
+                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
+            )
+
+            after_remotes = await pc2_executor.run_command(
+                f"flatpak remotes {scope_flag} --columns=name", login_shell=False, timeout=15.0
+            )
+            assert remote_name not in nonblank_lines(after_remotes.stdout), (
+                f"{remote_name} is still configured on pc2, so nothing was deleted and the keyring check below "
+                f"would say nothing.\nstdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
+            )
+            key_after = await pc2_executor.run_command(f"test -f {keyring}", login_shell=False, timeout=15.0)
+            assert not key_after.success, (
+                f"{keyring} survived the deletion of {remote_name}: pc2 still trusts that vendor's signing key for a "
+                "remote it no longer has"
+            )
+        finally:
+            await pc2_executor.run_command(
+                f"flatpak remote-delete {scope_flag} --force {shlex.quote(remote_name)} || true; rm --force {keyring}",
+                login_shell=False,
+                timeout=60.0,
+            )

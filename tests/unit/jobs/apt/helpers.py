@@ -18,6 +18,7 @@ from pcswitcher.jobs.packages.review import (
     ReviewGroup,
     ReviewOutcome,
 )
+from pcswitcher.jobs.packages.sync_core import PackageItemFailures
 from pcswitcher.models import CommandResult
 from tests.unit.jobs.test_package_sync_core import FakeReviewer
 
@@ -363,6 +364,36 @@ class CountingReviewer(FakeReviewer):
     async def review(self, groups: Sequence[ReviewGroup]) -> ReviewOutcome:
         self.calls.append(tuple(groups))
         return await super().review(groups)
+
+
+async def review_rounds(
+    job: AptSyncJob, decisions: dict[str, Decision] | None = None, *, ignore_item_failures: bool = False
+) -> list[tuple[ReviewGroup, ...]]:
+    """Run `execute()` and return the groups of each review ROUND, in order.
+
+    The only honest way to ask "what was the user offered": a question whose article scopes
+    it to approved work is built after the first round's answers (`plan_second_round`), so
+    `plan().groups` is the first round alone and nothing else in the job knows the rest.
+
+    `ignore_item_failures` is for a test that has to approve work its fixture cannot carry
+    out — approving an install is what raises some of these questions, and a fixture built to
+    exercise the question need not also model a target that can install the package. Every
+    question was put before the first change either way, so what this returns is unaffected.
+    """
+    reviewer = CountingReviewer(decisions or {})
+    job.context = dataclasses.replace(job.context, reviewer=reviewer)
+    try:
+        await job.execute()
+    except PackageItemFailures:
+        if not ignore_item_failures:
+            raise
+    return reviewer.calls
+
+
+async def reviewed_groups(job: AptSyncJob, decisions: dict[str, Decision] | None = None) -> list[ReviewGroup]:
+    """Every group `review_rounds` saw, flattened — for a test about one screen rather than
+    about which round it lands in."""
+    return [group for rounds in await review_rounds(job, decisions) for group in rounds]
 
 
 def actionable_entry_ids(groups: Sequence[ReviewGroup]) -> set[str]:

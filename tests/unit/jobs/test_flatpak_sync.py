@@ -3248,6 +3248,25 @@ class TestMaskSystemScopeGate:
         assert any(e.host is Host.TARGET and "sudo" in e.message for e in errors)
 
     @pytest.mark.asyncio
+    async def test_a_system_scope_mask_only_on_the_target_requires_target_sudo(self) -> None:
+        """K57 — the target-side half of the mask branch: nothing system-scope exists on the
+        source, and Nomad's own system mask still writes into `/var/lib/flatpak`, so the gate
+        fires for a mask the source never mentions.
+        """
+        context, _source, target = make_context(
+            target_responses={
+                "flatpak --system mask": CommandResult(0, "  org.example.Blocked\n", ""),
+                "sudo --non-interactive true": CommandResult(1, "", "sudo: a password is required"),
+            }
+        )
+        job = FlatpakSyncJob(context)
+
+        errors = await job.validate()
+
+        assert any(e.host is Host.TARGET and "sudo" in e.message for e in errors)
+        assert any("sudo --non-interactive true" in c for c in all_calls(target))
+
+    @pytest.mark.asyncio
     async def test_user_scope_only_mask_never_checks_sudo(self) -> None:
         """F133, K52 — the mask half of the same gate."""
         context, _source, target = make_context(
@@ -3921,8 +3940,29 @@ class TestValidate:
         assert any(e.host is Host.TARGET and "sudo" in e.message for e in errors)
 
     @pytest.mark.asyncio
+    async def test_a_system_scope_application_only_on_the_target_requires_target_sudo(self) -> None:
+        """K54 — the target-side half of the application branch: the source has nothing
+        system-scope at all, and Nomad's own system-scope application still makes passwordless
+        sudo on Nomad a precondition, because uninstalling it writes into `/var/lib/flatpak`.
+        """
+        context, _source, target = make_context(
+            target_responses={
+                "flatpak list --app": CommandResult(
+                    0, "com.slack.Slack\t1.0\tflathub\tsystem\tcom.slack.Slack/x86_64/stable\n", ""
+                ),
+                "sudo --non-interactive true": CommandResult(1, "", "sudo: a password is required"),
+            }
+        )
+        job = FlatpakSyncJob(context)
+
+        errors = await job.validate()
+
+        assert any(e.host is Host.TARGET and "sudo" in e.message for e in errors)
+        assert any("sudo --non-interactive true" in c for c in all_calls(target))
+
+    @pytest.mark.asyncio
     async def test_a_system_scope_remote_alone_requires_target_sudo(self) -> None:
-        """F136 — no application and no mask anywhere: a system-scope remote on its own writes into
+        """F136, K55 — no application and no mask anywhere: a system-scope remote on its own writes into
         `/var/lib/flatpak`, so it flips the gate exactly as the other two do.
         """
         context, _source, _target = make_context(
@@ -3934,6 +3974,56 @@ class TestValidate:
         errors = await job.validate()
 
         assert any(e.host is Host.TARGET and "sudo" in e.message for e in errors)
+
+    @pytest.mark.asyncio
+    async def test_a_system_scope_remote_only_on_the_target_requires_target_sudo(self) -> None:
+        """K55 — the other machine of the same branch: the remote is configured only on Nomad,
+        and the gate still fires, because deleting an unused one there needs root just as
+        adding one does.
+        """
+        context, _source, target = make_context(
+            target_responses={
+                "flatpak remotes --system": CommandResult(0, _FLATHUB_REMOTE_LINE, ""),
+                "sudo --non-interactive true": CommandResult(1, "", "sudo: a password is required"),
+            }
+        )
+        job = FlatpakSyncJob(context)
+
+        errors = await job.validate()
+
+        assert any(e.host is Host.TARGET and "sudo" in e.message for e in errors)
+        assert any("sudo --non-interactive true" in c for c in all_calls(target))
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("missing_on", ["source", "target"])
+    async def test_a_missing_flatpak_leaves_the_scope_gate_unevaluated(self, missing_on: str) -> None:
+        """K60 — a machine without flatpak is reported and nothing else is asked of either
+        machine: the scope gate reads six things across both hosts, and every one of them is a
+        `flatpak` invocation that would fail anyway. Both machines here hold a system-scope
+        application and Nomad would refuse the sudo probe, so the gate firing would be visible.
+        """
+        system_app = CommandResult(0, "com.slack.Slack\t1.0\tflathub\tsystem\tcom.slack.Slack/x86_64/stable\n", "")
+        absent = CommandResult(127, "", "flatpak: command not found")
+        source_responses = {"flatpak list --app": system_app}
+        target_responses = {
+            "flatpak list --app": system_app,
+            "sudo --non-interactive true": CommandResult(1, "", "sudo: a password is required"),
+        }
+        if missing_on == "source":
+            source_responses["flatpak --version"] = absent
+        else:
+            target_responses["flatpak --version"] = absent
+        context, source, target = make_context(source_responses=source_responses, target_responses=target_responses)
+        job = FlatpakSyncJob(context)
+
+        errors = await job.validate()
+
+        assert [e.host for e in errors] == [Host.SOURCE if missing_on == "source" else Host.TARGET]
+        assert not any("passwordless sudo" in e.message for e in errors)
+        # One command each, and it is the version check: no listing, no remote or mask read,
+        # and no sudo probe.
+        assert all_calls(source) == ["flatpak --version"]
+        assert all_calls(target) == ["flatpak --version"]
 
     @pytest.mark.asyncio
     async def test_user_scope_only_never_checks_sudo(self) -> None:

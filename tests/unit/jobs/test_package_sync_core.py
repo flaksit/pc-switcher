@@ -573,6 +573,103 @@ class TestEveryLogRecordCarriesItsMachine:
         assert all(getattr(record, "host", "") for record in from_this_job)
 
 
+class _SecondRoundJob(FakeSyncJob):
+    """`FakeSyncJob` with a question its first round's answers bring into being.
+
+    The shape every real second round has (`AptSyncJob.plan_second_round`): an item that
+    exists only because something else was approved, so it cannot be built while the plan is.
+    """
+
+    def __init__(self, context: JobContext, **kwargs: Any) -> None:
+        super().__init__(context, **kwargs)
+        self.rounds_seen: list[dict[str, Decision]] = []
+        self.converges_when_asked: list[int] = []
+
+    async def plan_second_round(self, plan: PackagePlan, outcome: ReviewOutcome) -> PackagePlan:
+        self.rounds_seen.append(dict(outcome.decisions))
+        approved = [diff for diff in plan.diffs if outcome.decisions.get(diff.item_id) == Decision.APPLY]
+        if not approved:
+            return await super().plan_second_round(plan, outcome)
+        follow_up = _diff(f"follow:{approved[0].item_id}", DiffAction.INSTALL)
+        return PackagePlan(
+            manager=plan.manager,
+            diffs=(*plan.diffs, follow_up),
+            groups=self._build_review_groups([follow_up]),
+        )
+
+
+class _SecondRoundOnlyJob(FakeSyncJob):
+    """A job whose FIRST round asks nothing and whose second round asks one thing."""
+
+    async def plan(self) -> PackagePlan:
+        await super().plan()
+        return PackagePlan(manager=self.manager_id, diffs=(), groups=())
+
+    async def plan_second_round(self, plan: PackagePlan, outcome: ReviewOutcome) -> PackagePlan:
+        late = _diff("late", DiffAction.INSTALL)
+        return PackagePlan(manager=plan.manager, diffs=(late,), groups=self._build_review_groups([late]))
+
+
+class TestTheSecondRoundIsPartOfTheReview:
+    """`PKG-FR-BATCHED`: a question an article scopes to APPROVED work cannot be built from
+    the plan-time superset, so `execute()` puts a second round between the first round's
+    answers and the job's first change.
+
+    What licenses it is the batching article itself and not `PKG-FR-ASK-AGAIN`: the rounds
+    still come one after another with no work between them, and every recurring kind of
+    decision is still settled in one pass. `PKG-FR-ASK-AGAIN` is for asking after the target
+    has already been changed, which these tests require NOT to have happened.
+    """
+
+    @pytest.mark.asyncio
+    async def test_the_second_rounds_own_item_is_reviewed_and_converged(self) -> None:
+        """H175 — the round is a real review: its groups reach the reviewer and its answers
+        govern what applies, exactly as the first round's do."""
+        reviewer = FakeReviewer({"fake:a": Decision.APPLY, "follow:fake:a": Decision.APPLY})
+        job = _SecondRoundJob(make_context(reviewer=reviewer), source_items=[FakeItem("a")])
+
+        await job.execute()
+
+        assert reviewer.call_count == 2
+        assert job.rounds_seen == [{"fake:a": Decision.APPLY}]
+        assert [diff.item_id for diff in job.converge_calls] == ["fake:a", "follow:fake:a"]
+
+    @pytest.mark.asyncio
+    async def test_nothing_is_converged_before_the_second_rounds_answers(self) -> None:
+        """H176 — `PKG-FR-REVIEW-FIRST` and `PKG-FR-CONSENT-BEFORE-CHANGE` bind the whole
+        review, not its first round: the second round is put before the job's first change,
+        so a stopping answer there still reaches every change it is about."""
+        job: _SecondRoundJob | None = None
+
+        class _Spy(FakeReviewer):
+            async def review(self, groups: Sequence[ReviewGroup]) -> ReviewOutcome:
+                assert job is not None
+                job.converges_when_asked.append(len(job.converge_calls))
+                return await super().review(groups)
+
+        reviewer = _Spy({"fake:a": Decision.APPLY, "follow:fake:a": Decision.APPLY})
+        job = _SecondRoundJob(make_context(reviewer=reviewer), source_items=[FakeItem("a")])
+
+        await job.execute()
+
+        assert job.converges_when_asked == [0, 0]
+        assert job.converge_calls, "the spy would read zero on a run that converged nothing at all"
+
+    @pytest.mark.asyncio
+    async def test_a_question_only_the_second_round_holds_still_skips_a_run_with_nobody_to_ask(self) -> None:
+        """H177 — `PKG-FR-NO-TERMINAL` counts both rounds: a run whose only answerable
+        question is the second round's has just as much undecided as one whose first round
+        held it, and reporting success would say the opposite."""
+        reviewer = FakeReviewer(was_interactive=False)
+        job = _SecondRoundOnlyJob(make_context(reviewer=reviewer))
+
+        with pytest.raises(JobSkipped):
+            await job.execute()
+
+        assert reviewer.call_count == 1, "the second round is not put to a run that cannot answer it"
+        assert job.converge_calls == []
+
+
 class _ThreeScreenJob(FakeSyncJob):
     """`FakeSyncJob` whose plan holds one diff of each answerable action, so its review is
     three screens rather than one. `super().plan()` runs first so the two decision-file

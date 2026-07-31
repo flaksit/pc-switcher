@@ -38,6 +38,7 @@ from tests.unit.jobs.apt.helpers import (
     key_writes,
     make_context,
     respond_to,
+    reviewed_groups,
     sha256_line,
 )
 
@@ -112,10 +113,11 @@ class TestKeysAreNotItems:
         job = AptSyncJob(context)
 
         plan = await job.plan()
+        groups = await reviewed_groups(job)
 
         assert not any(diff.item_id.startswith("apt:key:") for diff in plan.diffs)
         assert not any(diff.item_class.value == "apt_key" for diff in plan.diffs)
-        entries = {entry.item_id for group in plan.groups for entry in group.entries}
+        entries = {entry.item_id for group in groups for entry in group.entries}
         assert not any(item_id.startswith("apt:key:") for item_id in entries)
         assert "apt:source:foo.sources" in entries, "the repository DELETION must still be reviewed"
 

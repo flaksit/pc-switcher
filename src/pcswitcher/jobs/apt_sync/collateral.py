@@ -124,8 +124,9 @@ class Collateral:
         # models what the real install does — see `plan_time`.
         self._stale_holds = stale_holds
         self._log = log
-        # Marks this run's own review recorded, added by `resolve` so the apply-time guard
-        # honours a "never offer again" answer given minutes earlier in the same review.
+        # Marks this run's own review recorded (`note_run_marks`), so both the second round's
+        # question and the apply-time guard honour a "never offer again" answer given minutes
+        # earlier in the same review.
         self._run_marked: frozenset[str] = frozenset()
         # The target's `apt-mark showmanual` set: the single source of the auto-versus-manual
         # split (D-30). A collateral package the simulation would remove or downgrade is
@@ -212,6 +213,10 @@ class Collateral:
         # transaction takes one out has to be asked about, not silently allowed on the
         # strength of a removal the user may yet skip.
         #
+        # Once the answers exist, a candidate the user marked as the target's own is not a
+        # candidate any more, and `after_marks` puts the question this exemption could not
+        # (`PKG-FR-COLLATERAL-MARKED`).
+        #
         # The install candidates need no exemption at all: a package this run installs is
         # absent from the target, so it is outside `protected()` and cannot be collateral.
         collateral: list[ItemDiff] = []
@@ -243,9 +248,16 @@ class Collateral:
         args_for: Callable[[Sequence[str]], str],
         *,
         verb: str,
+        restrict_to: frozenset[str] | None = None,
     ) -> list[ItemDiff]:
         """One direction's collateral: the batched rehearsal, then — only if it found
         manual collateral — the narrowing that says WHICH candidates cause each item.
+
+        `restrict_to` keeps only the named packages, for a pass that is re-reading a
+        transaction an earlier pass already reported on (`after_marks`): everything else it
+        finds was found there. It also silences the auto-collateral log, which that earlier
+        pass has already written for the same transaction — `PKG-FR-COLLATERAL-AUTO` wants
+        each such change named, not named twice.
 
         Attribution matters because `skip` cancels the candidates recorded against the item:
         blaming the whole batch would make one collateral question cancel every package in it,
@@ -263,8 +275,9 @@ class Collateral:
         """
         preview = await simulate_apt_transaction(self._target, args_for(candidates), login_shell=False)
         split = await self.classify(preview, reviewed_names)
-        self._log_auto(split.auto, verb, candidates)
-        found = split.manual
+        if restrict_to is None:
+            self._log_auto(split.auto, verb, candidates)
+        found = split.manual if restrict_to is None else [item for item in split.manual if item.package in restrict_to]
         if not found:
             return []
 
@@ -404,11 +417,17 @@ class Collateral:
 
         Composed here because `protected()` is a union and only this layer knows which of its
         grounds applies: a fixed "apt has it marked as manually installed" sentence is false
-        about a package a mark alone protects. `_run_marked` is deliberately not consulted —
-        items are built at plan time, before this run's own marks exist.
+        about a package a mark alone protects. A mark given in THIS review is its own
+        sentence — "nothing else in this review mentions it" is untrue of a package whose own
+        removal row is where the mark was just given.
         """
         target = self._machines.target
         manual = f"apt on {target} has {package} marked as manually installed"
+        if package in self._run_marked:
+            return (
+                f"{manual}, and it was marked as {target}'s own earlier in this review — "
+                "either ground alone would protect it."
+            )
         if package not in self._marked:
             return (
                 f"{manual}: something asked for it there directly, rather than it arriving as "
@@ -463,6 +482,54 @@ class Collateral:
             and decisions.get(diff.item_id) == Decision.APPLY
         )
 
+    def note_run_marks(self, diffs: Sequence[ItemDiff], decisions: Mapping[str, Decision]) -> frozenset[str]:
+        """Record the packages this run's own answers marked machine-specific, and return
+        them (`PKG-FR-COLLATERAL-MARKED`: "a mark recorded earlier in the same run MUST
+        count").
+
+        Only the removal direction can produce one: a mark on an INSTALL says the package is
+        the SOURCE's own and the target does not have it, so there is nothing on the machine
+        being changed for a transaction to take.
+
+        Idempotent, and called twice on purpose — once before the second review round is
+        built, so the question can name the mark, and again from `resolve`, so the apply-time
+        guard reads it whether or not a second round happened.
+        """
+        self._run_marked = frozenset(
+            package_name(diff.item_id)
+            for diff in diffs
+            if diff.item_class == ItemClass.APT_PACKAGE
+            and diff.action == DiffAction.REMOVE
+            and decisions.get(diff.item_id) == Decision.SKIP_ALWAYS
+        )
+        return self._run_marked
+
+    async def after_marks(self, diffs: Sequence[ItemDiff], decisions: Mapping[str, Decision]) -> list[ItemDiff]:
+        """The collateral questions this review's own machine-specific marks bring into
+        being (`PKG-FR-COLLATERAL-MARKED`, `PKG-FR-MACHINE-SPECIFIC`).
+
+        A package the user has just marked as the target's own is protected from every action
+        the tool takes of its own accord, from that moment — but at plan time it was a removal
+        candidate, exempt from the removal batch (`plan_time`), so no item was built for it
+        and nothing could ask. This is where it is asked, over the removals this run really
+        approved, against the transaction that will really run.
+
+        Deliberately narrowed to the newly marked packages. A candidate the user merely
+        skipped for this run also keeps its protection, and the tool still tells rather than
+        asks there (the accepted cost the criteria record under `PKG-FR-COLLATERAL-MANUAL`);
+        widening this pass to it is a separate change with its own answer to give.
+
+        Costs one `apt-get --dry-run` (plus attribution) on a run that marked something and
+        approved a removal, and no command at all on every other run.
+        """
+        marked = self.note_run_marks(diffs, decisions)
+        approved = sorted(self.approved_removals(diffs, decisions))
+        if not marked or not approved:
+            return []
+        return await self.for_direction(
+            approved, frozenset(approved), remove_args, verb="Removing", restrict_to=marked
+        )
+
     def resolve(self, diffs: Sequence[ItemDiff], outcome: ReviewOutcome) -> ReviewOutcome:
         """Translate the manual-collateral group's decisions (D-30) into the guard's
         approved set and the triggering installs' decisions.
@@ -486,13 +553,9 @@ class Collateral:
         # A "never offer again" answer given in THIS review counts from here on
         # (`PKG-FR-COLLATERAL-MARKED`): the apply-time guard runs after `resolve`, so a mark
         # the user made minutes ago protects the package from the transactions that follow.
-        self._run_marked = frozenset(
-            package_name(diff.item_id)
-            for diff in diffs
-            if diff.item_class == ItemClass.APT_PACKAGE
-            and diff.action == DiffAction.REMOVE
-            and outcome.decisions.get(diff.item_id) == Decision.SKIP_ALWAYS
-        )
+        # `after_marks` has usually recorded the same set already; this covers the paths that
+        # reach `resolve` without a second review round.
+        self.note_run_marks(diffs, outcome.decisions)
 
         approved: set[str] = set()
         overrides: dict[str, Decision] = {}
