@@ -5,6 +5,8 @@ Split out of the former single `test_apt_sync.py`.
 
 from __future__ import annotations
 
+import dataclasses
+from collections.abc import Sequence
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -15,15 +17,24 @@ from pcswitcher.jobs.packages.items import DiffAction, ItemDiff
 from pcswitcher.jobs.packages.review import (
     COLLATERAL_REVIEW_ACTION,
     Decision,
+    ReviewGroup,
+    ReviewOutcome,
 )
 from pcswitcher.jobs.packages.sync_core import PackageItemFailures
-from pcswitcher.models import CommandResult, LogLevel
+from pcswitcher.models import CommandResult, LogLevel, SyncAbortedByUser
 from tests.unit.jobs.apt.helpers import (
+    _APPROVE_PKG_A,
+    CountingReviewer,
+    _policy_block,
+    _repo_context,
     all_calls,
     decision_file,
+    foo_source_responses,
+    foo_target_side_effect,
     install_reviewer,
     installed_on_target,
     make_context,
+    real_installs,
     respond_to,
     target_offers,
 )
@@ -969,3 +980,182 @@ class TestOnePackageTwoConsequences:
         commands = all_calls(target)
         assert any("sudo" in cmd and "apt-get install" in cmd and "pkg-a" in cmd for cmd in commands)
         assert not any("sudo" in cmd and "apt-get remove" in cmd for cmd in commands)
+
+
+def _late_collateral_context(
+    *, simulation: str = "Inst pkg-a (1.0)\nRemv other-manual [1.0]\n"
+) -> tuple[JobContext, MagicMock, MagicMock]:
+    """`pkg-a` comes from a repository this run writes, so the target's apt cannot resolve
+    the name while the review is being built and the plan-time rehearsal leaves it out.
+
+    Installing it would take `other-manual`, which the target has manually installed. That
+    fact does not exist until `foo.sources` and the run's `apt-get update` have landed, which
+    is exactly the case `PKG-FR-ASK-AGAIN` allows a second question for.
+    """
+    context, source, target = _repo_context(
+        source_responses=foo_source_responses(
+            **{
+                "apt-mark showmanual": CommandResult(0, "pkg-a\nother-manual\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\nother-manual\t1.0\n", ""),
+                "apt-cache policy": CommandResult(
+                    0,
+                    _policy_block("pkg-a", "https://example.com")
+                    + _policy_block("other-manual", "https://example.com"),
+                    "",
+                ),
+            }
+        )
+    )
+    target.run_command = AsyncMock(
+        side_effect=foo_target_side_effect(
+            {
+                "apt-mark showmanual": CommandResult(0, "other-manual\n", ""),
+                "dpkg-query": CommandResult(0, "other-manual\t1.0\n", ""),
+                "apt-get --dry-run install": CommandResult(0, simulation, ""),
+            }
+        )
+    )
+    return context, source, target
+
+
+class AbortingReviewer(CountingReviewer):
+    """Answers the plan review, then stops the sync at the collateral question — what
+    `_review_collateral_group` does for the third answer.
+    """
+
+    async def review(self, groups: Sequence[ReviewGroup]) -> ReviewOutcome:
+        if any(group.action == COLLATERAL_REVIEW_ACTION for group in groups):
+            raise SyncAbortedByUser("other-manual on target-host would have been removed")
+        return await super().review(groups)
+
+
+class SilentReviewer(CountingReviewer):
+    """Answers the plan review, then reports that nobody was there for the collateral
+    question (`PKG-FR-NO-TERMINAL`).
+
+    Defence in depth rather than a production path: a run with no terminal and a non-empty
+    plan is skipped before `apply()` ever runs, so this shape is only reachable if that
+    guard is ever weakened.
+    """
+
+    async def review(self, groups: Sequence[ReviewGroup]) -> ReviewOutcome:
+        outcome = await super().review(groups)
+        if any(group.action == COLLATERAL_REVIEW_ACTION for group in groups):
+            return ReviewOutcome(decisions={}, was_interactive=False)
+        return outcome
+
+
+def _collateral_entry_ids(reviewer: CountingReviewer) -> list[set[str]]:
+    """The collateral question's entries per review call — `[]` for a call that asked none."""
+    return [
+        {entry.item_id for group in groups if group.action == COLLATERAL_REVIEW_ACTION for entry in group.entries}
+        for groups in reviewer.calls
+    ]
+
+
+class TestCollateralForARepositoryThisRunWrites:
+    """`PKG-FR-ASK-AGAIN`: an install whose repository this run writes cannot be simulated
+    at plan time, so its collateral question is put once `/etc/apt` has converged — the
+    three answers `PKG-FR-COLLATERAL-MANUAL` requires, not a late refusal.
+    """
+
+    @pytest.mark.asyncio
+    async def test_keeping_the_package_leaves_the_install_unapplied_and_unfailed(self) -> None:
+        """The whole ruling in one run: the install does not run, `other-manual` survives,
+        and the job reports no failed item — a change the user declined is not a change that
+        broke.
+        """
+        context, _source, target = _late_collateral_context()
+        job = AptSyncJob(context)
+        reviewer = CountingReviewer(_APPROVE_PKG_A)
+        job.context = dataclasses.replace(job.context, reviewer=reviewer)
+
+        await job.execute()
+
+        assert real_installs(target) == []
+        assert not any("apt-get remove" in cmd for cmd in all_calls(target))
+        assert _collateral_entry_ids(reviewer) == [set(), {"apt:collateral:install:remove:other-manual"}]
+
+    @pytest.mark.asyncio
+    async def test_the_question_is_absent_from_the_plan_time_review(self) -> None:
+        """The facts genuinely do not exist yet: the target's apt has never heard `pkg-a`,
+        so plan time rehearses nothing and asks nothing.
+        """
+        context, _source, target = _late_collateral_context()
+
+        plan = await AptSyncJob(context).plan()
+
+        assert not any(diff.item_id.startswith("apt:collateral:") for diff in plan.diffs)
+        assert not any("apt-get --dry-run" in cmd for cmd in all_calls(target))
+
+    @pytest.mark.asyncio
+    async def test_going_ahead_installs_and_the_guard_allows_the_collateral_removal(self) -> None:
+        context, _source, target = _late_collateral_context()
+        job = AptSyncJob(context)
+        install_reviewer(
+            job,
+            {**_APPROVE_PKG_A, "apt:collateral:install:remove:other-manual": Decision.APPLY},
+        )
+
+        await job.execute()
+
+        assert len(real_installs(target)) == 1
+
+    @pytest.mark.asyncio
+    async def test_stopping_ends_the_whole_sync(self) -> None:
+        """The stopping answer reaches as far here as it does at plan time: the reviewer
+        raises, and nothing catches it inside the job.
+        """
+        context, _source, target = _late_collateral_context()
+        job = AptSyncJob(context)
+        job.context = dataclasses.replace(job.context, reviewer=AbortingReviewer(_APPROVE_PKG_A))
+
+        with pytest.raises(SyncAbortedByUser):
+            await job.execute()
+
+        assert real_installs(target) == []
+
+    @pytest.mark.asyncio
+    async def test_a_run_with_no_terminal_declines_it(self) -> None:
+        """`PKG-FR-NO-TERMINAL`: nobody to ask means every item is declined for this run, so
+        the install is withheld rather than pushed through or failed.
+        """
+        context, _source, target = _late_collateral_context()
+        job = AptSyncJob(context)
+        job.context = dataclasses.replace(job.context, reviewer=SilentReviewer(_APPROVE_PKG_A))
+
+        await job.execute()
+
+        assert real_installs(target) == []
+
+    @pytest.mark.asyncio
+    async def test_the_decision_is_named_in_the_log(self, caplog: pytest.LogCaptureFixture) -> None:
+        """`PKG-FR-LOG-DECISIONS`: this question is asked outside the plan, so the base
+        per-item decision pass cannot name it and this layer must.
+        """
+        context, _source, _target = _late_collateral_context()
+        job = AptSyncJob(context)
+        job.context = dataclasses.replace(job.context, reviewer=CountingReviewer(_APPROVE_PKG_A))
+
+        with caplog.at_level(LogLevel.FULL.value):
+            await job.execute()
+
+        messages = [record.message for record in caplog.records]
+        assert "reviewed other-manual (collateral): skip now" in messages
+        assert any("pkg-a" in message and "not applied" in message for message in messages)
+
+    @pytest.mark.asyncio
+    async def test_the_question_costs_nothing_on_a_run_with_no_late_install(self) -> None:
+        """Every install the target can already resolve is settled at plan time, so the
+        converge loop puts no question and issues no extra rehearsal.
+        """
+        context, _source, _target = _manual_collateral_context()
+        job = AptSyncJob(context)
+        reviewer = CountingReviewer(
+            {"apt:package:pkg-a": Decision.APPLY, "apt:collateral:install:remove:other-manual": Decision.APPLY}
+        )
+        job.context = dataclasses.replace(job.context, reviewer=reviewer)
+
+        await job.execute()
+
+        assert len(reviewer.calls) == 1

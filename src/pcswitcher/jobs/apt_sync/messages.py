@@ -172,6 +172,23 @@ def build_esm_gate_message(esm_files: Sequence[str], machines: Machines, job_nam
     )
 
 
+def build_collateral_group_title(machines: Machines, manager_id: str) -> str:
+    """The heading over every manual-collateral question, whenever it is asked.
+
+    Names both of `Collateral.protected`'s grounds, because one group can hold both: a
+    package a mark alone protects is not one the user installed there. Which ground holds
+    for a given entry is its own detail line (`Collateral._reason`).
+
+    One builder because the question is asked from two places — the plan-time group and the
+    one `LateCollateral` raises mid-apply — and a heading that differed between them would
+    read as two different questions.
+    """
+    return (
+        f"Packages you installed on {machines.target} or marked as its own that this sync "
+        f"would remove, downgrade or upgrade ({manager_id})"
+    )
+
+
 def build_trigger_phrase(triggers: frozenset[str], candidates: Sequence[str]) -> str:
     """How a collateral item names what causes it: the attributed candidates, or a reference
     back to the earlier screens when the answer really is all of them and listing them would

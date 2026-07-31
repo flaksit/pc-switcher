@@ -17,7 +17,7 @@ import shlex
 from collections.abc import Mapping, Sequence
 
 from pcswitcher.executor import RemoteExecutor
-from pcswitcher.jobs.apt_sync.collateral import Collateral
+from pcswitcher.jobs.apt_sync.collateral import Collateral, LateCollateral
 from pcswitcher.jobs.apt_sync.commands import (
     candidate_version,
     install_args,
@@ -30,7 +30,7 @@ from pcswitcher.jobs.apt_sync.items import APT_PACKAGE_ID_PREFIX, hold_name, pac
 from pcswitcher.jobs.apt_sync.origins import OriginClassifier
 from pcswitcher.jobs.packages.items import DiffAction, DiffClass, ItemClass, ItemDiff, Machines
 from pcswitcher.jobs.packages.review import Decision
-from pcswitcher.jobs.packages.sync_core import ConvergeItemFailed
+from pcswitcher.jobs.packages.sync_core import ConvergeItemDeclined, ConvergeItemFailed
 from pcswitcher.models import CommandResult
 
 
@@ -105,6 +105,7 @@ class PackageConverger:
         derived: DerivedWrites,
         origins: OriginClassifier,
         refresh: MetadataRefresh,
+        late: LateCollateral | None = None,
         held_versions: Mapping[str, str] | None = None,
         stale_holds: frozenset[str] = frozenset(),
     ) -> None:
@@ -115,6 +116,14 @@ class PackageConverger:
         self._derived = derived
         self._origins = origins
         self._refresh = refresh
+        # The mid-apply collateral question for the installs plan time could not simulate
+        # (`PKG-FR-ASK-AGAIN`). Optional so a test converging one package by hand needs no
+        # reviewer; a run without one simply has no late question to put.
+        self._late = late
+        # Package names whose install a kept collateral package withdrew. Read by `hold`,
+        # which may not register a hold for a package that never landed and must not call
+        # that a failure either.
+        self._declined_installs: set[str] = set()
         # `{package name: the version the SOURCE holds it at}` (`PKG-FR-APT-HOLD-VERSION`).
         self._held_versions = dict(held_versions or {})
         # Names the TARGET holds without having them installed. apt refuses to install one
@@ -139,8 +148,21 @@ class PackageConverger:
         Every outcome is recorded against the package name, because the hold that may follow
         it must not be registered for a package that never landed
         (`PKG-FR-APT-HOLD-INERT`).
+
+        The mid-apply collateral question comes first, and comes once: before this run's
+        first install command rather than between two of them, so every question is put
+        before any of the transactions they are about (`PKG-FR-BATCHED`,
+        `PKG-FR-CONSENT-BEFORE-CHANGE`). An install a kept package withdrew is DECLINED, not
+        failed — that is the article's own remedy for keeping a package
+        (`PKG-FR-COLLATERAL-MANUAL`).
         """
         name = package_name(diff.item_id)
+        if self._late is not None:
+            await self._late.ensure_asked(diffs, decisions)
+            withdrawn = self._late.declined(diff.item_id)
+            if withdrawn is not None:
+                self._declined_installs.add(name)
+                raise ConvergeItemDeclined(f"install of {name} withdrawn: {withdrawn}")
         try:
             result = await self._install(name, diff, diffs, decisions)
         except ConvergeItemFailed as exc:
@@ -277,6 +299,14 @@ class PackageConverger:
         """
         name = hold_name(diff.item_id)
         if diff.action == DiffAction.INSTALL:
+            if name in self._declined_installs:
+                # The install was withdrawn by an answer, not by a fault, so its hold is
+                # withdrawn the same way: a hold on a package the target lacks would block
+                # every later attempt to install it, and nothing here failed.
+                raise ConvergeItemDeclined(
+                    f"hold on {name} not applied: its install was withdrawn to keep a package on "
+                    f"{self._machines.target}"
+                )
             blocked = self._hold_refusal(name, diffs, decisions)
             if blocked is not None:
                 raise ConvergeItemFailed(blocked)

@@ -11,6 +11,10 @@ Two batched simulations per run, not one per package: a per-package simulation o
 150-package manual set would cost more than the sync itself. Attribution is what costs extra,
 and only on a run that actually found manual collateral.
 
+A third batch is possible and belongs to `LateCollateral`: an install whose repository this
+run writes cannot be simulated while the review is being built, so its question is asked
+once `/etc/apt` has converged (`PKG-FR-ASK-AGAIN`) rather than replaced by a late refusal.
+
 Known gap, deliberately left: in the removal batch a candidate is exempt from its own
 transaction, so a removal the user skips can still be carried off by ANOTHER approved
 removal's cascade. The apply-time guard refuses that transaction and names the package, so
@@ -20,7 +24,7 @@ simulation on every run with removals, which is the cost this module exists to a
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from functools import partial
 from typing import NamedTuple
 
@@ -39,12 +43,25 @@ from pcswitcher.jobs.apt_sync.items import (
     is_collateral_diff,
     package_name,
 )
-from pcswitcher.jobs.apt_sync.messages import build_trigger_phrase
+from pcswitcher.jobs.apt_sync.messages import build_collateral_group_title, build_trigger_phrase
 from pcswitcher.jobs.apt_sync.origins import OriginClassifier
 from pcswitcher.jobs.apt_sync.reporting import Log
 from pcswitcher.jobs.packages.items import DiffAction, ItemClass, ItemDiff, Machines
-from pcswitcher.jobs.packages.review import Decision, ReviewOutcome
+from pcswitcher.jobs.packages.review import (
+    COLLATERAL_REVIEW_ACTION,
+    SKIP_NOW_WORD,
+    Decision,
+    ReviewEntry,
+    Reviewer,
+    ReviewGroup,
+    ReviewOutcome,
+)
 from pcswitcher.models import Host, LogLevel
+
+# The run's single `apt-get update`, as a bound call rather than the object that owns it
+# (`MetadataRefresh.ensure`): the converger imports this module, so this module cannot import
+# the converger back.
+Refresh = Callable[[], Awaitable[None]]
 
 
 class CollateralEffect(NamedTuple):
@@ -129,6 +146,20 @@ class Collateral:
     @property
     def approved(self) -> frozenset[str]:
         return self._approved
+
+    def allow(self, item_ids: frozenset[str]) -> None:
+        """Add consequences let go ahead by a question asked AFTER `resolve` ran, so the
+        apply-time guard honours an answer given minutes into the converge loop
+        (`LateCollateral`, `PKG-FR-ASK-AGAIN`).
+        """
+        self._approved |= item_ids
+
+    def triggers_of(self, item_id: str) -> frozenset[str]:
+        """The install/remove item_ids whose own transaction reproduces this collateral —
+        what a "keep the package" answer cancels, and nothing else
+        (`PKG-FR-COLLATERAL-ATTRIBUTION`).
+        """
+        return self._trigger_ids.get(item_id, frozenset())
 
     def protected(self) -> frozenset[str]:
         """Packages a collateral removal, downgrade or upgrade must not silently touch: the
@@ -480,3 +511,156 @@ class Collateral:
             snippets=outcome.snippets,
             unresolved=outcome.unresolved,
         )
+
+
+class LateCollateral:
+    """The collateral question for the installs plan time could not simulate
+    (`PKG-FR-ASK-AGAIN`, `PKG-FR-COLLATERAL-MANUAL`).
+
+    An install whose repository this run writes is a name the target's apt has never heard,
+    so `OriginClassifier.target_resolvable` keeps it out of the plan-time simulation — apt
+    refuses the whole simulated batch on one such name — and nothing can be said there about
+    what installing it would cost. Once `/etc/apt` has converged and this run's `apt-get
+    update` has run, apt can say, and the three answers the article requires exist from that
+    moment. Being told afterwards is not one of them.
+
+    Asked ONCE, over every such install together, before the first of them converges —
+    never as each one comes up. That is `PKG-FR-BATCHED` (the questions come one after
+    another with no work between them) and `PKG-FR-CONSENT-BEFORE-CHANGE` at the same time:
+    no package transaction has happened when the last of them is answered, so the stopping
+    answer stops the sync ahead of every transaction it is about.
+
+    Keeping the package leaves the installs that cause it unapplied, which is the article's
+    own remedy — "leaving the changes that cause the loss unapplied rather than failing
+    later". A withdrawn install is therefore a `ConvergeItemDeclined`: not applied, not
+    failed. The apply-time guard behind all of this is untouched and still refuses a real
+    transaction that has drifted onto a protected package nobody saw.
+    """
+
+    def __init__(
+        self,
+        *,
+        collateral: Collateral,
+        origins: OriginClassifier,
+        machines: Machines,
+        manager_id: str,
+        reviewer: Reviewer | None,
+        refresh: Refresh,
+        stale_holds: frozenset[str] = frozenset(),
+        log: Log | None = None,
+    ) -> None:
+        self._collateral = collateral
+        self._origins = origins
+        self._machines = machines
+        self._manager_id = manager_id
+        self._reviewer = reviewer
+        self._refresh = refresh
+        self._stale_holds = stale_holds
+        self._log = log
+        self._asked = False
+        # `{install item_id: why it was not applied}` — the installs a kept package cancels,
+        # and only those (`PKG-FR-COLLATERAL-ATTRIBUTION`).
+        self._declined: dict[str, str] = {}
+
+    def declined(self, item_id: str) -> str | None:
+        """Why this approved install is not being run, or `None` when nothing withdrew it."""
+        return self._declined.get(item_id)
+
+    async def ensure_asked(self, diffs: Sequence[ItemDiff], decisions: Mapping[str, Decision]) -> None:
+        """Put every outstanding collateral question to the user, once per run.
+
+        Idempotent by design: the converger calls it before EVERY install, and the second
+        call onwards is a no-op. That is what makes "before the first install command" and
+        "all in one sitting" the same moment without the converge loop needing a phase of
+        its own.
+
+        Costs one `apt-get --dry-run` (plus attribution, only where collateral is found) on
+        a run that installs a package from a repository it writes, and no command at all on
+        every other run.
+        """
+        if self._asked:
+            return
+        self._asked = True
+
+        names = [
+            package_name(diff.item_id)
+            for diff in diffs
+            if diff.item_class is ItemClass.APT_PACKAGE
+            and diff.action is DiffAction.INSTALL
+            and decisions.get(diff.item_id) == Decision.APPLY
+            and not self._origins.target_resolvable(diff.item_id)
+        ]
+        if not names:
+            return
+
+        # apt can only answer against the repository this run has just written, so the
+        # metadata refresh comes first. It is the run's single one either way: a failure
+        # here fails this install exactly as it does without a question to ask.
+        await self._refresh()
+        install = (
+            partial(install_args, allow_held=True)
+            if any(name in self._stale_holds for name in names)
+            else install_args
+        )
+        found = [
+            item
+            for item in await self._collateral.for_direction(names, frozenset(), install, verb="Installing")
+            # A consequence the plan-time question already got a go-ahead for is not put
+            # twice: the id is the consequence, so that answer covers this cause too. A
+            # DECLINED one IS asked again — that answer cancelled the changes it was about,
+            # and these are different changes (`PKG-FR-COLLATERAL-ATTRIBUTION`).
+            if item.item_id not in self._collateral.approved
+        ]
+        if found:
+            await self._settle(found)
+
+    async def _settle(self, found: Sequence[ItemDiff]) -> None:
+        """Ask, then turn the answers into the guard's approvals and the withdrawn installs.
+
+        Stopping needs no branch: `_review_collateral_group` raises `SyncAbortedByUser`,
+        which propagates out of `apply()` and through the orchestrator's per-job handler
+        untouched, ending the whole run exactly as the plan-time answer does.
+        """
+        outcome = await self._ask(found)
+        self._collateral.allow(
+            frozenset(item.item_id for item in found if outcome.decisions.get(item.item_id) == Decision.APPLY)
+        )
+        approved = self._collateral.approved
+        for item in found:
+            if self._log is not None:
+                # `PKG-FR-LOG-DECISIONS`: this question is not in the plan, so the base
+                # `_log_decisions` pass cannot name it. The words are the answer's own.
+                word = item.act_word if item.item_id in approved else SKIP_NOW_WORD
+                self._log(Host.TARGET, LogLevel.FULL, f"reviewed {item.label} (collateral): {word}")
+            if item.item_id in approved:
+                continue
+            finding = (item.detail or "").split("\n")[0]
+            for trigger_id in self._collateral.triggers_of(item.item_id):
+                self._declined[trigger_id] = f"{item.label} was kept on {self._machines.target}: {finding}"
+
+    async def _ask(self, found: Sequence[ItemDiff]) -> ReviewOutcome:
+        """One `COLLATERAL_REVIEW_ACTION` group through the job's own reviewer, so the
+        wording, the three answers and the attribution are the ones the plan-time question
+        already uses.
+
+        No reviewer is `PKG-FR-NO-TERMINAL`'s case rather than an error: with nobody to ask,
+        every item is declined for this run, which an outcome carrying no decision says.
+        """
+        if self._reviewer is None:
+            return ReviewOutcome(decisions={}, was_interactive=False)
+        group = ReviewGroup(
+            manager=self._manager_id,
+            action=COLLATERAL_REVIEW_ACTION,
+            title=build_collateral_group_title(self._machines, self._manager_id),
+            entries=tuple(
+                ReviewEntry(
+                    item_id=item.item_id,
+                    label=item.label,
+                    action_label=item.act_word or "resolve",
+                    detail=item.detail,
+                    answer_hints=item.answer_hints,
+                )
+                for item in found
+            ),
+        )
+        return await self._reviewer.review((group,))

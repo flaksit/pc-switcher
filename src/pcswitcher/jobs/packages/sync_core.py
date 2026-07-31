@@ -47,6 +47,7 @@ from pcswitcher.jobs.packages.state import DecisionEntry, DecisionFile
 from pcswitcher.models import CommandResult, Host, JobSkipped, LogLevel, ProgressUpdate
 
 __all__ = [
+    "ConvergeItemDeclined",
     "ConvergeItemFailed",
     "PackageItemFailures",
     "PackagePlan",
@@ -62,6 +63,22 @@ class ConvergeItemFailed(RuntimeError):
     Distinct from a converge command simply exiting non-zero (which `apply()` also treats
     as a per-item failure via the returned `CommandResult`): this exception is for a
     converge step that refuses to even attempt the command.
+    """
+
+
+class ConvergeItemDeclined(RuntimeError):
+    """Raised by a `converge()` implementation for an item the user withdrew after the
+    review, when a question only this run's own earlier changes made answerable came back
+    "do not do this" (`PKG-FR-ASK-AGAIN`).
+
+    Neither applied nor failed, which is the whole reason it is not `ConvergeItemFailed`:
+    an approved install a mid-apply collateral question leaves unapproved is a change the
+    user declined, and `PKG-FR-COLLATERAL-MANUAL` requires exactly that outcome — "leaving
+    the changes that cause the loss unapplied rather than failing later". `apply()` logs it
+    with its reason and counts it in neither the applied nor the failed total.
+
+    Only `apt_sync` raises it today (`LateCollateral`). A converge step that refuses an item
+    on its own authority still raises `ConvergeItemFailed`: nobody declined that one.
     """
 
 
@@ -243,7 +260,8 @@ class PackageSyncJob(SyncJob):
         """Apply one approved diff on the target.
 
         May raise `ConvergeItemFailed` to refuse the item without even attempting the
-        mutating command (e.g. a transaction-safety guard); otherwise returns the
+        mutating command (e.g. a transaction-safety guard), or `ConvergeItemDeclined` for
+        one the user withdrew after the review; otherwise returns the
         `CommandResult` of the converge command, whose `.success` decides pass/fail.
         Called for every APPLY-decided diff whose action is `INSTALL`, `REMOVE` or
         `CHANGE` — `REPORT_ONLY` diffs never reach this hook (see `apply()`).
@@ -413,6 +431,11 @@ class PackageSyncJob(SyncJob):
         were unreproducible items never has any INSTALL/CHANGE/REMOVE work to do, and
         must still fail if one of them ended up unresolved.
 
+        `ConvergeItemDeclined` is the third outcome: the item is neither applied nor
+        failed, because the user withdrew it after the review (`PKG-FR-ASK-AGAIN`). It is
+        named in its own summary line so the run says what happened to it, and it never
+        reaches `PackageItemFailures`.
+
         Dry-run (ADR-014): each intended action is logged at FULL with a `[dry-run] `
         prefix, carrying the diff's own detail, and no converge command is ever issued.
 
@@ -451,6 +474,7 @@ class PackageSyncJob(SyncJob):
         total = len(apply_diffs)
 
         failures: list[tuple[ItemDiff, str]] = []
+        declined: list[tuple[ItemDiff, str]] = []
         if total == 0:
             self._log(Host.TARGET, LogLevel.INFO, f"{prefix}No {self.manager_id} changes to apply")
             self._report_progress(ProgressUpdate(percent=100))
@@ -466,15 +490,22 @@ class PackageSyncJob(SyncJob):
                     detail = f" — {diff.detail}" if diff.detail else ""
                     self._log(Host.TARGET, LogLevel.FULL, f"{prefix}Would {diff.action.value} {diff.label}{detail}")
                 else:
-                    await self._converge_one(diff, failures)
+                    await self._converge_one(diff, failures, declined)
                 self._report_progress(ProgressUpdate(percent=int((index + 1) / total * 100)))
 
-            succeeded = total - len(failures)
+            succeeded = total - len(failures) - len(declined)
             self._log(
                 Host.TARGET,
                 LogLevel.INFO,
                 f"{prefix}{succeeded}/{total} {self.manager_id} change(s) applied",
             )
+            if declined:
+                summary = "; ".join(f"{diff.label}: {reason}" for diff, reason in declined)
+                self._log(
+                    Host.TARGET,
+                    LogLevel.INFO,
+                    f"{len(declined)} {self.manager_id} change(s) not applied, by the user's answer: {summary}",
+                )
 
         all_failures = [*failures, *self._unresolved_as_failures(plan, outcome)]
         if all_failures:
@@ -573,9 +604,19 @@ class PackageSyncJob(SyncJob):
         assert self._accepted_outcome is not None
         return self._accepted_outcome.was_interactive
 
-    async def _converge_one(self, diff: ItemDiff, failures: list[tuple[ItemDiff, str]]) -> None:
+    async def _converge_one(
+        self, diff: ItemDiff, failures: list[tuple[ItemDiff, str]], declined: list[tuple[ItemDiff, str]]
+    ) -> None:
         try:
             result = await self.converge(diff)
+        except ConvergeItemDeclined as exc:
+            # Not a failure and not an application: the user answered a question this run's
+            # own earlier changes made answerable, and the answer withdrew the item
+            # (`PKG-FR-ASK-AGAIN`). Per-item detail at FULL like every other converge line,
+            # never ERROR; the INFO summary after the loop names it and its reason.
+            declined.append((diff, str(exc)))
+            self._log(Host.TARGET, LogLevel.FULL, f"{diff.label} not applied: {exc}")
+            return
         except ConvergeItemFailed as exc:
             failures.append((diff, str(exc)))
             self._log(Host.TARGET, LogLevel.ERROR, f"{diff.label} failed: {exc}", stderr=str(exc))

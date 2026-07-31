@@ -14,10 +14,11 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import Any, ClassVar, override
 
-from pcswitcher.jobs.apt_sync.collateral import Collateral
+from pcswitcher.jobs.apt_sync.collateral import Collateral, LateCollateral
 from pcswitcher.jobs.apt_sync.commands import SOURCE_SUDO_COMMANDS, TARGET_SUDO_COMMANDS
 from pcswitcher.jobs.apt_sync.derived import DerivedWrites
 from pcswitcher.jobs.apt_sync.diffing import (
@@ -48,7 +49,7 @@ from pcswitcher.jobs.apt_sync.items import (
     pin_filename,
 )
 from pcswitcher.jobs.apt_sync.keyrings import Keyrings
-from pcswitcher.jobs.apt_sync.messages import build_repo_conflict_detail
+from pcswitcher.jobs.apt_sync.messages import build_collateral_group_title, build_repo_conflict_detail
 from pcswitcher.jobs.apt_sync.origins import OriginClassifier, OriginPlan
 from pcswitcher.jobs.apt_sync.packages import MetadataRefresh, PackageConverger
 from pcswitcher.jobs.apt_sync.probe import AptProbe, OriginFacts, RepoConflict, RepoFacts
@@ -219,6 +220,16 @@ class AptSyncJob(PackageSyncJob):
                 derived=derived,
                 origins=origins,
                 refresh=self._refresh,
+                late=LateCollateral(
+                    collateral=collateral,
+                    origins=origins,
+                    machines=self.machines,
+                    manager_id=self.manager_id,
+                    reviewer=self.context.reviewer,
+                    refresh=partial(self._refresh.ensure, self.target, self.manager_id),
+                    stale_holds=stale_holds,
+                    log=self._log,
+                ),
                 held_versions=self._held_versions,
                 stale_holds=stale_holds,
             ),
@@ -593,14 +604,7 @@ class AptSyncJob(PackageSyncJob):
                 ReviewGroup(
                     manager=self.manager_id,
                     action=COLLATERAL_REVIEW_ACTION,
-                    # Both of `Collateral.protected`'s grounds, because one group can hold
-                    # both: a package a mark alone protects is not one the user installed
-                    # there. Which ground holds for a given entry is its own detail line
-                    # (`Collateral._reason`).
-                    title=(
-                        f"Packages you installed on {self.machines.target} or marked as its own that this sync "
-                        f"would remove, downgrade or upgrade ({self.manager_id})"
-                    ),
+                    title=build_collateral_group_title(self.machines, self.manager_id),
                     entries=tuple(
                         ReviewEntry(
                             item_id=diff.item_id,

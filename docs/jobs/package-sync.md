@@ -117,7 +117,11 @@ One case is told rather than asked. Inside the batch of removals you were offere
 
 Skipping cancels only the changes that actually cause the collateral. The question names them, and everything else you approved in the same review is applied as you decided. Where no single change causes it on its own — apt keeps a package as long as either of two others is there, and drops it once both go — the question says "the packages listed earlier" and keeping the package cancels all of them, because that combination really is the cause. Skipping never rewrites an answer you gave: a package you marked never-offer-again keeps that mark even when the skip cancels it for this run.
 
-One class of install cannot be classified that way and is deliberately left out of the plan-time simulation: a package whose repository this run is about to add on the target's behalf. Until that repository lands the target's apt has never heard the name, and apt refuses the whole simulated batch on one such name — which would strip the protection from every other package in the run rather than weaken it for one. Those packages are covered instead by the same simulation re-run per item after `/etc/apt` has converged, where apt can resolve them: unapproved manual collateral fails that one item. The cost is real — for those packages you are told afterwards rather than asked beforehand — and is accepted because the facts the question needs do not exist while the review is being built.
+One class of install cannot be classified while the review is being built: a package whose repository this run is about to add on the target's behalf. Until that repository lands the target's apt has never heard the name, and apt refuses the whole simulated batch on one such name — which would strip the protection from every other package in the run rather than weaken it for one.
+
+You are asked about those later in the same run, once the repositories have landed and the package lists have been refreshed, which is the first moment apt can say what installing them would cost. It is the same question with the same three answers, and every one of those questions comes before the first of those installs runs — so keeping a package leaves its install unapplied rather than undoing it, and stopping the sync stops it before any of them.
+
+An install you withdraw that way is neither applied nor failed. The run says what happened to it and moves on to the rest of what you approved.
 
 ## Repositories, pins and keys are derived
 
