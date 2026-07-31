@@ -22,7 +22,7 @@ Intent under test: `docs/planning/package-sync-user-requirements.md` and its tes
 expected: |
   On a real terminal, with the two machines diverged as the runbook sets them up:
   - One question per group: arrow keys between lines, `<y>`/`<s>`/`<x>` on the focused line, a shifted key on every line, `<enter>` to confirm, `<ctrl-c>` to abort the sync. No second pass and no leftover set. A question that records nothing offers two answers, its legend shorter by exactly `<x>`. The questions that must show something first — a repository being deleted, a collateral package, an unreproducible item — come one item at a time.
-  - Every title, detail and answer names the two machines by hostname and states its own effect on one of them; the permanent answer says the user will not be asked again and whose machine the item is. "source" and "target" name no machine anywhere.
+  - Every title, detail and answer names the two machines by hostname and states its own effect on one of them; the permanent answer says the user will not be asked again and whose machine the item is. A collateral question names the change that causes it and the ground that protects the package, and is answered per consequence. "source" and "target" name no machine anywhere.
   - What each column said is what lands in `*.decisions.yaml` on the machine that holds the item: an install on the source, a removal on the target. The snippet editor rejects a whitespace-only body, and an accepted snippet lands in `~/.config/pc-switcher/package-snippets.yaml` and replays on the target in the same run.
 result: [pending]
 
@@ -30,14 +30,14 @@ result: [pending]
 expected: |
   The same run, checked afterwards on both machines (runbook §5):
   - Packages replicate, except what the user skipped or marked; conflicts and version differences are reported before any change, never silently converged; a package marked as a machine's own stays inert, and is named rather than taken when another change would remove it.
-  - A held package arrives at the source's version; a sideloaded snap is left alone on both machines and named in a warning; a flatpak remote's filter reaches the target at the same path; a repository the target still installs from is not offered for deletion; a remote nothing uses is deleted with no question.
-  - The log names every item and the answer it received, carries each package manager's own output, and shows a URL credential as `***@` and never in full. A dead package-manager read fails its own job; the other three still run (runbook §6).
+  - A held package arrives at the source's version, including one the target held without having it; a sideloaded snap is left alone on both machines and named in a warning; a flatpak remote's filter reaches the target at the same path and the target's own comes off before the installs; a repository the target still installs from is not offered for deletion; a remote nothing uses is deleted with no question.
+  - The log names every item and the answer it received, carries each package manager's own output, and shows a URL credential as `***@` and never in full, whatever characters it holds. With no terminal, no snippet registry is transferred and no snapd refresh policy is written on a machine whose own could not be read; a read that went dark fails its own job, the other jobs still run, and the end-of-run message gives one line per failed job naming the reason it recorded (runbook §6).
 result: [pending]
 
 ### 3. --confirm-each-command gate and verbatim debug trace
 expected: |
   Only reachable by hand: the gate refuses to run without a TTY. On a real terminal, run `pc-switcher sync <target> --confirm-each-command` with diverged packages, then once without the flag to confirm the sync is unchanged. Confirm:
-  - Before every modification a prompt shows the exact command (or `send_file <local> -> <remote>`) and composes cleanly with the paused Rich Live display; Enter alone re-prompts, `p` runs that one command, `a` and Ctrl-C abort the whole sync. The gate appears for target writes and for source writes (a decision file, an authored snippet), and never for reads.
+  - Before every modification a question shows the job, the machine by hostname and the exact command (or `send_file <local> -> <remote>`), and composes cleanly with the paused Rich Live display; Enter alone re-asks, `p` runs that one command, `a` and Ctrl-C abort the whole sync. The gate appears for target writes and for source writes (a decision file, an authored snippet), and never for reads.
   - In the same run's log, every command appears verbatim at DEBUG with its job and host, and a mutating line carries its description in brackets (`PKG-FR-CONFIRM-EACH`).
 result: [pending]
 
