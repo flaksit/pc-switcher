@@ -1,0 +1,18 @@
+Bring the doc 100% in line with the changed functional requirements and logic (the listed ADRs and conformance-criteria doc): thorough sweep.
+First of all, the doc needs to list each and every single scenario that is possible based on the functional requirements/logic, which you find in the conformance-criteria. Every single logic path/branch must be listed. There are probably scenario's that are not correct anymore and others missing. Find and fix them. Don't touch the numbering as such, as the tests refer to them, so there is cross-reference between tests and the scenario-coverage doc.
+Secondly, verify the cross-referencing and update/extend the tests where needed so they fully cover each scenario, so they cover each and every possible path/branch in the functional logic. Update the cross-referencing in scenario-coverage as you go. So it is not only an existence-check, but checking if the test really tests each corner of the scenario it is intended to test. It is ok and good to combine multiple paths/branches/scenarios in a single test: more efficient execution. But the priority is completeness.
+
+The audience of scenario-coverage is
+- the dev who writes the tests (you)
+- the reviewer who validates the tool by live-testing the tool
+- the reviewer who validates the tool by code- and test-inspection
+This doc is valuable after this phase is closed, for follow-up fixes and features. So should be in docs/dev, I think.
+
+More clear now? Ask if not 100% sure!
+
+---
+
+Bug with your question-tool. You seem to not get my notes anymore. Here they are. Go.
+
+Cross-ref: As currently one-directional, you are free to update the scenario numbers now, until they become bi-directional.
+Delivery: I don't review. Ask codex (cli) to review for completeness.
