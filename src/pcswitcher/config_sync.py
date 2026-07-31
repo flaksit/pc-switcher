@@ -1,4 +1,10 @@
-"""Configuration sync between source and target machines."""
+"""Configuration sync between the two machines.
+
+Every line this module prints goes on screen at a question the user answers, so it names
+both machines by hostname and never by the role this run gave them
+(`PKG-FR-NAME-THE-MACHINES`). The hostnames are threaded in as two parameters, the same
+pair `StepGate` takes, rather than re-derived here.
+"""
 
 from __future__ import annotations
 
@@ -53,12 +59,8 @@ async def _get_target_config(target: RemoteExecutor) -> str | None:
     return None
 
 
-def _generate_diff(source_content: str, target_content: str) -> str:
-    """Generate a unified diff between source and target configs.
-
-    Args:
-        source_content: Source config file content
-        target_content: Target config file content
+def _generate_diff(source_content: str, target_content: str, source_hostname: str, target_hostname: str) -> str:
+    """Generate a unified diff between the two machines' configs.
 
     Returns:
         Unified diff string with color-friendly markers
@@ -69,19 +71,15 @@ def _generate_diff(source_content: str, target_content: str) -> str:
     diff = difflib.unified_diff(
         target_lines,
         source_lines,
-        fromfile="target config",
-        tofile="source config",
+        fromfile=f"{target_hostname} config",
+        tofile=f"{source_hostname} config",
         lineterm="",
     )
     return "".join(diff)
 
 
-def _prompt_new_config(console: Console, source_content: str) -> bool:
-    """Prompt user to accept new config for target.
-
-    Args:
-        console: Rich console for display
-        source_content: Source config content to display
+def _prompt_new_config(console: Console, source_content: str, source_hostname: str, target_hostname: str) -> bool:
+    """Prompt the user to apply this machine's config to the machine being synced to.
 
     Returns:
         True if user accepts, False if user declines
@@ -89,8 +87,8 @@ def _prompt_new_config(console: Console, source_content: str) -> bool:
     console.print()
     console.print(
         Panel(
-            "[yellow]Target has no configuration file.[/yellow]\n"
-            "The following configuration from source will be applied:",
+            f"[yellow]{target_hostname} has no configuration file.[/yellow]\n"
+            f"This configuration from {source_hostname} will be applied:",
             title="Config Sync",
             border_style="yellow",
         )
@@ -99,13 +97,13 @@ def _prompt_new_config(console: Console, source_content: str) -> bool:
 
     # Display config with syntax highlighting
     syntax = Syntax(source_content, "yaml", theme="monokai", line_numbers=True)
-    console.print(Panel(syntax, title="Source Configuration", border_style="blue"))
+    console.print(Panel(syntax, title=f"Configuration on {source_hostname}", border_style="blue"))
     console.print()
 
     # Prompt for confirmation. Spell out that declining aborts the whole sync —
     # a first sync needs the config applied, so "n" is not "skip config and
     # continue" but "abort". The bare y/n default hid this (a footgun).
-    console.print("[bold]Apply this config to the target?[/bold]")
+    console.print(f"[bold]Apply this config to {target_hostname}?[/bold]")
     console.print("  [cyan]y[/cyan] - Apply the config and continue the sync")
     console.print("  [cyan]n[/cyan] - Abort the sync (nothing is transferred)")
     console.print()
@@ -113,7 +111,7 @@ def _prompt_new_config(console: Console, source_content: str) -> bool:
     return response.lower() == "y"
 
 
-def _display_config_diff(console: Console, diff: str) -> None:
+def _display_config_diff(console: Console, diff: str, source_hostname: str, target_hostname: str) -> None:
     """Print the config-differs warning panel and the diff itself.
 
     Shared by `_prompt_config_diff` (interactive) and the dry-run preview path
@@ -126,7 +124,8 @@ def _display_config_diff(console: Console, diff: str) -> None:
     console.print()
     console.print(
         Panel(
-            "[yellow]Target configuration differs from source.[/yellow]\nReview the differences below:",
+            f"[yellow]{target_hostname}'s configuration differs from {source_hostname}'s.[/yellow]\n"
+            "Review the differences below:",
             title="Config Sync",
             border_style="yellow",
         )
@@ -139,22 +138,18 @@ def _display_config_diff(console: Console, diff: str) -> None:
     console.print()
 
 
-def _prompt_config_diff(console: Console, diff: str) -> ConfigSyncAction:
-    """Prompt user to choose action when configs differ.
-
-    Args:
-        console: Rich console for display
-        diff: Unified diff between configs
+def _prompt_config_diff(console: Console, diff: str, source_hostname: str, target_hostname: str) -> ConfigSyncAction:
+    """Prompt the user to choose an action when the two configs differ.
 
     Returns:
         User's chosen action
     """
-    _display_config_diff(console, diff)
+    _display_config_diff(console, diff, source_hostname, target_hostname)
 
     # Display options
     console.print("[bold]Choose an action:[/bold]")
-    console.print("  [cyan]a[/cyan] - Accept config from source (overwrite target)")
-    console.print("  [cyan]k[/cyan] - Keep current config on target")
+    console.print(f"  [cyan]a[/cyan] - Take {source_hostname}'s config (overwrites {target_hostname}'s)")
+    console.print(f"  [cyan]k[/cyan] - Keep {target_hostname}'s current config")
     console.print("  [cyan]x[/cyan] - Abort sync")
     console.print()
 
@@ -180,25 +175,35 @@ async def _handle_config_sync(
     console: Console,
     auto_accept: bool,
     dry_run: bool,
+    source_hostname: str,
+    target_hostname: str,
 ) -> bool:
-    """Handle config sync logic based on target state.
+    """Handle config sync logic based on the other machine's state.
 
     Returns True if sync should continue, False if aborted.
     """
-    # Scenario 1: No config on target
+    # Scenario 1: no config there yet
     if target_content is None:
         return await _handle_no_target_config(
-            target, source_config_path, source_content, console, auto_accept, dry_run
+            target, source_config_path, source_content, console, auto_accept, dry_run, source_hostname, target_hostname
         )
 
     # Scenario 2: Configs match
     if source_content.strip() == target_content.strip():
-        console.print("[dim]Target config matches source, skipping config sync.[/dim]")
+        console.print(f"[dim]{target_hostname}'s config matches {source_hostname}'s, skipping config sync.[/dim]")
         return True
 
     # Scenario 3: Configs differ
     return await _handle_config_diff(
-        target, source_config_path, source_content, target_content, console, auto_accept, dry_run
+        target,
+        source_config_path,
+        source_content,
+        target_content,
+        console,
+        auto_accept,
+        dry_run,
+        source_hostname,
+        target_hostname,
     )
 
 
@@ -209,16 +214,21 @@ async def _handle_no_target_config(
     console: Console,
     auto_accept: bool,
     dry_run: bool,
+    source_hostname: str,
+    target_hostname: str,
 ) -> bool:
-    """Handle case when target has no config."""
+    """Handle the case where the machine being synced to has no config."""
     if dry_run:
         # ADR-014: a rehearsal never prompts; log the preview and proceed.
-        console.print("[dim][dry-run] Target has no config; source config would be applied (no changes made).[/dim]")
+        console.print(
+            f"[dim][dry-run] {target_hostname} has no config; {source_hostname}'s would be applied "
+            "(no changes made).[/dim]"
+        )
         return True
 
-    if auto_accept or _prompt_new_config(console, source_content):
-        await _copy_config_to_target(target, source_config_path)
-        console.print("[green]Configuration copied to target.[/green]")
+    if auto_accept or _prompt_new_config(console, source_content, source_hostname, target_hostname):
+        await _copy_config_to_target(target, source_config_path, target_hostname)
+        console.print(f"[green]Configuration copied to {target_hostname}.[/green]")
         return True
     # Decline silently: _sync_config_to_target raises SyncAbortedByUser and the
     # single CLI `except SyncAbortedByUser` handler prints the one abort line
@@ -234,32 +244,34 @@ async def _handle_config_diff(
     console: Console,
     auto_accept: bool,
     dry_run: bool,
+    source_hostname: str,
+    target_hostname: str,
 ) -> bool:
-    """Handle case when configs differ."""
+    """Handle the case where the two machines' configs differ."""
     if auto_accept:
         if dry_run:
-            console.print("[dim]Configuration would be copied to target (auto-accepted).[/dim]")
+            console.print(f"[dim]Configuration would be copied to {target_hostname} (auto-accepted).[/dim]")
         else:
-            await _copy_config_to_target(target, source_config_path)
-            console.print("[green]Configuration copied to target (auto-accepted).[/green]")
+            await _copy_config_to_target(target, source_config_path, target_hostname)
+            console.print(f"[green]Configuration copied to {target_hostname} (auto-accepted).[/green]")
         return True
 
-    diff = _generate_diff(source_content, target_content)
+    diff = _generate_diff(source_content, target_content, source_hostname, target_hostname)
 
     if dry_run:
         # ADR-014: a rehearsal never prompts; show the diff as a read-only preview.
-        _display_config_diff(console, diff)
-        console.print("[dim][dry-run] Config differs; source config would be applied (no changes made).[/dim]")
+        _display_config_diff(console, diff, source_hostname, target_hostname)
+        console.print(f"[dim][dry-run] Configs differ; {source_hostname}'s would be applied (no changes made).[/dim]")
         return True
 
-    action = _prompt_config_diff(console, diff)
+    action = _prompt_config_diff(console, diff, source_hostname, target_hostname)
 
     if action == ConfigSyncAction.ACCEPT_SOURCE:
-        await _copy_config_to_target(target, source_config_path)
-        console.print("[green]Configuration copied to target.[/green]")
+        await _copy_config_to_target(target, source_config_path, target_hostname)
+        console.print(f"[green]Configuration copied to {target_hostname}.[/green]")
         return True
     if action == ConfigSyncAction.KEEP_TARGET:
-        console.print("[yellow]Keeping existing target configuration.[/yellow]")
+        console.print(f"[yellow]Keeping {target_hostname}'s existing configuration.[/yellow]")
         return True
     # ABORT: decline silently — the single CLI `except SyncAbortedByUser`
     # handler owns the one user-facing abort line (01-16 single-message
@@ -273,6 +285,8 @@ async def sync_config_to_target(
     ui: TerminalUI | None,
     console: Console,
     *,
+    source_hostname: str,
+    target_hostname: str,
     auto_accept: bool = False,
     dry_run: bool = False,
 ) -> bool:
@@ -294,6 +308,8 @@ async def sync_config_to_target(
             other than `config.yaml` must have that file transferred, not a sibling).
         ui: TerminalUI instance (will be paused during prompts)
         console: Rich console for display
+        source_hostname: This machine's hostname, named in every line the user reads
+        target_hostname: The other machine's hostname, named in every line the user reads
         auto_accept: If True, auto-accept source config without prompting
         dry_run: If True, show diff preview without copying file
 
@@ -305,7 +321,7 @@ async def sync_config_to_target(
     """
     # Read source config from the path the caller passed, whatever its name.
     if not source_config_path.exists():
-        raise RuntimeError(f"Source config not found: {source_config_path}")
+        raise RuntimeError(f"No pc-switcher config on {source_hostname} at {source_config_path}")
 
     source_content = source_config_path.read_text()
 
@@ -325,7 +341,15 @@ async def sync_config_to_target(
 
     try:
         should_continue = await _handle_config_sync(
-            target, source_config_path, source_content, target_content, console, auto_accept, dry_run
+            target,
+            source_config_path,
+            source_content,
+            target_content,
+            console,
+            auto_accept,
+            dry_run,
+            source_hostname,
+            target_hostname,
         )
         return should_continue
     finally:
@@ -335,28 +359,24 @@ async def sync_config_to_target(
             ui.resume()
 
 
-async def _copy_config_to_target(target: RemoteExecutor, source_path: Path) -> None:
-    """Copy config file from source to target.
-
-    Args:
-        target: RemoteExecutor for target machine
-        source_path: Local path to source config file
+async def _copy_config_to_target(target: RemoteExecutor, source_path: Path, target_hostname: str) -> None:
+    """Copy this machine's config file to the machine being synced to.
 
     Raises:
         RuntimeError: If copy fails
     """
-    # Ensure directory exists on target
+    # Ensure the directory exists there
     result = await target.run_command(
-        f"mkdir --parents {CONFIG_REMOTE_DIR}", mutates="create the pc-switcher config directory on the target"
+        f"mkdir --parents {CONFIG_REMOTE_DIR}", mutates="create the pc-switcher config directory"
     )
     if not result.success:
-        raise RuntimeError(f"Failed to create config directory on target: {result.stderr}")
+        raise RuntimeError(f"Failed to create the config directory on {target_hostname}: {result.stderr}")
 
     # Copy file via SFTP
     # RemoteExecutor.send_file expects absolute remote path, so expand ~
     result = await target.run_command("echo $HOME")
     if not result.success:
-        raise RuntimeError("Failed to get home directory on target")
+        raise RuntimeError(f"Failed to read the home directory on {target_hostname}")
     home_dir = result.stdout.strip()
 
     # Derive the absolute path from CONFIG_REMOTE_PATH by expanding the ~ prefix
@@ -365,5 +385,5 @@ async def _copy_config_to_target(target: RemoteExecutor, source_path: Path) -> N
     await target.send_file(
         source_path,
         absolute_remote_path,
-        mutates=f"overwrite the target's pc-switcher config at {CONFIG_REMOTE_PATH} with this machine's copy",
+        mutates=f"overwrite the pc-switcher config at {CONFIG_REMOTE_PATH} with this machine's copy",
     )

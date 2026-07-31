@@ -16,6 +16,11 @@ from pcswitcher.config_sync import (
 )
 from pcswitcher.executor import RemoteExecutor
 
+# The two machines are named by hostname in everything config sync prints
+# (`PKG-FR-NAME-THE-MACHINES`), so every call has to supply them.
+ATLAS = "Atlas"
+NOMAD = "Nomad"
+
 pytestmark = pytest.mark.smoke
 
 
@@ -59,7 +64,7 @@ class TestConfigSyncIntegration:
             local_path = Path(f.name)
 
         try:
-            await _copy_config_to_target(pc1_executor, local_path)
+            await _copy_config_to_target(pc1_executor, local_path, NOMAD)
 
             # Verify file was created
             result = await pc1_executor.run_command("cat ~/.config/pc-switcher/config.yaml")
@@ -81,7 +86,7 @@ class TestConfigSyncIntegration:
             local_path = Path(f.name)
 
             try:
-                await _copy_config_to_target(pc1_executor, local_path)
+                await _copy_config_to_target(pc1_executor, local_path, NOMAD)
 
                 # Verify directory was created
                 result = await pc1_executor.run_command("test -d ~/.config/pc-switcher")
@@ -105,7 +110,9 @@ class TestConfigSyncIntegration:
             local_path = Path(f.name)
 
             try:
-                result = await sync_config_to_target(pc1_executor, local_path, None, console)
+                result = await sync_config_to_target(
+                    pc1_executor, local_path, None, console, source_hostname=ATLAS, target_hostname=NOMAD
+                )
 
                 assert result is True
                 # Verify "skipping" message was printed
@@ -129,7 +136,9 @@ class TestConfigSyncIntegration:
 
             try:
                 with patch("pcswitcher.config_sync._prompt_new_config", return_value=True):
-                    result = await sync_config_to_target(pc1_executor, local_path, None, console)
+                    result = await sync_config_to_target(
+                        pc1_executor, local_path, None, console, source_hostname=ATLAS, target_hostname=NOMAD
+                    )
 
                 assert result is True
 
@@ -153,7 +162,9 @@ class TestConfigSyncIntegration:
 
         try:
             with patch("pcswitcher.config_sync._prompt_new_config", return_value=False):
-                result = await sync_config_to_target(pc1_executor, local_path, None, console)
+                result = await sync_config_to_target(
+                    pc1_executor, local_path, None, console, source_hostname=ATLAS, target_hostname=NOMAD
+                )
 
             assert result is False
 
@@ -180,7 +191,9 @@ class TestConfigSyncIntegration:
                 "pcswitcher.config_sync._prompt_config_diff",
                 return_value=ConfigSyncAction.ACCEPT_SOURCE,
             ):
-                result = await sync_config_to_target(pc1_executor, local_path, None, console)
+                result = await sync_config_to_target(
+                    pc1_executor, local_path, None, console, source_hostname=ATLAS, target_hostname=NOMAD
+                )
 
             assert result is True
 
@@ -208,7 +221,9 @@ class TestConfigSyncIntegration:
                 "pcswitcher.config_sync._prompt_config_diff",
                 return_value=ConfigSyncAction.KEEP_TARGET,
             ):
-                result = await sync_config_to_target(pc1_executor, local_path, None, console)
+                result = await sync_config_to_target(
+                    pc1_executor, local_path, None, console, source_hostname=ATLAS, target_hostname=NOMAD
+                )
 
             assert result is True
 
@@ -236,7 +251,9 @@ class TestConfigSyncIntegration:
                 "pcswitcher.config_sync._prompt_config_diff",
                 return_value=ConfigSyncAction.ABORT,
             ):
-                result = await sync_config_to_target(pc1_executor, local_path, None, console)
+                result = await sync_config_to_target(
+                    pc1_executor, local_path, None, console, source_hostname=ATLAS, target_hostname=NOMAD
+                )
 
             assert result is False
         finally:
@@ -264,7 +281,9 @@ class TestConfigSyncIntegration:
 
         try:
             with patch("pcswitcher.config_sync._prompt_new_config", return_value=False):
-                await sync_config_to_target(pc1_executor, local_path, ui, console)
+                await sync_config_to_target(
+                    pc1_executor, local_path, ui, console, source_hostname=ATLAS, target_hostname=NOMAD
+                )
 
             ui.pause.assert_called_once()
             ui.resume.assert_called_once()

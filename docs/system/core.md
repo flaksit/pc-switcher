@@ -44,11 +44,11 @@ The orchestrator brings the target's pc-switcher to the source's version, then r
 
 4. **Given** the install or the post-install `pc-switcher --version` check fails, **Then** the job raises `RuntimeError` and the sync aborts
 
-5. **Given** the target has no `~/.config/pc-switcher/config.yaml`, **When** the config-sync step runs, **Then** the source config is displayed and the user is asked `Apply this config to the target?` (`y` applies and continues, `n` — the default — aborts the whole sync with `SyncAbortedByUser`)
+5. **Given** the target has no `~/.config/pc-switcher/config.yaml`, **When** the config-sync step runs, **Then** this machine's config is displayed and the user is asked `Apply this config to <hostname>?` — every line of the screen names both machines by hostname (`PKG-FR-NAME-THE-MACHINES`) (`y` applies and continues, `n` — the default — aborts the whole sync with `SyncAbortedByUser`)
 
-6. **Given** the target config differs from the source's, **Then** a unified diff is shown with three choices: `a` accept from source, `k` keep the target's, `x` abort (the default)
+6. **Given** the target config differs from the source's, **Then** a unified diff is shown with three choices: `a` take this machine's config, `k` keep the other machine's, `x` abort (the default) — each naming its machine by hostname
 
-7. **Given** the configs match, **Then** the step prints `Target config matches source, skipping config sync.` without prompting
+7. **Given** the configs match, **Then** the step prints `<hostname>'s config matches <hostname>'s, skipping config sync.` without prompting
 
 `--yes` auto-accepts both prompts. `--dry-run` shows the same preview and never prompts or writes.
 
@@ -325,7 +325,7 @@ Lineage: 001-core edge cases, 003-core-tests edge cases
 
 #### Core Orchestration
 
-- **CORE-FR-SYNC-CMD** `[Frictionless Command UX]`: `pc-switcher sync <target>` MUST run the complete workflow. Flags: `--config`, `--dry-run`, `--yes`, `--allow-out-of-order`, `--allow-first-sync`, `--confirm-each-command`
+- **CORE-FR-SYNC-CMD** `[Frictionless Command UX]`: `pc-switcher sync <hostname>` MUST run the complete workflow. Flags: `--config`, `--dry-run`, `--yes`, `--allow-out-of-order`, `--allow-first-sync`, `--confirm-each-command`
   Lineage: 001-FR-046
 
 - **CORE-FR-LOCK** `[Reliability Without Compromise]`: A single unified lock per machine MUST prevent it from taking part in two syncs at once, in either role
@@ -371,7 +371,7 @@ Field-level definitions live in the [Data Model](data-model.md); this is the voc
 
 ## Success Criteria
 
-- **CORE-SC-SINGLE-CMD** `[Frictionless Command UX]`: A complete sync runs from `pc-switcher sync <target>` with no additional manual steps
+- **CORE-SC-SINGLE-CMD** `[Frictionless Command UX]`: A complete sync runs from `pc-switcher sync <hostname>` with no additional manual steps
   Lineage: 001-SC-001
 
 - **CORE-SC-SNAPSHOTS** `[Reliability Without Compromise]`: Pre- and post-sync snapshots exist for 100% of successful runs
