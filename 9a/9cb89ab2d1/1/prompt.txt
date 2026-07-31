@@ -1,0 +1,22 @@
+You are orchestrator. Delegate to subagents.
+
+docs/dev/package-sync-scenario-coverage.md: 1185 scenarios, one per branch the package sync
+requirements impose, each derived from an article in docs/planning/package-sync-conformance-criteria.md.
+tests/unit/test_scenario_coverage_matrix.py enforces the cross-reference both ways.
+
+Rules:
+- A row states what an ARTICLE demands. Never derive one from a test or from the code.
+  A test is one implementation; it may bundle rows, set up any way, run any direction.
+- Scenario ids are stable — tests cite them. Never renumber.
+- Atlas is source, Nomad is target. Sections A–K are always that direction; N may reverse.
+
+Work, in order:
+1. Section "Questions the requirements do not settle" has an `A:` ruling under each of the nine
+   questions. Implement each.
+2. The 35 rows marked ‼: behaviour that contradicts its article, listed under "Where the tool does
+   not do what the requirements say". Fix code, tests and row together.
+3. The 39 rows marked — and 3 marked P, per the "Gaps — what to test next" register.
+
+Verify with all five: uv run pytest / ruff format --check . / ruff check . / basedpyright / codespell.
+Commit with explicit pathspecs, never `git add -A` (the user edits the same tree). Batch related
+edits into one commit per coherent unit.
