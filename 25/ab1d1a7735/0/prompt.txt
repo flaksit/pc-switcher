@@ -733,3 +733,7 @@ One thing outside the five rules, arising from the header edit made during the a
 ---
 
 Make them consistent (if not yet done). C16 and E26 as well.
+
+---
+
+Is Atlas now the source for each of these 6?
