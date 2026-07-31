@@ -1,0 +1,5 @@
+Scope of this branch: package sync. Some requirements were changed and this was implemented. Refactoring done.
+.planning/phases/02-package-management-sync/02-SCENARIO-COVERAGE.md was not updated. Update it. If you are not 100% sure about the scope, objective or audience of this doc, ask.
+Use subagents if needed for the scope of the work.
+
+Should probably not be based on nor mention 02-208-HOLD-MASK-REPLICATION.md anymore, as I hope this is integrated in package-sync-conformance-criteria.md. Right?
