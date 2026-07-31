@@ -3,8 +3,10 @@
 `docs/dev/package-sync-scenario-coverage.md` names, for every branch the package sync
 requirements impose, the test that proves it; each of those tests names the scenarios it
 proves, in the first clause of its docstring. Neither direction is worth anything if the
-two drift, and both drift silently: a renamed test leaves the matrix citing nothing, and a
-renumbered scenario leaves a docstring pointing at someone else's branch.
+two drift, and all three ways they drift are silent: a renamed test leaves the matrix
+citing nothing, a renumbered scenario leaves a docstring pointing at someone else's
+branch, and a tag one character off the shape `DOCSTRING_TAG` reads leaves a proven branch
+looking unproven.
 
 These tests are the ratchet. They assert nothing about behaviour — only that the document
 and the suite still describe the same tests.
@@ -28,6 +30,10 @@ SCENARIO_ID = re.compile(r"\b([A-KN]\d{1,3}[a-z]?)\b")
 CITATION = re.compile(r"(Test[A-Za-z0-9_]+)::(test_[a-z0-9_]+)")
 #: The opening clause of a tagged docstring: `C48 — ...`, `A2, A3 — ...`, `H2.`
 DOCSTRING_TAG = re.compile(r"^\s*((?:[A-KN]\d{1,3}[a-z]?)(?:\s*[,/]\s*[A-KN]\d{1,3}[a-z]?)*)\s*[—:.\-]")
+#: A docstring that was MEANT to open with a tag: an id in first position, bare or inside
+#: the punctuation a tag is sometimes typed with. Prose that names a row it does not prove
+#: puts it mid-sentence, never here.
+INTENDED_TAG = re.compile(r"^\s*[`(\[\"'*]*\s*([A-KN]\d{1,3}[a-z]?)\b")
 
 #: Coverage marks that claim a test exists. `—` claims none and `‼` describes a defect
 #: whose test lands with its fix, so neither is checked here.
@@ -82,7 +88,19 @@ def _rows() -> dict[str, tuple[str, str, list[tuple[str, str]]]]:
     return rows
 
 
-def _tests() -> dict[tuple[str, str], set[str]]:
+def _docstrings() -> list[tuple[str, str, str]]:
+    """(Class, method, docstring) for every method of every test class, parsed once."""
+    return [
+        (node.name, item.name, ast.get_docstring(item) or "")
+        for path in sorted(TESTS.rglob("test_*.py"))
+        for node in ast.walk(ast.parse(path.read_text()))
+        if isinstance(node, ast.ClassDef)
+        for item in node.body
+        if isinstance(item, ast.FunctionDef | ast.AsyncFunctionDef)
+    ]
+
+
+def _tests(docstrings: list[tuple[str, str, str]]) -> dict[tuple[str, str], set[str]]:
     """(Class, test) -> every scenario id any module's copy of it claims.
 
     Keyed without the module because the Test column often omits it, and a class and test
@@ -90,22 +108,15 @@ def _tests() -> dict[tuple[str, str], set[str]]:
     have a `TestValidate` — their ids are pooled, which is the lenient direction.
     """
     found: dict[tuple[str, str], set[str]] = defaultdict(set)
-    for path in sorted(TESTS.rglob("test_*.py")):
-        tree = ast.parse(path.read_text())
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.ClassDef):
-                continue
-            for item in node.body:
-                if not isinstance(item, ast.FunctionDef | ast.AsyncFunctionDef):
-                    continue
-                doc = ast.get_docstring(item) or ""
-                tag = DOCSTRING_TAG.match(doc)
-                found[(node.name, item.name)] |= set(SCENARIO_ID.findall(tag.group(1))) if tag else set()
+    for cls, fn, doc in docstrings:
+        tag = DOCSTRING_TAG.match(doc)
+        found[(cls, fn)] |= set(SCENARIO_ID.findall(tag.group(1))) if tag else set()
     return found
 
 
 ROWS = _rows()
-SUITE = _tests()
+DOCSTRINGS = _docstrings()
+SUITE = _tests(DOCSTRINGS)
 
 
 CLAIMED = sorted(sid for sid, (mark, _, _) in ROWS.items() if mark in COVERED)
@@ -169,6 +180,34 @@ def test_every_cited_test_names_the_scenario_back(scenario: str) -> None:
     raise AssertionError(
         f"{scenario} is cited by no test that names it back."
         f" Put `{scenario}` at the start of the docstring of one of: {named}"
+    )
+
+
+def test_no_docstring_opens_with_a_tag_the_matcher_cannot_read() -> None:
+    """A docstring that starts with a scenario id must parse as one.
+
+    `DOCSTRING_TAG` reads ids, comma-separated, then a dash — so a single character out of
+    place breaks it: an article name backticked in among the ids, an "and" where a comma
+    belongs. The tag then goes unseen, and nothing else notices. The suite still passes, the
+    row it was written for still reads `—`, and a branch a passing test already proves reads
+    as work outstanding. That is the drift direction nobody investigates, because it
+    understates coverage rather than claiming any.
+
+    Prose may name a row it does not prove — "distinguished from C21 by …", "the other half
+    of B14" — so this fires only on an id in first position, the one place a tag ever sits.
+    The whole cost is that a docstring may not OPEN with a bare row id it means as prose;
+    lead with the sentence instead and the id can appear anywhere after.
+    """
+    unreadable = {
+        f"{cls}::{fn}": intended.group(1)
+        for cls, fn, doc in DOCSTRINGS
+        if not DOCSTRING_TAG.match(doc) and (intended := INTENDED_TAG.match(doc))
+    }
+    assert not unreadable, (
+        f"docstrings open with a scenario id that is not a readable tag: {unreadable}."
+        f" Write the ids first, separated by commas, then `—`, then the prose:"
+        f' `"""C48, C49 — …"""`. Anything else in the opening clause leaves the row'
+        f" reading as unproven."
     )
 
 

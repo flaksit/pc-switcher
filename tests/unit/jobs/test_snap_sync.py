@@ -24,7 +24,7 @@ from pcswitcher.jobs.packages.review import (
 )
 from pcswitcher.jobs.packages.sync_core import PackageItemFailures, PackagePlan
 from pcswitcher.jobs.snap_sync import SnapItem, SnapSyncJob, snap_sync_exclude_paths, target_snap_revisions
-from pcswitcher.models import CommandResult, Host, ValidationError
+from pcswitcher.models import CommandResult, Host, LogLevel, ValidationError
 from pcswitcher.orchestrator import Orchestrator
 
 # `Name Version Rev Tracking Publisher Notes` matches the live layout RESEARCH.md
@@ -1592,13 +1592,32 @@ class TestValidate:
 
     @pytest.mark.asyncio
     async def test_valid_environment_yields_no_errors(self) -> None:
-        """K50, K51, K62."""
+        """K50, K62."""
         context, _source, _target = make_context()
         job = SnapSyncJob(context)
 
         errors: list[ValidationError] = await job.validate()
 
         assert errors == []
+
+    @pytest.mark.asyncio
+    async def test_a_standing_refresh_hold_is_recorded_and_does_not_fail_validation(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """K51 — the sync window's pause has to restore whatever refresh policy each machine
+        already had, an indefinite hold the user set included. So a standing hold is context
+        the log must carry into the restore, never a reason to refuse the run.
+        """
+        caplog.set_level(LogLevel.FULL.value, logger="pcswitcher.jobs.base")
+        context, _source, _target = make_context(
+            target_responses={"snap get system refresh.hold": CommandResult(0, "forever\n", "")}
+        )
+        job = SnapSyncJob(context)
+
+        errors = await job.validate()
+
+        assert errors == []
+        assert "target snap refresh.hold: forever" in caplog.messages
 
 
 class TestJobDiscovery:
