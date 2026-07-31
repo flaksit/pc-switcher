@@ -1,0 +1,41 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "8e39703e0f18",
+  "session_id": "354077f7-8171-4dc7-8e2f-e2c4e73a7888",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-31T07:10:37.594331151Z",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    "src/pcswitcher/jobs/apt_sync/collateral.py",
+    "src/pcswitcher/jobs/apt_sync/job.py",
+    "tests/unit/jobs/apt/test_apt_collateral.py"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "7d1a44b6ba10",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 426,
+    "cache_creation_tokens": 988869,
+    "cache_read_tokens": 60954797,
+    "output_tokens": 178571,
+    "api_call_count": 225
+  },
+  "session_metrics": {
+    "turn_count": 29
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-31T07:10:37.385355342Z",
+    "agent_lines": 157,
+    "agent_removed": 1,
+    "human_added": 66,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 223,
+    "total_lines_changed": 225,
+    "agent_percentage": 70.22222222222221,
+    "metric_version": 2
+  }
+}

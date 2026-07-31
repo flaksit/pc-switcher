@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "8e39703e0f18",
+  "strategy": "manual-commit",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "src/pcswitcher/jobs/apt_sync/collateral.py",
+    "src/pcswitcher/jobs/apt_sync/job.py",
+    "tests/unit/jobs/apt/test_apt_collateral.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/8e/39703e0f18/0/metadata.json",
+      "transcript": "/8e/39703e0f18/0/full.jsonl",
+      "compact_transcript": "/8e/39703e0f18/0/transcript.jsonl",
+      "content_hash": "/8e/39703e0f18/0/content_hash.txt",
+      "prompt": "/8e/39703e0f18/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 426,
+    "cache_creation_tokens": 988869,
+    "cache_read_tokens": 60954797,
+    "output_tokens": 178571,
+    "api_call_count": 225
+  }
+}
