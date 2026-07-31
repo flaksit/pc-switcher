@@ -121,7 +121,7 @@ One class of install cannot be classified while the review is being built: a pac
 
 You are asked about those later in the same run, once the repositories have landed and the package lists have been refreshed, which is the first moment apt can say what installing them would cost. It is the same question with the same three answers, and every one of those questions comes before the first of those installs runs — so keeping a package leaves its install unapplied rather than undoing it, and stopping the sync stops it before any of them.
 
-An install you withdraw that way is neither applied nor failed. The run says what happened to it and moves on to the rest of what you approved.
+An install you withdraw that way is neither applied nor failed. The run says what happened to it and moves on to the rest of what you approved. Its hold, if the source holds it, is withdrawn with it — that is true of every install you decline, however you decline it.
 
 ## Repositories, pins and keys are derived
 
@@ -309,7 +309,7 @@ Replicating a hold never touches the package's version: a held apt package is ne
 
 There is one case where the version is not the target's own to choose: an apt package the source holds and the target does not have at all. apt gives a hold no way to say "at whatever version you happen to get", so installing the target's version and then holding it would freeze the two machines apart for good — nothing moves a held package again. That install therefore asks for the source's exact version. If the target cannot supply it, the install fails as its own item naming both versions, and the hold fails with it rather than pinning a package that is not there.
 
-A hold whose package this run did not put on the target fails on its own for the same reason. `apt-mark hold` accepts a package that is merely not installed, and a hold recorded that way blocks every later attempt to install it.
+A hold whose package this run did not put on the target is never registered, for the same reason: `apt-mark hold` accepts a package that is merely not installed, and a hold recorded that way blocks every later attempt to install it. Which outcome it gets follows why the package is missing. If you declined the install — in the review, or by keeping a package its collateral question was about — the hold is declined with it, not reported as broken: a hold freezes a version, and a package nobody installed has none to freeze. If the install was approved and failed, or the run cannot reproduce the repository the package comes from, the hold fails as its own item.
 
 The review verbs match the mechanism: apt and snap holds read *hold* / *unhold*, flatpak masks read *mask* / *unmask*. flatpak masks are patterns, replicated whether or not a matching ref is installed; a pattern edit reads as remove-old plus add-new, and a user/system scope change as add plus remove, reported as found rather than normalised.
 

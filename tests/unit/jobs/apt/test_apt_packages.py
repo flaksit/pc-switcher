@@ -17,7 +17,7 @@ from pcswitcher.jobs.packages.review import (
     ReviewOutcome,
 )
 from pcswitcher.jobs.packages.sync_core import ConvergeItemFailed, PackageItemFailures, PackagePlan
-from pcswitcher.models import CommandResult
+from pcswitcher.models import CommandResult, LogLevel
 from tests.unit.jobs.apt.helpers import (
     _APPROVE_PKG_A,
     _repo_context,
@@ -605,8 +605,11 @@ class TestAStaleTargetHoldDoesNotStrandThePackage:
 class TestAHoldNeedsItsPackage:
     """`PKG-FR-APT-HOLD-INERT`: measured on `ubuntu:24.04`, `apt-mark hold` exits 0 and
     records the hold for a package that is merely NOT INSTALLED — it refuses only a name apt
-    has never heard of. So the guard is this job's, not apt's, and a hold whose install did
-    not happen fails alone before any command.
+    has never heard of. So the guard is this job's, not apt's, and no hold is registered for
+    a package this run did not put on the target.
+
+    Which outcome that is depends on WHY the install did not happen: an install the user
+    declined declines its hold, an install that broke fails it.
     """
 
     @staticmethod
@@ -621,18 +624,25 @@ class TestAHoldNeedsItsPackage:
         }
 
     @pytest.mark.asyncio
-    async def test_a_hold_whose_install_was_skipped_fails_alone(self) -> None:
+    async def test_a_hold_whose_install_was_skipped_is_declined_not_failed(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The user declined the install, so the hold that pins it is declined too: nothing
+        broke, and a hold has no version to pin on a package nobody installed.
+        """
         context, _source, target = make_context(source_responses=_HELD_SOURCE, target_responses=self._target())
         job = AptSyncJob(context)
         install_reviewer(job, {"apt:hold:pkg-a": Decision.APPLY})
 
-        with pytest.raises(PackageItemFailures) as exc_info:
+        with caplog.at_level(LogLevel.FULL.value):
             await job.execute()
 
-        failures = {diff.item_id: message for diff, message in exc_info.value.failures}
-        assert set(failures) == {"apt:hold:pkg-a"}
-        assert "was not approved" in failures["apt:hold:pkg-a"]
         assert not any("apt-mark hold" in cmd for cmd in all_calls(target))
+        assert any(
+            "not applied" in record.message and "its install was not approved" in record.message
+            for record in caplog.records
+        )
+        assert not any(record.levelno >= LogLevel.ERROR.value for record in caplog.records)
 
     @pytest.mark.asyncio
     async def test_a_hold_whose_install_failed_fails_too(self) -> None:
@@ -650,6 +660,52 @@ class TestAHoldNeedsItsPackage:
         assert set(failures) == {"apt:package:pkg-a", "apt:hold:pkg-a"}
         assert "its install failed" in failures["apt:hold:pkg-a"]
         assert not any("apt-mark hold" in cmd for cmd in all_calls(target))
+
+    @pytest.mark.asyncio
+    async def test_a_hold_whose_install_a_collateral_answer_cancelled_is_declined_too(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The plan-time collateral answer reaches the hold as an ordinary unapproved
+        install: `Collateral.resolve` rewrote `pkg-a` to skip-once because keeping
+        `other-manual` cancels the transaction that would take it.
+
+        The same answer given late — after `/etc/apt` has converged — already declined its
+        hold, and which side of that line a run falls on is decided by nothing but whether
+        the repository happened to be on the target already.
+        """
+        context, _source, target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\nother-manual\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\nother-manual\t1.0\n", ""),
+                "apt-mark showhold": CommandResult(0, "pkg-a\n", ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "other-manual\n", ""),
+                "dpkg-query": CommandResult(0, "other-manual\t1.0\n", ""),
+                "apt-mark showhold": CommandResult(0, "", ""),
+                "apt-cache policy": CommandResult(0, target_offers("pkg-a"), ""),
+                "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": CommandResult(
+                    0, "Inst pkg-a (1.0)\nRemv other-manual [1.0]\n", ""
+                ),
+            },
+        )
+        job = AptSyncJob(context)
+        install_reviewer(
+            job,
+            {
+                "apt:package:pkg-a": Decision.APPLY,
+                "apt:hold:pkg-a": Decision.APPLY,
+                "apt:collateral:install:remove:other-manual": Decision.SKIP_ONCE,
+            },
+        )
+
+        with caplog.at_level(LogLevel.FULL.value):
+            await job.execute()
+
+        commands = all_calls(target)
+        assert not any("apt-mark hold" in cmd for cmd in commands)
+        assert not any("sudo DEBIAN_FRONTEND=noninteractive apt-get install" in cmd for cmd in commands)
+        assert not any(record.levelno >= LogLevel.ERROR.value for record in caplog.records)
 
     @pytest.mark.asyncio
     async def test_a_hold_on_a_package_the_target_already_has_still_runs(self) -> None:

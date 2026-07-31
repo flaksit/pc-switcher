@@ -290,8 +290,8 @@ class PackageConverger:
         exit code alone decides pass/fail (D-27); a hold on an unknown package that
         `apt-mark` rejects is a normal per-item failure (D6), not a gated abort.
 
-        A hold whose package this run did not put on the target fails alone before any
-        command (`PKG-FR-APT-HOLD-INERT`). apt-mark cannot be relied on for this: measured on
+        A hold whose package this run did not put on the target is refused before any command
+        (`PKG-FR-APT-HOLD-INERT`). apt-mark cannot be relied on for this: measured on
         `ubuntu:24.04`, `apt-mark hold` exits 100 only for a name apt has never heard of and
         exits 0 for a package that is merely NOT INSTALLED, recording the hold in dpkg's
         selections. So a skipped or failed install would otherwise leave the target holding a
@@ -299,23 +299,17 @@ class PackageConverger:
         """
         name = hold_name(diff.item_id)
         if diff.action == DiffAction.INSTALL:
-            if name in self._declined_installs:
-                # The install was withdrawn by an answer, not by a fault, so its hold is
-                # withdrawn the same way: a hold on a package the target lacks would block
-                # every later attempt to install it, and nothing here failed.
-                raise ConvergeItemDeclined(
-                    f"hold on {name} not applied: its install was withdrawn to keep a package on "
-                    f"{self._machines.target}"
-                )
             blocked = self._hold_refusal(name, diffs, decisions)
             if blocked is not None:
-                raise ConvergeItemFailed(blocked)
+                raise blocked
         verb = "hold" if diff.action == DiffAction.INSTALL else "unhold"
         return await self._target.run_command(
             f"sudo apt-mark {verb} {shlex.quote(name)}", login_shell=False, mutates=f"{verb} apt package {name}"
         )
 
-    def _hold_refusal(self, name: str, diffs: Sequence[ItemDiff], decisions: Mapping[str, Decision]) -> str | None:
+    def _hold_refusal(
+        self, name: str, diffs: Sequence[ItemDiff], decisions: Mapping[str, Decision]
+    ) -> ConvergeItemDeclined | ConvergeItemFailed | None:
         """Why this hold may not be registered, or `None` when the package is on the target.
 
         Judged from the package's OWN item in this run, which is the only thing that can say
@@ -323,7 +317,22 @@ class PackageConverger:
         change. An item that installs it must have been approved and must have succeeded; an
         item that only reports the package missing (its origin cannot be reproduced) never
         put it there at all.
+
+        Which exception carries the answer is the whole point of returning one rather than a
+        string: a hold pins a package to a version, so a package nobody installed has no
+        version to pin, and calling that breakage would report a fault for a deliberate
+        answer. Every ground that is the user's own answer therefore declines. A plain skip
+        in the review and a collateral answer that kept some other package are ONE case here
+        — either way the user declined the install, and the plan-time collateral answer
+        reaches this branch as that same skip, `Collateral.resolve` having rewritten the
+        decision. `_declined_installs` is the late version of it, arriving after the review
+        instead of in it, and it is checked first because the decision map still reads APPLY
+        for those. Only an install that was approved and then BROKE fails its hold with it.
         """
+        if name in self._declined_installs:
+            return ConvergeItemDeclined(
+                f"hold on {name} not applied: its install was withdrawn to keep a package on {self._machines.target}"
+            )
         package_diff = next(
             (
                 candidate
@@ -337,18 +346,18 @@ class PackageConverger:
             return None
         why = f"hold on {name} refused"
         if package_diff.diff_class is DiffClass.REPO_UNAVAILABLE:
-            return (
+            # Nobody declined this one: the source has a package the run cannot deliver at
+            # all, which is a finding about the two machines rather than an answer.
+            return ConvergeItemFailed(
                 f"{why}: {name} is not on {self._machines.target} and this run cannot reproduce the repository "
                 "it comes from"
             )
         if package_diff.action is not DiffAction.INSTALL:
             return None
         if decisions.get(package_diff.item_id) != Decision.APPLY:
-            return (
-                f"{why}: its install was not approved, and holding a package {self._machines.target} lacks "
-                "blocks installing it"
+            return ConvergeItemDeclined(
+                f"hold on {name} not applied: its install was not approved, and holding a package "
+                f"{self._machines.target} lacks blocks installing it"
             )
         failure = self._install_outcome.get(name, "the install did not run")
-        if failure is None:
-            return None
-        return f"{why}: its install failed ({failure})"
+        return None if failure is None else ConvergeItemFailed(f"{why}: its install failed ({failure})")
