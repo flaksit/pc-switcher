@@ -159,7 +159,7 @@ class TestTargetLockConflictMessages:
                 await orchestrator._acquire_target_lock()  # pyright: ignore[reportPrivateUsage]
 
             error_msg = str(exc_info.value)
-            assert error_msg.startswith(f"Target {target_hostname} is already involved in a sync")
+            assert error_msg.startswith(f"{target_hostname} is already involved in a sync")
             # Remediation guidance is present and points at killing the holder, not rm.
             assert "releases automatically" in error_msg
             assert "pkill --full pc-switcher.lock" in error_msg

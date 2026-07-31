@@ -488,24 +488,24 @@ class Orchestrator:
             # SyncStep 1: Acquire source lock
             self._logger.info("Acquiring source lock", extra={"job": "orchestrator", "host": "source"})
             await self._acquire_source_lock()
-            self._ui.set_current_step(SyncStep.SOURCE_LOCK, "Source lock")
+            self._ui.set_current_step(SyncStep.SOURCE_LOCK, f"Lock {self._source_hostname}")
 
             # SyncStep 2: Establish SSH connection
             self._logger.info("Connecting to target", extra={"job": "orchestrator", "host": "source"})
             await self._establish_connection()
             assert self._remote_executor is not None
-            self._ui.set_current_step(SyncStep.CONNECT, "Connect to target")
+            self._ui.set_current_step(SyncStep.CONNECT, f"Connect to {self._target_hostname}")
 
             # SyncStep 3: Acquire target lock
             self._logger.info("Acquiring target lock", extra={"job": "orchestrator", "host": "target"})
             await self._acquire_target_lock()
-            self._ui.set_current_step(SyncStep.TARGET_LOCK, "Target lock")
+            self._ui.set_current_step(SyncStep.TARGET_LOCK, f"Lock {self._target_hostname}")
 
             # SyncStep 4: Out-of-order / target-state check. Runs after the target lock
             # so we can read the target's sync-history over SSH. Always executes;
             # --allow-out-of-order only bypasses the W2/W3 confirmation, not the read.
             if not await self._check_out_of_order():
-                raise SyncAbortedByUser("Sync aborted at the out-of-order / target-state check")
+                raise SyncAbortedByUser(f"Sync aborted at the sync-order check on {self._target_hostname}")
             self._ui.set_current_step(SyncStep.OUT_OF_ORDER_CHECK, "Out-of-order check")
 
             # SyncStep 5: Discover and validate jobs
@@ -528,7 +528,7 @@ class Orchestrator:
                 extra={"job": "orchestrator", "host": "target"},
             )
             await self._install_on_target_job()
-            self._ui.set_current_step(SyncStep.INSTALL_ON_TARGET, "Install on target")
+            self._ui.set_current_step(SyncStep.INSTALL_ON_TARGET, f"Install on {self._target_hostname}")
 
             # SyncStep 9: Sync config from source to target
             self._logger.info("Syncing configuration to target", extra={"job": "orchestrator", "host": "target"})
@@ -679,7 +679,7 @@ class Orchestrator:
         )
         if self._target_lock_process is None:
             raise SyncLockedError(
-                f"Target {self._target_hostname} is already involved in a sync.\n"
+                f"{self._target_hostname} is already involved in a sync.\n"
                 f"{_stuck_lock_hint(self._target_hostname, '~/.local/share/pc-switcher/pc-switcher.lock')}"
             )
 
@@ -722,6 +722,8 @@ class Orchestrator:
             source_config_path=source_config_path,
             ui=self._ui,
             console=self._console,
+            source_hostname=self._source_hostname,
+            target_hostname=self._target_hostname,
             auto_accept=self._auto_accept,
             dry_run=self._dry_run,
         )
@@ -836,10 +838,10 @@ class Orchestrator:
             )
         else:
             scope_line = "  (all data configured for sync)"
-        warn_title = "First Sync — Target Will Be Overwritten"
+        warn_title = f"First Sync — {tgt} Will Be Overwritten"
         warning = (
             f"[bold]{tgt}[/bold] has never been synced by pc-switcher (no sync history).\n\n"
-            "This first-ever sync will overwrite everything on the target that is in scope of "
+            f"This first-ever sync will overwrite everything on {tgt} that is in scope of "
             "the configured sync jobs, except configured exclusions. In scope:\n\n"
             f"{scope_line}\n\n"
             f"Any independent data on [bold]{tgt}[/bold] within that scope will be lost.\n\n"
@@ -926,7 +928,7 @@ class Orchestrator:
         if target_peer is not None and not hostnames_equal(target_peer, src):
             # W2: machine-C — target last synced with a third machine
             direction = "received a sync from" if target_role == SyncRole.TARGET else "sent a sync to"
-            warn_title = "Target Last Synced with a Different Machine"
+            warn_title = f"{tgt} Last Synced with a Different Machine"
             warning = (
                 f"[bold]{tgt}[/bold] most recently {direction} [bold]{target_peer}[/bold], "
                 f"not this machine ([bold]{src}[/bold]).\n\n"
@@ -994,10 +996,10 @@ class Orchestrator:
         if self._remote_executor is not None:
             cmd = get_record_role_command(SyncRole.TARGET, peer=self._source_hostname)
             result = await self._remote_executor.run_command(
-                cmd, mutates="record the target's role in the sync history"
+                cmd, mutates=f"record this run's role in {self._target_hostname}'s sync history"
             )
             if not result.success:
-                raise RuntimeError(f"Failed to update sync history on target: {result.stderr}")
+                raise RuntimeError(f"Failed to update the sync history on {self._target_hostname}: {result.stderr}")
             self._logger.debug("Updated sync history: role=target", extra={"job": "orchestrator", "host": "target"})
 
     async def _discover_and_validate_jobs(self) -> tuple[list[Job], list[JobResult]]:
@@ -1178,7 +1180,7 @@ class Orchestrator:
         if not is_sufficient(source_disk, threshold_type, threshold_value):
             free_space_desc = format_free_space(source_disk)
             threshold_desc = format_threshold(threshold_type, threshold_value)
-            error_msg = f"Source disk space {free_space_desc} below threshold {threshold_desc}"
+            error_msg = f"Disk space on {self._source_hostname} {free_space_desc} below threshold {threshold_desc}"
             self._logger.critical(error_msg, extra={"job": "orchestrator", "host": "source"})
             raise RuntimeError(error_msg)
 
@@ -1186,7 +1188,7 @@ class Orchestrator:
         if not is_sufficient(target_disk, threshold_type, threshold_value):
             free_space_desc = format_free_space(target_disk)
             threshold_desc = format_threshold(threshold_type, threshold_value)
-            error_msg = f"Target disk space {free_space_desc} below threshold {threshold_desc}"
+            error_msg = f"Disk space on {self._target_hostname} {free_space_desc} below threshold {threshold_desc}"
             self._logger.critical(error_msg, extra={"job": "orchestrator", "host": "target"})
             raise RuntimeError(error_msg)
 

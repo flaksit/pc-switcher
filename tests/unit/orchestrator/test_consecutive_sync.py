@@ -872,5 +872,5 @@ class TestUpdateSyncHistoryWithPeer:
         mock_executor.run_command.return_value = mock_result
         orchestrator._remote_executor = mock_executor  # pyright: ignore[reportPrivateUsage]
 
-        with pytest.raises(RuntimeError, match="Failed to update sync history on target"):
+        with pytest.raises(RuntimeError, match="Failed to update the sync history on"):
             await orchestrator._update_sync_history()  # pyright: ignore[reportPrivateUsage]
