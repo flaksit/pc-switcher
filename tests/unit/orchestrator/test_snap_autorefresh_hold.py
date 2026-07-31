@@ -16,6 +16,7 @@ Covers:
   and never a failure.
 - Restore is a no-op when no hold was engaged, and never blocks the manual `--revision`
   convergence (the hold command only writes the system-wide `refresh.hold` option).
+- Every warning names the machine it concerns by hostname (`PKG-FR-NAME-THE-MACHINES`).
 
 All executor interactions are mocked; no real snap/snapd commands run.
 """
@@ -103,6 +104,13 @@ def all_calls(mock: MagicMock) -> list[str]:
     return [call.args[0] for call in mock.run_command.call_args_list]
 
 
+# Both machine names are pinned: the source's is otherwise the real hostname of whatever
+# machine runs the suite, and neither may contain "source"/"target" for the naming
+# assertions in `TestWarningsNameTheMachines` to mean anything.
+SOURCE_MACHINE = "Atlas"
+TARGET_MACHINE = "Nomad"
+
+
 def make_orchestrator(
     *,
     snap_sync_enabled: bool,
@@ -114,7 +122,8 @@ def make_orchestrator(
 ) -> tuple[Orchestrator, MagicMock, MagicMock]:
     config = MagicMock(spec=Configuration)
     config.sync_jobs = {"snap_sync": snap_sync_enabled}
-    orchestrator = Orchestrator(target="target-host", config=config, dry_run=dry_run)
+    orchestrator = Orchestrator(target=TARGET_MACHINE, config=config, dry_run=dry_run)
+    orchestrator._source_hostname = SOURCE_MACHINE  # pyright: ignore[reportPrivateUsage]
     orchestrator._logger = MagicMock()  # pyright: ignore[reportPrivateUsage]
     source = source_executor if source_executor is not None else make_executor(source_responses)
     target = target_executor if target_executor is not None else make_executor(target_responses)
@@ -536,3 +545,135 @@ class TestConfirmEachCommandGate:
 
         release.assert_awaited_once_with(lock_process)
         source_lock.release.assert_called_once()
+
+
+class TestWarningsNameTheMachines:
+    """`PKG-FR-NAME-THE-MACHINES`: a warning names the machine it concerns by hostname.
+
+    The end-of-run summary reprints every captured warning on its own, long after the line
+    that maps each role to a machine, so "not paused on the target" leaves the reader to
+    work out which of their two computers is running unpaused.
+    """
+
+    @staticmethod
+    def _named(orchestrator: Orchestrator) -> list[str]:
+        """Every warning logged, asserted to be free of the two role words."""
+        warnings = warnings_of(orchestrator)
+        assert warnings, "expected at least one warning"
+        for w in warnings:
+            assert "source" not in w.lower(), w
+            assert "target" not in w.lower(), w
+        return warnings
+
+    @pytest.mark.asyncio
+    async def test_an_unreadable_hold_names_the_machine_it_leaves_unpaused(self) -> None:
+        denied = {"snap get system refresh.hold": CommandResult(1, "", HOLD_DENIED_STDERR)}
+        orchestrator, _source, _target = make_orchestrator(
+            snap_sync_enabled=True, source_responses=denied, target_responses=denied
+        )
+
+        await orchestrator._hold_snap_autorefresh()  # pyright: ignore[reportPrivateUsage]
+
+        warnings = self._named(orchestrator)
+        assert any(f"Not pausing snapd auto-refresh on {SOURCE_MACHINE}" in w for w in warnings)
+        assert any(f"Not pausing snapd auto-refresh on {TARGET_MACHINE}" in w for w in warnings)
+
+    @pytest.mark.asyncio
+    async def test_a_failed_pause_names_the_machine(self) -> None:
+        refuses = {"snap set system refresh.hold": CommandResult(1, "", "error: cannot set")}
+        orchestrator, _source, _target = make_orchestrator(
+            snap_sync_enabled=True, source_responses=refuses, target_responses=refuses
+        )
+
+        await orchestrator._hold_snap_autorefresh()  # pyright: ignore[reportPrivateUsage]
+
+        warnings = self._named(orchestrator)
+        assert any(f"Could not pause snapd auto-refresh on {SOURCE_MACHINE}" in w for w in warnings)
+        assert any(f"Could not pause snapd auto-refresh on {TARGET_MACHINE}" in w for w in warnings)
+
+    @pytest.mark.asyncio
+    async def test_a_hold_that_did_not_stick_names_the_machine(self) -> None:
+        never_set = {"snap get system refresh.hold": CommandResult(1, "", HOLD_UNSET_STDERR)}
+        orchestrator, _source, _target = make_orchestrator(
+            snap_sync_enabled=True, source_responses=never_set, target_responses=never_set
+        )
+
+        await orchestrator._hold_snap_autorefresh()  # pyright: ignore[reportPrivateUsage]
+
+        warnings = self._named(orchestrator)
+        assert any(f"snapd auto-refresh is NOT paused on {SOURCE_MACHINE}" in w for w in warnings)
+        assert any(f"snapd auto-refresh is NOT paused on {TARGET_MACHINE}" in w for w in warnings)
+
+    @pytest.mark.asyncio
+    async def test_a_pause_that_cannot_be_confirmed_names_the_machine(self) -> None:
+        """The capture answers, so the hold is written; only the read-back is denied."""
+
+        def _deny_the_read_back() -> Callable[..., CommandResult]:
+            reads = {"n": 0}
+
+            def _side_effect(cmd: str, **_: object) -> CommandResult:
+                if "snap get system refresh.hold" in cmd:
+                    reads["n"] += 1
+                    return CommandResult(1, "", HOLD_UNSET_STDERR if reads["n"] == 1 else HOLD_DENIED_STDERR)
+                return CommandResult(exit_code=0, stdout="", stderr="")
+
+            return _side_effect
+
+        source, target = MagicMock(), MagicMock()
+        source.run_command = AsyncMock(side_effect=_deny_the_read_back())
+        target.run_command = AsyncMock(side_effect=_deny_the_read_back())
+        orchestrator, _source, _target = make_orchestrator(
+            snap_sync_enabled=True, source_executor=source, target_executor=target
+        )
+
+        await orchestrator._hold_snap_autorefresh()  # pyright: ignore[reportPrivateUsage]
+
+        warnings = self._named(orchestrator)
+        assert any(f"Could not confirm snapd auto-refresh is paused on {SOURCE_MACHINE}" in w for w in warnings)
+        assert any(f"Could not confirm snapd auto-refresh is paused on {TARGET_MACHINE}" in w for w in warnings)
+
+    @pytest.mark.asyncio
+    async def test_an_option_left_alone_at_restore_names_the_machine(self) -> None:
+        denied = {"snap get system refresh.hold": CommandResult(1, "", HOLD_DENIED_STDERR)}
+        orchestrator, _source, _target = make_orchestrator(
+            snap_sync_enabled=True, source_responses=denied, target_responses=denied
+        )
+
+        await orchestrator._hold_snap_autorefresh()  # pyright: ignore[reportPrivateUsage]
+        await orchestrator._restore_snap_autorefresh()  # pyright: ignore[reportPrivateUsage]
+
+        warnings = self._named(orchestrator)
+        assert any(f"Leaving snapd refresh.hold alone on {SOURCE_MACHINE}" in w for w in warnings)
+        assert any(f"Leaving snapd refresh.hold alone on {TARGET_MACHINE}" in w for w in warnings)
+
+    @pytest.mark.asyncio
+    async def test_a_failed_restore_names_the_machine(self) -> None:
+        orchestrator, source, target = make_orchestrator(
+            snap_sync_enabled=True, source_executor=make_snapd(None), target_executor=make_snapd(None)
+        )
+        await orchestrator._hold_snap_autorefresh()  # pyright: ignore[reportPrivateUsage]
+        # The restore is the next write on each host, and it fails on both.
+        refused = CommandResult(1, "", "error: cannot set")
+        for ex in (source, target):
+            ex.run_command = AsyncMock(return_value=refused)
+
+        await orchestrator._restore_snap_autorefresh()  # pyright: ignore[reportPrivateUsage]
+
+        warnings = self._named(orchestrator)
+        assert any(f"Could not restore snapd refresh.hold on {SOURCE_MACHINE}" in w for w in warnings)
+        assert any(f"Could not restore snapd refresh.hold on {TARGET_MACHINE}" in w for w in warnings)
+
+    @pytest.mark.asyncio
+    async def test_a_restore_that_raises_names_the_machine(self) -> None:
+        orchestrator, source, target = make_orchestrator(
+            snap_sync_enabled=True, source_executor=make_snapd(None), target_executor=make_snapd(None)
+        )
+        await orchestrator._hold_snap_autorefresh()  # pyright: ignore[reportPrivateUsage]
+        for ex in (source, target):
+            ex.run_command = AsyncMock(side_effect=ConnectionResetError("connection lost"))
+
+        await orchestrator._restore_snap_autorefresh()  # pyright: ignore[reportPrivateUsage]
+
+        warnings = self._named(orchestrator)
+        assert any(f"Error restoring snapd refresh.hold on {SOURCE_MACHINE}" in w for w in warnings)
+        assert any(f"Error restoring snapd refresh.hold on {TARGET_MACHINE}" in w for w in warnings)

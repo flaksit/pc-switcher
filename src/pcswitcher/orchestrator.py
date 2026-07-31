@@ -1374,6 +1374,18 @@ class Orchestrator:
                 source_monitor_task.cancel()
                 target_monitor_task.cancel()
 
+    def _machine_name(self, host: Host) -> str:
+        """Name `host` as the user knows it: its hostname, never its role in this run.
+
+        The source is this machine's own hostname, the target the CLI argument — the same
+        two strings `JobContext` carries and the confirmation heading prints, so one machine
+        reads the same wherever it is named (`PKG-FR-NAME-THE-MACHINES`).
+
+        For the message a user reads. The `host` field of a log record keeps the role, which
+        is what the file's structured queries and the session-start hostname mapping expect.
+        """
+        return self._source_hostname if host is Host.SOURCE else self._target_hostname
+
     async def _run_snap_hold_command(self, host: Host, cmd: str, *, mutates: str | None = None) -> CommandResult:
         """Run a snap-hold command on `host`, honoring each executor's shell contract.
 
@@ -1428,7 +1440,7 @@ class Orchestrator:
         if not result.success:
             self._logger.warning(
                 "Could not pause snapd auto-refresh on %s: %s",
-                host.value,
+                self._machine_name(host),
                 result.stderr.strip(),
                 extra={"job": "orchestrator", "host": host.value},
             )
@@ -1455,7 +1467,7 @@ class Orchestrator:
         except Exception as e:
             self._logger.warning(
                 "Could not confirm snapd auto-refresh is paused on %s: %s",
-                host.value,
+                self._machine_name(host),
                 e,
                 extra={"job": "orchestrator", "host": host.value},
             )
@@ -1464,14 +1476,14 @@ class Orchestrator:
             self._logger.warning(
                 "Could not confirm snapd auto-refresh is paused on %s: refresh.hold is unreadable "
                 "(check `snap refresh --time` on that machine)",
-                host.value,
+                self._machine_name(host),
                 extra={"job": "orchestrator", "host": host.value},
             )
         elif observed is None or observed == prior:
             self._logger.warning(
                 "snapd auto-refresh is NOT paused on %s: refresh.hold still reads %s after being set "
                 "(check `snap refresh --time` on that machine). The sync continues unpaused.",
-                host.value,
+                self._machine_name(host),
                 observed if observed is not None else "(unset)",
                 extra={"job": "orchestrator", "host": host.value},
             )
@@ -1512,7 +1524,7 @@ class Orchestrator:
                 self._logger.warning(
                     "Not pausing snapd auto-refresh on %s: its refresh.hold could not be read, so a hold "
                     "written here could not be put back. The sync continues unpaused on that machine.",
-                    host.value,
+                    self._machine_name(host),
                     extra={"job": "orchestrator", "host": host.value},
                 )
                 continue
@@ -1547,7 +1559,7 @@ class Orchestrator:
             self._logger.warning(
                 "Leaving snapd refresh.hold alone on %s: its pre-sync value could not be read, so this run "
                 "never paused auto-refresh there and clearing it now could destroy a hold set on that machine.",
-                host.value,
+                self._machine_name(host),
                 extra={"job": "orchestrator", "host": host.value},
             )
             return
@@ -1559,7 +1571,7 @@ class Orchestrator:
             if not result.success:
                 self._logger.warning(
                     "Could not restore snapd refresh.hold on %s: %s",
-                    host.value,
+                    self._machine_name(host),
                     result.stderr.strip(),
                     extra={"job": "orchestrator", "host": host.value},
                 )
@@ -1570,7 +1582,7 @@ class Orchestrator:
             # already tearing down). The timed hold self-expires regardless.
             self._logger.warning(
                 "Error restoring snapd refresh.hold on %s: %s",
-                host.value,
+                self._machine_name(host),
                 e,
                 extra={"job": "orchestrator", "host": host.value},
             )
