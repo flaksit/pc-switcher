@@ -1,0 +1,1 @@
+fix adr-003 and 012 *in place*. State clearly in the preamble that is was updated today to fit the current state.
