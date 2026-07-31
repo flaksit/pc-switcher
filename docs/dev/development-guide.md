@@ -25,8 +25,8 @@ uv run ruff check . && uv run ruff format .
 # Spell checking
 uv run codespell
 
-# Unit and contract tests
-uv run pytest tests/unit tests/contract --verbose
+# Unit and contract tests (every test except integration; the pytest config excludes those)
+uv run pytest
 
 # Integration tests (requires VM infrastructure)
 tests/run-integration-tests.sh

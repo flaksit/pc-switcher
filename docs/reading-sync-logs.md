@@ -1,6 +1,6 @@
 # Reading Sync Logs
 
-When you set `log.file: FULL`, pc-switcher records one line per changed item during a folder sync. Each line looks like this:
+When you set `logging.file: FULL`, pc-switcher records one line per changed item during a folder sync. Each line looks like this:
 
 ```
 /home/user: <f+++++++++ Documents/notes.txt
