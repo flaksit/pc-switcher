@@ -6,9 +6,11 @@ Every situation the package sync requirements distinguish, with the test that pr
 
 **Sections A–K** are launched from Atlas, so **Atlas is the source** and **Nomad is the target**.
 
-About a dozen A–K rows do span more than one run in that one direction — A54, B45, B47, C33, C61, C115, C119, D21, G35, G37, G82, G90, H114, H145 — and each says so ("asked again next sync", "inert next run"). One row is deliberately direction-agnostic: C175 asserts that its outcome holds whichever machine launches the run, which is the point of it.
+Some A–K rows span more than one run, still in that direction, and each says so — "asked again next sync", "inert next run", "planned again". C175 is the one row that names no direction, because holding whichever machine launches the run is what it asserts.
 
-**Section N is where multiple runs are the point.** Read each one's own wording before setting it up:
+**Section N is where multiple runs are the point**, and its rows differ from each other: most are two or three syncs, some repeating the direction and some reversing it so Atlas becomes the machine being changed; a few are a single run composing several A–K branches; N14 and N20 state a standing property rather than a run count. Read each row's own wording.
+
+**A row defines a scenario; a test is one implementation of it.** One test may prove several rows at once, and may reach a row's situation by whatever route is cheapest on two real machines — including a run in the other direction, or state an earlier step left behind. None of that changes what a row means, and none of it belongs in the Scenario or Expected column.
 
 `Vega` appears only where a scenario needs a third machine.
 
@@ -140,7 +142,7 @@ Flowchart edges are named in the Scenario column as `A→B`, `B→C`, etc.
 | --- | --- | --- | --- | --- |
 | A52 | Nomad has `pkg-extra` in its manual set and Atlas does not | A removal item; approving it issues `apt-get remove` for that package alone, and no install | U | `test_apt_packages:TestRemovalConverge::test_remove_diff_issues_real_apt_get_remove_for_that_package_alone` |
 | A53 | A removal is approved | The command removes without purging the package's configuration | U | `test_apt_packages:TestRemovalConverge::test_remove_diff_issues_real_apt_get_remove_for_that_package_alone` |
-| A54 | The same removal item on two successive Atlas→Nomad runs: proposed and left undecided, then approved | Undecided leaves `P` installed on Nomad and records nothing; approved removes it from Nomad | V | `test_package_sync:TestCrossDirectionRoundTrips::test_install_propagates_then_reversed_removal_needs_approval` |
+| A54 | The same removal item on two successive runs: proposed and left undecided, then approved | Undecided leaves the package installed on Nomad and records nothing; approved removes it | V | `test_package_sync:TestCrossDirectionRoundTrips::test_install_propagates_then_reversed_removal_needs_approval` |
 | A55 | Same branch as D36. | As D36. | U | `test_apt_packages:TestRemovalGuard::test_both_removals_approved_the_first_proceeds` |
 
 ### A.5 Reporting without acting (articles: PKG-FR-APT-SAME, PKG-FR-APT-VERSION-DIFF, PKG-FR-APT-ORIGIN-DIFF, PKG-FR-VERSION-FLOAT, PKG-NG-VERSION-CONVERGE, PKG-NG-ORIGIN-CONVERGE, PKG-NG-APT-IDENTICAL)
