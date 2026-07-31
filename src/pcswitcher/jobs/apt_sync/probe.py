@@ -32,7 +32,6 @@ from pcswitcher.jobs.apt_sync.items import (
     APT_CONF_DIR,
     APT_PREFERENCES_DIR,
     APT_ROOT_DIR,
-    APT_SOURCE_EXTENSIONS,
     APT_SOURCES_DIR,
     APT_SOURCES_LIST,
     DISTRIBUTION_ORIGIN_FILENAMES,
@@ -49,6 +48,27 @@ from pcswitcher.jobs.packages.apt_policy import (
 from pcswitcher.jobs.packages.items import Machines
 from pcswitcher.jobs.packages.probes import require_answer
 from pcswitcher.models import CommandResult
+
+# What apt itself reads in each of its three fragment directories (`PKG-FR-APT-IGNORES`).
+# `None` as the required extension means "no extension, or this one"; a tuple means one of
+# these, mandatory. A directory absent from this map — the three KEY_DIRS — is captured
+# whole, because a keyring is named by an explicit `Signed-By:` path rather than found by a
+# fragment scan, and `trusted.gpg.d` has rules of its own that this job does not filter on.
+#
+# Measured on apt 2.8.3 / Ubuntu 24.04, by pointing apt at a scratch directory
+# (`apt-cache policy -o Dir::Etc::preferencesparts=…`, `APT_CONFIG` with `Dir::Etc::parts`,
+# `apt-get update --print-uris -o Dir::Etc::sourceparts=…`) and asking whether the file took
+# effect, one filename at a time. Documented by `man 5 apt_preferences`, `man 5 apt.conf`
+# and `man 5 sources.list`, which state the same three rules.
+_FRAGMENT_EXTENSIONS: dict[str, tuple[str, ...] | None] = {
+    APT_SOURCES_DIR: (".list", ".sources"),
+    APT_PREFERENCES_DIR: None,
+    APT_CONF_DIR: None,
+}
+_OPTIONAL_FRAGMENT_EXTENSION = {APT_PREFERENCES_DIR: ".pref", APT_CONF_DIR: ".conf"}
+# The only characters apt accepts in a fragment filename. Measured: `99+vendor.pref` and
+# `99 vendor.pref` are both ignored, as is any name starting with a dot.
+_APT_FILENAME_RE = re.compile(r"^[A-Za-z0-9_-][A-Za-z0-9_.-]*$")
 
 _SIGNED_BY_RE = re.compile(r"^Signed-By:\s*(?P<path>\S+)", re.IGNORECASE)
 _LEGACY_SIGNED_BY_RE = re.compile(r"signed-by=(?P<path>[^\]\s,]+)")
@@ -79,6 +99,43 @@ def parse_sha256sum(output: str) -> dict[str, str]:
         digest, path = parts
         digests[Path(path).name] = digest
     return digests
+
+
+def apt_reads(directory: str, filename: str) -> bool:
+    """Whether apt itself would read `filename` in `directory` (`PKG-FR-APT-IGNORES`).
+
+    Three rules, and they are the same three in all three fragment directories, differing
+    only in which extension each accepts:
+
+    - the extension. `sources.list.d` requires `.list` or `.sources`; `preferences.d`
+      accepts none or `.pref`; `apt.conf.d` accepts none or `.conf`. Case-sensitive: a
+      `.PREF` file is ignored. The extension is what follows the LAST dot, so
+      `99-vendor.pref.save` is a `.save` file and `a.b.pref` is a `.pref` one.
+    - the characters. Letters, digits, underscore, hyphen and period only, and not a
+      leading period.
+    - `Dir::Ignore-Files-Silently` (`~$`, `\\.disabled$`, `\\.bak$`, `\\.dpkg-[a-z]+$`,
+      `\\.ucf-[a-z]+$`, `\\.save$`, `\\.orig$`, `\\.distUpgrade$`) decides only whether apt
+      PRINTS a notice about a file it is skipping. Every one of those patterns already
+      fails one of the two rules above — `~` is not an accepted character and the rest are
+      extensions no directory accepts — so nothing here needs to encode the list.
+
+    Why it matters in both directions: a file apt ignores is not configuration, so copying
+    the source's copy of it changes nothing on the target, and offering to delete the
+    target's copy asks the user about a file that governs nothing. `PKG-FR-APT-IGNORES`
+    forbids treating one as repository configuration in add, change and remove alike.
+
+    A directory with no fragment rule — the three key directories — reads everything: a
+    keyring is named by an explicit path, not found by a naming convention.
+    """
+    if directory not in _FRAGMENT_EXTENSIONS:
+        return True
+    if not _APT_FILENAME_RE.match(filename):
+        return False
+    _stem, dot, extension = filename.rpartition(".")
+    required = _FRAGMENT_EXTENSIONS[directory]
+    if not dot:
+        return required is None
+    return f".{extension}" in (required or (_OPTIONAL_FRAGMENT_EXTENSION[directory],))
 
 
 def keyring_reference(value: str) -> str | None:
@@ -331,19 +388,19 @@ class RepoConflict:
 # -- The reads --------------------------------------------------------------------------
 
 
-async def capture_dir_digests(
-    run: Run, directory: str, machine: str, *, extensions: Sequence[str] = ()
-) -> dict[str, str]:
+async def capture_dir_digests(run: Run, directory: str, machine: str) -> dict[str, str]:
     """One `if sudo test -d <dir>; then sudo find <dir> -maxdepth 1 -type f -exec sha256sum
     {} +; fi` per directory — a single batched command, never one `sha256sum` per file.
     `-exec ... {} +` never runs at all when the directory has no matching files, so an empty
     directory degrades to an empty digest map rather than a shell error.
 
-    `extensions` narrows the capture to the files apt itself reads, and is only correct
-    where apt HAS such a rule: `sources.list.d` is read for `*.list`/`*.sources` alone, so
-    the `.save`/`.curtin.orig` copies apt ignores must not become syncable items.
-    `preferences.d` and `apt.conf.d` pass no extensions, because apt reads extensionless
-    files in both.
+    What comes back is narrowed to the files apt itself reads (`apt_reads`), so the
+    `.save`/`.curtin.orig`/`.dpkg-dist` copies Ubuntu's own tooling leaves behind never
+    become syncable items in any of the three fragment directories. The narrowing is applied
+    to the listing rather than expressed as a `find` predicate because the rule is not one
+    of extension alone — an accepted character set, and a per-directory optional extension —
+    and a `find` expression saying all of that would be unreadable and unlike the manpages
+    it comes from.
 
     An ABSENT directory is a separate case and is what the `sudo test -d` wrapper is for
     (ADR-022). Measured: `find` on a path that does not exist exits 1, exactly as it does
@@ -362,16 +419,14 @@ async def capture_dir_digests(
     directory root would have listed.
     """
     quoted = shlex.quote(directory)
-    predicate = ""
-    if extensions:
-        names = " -o ".join(f"-name {shlex.quote(f'*{ext}')}" for ext in extensions)
-        predicate = f"\\( {names} \\) "
-    command = (
-        f"if sudo test -d {quoted}; then sudo find {quoted} -maxdepth 1 -type f {predicate}-exec sha256sum {{}} +; fi"
-    )
+    command = f"if sudo test -d {quoted}; then sudo find {quoted} -maxdepth 1 -type f -exec sha256sum {{}} +; fi"
     result = await run(command)
     require_answer(command, result, machine)
-    return parse_sha256sum(result.stdout)
+    return {
+        filename: digest
+        for filename, digest in parse_sha256sum(result.stdout).items()
+        if apt_reads(directory, filename)
+    }
 
 
 async def capture_file_digest(run: Run, path: str) -> str | None:
@@ -758,12 +813,8 @@ class AptProbe:
         source_keys = {d: await capture_dir_digests(self.source_run, d, self._machines.source) for d in KEY_DIRS}
         target_keys = {d: await capture_dir_digests(self.target_run, d, self._machines.target) for d in KEY_DIRS}
 
-        source_sources = await capture_dir_digests(
-            self.source_run, APT_SOURCES_DIR, self._machines.source, extensions=APT_SOURCE_EXTENSIONS
-        )
-        target_sources = await capture_dir_digests(
-            self.target_run, APT_SOURCES_DIR, self._machines.target, extensions=APT_SOURCE_EXTENSIONS
-        )
+        source_sources = await capture_dir_digests(self.source_run, APT_SOURCES_DIR, self._machines.source)
+        target_sources = await capture_dir_digests(self.target_run, APT_SOURCES_DIR, self._machines.target)
         source_list_digest = await capture_file_digest(self.source_run, APT_SOURCES_LIST)
         target_list_digest = await capture_file_digest(self.target_run, APT_SOURCES_LIST)
 
@@ -799,29 +850,73 @@ class AptProbe:
             RepoFacts(pin_digests=target_pins, conf_digests=target_configs),
         )
 
-    async def capture_package_owned_keys(self, target_keys: KeyDigests) -> frozenset[str]:
-        """Absolute paths of the target's key files that the target's own dpkg owns, from
-        ONE batched `dpkg --search` over every key file the target has (never one call per file —
-        the `manual_installs_sync._scan_unowned_installs` shape).
+    async def capture_distribution_owned_keys(
+        self, target_keys: KeyDigests, source_keys: KeyDigests, distribution_origins: frozenset[str]
+    ) -> frozenset[str]:
+        """Absolute paths of the target's key files that the target's own DISTRIBUTION
+        packaging owns — the one exemption `PKG-FR-KEY-REFRESH` grants a differing key.
 
-        The exit code is deliberately ignored: `dpkg --search` returns non-zero as soon as ANY
-        argument matches no package, which for a machine with even one hand-placed key is
-        always. Ownership is read out of stdout, where each matched path arrives as
-        `<package[, package...]>: <path>`; unmatched paths go to stderr and simply produce
-        no entry, which is exactly the "unowned" answer.
+        Two reads, both batched and both narrowed to what the exemption can bite on:
 
-        Read-only, no sudo: `dpkg --search` queries the local dpkg database.
+        - ONE `dpkg --search` over every key file the target has (never one call per file —
+          the `manual_installs_sync._scan_unowned_installs` shape), which gives `{path:
+          owning packages}`. Its exit code is deliberately ignored: `dpkg --search` returns
+          non-zero as soon as ANY argument matches no package, which for a machine with even
+          one hand-placed key is always. Ownership is read out of stdout, where each matched
+          path arrives as `<package[, package...]>: <path>`; unmatched paths go to stderr and
+          simply produce no entry, which is exactly the "unowned" answer.
+        - ONE `apt-cache policy` over the packages owning the keys whose bytes DIFFER from
+          the source machine's, which is the only population `Keyrings.manages` is ever
+          consulted about. A run where the two machines' keys match pays nothing.
+
+        The distribution test is the origin its owning package's INSTALLED version came
+        from, matched against the origins this machine's own distribution source files
+        declare (`SourceFileRefs.distribution_origins`, D-35) — the same per-machine
+        definition every other origin question here uses, so a machine on a local mirror is
+        not read as a vendor. A vendor's `.deb` that ships a keyring — `tailscale-archive
+        -keyring` from `https://pkgs.tailscale.com/stable/ubuntu`, measured on the
+        development machine — is therefore NOT the distribution, and its rotated key is
+        refreshed like any other. `ubuntu-keyring` and `ubuntu-pro-client`, from the
+        machine's archive and ESM suites, are.
+
+        EVERY owning package must be the distribution's for the path to be exempt: the
+        article's default is that a differing key is refreshed, so a path a vendor package
+        also claims keeps the vendor's rotation rather than the exemption. A package whose
+        installed version comes from no repository at all — a hand-installed `.deb` — has an
+        empty origin set and is never the distribution.
+
+        Read-only, no sudo: both commands query the target's own databases.
         """
         paths = sorted(f"{directory}/{name}" for directory, digests in target_keys.dirs() for name in digests)
         if not paths:
             return frozenset()
         result = await self.target_run(f"dpkg --search {' '.join(shlex.quote(path) for path in paths)}")
-        owned: set[str] = set()
+        owners: dict[str, tuple[str, ...]] = {}
         for line in result.stdout.splitlines():
-            _packages, separator, path = line.rpartition(": ")
+            packages, separator, path = line.rpartition(": ")
             if separator and path.startswith("/"):
-                owned.add(path.strip())
-        return frozenset(owned)
+                owners[path.strip()] = tuple(name.strip() for name in packages.split(",") if name.strip())
+
+        differing = {
+            path: packages
+            for path, packages in owners.items()
+            if packages and source_keys.digest_of(path) != target_keys.digest_of(path)
+        }
+        if not differing:
+            return frozenset()
+
+        names = sorted({name for packages in differing.values() for name in packages})
+        command = policy_command(names)
+        policy = await self.target_run(command)
+        # Exit code only (ADR-022). An unanswered probe leaves every owner without an origin
+        # and so exempts nothing, which refreshes a key the distribution owns — a wrong write
+        # rather than a stale key, so it fails the job instead of degrading.
+        require_apt_answer(command, policy, self._machines.target)
+        origins = installed_origins_by_package(policy.stdout)
+        distribution = {name for name in names if (uris := origins.get(name)) and uris <= distribution_origins}
+        return frozenset(
+            path for path, packages in differing.items() if all(name in distribution for name in packages)
+        )
 
     async def packages_by_source_file(
         self, filenames: frozenset[str], names: Sequence[str], target_refs: SourceFileRefs
@@ -905,5 +1000,16 @@ class AptProbe:
 
     async def target_pro_attached(self, status_command: str) -> CommandResult:
         """The raw `pro status` result. Parsing stays in `esm_gate` — the payload names the
-        subscriber's account, so only the parsed boolean may ever leave it (D-38)."""
-        return await self._target.run_command(status_command, login_shell=False)
+        subscriber's account, so only the parsed boolean may ever leave it (D-38).
+
+        `withhold_output` is what keeps that true of the executor's own debug trace, which
+        otherwise records every command's stdout verbatim (`PKG-FR-LOG-VERBATIM`): the
+        subscriber's identity would reach the log file before `esm_gate` ever parsed the
+        payload, and no downstream filter can help — by then it is already written
+        (`PKG-FR-ESM-PRIVACY`).
+        """
+        return await self._target.run_command(
+            status_command,
+            login_shell=False,
+            withhold_output="the Ubuntu Pro attachment payload names the subscriber (PKG-FR-ESM-PRIVACY)",
+        )

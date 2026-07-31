@@ -901,6 +901,42 @@ class TestUnreproducibleGroupResolution:
         assert outcome.snippets == {"u1": body}
         assert "u1" not in outcome.unresolved
 
+    async def test_the_authoring_warning_is_read_before_the_editor_opens(self) -> None:
+        """G61 — the user is warned while they can still act on it. A snippet that asks a
+        question does not fail on nomad, it HANGS there with nobody to answer, so the
+        warning is worth nothing once the body is written: it is captured at the moment
+        `questionary.text` is constructed, which is the moment the editor opens.
+
+        The worked shape is asserted too — telling someone their command must not prompt
+        without showing them what that looks like leaves them to discover
+        `DEBIAN_FRONTEND` as a stuck sync.
+        """
+        sink = io.StringIO()
+        console = Console(file=sink, force_terminal=True, no_color=True, width=200)
+        ui = MagicMock()
+        group = _unreproducible_group([_entry("u1", label="brscan3")])
+        screen = _fake_prompt(ask_return={"u1": "add_snippet"})
+        text_prompt = _fake_prompt(ask_return="sudo dpkg --install /tmp/x.deb")
+        shown_when_the_editor_opened = ""
+
+        def open_editor(*_args: object, **_kwargs: object) -> MagicMock:
+            nonlocal shown_when_the_editor_opened
+            shown_when_the_editor_opened = sink.getvalue()
+            return text_prompt
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen),
+            patch("pcswitcher.jobs.packages.review.questionary.text", side_effect=open_editor),
+        ):
+            await review_items([group], console=console, ui=ui, **HOSTS)
+
+        assert "nomad" in shown_when_the_editor_opened
+        assert "nobody watching" in shown_when_the_editor_opened
+        assert "asks a question" in shown_when_the_editor_opened
+        assert "hangs the" in shown_when_the_editor_opened
+        assert "DEBIAN_FRONTEND=noninteractive" in shown_when_the_editor_opened
+
     async def test_skip_always_choice_yields_skip_always_decision_and_no_snippet(self) -> None:
         """G32."""
         console = _interactive_console()

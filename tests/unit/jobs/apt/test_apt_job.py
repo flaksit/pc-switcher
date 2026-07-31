@@ -492,6 +492,64 @@ class TestRepoRemovalWithheldWhileInUse:
         assert by_id["apt:package:vendor-tool"].action == DiffAction.REMOVE
         assert by_id["apt:source:vendor.list"].action == DiffAction.REMOVE
 
+    @staticmethod
+    def _one_removal_context(*, decisions: dict[str, Decision]) -> tuple[AptSyncJob, MagicMock]:
+        """`vendor.list` on the target only, feeding exactly one target package the source
+        does not have — so this run proposes to remove `vendor-tool` AND offers the
+        repository it is the last user of, in one review.
+        """
+        target_responses = {
+            **TestRepoRemovalWithheldWhileInUse._target_responses(
+                source_files={"vendor.list": _VENDOR_LIST},
+                source_digests=sha256_line("d1", "vendor.list"),
+                decisions="machine_specific: {}\n",
+                policy=_policy_block("vendor-tool", "https://vendor.example.com/apt"),
+            ),
+            "apt-mark showmanual": CommandResult(0, "vendor-tool\n", ""),
+            "dpkg-query": CommandResult(0, "vendor-tool\t1.0\n", ""),
+        }
+        context, _source, target = _repo_context(source_responses=_NO_PACKAGES, target_responses=target_responses)
+        job = AptSyncJob(context)
+        install_reviewer(job, decisions)
+        return job, target
+
+    @pytest.mark.asyncio
+    async def test_a_repository_goes_with_the_removal_the_user_approved(self) -> None:
+        """C50, N13 — removing a repository together with the packages it feeds is the case the
+        withholding rule must not swallow: both were approved, so by the time the file goes
+        nothing on the target installs from it.
+        """
+        job, target = self._one_removal_context(
+            decisions={"apt:source:vendor.list": Decision.APPLY, "apt:package:vendor-tool": Decision.APPLY}
+        )
+
+        await job.execute()
+
+        assert "sudo rm --force /etc/apt/sources.list.d/vendor.list" in all_calls(target)
+        assert any("apt-get remove" in c and "vendor-tool" in c and "--dry-run" not in c for c in all_calls(target))
+
+    @pytest.mark.asyncio
+    async def test_a_repository_whose_packages_removal_was_declined_is_not_deleted(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """C172, N12 — the answer the plan-time reading cannot know: the user approves the
+        repository's deletion and declines its package's removal. `vendor-tool` stays, so
+        something on the target still installs from the file, and deleting it would strand an
+        installed package with no origin. The approval is taken back, not failed, and the
+        file is offered again next run.
+        """
+        job, target = self._one_removal_context(decisions={"apt:source:vendor.list": Decision.APPLY})
+
+        with caplog.at_level(1):
+            await job.execute()
+
+        assert "sudo rm --force /etc/apt/sources.list.d/vendor.list" not in all_calls(target)
+        assert not any("apt-get remove" in c for c in all_calls(target))
+        assert (
+            "keeping repository vendor.list: target-host still installs vendor-tool from it, "
+            "so its approved deletion is not applied" in caplog.text
+        )
+
     @pytest.mark.asyncio
     async def test_the_machine_specific_package_itself_still_produces_no_diff(self) -> None:
         """C52 — the inertness this detail exists to compensate for must not regress: naming

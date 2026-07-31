@@ -16,7 +16,7 @@ import getpass
 import os
 import re
 import shlex
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, ClassVar, override
@@ -24,8 +24,8 @@ from typing import Any, ClassVar, override
 from pcswitcher.disk import format_bytes
 from pcswitcher.jobs.base import SyncJob
 from pcswitcher.jobs.flatpak_sync import flatpak_sync_exclude_paths
-from pcswitcher.jobs.packages.state import DECISION_FILE_GLOB_RELPATH
-from pcswitcher.jobs.snap_sync import snap_sync_exclude_paths
+from pcswitcher.jobs.packages.state import DECISION_FILE_GLOB_RELPATH, SNIPPET_REGISTRY_RELPATH
+from pcswitcher.jobs.snap_sync import snap_sync_exclude_paths, target_snap_revisions
 from pcswitcher.jobs.vscode_state_sync import vscode_state_exclude_paths
 from pcswitcher.models import (
     ConfigError,
@@ -101,7 +101,7 @@ def _pass_display(path: str, label: str) -> str:
 # while --delete-mirroring the uv interpreter tree it depends on deleted the in-use
 # interpreter and broke pc-switcher on the target.
 #
-# Five GLOBAL-FIRST, non-overridable exclude groups exist, each owned elsewhere or
+# Six GLOBAL-FIRST, non-overridable exclude groups exist, each owned elsewhere or
 # here and all emitted before the user filter surfaces so no `+` rule can re-expose them:
 #   1. this runtime-state relpath (below), home-relative and folder_sync's own concern;
 #   2. the VS Code state DBs (VS Code and its forks), whose ABSOLUTE paths are owned and
@@ -115,22 +115,29 @@ def _pass_display(path: str, label: str) -> str:
 #      machine's hardware exclusions on a peer. Unconditional — never gated on any package job
 #      being enabled, since a decision file must never travel even on a run where the package
 #      jobs happen to be off (see _decision_file_exclude_filters).
-#   4. the retained OLD `~/snap/<app>/<revision>` data dirs snap_sync owns (D-29),
-#      translated from snap_sync_exclude_paths() the same way (see _snap_sync_exclude_filters).
-#      The CURRENT-revision data dir is deliberately NOT excluded — snap_sync converges both
-#      machines onto the same revision before folder_sync runs (D-17), so mirroring it carries
-#      the active revision's per-user app data across (decision 3, issue #118); only the
-#      retained older rev dirs, which the target's snapd never installed, stay excluded.
-#      UNLIKE groups 2-3, gated on sync_jobs.snap_sync being enabled: a disabled snap_sync
-#      means nobody is managing those paths, and excluding them anyway would strand that data
-#      unmirrored rather than protect it.
-#   5. `~/.local/share/flatpak`, which flatpak_sync owns (D-29), translated from
+#   4. the install-snippet registry (`~/.config/pc-switcher/package-snippets.yaml`), the
+#      relpath packages.state owns beside that glob but which the glob does not match
+#      (see _snippet_registry_exclude_filters). The registry DOES travel (PKG-FR-REGISTRY-SYNCS)
+#      — but only through manual_installs_sync's own push, which asks first when the transfer
+#      would lose or change an entry the target holds (PKG-FR-REGISTRY-CONSENT) and which a
+#      skipped or non-interactive run does not make at all (PKG-FR-OUTCOME-SKIPPED,
+#      PKG-FR-NO-TERMINAL). A mirror of the same file would be that transfer without the
+#      question, so it is unconditional for the same reason group 3 is: with the job off there
+#      is no consent gate at all, which makes mirroring it worse, not safer.
+#   5. the `~/snap/<app>/<revision>` data dirs snap_sync owns (D-29), translated from
+#      snap_sync_exclude_paths() the same way (see _snap_sync_exclude_filters). An app's
+#      active-revision dir is excluded UNLESS the target is itself on that revision, which
+#      `execute` establishes by reading the target's own `snap list` after the package jobs
+#      have run (PKG-FR-JOB-ORDER): mirroring it then carries the active revision's per-user
+#      app data across (decision 3, issue #118), and every other case would plant data for a
+#      revision the target's snapd never installed (PKG-FR-SNAP-DATA-BOUNDARY). Unconditional,
+#      like groups 3-4: the target's own state answers the question, so a disabled or failed
+#      snap_sync changes what may be mirrored rather than whether the rule applies.
+#   6. `~/.local/share/flatpak`, which flatpak_sync owns (D-29), translated from
 #      flatpak_sync_exclude_paths() the same way (see _flatpak_sync_exclude_filters) —
-#      gated on sync_jobs.flatpak_sync for the identical reason group 4 is.
-# The rule the asymmetry follows: the VS Code exclusion is unconditional because
-# vscode_state_sync MERGES those DBs and must always hide them from the mirror; groups 4-5
-# are conditional because no such merge happens when their job is off, so hiding the path
-# would just make the data invisible to every sync mechanism at once.
+#      the one group gated on its job (sync_jobs.flatpak_sync): with flatpak_sync off nobody
+#      manages that store, and excluding it anyway would strand the data unmirrored rather
+#      than protect anything.
 # Every OTHER exclusion is user-configurable.
 # The binary this job escalates for (ADR-013). A lower bound on what the sudoers
 # entry must permit, not an exact scope — a broader existing grant is fine.
@@ -476,25 +483,56 @@ class FolderSyncJob(SyncJob):
         return [f"--filter={shlex.quote(f'- /{rel}')}"]
 
     @staticmethod
-    def _snap_sync_exclude_filters(folder_path: str) -> list[str]:
-        """rsync `--filter` args excluding the retained OLD `~/snap/<app>/<revision>`
-        data dirs that fall under `folder_path` (D-29).
+    def _snippet_registry_exclude_filters(folder_path: str) -> list[str]:
+        """rsync `--filter` arg excluding the install-snippet registry
+        (`~/.config/pc-switcher/package-snippets.yaml`) when it falls under `folder_path`.
+
+        The home-relative relpath comes from `packages.state.SNIPPET_REGISTRY_RELPATH` —
+        `packages.state` owns where the registry lives; folder_sync only resolves it against
+        `Path.home()` and translates it into a root-anchored, first-match exclude, the same
+        one-way ownership `_decision_file_exclude_filters` follows. It needs a rule of its
+        own because it is NOT a decision file: `DECISION_FILE_GLOB_RELPATH` matches
+        `*.decisions.yaml`, and the registry sits beside those files under a name that glob
+        does not reach.
+
+        Deliberately unconditional, and deliberately not "the registry never travels": the
+        registry is shared knowledge and does travel (`PKG-FR-REGISTRY-SYNCS`), but only
+        through `manual_installs_sync`'s own push, which names the entries an overwrite would
+        lose or change and asks first (`PKG-FR-REGISTRY-CONSENT`), and which a skipped or
+        non-interactive run never makes (`PKG-FR-OUTCOME-SKIPPED`, `PKG-FR-NO-TERMINAL`).
+        Mirroring the file here would be exactly that transfer with the question removed,
+        whether or not `manual_installs_sync` is enabled.
+        """
+        root = Path(folder_path.rstrip("/") or "/")
+        abs_path = Path.home() / SNIPPET_REGISTRY_RELPATH
+        try:
+            rel = abs_path.relative_to(root)
+        except ValueError:
+            return []
+        return [f"--filter={shlex.quote(f'- /{rel}')}"]
+
+    @staticmethod
+    def _snap_sync_exclude_filters(folder_path: str, target_snap_revisions: Mapping[str, str] | None) -> list[str]:
+        """rsync `--filter` args excluding the `~/snap/<app>/<revision>` data dirs that fall
+        under `folder_path` and hold data for a revision the target is not on (D-29).
 
         The absolute paths come from `snap_sync_exclude_paths()` — `snap_sync` owns which
-        revision directories to exclude, and deliberately keeps the CURRENT-revision data
-        dir OUT of that set so folder_sync mirrors it (decision 3, issue #118): both machines
-        are converged onto the same revision before folder_sync runs (D-17). folder_sync only
+        revision directories to exclude, and keeps an app's active-revision data dir OUT of
+        that set (so folder_sync mirrors it, decision 3, issue #118) only where
+        `target_snap_revisions` says the target is on that same revision. folder_sync only
         translates each absolute path into a root-anchored, first-match exclude relative to
         the transfer root, exactly as `_vscode_state_exclude_filters` does for the VS Code
         DBs. A path outside `folder_path` is skipped.
 
-        The CALLER gates this on `sync_jobs.snap_sync` being enabled (see the
-        GLOBAL-FIRST module comment above `_RSYNC_SUDO_COMMANDS`) — this method itself
-        emits unconditionally whatever `snap_sync_exclude_paths()` currently returns.
+        The argument is what `execute` read off the target (`snap_sync.target_snap_revisions()`,
+        whose name this parameter shares), or None when it could not be read; unlike the
+        flatpak group this is NOT gated on
+        `sync_jobs.snap_sync`, because the target's own state answers the question whether or
+        not that job ran.
         """
         root = Path(folder_path.rstrip("/") or "/")
         filters: list[str] = []
-        for abs_path in snap_sync_exclude_paths():
+        for abs_path in snap_sync_exclude_paths(target_snap_revisions):
             try:
                 rel = abs_path.relative_to(root)
             except ValueError:
@@ -535,8 +573,11 @@ class FolderSyncJob(SyncJob):
         section (`self.context.config["folders"]`) and has never carried sibling job
         state. `enabled_sync_jobs` is `None` when no sibling information is available
         (e.g. the lightweight `JobContext` constructions many existing unit tests use),
-        which this treats as "not enabled" — reproducing today's behavior of emitting
-        no package-job exclusion.
+        which this treats as "not enabled" — emitting no exclusion on that job's behalf.
+
+        Only the flatpak group is gated this way. The snap group asks the target which
+        revisions it is on instead, which answers the data-boundary question whether or not
+        `snap_sync` ran (see `_snap_sync_exclude_filters`).
         """
         return (self.context.enabled_sync_jobs or {}).get(job_name, False)
 
@@ -613,7 +654,13 @@ class FolderSyncJob(SyncJob):
         # Seed unless every source filter file is present and identical on the target.
         return not src_manifest.issubset(tgt_manifest)
 
-    def _build_rsync_cmd(self, folder: FolderEntry, dry_run: bool, delete: bool = True) -> str:
+    def _build_rsync_cmd(
+        self,
+        folder: FolderEntry,
+        dry_run: bool,
+        delete: bool = True,
+        target_snap_revisions: Mapping[str, str] | None = None,
+    ) -> str:
         """Build the rsync shell command for syncing a single folder.
 
         Produces a command that:
@@ -634,6 +681,12 @@ class FolderSyncJob(SyncJob):
 
         All config-derived values (folder path, exclude patterns, target hostname)
         are shlex.quote'd to prevent shell injection (T-05-01).
+
+        `target_snap_revisions` is the snap-name -> revision map `execute` read off the
+        target, or None when it could not be read; it decides which `~/snap/<app>/<revision>`
+        data dirs may be mirrored (see `_snap_sync_exclude_filters`). None is the safe
+        default, excluding every revision dir, so a caller that has not read the target
+        (a unit test, a future call site) never widens the mirror by omission.
 
         The SSH transport and target-side sudo elevation are built by
         `_transport_args`.  The filter chain (runtime excludes → central merge →
@@ -678,8 +731,9 @@ class FolderSyncJob(SyncJob):
 
         # GLOBAL-FIRST filter precedence: the un-overridable excludes come first —
         # pc-switcher's runtime state (ADR-017), the VS Code state DBs (ADR-018),
-        # every manager's machine-local decision file (D-08/D-09), then — only when
-        # the owning job is enabled — the snap revision dirs and the flatpak data dir
+        # every manager's machine-local decision file (D-08/D-09), the install-snippet
+        # registry (whose own job carries it, under consent), the snap revision dirs the
+        # target is not on, and — only when its job is enabled — the flatpak data dir
         # (D-29); the folder's central `merge` filter (when configured) comes next so
         # its rules win over any per-directory file under first-match-wins; the
         # tree-wide `dir-merge /.pcswitcher-filter` is always last and gives users a
@@ -689,8 +743,8 @@ class FolderSyncJob(SyncJob):
         parts.extend(self._runtime_exclude_filters(folder.path))
         parts.extend(self._vscode_state_exclude_filters(folder.path))
         parts.extend(self._decision_file_exclude_filters(folder.path))
-        if self._package_job_enabled("snap_sync"):
-            parts.extend(self._snap_sync_exclude_filters(folder.path))
+        parts.extend(self._snippet_registry_exclude_filters(folder.path))
+        parts.extend(self._snap_sync_exclude_filters(folder.path, target_snap_revisions))
         if self._package_job_enabled("flatpak_sync"):
             parts.extend(self._flatpak_sync_exclude_filters(folder.path))
 
@@ -888,6 +942,16 @@ class FolderSyncJob(SyncJob):
             # every folder can be disabled — nothing is mirrored and nothing converged.
             raise JobSkipped(self.name, "no enabled folders configured")
 
+        # Which snap revisions the target is actually on, read ONCE for the whole job and
+        # before the first pass. It decides which `~/snap/<app>/<revision>` data dirs may be
+        # mirrored (`PKG-FR-SNAP-DATA-BOUNDARY`); reading it here rather than in
+        # `_build_rsync_cmd` keeps that method synchronous and costs one command per run
+        # instead of one per pass. Read-only, and correct at this point precisely because
+        # every package job has already run (`PKG-FR-JOB-ORDER`), so a revision `snap_sync`
+        # converged is visible and one it did not is equally visible. Also read in dry-run:
+        # the preview must be built from the same filters a real run would use.
+        snap_revisions = await target_snap_revisions(self.target)
+
         for folder in folders:
             prefix = "[dry-run] " if self.context.dry_run else ""
             self._log(
@@ -907,12 +971,14 @@ class FolderSyncJob(SyncJob):
                     f"Copy pass for {folder.path!r} (no-delete), to place per-directory filter files",
                 )
                 copy_files, copy_bytes, _ = await self._run_rsync_pass(
-                    self._build_rsync_cmd(folder, dry_run=False, delete=False), folder, PASS_COPY
+                    self._build_rsync_cmd(folder, dry_run=False, delete=False, target_snap_revisions=snap_revisions),
+                    folder,
+                    PASS_COPY,
                 )
 
             # Deleting mirror (or, in dry-run, the read-only preview).
             mirror_files, mirror_bytes, files_deleted = await self._run_rsync_pass(
-                self._build_rsync_cmd(folder, self.context.dry_run, delete=True),
+                self._build_rsync_cmd(folder, self.context.dry_run, delete=True, target_snap_revisions=snap_revisions),
                 folder,
                 PASS_DELETE if split else PASS_MIRROR,
             )

@@ -23,7 +23,7 @@ from pcswitcher.jobs.packages.review import (
     _is_removal_direction,  # pyright: ignore[reportPrivateUsage]
 )
 from pcswitcher.jobs.packages.sync_core import PackageItemFailures, PackagePlan
-from pcswitcher.jobs.snap_sync import SnapItem, SnapSyncJob, snap_sync_exclude_paths
+from pcswitcher.jobs.snap_sync import SnapItem, SnapSyncJob, snap_sync_exclude_paths, target_snap_revisions
 from pcswitcher.models import CommandResult, Host, ValidationError
 from pcswitcher.orchestrator import Orchestrator
 
@@ -1381,8 +1381,8 @@ class TestExcludePaths:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """E104, E105, K80 — the revision `current` resolves to is mirrored (kept OUT of the exclude set,
-        decision 3); every retained OLDER revision dir is excluded, and `common`/`current`
-        are always kept.
+        decision 3) where the target is on that same revision; every retained OLDER revision
+        dir is excluded, and `common`/`current` are always kept.
         """
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         firefox_dir = tmp_path / "snap" / "firefox"
@@ -1394,12 +1394,55 @@ class TestExcludePaths:
         common_dir.mkdir(parents=True)
         (firefox_dir / "current").symlink_to(current_rev, target_is_directory=True)
 
-        paths = snap_sync_exclude_paths()
+        paths = snap_sync_exclude_paths({"firefox": "2938"})
 
         assert old_rev in paths  # retained old revision the target never installed
         assert current_rev not in paths  # active-revision data dir travels
         assert not any(p.name == "common" for p in paths)
         assert not any(p.name == "current" for p in paths)
+
+    def test_a_revision_the_target_did_not_converge_to_is_excluded(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """K82 — the user skipped `firefox`'s revision change (or it failed), so the target is
+        still on the old revision: the source's active-revision data dir is excluded like any
+        other revision the target's snapd never installed.
+        """
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        firefox_dir = tmp_path / "snap" / "firefox"
+        current_rev = firefox_dir / "2938"
+        current_rev.mkdir(parents=True)
+        (firefox_dir / "current").symlink_to(current_rev, target_is_directory=True)
+
+        assert snap_sync_exclude_paths({"firefox": "2911"}) == [current_rev]
+
+    def test_a_snap_the_target_does_not_hold_has_every_revision_dir_excluded(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """E115 — `alpha`'s install was declined or failed, so the target holds no revision of it
+        at all and its data dir stays home.
+        """
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        alpha_dir = tmp_path / "snap" / "alpha"
+        current_rev = alpha_dir / "10"
+        current_rev.mkdir(parents=True)
+        (alpha_dir / "current").symlink_to(current_rev, target_is_directory=True)
+
+        assert snap_sync_exclude_paths({"firefox": "2938"}) == [current_rev]
+
+    def test_unknown_target_revisions_exclude_every_revision_dir(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """K81 — with no revision map (snap_sync off, or the target's snapd could not be asked)
+        nothing is known to have been installed there, so no revision dir is mirrored.
+        """
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        firefox_dir = tmp_path / "snap" / "firefox"
+        current_rev = firefox_dir / "2938"
+        current_rev.mkdir(parents=True)
+        (firefox_dir / "current").symlink_to(current_rev, target_is_directory=True)
+
+        assert snap_sync_exclude_paths(None) == [current_rev]
 
     def test_dangling_current_falls_back_to_excluding_all_revisions(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1416,7 +1459,7 @@ class TestExcludePaths:
         # `current` points at a revision dir that does not exist -> dangling.
         (firefox_dir / "current").symlink_to(firefox_dir / "9999", target_is_directory=True)
 
-        paths = snap_sync_exclude_paths()
+        paths = snap_sync_exclude_paths({"firefox": "2938"})
 
         assert rev_a in paths
         assert rev_b in paths
@@ -1431,7 +1474,7 @@ class TestExcludePaths:
         rev.mkdir(parents=True)
         # No `current` symlink created at all.
 
-        paths = snap_sync_exclude_paths()
+        paths = snap_sync_exclude_paths({"firefox": "2938"})
 
         assert rev in paths
 
@@ -1439,7 +1482,49 @@ class TestExcludePaths:
         """E108 — no `~/snap` at all: nothing excluded, nothing raised."""
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
-        assert snap_sync_exclude_paths() == []
+        assert snap_sync_exclude_paths({"firefox": "2938"}) == []
+
+
+class TestTargetSnapRevisions:
+    """The target's own revision listing, which is what decides whether a `~/snap` data dir
+    may be mirrored (`PKG-FR-SNAP-DATA-BOUNDARY`).
+    """
+
+    @pytest.mark.asyncio
+    async def test_the_listing_becomes_a_name_to_revision_map(self) -> None:
+        """K82 — read from the target, after the package jobs ran."""
+        target = MagicMock()
+        target.run_command = AsyncMock(
+            return_value=CommandResult(
+                exit_code=0,
+                stdout=(
+                    "Name     Version  Rev   Tracking       Publisher  Notes\n"
+                    "firefox  1.0      2938  latest/stable  mozilla    -\n"
+                ),
+                stderr="",
+            )
+        )
+
+        assert await target_snap_revisions(target) == {"firefox": "2938"}
+        target.run_command.assert_awaited_once_with("snap list --all", login_shell=False)
+
+    @pytest.mark.asyncio
+    async def test_a_read_that_did_not_answer_is_not_an_empty_machine(self) -> None:
+        """K81 — a snapd that could not be asked says nothing about which revisions exist, so
+        the caller gets None (exclude everything), never an empty map read as fact."""
+        target = MagicMock()
+        target.run_command = AsyncMock(return_value=CommandResult(exit_code=1, stdout="", stderr="error"))
+
+        assert await target_snap_revisions(target) is None
+
+    @pytest.mark.asyncio
+    async def test_a_machine_with_no_snaps_is_ordinary_data(self) -> None:
+        """K81 — exit 0 with an empty listing is a machine holding no snaps, which is a map with
+        no entries rather than an unreadable one."""
+        target = MagicMock()
+        target.run_command = AsyncMock(return_value=CommandResult(exit_code=0, stdout="", stderr=""))
+
+        assert await target_snap_revisions(target) == {}
 
 
 class TestValidate:

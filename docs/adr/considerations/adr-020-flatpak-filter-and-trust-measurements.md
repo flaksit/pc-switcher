@@ -50,4 +50,10 @@ Confirmed at the flatpak level. A flathub ref mirrored with `ostree pull-local`,
 
 `flatpak remote-add --gpg-import` is repeatable and merges, which is what lets one remote carry several anchor files. Two files imported in one `remote-add` left both fingerprints in `/var/lib/flatpak/repo/lt2.trustedkeys.gpg` and the install exited 0 with no anchor anywhere. `ostree remote add` keeps only the last `--gpg-import`; flatpak's does not.
 
+## Which anchor does a keyless verified remote rest on?
+
+All of them, and nothing records which one verified anything — read from libostree's source at `v2024.5` rather than measured. `_ostree_gpg_verifier_add_keyring_dir_at` in `src/libostree/ostree-gpg-verifier.c` walks the directory and takes every regular file whose name ends in `.gpg`, skipping exactly `trustdb.gpg` and `secring.gpg` (gpg's own database files); each surviving file's bytes are appended to one `keyring_data` array, imported into a single GPGME context by `_ostree_gpg_verifier_import_keys`, and `gpgme_op_verify` then accepts a signature any key in that merged keyring validates. No per-remote state records which key it was.
+
+So "the anchor a remote rests on" is not a question configuration can answer: for a remote holding no keyring of its own it is the whole merged set, and replicating all of it reproduces exactly the trust the source's remote had. `_anchors_to_import` therefore carries every anchor the target lacks, and the only narrowing available is libostree's own file filter, which the anchor read applies (`*.gpg` in the glob, `trustdb.gpg`/`secring.gpg` dropped after it).
+
 One key source stays outside both: the ostree per-remote configuration option `gpgkeypath`. Setting `remote "r1"`'s `gpgkeypath` to a key file made a pull exit 0 with no anchor and no keyring. flatpak never writes that option, so it can only reach a machine through a hand-edited repo config, and `_stage_source_keys` does not read it.

@@ -11,18 +11,21 @@ reasons that have nothing to do with the shared pipeline.
 
 from __future__ import annotations
 
+import io
+import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, ClassVar
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from rich.console import Console
 
 from pcswitcher.jobs.base import SyncJob
 from pcswitcher.jobs.context import JobContext
 from pcswitcher.jobs.manual_installs_sync import ManualInstallsSyncJob
 from pcswitcher.jobs.packages.items import DiffAction, DiffClass, ItemClass, ItemDiff
-from pcswitcher.jobs.packages.review import Decision, ReviewGroup, ReviewOutcome
+from pcswitcher.jobs.packages.review import Decision, ReviewGroup, ReviewOutcome, TerminalUIReviewer
 from pcswitcher.jobs.packages.state import DecisionFile, filter_inert
 from pcswitcher.jobs.packages.sync_core import (  # pyright: ignore[reportPrivateUsage]
     _ACTION_VOCABULARY,
@@ -553,6 +556,7 @@ class TestEveryLogRecordCarriesItsMachine:
 
     @pytest.mark.asyncio
     async def test_no_package_job_log_record_leaves_its_machine_unsaid(self, caplog: pytest.LogCaptureFixture) -> None:
+        """H79."""
         caplog.set_level(LogLevel.FULL.value, logger="pcswitcher.jobs.base")
         job = FakeSyncJob(make_context())
         diffs = (
@@ -567,6 +571,69 @@ class TestEveryLogRecordCarriesItsMachine:
         from_this_job = [record for record in caplog.records if getattr(record, "job", None) == "fake_sync"]
         assert from_this_job, "apply() emitted no record attributable to the job"
         assert all(getattr(record, "host", "") for record in from_this_job)
+
+
+class _ThreeScreenJob(FakeSyncJob):
+    """`FakeSyncJob` whose plan holds one diff of each answerable action, so its review is
+    three screens rather than one. `super().plan()` runs first so the two decision-file
+    reads land on the executors before the review — the commands the spy below counts.
+    """
+
+    async def plan(self) -> PackagePlan:
+        await super().plan()
+        diffs = (
+            _diff("i1", DiffAction.INSTALL),
+            _diff("c1", DiffAction.CHANGE, DiffClass.VERSION_MISMATCH),
+            _diff("r1", DiffAction.REMOVE, DiffClass.EXTRA_ON_TARGET),
+        )
+        return PackagePlan(manager=self.manager_id, diffs=diffs, groups=self._build_review_groups(diffs))
+
+
+class TestNoWorkBetweenTheQuestionsOfOneRound:
+    """`PKG-FR-BATCHED`: what interrupts a user is work resuming between questions, not
+    their number.
+
+    Driven through the real `TerminalUIReviewer` rather than a fake, because the property
+    is about the seam between the screens: a fake reviewer answers every group in one call
+    and could not tell a round that pauses to run a command from one that does not. The
+    executors are the spy — each screen records how many commands the run has issued by the
+    time it opens, and a converge, a probe or a refresh slipped between two screens would
+    move that number.
+    """
+
+    @pytest.mark.asyncio
+    async def test_no_executor_command_is_issued_between_the_screens_of_one_round(self) -> None:
+        """H35."""
+        console = Console(file=io.StringIO(), force_terminal=True)
+        reviewer = TerminalUIReviewer(console, MagicMock(), source_hostname="atlas", target_hostname="nomad")
+        context = make_context(reviewer=reviewer)
+        job = _ThreeScreenJob(context)
+
+        commands_issued_when_each_screen_opened: list[int] = []
+
+        def screen(_title: str, *, rows: Sequence[Any], options: Sequence[Any]) -> MagicMock:
+            commands_issued_when_each_screen_opened.append(
+                len(context.source.run_command.call_args_list)  # pyright: ignore[reportAttributeAccessIssue]
+                + len(context.target.run_command.call_args_list)  # pyright: ignore[reportAttributeAccessIssue]
+            )
+            prompt = MagicMock()
+            prompt.ask = MagicMock(return_value={row.row_id: Decision.SKIP_ONCE.value for row in rows})
+            return prompt
+
+        stdin = MagicMock()
+        stdin.isatty.return_value = True
+        with (
+            patch.object(sys, "stdin", stdin),
+            patch("pcswitcher.jobs.packages.review.decision_list", side_effect=screen) as decision_list,
+        ):
+            await job.execute()
+
+        assert decision_list.call_count == 3, "the round did not put three screens up"
+        # Non-zero, so the spy is counting something: the plan's own reads precede the round.
+        assert commands_issued_when_each_screen_opened[0] > 0
+        assert len(set(commands_issued_when_each_screen_opened)) == 1, (
+            f"a command ran between two screens of one round: {commands_issued_when_each_screen_opened}"
+        )
 
 
 class TestIdempotency:
@@ -888,6 +955,27 @@ class TestExecuteSelfContained:
 
         assert exc_info.value.job_name == "fake_sync"
         # Raised before after_review, so manual_installs_sync would not push its registry.
+        assert events == ["plan", "review"]
+        assert job.converge_calls == []
+
+    @pytest.mark.asyncio
+    async def test_a_rehearsal_with_no_terminal_skips_the_job_for_the_same_reason(self) -> None:
+        """J60 — `PKG-FR-DRY-RUN`: a dry run without a terminal reports skipped "for the same
+        reason a real run does", and the reason is an item nobody was there to decide. The
+        plan carries one install, so there was something to decide; `execute()` never reads
+        `dry_run` at all, which is exactly why the rehearsal must be shown to take the same
+        branch rather than inferred to.
+        """
+        events: list[str] = []
+        reviewer = _RecordingReviewer(events, was_interactive=False)
+        job = _OrderRecordingJob(
+            make_context(dry_run=True, reviewer=reviewer), events, source_items=[FakeItem("pkg-a")]
+        )
+
+        with pytest.raises(JobSkipped) as exc_info:
+            await job.execute()
+
+        assert exc_info.value.job_name == "fake_sync"
         assert events == ["plan", "review"]
         assert job.converge_calls == []
 

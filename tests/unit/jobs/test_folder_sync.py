@@ -78,6 +78,14 @@ def make_context(
     )
 
 
+def _snap_listing(revision: str) -> str:
+    """What the target's `snap list --all` prints for one snap `firefox` at `revision`."""
+    return (
+        "Name     Version  Rev   Tracking       Publisher  Notes\n"
+        f"firefox  1.0      {revision}  latest/stable  moz        -\n"
+    )
+
+
 def all_success_source(cmd: str, **_: object) -> CommandResult:
     """Default source side_effect: all commands succeed."""
     return CommandResult(exit_code=0, stdout="", stderr="")
@@ -729,17 +737,67 @@ class TestDecisionFileExcludeFilters:
         assert self._filters("/root", "/root") != []
 
 
+class TestSnippetRegistryExcludeFilters:
+    """The install-snippet registry (`~/.config/pc-switcher/package-snippets.yaml`) never
+    travels in the mirror: it reaches the target only through `manual_installs_sync`'s own
+    consented push (`PKG-FR-REGISTRY-CONSENT`). Unconditional, like the decision files.
+    """
+
+    def _filters(self, folder_path: str, home: str) -> list[str]:
+        with patch("pcswitcher.jobs.folder_sync.Path.home", return_value=Path(home)):
+            return FolderSyncJob._snippet_registry_exclude_filters(folder_path)  # pyright: ignore[reportPrivateUsage]
+
+    def test_the_registry_is_excluded_under_the_invoking_users_home(self) -> None:
+        """K88 — the file the `*.decisions.yaml` glob does not match gets its own rule."""
+        assert self._filters("/home", "/home/alice") == [
+            f"--filter={shlex.quote('- /alice/.config/pc-switcher/package-snippets.yaml')}"
+        ]
+
+    def test_registry_outside_synced_folder_is_skipped(self) -> None:
+        """K88 — syncing /root while the invoking user's home is /home/alice excludes nothing."""
+        assert self._filters("/root", "/home/alice") == []
+
+    def test_excluded_even_with_every_package_job_off(self, tmp_path: Path) -> None:
+        """K88 — a skipped or disabled `manual_installs_sync` is the case where nothing gates the
+        transfer at all, so the mirror must not become the transport."""
+        home = tmp_path / "alice"
+        ctx = make_context(config={"folders": [{"path": str(tmp_path)}]}, enabled_sync_jobs={})
+        job = FolderSyncJob(ctx)
+        with (
+            patch("pcswitcher.jobs.folder_sync.Path.home", return_value=home),
+            patch("pcswitcher.jobs.snap_sync.Path.home", return_value=home),
+            patch("pcswitcher.jobs.flatpak_sync.Path.home", return_value=home),
+        ):
+            cmd = job._build_rsync_cmd(FolderEntry(path=str(tmp_path)), dry_run=False)  # pyright: ignore[reportPrivateUsage]
+        assert "/alice/.config/pc-switcher/package-snippets.yaml" in cmd
+
+    def test_the_registry_exclusion_precedes_the_merge_filter(self, tmp_path: Path) -> None:
+        """K88 — GLOBAL-FIRST, so no user `+` rule can re-expose it."""
+        home = tmp_path / "alice"
+        ctx = make_context(config={"folders": [{"path": str(tmp_path)}]})
+        job = FolderSyncJob(ctx)
+        folder = FolderEntry(path=str(tmp_path), filter_file="/abs/home.filter")
+        with (
+            patch("pcswitcher.jobs.folder_sync.Path.home", return_value=home),
+            patch("pcswitcher.jobs.snap_sync.Path.home", return_value=home),
+            patch("pcswitcher.jobs.flatpak_sync.Path.home", return_value=home),
+        ):
+            cmd = job._build_rsync_cmd(folder, dry_run=False)  # pyright: ignore[reportPrivateUsage]
+        assert cmd.index("package-snippets.yaml") < cmd.index("merge /abs/home.filter")
+
+
 class TestSnapSyncExcludeFilters:
     """The `~/snap/<app>/<revision>` directories `snap_sync` owns are excluded via
     absolute paths that module owns; folder_sync only translates each into a
-    root-anchored, first-match filter for the folder being synced (D-29). Gating on
-    `snap_sync` being enabled happens at the `_build_rsync_cmd` call site, not here —
-    see `TestPackageJobExcludeFiltersGating`.
+    root-anchored, first-match filter for the folder being synced (D-29). Which revision
+    dirs those are depends on the revisions the TARGET is on, which `execute` reads and
+    passes down — see `TestPackageJobExcludeFiltersGating`.
     """
 
     def test_old_revision_excluded_current_kept(self, tmp_path: Path) -> None:
         """E109, K77 — the retained OLD revision dir is excluded; the CURRENT-revision data dir (what
-        `current` resolves to) is mirrored, so it is absent from the filter list (decision 3).
+        `current` resolves to) is mirrored where the target is on that revision, so it is
+        absent from the filter list (decision 3).
         """
         home = tmp_path / "alice"
         firefox_dir = home / "snap" / "firefox"
@@ -752,14 +810,14 @@ class TestSnapSyncExcludeFilters:
         (firefox_dir / "current").symlink_to(current_rev, target_is_directory=True)
 
         with patch("pcswitcher.jobs.snap_sync.Path.home", return_value=home):
-            filters = FolderSyncJob._snap_sync_exclude_filters(str(tmp_path))  # pyright: ignore[reportPrivateUsage]
+            filters = FolderSyncJob._snap_sync_exclude_filters(str(tmp_path), {"firefox": "2938"})  # pyright: ignore[reportPrivateUsage]
 
         assert filters == [f"--filter={shlex.quote('- /alice/snap/firefox/2911')}"]
 
     def test_no_snap_directory_yields_no_filters(self, tmp_path: Path) -> None:
         """K79 — nothing is excluded on snap's behalf."""
         with patch("pcswitcher.jobs.snap_sync.Path.home", return_value=tmp_path / "alice"):
-            filters = FolderSyncJob._snap_sync_exclude_filters(str(tmp_path))  # pyright: ignore[reportPrivateUsage]
+            filters = FolderSyncJob._snap_sync_exclude_filters(str(tmp_path), {})  # pyright: ignore[reportPrivateUsage]
         assert filters == []
 
     def test_revision_dir_outside_synced_folder_is_skipped(self, tmp_path: Path) -> None:
@@ -767,7 +825,7 @@ class TestSnapSyncExcludeFilters:
         home = tmp_path / "alice"
         (home / "snap" / "firefox" / "2938").mkdir(parents=True)
         with patch("pcswitcher.jobs.snap_sync.Path.home", return_value=home):
-            filters = FolderSyncJob._snap_sync_exclude_filters("/root")  # pyright: ignore[reportPrivateUsage]
+            filters = FolderSyncJob._snap_sync_exclude_filters("/root", {"firefox": "2938"})  # pyright: ignore[reportPrivateUsage]
         assert filters == []
 
 
@@ -796,18 +854,29 @@ class TestFlatpakSyncExcludeFilters:
 
 
 class TestPackageJobExcludeFiltersGating:
-    """Enabling `snap_sync`/`flatpak_sync` automatically excludes the paths those jobs
-    own from the built rsync command; a disabled or unknown-enablement job leaves the
-    mirror untouched (D-29). Enablement is read from `JobContext.enabled_sync_jobs`,
-    never from `self.context.config` (that field is folder_sync's OWN config section).
+    """What each package exclusion is conditioned on in the built rsync command (D-29).
+    `flatpak_sync`'s store is excluded only when that job is enabled, read from
+    `JobContext.enabled_sync_jobs` and never from `self.context.config` (that field is
+    folder_sync's OWN config section). The snap revision dirs are conditioned on the
+    TARGET's own revisions instead, which `execute` reads and passes in.
     """
 
-    def _build_cmd(self, tmp_path: Path, enabled_sync_jobs: dict[str, bool] | None) -> str:
+    def _build_cmd(
+        self,
+        tmp_path: Path,
+        enabled_sync_jobs: dict[str, bool] | None,
+        target_snap_revisions: dict[str, str] | None = None,
+    ) -> str:
         # The transfer root is tmp_path itself (not a literal "/home") so it is a real
         # ancestor of `home`, matching how _snap_sync_exclude_filters/
         # _flatpak_sync_exclude_filters resolve paths relative to the transfer root.
         home = tmp_path / "alice"
-        (home / "snap" / "firefox" / "2938").mkdir(parents=True)
+        firefox_dir = home / "snap" / "firefox"
+        current_rev = firefox_dir / "2938"
+        old_rev = firefox_dir / "2911"
+        current_rev.mkdir(parents=True)
+        old_rev.mkdir(parents=True)
+        (firefox_dir / "current").symlink_to(current_rev, target_is_directory=True)
         ctx = make_context(
             config={"folders": [{"path": str(tmp_path)}]},
             target_username="testuser",
@@ -820,41 +889,60 @@ class TestPackageJobExcludeFiltersGating:
             patch("pcswitcher.jobs.snap_sync.Path.home", return_value=home),
             patch("pcswitcher.jobs.flatpak_sync.Path.home", return_value=home),
         ):
-            return job._build_rsync_cmd(folder, dry_run=False)  # pyright: ignore[reportPrivateUsage]
+            return job._build_rsync_cmd(  # pyright: ignore[reportPrivateUsage]
+                folder, dry_run=False, target_snap_revisions=target_snap_revisions
+            )
 
-    def test_snap_sync_enabled_includes_revision_exclusion(self, tmp_path: Path) -> None:
-        """E109, K23, K77, N21 — with snap_sync on, folder_sync leaves the revision dirs to it."""
-        cmd = self._build_cmd(tmp_path, {"snap_sync": True})
+    def test_the_revision_the_target_holds_is_mirrored(self, tmp_path: Path) -> None:
+        """E109, K77, N21 — the target is on 2938, so its data dir travels while the
+        retained 2911 stays excluded."""
+        cmd = self._build_cmd(tmp_path, {"snap_sync": True}, {"firefox": "2938"})
+        assert "/alice/snap/firefox/2911" in cmd
+        assert "/alice/snap/firefox/2938" not in cmd
+
+    def test_a_revision_the_target_did_not_converge_to_is_excluded(self, tmp_path: Path) -> None:
+        """K82 — the revision change was declined or failed, so the target is still on 2911 and
+        no data dir of that app is mirrored."""
+        cmd = self._build_cmd(tmp_path, {"snap_sync": True}, {"firefox": "2911"})
         assert "/alice/snap/firefox/2938" in cmd
 
-    def test_snap_sync_disabled_excludes_nothing(self, tmp_path: Path) -> None:
-        """E110, K23 — with snap_sync off, nobody manages those dirs, so folder_sync mirrors them."""
-        cmd = self._build_cmd(tmp_path, {"snap_sync": False})
-        assert "snap/firefox/2938" not in cmd
+    def test_a_snap_the_target_does_not_hold_has_its_data_dir_excluded(self, tmp_path: Path) -> None:
+        """E115 — the install was declined or failed, so the target holds no revision of it."""
+        cmd = self._build_cmd(tmp_path, {"snap_sync": True}, {"other": "1"})
+        assert "/alice/snap/firefox/2938" in cmd
+
+    def test_snap_exclusions_are_not_gated_on_snap_sync_being_enabled(self, tmp_path: Path) -> None:
+        """K81, E110 — with snap_sync off nothing converged any revision, so no revision dir is
+        mirrored; the exclusion follows the target's state, not the job's enable flag."""
+        cmd = self._build_cmd(tmp_path, {"snap_sync": False}, target_snap_revisions=None)
+        assert "/alice/snap/firefox/2938" in cmd
+        assert "/alice/snap/firefox/2911" in cmd
 
     def test_flatpak_sync_enabled_includes_data_dir_exclusion_not_var_app(self, tmp_path: Path) -> None:
-        """K83 — with flatpak_sync on, the store is left to it and `~/.var/app` still travels."""
+        """K23, K83 — with flatpak_sync on, the store is left to it and `~/.var/app` still travels."""
         cmd = self._build_cmd(tmp_path, {"flatpak_sync": True})
         assert "/alice/.local/share/flatpak" in cmd
         assert ".var/app" not in cmd
 
     def test_flatpak_sync_disabled_excludes_nothing(self, tmp_path: Path) -> None:
-        """K84 — with flatpak_sync off, the store is mirrored like any other data."""
+        """K23, K84 — with flatpak_sync off, the store is mirrored like any other data; folder_sync is
+        free to read a package job's switch, which is what K23 rules on."""
         cmd = self._build_cmd(tmp_path, {"flatpak_sync": False})
         assert ".local/share/flatpak" not in cmd
 
     def test_both_package_exclusions_precede_merge_filter(self, tmp_path: Path) -> None:
         """E112, K86 — no user rule can re-expose either, both being emitted before the merge."""
-        cmd = self._build_cmd(tmp_path, {"snap_sync": True, "flatpak_sync": True})
-        assert cmd.index("/alice/snap/firefox/2938") < cmd.index("merge /abs/home.filter")
+        cmd = self._build_cmd(tmp_path, {"snap_sync": True, "flatpak_sync": True}, {"firefox": "2938"})
+        assert cmd.index("/alice/snap/firefox/2911") < cmd.index("merge /abs/home.filter")
         assert cmd.index("/alice/.local/share/flatpak") < cmd.index("merge /abs/home.filter")
 
-    def test_missing_enabled_sync_jobs_omits_both_exclusions_without_raising(self, tmp_path: Path) -> None:
+    def test_missing_enabled_sync_jobs_omits_the_flatpak_exclusion_without_raising(self, tmp_path: Path) -> None:
         """K87 — a JobContext built without enabled_sync_jobs (the existing lightweight test
-        constructions' default) emits neither exclusion and does not raise."""
-        cmd = self._build_cmd(tmp_path, enabled_sync_jobs=None)
-        assert "snap/firefox/2938" not in cmd
+        constructions' default) emits no flatpak exclusion and does not raise; the snap dirs
+        never depended on that map."""
+        cmd = self._build_cmd(tmp_path, enabled_sync_jobs=None, target_snap_revisions={"firefox": "2938"})
         assert ".local/share/flatpak" not in cmd
+        assert "/alice/snap/firefox/2938" not in cmd
 
 
 # ---------------------------------------------------------------------------
@@ -1387,7 +1475,50 @@ class TestExecuteNormalMode:
 
         assert ctx.source.start_process.call_count == 1
         assert "--delete" in ctx.source.start_process.call_args[0][0]
-        target_rc.assert_not_called()  # short-circuit: no target manifest round-trip
+        # Short-circuit: no target manifest round-trip. The one target command a run always
+        # issues is the snap revision listing the data boundary rests on.
+        assert [call.args[0] for call in target_rc.call_args_list] == ["snap list --all"]
+
+    async def _mirror_cmd_with_target_snaps(self, tmp_path: Path, target_snap_list: str) -> tuple[str, list[str]]:
+        """Run `execute` over one folder holding `~/snap/firefox` at revision 2938, with the
+        target answering `target_snap_list`. Returns (the mirror command, the target's commands).
+        """
+        home = tmp_path / "alice"
+        firefox = home / "snap" / "firefox"
+        (firefox / "2938").mkdir(parents=True)
+        (firefox / "current").symlink_to(firefox / "2938", target_is_directory=True)
+        ctx = make_context(config={"folders": [{"path": str(tmp_path)}]})
+        ctx.source.run_command = AsyncMock(return_value=CommandResult(exit_code=0, stdout="", stderr=""))
+        target_rc = AsyncMock(return_value=CommandResult(exit_code=0, stdout=target_snap_list, stderr=""))
+        ctx.target.run_command = target_rc
+        ctx.source.start_process = AsyncMock(return_value=make_fake_process())
+
+        job = FolderSyncJob(ctx)
+        with (
+            patch("pcswitcher.jobs.folder_sync.Path.home", return_value=home),
+            patch("pcswitcher.jobs.snap_sync.Path.home", return_value=home),
+            patch("pcswitcher.jobs.flatpak_sync.Path.home", return_value=home),
+        ):
+            await job.execute()
+
+        return ctx.source.start_process.call_args[0][0], [call.args[0] for call in target_rc.call_args_list]
+
+    async def test_the_targets_own_revision_lets_the_data_dir_through(self, tmp_path: Path) -> None:
+        """E109, N21 — the target reports revision 2938, so that data dir is mirrored, and the
+        listing is read once for the whole job."""
+        listing = _snap_listing("2938")
+        cmd, target_cmds = await self._mirror_cmd_with_target_snaps(tmp_path, listing)
+
+        assert "/alice/snap/firefox/2938" not in cmd
+        assert target_cmds == ["snap list --all"]
+
+    async def test_a_revision_the_target_is_not_on_is_excluded_by_execute(self, tmp_path: Path) -> None:
+        """K82, E115 — the target is on another revision (a declined or failed convergence), so
+        `execute` builds the transfer with that data dir excluded."""
+        listing = _snap_listing("2911")
+        cmd, _ = await self._mirror_cmd_with_target_snaps(tmp_path, listing)
+
+        assert "/alice/snap/firefox/2938" in cmd
 
     async def test_copy_pass_failure_aborts_before_the_mirror(self) -> None:
         """A non-zero exit in the copy pass raises RuntimeError; the deleting mirror never runs."""

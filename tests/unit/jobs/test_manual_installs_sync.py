@@ -1771,6 +1771,27 @@ TARGET_CHANGED_BODY_YAML = (
     "    authored_on: workstation\n"
 )
 
+# A target registry whose brscan3 body matches the source's byte for byte and whose
+# AUTHORING RECORD does not: same entry, different `authored_at`/`authored_on`.
+TARGET_SAME_BODY_OTHER_AUTHORING_YAML = (
+    "snippets:\n"
+    "  unreproducible:apt-no-candidate:brscan3:\n"
+    "    label: brscan3 (no apt candidate)\n"
+    "    body: sudo dpkg --install /tmp/brscan3.deb\n"
+    "    authored_at: '2025-06-30T09:15:00+00:00'\n"
+    "    authored_on: workstation\n"
+)
+
+# The same, with the LABEL as the only difference.
+TARGET_SAME_BODY_OTHER_LABEL_YAML = (
+    "snippets:\n"
+    "  unreproducible:apt-no-candidate:brscan3:\n"
+    "    label: brscan3 scanner driver\n"
+    "    body: sudo dpkg --install /tmp/brscan3.deb\n"
+    "    authored_at: '2026-01-01T00:00:00+00:00'\n"
+    "    authored_on: laptop\n"
+)
+
 # A target registry holding two entries the source lacks AND the source's brscan3 with a
 # different body: one question has to name all three.
 TARGET_WITH_TWO_LOST_AND_ONE_CHANGED_YAML = TARGET_CHANGED_BODY_YAML + (
@@ -1905,6 +1926,65 @@ class TestSnippetRegistryOverwriteGuard:
 
         assert len(confirmer.calls) == 1
         assert "CHANGED" in str(confirmer.calls[0]["message"])
+        target.send_file.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_a_different_authoring_record_is_non_additive_and_prompts(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """G72 — the body is identical but the authoring record is not, so the push still changes
+        the entry the target holds: it is named, and the question shows the authoring records
+        rather than printing the unchanged body twice."""
+        self._write_source_registry(tmp_path)
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        confirmer = FakeConfirmer(approve=True)
+        context, _source, target = make_context(
+            target_responses={
+                "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(
+                    0, TARGET_SAME_BODY_OTHER_AUTHORING_YAML, ""
+                ),
+                "echo $HOME": CommandResult(0, "/home/user\n", ""),
+            },
+            confirmer=confirmer,
+        )
+        job = ManualInstallsSyncJob(context)
+
+        await job._push_snippet_registry()  # pyright: ignore[reportPrivateUsage]
+
+        assert len(confirmer.calls) == 1
+        message = str(confirmer.calls[0]["message"])
+        assert "CHANGED" in message
+        assert "brscan3" in message
+        assert "2025-06-30T09:15:00+00:00 on workstation" in message
+        assert "2026-01-01T00:00:00+00:00 on laptop" in message
+        assert "sudo dpkg --install /tmp/brscan3.deb" not in message  # the body did not change
+        target.send_file.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_a_different_label_is_non_additive_and_prompts(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """G72 — the label is part of the entry too, so replacing it is a change the user answers."""
+        self._write_source_registry(tmp_path)
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        confirmer = FakeConfirmer(approve=True)
+        context, _source, target = make_context(
+            target_responses={
+                "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(
+                    0, TARGET_SAME_BODY_OTHER_LABEL_YAML, ""
+                ),
+                "echo $HOME": CommandResult(0, "/home/user\n", ""),
+            },
+            confirmer=confirmer,
+        )
+        job = ManualInstallsSyncJob(context)
+
+        await job._push_snippet_registry()  # pyright: ignore[reportPrivateUsage]
+
+        assert len(confirmer.calls) == 1
+        message = str(confirmer.calls[0]["message"])
+        assert "brscan3 scanner driver" in message
+        assert "brscan3 (no apt candidate)" in message
         target.send_file.assert_called_once()
 
     @pytest.mark.asyncio

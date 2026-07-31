@@ -5,9 +5,11 @@ saying "the target loses this package" makes the reader work out which machine t
 before they can answer, so every question, answer, warning and summary line names the
 machine outright.
 
-Two things the article puts outside the rule, and this module therefore does not test: a
-log record, which carries the machine it concerns as a field of its own; and a validation
-failure, which ends the run before there is anything to decide.
+Two things the article puts outside the rule. A log record, which carries the machine it
+concerns as a field of its own, is asserted where the records are — over one package job's
+`apply()` in `tests/unit/jobs/test_package_sync_core.py`. A validation failure, which ends
+the run before there is anything to decide, is asserted below: the exemption is one this
+code takes, not merely one it is granted.
 
 One test per CLASS of place the words can reach the user, not one per string. Each would
 fail if a role word came back anywhere in its class.
@@ -35,8 +37,10 @@ from pcswitcher.config_sync import (
     _prompt_new_config,  # pyright: ignore[reportPrivateUsage]
 )
 from pcswitcher.confirmer import TerminalUIConfirmer
+from pcswitcher.jobs.apt_sync import AptSyncJob
+from pcswitcher.jobs.context import JobContext
 from pcswitcher.jobs.packages.probes import ProbeFailed, require_answer
-from pcswitcher.models import CommandResult
+from pcswitcher.models import CommandResult, Host
 from pcswitcher.orchestrator import Orchestrator
 
 _SRC = Path(pcswitcher.__file__).parent
@@ -176,6 +180,54 @@ class TestProbeFailure:
             require_answer("snap list --all", CommandResult(1, "", "cannot communicate with server"), NOMAD)
 
         _assert_names_machines(str(excinfo.value), NOMAD)
+
+
+class TestValidationFailure:
+    """The one place role words still reach the user, and the article says they may.
+
+    A validation failure ends the run before a single question is put, so nobody is left
+    working out which machine an answer would act on. The exemption is exercised rather
+    than merely granted: the message says "on target" and the orchestrator prints it as
+    `- apt_sync (target): …`, so no hostname reaches the reader even though the job holds
+    both. Asserted so that the row claiming an exemption is not read as coverage of the
+    stricter rule.
+    """
+
+    @staticmethod
+    def _job_whose_target_lacks_sudo() -> AptSyncJob:
+        def target_answer(command: str, **_: object) -> CommandResult:
+            if "sudo --non-interactive true" in command:
+                return CommandResult(1, "", "sudo: a password is required")
+            # fuser exits non-zero when the dpkg lock is FREE, so this leaves sudo the
+            # only complaint.
+            return CommandResult(1 if "fuser" in command else 0, "", "")
+
+        source = MagicMock()
+        source.run_command = AsyncMock(return_value=CommandResult(0, "", ""))
+        target = MagicMock()
+        target.run_command = AsyncMock(side_effect=target_answer)
+        return AptSyncJob(
+            JobContext(
+                config={},
+                source=source,
+                target=target,
+                event_bus=MagicMock(),
+                session_id="test-1234",
+                source_hostname=ATLAS,
+                target_hostname=NOMAD,
+            )
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_package_jobs_sudo_failure_names_the_role_and_no_hostname(self) -> None:
+        """H80."""
+        errors = await self._job_whose_target_lacks_sudo().validate()
+
+        [sudo_error] = [error for error in errors if "sudo" in error.message]
+        assert sudo_error.host is Host.TARGET
+        assert "target" in _role_words_in(sudo_error.message)
+        assert NOMAD not in sudo_error.message
+        assert ATLAS not in sudo_error.message
 
 
 def _orchestrator(config: MagicMock, *, remote_stdout: str = "", dry_run: bool = False) -> Orchestrator:

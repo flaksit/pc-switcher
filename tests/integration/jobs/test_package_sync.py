@@ -443,6 +443,13 @@ _CONTINUE_TEST_MARKERS = (
     _CONTINUE_TEST_MARKER_INSTALL_SECOND,
 )
 
+# The same device for `test_one_failing_job_leaves_the_other_jobs_work_intact`: one
+# deliberately-failing snippet, under its own marker path so the two tests can never see
+# each other's items. `manual_installs_sync` is ordered FIRST in that test's config, so
+# this is what fails BEFORE the three jobs whose work the test then checks survived.
+_WHOLE_RUN_FAILURE_MARKER = f"{_CONTINUE_TEST_MARKER_ROOT}/pcswitcher-it-whole-run-fail"
+_WHOLE_RUN_FAILURE_MESSAGE = "deliberate whole-run integration-test failure"
+
 
 def _unowned_item_id(path: str) -> str:
     """The `UnreproducibleItem.item_id` a `_scan_unowned_installs`-detected path at
@@ -1519,8 +1526,9 @@ class TestPackageSyncWholeRunContracts:
     """VM-level proof of the phase's whole-run contracts (plan 02-11): properties of an
     entire sync -- non-interactive skip-all, continue-on-item-failure, snap/flatpak
     convergence, skip-always inertness in both roles, per-manager review-before-own-
-    mutation -- rather than any single item's diff/converge, and therefore invisible to
-    plans 02-03/02-05/02-07/02-08's mocked-executor unit tests.
+    mutation, and one job's failure leaving every other job's approved work intact --
+    rather than any single item's diff/converge, and therefore invisible to plans
+    02-03/02-05/02-07/02-08's mocked-executor unit tests.
     """
 
     async def test_non_interactive_skip_all(
@@ -2442,6 +2450,126 @@ class TestPackageSyncWholeRunContracts:
                 f"{after_snap.stderr}"
             )
         finally:
+            await _restore_package(pc2_executor, apt_candidate)
+            current_snap = await pc2_executor.run_command(
+                f"snap list {shlex.quote(snap_candidate)}", login_shell=False, timeout=15.0
+            )
+            if original_snap_revision not in current_snap.stdout:
+                restore_result = await pc2_executor.run_command(
+                    f"sudo snap install --revision={shlex.quote(original_snap_revision)} "
+                    f"{shlex.quote(snap_candidate)} || "
+                    f"sudo snap refresh --revision={shlex.quote(original_snap_revision)} "
+                    f"{shlex.quote(snap_candidate)}",
+                    login_shell=False,
+                    timeout=120.0,
+                )
+                if not restore_result.success:
+                    print(
+                        f"[cleanup] failed to restore {snap_candidate} to revision "
+                        f"{original_snap_revision} on pc2: {restore_result.stderr}"
+                    )
+
+    async def test_one_failing_job_leaves_the_other_jobs_work_intact(
+        self,
+        pc1_executor: BashLoginRemoteExecutor,
+        pc2_executor: BashLoginRemoteExecutor,
+        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
+        pc2_with_pcswitcher: BashLoginRemoteExecutor,
+        reset_pcswitcher_state: None,
+    ) -> None:
+        """N22 — All four package jobs enabled in one run, the first of them failing: the three
+        ordered after it still review and converge their own diffs, and the sync's own exit
+        code reports the failure (`PKG-FR-JOB-INDEPENDENCE`, `PKG-FR-OUTCOME-FAILED`).
+
+        The failure has to come FIRST for the claim to mean anything -- a job that fails last
+        leaves the others' work intact whatever the orchestrator does. Jobs run in the order
+        the config names them (`_discover_and_validate_jobs` iterates `sync_jobs` as written),
+        so `manual_installs_sync` is written first and fails on a snippet that exits non-zero,
+        the same device as `test_continue_on_item_failure` but at whole-run scale.
+
+        `flatpak_sync` is enabled and left unanswered: this run's claim is about four jobs
+        being enabled together, and a job whose items are all declined still plans, reviews
+        and reports -- it just converges nothing, which is why nothing is asserted about it.
+
+        The witness is pc2's own package managers, as everywhere else in this module: the apt
+        package is back in `apt-mark showmanual` and the snap is back in `snap list`, each of
+        which could only happen if that manager reviewed its own diff and then applied it,
+        after the run had already failed a job.
+        """
+        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
+
+        apt_candidate = await _removable_candidate(pc1_executor, pc2_executor)
+        snap_candidate = await _snap_subject(pc1_executor, pc2_executor)
+
+        pc2_snap_list_before = await pc2_executor.run_command("snap list --all", login_shell=False, timeout=20.0)
+        original_snap_revision = parse_snap_list_names_revisions(pc2_snap_list_before.stdout)[snap_candidate]
+
+        try:
+            remove_apt = await pc2_executor.run_command(
+                f"sudo DEBIAN_FRONTEND=noninteractive apt-get remove --assume-yes {shlex.quote(apt_candidate)}",
+                login_shell=False,
+                timeout=120.0,
+            )
+            assert remove_apt.success, f"Failed to remove {apt_candidate} from pc2: {remove_apt.stderr}"
+
+            remove_snap = await pc2_executor.run_command(
+                f"sudo snap remove {shlex.quote(snap_candidate)}", login_shell=False, timeout=60.0
+            )
+            assert remove_snap.success, f"Failed to remove {snap_candidate} from pc2: {remove_snap.stderr}"
+
+            await _create_unowned_marker(pc1_executor, _WHOLE_RUN_FAILURE_MARKER)
+            failing_item_id = _unowned_item_id(_WHOLE_RUN_FAILURE_MARKER)
+            await _author_snippet(
+                pc1_executor,
+                failing_item_id,
+                _WHOLE_RUN_FAILURE_MARKER,
+                f'echo "{_WHOLE_RUN_FAILURE_MESSAGE}" >&2; exit 42',
+            )
+
+            # Written in execution order: the failing job first, the three whose work must
+            # survive it after.
+            await _write_package_sync_config(
+                pc1_executor,
+                manual_installs_sync=True,
+                apt_sync=True,
+                snap_sync=True,
+                flatpak_sync=True,
+            )
+
+            apt_item_id = AptPackageItem(name=apt_candidate, version="").item_id
+            decisions = {
+                failing_item_id: Decision.APPLY,
+                apt_item_id: Decision.APPLY,
+                f"snap:{snap_candidate}": Decision.APPLY,
+            }
+            sync_cmd = f"{_automation_env_assignment_multi(decisions)} pc-switcher sync pc2 --yes --allow-first-sync"
+            sync_result = await pc1_executor.run_command(sync_cmd, timeout=300.0, login_shell=True)
+
+            assert not sync_result.success, (
+                "a run with a failed job must exit non-zero (PKG-FR-OUTCOME-FAILED).\n"
+                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
+            )
+
+            after_apt = await pc2_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0)
+            assert apt_candidate in nonblank_lines(after_apt.stdout), (
+                f"{apt_candidate} not reinstalled on pc2 -- apt_sync's approved work did not survive the "
+                "earlier job's failure (PKG-FR-JOB-INDEPENDENCE)"
+            )
+            after_snap = await pc2_executor.run_command(
+                f"snap list {shlex.quote(snap_candidate)}", login_shell=False, timeout=15.0
+            )
+            assert after_snap.success, (
+                f"{snap_candidate} not reinstalled on pc2 -- snap_sync's approved work did not survive the "
+                f"earlier job's failure (PKG-FR-JOB-INDEPENDENCE): {after_snap.stderr}"
+            )
+
+            # Secondary confirmation only -- the exit code and pc2's own managers above are
+            # the primary evidence. This says the non-zero exit is THIS failure's and not
+            # some unrelated trouble, which the exit code alone cannot distinguish.
+            assert _WHOLE_RUN_FAILURE_MESSAGE in sync_result.stdout + sync_result.stderr
+        finally:
+            await _remove_unowned_marker(pc1_executor, _WHOLE_RUN_FAILURE_MARKER)
+            await _remove_unowned_marker(pc2_executor, _WHOLE_RUN_FAILURE_MARKER)
             await _restore_package(pc2_executor, apt_candidate)
             current_snap = await pc2_executor.run_command(
                 f"snap list {shlex.quote(snap_candidate)}", login_shell=False, timeout=15.0

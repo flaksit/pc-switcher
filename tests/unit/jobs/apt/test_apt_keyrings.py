@@ -599,6 +599,21 @@ _INLINE_ON_FIELD_LINE = (
 )
 
 
+_ARCHIVE = "http://ftp.belnet.be/ubuntu"
+_TARGET_UBUNTU_SOURCES = f"Types: deb\nURIs: {_ARCHIVE}\nSuites: noble\nComponents: main\n"
+
+
+def _owned_by(package: str, origin: str) -> dict[str, CommandResult]:
+    """What the TARGET answers about a package that OWNS one of its keys: where its
+    installed version came from, and — through the target's own `ubuntu.sources` — which
+    origins count as the distribution's on that machine (D-35).
+    """
+    return {
+        f"apt-cache policy {package}": CommandResult(0, _policy_block(package, origin), ""),
+        _SOURCE_SCAN_CMD: CommandResult(0, _scan_line("ubuntu.sources", _TARGET_UBUNTU_SOURCES), ""),
+    }
+
+
 def _shared_key_context(
     *,
     filename: str = "vendor.sources",
@@ -607,10 +622,15 @@ def _shared_key_context(
     source_shared: str = sha256_line("k1", "vendor.gpg"),
     target_shared: str = "",
     dpkg_output: str = "",
+    target_overrides: dict[str, CommandResult] | None = None,
 ) -> tuple[JobContext, MagicMock, MagicMock]:
     """One repository whose `Signed-By:` points into `/usr/share/keyrings`, derived by the
     package `pkg-a` it serves, with the target's copy of that directory and its
     `dpkg --search` answer under the test's control.
+
+    `target_overrides` reaches the target's responder ahead of the policy sequence, which is
+    how a test states what the target's apt says about a package that OWNS a key — a
+    different question from the ones this run asks about `pkg-a`.
     """
     context, source, target = _repo_context(
         source_responses={
@@ -629,6 +649,7 @@ def _shared_key_context(
                 # dpkg --search exits non-zero as soon as ANY argument is unowned, which is
                 # the norm: the exit code must not be what decides ownership.
                 "dpkg --search": CommandResult(1, dpkg_output, "dpkg-query: no path found matching pattern\n"),
+                **(target_overrides or {}),
             },
             origin=origin,
         )
@@ -670,13 +691,16 @@ class TestSharedKeyringsDirectory:
         assert key_writes(target) == ["/usr/share/keyrings/vendor.gpg"]
 
     @pytest.mark.asyncio
-    async def test_a_package_owned_key_present_with_different_bytes_is_not_overwritten(self) -> None:
-        """The target's own package manages that file. The repository is still written —
-        refusing it over a difference this run deliberately did not touch would strand it.
+    async def test_a_distribution_owned_key_present_with_different_bytes_is_not_overwritten(self) -> None:
+        """C81 — the target's own DISTRIBUTION packaging manages that file: `ubuntu-keyring`,
+        installed from the archive the target's own `ubuntu.sources` declares. The repository
+        is still written — refusing it over a difference this run deliberately did not touch
+        would strand it.
         """
         context, _source, target = _shared_key_context(
             target_shared=sha256_line("k-old", "vendor.gpg"),
-            dpkg_output="vendor-keyring: /usr/share/keyrings/vendor.gpg\n",
+            dpkg_output="ubuntu-keyring: /usr/share/keyrings/vendor.gpg\n",
+            target_overrides=_owned_by("ubuntu-keyring", _ARCHIVE),
         )
         job = AptSyncJob(context)
         install_reviewer(job, _APPROVE_PKG_A)
@@ -687,6 +711,56 @@ class TestSharedKeyringsDirectory:
         assert any(
             "sudo install" in c and c.endswith("/etc/apt/sources.list.d/vendor.sources") for c in all_calls(target)
         )
+
+    @pytest.mark.asyncio
+    async def test_a_vendor_owned_key_present_with_different_bytes_is_refreshed(self) -> None:
+        """C174 — a vendor ships its keyring in a `.deb` of its own and rotates it there, so
+        ownership by that package is not the exemption: `PKG-FR-KEY-REFRESH` exempts the
+        target's own distribution packaging alone, and everything else is refreshed from the
+        source's copy like any other differing key.
+        """
+        context, _source, target = _shared_key_context(
+            target_shared=sha256_line("k-old", "vendor.gpg"),
+            dpkg_output="vendor-keyring: /usr/share/keyrings/vendor.gpg\n",
+            target_overrides=_owned_by("vendor-keyring", "https://vendor.example.com"),
+        )
+        job = AptSyncJob(context)
+        install_reviewer(job, _APPROVE_PKG_A)
+
+        await job.execute()
+
+        assert key_writes(target) == ["/usr/share/keyrings/vendor.gpg"]
+
+    @pytest.mark.asyncio
+    async def test_ownership_costs_one_policy_call_over_the_owning_packages(self) -> None:
+        """C174 — the distribution test is one batched `apt-cache policy` over the packages
+        owning the keys that DIFFER, never one call per key and never one per owner: a run
+        whose keys all match the source pays nothing for the question at all.
+        """
+        context, _source, target = _shared_key_context(
+            target_shared=sha256_line("k-old", "vendor.gpg"),
+            dpkg_output="vendor-keyring, other-keyring: /usr/share/keyrings/vendor.gpg\n",
+            target_overrides=_owned_by("vendor-keyring", "https://vendor.example.com"),
+        )
+
+        await AptSyncJob(context).plan()
+
+        owner_policies = [c for c in all_calls(target) if c.startswith("apt-cache policy") and "keyring" in c]
+        assert owner_policies == ["apt-cache policy other-keyring vendor-keyring"]
+
+    @pytest.mark.asyncio
+    async def test_a_key_that_matches_the_source_costs_no_ownership_policy_call(self) -> None:
+        """C83 — ownership only ever decides whether a DIFFERING key is overwritten, so a key
+        the two machines hold identically is never asked about.
+        """
+        context, _source, target = _shared_key_context(
+            target_shared=sha256_line("k1", "vendor.gpg"),
+            dpkg_output="vendor-keyring: /usr/share/keyrings/vendor.gpg\n",
+        )
+
+        await AptSyncJob(context).plan()
+
+        assert [c for c in all_calls(target) if c.startswith("apt-cache policy") and "keyring" in c] == []
 
     @pytest.mark.asyncio
     async def test_a_package_owned_key_the_target_is_missing_is_copied_anyway(self) -> None:

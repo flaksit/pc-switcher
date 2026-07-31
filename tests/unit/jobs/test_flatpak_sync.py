@@ -139,6 +139,7 @@ class FakeFlatpakTarget:
         filter_blocks: set[str] | None = None,
         install_records_origin: str | None = None,
         install_lands: bool = True,
+        on_install: Callable[[FakeFlatpakTarget], None] | None = None,
         responses: dict[str, CommandResult] | None = None,
     ) -> None:
         self.remotes: dict[str, dict[str, str]] = {"user": {}, "system": {}}
@@ -162,6 +163,9 @@ class FakeFlatpakTarget:
         # whole point of that check is the outcomes an exit code cannot rule out.
         self.install_records_origin = install_records_origin
         self.install_lands = install_lands
+        # Runs once the install has landed, for the states that only exist BETWEEN the
+        # pre-install origin check and the read-back — a remote reconfigured under the run.
+        self.on_install = on_install
         # Substring overrides, consulted BEFORE the modelled behaviour, so a test can make
         # one command fail without having to model failure inside the fake.
         self._responses = dict(responses or {})
@@ -226,6 +230,8 @@ class FakeFlatpakTarget:
                 return CommandResult(1, "", f"error: Nothing matches {ref} in remote {remote}\n")
             if self.install_lands:
                 self.refs[(scope, ref)] = self.install_records_origin or remote
+            if self.on_install is not None:
+                self.on_install(self)
             return CommandResult(0, "", "")
         if verb == "uninstall":
             _ = self.refs.pop((scope, positional[0]), None)
@@ -1610,6 +1616,7 @@ def trust_job(
     key_digest: str | None,
     scope: str = "user",
     source_anchor: str | None = None,
+    extra_source_anchors: dict[str, str] | None = None,
     target_anchor: str | None = None,
     target_remotes: dict[str, dict[str, str]] | None = None,
     target_unverified: set[tuple[str, str]] | None = None,
@@ -1620,7 +1627,9 @@ def trust_job(
 
     `source_anchor`/`target_anchor` are digests for the machine-level keyring directory
     (relocated into `tmp_path`, since the real one is `/usr/share/ostree/trusted.gpg.d`).
-    Equal digests mean the two machines already trust the same key.
+    Equal digests mean the two machines already trust the same key. `extra_source_anchors`
+    maps further file NAMES in that directory to their digests, for the anchor set libostree
+    merges into one verifier.
     """
     scope_flag = "--user" if scope == "user" else "--system"
     anchor_dir = tmp_path / "ostree-anchors"
@@ -1629,9 +1638,13 @@ def trust_job(
     target_anchor_responses: dict[str, CommandResult] = {}
     if source_anchor is not None:
         anchor_dir.mkdir(parents=True, exist_ok=True)
-        anchor_file = anchor_dir / "vendor.gpg"
-        _ = anchor_file.write_bytes(b"fake machine anchor bytes")
-        source_anchor_responses[f"sha256sum {anchor_dir}"] = CommandResult(0, f"{source_anchor}  {anchor_file}\n", "")
+        digests = {"vendor.gpg": source_anchor, **(extra_source_anchors or {})}
+        lines = ""
+        for name, digest in digests.items():
+            anchor_file = anchor_dir / name
+            _ = anchor_file.write_bytes(f"fake machine anchor bytes for {name}".encode())
+            lines += f"{digest}  {anchor_file}\n"
+        source_anchor_responses[f"sha256sum {anchor_dir}"] = CommandResult(0, lines, "")
     if target_anchor is not None:
         target_anchor_responses[f"sha256sum {anchor_dir}"] = CommandResult(
             0, f"{target_anchor}  {anchor_dir}/whatever-the-target-calls-it.gpg\n", ""
@@ -1960,6 +1973,62 @@ class TestRemoteTrustTravelsWithTheDerivedWrite:
         add_call = next(c for c in target.run_command.call_args_list if "remote-add" in c.args[0])
         assert "machine-level signing key" in add_call.kwargs["mutates"]
 
+    _SECOND_ANCHOR_DIGEST = "3333333333333333333333333333333333333333333333333333333333333333"
+
+    @pytest.mark.asyncio
+    async def test_every_anchor_the_remote_rests_on_travels_and_nothing_libostree_ignores_does(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """F44 — How many anchors one remote's keyring receives. libostree merges every keyring in
+        the anchor directory into a single verifier and accepts a signature any of them
+        validates, recording nothing about which key verified what — so the trust a keyless
+        verified remote rests on IS the merged set, and reproducing it means carrying all of
+        it. The set is libostree's own, not the directory listing: `trustdb.gpg` is gpg's
+        database rather than an anchor, and a file that is not `*.gpg` is never a candidate.
+        """
+        job, target = trust_job(
+            tmp_path,
+            monkeypatch,
+            remote_line=self._SIGNED,
+            key_digest=None,
+            source_anchor=_SOURCE_KEY_DIGEST,
+            extra_source_anchors={"vendor2.gpg": self._SECOND_ANCHOR_DIGEST, "trustdb.gpg": _TARGET_KEY_DIGEST},
+        )
+
+        await run_job(job)
+
+        add_cmd = next(c for c in all_calls(target) if "remote-add" in c)
+        imported = [word for word in shlex.split(add_cmd) if word.startswith("--gpg-import=")]
+        assert len(imported) == 2
+        assert sorted(call.args[0].name for call in target.send_file.await_args_list) == ["vendor.gpg", "vendor2.gpg"]
+        assert not any("trustdb" in word for word in imported)
+        # A file that is not `*.gpg` never even reaches the digest map: the read is the filter.
+        assert any(f"sha256sum {tmp_path / 'ostree-anchors'}/*.gpg" in c for c in all_calls(job.source))
+
+    @pytest.mark.asyncio
+    async def test_a_key_held_only_through_gpgkeypath_is_replicated_as_no_key_at_all(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """F43 — The accepted gap, pinned. A source remote whose key it holds through the ostree
+        per-remote option `gpgkeypath` looks exactly like one holding no key at all: this run
+        reads the remote's own keyring and the anchor directory and nothing else, never the
+        ostree repo config that option lives in. So the remote is provisioned plainly, the
+        warning says installs from it will fail the signature check, and the key does not
+        travel. The day that option is read, this test flips rather than passing silently.
+        """
+        job, target = trust_job(tmp_path, monkeypatch, remote_line=self._SIGNED, key_digest=None)
+
+        with caplog.at_level(logging.WARNING, logger="pcswitcher.jobs.base"):
+            await run_job(job)
+
+        assert not any("gpgkeypath" in cmd or "repo/config" in cmd for cmd in all_calls(job.source))
+        add_cmd = next(c for c in all_calls(target) if "remote-add" in c)
+        assert "--gpg-import" not in add_cmd
+        target.send_file.assert_not_awaited()
+        warnings = [record.message for record in caplog.records if record.levelno == logging.WARNING]
+        assert len(warnings) == 1
+        assert "flathub" in warnings[0]
+
     @pytest.mark.asyncio
     async def test_a_verified_remote_with_no_key_anywhere_is_added_plainly_and_the_run_says_so(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
@@ -2239,13 +2308,45 @@ class TestOriginIsReplicatedNotJustNamed:
 
     @pytest.mark.asyncio
     async def test_a_target_remote_that_does_not_verify_signatures_refuses_the_install(self) -> None:
+        """F79 — an origin is a repository AND the verification of what it serves, so this refusal
+        names the repository too: the two URLs are equal here, which is exactly why saying only
+        that a setting differs leaves the reader without the subject of the sentence.
+        """
         target = FakeFlatpakTarget(remotes={"user": {"flathub": _REAL_FLATHUB}}, unverified={("user", "flathub")})
         context, _source, _target = make_context(source_responses=self._SOURCE, fake_target=target)
         job = FlatpakSyncJob(context)
         plan = await job.plan()
 
-        with pytest.raises(ConvergeItemFailed, match="gpg verification"):
+        with pytest.raises(ConvergeItemFailed, match="gpg verification") as excinfo:
             await job.converge(self._ref_install(plan))
+
+        message = str(excinfo.value)
+        assert message.count(_REAL_FLATHUB) == 2  # target's side and source's side
+        assert "disabled" in message
+        assert "enabled" in message
+
+    @pytest.mark.asyncio
+    async def test_a_remote_that_stops_verifying_between_the_check_and_the_read_back_fails_the_app(self) -> None:
+        """F146 — The pre-install check passed, so only the read-back can catch this: the remote's
+        verification is turned off while the install runs. It is caught because the read-back
+        re-reads the target's remotes rather than reusing the snapshot the pre-check judged,
+        and because it compares the same two facets that check compares.
+        """
+        target = FakeFlatpakTarget(
+            remotes={"user": {"flathub": _REAL_FLATHUB}},
+            on_install=lambda t: t.unverified.add(("user", "flathub")),
+        )
+        context, _source, _target = make_context(source_responses=self._SOURCE, fake_target=target)
+        job = FlatpakSyncJob(context)
+        plan = await job.plan()
+
+        with pytest.raises(ConvergeItemFailed) as excinfo:
+            await job.converge(self._ref_install(plan))
+
+        message = str(excinfo.value)
+        assert "did not replicate its origin" in message
+        assert message.count(_REAL_FLATHUB) == 2
+        assert "gpg verification disabled" in message
 
     @pytest.mark.asyncio
     async def test_a_ref_that_landed_from_another_repository_fails_after_the_install(self) -> None:
@@ -3476,6 +3577,37 @@ class TestRemoteFilterReplicates:
         assert "error: no such remote" in raised.value.failures[0][1]
         assert "customremote" in raised.value.failures[0][1]
         assert str(path) in raised.value.failures[0][1]
+
+    @pytest.mark.asyncio
+    async def test_a_re_apply_that_fails_leaves_the_remote_unfiltered_for_the_rest_of_the_run(
+        self, tmp_path: Path
+    ) -> None:
+        """F117 — The accepted cost of clearing first, pinned. The target's own filter came off
+        before the installs, and the source's could not go back on, so the remote ends the run
+        carrying neither — offering more than either machine meant until the next run puts a
+        filter back. The run says so on every approved app from that remote and repairs
+        nothing: re-applying the target's own is exactly what `PKG-FR-FLATPAK-FILTER`'s
+        ordering rule ruled out.
+        """
+        path = self._filter_file(tmp_path)
+        target = self._target(
+            responses={"--filter=": CommandResult(1, "", "error: no such remote\n")}, carries="/etc/old.filter"
+        )
+        context, _source, _target = make_context(source_responses=self._source(str(path)), fake_target=target)
+        job = FlatpakSyncJob(context)
+        plan = await job.plan()
+        job.accept_review(
+            plan, ReviewOutcome(decisions={d.item_id: Decision.APPLY for d in plan.diffs}, was_interactive=True)
+        )
+
+        with pytest.raises(PackageItemFailures) as raised:
+            await job.apply()
+
+        assert [diff.item_id for diff, _reason in raised.value.failures] == [self._APP_ID]
+        # The app landed and its remote carries neither machine's filter — the end state the
+        # criteria accept, and nothing in the run puts one back.
+        assert ("user", "org.example.App/x86_64/stable") in target.refs
+        assert target.filters == {}
 
     @pytest.mark.asyncio
     async def test_a_filter_directory_that_cannot_be_created_fails_the_app(self, tmp_path: Path) -> None:

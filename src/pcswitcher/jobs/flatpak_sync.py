@@ -53,10 +53,12 @@ the source
 remote's URL and verification setting — not merely to exist under the same name
 (`_origin_refusal`), because a same-named remote pointing elsewhere serves a different
 vendor's build of the same ref at exit 0 with no warning; and after the install the ref's
-own reported origin is read back and resolved to a URL again (`_installed_origin_refusal`),
-so the guarantee is checked rather than inferred. Either refusal is a per-item failure
-naming both URLs, never an install issued in hope (T-02-24). That same read is what checks
-the derived writes actually landed: `flatpak remote-add --if-not-exists <name> <other url>`
+own reported origin is read back and resolved against a FRESHLY read remote listing, on those
+same two facets (`_installed_origin_refusal`), so the guarantee is checked rather than
+inferred — a cached listing would make the read-back a second reading of the evidence the
+pre-install check already judged. Either refusal is a per-item failure naming both URLs,
+never an install issued in hope (T-02-24). That same read is what checks the derived writes
+actually landed: `flatpak remote-add --if-not-exists <name> <other url>`
 exits 0 and changes nothing (measured), so the write's exit code proves nothing and only
 the target's own answer does.
 
@@ -278,6 +280,15 @@ _FLATPAK_SYSTEM_INSTALLATION = Path("/var/lib/flatpak")
 # target's remote then trusts exactly what the source's remote trusted, and nothing else on
 # the target gains trust it did not have.
 _OSTREE_TRUSTED_ANCHOR_DIR = Path("/usr/share/ostree/trusted.gpg.d")
+
+# The two `.gpg` names libostree skips in that directory — gpg's own database files rather
+# than keyrings (`_ostree_gpg_verifier_add_keyring_dir_at`, libostree v2024.5, which takes
+# regular files whose name ends in `.gpg` and then drops exactly these two). Everything that
+# survives that filter is merged into ONE verifier keyring and a signature verifies if any
+# key in it matches, which is what `_anchors_to_import` rests on: nothing anywhere records
+# which of those keys a given remote's signatures were checked against, so the trust a keyless
+# verified remote rests on is the whole merged set, not one file inside it.
+_ANCHOR_FILES_LIBOSTREE_IGNORES = frozenset({"trustdb.gpg", "secring.gpg"})
 
 
 # Masks are ALSO per-installation (#208, D-10), listed one pattern per line with no
@@ -547,15 +558,21 @@ def _keyring_digests_cmd(scope: str) -> str:
 
 
 def _trust_anchor_digests_cmd() -> str:
-    """Digests of every file in `_OSTREE_TRUSTED_ANCHOR_DIR`, batched exactly like the
+    """Digests of the anchor files in `_OSTREE_TRUSTED_ANCHOR_DIR`, batched exactly like the
     per-remote keyring read and unguarded for the same reason: a machine with no anchor at all
     leaves the glob unmatched, so `sha256sum` prints nothing and exits 1, and that is the
     ordinary case rather than a failure.
 
+    `*.gpg` rather than `*`, because that is the set libostree itself loads
+    (`_ANCHOR_FILES_LIBOSTREE_IGNORES`). A file in that directory libostree never reads is not
+    trust the source's remote rests on, and importing it would grant the target's remote
+    something the source's never had — or fail the whole write, since `--gpg-import` is given
+    a file it cannot parse as a keyring.
+
     Built at call time rather than held as a constant, exactly as `_keyring_digests_cmd` is,
     so the directory stays the single place the path is written down.
     """
-    return f"sha256sum {_OSTREE_TRUSTED_ANCHOR_DIR}/* 2>/dev/null"
+    return f"sha256sum {_OSTREE_TRUSTED_ANCHOR_DIR}/*.gpg 2>/dev/null"
 
 
 def _source_keyring_path(item: FlatpakRemoteItem) -> Path:
@@ -580,6 +597,21 @@ def _parse_file_digests(output: str) -> dict[str, str]:
         digest, path = parts
         digests[path.strip()] = digest
     return digests
+
+
+def _anchor_digests(output: str) -> dict[str, str]:
+    """`{path: sha256}` for the machine-level anchor files libostree actually merges.
+
+    The glob already narrows to `*.gpg` (`_trust_anchor_digests_cmd`); this drops the two
+    names libostree skips inside that set (`_ANCHOR_FILES_LIBOSTREE_IGNORES`). Done here as
+    well as in the glob because it is the same rule read from the other end: the shell can
+    express the suffix cheaply and the exclusions clumsily.
+    """
+    return {
+        path: digest
+        for path, digest in _parse_file_digests(output).items()
+        if Path(path).name not in _ANCHOR_FILES_LIBOSTREE_IGNORES
+    }
 
 
 def _parse_keyring_digests(output: str) -> dict[str, str]:
@@ -1386,8 +1418,8 @@ class FlatpakSyncJob(PackageSyncJob):
         command = _trust_anchor_digests_cmd()
         source = await self.source.run_command(command)
         target = await self.target.run_command(command, login_shell=False)
-        self._source_trust_anchors = _parse_file_digests(source.stdout)
-        self._target_trust_anchor_digests = frozenset(_parse_file_digests(target.stdout).values())
+        self._source_trust_anchors = _anchor_digests(source.stdout)
+        self._target_trust_anchor_digests = frozenset(_anchor_digests(target.stdout).values())
 
     def _anchors_to_import(self, item: FlatpakRemoteItem) -> list[Path]:
         """The source's machine-level anchor files a verified remote with no keyring of its
@@ -1399,6 +1431,15 @@ class FlatpakSyncJob(PackageSyncJob):
         signature: public key not found`. Replicating the anchor machine-wide would grant that
         trust to every remote the target has; importing it into this remote's own keyring
         grants exactly what the source's remote had, and nothing else on the target changes.
+
+        EVERY such anchor the target lacks travels, not some subset chosen as "the one this
+        remote used". That is not a shortcut: libostree merges every keyring in that directory
+        into a single verifier and accepts a signature any key in it validates
+        (`_ANCHOR_FILES_LIBOSTREE_IGNORES`), and neither flatpak nor ostree records which key
+        verified anything — so the trust a keyless verified remote rests on IS the merged set,
+        and reproducing it is reproducing exactly what the source's remote had. The only
+        narrowing that is decidable at all is libostree's own file filter, and
+        `_capture_trust_anchors` applies it.
 
         An anchor the target already holds is left out — its trust is already there, and
         importing it would issue a write per run for no change.
@@ -2380,10 +2421,14 @@ class FlatpakSyncJob(PackageSyncJob):
                 "repository, so installing would replicate the name and invert the provenance"
             )
         if target_remote.gpg_verify != source_remote.gpg_verify:
+            # The URL belongs in this message as much as in the one above, even though this
+            # branch is reached only once the two URLs match: an origin is a repository plus
+            # the verification of what it serves, and naming the setting alone tells the
+            # reader a check differs without saying which repository it is a check on.
             return (
-                f"{self.machines.target}'s {scope}-scope remote {origin!r} has gpg verification "
-                f"{_verification_word(target_remote)} while {self.machines.source}'s has it "
-                f"{_verification_word(source_remote)}"
+                f"{self.machines.target}'s {scope}-scope remote {origin!r} points at {target_remote.url} with "
+                f"gpg verification {_verification_word(target_remote)}, while {self.machines.source} takes this "
+                f"ref from {source_remote.url} with it {_verification_word(source_remote)}"
             )
         return None
 
@@ -2399,9 +2444,18 @@ class FlatpakSyncJob(PackageSyncJob):
         ref that is not installed is simply an absent row at exit 0, so a non-zero exit
         means only that the tool failed and `require_answer` fails the job once.
 
-        What is compared is the URL behind the reported origin, never the origin's name:
-        the wrong-vendor case is precisely two same-named remotes, and a name-only check
-        passes it.
+        What is compared is the URL behind the reported origin AND that remote's verification
+        setting, never the origin's name: the wrong-vendor case is precisely two same-named
+        remotes, and a name-only check passes it. Both facets, because the article defines an
+        origin as both and this check is the same check as `_origin_refusal`'s, run on what
+        landed rather than on what was configured beforehand — a remote whose verification was
+        turned off between the two would otherwise pass here having failed there.
+
+        The remote listing is re-read rather than reused: `_target_remotes_now` caches until
+        the next remote WRITE, and this run issues none between the pre-install check and
+        here, so the cached snapshot is the one the pre-install check already judged. Reusing
+        it would make this pass a second reading of the same evidence instead of a look at the
+        target's state after the install — which is the whole of what this function is for.
         """
         result = await self.target.run_command(_FLATPAK_LIST_CMD, login_shell=False)
         require_answer(_FLATPAK_LIST_CMD, result, self.machines.target)
@@ -2410,7 +2464,8 @@ class FlatpakSyncJob(PackageSyncJob):
         )
         if landed is None:
             return f"flatpak exited 0 but {self.machines.target} does not list {ref} in the {scope} installation"
-        source_url = self._source_remotes_by_id[f"flatpak:remote:{scope}:{expected_origin}"].url
+        source_remote = self._source_remotes_by_id[f"flatpak:remote:{scope}:{expected_origin}"]
+        self._target_remotes_now_by_id = None
         target_remotes = await self._target_remotes_now()
         landed_remote = target_remotes.get(f"flatpak:remote:{scope}:{landed.origin}")
         if landed_remote is None:
@@ -2418,10 +2473,16 @@ class FlatpakSyncJob(PackageSyncJob):
                 f"{ref} reports origin {landed.origin!r}, which {self.machines.target} does not configure "
                 f"in {scope} scope"
             )
-        if landed_remote.url != source_url:
+        if landed_remote.url != source_remote.url:
             return (
                 f"{ref} came from {landed.origin!r} at {landed_remote.url}, but {self.machines.source} takes it "
-                f"from {source_url}"
+                f"from {source_remote.url}"
+            )
+        if landed_remote.gpg_verify != source_remote.gpg_verify:
+            return (
+                f"{ref} came from {landed.origin!r} at {landed_remote.url} with gpg verification "
+                f"{_verification_word(landed_remote)}, but {self.machines.source} takes it from "
+                f"{source_remote.url} with it {_verification_word(source_remote)}"
             )
         return None
 

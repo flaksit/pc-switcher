@@ -133,12 +133,15 @@ bracketing the repository unit (`keyrings.py`):
   and that refusal, like every other derived-write failure, is charged to the package.
   Provisioning is ownership-aware in ONE direction: a keyring the target LACKS is copied
   whatever owns it on the source, but a keyring the target already has with different bytes
-  is left alone when the target's own dpkg owns that path — the target's package manages
-  that file and clobbering a distro keyring is not this job's business. Ownership must not
-  gate the COPY, because a vendor `.deb` (`code`, `tailscale-archive-keyring`) ships both
-  its `sources.list.d` entry and its keyring, so the repository the package comes from
-  cannot be trusted until the key that package owns is already there; skipping
-  package-owned keys would make that bootstrap unsatisfiable. Every derived write is
+  is left alone when the target's own DISTRIBUTION packaging owns that path — clobbering a
+  distro keyring is not this job's business. Ownership by any other package is not an
+  exemption (`PKG-FR-KEY-REFRESH`): a vendor ships its keyring in a `.deb` of its own and
+  rotates it there, so leaving that one alone is how the rotation never arrives. Ownership
+  must not gate the COPY either, because a vendor `.deb` (`code`,
+  `tailscale-archive-keyring`) ships both its `sources.list.d` entry and its keyring, so the
+  repository the package comes from cannot be trusted until the key that package owns is
+  already there; skipping package-owned keys would make that bootstrap
+  unsatisfiable. Every derived write is
   logged at FULL as it lands, and previewed under `--dry-run` (ADR-014), which is how a
   file with no review entry stays visible without becoming a question.
 

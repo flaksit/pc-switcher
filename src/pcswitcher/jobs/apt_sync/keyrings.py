@@ -11,6 +11,12 @@ and deletion — the order is apt's, and `Keyrings.gap` is what stops a reposito
 ahead of its key. Both are ownership-aware in one direction only: a key the target LACKS is
 copied whatever owns it, because a vendor `.deb` that ships both a repository entry and the
 keyring trusting it cannot be installed until that keyring is present.
+
+Ownership means the target's own DISTRIBUTION packaging, never any package
+(`PKG-FR-KEY-REFRESH`, `AptProbe.capture_distribution_owned_keys`). A vendor ships its
+keyring in a `.deb` of its own and rotates it there; leaving that key alone because
+something owned it is how a rotation on the source never reaches the target and the
+target's apt starts failing that repository's signature check.
 """
 
 from __future__ import annotations
@@ -66,7 +72,7 @@ class Keyrings:
         target_keys: KeyDigests,
         source_refs: SourceFileRefs,
         target_refs: SourceFileRefs,
-        package_owned: frozenset[str],
+        distribution_owned: frozenset[str],
         probe: AptProbe,
         files: TargetFiles,
         log: Log,
@@ -77,11 +83,11 @@ class Keyrings:
         self._target_keys = target_keys
         self._source_refs = source_refs
         self._target_refs = target_refs
-        # Absolute paths of every key file on the TARGET that the target's own dpkg owns,
-        # from one batched `dpkg --search` at plan time. Consulted in one direction only: it
+        # Absolute paths of every key file on the TARGET that the target's own DISTRIBUTION
+        # packaging owns, from the plan-time probe. Consulted in one direction only: it
         # never blocks copying a key the target LACKS, it only stops a differing key the
-        # target's package manages from being overwritten.
-        self._package_owned = package_owned
+        # target's distribution manages from being overwritten.
+        self._distribution_owned = distribution_owned
         self._probe = probe
         self._files = files
         self._log = log
@@ -91,14 +97,17 @@ class Keyrings:
         self._provisioned: set[str] = set()
 
     def manages(self, ref: str) -> bool:
-        """Whether the target already has the key `ref` names AND its own dpkg owns that
-        path — the one case where a differing keyring is deliberately left alone.
+        """Whether the target already has the key `ref` names AND its own DISTRIBUTION
+        packaging owns that path — the one case where a differing keyring is deliberately
+        left alone (`PKG-FR-KEY-REFRESH`).
 
-        Not a general ownership gate (package docstring): a key the target LACKS is copied
-        whatever owns it on the source, because a vendor `.deb` that ships both a repository
-        entry and the keyring trusting it cannot be installed until that keyring is present.
+        Not a general ownership gate (package docstring), twice over: a key the target
+        LACKS is copied whatever owns it, because a vendor `.deb` that ships both a
+        repository entry and the keyring trusting it cannot be installed until that keyring
+        is present; and a key some VENDOR's package owns is refreshed like any other, since
+        that is exactly how a vendor rotates one.
         """
-        return self._target_keys.digest_of(ref) is not None and ref in self._package_owned
+        return self._target_keys.digest_of(ref) is not None and ref in self._distribution_owned
 
     def writes(self, refs: frozenset[str]) -> list[tuple[str, str]]:
         """`(local path, target destination)` for every keyring this run must copy, given
@@ -119,7 +128,8 @@ class Keyrings:
           points at is litter, and `/usr/share/keyrings` is mostly the distro's own.
 
         Overwriting is ownership-aware, copying is not (package docstring): a key the target
-        already has with different bytes is skipped when the target's dpkg owns that path,
+        already has with different bytes is skipped when the target's own distribution
+        packaging owns that path,
         while a key the target LACKS is always copied — including a package-owned one,
         which is the only way a repository whose keyring ships inside a package it hosts can
         ever be bootstrapped.
@@ -228,7 +238,8 @@ class Keyrings:
         attribution, on the packages that needed it — the things the user actually decided
         about (D-39).
 
-        A key the target has and its own dpkg owns counts as ready even though this run
+        A key the target has and its own distribution packaging owns counts as ready even
+        though this run
         deliberately did not overwrite it: the target's package manages that file, so the
         repository is trusted there. Pin and apt-config destinations name no keys and always
         return `None`.

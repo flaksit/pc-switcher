@@ -12,7 +12,7 @@ import pytest
 
 from pcswitcher.jobs.apt_sync import AptSyncJob
 from pcswitcher.jobs.apt_sync.items import APT_PREFERENCES_DIR
-from pcswitcher.jobs.apt_sync.probe import AptProbe, SourceFileRefs
+from pcswitcher.jobs.apt_sync.probe import AptProbe, SourceFileRefs, apt_reads
 from pcswitcher.jobs.packages.items import DiffAction, DiffClass, ItemClass
 from pcswitcher.jobs.packages.probes import ProbeFailed
 from pcswitcher.jobs.packages.review import (
@@ -736,7 +736,6 @@ class TestRepoStateCapture:
         assert by_id["apt:config:99extra"].action == DiffAction.REMOVE
 
 
-_FILTERED_SOURCES_FIND = "-name '*.list' -o -name '*.sources'"
 _SOURCES_LIST_DIGEST_CMD = "sudo sha256sum /etc/apt/sources.list"
 
 
@@ -749,14 +748,10 @@ class TestWhatAptItselfReads:
         apt reads neither, so neither may reach the review — the target-only copy below
         would otherwise be offered for deletion as a repository the source lacks.
         """
-        unfiltered = sha256_line("d1", "vendor.list") + sha256_line("d2", "vendor.list.save")
+        listing = sha256_line("d1", "vendor.list") + sha256_line("d2", "vendor.list.save")
         context, _source, _target = make_context(
             source_responses=_NO_PACKAGES,
-            target_responses={
-                **_NO_PACKAGES,
-                _FILTERED_SOURCES_FIND: CommandResult(0, sha256_line("d1", "vendor.list"), ""),
-                "find /etc/apt/sources.list.d": CommandResult(0, unfiltered, ""),
-            },
+            target_responses={**_NO_PACKAGES, "find /etc/apt/sources.list.d": CommandResult(0, listing, "")},
         )
 
         plan = await AptSyncJob(context).plan()
@@ -764,6 +759,82 @@ class TestWhatAptItselfReads:
         item_ids = {d.item_id for d in plan.diffs}
         assert "apt:source:vendor.list.save" not in item_ids
         assert "apt:source:vendor.list" in item_ids
+
+    @pytest.mark.parametrize(
+        ("directory", "filename", "read"),
+        [
+            # `sources.list.d` REQUIRES one of two extensions; the other two directories
+            # accept none or their own. Measured on apt 2.8.3 / Ubuntu 24.04.
+            ("/etc/apt/sources.list.d", "vendor.list", True),
+            ("/etc/apt/sources.list.d", "vendor.sources", True),
+            ("/etc/apt/sources.list.d", "vendor", False),
+            ("/etc/apt/sources.list.d", "vendor.LIST", False),
+            ("/etc/apt/preferences.d", "99-vendor", True),
+            ("/etc/apt/preferences.d", "99-vendor.pref", True),
+            ("/etc/apt/preferences.d", "a.b.pref", True),
+            ("/etc/apt/preferences.d", "99-vendor.conf", False),
+            ("/etc/apt/preferences.d", "99-vendor.prefs", False),
+            ("/etc/apt/apt.conf.d", "99update", True),
+            ("/etc/apt/apt.conf.d", "99update.conf", True),
+            ("/etc/apt/apt.conf.d", "99update.pref", False),
+            # `Dir::Ignore-Files-Silently`'s own list, in the directory whose extension rule
+            # is the most permissive of the three.
+            ("/etc/apt/preferences.d", "99-vendor.bak", False),
+            ("/etc/apt/preferences.d", "99-vendor.dpkg-dist", False),
+            ("/etc/apt/preferences.d", "99-vendor.ucf-old", False),
+            ("/etc/apt/preferences.d", "99-vendor.save", False),
+            ("/etc/apt/preferences.d", "99-vendor.orig", False),
+            ("/etc/apt/preferences.d", "99-vendor.distUpgrade", False),
+            ("/etc/apt/preferences.d", "99-vendor.disabled", False),
+            ("/etc/apt/preferences.d", "99-vendor~", False),
+            ("/etc/apt/preferences.d", "99-vendor.pref.save", False),
+            # The character set, and the leading dot.
+            ("/etc/apt/preferences.d", "99 vendor.pref", False),
+            ("/etc/apt/preferences.d", "99+vendor.pref", False),
+            ("/etc/apt/preferences.d", ".99-vendor.pref", False),
+            # A key directory has no fragment naming rule: a keyring is named by an explicit
+            # `Signed-By:` path, so nothing there may be filtered out on its name.
+            ("/usr/share/keyrings/", "vendor.gpg", True),
+            ("/etc/apt/keyrings", "vendor.asc", True),
+            ("/etc/apt/trusted.gpg.d", "vendor.gpg~", True),
+        ],
+    )
+    def test_apt_s_own_naming_rules_decide_what_is_captured(self, directory: str, filename: str, read: bool) -> None:
+        """C7 — every case measured against apt itself, by pointing it at a scratch directory
+        one filename at a time and asking whether the file took effect.
+        """
+        assert apt_reads(directory, filename) is read
+
+    @pytest.mark.asyncio
+    async def test_a_file_apt_ignores_is_neither_written_nor_offered_for_deletion(self) -> None:
+        """C7 — `PKG-FR-APT-IGNORES` binds add, change and remove alike, and the pin and config
+        directories are where it bites: they pass no extension filter to `find`, so a
+        `99-vendor.bak` on the source would otherwise be written to the target on every run
+        and the target's own copy offered for deletion — a file apt reads on neither machine.
+        """
+        source_pins = sha256_line("p1", "99-vendor.pref") + sha256_line("p2", "99-vendor.bak")
+        target_configs = sha256_line("c1", "99conf.dpkg-dist")
+        context, _source, target = make_context(
+            source_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/preferences.d": CommandResult(0, source_pins, ""),
+            },
+            target_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/apt.conf.d": CommandResult(0, target_configs, ""),
+            },
+        )
+        job = AptSyncJob(context)
+        install_reviewer(job, {})
+
+        await job.execute()
+
+        assert "apt:config:99conf.dpkg-dist" not in {d.item_id for d in job._accepted_plan.diffs}  # pyright: ignore[reportOptionalMemberAccess, reportPrivateUsage]
+        written = [c for c in all_calls(target) if c.startswith("sudo install ")]
+        assert not any("99-vendor.bak" in c for c in written)
+        assert any(c.endswith("/etc/apt/preferences.d/99-vendor.pref") for c in written), (
+            "the pin beside it must still travel"
+        )
 
     @pytest.mark.asyncio
     async def test_preferences_d_and_apt_conf_d_keep_no_extension_filter(self) -> None:

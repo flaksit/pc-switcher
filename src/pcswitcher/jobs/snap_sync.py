@@ -57,7 +57,7 @@ import shlex
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, ClassVar, override
+from typing import TYPE_CHECKING, Any, ClassVar, override
 
 from pcswitcher.jobs.context import JobContext
 from pcswitcher.jobs.packages.items import (
@@ -74,7 +74,10 @@ from pcswitcher.jobs.packages.sync_core import ConvergeItemFailed, PackagePlan, 
 from pcswitcher.models import CommandResult, FirstSyncScope, Host, LogLevel, ValidationError
 from pcswitcher.sudoers import passwordless_sudo_hint
 
-__all__ = ["SnapSyncJob", "snap_sync_exclude_paths"]
+if TYPE_CHECKING:
+    from pcswitcher.executor import RemoteExecutor
+
+__all__ = ["SnapSyncJob", "snap_sync_exclude_paths", "target_snap_revisions"]
 
 # `SnapItem.item_id` is always this prefix + the snap name (below).
 _SNAP_ID_PREFIX = "snap:"
@@ -94,9 +97,9 @@ _TARGET_SUDO_COMMANDS = ("/usr/bin/snap",)
 # `common` is revision-independent user data folder_sync must keep mirroring, `current`
 # is the symlink snapd maintains to the active revision. Both are always kept for the
 # mirror. Of the per-revision dirs, folder_sync mirrors the ONE the app's `current`
-# resolves to (so the active revision's per-user app data travels — decision 3, issue
-# #118) and excludes the retained older ones (revisions the target's snapd never
-# installed). See `snap_sync_exclude_paths`.
+# resolves to AND the target is itself active at (so the active revision's per-user app
+# data travels — decision 3, issue #118), and excludes every other one, since the target's
+# snapd never installed those. See `snap_sync_exclude_paths`.
 _NON_REVISION_DIR_NAMES = frozenset({"common", "current"})
 
 
@@ -405,39 +408,68 @@ def _current_revision_name(app_dir: Path) -> str | None:
     return resolved.name
 
 
-def snap_sync_exclude_paths() -> list[Path]:
+async def target_snap_revisions(executor: RemoteExecutor) -> dict[str, str] | None:
+    """The revision each snap is active at on the machine `executor` reaches, or None when
+    that machine's snapd could not be asked.
+
+    This is the evidence `PKG-FR-SNAP-DATA-BOUNDARY` rests on — "revisions the target's
+    snapd never installed" is a fact about the target, so it is read from the target rather
+    than inferred from the source's filesystem. `PKG-FR-JOB-ORDER` is what makes the answer
+    usable: every package job runs before `folder_sync`, so by the time `folder_sync` asks,
+    this listing already carries everything `snap_sync` converged this run — and, equally,
+    still shows the old revision (or no entry at all) where an install or a revision change
+    was declined, failed, or never offered because `snap_sync` is disabled.
+
+    None rather than an empty map when the read does not answer: a machine with no snaps
+    exits 0 with an empty listing, which is ordinary data, while a snapd that cannot be
+    reached says nothing about which revisions exist (ADR-022). Callers exclude every
+    revision dir either way here, but the two must not be confused with each other.
+    """
+    result = await executor.run_command("snap list --all", login_shell=False)
+    if not result.success:
+        return None
+    return {item.name: item.revision for item in _parse_snap_list(result.stdout)}
+
+
+def snap_sync_exclude_paths(target_revisions: Mapping[str, str] | None) -> list[Path]:
     """Absolute `~/snap/<app>/<revision>` data directories folder_sync must NOT mirror,
     resolved against `Path.home()` at call time exactly like `vscode_state_exclude_paths()`
     — unlike VS Code's fixed relpath list, the revision set is dynamic, so it is enumerated
     from the filesystem rather than hardcoded.
 
-    Per app this excludes every revision dir EXCEPT the one the app's `current` symlink
-    resolves to (decision 3, issue #118): snap_sync converges the target onto the source's
-    revision before folder_sync runs (D-17 order), so by folder_sync time both machines'
-    `current` points at the same revision, and mirroring THAT revision's data dir carries
-    the active revision's per-user app data across. The retained older revision dirs stay
-    excluded so folder_sync never plants data dirs for revisions the target's snapd never
-    installed.
+    `target_revisions` is snap name -> the revision the TARGET is active at
+    (`target_snap_revisions`, read after the package jobs ran), or None when the target's
+    snapd could not be asked. An app's data dir is kept out of the exclusion set — and so
+    travels — only where the app's `current` symlink here resolves to a revision the target
+    is ALSO on: that is the one directory the target's snapd will read (decision 3, issue
+    #118). Every other revision dir is excluded, because the target's snapd never installed
+    it (`PKG-FR-SNAP-DATA-BOUNDARY`), which covers the retained older revisions as well as an
+    app whose install or revision change was declined, failed, or never proposed at all.
 
     `~/snap/<app>/common` (revision-independent user data folder_sync must keep mirroring)
     and `~/snap/<app>/current` (the symlink itself) are always kept — the whole reason this
     export is not simply `~/snap`. When `current` is missing or dangling the active revision
-    cannot be determined, so ALL of that app's revision dirs are excluded (safe default).
+    cannot be determined, so ALL of that app's revision dirs are excluded (safe default), as
+    they are when `target_revisions` is None.
     """
     snap_root = Path.home() / "snap"
     if not snap_root.is_dir():
         return []
 
+    revisions = target_revisions or {}
     paths: list[Path] = []
     for app_dir in sorted(snap_root.iterdir()):
         if not app_dir.is_dir():
             continue
         current_revision = _current_revision_name(app_dir)
+        # `!=` also covers the two None cases: an indeterminate `current` here, and a snap
+        # the target does not hold (absent from the map, so `.get` is None).
+        converged = current_revision is not None and revisions.get(app_dir.name) == current_revision
         for entry in sorted(app_dir.iterdir()):
             if entry.name in _NON_REVISION_DIR_NAMES or not entry.is_dir():
                 continue
-            if current_revision is not None and entry.name == current_revision:
-                continue  # active-revision data dir travels with folder_sync (decision 3)
+            if converged and entry.name == current_revision:
+                continue  # the target is on this revision, so its data dir travels
             paths.append(entry)
     return paths
 

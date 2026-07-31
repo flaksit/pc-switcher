@@ -9,18 +9,21 @@ import contextlib
 import dataclasses
 from collections.abc import Sequence
 from typing import override
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from pcswitcher.executor import RemoteExecutor
 from pcswitcher.jobs.apt_sync import AptSyncJob
 from pcswitcher.jobs.apt_sync.esm_gate import PRO_STATUS_COMMAND
+from pcswitcher.jobs.apt_sync.probe import AptProbe
 from pcswitcher.jobs.packages.review import (
     Decision,
 )
 from pcswitcher.models import CommandResult, JobSkipped
 from tests.unit.jobs.apt.helpers import (
     _NO_PACKAGES,
+    MACHINES,
     _repo_context,
     all_calls,
     sha256_line,
@@ -309,6 +312,30 @@ class TestTheESMAttachmentGate:
         assert "aAbBcC" not in caplog.text
         for call in reviewer.gate_calls:
             assert _PRO_ACCOUNT_EMAIL not in "".join(call.values())
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("payload", [_PRO_UNATTACHED, _PRO_ATTACHED])
+    async def test_the_probe_payload_never_reaches_the_executors_own_trace(
+        self, payload: str, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """J115, C141 — through the REAL `RemoteExecutor`, which traces every command's stdout
+        verbatim at DEBUG (`PKG-FR-LOG-VERBATIM`): a mock executor logs nothing, so it can
+        only prove that `esm_gate` itself stays quiet, and the payload was reaching the log
+        file one layer below it. The withholding has to happen at the read
+        (`PKG-FR-ESM-PRIVACY`) — by the time a filter downstream could see it, it is written.
+        """
+        conn = MagicMock()
+        conn.run = AsyncMock(return_value=MagicMock(exit_status=0, stdout=payload, stderr=""))
+        probe = AptProbe(MagicMock(), RemoteExecutor(conn), MACHINES)  # pyright: ignore[reportArgumentType]
+
+        with caplog.at_level(1):
+            result = await probe.target_pro_attached(PRO_STATUS_COMMAND)
+
+        assert result.stdout == payload, "the caller still gets the payload — only the log is denied it"
+        assert _PRO_ACCOUNT_EMAIL not in caplog.text
+        assert "aAbBcC" not in caplog.text
+        assert PRO_STATUS_COMMAND in caplog.text, "the command itself is still traced"
+        assert "PKG-FR-ESM-PRIVACY" in caplog.text, "and the trace says why the answer is not there"
 
     @pytest.mark.asyncio
     async def test_a_dry_run_never_prompts_about_attachment(self, caplog: pytest.LogCaptureFixture) -> None:

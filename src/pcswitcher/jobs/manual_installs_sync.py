@@ -309,12 +309,18 @@ class ManualInstallsSyncJob(PackageSyncJob):
         The source's on-disk file (the exact bytes about to be sent) is compared against
         the target's current registry per `item_id`. The push is purely additive when the
         source is a superset of the target — every target entry is present in the source
-        with an identical body — in which case it proceeds silently, as before. Otherwise
-        the target holds an entry that a wholesale overwrite would LOSE (absent from the
-        source) or CHANGE (a differing body); the user is shown exactly which entries and
-        must confirm. Declining, or a non-interactive run that cannot confirm, aborts the
-        whole sync (`SyncAbortedByUser`) so the user can consolidate the two registries by
-        hand and re-run — the tool never silently discards a snippet only the target has.
+        and IDENTICAL, whole entry against whole entry — in which case it proceeds silently,
+        as before. Otherwise the target holds an entry that a wholesale overwrite would LOSE
+        (absent from the source) or CHANGE; the user is shown exactly which entries and must
+        confirm. Declining, or a non-interactive run that cannot confirm, aborts the whole
+        sync (`SyncAbortedByUser`) so the user can consolidate the two registries by hand and
+        re-run — the tool never silently discards a snippet only the target has.
+
+        The comparison is the whole `Snippet`, not its body alone: `PKG-FR-REGISTRY-CONSENT`
+        gates a transfer that would "lose or change an entry the target holds", and the label
+        and the authoring record (`authored_at`, `authored_on`) are part of that entry — a
+        push that replaces them changes what the target holds even where the body it replays
+        stays byte-identical.
 
         Either registry being unparsable aborts the same way, inside the two reads below
         (`state._unreadable_registry`): a file nobody can read says nothing about which
@@ -331,7 +337,7 @@ class ManualInstallsSyncJob(PackageSyncJob):
         changed = [
             (snippet, source_snippets[item_id])
             for item_id, snippet in target_snippets.items()
-            if item_id in source_snippets and source_snippets[item_id].body != snippet.body
+            if item_id in source_snippets and source_snippets[item_id] != snippet
         ]
         if not lost and not changed:
             return  # purely additive — source is a superset of the target
@@ -363,6 +369,11 @@ class ManualInstallsSyncJob(PackageSyncJob):
         `rich.markup.escape`d before it reaches the confirmer's `Panel` — a body or label
         containing `[...]` must not be parsed as console markup (T-02-02).
 
+        A CHANGED entry shows only the FIELDS that differ, each as the target's value then
+        the source's. Printing the body unconditionally read as a contradiction when the
+        body was the one thing that had not changed — the same text twice under "to be
+        replaced" and "incoming" — and the question is about what the overwrite changes.
+
         This question is the fifth credential exit (ADR-021): a snippet body is opaque to
         the tool and a `curl` of a private `.deb` is a documented shape, so the composed
         text is redacted here, where it becomes the question. Only the rendering is
@@ -382,16 +393,37 @@ class ManualInstallsSyncJob(PackageSyncJob):
             lines.extend(body_lines(snippet.body, "             "))
         for target_snippet, source_snippet in changed:
             lines.append(f"  CHANGED  {escape(target_snippet.label)}  ({escape(target_snippet.item_id)})")
-            lines.append(f"             on {self.machines.target} (to be replaced):")
-            lines.extend(body_lines(target_snippet.body, "               "))
-            lines.append(f"             from {self.machines.source} (incoming):")
-            lines.extend(body_lines(source_snippet.body, "               "))
+            for field, target_value, source_value in self._snippet_fields(target_snippet, source_snippet):
+                if target_value == source_value:
+                    continue
+                lines.append(f"             {field} on {self.machines.target} (to be replaced):")
+                lines.extend(body_lines(target_value, "               "))
+                lines.append(f"             {field} from {self.machines.source} (incoming):")
+                lines.extend(body_lines(source_value, "               "))
         lines += [
             "",
             f"Continuing overwrites {self.machines.target}'s registry wholesale. Decline to abort and "
             "consolidate the two registries by hand.",
         ]
         return redact_credentials("\n".join(lines))
+
+    @staticmethod
+    def _snippet_fields(target_snippet: Snippet, source_snippet: Snippet) -> list[tuple[str, str, str]]:
+        """The comparable fields of two copies of one entry, as `(name, target, source)`.
+
+        `item_id` is absent because the pair is matched on it. `authored_at` and `authored_on`
+        are rendered as ONE `authored` field: they are two halves of a single authoring
+        record, and naming them apart would put two lines in front of the user for one fact.
+        """
+        return [
+            ("label", target_snippet.label, source_snippet.label),
+            ("body", target_snippet.body, source_snippet.body),
+            (
+                "authored",
+                f"{target_snippet.authored_at} on {target_snippet.authored_on}",
+                f"{source_snippet.authored_at} on {source_snippet.authored_on}",
+            ),
+        ]
 
     # -- Detection (D-18/D-19), all on the source ---------------------------------------
 

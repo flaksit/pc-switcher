@@ -27,11 +27,8 @@ APT_ROOT_DIR = "/etc/apt"
 # The five `/etc/apt/*` directories D-11/D-13 pull into scope, each captured with one
 # batched `sha256sum` listing (never one command per file).
 APT_SOURCES_DIR = "/etc/apt/sources.list.d"
-# The only two extensions apt reads in `sources.list.d`. Everything else there — the
-# `.save` and `.curtin.orig` copies Ubuntu's own tooling leaves behind (four of them on the
-# development machine) — is invisible to apt, so offering one as a syncable item would ask
-# the user about a file that changes nothing.
-APT_SOURCE_EXTENSIONS = (".list", ".sources")
+# Which files apt reads in this directory and in the other two fragment directories is
+# `probe.apt_reads` — a property of the capture, not of an item's identity.
 # apt's other source location. It is scanned for keyring references, because a keyring named
 # only here is still in use and deleting it would break apt — the clearest instance of "a
 # source file this tool does not sync still counts as a reference" — and its digest is

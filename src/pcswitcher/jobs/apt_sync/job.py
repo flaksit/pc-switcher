@@ -35,6 +35,7 @@ from pcswitcher.jobs.apt_sync.files import TargetFiles
 from pcswitcher.jobs.apt_sync.items import (
     APT_HOLD_ID_PREFIX,
     APT_PACKAGE_ID_PREFIX,
+    APT_SOURCE_ID_PREFIX,
     APT_SOURCES_LIST,
     CONFLICT_ID_PREFIX,
     DISTRO_SOURCE_FILENAMES,
@@ -131,6 +132,13 @@ class AptSyncJob(PackageSyncJob):
         # `{package name: the version the SOURCE holds it at}` for the packages this run
         # proposes to install and the source holds (`PKG-FR-APT-HOLD-VERSION`).
         self._held_versions: dict[str, str] = {}
+        # `{filename: the target packages installed from it}` for every target-only
+        # repository this run considered offering for deletion, counted before any removal
+        # was taken out. `PKG-FR-REPO-DELETE` counts usage after this run's APPROVED
+        # removals, and those exist only once the review has returned, so the count is
+        # taken twice: `_plan_repo_diffs` decides what to offer, `accept_review` decides
+        # what may actually go.
+        self._repo_users: dict[str, list[str]] = {}
         # Every package dpkg reports installed on the target, read at most once per run and
         # only by a run that has something to ask it: the hold handling
         # (`PKG-FR-APT-HOLD-VERSION`) and repository-usage counting (`PKG-FR-REPO-DELETE`)
@@ -143,7 +151,7 @@ class AptSyncJob(PackageSyncJob):
             target_facts=OriginFacts.empty(),
             source_repo=RepoFacts.empty(),
             target_repo=RepoFacts.empty(),
-            package_owned=frozenset(),
+            distribution_owned=frozenset(),
             origins=None,
             collateral=None,
         )
@@ -155,7 +163,7 @@ class AptSyncJob(PackageSyncJob):
         target_facts: OriginFacts,
         source_repo: RepoFacts,
         target_repo: RepoFacts,
-        package_owned: frozenset[str],
+        distribution_owned: frozenset[str],
         origins: OriginClassifier | None,
         collateral: Collateral | None,
         stale_holds: frozenset[str] = frozenset(),
@@ -190,7 +198,7 @@ class AptSyncJob(PackageSyncJob):
             target_keys=target_facts.keys,
             source_refs=source_facts.refs,
             target_refs=target_facts.refs,
-            package_owned=package_owned,
+            distribution_owned=distribution_owned,
             probe=self._probe,
             files=self._files,
             log=self._log,
@@ -442,9 +450,12 @@ class AptSyncJob(PackageSyncJob):
         - a repository the source no longer has is WITHHELD outright while the target still
           gets software from it (`PKG-FR-REPO-DELETE`). "Anything" is every package installed
           there, automatic ones included, plus its machine-specific marks. Usage is counted
-          after this run's own removal candidates, which is the approve-everything reading
+          here after this run's removal CANDIDATES, which is the approve-everything reading
           the review has not happened yet to improve on; marks count as usage always, since
-          they are never removal candidates.
+          they are never removal candidates. The article counts after the APPROVED removals,
+          which only exist once the review has returned, so this reading decides only whether
+          the file is offered — `_withhold_repositories_still_in_use` re-counts against the
+          real answers and is what decides whether it is deleted.
         - a repository the two machines disagree about becomes a question only when it is
           also one this run would write for an approved package (`PKG-FR-REPO-CONFLICT`), the
           same gate `flatpak_sync._capture_remote_conflicts` applies. Every other differing
@@ -455,7 +466,9 @@ class AptSyncJob(PackageSyncJob):
         assembled, since every fact they decide over exists by the end of it.
         """
         source_repo, target_repo = await self._probe.capture_repo_state()
-        package_owned = await self._probe.capture_package_owned_keys(target_facts.keys)
+        distribution_owned = await self._probe.capture_distribution_owned_keys(
+            target_facts.keys, source_facts.keys, target_facts.refs.distribution_origins()
+        )
 
         source_sources = source_facts.source_digests
         target_sources = target_facts.source_digests
@@ -492,6 +505,9 @@ class AptSyncJob(PackageSyncJob):
             and diff.action is DiffAction.REMOVE
             and diff.item_id.startswith(APT_PACKAGE_ID_PREFIX)
         }
+        # Kept for the post-review recount: the users of a file this run may offer to delete,
+        # before any removal is counted out of them.
+        self._repo_users = {filename: by_file.get(filename, []) for filename in sorted(extra)}
         in_use: dict[str, list[str]] = {}
         for filename in sorted(extra):
             keeping = [name for name in by_file.get(filename, []) if name not in going]
@@ -516,7 +532,7 @@ class AptSyncJob(PackageSyncJob):
             target_facts=target_facts,
             source_repo=source_repo,
             target_repo=target_repo,
-            package_owned=package_owned,
+            distribution_owned=distribution_owned,
             origins=origins,
             collateral=collateral,
             stale_holds=self._stale_holds,
@@ -667,9 +683,16 @@ class AptSyncJob(PackageSyncJob):
         removal through, while a skip is translated into `SKIP_ONCE` on the approved
         packages that cause that collateral, so a declined collateral cleanly leaves them
         unapproved rather than failing them at the guard.
+
+        A repository deletion is then re-counted against those final answers
+        (`_withhold_repositories_still_in_use`), which is where `PKG-FR-REPO-DELETE`'s
+        "after this run's approved removals" is actually enforced. It runs after the
+        collateral resolution on purpose: a removal a declined collateral withdrew is a
+        package that stays, and so a repository that must stay with it.
         """
         work = self._work
         outcome = work.collateral.resolve(plan.diffs, outcome)
+        outcome = self._withhold_repositories_still_in_use(plan, outcome)
         work.derived.build(plan.diffs, outcome.decisions, conflicts=self._conflicts, withheld_esm=self._esm.withheld)
         approved_group = any(
             diff.item_class in REPO_GROUP_CLASSES
@@ -698,6 +721,67 @@ class AptSyncJob(PackageSyncJob):
                 unresolved=outcome.unresolved,
             )
         super().accept_review(plan, outcome)
+
+    def _withhold_repositories_still_in_use(self, plan: PackagePlan, outcome: ReviewOutcome) -> ReviewOutcome:
+        """Take back the approval of any repository deletion the target still installs
+        something from, once this run's REAL removal answers are known (`PKG-FR-REPO-DELETE`).
+
+        The plan-time narrowing offers a file whose only users are this run's removal
+        CANDIDATES, which is the only reading available before the review — and it is the
+        right one, because that is exactly the case the article means to allow: the packages
+        and the repository they came from go together in one review. What it cannot know is
+        that the user may approve the file's deletion and decline the package's removal, and
+        the file's deletion would then leave an installed package with no origin — the
+        outcome the article forbids in the strongest terms it uses about repositories.
+
+        The recount is against the decisions rather than against a fresh read of the machine,
+        for a reason that is apt's rather than a shortcut: the repository unit converges
+        BEFORE the package removals do, so a read taken at deletion time would still see
+        every package the run is about to remove. `flatpak_sync` counts against the real
+        machine because its remote deletion runs after its converge loop; the decisions are
+        the same fact, known earlier. A removal that is approved and then FAILS is outside
+        the article, which counts approved removals.
+
+        Withdrawn rather than failed: nothing went wrong, and the file is offered again next
+        run. The log line names the file and what keeps it, in the words the plan-time
+        withholding uses, because a taken-back approval reaches the user nowhere else.
+        """
+        approved_deletions = [
+            diff.item_id.removeprefix(APT_SOURCE_ID_PREFIX)
+            for diff in plan.diffs
+            if diff.item_class is ItemClass.APT_SOURCE
+            and diff.item_id != METADATA_REFRESH_ITEM_ID
+            and diff.action is DiffAction.REMOVE
+            and outcome.decisions.get(diff.item_id) == Decision.APPLY
+        ]
+        withheld: dict[str, list[str]] = {}
+        for filename in approved_deletions:
+            keeping = [
+                name
+                for name in self._repo_users.get(filename, [])
+                if outcome.decisions.get(f"{APT_PACKAGE_ID_PREFIX}{name}") != Decision.APPLY
+            ]
+            if keeping:
+                withheld[filename] = keeping
+        if not withheld:
+            return outcome
+
+        for filename, keeping in withheld.items():
+            self._log(
+                Host.TARGET,
+                LogLevel.FULL,
+                f"keeping repository {filename}: {self.machines.target} still installs "
+                f"{', '.join(keeping)} from it, so its approved deletion is not applied",
+            )
+        return ReviewOutcome(
+            decisions={
+                **outcome.decisions,
+                **{f"{APT_SOURCE_ID_PREFIX}{filename}": Decision.SKIP_ONCE for filename in withheld},
+            },
+            was_interactive=outcome.was_interactive,
+            snippets=outcome.snippets,
+            unresolved=outcome.unresolved,
+        )
 
     @override
     async def _record_permanent_skips(self, plan: PackagePlan, decisions: Mapping[str, Decision]) -> None:

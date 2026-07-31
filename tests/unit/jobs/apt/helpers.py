@@ -159,12 +159,16 @@ def respond_with_policy_sequence(
     post-`apt-get update` verification ask the same question of two different `/etc/apt`
     states, and a fixture that answers both identically cannot distinguish a verification
     that re-read the target from one that reused the plan's answer.
+
+    A `mapping` key that matches the command still wins, so a test can answer ONE named
+    policy call — the distribution-ownership probe asks about the packages owning a key, not
+    about this run's packages — without taking a turn out of the sequence.
     """
     fallback = CommandResult(exit_code=0, stdout="", stderr="")
     state = {"policy_calls": 0}
 
     def _side_effect(cmd: str, **_: object) -> CommandResult:
-        if "apt-cache policy" in cmd:
+        if "apt-cache policy" in cmd and not any(pattern in cmd for pattern in mapping):
             index = min(state["policy_calls"], len(policy_results) - 1)
             state["policy_calls"] += 1
             return policy_results[index]

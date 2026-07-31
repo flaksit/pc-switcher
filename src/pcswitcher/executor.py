@@ -103,6 +103,7 @@ class Executor(Protocol):
         timeout: float | None = None,
         *,
         mutates: str | None = None,
+        withhold_output: str | None = None,
     ) -> CommandResult:
         """Run a command and wait for completion.
 
@@ -112,6 +113,9 @@ class Executor(Protocol):
             mutates: Set to a short phrase ("install firefox") when this command CHANGES
                 the machine. Gates the command behind `--confirm-each-command` and labels
                 it in the debug trace. Leave as None for read-only commands.
+            withhold_output: Set to a short phrase naming what the output carries and the
+                article that forbids keeping it, when this command's own output may not be
+                logged. The trace then records that phrase in place of the streams.
         """
         ...
 
@@ -176,7 +180,7 @@ class _GatedExecutorMixin:
             command=redact_credentials(operation),
         )
 
-    def _trace_output(self, result: CommandResult, host: Host | None = None) -> None:
+    def _trace_output(self, result: CommandResult, host: Host | None = None, *, withhold: str | None = None) -> None:
         """Keep what the command said, verbatim, in the debug log (`PKG-FR-LOG-VERBATIM`).
 
         The counterpart to `_announce`: the trace records what was asked, this records what
@@ -187,8 +191,18 @@ class _GatedExecutorMixin:
         stdout and stderr are separate records so a formatter never has to guess which
         stream a line came from. Empty streams produce nothing: a run's trace is large
         enough without a line per silent command.
+
+        `withhold` is the one exception `PKG-FR-LOG-VERBATIM` names, and it is enforced
+        here rather than by a filter downstream: a caller reading something the user's own
+        privacy articles forbid keeping — `pro status`, whose payload names the subscriber
+        (`PKG-FR-ESM-PRIVACY`) — declares that at the call, and neither stream reaches a log
+        sink at any level. The phrase itself is logged, so the trace still shows the command
+        answered and says why the answer is not there.
         """
         extra = {"job": _active_job.get(), "host": (host if host is not None else self.host).value}
+        if withhold is not None:
+            _logger.debug("output withheld: %s", withhold, extra=extra)
+            return
         if result.stdout:
             _logger.debug("stdout: %s", result.stdout.rstrip("\n"), extra=extra)
         if result.stderr:
@@ -312,6 +326,7 @@ class LocalExecutor(_GatedExecutorMixin):
         timeout: float | None = None,
         *,
         mutates: str | None = None,
+        withhold_output: str | None = None,
     ) -> CommandResult:
         """Run a command and wait for completion.
 
@@ -320,6 +335,8 @@ class LocalExecutor(_GatedExecutorMixin):
             timeout: Optional timeout in seconds
             mutates: Short phrase describing the change when this command MODIFIES the
                 source (see the module docstring); None for a read.
+            withhold_output: Short phrase naming what the output carries, when it may not
+                be logged (`_trace_output`); None keeps the verbatim trace.
 
         Returns:
             CommandResult with exit code, stdout, and stderr
@@ -340,7 +357,7 @@ class LocalExecutor(_GatedExecutorMixin):
                 stdout=stdout.decode() if stdout else "",
                 stderr=stderr.decode() if stderr else "",
             )
-            self._trace_output(result)
+            self._trace_output(result, withhold=withhold_output)
             return result
         except TimeoutError:
             proc.terminate()
@@ -460,6 +477,7 @@ class RemoteExecutor(_GatedExecutorMixin):
         login_shell: bool | None = None,
         *,
         mutates: str | None = None,
+        withhold_output: str | None = None,
     ) -> CommandResult:
         """Run a command on remote machine and wait for completion.
 
@@ -471,6 +489,8 @@ class RemoteExecutor(_GatedExecutorMixin):
                 Useful for commands requiring user-installed tools (e.g., uv, pc-switcher).
             mutates: Short phrase describing the change when this command MODIFIES the
                 target (see the module docstring); None for a read.
+            withhold_output: Short phrase naming what the output carries, when it may not
+                be logged (`_trace_output`); None keeps the verbatim trace.
 
         Returns:
             CommandResult with exit code, stdout, and stderr
@@ -497,7 +517,7 @@ class RemoteExecutor(_GatedExecutorMixin):
                 stdout=str(result.stdout) if result.stdout else "",
                 stderr=str(result.stderr) if result.stderr else "",
             )
-            self._trace_output(outcome)
+            self._trace_output(outcome, withhold=withhold_output)
             return outcome
         except TimeoutError:
             raise
