@@ -1960,7 +1960,7 @@ class TestSnippetRegistryOverwriteGuard:
     async def test_a_corrupt_source_registry_makes_every_target_entry_a_loss(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """G80 — an unparseable source file reads as holding nothing, so every target entry
+        """G80 — an unparsable source file reads as holding nothing, so every target entry
         counts as lost and the user is asked; approving sends the corrupt file itself,
         because the push is a byte-for-byte copy of what is on disk."""
         corrupt = "snippets: [\n  - broken\n"
