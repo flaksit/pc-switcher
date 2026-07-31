@@ -24,7 +24,7 @@ Every sync capability is a job. `Job` (`jobs/base.py`) defines the whole contrac
 
 5. **Given** any job's `validate()` returns errors, **When** the validation phase runs, **Then** the orchestrator collects every job's errors, raises `RuntimeError` listing all of them, and halts before any state changes
 
-6. **Given** a job raises, **When** the exception reaches the job loop, **Then** the orchestrator records a FAILED `JobResult`, logs CRITICAL, and halts the run — except `PackageItemFailures` and `ProbeFailed`, which are recorded FAILED without cancelling the remaining jobs, and `JobSkipped`, which is recorded SKIPPED (see [Job outcomes](#job-outcomes))
+6. **Given** a job raises, **When** the exception reaches the job loop, **Then** the orchestrator records a FAILED `JobResult`, logs CRITICAL, and halts the run — except anything raised by a package job (plus `PackageItemFailures` and `ProbeFailed` wherever raised), which is recorded FAILED without cancelling the remaining jobs, and `JobSkipped`, which is recorded SKIPPED (see [Job outcomes](#job-outcomes))
 
 7. **Given** the user presses Ctrl+C during job execution, **Then** the CLI cancels the sync task, the orchestrator's `finally` block runs `_cleanup()`, and the process exits with code 130
 
@@ -445,7 +445,9 @@ Situations that produce SKIPPED:
 
 A skipped job does not fail the run: the remaining jobs still execute, the session still completes, and the exit code is unchanged. A job signals it by raising `JobSkipped`, which it may only do **before** its first mutating command — raised later, the partial state it already wrote would go unreported.
 
-FAILED behaves the same way for two causes only: `PackageItemFailures` (a manager's items that could not be applied) and `ProbeFailed` (a package-manager read that went dark, ADR-022). Both record a FAILED `JobResult`, log CRITICAL and let the remaining jobs run, because one manager's trouble says nothing about consent the user already gave for another. Every other exception still aborts the run.
+FAILED behaves the same way for every failure of a package job (`apt_sync`, `snap_sync`, `flatpak_sync`, `manual_installs_sync`): a FAILED `JobResult`, a CRITICAL log, and the remaining jobs still run. What isolates a failure is the job it came out of, not its exception class — a package job that dies on a registry transfer, a filesystem error or a parser defect says no more about another manager's already-approved work than one whose items failed to converge. `PackageItemFailures` and `ProbeFailed` isolate wherever they are raised, being by construction one manager's trouble.
+
+Two things still end the run: a `SyncLockedError`, because the machine is no longer entitled to sync at all, and any failure of a job outside package sync (`folder_sync`, `vscode_state_sync`, the core jobs). Which of those may survive a failure is GitHub issue #220.
 
 Dry-run is not a reason to report SKIPPED on its own: a rehearsal that completes did succeed. A rehearsal that hits one of the situations above is skipped like any other run.
 
