@@ -94,9 +94,12 @@ path (`_FLATPAK_REMOTES_CMD_TEMPLATE`'s fourth column), so the file at that path
 byte-for-byte to the same absolute path on the target and `remote-modify --filter` re-applies
 it there (`_apply_remote_filters`), after the approved refs from that remote have landed: a
 filter narrower than what the source has installed would otherwise exclude the very refs
-being replicated. That ordering rests on flatpak refusing an install its own filter excludes,
-which is a design requirement here and has NOT been measured. A filter that cannot be copied
-or re-applied fails every approved ref from that remote, naming the remote and the path.
+being replicated. That flatpak refuses such an install is measured, not assumed: on Flatpak
+1.14.6 an install of a ref its remote's filter denies exits 1 with `Nothing matches <id> in
+remote <remote>` and lands nothing, while the same install of an allowed ref succeeds
+(`docs/adr/considerations/adr-020-flatpak-filter-and-trust-measurements.md`). A filter that
+cannot be copied or re-applied fails every approved ref from that remote, naming the remote
+and the path.
 
 The rule is about which refs a filter can exclude, not about which machine wrote it, so the
 TARGET's own filter comes off first (`_clear_target_filters`, before the converge loop). A
@@ -262,10 +265,12 @@ _FLATPAK_KEYRING_DIGESTS_CMD_TEMPLATE = "sha256sum {directory}/*{suffix} 2>/dev/
 _FLATPAK_SYSTEM_INSTALLATION = Path("/var/lib/flatpak")
 
 # The one keyring directory libostree consults BESIDES a remote's own
-# `<remote>.trustedkeys.gpg` — verified against the installed libostree 2024.5 binary, which
-# carries this path as a literal and names no other such directory. A remote can therefore be
-# verified while holding no key of its own, its trust supplied by whichever machine put a
-# keyring here. That is trust the MACHINE holds rather than the remote, so replicating the
+# `<remote>.trustedkeys.gpg` — measured on libostree 2024.5: a signed pull succeeds with the
+# key here and fails with it in `/etc/ostree/trusted.gpg.d`, and a remote holding a keyring of
+# its own suppresses this directory outright, which is why `_anchors_to_import` acts only on a
+# remote that holds none (`docs/adr/considerations/adr-020-flatpak-filter-and-trust-measurements.md`).
+# A remote can therefore be verified while holding no key of its own, its trust supplied by
+# whichever machine put a keyring here. That is trust the MACHINE holds rather than the remote, so replicating the
 # remote alone gives the target a remote marked verified against a key it may not have, and
 # every install from it fails the signature check. `_anchors_to_import` carries these files
 # into the replicated remote's OWN keyring instead of replicating them machine-wide: the
@@ -1857,8 +1862,9 @@ class FlatpakSyncJob(PackageSyncJob):
 
         Run after the base converge loop, never before it: a filter can be narrower than what
         the source has installed, so applying it first would exclude the very refs this run is
-        replicating. That ordering rests on flatpak refusing an install its own filter
-        excludes, which is a design requirement here and has not been measured.
+        replicating — measured, not assumed (module docstring). A ref already installed when
+        a filter arrives is untouched by it, so this pass costs the target nothing that has
+        landed.
 
         A remote the source does not filter needs nothing here: `_clear_target_filters` has
         already taken the target's own off, so skipping it converges rather than strands it.

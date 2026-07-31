@@ -153,10 +153,9 @@ class FakeFlatpakTarget:
         self.unverified: set[tuple[str, str]] = set(unverified or ())
         # (scope, name) -> the path this target reports in the `filter` column.
         self.filters: dict[tuple[str, str], str] = dict(filters or {})
-        # Refs an ACTIVE filter on their origin remote makes `flatpak install` refuse. This is
-        # the one design requirement `PKG-FR-FLATPAK-FILTER`'s ordering rests on and the one
-        # thing about filters nobody has measured, so it is modelled explicitly and opted into
-        # per test rather than assumed everywhere.
+        # Refs an ACTIVE filter on their origin remote makes `flatpak install` refuse — real
+        # behaviour, measured on Flatpak 1.14.6 (`_apply_remote_filters`). Opted into per test
+        # rather than modelled everywhere, since only the filter tests set a filter at all.
         self.filter_blocks: set[str] = set(filter_blocks or ())
         # What an `install` that exits 0 actually leaves behind. Both default to the honest
         # case; they exist so the post-install read-back has conditions to find, since the
@@ -2867,9 +2866,9 @@ class TestRemoteFilterReplicates:
     @pytest.mark.asyncio
     async def test_the_filter_lands_after_the_app_it_could_exclude(self, tmp_path: Path) -> None:
         """A filter can be narrower than what the source has installed, so applying it first
-        would exclude the very ref being replicated. That flatpak actually refuses such an
-        install is a design requirement here, not something measured — the ordering is what
-        makes it moot either way.
+        would exclude the very ref being replicated: flatpak refuses an install its remote's
+        filter denies, measured on 1.14.6, and leaves an already-installed ref alone. The
+        ordering is what turns the first into the second.
         """
         path = self._filter_file(tmp_path)
         context, _source, target = make_context(source_responses=self._source(str(path)), fake_target=self._target())
