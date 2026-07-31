@@ -18,7 +18,6 @@ from dataclasses import dataclass
 from pcswitcher.jobs.apt_sync.items import (
     APT_PREFERENCES_DIR,
     APT_SOURCES_DIR,
-    COLLATERAL_ID_PREFIX,
     DISTRO_SOURCE_FILENAMES,
     METADATA_REFRESH_ITEM_ID,
     AptConfigItem,
@@ -26,6 +25,7 @@ from pcswitcher.jobs.apt_sync.items import (
     AptPackageItem,
     AptPinItem,
     AptSourceItem,
+    collateral_item_id,
 )
 from pcswitcher.jobs.apt_sync.messages import (
     build_origin_detail,
@@ -404,12 +404,17 @@ def metadata_refresh_diff() -> ItemDiff:
 
 
 def collateral_diff(
-    name: str, detail: str, *, act_word: str = "resolve", answer_hints: tuple[str, str] | None = None
+    name: str, detail: str, *, cause: str, act_word: str = "resolve", answer_hints: tuple[str, str] | None = None
 ) -> ItemDiff:
     """One manual-collateral item (D-30): a package the TARGET's apt has marked manually
     installed that the pending transaction would remove or downgrade. Stays `REPORT_ONLY` so
     `apply()` never converges it directly — its decision governs the changes that cause it,
     not itself.
+
+    Identified by `(cause, act_word, package)` and not by the package alone: one protected
+    package can be collateral of the install batch and of the removal batch in the same run,
+    and letting the install's casualty go ahead says nothing about the removal's. Sharing one
+    id made either answer govern both and lost the second item's attribution.
 
     `detail` is the whole finding as one sentence — which change, on which machine, and what
     it does to this package — because that sentence is the entire basis for the answer. It is
@@ -420,7 +425,7 @@ def collateral_diff(
         item_class=ItemClass.APT_PACKAGE,
         diff_class=DiffClass.EXTRA_ON_TARGET,
         action=DiffAction.REPORT_ONLY,
-        item_id=f"{COLLATERAL_ID_PREFIX}{name}",
+        item_id=collateral_item_id(cause, act_word, name),
         label=name,
         detail=detail,
         answer_hints=answer_hints,

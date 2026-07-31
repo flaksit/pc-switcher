@@ -472,7 +472,7 @@ class TestBareDebPackagesAreNotAptSyncsBusiness:
 
         plan = await AptSyncJob(context).plan()
 
-        assert not any(d.item_id == "apt:collateral:code" for d in plan.diffs)
+        assert not any(d.item_id == "apt:collateral:install:remove:code" for d in plan.diffs)
 
 
 class TestRepoStateCapture:

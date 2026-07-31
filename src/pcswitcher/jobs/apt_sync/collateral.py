@@ -35,7 +35,7 @@ from pcswitcher.jobs.apt_sync.commands import (
 from pcswitcher.jobs.apt_sync.diffing import collateral_diff
 from pcswitcher.jobs.apt_sync.items import (
     APT_PACKAGE_ID_PREFIX,
-    collateral_name,
+    collateral_item_id,
     is_collateral_diff,
     package_name,
 )
@@ -112,10 +112,12 @@ class Collateral:
         # and at apply time by the converge guards, which must agree.
         self._target_manual_set = target_manual_set
         self._origins = origins
-        # Package names of every manual-collateral item the user let go ahead, computed from
-        # the collateral group's decisions. The apply-time guard lets a removal/downgrade of
-        # one of these through; every other manual collateral stays refused (D-30 — the last
-        # line of defence behind plan-time classification).
+        # The item id of every manual-collateral consequence the user let go ahead, computed
+        # from the collateral group's decisions — the id and not the package name, because
+        # one package can be collateral of two transactions and a go-ahead answers one of
+        # them. The apply-time guard lets exactly those consequences through; every other
+        # manual collateral stays refused (D-30 — the last line of defence behind plan-time
+        # classification).
         self._approved: frozenset[str] = frozenset()
         # Each collateral item's `item_id` -> the install/remove item_ids whose OWN
         # transaction reproduces it (`for_direction` narrows the batch down to them).
@@ -250,6 +252,15 @@ class Collateral:
             for item in found
         ]
 
+    @staticmethod
+    def cause_of(verb: str) -> str:
+        """The id and approval segment for a direction's verb: `Installing` -> `install`.
+
+        One definition for the plan-time item and the apply-time guard, because an approval
+        recorded under one word and looked up under the other would exempt nothing.
+        """
+        return "install" if verb == "Installing" else "remove"
+
     async def classify(self, preview: AptTransactionPreview, reviewed_names: frozenset[str]) -> CollateralSplit:
         """Partition a simulation's would-remove, would-downgrade and would-upgrade packages
         by origin (D-30): a package `protected()` covers becomes a manual-collateral review
@@ -318,10 +329,20 @@ class Collateral:
         and the package the guard enforces cannot drift apart. Auto collateral is logged here
         too, because this is the transaction that actually happens
         (`PKG-FR-COLLATERAL-AUTO`).
+
+        Matched on the CONSEQUENCE — this direction, this effect, this package — and not on
+        the package alone: a go-ahead given for the install batch's casualty is not consent
+        to lose the same package to an approved removal's cascade
+        (`PKG-FR-COLLATERAL-MANUAL`).
         """
         split = await self.classify(preview, exempt)
         self._log_auto(split.auto, verb, [subject])
-        return [effect for effect in split.manual if effect.package not in self._approved]
+        cause = self.cause_of(verb)
+        return [
+            effect
+            for effect in split.manual
+            if collateral_item_id(cause, effect.act_word, effect.package) not in self._approved
+        ]
 
     def _log_auto(self, auto: Sequence[CollateralEffect], verb: str, candidates: Sequence[str]) -> None:
         """One line per collateral change nobody will be asked about
@@ -375,10 +396,11 @@ class Collateral:
         the reader knows that.
         """
         target = self._machines.target
-        causing = "install" if verb == "Installing" else "remove"
+        causing = self.cause_of(verb)
         diff = collateral_diff(
             effect.package,
             f"{verb} {trigger} on {target} would {effect.phrase}\n{self._reason(effect.package)}",
+            cause=causing,
             act_word=effect.act_word,
             answer_hints=(
                 f"{causing} {trigger} {'on' if causing == 'install' else 'from'} {target}, so {effect.sentence}",
@@ -409,9 +431,9 @@ class Collateral:
         """Translate the manual-collateral group's decisions (D-30) into the guard's
         approved set and the triggering installs' decisions.
 
-        For each collateral item (`apt:collateral:<pkg>`): an `APPLY` (go ahead)
-        marks `<pkg>` approved, so the install/remove guards let its removal
-        or downgrade through; a `SKIP_ONCE` (skip) is propagated to the packages whose own
+        For each collateral item (`apt:collateral:<cause>:<effect>:<pkg>`): an `APPLY` (go
+        ahead) approves that consequence, so the install/remove guard for THAT direction lets
+        it through; a `SKIP_ONCE` (skip) is propagated to the packages whose own
         transaction causes that collateral (`for_direction`'s attribution), so each is cleanly
         left unapproved rather than attempted and refused at the guard. Abort never reaches
         here — it raised `SyncAbortedByUser` inside the review.
@@ -443,7 +465,7 @@ class Collateral:
                 continue
             decision = outcome.decisions.get(diff.item_id)
             if decision == Decision.APPLY:
-                approved.add(collateral_name(diff.item_id))
+                approved.add(diff.item_id)
             elif decision == Decision.SKIP_ONCE:
                 for trigger_id in self._trigger_ids.get(diff.item_id, frozenset()):
                     if outcome.decisions.get(trigger_id) == Decision.APPLY:

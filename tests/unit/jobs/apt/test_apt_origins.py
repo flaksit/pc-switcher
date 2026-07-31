@@ -183,7 +183,7 @@ class TestAPackageTheTargetCannotResolveYet:
 
         simulations = [cmd for cmd in all_calls(target) if "apt-get --dry-run" in cmd]
         assert simulations == ["apt-get --dry-run install --assume-yes --no-install-recommends pkg-b"]
-        assert "apt:collateral:other-manual" in {d.item_id for d in plan.diffs}
+        assert "apt:collateral:install:remove:other-manual" in {d.item_id for d in plan.diffs}
         assert {d.item_id for d in plan.diffs if d.action == DiffAction.INSTALL} == {
             "apt:package:gh",
             "apt:package:pkg-b",

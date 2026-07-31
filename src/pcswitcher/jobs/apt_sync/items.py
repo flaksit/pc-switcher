@@ -80,6 +80,12 @@ APT_CONFIG_ID_PREFIX = "apt:config:"
 # it BEFORE the action-based package dispatch so an `apt:hold:` INSTALL never routes into
 # `apt-get install` (#208, D4 — routed by prefix, never by action).
 APT_HOLD_ID_PREFIX = "apt:hold:"
+# `apt:collateral:<cause>:<effect>:<package>` — the id of one manual-collateral question.
+# The package alone is not the item: the same protected package can be collateral of the
+# install batch AND the removal batch, and consenting to one of those is not consenting to
+# the other. `cause` is the direction under review ("install"/"remove"), `effect` what would
+# happen to the package ("remove"/"downgrade"/"upgrade"). Stable across runs, because both
+# are derived from the transaction rather than from this run's candidate list.
 COLLATERAL_ID_PREFIX = "apt:collateral:"
 
 # Identity of a repository-conflict review entry. Distinct from `apt:source:` because it is
@@ -116,9 +122,26 @@ def hold_name(item_id: str) -> str:
     return item_id.removeprefix(APT_HOLD_ID_PREFIX)
 
 
+def collateral_item_id(cause: str, effect: str, package: str) -> str:
+    """`apt:collateral:<cause>:<effect>:<package>`."""
+    return f"{COLLATERAL_ID_PREFIX}{cause}:{effect}:{package}"
+
+
+def collateral_effect(item_id: str) -> tuple[str, str, str]:
+    """`apt:collateral:<cause>:<effect>:<package>` -> the three of them.
+
+    Split from the LEFT with a bounded count, so a package name carrying a colon of its own
+    (`libgpm2:amd64`, apt's multi-arch form) survives intact.
+    """
+    parts = item_id.split(":", 4)
+    if len(parts) != 5 or not item_id.startswith(COLLATERAL_ID_PREFIX):
+        raise ValueError(f"Not an apt collateral item id: {item_id!r}")
+    return parts[2], parts[3], parts[4]
+
+
 def collateral_name(item_id: str) -> str:
-    """`apt:collateral:<name>` -> `<name>`."""
-    return item_id.removeprefix(COLLATERAL_ID_PREFIX)
+    """`apt:collateral:<cause>:<effect>:<package>` -> `<package>`."""
+    return collateral_effect(item_id)[2]
 
 
 # -- apt's own item shapes -------------------------------------------------------------

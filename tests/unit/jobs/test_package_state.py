@@ -680,7 +680,7 @@ class TestDecisionScopeReachesCollateral:
 
         plan = await job.plan()
 
-        collateral = [d for d in plan.diffs if d.item_id == "apt:collateral:ghost-tool"]
+        collateral = [d for d in plan.diffs if d.item_id == "apt:collateral:install:remove:ghost-tool"]
         assert len(collateral) == 1
         assert collateral[0].detail is not None
         assert "marked as target-host's own" in collateral[0].detail
@@ -711,8 +711,8 @@ class TestDecisionScopeReachesCollateral:
 
         plan = await job.plan()
 
-        assert [d.item_id for d in plan.diffs if d.item_id == "apt:collateral:ghost-tool"] == [
-            "apt:collateral:ghost-tool"
+        assert [d.item_id for d in plan.diffs if d.item_id == "apt:collateral:install:remove:ghost-tool"] == [
+            "apt:collateral:install:remove:ghost-tool"
         ]
         # The decision file still does its own job: no removal diff for the inert item.
         assert not [d for d in plan.diffs if d.item_id == "apt:package:ghost-tool"]

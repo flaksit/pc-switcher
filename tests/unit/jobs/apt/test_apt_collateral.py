@@ -16,6 +16,7 @@ from pcswitcher.jobs.packages.review import (
     COLLATERAL_REVIEW_ACTION,
     Decision,
 )
+from pcswitcher.jobs.packages.sync_core import PackageItemFailures
 from pcswitcher.models import CommandResult, LogLevel
 from tests.unit.jobs.apt.helpers import (
     all_calls,
@@ -23,6 +24,7 @@ from tests.unit.jobs.apt.helpers import (
     install_reviewer,
     installed_on_target,
     make_context,
+    respond_to,
     target_offers,
 )
 
@@ -64,16 +66,16 @@ class TestPlanTimeCollateral:
 
         plan = await job.plan()
 
-        collateral = [diff for diff in plan.diffs if diff.item_id == "apt:collateral:other-manual"]
+        collateral = [diff for diff in plan.diffs if diff.item_id == "apt:collateral:install:remove:other-manual"]
         assert len(collateral) == 1
         assert collateral[0].action == DiffAction.REPORT_ONLY
         assert collateral[0].label == "other-manual"
         assert finding(collateral[0]) == "Installing pkg-a on target-host would remove other-manual"
 
         collateral_group = next(g for g in plan.groups if g.action == COLLATERAL_REVIEW_ACTION)
-        assert "apt:collateral:other-manual" in {entry.item_id for entry in collateral_group.entries}
+        assert "apt:collateral:install:remove:other-manual" in {entry.item_id for entry in collateral_group.entries}
         install_group = next(g for g in plan.groups if g.action == "install")
-        assert "apt:collateral:other-manual" not in {entry.item_id for entry in install_group.entries}
+        assert "apt:collateral:install:remove:other-manual" not in {entry.item_id for entry in install_group.entries}
         # pkg-a stays a normal, approvable install candidate.
         assert "apt:package:pkg-a" in {entry.item_id for entry in install_group.entries}
 
@@ -130,9 +132,9 @@ class TestPlanTimeCollateral:
         plan = await job.plan()
 
         collateral_ids = {diff.item_id for diff in plan.diffs if diff.item_id.startswith("apt:collateral:")}
-        assert "apt:collateral:manual-dg" in collateral_ids
-        assert "apt:collateral:auto-dg" not in collateral_ids
-        manual_dg = next(diff for diff in plan.diffs if diff.item_id == "apt:collateral:manual-dg")
+        assert "apt:collateral:install:downgrade:manual-dg" in collateral_ids
+        assert "apt:collateral:install:downgrade:auto-dg" not in collateral_ids
+        manual_dg = next(diff for diff in plan.diffs if diff.item_id == "apt:collateral:install:downgrade:manual-dg")
         assert manual_dg.detail is not None and "downgrade" in manual_dg.detail.lower()
 
     @pytest.mark.asyncio
@@ -237,7 +239,7 @@ class TestTheRehearsalSurvivesAStaleTargetHold:
         plan = await AptSyncJob(context).plan()
 
         assert rehearsal in all_calls(target)
-        assert "apt:collateral:other-manual" in {diff.item_id for diff in plan.diffs}
+        assert "apt:collateral:install:remove:other-manual" in {diff.item_id for diff in plan.diffs}
 
     @pytest.mark.asyncio
     async def test_an_ordinary_run_never_asks_for_it(self) -> None:
@@ -269,7 +271,7 @@ class TestCollateralFlow:
         job = AptSyncJob(context)
         install_reviewer(
             job,
-            {"apt:package:pkg-a": Decision.APPLY, "apt:collateral:other-manual": Decision.APPLY},
+            {"apt:package:pkg-a": Decision.APPLY, "apt:collateral:install:remove:other-manual": Decision.APPLY},
         )
 
         await job.execute()
@@ -283,7 +285,7 @@ class TestCollateralFlow:
         job = AptSyncJob(context)
         install_reviewer(
             job,
-            {"apt:package:pkg-a": Decision.APPLY, "apt:collateral:other-manual": Decision.SKIP_ONCE},
+            {"apt:package:pkg-a": Decision.APPLY, "apt:collateral:install:remove:other-manual": Decision.SKIP_ONCE},
         )
 
         await job.execute()
@@ -337,7 +339,7 @@ class TestCollateralAttribution:
             {
                 "apt:package:pkg-x": Decision.APPLY,
                 "apt:package:pkg-y": Decision.APPLY,
-                "apt:collateral:other-manual": Decision.SKIP_ONCE,
+                "apt:collateral:remove:remove:other-manual": Decision.SKIP_ONCE,
             },
         )
 
@@ -376,7 +378,7 @@ class TestCollateralAttribution:
             {
                 "apt:package:pkg-x": Decision.APPLY,
                 "apt:package:pkg-y": Decision.SKIP_ALWAYS,
-                "apt:collateral:other-manual": Decision.SKIP_ONCE,
+                "apt:collateral:remove:remove:other-manual": Decision.SKIP_ONCE,
             },
         )
 
@@ -401,7 +403,7 @@ class TestCollateralAttribution:
             {
                 "apt:package:pkg-x": Decision.APPLY,
                 "apt:package:pkg-y": Decision.SKIP_ALWAYS,
-                "apt:collateral:other-manual": Decision.SKIP_ONCE,
+                "apt:collateral:remove:remove:other-manual": Decision.SKIP_ONCE,
             },
         )
 
@@ -422,7 +424,7 @@ class TestCollateralAttribution:
 
         plan = await AptSyncJob(context).plan()
 
-        collateral = next(diff for diff in plan.diffs if diff.item_id == "apt:collateral:other-manual")
+        collateral = next(diff for diff in plan.diffs if diff.item_id == "apt:collateral:remove:remove:other-manual")
         assert finding(collateral) == "Removing pkg-x on target-host would remove other-manual"
         # The cost, pinned: one batched rehearsal plus one per candidate, and only because
         # the batch found manual collateral.
@@ -452,7 +454,7 @@ class TestCollateralAttribution:
 
         plan = await AptSyncJob(context).plan()
 
-        collateral = next(diff for diff in plan.diffs if diff.item_id == "apt:collateral:other-manual")
+        collateral = next(diff for diff in plan.diffs if diff.item_id == "apt:collateral:remove:remove:other-manual")
         assert finding(collateral) == "Removing the packages listed earlier on target-host would remove other-manual"
 
     @pytest.mark.asyncio
@@ -507,7 +509,7 @@ class TestCollateralAttribution:
             {
                 "apt:package:pkg-x": Decision.APPLY,
                 "apt:package:pkg-y": Decision.APPLY,
-                "apt:collateral:other-manual": Decision.SKIP_ONCE,
+                "apt:collateral:remove:remove:other-manual": Decision.SKIP_ONCE,
             },
         )
 
@@ -557,7 +559,7 @@ class TestSourceOnlyCollateral:
 
         plan = await job.plan()
 
-        assert not any(d.item_id == "apt:collateral:src-only" for d in plan.diffs)
+        assert not any(d.item_id == "apt:collateral:install:remove:src-only" for d in plan.diffs)
         # src-only was filtered from the source manifest, so it is not a review candidate
         # in its own right either — the removal reaches the user in no form at all.
         assert "apt:package:src-only" not in {d.item_id for d in plan.diffs}
@@ -632,7 +634,7 @@ class TestRemovalCandidateKeepsItsProtection:
 
         plan = await job.plan()
 
-        collateral = next(d for d in plan.diffs if d.item_id == "apt:collateral:old-tool")
+        collateral = next(d for d in plan.diffs if d.item_id == "apt:collateral:install:remove:old-tool")
         assert finding(collateral) == "Installing pkg-a on target-host would remove old-tool"
         # Its own removal item is untouched: the two questions are about different things.
         assert "apt:package:old-tool" in {d.item_id for d in plan.diffs}
@@ -649,7 +651,7 @@ class TestRemovalCandidateKeepsItsProtection:
             {
                 "apt:package:pkg-a": Decision.APPLY,
                 "apt:package:old-tool": Decision.SKIP_ONCE,
-                "apt:collateral:old-tool": Decision.SKIP_ONCE,
+                "apt:collateral:install:remove:old-tool": Decision.SKIP_ONCE,
             },
         )
 
@@ -669,12 +671,7 @@ class TestRemovalCandidateKeepsItsProtection:
 
         plan = await job.plan()
 
-        removal_batch_items = [
-            d
-            for d in plan.diffs
-            if d.item_id == "apt:collateral:old-tool" and d.detail is not None and d.detail.startswith("Removing")
-        ]
-        assert removal_batch_items == []
+        assert "apt:collateral:remove:remove:old-tool" not in {d.item_id for d in plan.diffs}
 
 
 class TestTheReasonNamesTheGroundThatApplies:
@@ -712,7 +709,7 @@ class TestTheReasonNamesTheGroundThatApplies:
 
         plan = await AptSyncJob(context).plan()
 
-        collateral = next(d for d in plan.diffs if d.item_id == "apt:collateral:other-manual")
+        collateral = next(d for d in plan.diffs if d.item_id == "apt:collateral:install:remove:other-manual")
         assert collateral.detail == (
             "Installing pkg-a on target-host would remove other-manual\n"
             "apt on target-host has other-manual marked as manually installed: something asked for it there "
@@ -725,7 +722,7 @@ class TestTheReasonNamesTheGroundThatApplies:
 
         plan = await AptSyncJob(context).plan()
 
-        collateral = next(d for d in plan.diffs if d.item_id == "apt:collateral:vendor-tool")
+        collateral = next(d for d in plan.diffs if d.item_id == "apt:collateral:install:remove:vendor-tool")
         assert collateral.detail == (
             "Installing pkg-a on target-host would remove vendor-tool\n"
             "vendor-tool is marked as target-host's own, so nothing else in this review mentions it."
@@ -752,7 +749,7 @@ class TestTheReasonNamesTheGroundThatApplies:
 
         plan = await AptSyncJob(context).plan()
 
-        collateral = next(d for d in plan.diffs if d.item_id == "apt:collateral:vendor-tool")
+        collateral = next(d for d in plan.diffs if d.item_id == "apt:collateral:install:remove:vendor-tool")
         assert collateral.detail == (
             "Installing pkg-a on target-host would remove vendor-tool\n"
             "apt on target-host has vendor-tool marked as manually installed, and it is marked as "
@@ -787,7 +784,7 @@ class TestCollateralUpgrade:
 
         plan = await job.plan()
 
-        collateral = next(d for d in plan.diffs if d.item_id == "apt:collateral:manual-up")
+        collateral = next(d for d in plan.diffs if d.item_id == "apt:collateral:install:upgrade:manual-up")
         assert finding(collateral) == "Installing pkg-a on target-host would upgrade manual-up from 1.0 to 2.0"
 
 
@@ -848,3 +845,127 @@ class TestAutoCollateralIsLogged:
 
         assert any("change auto-dep from 1.0 to 2.0" in record.message for record in caplog.records)
         assert not any("dpkg --compare-versions" in cmd for cmd in all_calls(target))
+
+
+class TestOnePackageTwoConsequences:
+    """`PKG-FR-COLLATERAL-MANUAL` wants consent to the consequence, and one protected package
+    can be the casualty of two of them in one run: an approved install's transaction and an
+    approved removal's cascade. Keyed on the package alone, the two shared one item — either
+    answer governed both, and the second overwrote the first's attribution.
+    """
+
+    @staticmethod
+    def _context() -> tuple[JobContext, MagicMock, MagicMock]:
+        """`victim` is manual and identical on both machines, so it is never a diff of its
+        own. Installing `pkg-a` takes it, and so does removing `going`.
+        """
+        return make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\nvictim\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\nvictim\t1.0\n", ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "going\nvictim\n", ""),
+                "dpkg-query": CommandResult(0, "going\t1.0\nvictim\t1.0\n", ""),
+                "apt-cache policy": CommandResult(0, target_offers("pkg-a"), ""),
+                "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": CommandResult(
+                    0, "Inst pkg-a (1.0)\nRemv victim [1.0]\n", ""
+                ),
+                "apt-get --dry-run remove --assume-yes going": CommandResult(
+                    0, "Remv going [1.0]\nRemv victim [1.0]\n", ""
+                ),
+            },
+        )
+
+    @pytest.mark.asyncio
+    async def test_each_consequence_is_its_own_item_with_its_own_cause(self) -> None:
+        context, _source, _target = self._context()
+
+        plan = await AptSyncJob(context).plan()
+
+        by_id = {d.item_id: d for d in plan.diffs if d.item_id.startswith("apt:collateral:")}
+        assert set(by_id) == {"apt:collateral:install:remove:victim", "apt:collateral:remove:remove:victim"}
+        assert finding(by_id["apt:collateral:install:remove:victim"]) == (
+            "Installing pkg-a on target-host would remove victim"
+        )
+        assert finding(by_id["apt:collateral:remove:remove:victim"]) == (
+            "Removing going on target-host would remove victim"
+        )
+
+    @pytest.mark.asyncio
+    async def test_letting_the_installs_casualty_go_ahead_does_not_release_the_removals(self) -> None:
+        """The whole consent model: a go-ahead on one consequence must leave the guard
+        refusing the other, rather than exempting the package outright.
+        """
+        context, _source, target = self._context()
+        job = AptSyncJob(context)
+        install_reviewer(
+            job,
+            {
+                "apt:package:pkg-a": Decision.APPLY,
+                "apt:package:going": Decision.APPLY,
+                "apt:collateral:install:remove:victim": Decision.APPLY,
+                # The removal's own casualty is answered separately, and this answer is
+                # "keep victim" — which cancels the removal that causes it.
+                "apt:collateral:remove:remove:victim": Decision.SKIP_ONCE,
+            },
+        )
+
+        await job.execute()
+
+        commands = all_calls(target)
+        assert any("sudo" in cmd and "apt-get install" in cmd and "pkg-a" in cmd for cmd in commands)
+        assert not any("sudo" in cmd and "apt-get remove" in cmd for cmd in commands)
+
+    @pytest.mark.asyncio
+    async def test_the_apply_time_guard_matches_the_consequence_not_the_package(self) -> None:
+        """The guard's own half of the same rule. The removal's transaction drifts after
+        plan time to take `victim` as well, so nothing cancelled it and only the guard
+        stands between the user and a package they never agreed to lose — while the
+        install's casualty, which they DID agree to, still goes ahead.
+        """
+        removal = "apt-get --dry-run remove --assume-yes going"
+        state = {"removals": 0}
+
+        def target_side_effect(cmd: str, **_: object) -> CommandResult:
+            if cmd == removal:
+                state["removals"] += 1
+                if state["removals"] == 1:
+                    return CommandResult(0, "Remv going [1.0]\n", "")
+                return CommandResult(0, "Remv going [1.0]\nRemv victim [1.0]\n", "")
+            return respond_to(
+                {
+                    "apt-mark showmanual": CommandResult(0, "going\nvictim\n", ""),
+                    "dpkg-query": CommandResult(0, "going\t1.0\nvictim\t1.0\n", ""),
+                    "apt-cache policy": CommandResult(0, target_offers("pkg-a"), ""),
+                    "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": CommandResult(
+                        0, "Inst pkg-a (1.0)\nRemv victim [1.0]\n", ""
+                    ),
+                }
+            )(cmd)
+
+        context, _source, target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\nvictim\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\nvictim\t1.0\n", ""),
+            },
+            target_side_effect=target_side_effect,
+        )
+        job = AptSyncJob(context)
+        install_reviewer(
+            job,
+            {
+                "apt:package:pkg-a": Decision.APPLY,
+                "apt:package:going": Decision.APPLY,
+                "apt:collateral:install:remove:victim": Decision.APPLY,
+            },
+        )
+
+        with pytest.raises(PackageItemFailures) as exc_info:
+            await job.execute()
+
+        failures = {diff.item_id: message for diff, message in exc_info.value.failures}
+        assert "victim" in failures["apt:package:going"]
+        commands = all_calls(target)
+        assert any("sudo" in cmd and "apt-get install" in cmd and "pkg-a" in cmd for cmd in commands)
+        assert not any("sudo" in cmd and "apt-get remove" in cmd for cmd in commands)

@@ -109,6 +109,8 @@ Two kinds of package are protected instead of let go: one you installed by hand 
 
 Being offered for removal is not the same as being given up. A package you were offered for removal and kept — by skipping it, or by marking it as this machine's own — keeps its protection, so an unrelated install that would take it still asks you first. A mark you made earlier in the same review counts from the moment you made it.
 
+The same package can be the casualty of two different changes in one run — an install's own transaction and an approved removal's cascade. Those are two questions, not one, and letting one go ahead says nothing about the other: the answer you give is to the consequence, not to the package.
+
 The source's manual set is not consulted, which gives up one case on purpose: a package you installed by hand on the source, which arrived on the target as an automatic dependency, can be removed as collateral without asking you. If the target's apt installed it automatically, the target's apt owns it, and that is also the set apt itself consults when deciding what it may remove.
 
 One case is told rather than asked. Inside the batch of removals you were offered, each package is exempt from its own transaction — otherwise every candidate would be raised as collateral of itself. So if you approve removing one package and skip another that apt drops along with it, the approved removal is refused when it runs, naming the package it would have taken. Nothing is lost; you just find out afterwards.
