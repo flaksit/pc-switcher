@@ -1,0 +1,68 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "9a9cb89ab2d1",
+  "session_id": "79395195-eaac-4280-9fbf-7a7610dd3e3a",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-31T21:45:01.26587534Z",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 3,
+  "save_step_count": 2,
+  "files_touched": [
+    "docs/dev/package-sync-scenario-coverage.md",
+    "docs/planning/package-sync-conformance-criteria.md",
+    "src/pcswitcher/jobs/folder_sync.py",
+    "tests/unit/jobs/test_flatpak_sync.py",
+    "tests/unit/jobs/test_folder_sync.py",
+    "tests/unit/jobs/test_manual_installs_sync.py",
+    "tests/unit/jobs/test_package_state.py",
+    "tests/unit/jobs/test_package_sync_core.py",
+    "tests/unit/jobs/test_snap_sync.py",
+    "tests/unit/test_scenario_coverage_matrix.py"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "b78a07f0f0c8",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 9297,
+    "cache_creation_tokens": 1086795,
+    "cache_read_tokens": 127598447,
+    "output_tokens": 238499,
+    "api_call_count": 321
+  },
+  "session_metrics": {
+    "turn_count": 16
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-31T21:45:01.003778571Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 170,
+    "human_modified": 133,
+    "human_removed": 0,
+    "total_committed": 170,
+    "total_lines_changed": 387,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 18,
+      "user_lines_removed": 3,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9,
+        "docs/dev/package-sync-scenario-coverage.md": 7,
+        "docs/planning/package-sync-conformance-criteria.md": 1,
+        "src/pcswitcher/jobs/folder_sync.py": 1
+      },
+      "user_removed_per_file": {
+        "docs/dev/package-sync-scenario-coverage.md": 1,
+        "docs/planning/package-sync-conformance-criteria.md": 1,
+        "src/pcswitcher/jobs/folder_sync.py": 1
+      }
+    }
+  ]
+}
