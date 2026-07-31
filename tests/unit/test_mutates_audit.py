@@ -181,7 +181,7 @@ _READ_ONLY_CALLS: dict[str, int] = {
     "jobs/manual_installs_sync.py::ManualInstallsSyncJob._push_snippet_registry::run_command": 1,
     "jobs/manual_installs_sync.py::ManualInstallsSyncJob._scan_no_candidate_apt_packages::run_command": 1,
     "jobs/manual_installs_sync.py::ManualInstallsSyncJob._scan_unowned_installs::run_command": 2,
-    "jobs/manual_installs_sync.py::ManualInstallsSyncJob.capture_source_items::run_command": 1,
+    "jobs/manual_installs_sync.py::ManualInstallsSyncJob._source_installed_names::run_command": 1,
     "jobs/manual_installs_sync.py::ManualInstallsSyncJob.validate::run_command": 2,
     # The decision file and snippet registry are read with `cat`; their writes are gated.
     "jobs/packages/state.py::DecisionFile.load::run_command": 1,

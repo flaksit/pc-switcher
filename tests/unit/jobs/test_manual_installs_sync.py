@@ -139,6 +139,16 @@ BRSCAN3_REGISTRY_YAML = (
 )
 
 
+# The `dpkg-query` that names the source's installed set, matched by its one distinctive
+# field so a fixture keys on the question rather than on the whole format string.
+_STATUS_QUERY = "db:Status-Status"
+
+
+def installed_on_source(*names: str) -> CommandResult:
+    """What that `dpkg-query` answers on a machine holding exactly `names`."""
+    return CommandResult(0, "".join(f"{name}\tinstalled\n" for name in names), "")
+
+
 def respond_to(
     mapping: dict[str, CommandResult], default: CommandResult | None = None
 ) -> Callable[..., CommandResult]:
@@ -297,7 +307,7 @@ class TestNoCandidateDetection:
         accounts for is presented as an item no package manager can reproduce."""
         context, _source, _target = make_context(
             source_responses={
-                "apt-mark showmanual": CommandResult(0, "code\n", ""),
+                _STATUS_QUERY: installed_on_source("code"),
                 "apt-cache policy": CommandResult(0, _POLICY_HAND_DEB, ""),
             }
         )
@@ -319,7 +329,7 @@ class TestNoCandidateDetection:
         """
         context, _source, _target = make_context(
             source_responses={
-                "apt-mark showmanual": CommandResult(0, "gh\n", ""),
+                _STATUS_QUERY: installed_on_source("gh"),
                 "apt-cache policy": CommandResult(0, _POLICY_REPO_INSTALLED, ""),
             }
         )
@@ -337,7 +347,7 @@ class TestNoCandidateDetection:
         """
         context, _source, _target = make_context(
             source_responses={
-                "apt-mark showmanual": CommandResult(0, "docker.io\n", ""),
+                _STATUS_QUERY: installed_on_source("docker.io"),
                 "apt-cache policy": CommandResult(0, _POLICY_PINNED_NO_CANDIDATE, ""),
             }
         )
@@ -352,7 +362,7 @@ class TestNoCandidateDetection:
         """G4 — the installed version comes from an ESM origin, so a repository supplies it."""
         context, _source, _target = make_context(
             source_responses={
-                "apt-mark showmanual": CommandResult(0, "7zip\n", ""),
+                _STATUS_QUERY: installed_on_source("7zip"),
                 "apt-cache policy": CommandResult(0, _POLICY_AUTO_DEP, ""),
             }
         )
@@ -363,13 +373,35 @@ class TestNoCandidateDetection:
         assert self._unreproducible_ids(plan) == set()
 
     @pytest.mark.asyncio
+    async def test_a_hand_deb_apt_marks_automatic_is_still_detected(self) -> None:
+        """G5 — `code` came from a `.deb` and apt has it marked automatically installed, so
+        it is outside `apt-mark showmanual`. The boundary the article draws is "no configured
+        repository supplies the installed version", which this still is: `apt_sync` will not
+        touch it either, so nothing else in the run would ever name it.
+        """
+        context, source, _target = make_context(
+            source_responses={
+                _STATUS_QUERY: installed_on_source("code"),
+                "apt-mark showmanual": CommandResult(0, "", ""),
+                "apt-cache policy": CommandResult(0, _POLICY_HAND_DEB, ""),
+            }
+        )
+
+        plan = await ManualInstallsSyncJob(context).plan()
+
+        assert self._unreproducible_ids(plan) == {"unreproducible:apt-no-candidate:code"}
+        # The manual/automatic mark is not consulted at all — asking for it and then
+        # ignoring it would leave the boundary looking like a filter that happens to pass.
+        assert not any("apt-mark" in cmd for cmd in all_calls(source))
+
+    @pytest.mark.asyncio
     async def test_a_version_newer_than_any_repository_offers_is_unreproducible(self) -> None:
         """G6 — the installed version's own row names no repository while an older row
         does: replicating THIS machine's version needs the `.deb`, so the item is
         presented rather than left to apt."""
         context, _source, _target = make_context(
             source_responses={
-                "apt-mark showmanual": CommandResult(0, "mytool\n", ""),
+                _STATUS_QUERY: installed_on_source("mytool"),
                 "apt-cache policy": CommandResult(0, _POLICY_NEWER_THAN_REPO, ""),
             }
         )
@@ -385,7 +417,7 @@ class TestNoCandidateDetection:
         policy = _POLICY_HAND_DEB + _POLICY_REPO_INSTALLED + _POLICY_PINNED_NO_CANDIDATE + _POLICY_AUTO_DEP
         context, source, _target = make_context(
             source_responses={
-                "apt-mark showmanual": CommandResult(0, "code\ngh\ndocker.io\n7zip\n", ""),
+                _STATUS_QUERY: installed_on_source("code", "gh", "docker.io", "7zip"),
                 "apt-cache policy": CommandResult(0, policy, ""),
             }
         )
@@ -407,7 +439,7 @@ class TestNoCandidateDetection:
         so nothing but `gh`'s missing block can decide this."""
         context, _source, _target = make_context(
             source_responses={
-                "apt-mark showmanual": CommandResult(0, "code\ngh\n", ""),
+                _STATUS_QUERY: installed_on_source("code", "gh"),
                 "apt-cache policy": CommandResult(0, _POLICY_HAND_DEB, ""),
             }
         )
@@ -424,7 +456,7 @@ class TestNoCandidateDetection:
         """
         context, _source, _target = make_context(
             source_responses={
-                "apt-mark showmanual": CommandResult(0, "code\ngh\n", ""),
+                _STATUS_QUERY: installed_on_source("code", "gh"),
                 "apt-cache policy": CommandResult(100, "", "E: could not read the package lists\n"),
             }
         )
@@ -439,14 +471,14 @@ class TestNoCandidateDetection:
     async def test_a_policy_read_that_printed_no_block_at_all_fails_the_job(self) -> None:
         """G10, J82 — the `blocks` half of ADR-022 D-04, which `apt_sync._source_policy` puts on the
         BYTE-IDENTICAL command — same names, same host, same probe. apt prints one block per
-        name it knows and every name here came from this machine's own `apt-mark showmanual`,
-        so zero blocks at exit 0 is apt not answering. The two jobs disagreeing about that
+        name it knows and every name here is installed on this machine, so zero blocks at
+        exit 0 is apt not answering. The two jobs disagreeing about that
         silence is the divergence this scan's guard exists to prevent: `apt_sync` would drop
         the same bare-`.deb` packages from its manifest while this job reports none.
         """
         context, _source, _target = make_context(
             source_responses={
-                "apt-mark showmanual": CommandResult(0, "code\ngh\n", ""),
+                _STATUS_QUERY: installed_on_source("code", "gh"),
                 "apt-cache policy": CommandResult(0, "", ""),
             }
         )
@@ -465,7 +497,7 @@ class TestNoCandidateDetection:
         """
         context, _source, _target = make_context(
             source_responses={
-                "apt-mark showmanual": CommandResult(0, "code\n", ""),
+                _STATUS_QUERY: installed_on_source("code"),
                 "apt-cache policy": CommandResult(0, _POLICY_HAND_DEB, ""),
             }
         )
@@ -475,13 +507,13 @@ class TestNoCandidateDetection:
         assert self._unreproducible_ids(plan) == {"unreproducible:apt-no-candidate:code"}
 
     @pytest.mark.asyncio
-    async def test_a_manual_set_read_that_did_not_answer_fails_the_job(self) -> None:
-        """G12, J83 — the other end of the same detection: `apt-mark showmanual` exits non-zero, so the
-        run knows nothing about the source's packages. The policy probe below it is left
-        answering normally, so only the manual-set read can fail this."""
+    async def test_an_installed_set_read_that_did_not_answer_fails_the_job(self) -> None:
+        """G12, J83 — the other end of the same detection: the `dpkg-query` naming the source's
+        installed packages exits non-zero, so the run knows nothing about them. The policy
+        probe below it is left answering normally, so only that read can fail this."""
         context, _source, _target = make_context(
             source_responses={
-                "apt-mark showmanual": CommandResult(100, "", "E: Problem opening /var/lib/dpkg/status\n"),
+                _STATUS_QUERY: CommandResult(100, "", "E: Problem opening /var/lib/dpkg/status\n"),
                 "apt-cache policy": CommandResult(0, _POLICY_HAND_DEB, ""),
             }
         )
@@ -489,7 +521,7 @@ class TestNoCandidateDetection:
         with pytest.raises(ProbeFailed) as excinfo:
             await ManualInstallsSyncJob(context).plan()
 
-        assert "apt-mark showmanual" in str(excinfo.value)
+        assert "dpkg-query" in str(excinfo.value)
         assert "exited 100" in str(excinfo.value)
 
     def test_only_the_installed_version_row_contributes_origins(self) -> None:
@@ -641,7 +673,7 @@ class TestSnippetResolution:
     async def test_item_with_snippet_plans_install_and_converges_by_replaying_it(self) -> None:
         context, _source, target = make_context(
             source_responses={
-                "apt-mark showmanual": CommandResult(0, "brscan3\n", ""),
+                _STATUS_QUERY: installed_on_source("brscan3"),
                 "apt-cache policy": CommandResult(0, _hand_deb_policy("brscan3"), ""),
                 # plan() now classifies from the SOURCE registry (corrected D-23).
                 "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, BRSCAN3_REGISTRY_YAML, ""),
@@ -672,7 +704,7 @@ class TestSnippetResolution:
         question and in no other list."""
         context, _source, _target = make_context(
             source_responses={
-                "apt-mark showmanual": CommandResult(0, "brscan3\n", ""),
+                _STATUS_QUERY: installed_on_source("brscan3"),
                 "apt-cache policy": CommandResult(0, _hand_deb_policy("brscan3"), ""),
             }
         )
@@ -758,7 +790,7 @@ class TestInstallOnly:
     async def test_target_query_is_empty_by_design(self) -> None:
         """G89 — the target is never asked what unreproducible software it holds."""
         context, _source, _target = make_context(
-            target_responses={"apt-mark showmanual": CommandResult(0, "target-only-tool\n", "")}
+            target_responses={_STATUS_QUERY: installed_on_source("target-only-tool")}
         )
         job = ManualInstallsSyncJob(context)
 
@@ -772,13 +804,13 @@ class TestInstallOnly:
         """
         context, _source, target = make_context(
             source_responses={
-                "apt-mark showmanual": CommandResult(0, "brscan3\n", ""),
+                _STATUS_QUERY: installed_on_source("brscan3"),
                 "apt-cache policy": CommandResult(0, _hand_deb_policy("brscan3"), ""),
                 "for root in": CommandResult(0, "/usr/local/flux\n", ""),
                 "dpkg --search": CommandResult(0, DPKG_WITNESS_LINE, ""),
             },
             target_responses={
-                "apt-mark showmanual": CommandResult(0, "brscan3\ntarget-only-tool\n", ""),
+                _STATUS_QUERY: installed_on_source("brscan3", "target-only-tool"),
                 "for root in": CommandResult(0, "/usr/local/flux\n/usr/local/target-only\n", ""),
                 "dpkg --search": CommandResult(0, DPKG_WITNESS_LINE, ""),
             },
@@ -811,7 +843,7 @@ class TestInertFiltering:
         )
         context, _source, _target = make_context(
             source_responses={
-                "apt-mark showmanual": CommandResult(0, "brscan3\n", ""),
+                _STATUS_QUERY: installed_on_source("brscan3"),
                 "apt-cache policy": CommandResult(0, _hand_deb_policy("brscan3"), ""),
                 "cat ~/.config/pc-switcher/manual.decisions.yaml": CommandResult(0, decisions_yaml, ""),
             }
@@ -837,7 +869,7 @@ class TestInertFiltering:
         )
         context, _source, target = make_context(
             source_responses={
-                "apt-mark showmanual": CommandResult(0, "brscan3\n", ""),
+                _STATUS_QUERY: installed_on_source("brscan3"),
                 "apt-cache policy": CommandResult(0, _hand_deb_policy("brscan3"), ""),
             },
             target_responses={"cat ~/.config/pc-switcher/manual.decisions.yaml": CommandResult(0, decisions_yaml, "")},
@@ -858,7 +890,7 @@ class TestPermanentMarkWrites:
     def _brscan3_context(*, dry_run: bool = False) -> tuple[JobContext, MagicMock, MagicMock]:
         return make_context(
             source_responses={
-                "apt-mark showmanual": CommandResult(0, "brscan3\n", ""),
+                _STATUS_QUERY: installed_on_source("brscan3"),
                 "apt-cache policy": CommandResult(0, _hand_deb_policy("brscan3"), ""),
             },
             dry_run=dry_run,
@@ -871,7 +903,7 @@ class TestPermanentMarkWrites:
         and its label."""
         context, source, target = make_context(
             source_responses={
-                "apt-mark showmanual": CommandResult(0, "brscan3\n", ""),
+                _STATUS_QUERY: installed_on_source("brscan3"),
                 "apt-cache policy": CommandResult(0, _hand_deb_policy("brscan3"), ""),
             }
         )
@@ -923,7 +955,12 @@ class TestEmptyDetection:
     async def test_empty_detection_produces_no_group_and_applies_nothing(self) -> None:
         """G17 — backstop (must_haves): an empty unreproducible set yields no review group and
         nothing to apply."""
-        context, _source, _target = make_context(source_responses={"apt-mark showmanual": CommandResult(0, "\n", "")})
+        context, _source, _target = make_context(
+            source_responses={
+                _STATUS_QUERY: installed_on_source("gh"),
+                "apt-cache policy": CommandResult(0, _POLICY_REPO_INSTALLED, ""),
+            }
+        )
         job = ManualInstallsSyncJob(context)
 
         plan = await job.plan()
@@ -944,7 +981,7 @@ class TestExecuteIndependentOfApt:
         configuration: this job asks apt and dpkg its own questions."""
         context, _source, _target = make_context(
             source_responses={
-                "apt-mark showmanual": CommandResult(0, "brscan3\n", ""),
+                _STATUS_QUERY: installed_on_source("brscan3"),
                 "apt-cache policy": CommandResult(0, _hand_deb_policy("brscan3"), ""),
             },
             enabled_sync_jobs={"manual_installs_sync": True, "folder_sync": True},
@@ -961,7 +998,7 @@ class TestExecuteIndependentOfApt:
         reviewer = FakeReviewer(decisions={item_id: Decision.APPLY})
         context, _source, target = make_context(
             source_responses={
-                "apt-mark showmanual": CommandResult(0, "brscan3\n", ""),
+                _STATUS_QUERY: installed_on_source("brscan3"),
                 "apt-cache policy": CommandResult(0, _hand_deb_policy("brscan3"), ""),
                 # plan() classifies INSTALL from the SOURCE registry (corrected D-23).
                 "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, BRSCAN3_REGISTRY_YAML, ""),
@@ -991,7 +1028,7 @@ class TestTracerEndToEnd:
         alongside the rest, and converges by replaying it."""
         context, _source, target = make_context(
             source_responses={
-                "apt-mark showmanual": CommandResult(0, "brscan3\n", ""),
+                _STATUS_QUERY: installed_on_source("brscan3"),
                 "apt-cache policy": CommandResult(0, _hand_deb_policy("brscan3"), ""),
                 "for root in": CommandResult(0, "/usr/local/flux\n/opt/az\n", ""),
                 "dpkg --search": CommandResult(0, f"azure-cli: /opt/az\n{DPKG_WITNESS_LINE}", ""),
@@ -1057,7 +1094,7 @@ class TestSameRunApplication:
         reviewer = FakeReviewer(snippets={item_id: body})
         context, _source, target = make_context(
             source_responses={
-                "apt-mark showmanual": CommandResult(0, "falco-app\n", ""),
+                _STATUS_QUERY: installed_on_source("falco-app"),
                 "apt-cache policy": CommandResult(0, _hand_deb_policy("falco-app"), ""),
                 # Empty source registry -> plan classifies REPORT_ONLY (no source snippet).
                 "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, "snippets: {}\n", ""),
@@ -1090,7 +1127,7 @@ class TestClassificationAuthority:
         still asked to resolve it."""
         context, _source, _target = make_context(
             source_responses={
-                "apt-mark showmanual": CommandResult(0, "brscan3\n", ""),
+                _STATUS_QUERY: installed_on_source("brscan3"),
                 "apt-cache policy": CommandResult(0, _hand_deb_policy("brscan3"), ""),
                 # Source registry empty -> no source snippet.
                 "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, "snippets: {}\n", ""),
@@ -1112,7 +1149,7 @@ class TestClassificationAuthority:
         """G44 — a snippet the source holds resolves the item: it is presented as an install."""
         context, _source, _target = make_context(
             source_responses={
-                "apt-mark showmanual": CommandResult(0, "brscan3\n", ""),
+                _STATUS_QUERY: installed_on_source("brscan3"),
                 "apt-cache policy": CommandResult(0, _hand_deb_policy("brscan3"), ""),
                 "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, BRSCAN3_REGISTRY_YAML, ""),
             },
@@ -1137,7 +1174,7 @@ class TestClassificationAuthority:
         reviewer = FakeReviewer(snippets={item_id: body})
         context, source, target = make_context(
             source_responses={
-                "apt-mark showmanual": CommandResult(0, "falco-app\n", ""),
+                _STATUS_QUERY: installed_on_source("falco-app"),
                 "apt-cache policy": CommandResult(0, _hand_deb_policy("falco-app"), ""),
                 "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, "snippets: {}\n", ""),
             },
@@ -1169,7 +1206,7 @@ class TestClassificationAuthority:
         item_id = "unreproducible:apt-no-candidate:brscan3"
         context, _source, target = make_context(
             source_responses={
-                "apt-mark showmanual": CommandResult(0, "brscan3\n", ""),
+                _STATUS_QUERY: installed_on_source("brscan3"),
                 "apt-cache policy": CommandResult(0, _hand_deb_policy("brscan3"), ""),
                 "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, BRSCAN3_REGISTRY_YAML, ""),
             },
@@ -1202,7 +1239,7 @@ class TestNoTerminalRun:
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         context, _source, target = make_context(
             source_responses={
-                "apt-mark showmanual": CommandResult(0, "brscan3\n", ""),
+                _STATUS_QUERY: installed_on_source("brscan3"),
                 "apt-cache policy": CommandResult(0, _hand_deb_policy("brscan3"), ""),
             },
             target_responses={"echo $HOME": CommandResult(0, "/home/user\n", "")},
@@ -1239,7 +1276,7 @@ class TestSkipOnceResolution:
         """G34, J7 — a run whose only findings were all answered "not for now" ends clean."""
         context, _source, _target = make_context(
             source_responses={
-                "apt-mark showmanual": CommandResult(0, "brscan3\n", ""),
+                _STATUS_QUERY: installed_on_source("brscan3"),
                 "apt-cache policy": CommandResult(0, _hand_deb_policy("brscan3"), ""),
             }
         )
@@ -1262,7 +1299,7 @@ class TestSkipOnceResolution:
         cleanly rather than failing the job."""
         context, _source, _target = make_context(
             source_responses={
-                "apt-mark showmanual": CommandResult(0, "brscan3\n", ""),
+                _STATUS_QUERY: installed_on_source("brscan3"),
                 "apt-cache policy": CommandResult(0, _hand_deb_policy("brscan3"), ""),
             }
         )
@@ -1299,7 +1336,7 @@ class TestContinueOnFailure:
         )
         context, _source, _target = make_context(
             source_responses={
-                "apt-mark showmanual": CommandResult(0, "brscan3\ncnpg\n", ""),
+                _STATUS_QUERY: installed_on_source("brscan3", "cnpg"),
                 "apt-cache policy": CommandResult(0, _hand_deb_policy("brscan3") + _hand_deb_policy("cnpg"), ""),
                 # plan() classifies both INSTALL from the SOURCE registry (corrected D-23).
                 "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, registry_yaml, ""),
@@ -1423,7 +1460,7 @@ class TestSnippetPush:
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         context, _source, target = make_context(
             source_responses={
-                "apt-mark showmanual": CommandResult(0, "gh\n", ""),
+                _STATUS_QUERY: installed_on_source("gh"),
                 "apt-cache policy": CommandResult(0, _POLICY_REPO_INSTALLED, ""),
                 "for root in": CommandResult(0, "", ""),
             },
@@ -1445,7 +1482,10 @@ class TestSnippetPush:
         source_registry = self._write_source_registry(tmp_path)
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         context, _source, target = make_context(
-            source_responses={"apt-mark showmanual": CommandResult(0, "\n", "")},
+            source_responses={
+                _STATUS_QUERY: installed_on_source("gh"),
+                "apt-cache policy": CommandResult(0, _POLICY_REPO_INSTALLED, ""),
+            },
             target_responses={"echo $HOME": CommandResult(0, "/home/user\n", "")},
             reviewer=FakeReviewer(was_interactive=True),
         )
@@ -1521,7 +1561,7 @@ class TestSnippetPush:
         )
         context, source, _target = make_context(
             source_responses={
-                "apt-mark showmanual": CommandResult(0, "falco-app\n", ""),
+                _STATUS_QUERY: installed_on_source("falco-app"),
                 "apt-cache policy": CommandResult(0, _hand_deb_policy("falco-app"), ""),
                 "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, "snippets: {}\n", ""),
             },
@@ -1559,7 +1599,7 @@ class TestSnippetPush:
         }
         context, _source, target = make_context(
             source_responses={
-                "apt-mark showmanual": CommandResult(0, "brscan3\ncnpg\n", ""),
+                _STATUS_QUERY: installed_on_source("brscan3", "cnpg"),
                 "apt-cache policy": CommandResult(0, _hand_deb_policy("brscan3") + _hand_deb_policy("cnpg"), ""),
                 "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, registry_yaml, ""),
             },
@@ -1649,7 +1689,7 @@ class TestSnippetPush:
         reviewer = FakeReviewer(decisions={item_id: Decision.APPLY})
         context, _source, target = make_context(
             source_responses={
-                "apt-mark showmanual": CommandResult(0, "brscan3\n", ""),
+                _STATUS_QUERY: installed_on_source("brscan3"),
                 "apt-cache policy": CommandResult(0, _hand_deb_policy("brscan3"), ""),
                 # plan() classifies INSTALL from the SOURCE registry (corrected D-23).
                 "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, BRSCAN3_REGISTRY_YAML, ""),

@@ -154,6 +154,7 @@ uninstalling the app the user has and reinstalling it from the other vendor.
 
 from __future__ import annotations
 
+import fnmatch
 import shlex
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -1116,6 +1117,28 @@ def _remove_mask_diff(item: FlatpakMaskItem) -> ItemDiff:
     )
 
 
+def _mask_covers(mask_scope: str, pattern: str, ref_item_id: str) -> bool:
+    """Whether `pattern`, masked in `mask_scope`, covers the ref `ref_item_id` identifies.
+
+    flatpak matches a mask against `<application>/<arch>/<branch>`, and a pattern may name
+    fewer components than that — `org.example.App` masks every arch and branch of it. The
+    missing trailing components are therefore filled in as `*` before the glob runs, which
+    is what makes the bare-id form and the fully-qualified form both work.
+
+    Deliberately conservative rather than a re-implementation of flatpak's own matcher: the
+    only thing this decides is whether a mask rides an application's review question
+    (`FlatpakSyncJob._software_for_block`), and that pairing requires exactly one match — so
+    a pattern this reads as matching more broadly than flatpak would simply keeps its own
+    review item, which is the rule the pairing is an exception to.
+    """
+    scope, ref = _split_flatpak_item_id(ref_item_id, "ref")
+    if scope != mask_scope:
+        return False
+    parts = pattern.split("/")
+    completed = "/".join([*parts, *["*"] * (3 - len(parts))]) if len(parts) < 3 else pattern
+    return fnmatch.fnmatchcase(ref, completed)
+
+
 def _diff_flatpak_masks(
     source_items: Sequence[FlatpakMaskItem], target_items: Sequence[FlatpakMaskItem]
 ) -> list[ItemDiff]:
@@ -1595,6 +1618,40 @@ class FlatpakSyncJob(PackageSyncJob):
         self._derived_remotes = tuple(item for item in derived if item.remote_id not in skipped)
         self._failed_derived_remotes = dict(skipped)
         super().accept_review(plan, outcome)
+
+    @override
+    def _software_for_block(self, block: ItemDiff, software: Mapping[str, ItemDiff]) -> ItemDiff | None:
+        """The one application a `flatpak:mask:<scope>:<pattern>` item covers, where that
+        application is itself an item this run (`PKG-FR-FLATPAK-MASK`,
+        `PKG-FR-BLOCKS-REPLICATE`).
+
+        Unlike an apt or snap hold, a mask names software by PATTERN, so this is a match and
+        not a lookup — and the match must be exact about how many items it catches. A pattern
+        matching NO item this run is the ordinary case (`PKG-FR-FLATPAK-MASK` replicates a
+        mask whether or not anything matches it) and keeps its own item; one matching MORE
+        than one item keeps its own item too, because it would otherwise have to ride two
+        questions whose answers can disagree, and there would be no single decision to obey.
+
+        The comparison is scope-first: a mask belongs to one installation and can never
+        cover an application in the other.
+        """
+        if block.item_class is not ItemClass.FLATPAK_MASK:
+            return None
+        scope, pattern = _split_flatpak_item_id(block.item_id, "mask")
+        matched = [
+            diff
+            for diff in software.values()
+            if diff.item_class is ItemClass.FLATPAK_REF and _mask_covers(scope, pattern, diff.item_id)
+        ]
+        return matched[0] if len(matched) == 1 else None
+
+    @override
+    def _block_name(self, block: ItemDiff) -> str:
+        """The bare pattern: the merged question's clause already says which machine masks it
+        and the row it joins names the application, so the label's `(mask, <scope>)` tail
+        would say both a second time.
+        """
+        return _split_flatpak_item_id(block.item_id, "mask")[1]
 
     @override
     async def _record_permanent_skips(self, plan: PackagePlan, decisions: Mapping[str, Decision]) -> None:

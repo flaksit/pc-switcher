@@ -583,6 +583,31 @@ class TestHolds:
         assert any("snap refresh --hold=forever alpha" in cmd for cmd in commands)
 
     @pytest.mark.asyncio
+    async def test_a_hold_on_a_snap_this_run_installs_is_one_question_with_it(self) -> None:
+        """E116 — `alpha` is missing on the target and held on the source, so the two are one
+        merged question: no `alpha (hold)` row anywhere, and the install's own row says the
+        target ends up holding its refreshes (`PKG-FR-BLOCKS-REPLICATE`).
+        """
+        context, _source, target = make_context(
+            source_responses={"snap list --all": CommandResult(0, SNAP_LIST_SOURCE_HELD_ALPHA, "")},
+            target_responses={"snap list --all": CommandResult(0, _HEADER, "")},
+        )
+        job = SnapSyncJob(context)
+        plan = await job.plan()
+
+        entries = {entry.item_id: entry for group in plan.groups for entry in group.entries}
+        assert "snap:hold:alpha" not in entries
+        assert "target-host ends up holding its refreshes" in (entries["snap:alpha"].detail or "")
+
+        job.accept_review(plan, ReviewOutcome(decisions={"snap:alpha": Decision.APPLY}, was_interactive=True))
+        await job.apply()
+
+        commands = all_calls(target)
+        install = next(i for i, cmd in enumerate(commands) if "snap install --revision=10 alpha" in cmd)
+        hold = next(i for i, cmd in enumerate(commands) if "snap refresh --hold=forever alpha" in cmd)
+        assert install < hold
+
+    @pytest.mark.asyncio
     async def test_target_held_only_yields_remove_hold_diff_and_converges_unhold(self) -> None:
         """E56, E57 — Nomad's own hold is an item proposing to lift it, and applying it does."""
         context, _source, target = make_context(
@@ -812,10 +837,10 @@ class TestHoldAndRevisionFailuresArePerItem:
 
     @pytest.mark.asyncio
     async def test_hold_for_a_snap_absent_on_target_fails_only_that_item(self) -> None:
-        """E64 — the user skipped alpha's install but applied its hold, so
+        """E64 — alpha's merged install-and-hold is approved and the install fails, so
         `snap refresh --hold=forever alpha` hits an absent snap and exits non-zero. That
-        is a normal per-item failure (D6: no gating machinery), and the epsilon hold that
-        follows it still converges.
+        is a normal per-item failure (D6: no gating machinery), and the epsilon hold — its
+        own item, since epsilon is on both machines — still converges.
         """
         source = (
             _HEADER
@@ -827,6 +852,7 @@ class TestHoldAndRevisionFailuresArePerItem:
             source_responses={"snap list --all": CommandResult(0, source, "")},
             target_responses={
                 "snap list --all": CommandResult(0, target, ""),
+                "snap install --revision=10 alpha": CommandResult(1, "", 'cannot install "alpha"'),
                 "snap refresh --hold=forever alpha": CommandResult(1, "", 'snap "alpha" is not installed'),
             },
         )
@@ -836,8 +862,7 @@ class TestHoldAndRevisionFailuresArePerItem:
             plan,
             ReviewOutcome(
                 decisions={
-                    "snap:alpha": Decision.SKIP_ONCE,
-                    "snap:hold:alpha": Decision.APPLY,
+                    "snap:alpha": Decision.APPLY,
                     "snap:hold:epsilon": Decision.APPLY,
                 },
                 was_interactive=True,
@@ -847,11 +872,10 @@ class TestHoldAndRevisionFailuresArePerItem:
         with pytest.raises(PackageItemFailures) as exc_info:
             await job.apply()
 
-        assert [diff.item_id for diff, _stderr in exc_info.value.failures] == ["snap:hold:alpha"]
+        assert [diff.item_id for diff, _stderr in exc_info.value.failures] == ["snap:alpha", "snap:hold:alpha"]
         commands = all_calls(target_mock)
-        # The failing item precedes the succeeding one, so this proves the loop continued.
+        # The failing items precede the succeeding one, so this proves the loop continued.
         assert any("snap refresh --hold=forever epsilon" in c for c in commands)
-        assert not any("snap install" in c for c in commands)
 
     @pytest.mark.asyncio
     async def test_unfetchable_revision_is_a_clean_per_item_failure_not_a_crash(self) -> None:

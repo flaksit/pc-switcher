@@ -195,6 +195,54 @@ class TestAptHoldDecisions:
         assert "apt:hold:pkg-a" in {diff.item_id for diff in plan.diffs}
 
 
+# The B41 shape: the target has `pkg-a`, the source holds it without having it. The package
+# is a removal (target-held) and its hold an addition (source-held), so one answer sends two
+# marks to two different machines.
+_MERGED_SOURCE = {
+    "apt-mark showmanual": CommandResult(0, "", ""),
+    "dpkg-query": CommandResult(0, "", ""),
+    "apt-mark showhold": CommandResult(0, "pkg-a\n", ""),
+}
+_MERGED_TARGET = {
+    "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+    "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+    "apt-mark showhold": NO_HOLDS,
+}
+
+
+class TestAMarkGivenOnAMergedQuestion:
+    """`PKG-FR-BLOCKS-REPLICATE`: a permanent answer to a question that covered a package and
+    its hold silences BOTH, each recorded on its own holding machine.
+
+    Recording only the package would leave the hold to come back alone on the next run,
+    asking about software the tool has just been told to leave alone. The two holders can be
+    two different machines: here the target holds `pkg-a` and the source holds the hold for
+    it, which is the pair `PKG-FR-MACHINE-SPECIFIC` sends to two different files.
+    """
+
+    @pytest.mark.asyncio
+    async def test_one_permanent_answer_writes_a_mark_on_each_holding_machine(self) -> None:
+        """B55, N23 — one answer, two marks: the package's on the machine that has it, the
+        hold's on the machine that holds it. The next run raises neither.
+        """
+        context, source, target = make_context(source_responses=_MERGED_SOURCE, target_responses=_MERGED_TARGET)
+        await record_skip_always(AptSyncJob(context), "apt:package:pkg-a")
+
+        on_target = recorded_decision_file(target)
+        on_source = recorded_decision_file(source)
+        assert "apt:package:pkg-a" in on_target
+        assert "apt:hold:pkg-a" in on_source
+
+        context, _source, _target = make_context(
+            source_responses={**_MERGED_SOURCE, decision_cat("apt"): CommandResult(0, on_source, "")},
+            target_responses={**_MERGED_TARGET, decision_cat("apt"): CommandResult(0, on_target, "")},
+        )
+        plan = await AptSyncJob(context).plan()
+
+        assert not {"apt:package:pkg-a", "apt:hold:pkg-a"} & {diff.item_id for diff in plan.diffs}
+        assert not {"apt:package:pkg-a", "apt:hold:pkg-a"} & review_item_ids(plan)
+
+
 class TestAptHeldPackageSuppression:
     """The target hold SET keeps suppressing a held package's own install/upgrade action
     (`diff_apt_packages`), whatever is recorded — which is why inertness is filtered on
@@ -410,12 +458,17 @@ class TestSnapHoldDecisions:
 
     @pytest.mark.asyncio
     async def test_recorded_hold_does_not_silence_the_snaps_own_presence_diff(self) -> None:
-        """E70, H128 — A hold decision is about the hold, not the snap: `snap:alpha` must still be
-        proposed for install when the target lacks it."""
+        """E70, H128 — a mark given on a hold decided on its own is about the hold alone: a
+        later run that finds `alpha` gone from the target still offers the install, and the
+        question carries no hold clause.
+
+        Round 1 marks the hold while `alpha` sits on both machines, which is what makes the
+        hold an item of its own to mark; round 2 removes it from the target.
+        """
         source_responses = {"snap list --all": CommandResult(0, SNAP_ALPHA_HELD, "")}
         context, source, _target = make_context(
             source_responses=source_responses,
-            target_responses={"snap list --all": CommandResult(0, "No snaps are installed yet.\n", "")},
+            target_responses={"snap list --all": CommandResult(0, SNAP_ALPHA_UNHELD, "")},
         )
         await record_skip_always(SnapSyncJob(context), "snap:hold:alpha")
         recorded = recorded_decision_file(source)
@@ -429,6 +482,8 @@ class TestSnapHoldDecisions:
         item_ids = {diff.item_id for diff in plan.diffs}
         assert "snap:hold:alpha" not in item_ids
         assert "snap:alpha" in item_ids
+        entries = {entry.item_id: entry for group in plan.groups for entry in group.entries}
+        assert "holding" not in (entries["snap:alpha"].detail or "")
 
 
 class TestFlatpakMaskDecisions:

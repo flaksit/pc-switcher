@@ -620,7 +620,11 @@ class TestRepoRemovalWithheldWhileInUse:
         context, _source, target = make_context(
             source_responses=_NO_PACKAGES,
             target_responses={
-                **_NO_PACKAGES,
+                # The target holds a package, so the manifest/origin call (A76) DOES run —
+                # which is what makes the absence below about the usage probe rather than
+                # about a machine with nothing to ask.
+                "apt-mark showmanual": CommandResult(0, "curl\n", ""),
+                "dpkg-query": CommandResult(0, "curl\t8.0\n", ""),
                 "apt.decisions.yaml": CommandResult(0, decision_file("apt:package:vendor-tool"), ""),
             },
         )
@@ -629,7 +633,7 @@ class TestRepoRemovalWithheldWhileInUse:
         await job.plan()
 
         commands = all_calls(target)
-        assert not any("apt-cache policy" in cmd for cmd in commands)
+        assert len([cmd for cmd in commands if "apt-cache policy" in cmd]) == 1
         assert sum(1 for cmd in commands if _SOURCE_SCAN_CMD in cmd) == 1
 
 
@@ -1190,9 +1194,10 @@ class TestRepositoryConflicts:
         plan = await AptSyncJob(context).plan()
 
         assert any(g.action == REPO_CONFLICT_REVIEW_ACTION for g in plan.groups)
-        # The call over the TARGET's own packages. The other policy call this run makes asks
-        # about the SOURCE's names (`collect_target_policy`) and answers a different question.
-        assert sum(1 for c in all_calls(target) if "apt-cache policy" in c and "curl" in c) == 1
+        # Exactly two policy calls reach the target at plan time: the manifest/origin one
+        # (`capture_target_items`), and ONE shared by both `/etc/apt` follow-ups — never one
+        # follow-up call each.
+        assert len([c for c in all_calls(target) if "apt-cache policy" in c]) == 2
 
 
 class TestOneReviewPerRun:

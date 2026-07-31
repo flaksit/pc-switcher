@@ -413,6 +413,117 @@ class TestOriginClassification:
         assert "vendor.example.com/apt" in diff.detail
         assert "rival.example.com/apt" in diff.detail
 
+    @pytest.mark.asyncio
+    async def test_an_origin_divergence_outranks_a_version_difference(self) -> None:
+        """A60 — two vendors AND two versions. Builds from two origins share no version
+        scale, so "1.0 against 2.0" would report a difference of degree where the real
+        difference is of origin.
+        """
+        context, _source, _target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+                "apt-cache policy": CommandResult(0, _policy_block("pkg-a", "https://vendor.example.com/apt"), ""),
+                _SOURCE_SCAN_CMD: CommandResult(0, _scan_line("vendor.list", _VENDOR_LIST), ""),
+                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "vendor.gpg"), ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t2.0\n", ""),
+                "apt-cache policy": CommandResult(0, _policy_block("pkg-a", "https://rival.example.com/apt"), ""),
+                _SOURCE_SCAN_CMD: CommandResult(0, _scan_line("rival.list", _RIVAL_LIST), ""),
+            },
+        )
+
+        plan = await AptSyncJob(context).plan()
+
+        diff = next(d for d in plan.diffs if d.item_id == "apt:package:pkg-a")
+        assert diff.diff_class == DiffClass.ORIGIN_MISMATCH
+        assert diff.detail is not None
+        assert "2.0" not in diff.detail
+
+    @pytest.mark.asyncio
+    async def test_a_vendor_build_against_a_distribution_build_is_an_origin_divergence(self) -> None:
+        """A62 — the requirement's own worked example: `gh` from GitHub's own repository and
+        `gh` from Ubuntu's archive are one name and two pieces of software. The distribution
+        is ONE origin per machine, not no origin, so the split is a divergence naming both.
+        """
+        context, _source, _target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "gh\n", ""),
+                "dpkg-query": CommandResult(0, "gh\t2.96.0\n", ""),
+                "apt-cache policy": CommandResult(0, _policy_block("gh", "https://cli.github.com/packages"), ""),
+                _SOURCE_SCAN_CMD: CommandResult(0, _POLICY_FIXTURE_SCAN, ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "gh\n", ""),
+                "dpkg-query": CommandResult(0, "gh\t2.45.0\n", ""),
+                "apt-cache policy": CommandResult(0, _policy_block("gh", "http://archive.ubuntu.com/ubuntu"), ""),
+                _SOURCE_SCAN_CMD: CommandResult(0, _scan_line("ubuntu.sources", _UBUNTU_SOURCES_ARCHIVE), ""),
+            },
+        )
+
+        plan = await AptSyncJob(context).plan()
+
+        diff = next(d for d in plan.diffs if d.item_id == "apt:package:gh")
+        assert (diff.diff_class, diff.action) == (DiffClass.ORIGIN_MISMATCH, DiffAction.REPORT_ONLY)
+        assert diff.detail is not None
+        assert "cli.github.com/packages" in diff.detail
+        assert "distribution archive" in diff.detail
+
+    @pytest.mark.asyncio
+    async def test_the_same_version_from_a_vendor_and_from_the_distribution_still_diverges(self) -> None:
+        """A63 — with the two versions equal there is nothing else left to report, so the
+        whole finding rests on the origin comparison alone.
+        """
+        context, _source, _target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "gh\n", ""),
+                "dpkg-query": CommandResult(0, "gh\t2.45.0\n", ""),
+                "apt-cache policy": CommandResult(0, _policy_block("gh", "https://cli.github.com/packages"), ""),
+                _SOURCE_SCAN_CMD: CommandResult(0, _POLICY_FIXTURE_SCAN, ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "gh\n", ""),
+                "dpkg-query": CommandResult(0, "gh\t2.45.0\n", ""),
+                "apt-cache policy": CommandResult(0, _policy_block("gh", "http://archive.ubuntu.com/ubuntu"), ""),
+                _SOURCE_SCAN_CMD: CommandResult(0, _scan_line("ubuntu.sources", _UBUNTU_SOURCES_ARCHIVE), ""),
+            },
+        )
+
+        plan = await AptSyncJob(context).plan()
+
+        diff = next(d for d in plan.diffs if d.item_id == "apt:package:gh")
+        assert (diff.diff_class, diff.action) == (DiffClass.ORIGIN_MISMATCH, DiffAction.REPORT_ONLY)
+
+    @pytest.mark.asyncio
+    async def test_a_credential_in_the_origin_is_withheld_from_the_review(self) -> None:
+        """A40 — a private repository carries its password in its own address, and the
+        install line names that address. The userinfo is withheld wherever the user reads it.
+        """
+        private = "deb [signed-by=/etc/apt/keyrings/private.gpg] https://user:pw@repo.example.test/apt stable main\n"
+        context, _source, _target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+                "apt-cache policy": CommandResult(
+                    0, _policy_block("pkg-a", "https://user:pw@repo.example.test/apt"), ""
+                ),
+                _SOURCE_SCAN_CMD: CommandResult(0, _scan_line("private.list", private), ""),
+                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "private.gpg"), ""),
+            },
+            target_responses={"apt-mark showmanual": CommandResult(0, "", "")},
+        )
+
+        plan = await AptSyncJob(context).plan()
+
+        diff = next(d for d in plan.diffs if d.item_id == "apt:package:pkg-a")
+        assert diff.action == DiffAction.INSTALL
+        assert diff.detail is not None
+        assert "***@repo.example.test/apt" in diff.detail
+        assert "pw" not in diff.detail
+        assert "user:" not in diff.detail
+
 
 class TestOriginOutcome:
     """`OriginPlan.outcome` in isolation, for the branches a whole-plan test cannot reach

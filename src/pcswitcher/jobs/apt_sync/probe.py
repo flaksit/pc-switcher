@@ -301,6 +301,12 @@ class TargetPolicy:
 
     candidate_origins: Mapping[str, frozenset[str]]
     installed_origins: Mapping[str, frozenset[str]]
+    installed_from_no_repository: frozenset[str] = frozenset()
+    """The names in the TARGET's own manual set whose installed version comes from no
+    repository the target has configured — the mirror of the source-side exclusion
+    `capture_source_items` applies. `manual_installs_sync` owns that software on whichever
+    machine holds it, so `apt_sync` produces no item for it in either direction
+    (`PKG-FR-DEB-OWNERSHIP`)."""
 
     @classmethod
     def empty(cls) -> TargetPolicy:
@@ -535,9 +541,12 @@ class AptProbe:
         bare-`.deb` installs `manual_installs_sync` owns, plus `{package: origin URIs of its
         INSTALLED version}` — the provenance ADR-020 D-34 replicates.
 
-        The exclusion happens HERE and nowhere else: an item that never enters the manifest
-        cannot become an `ItemDiff`, reach a review group, reach the collateral simulation, or
-        reach the origin classification.
+        The exclusion happens at CAPTURE and nowhere downstream: an item that never enters
+        the manifest cannot become an `ItemDiff`, reach a review group, reach the collateral
+        simulation, or reach the origin classification. `capture_target_items` is the same
+        exclusion on the other machine — `PKG-FR-DEB-OWNERSHIP` binds `apt_sync` "in any
+        configuration", so a hand-`.deb` the TARGET holds must be as invisible here as one
+        the source holds, or it diffs as an ordinary removal.
 
         The one batched `apt-cache policy` this needs answers two questions, so it is issued
         once and parsed twice: which names came from no repository at all (the exclusion),
@@ -553,7 +562,8 @@ class AptProbe:
         return [item for item in items if item.name not in bare_debs], origins
 
     async def query_target_items(self) -> list[AptPackageItem]:
-        """The target's own manually-installed apt packages, with versions.
+        """The target's own manually-installed apt packages, with versions — the raw read,
+        before the hand-`.deb` exclusion `capture_target_items` applies over it.
 
         Guarded on the same terms as `capture_source_items` and for the mirror-image
         reason (ADR-022): an empty target manifest is "the target has no apt packages",
@@ -564,6 +574,28 @@ class AptProbe:
         manual = await self._target.run_command(command, login_shell=False)
         require_answer(command, manual, self._machines.target)
         return await self._resolve_versions(lines(manual.stdout), self.target_run, self._machines.target)
+
+    async def capture_target_items(self, source_names: Sequence[str]) -> tuple[list[AptPackageItem], TargetPolicy]:
+        """The target's manifest minus the bare-`.deb` installs `manual_installs_sync` owns,
+        plus the one batched `apt-cache policy` every target-side origin question is read out
+        of — the mirror of `capture_source_items`.
+
+        `PKG-FR-DEB-OWNERSHIP` gives that software to `manual_installs_sync` alone and
+        forbids `apt_sync` an item for it "in any configuration". The source-side exclusion
+        alone leaves the case where the TARGET is the machine holding the `.deb`: the name is
+        absent from the source's manifest and present in the target's, so it diffs as an
+        ordinary removal and the run offers to `apt-get remove` software apt never installed
+        and cannot reinstall.
+
+        The exclusion costs no call of its own. The target's manual names are asked in the
+        SAME `apt-cache policy` that already asks the source's names — one call for the
+        machine, parsed for three questions (the candidate rows, the installed rows, and this
+        exclusion), never one call per question and never one per package. That is the
+        economy A18/A10 fix for the source, held to on the target.
+        """
+        items = await self.query_target_items()
+        policy = await self.collect_target_policy(source_names, [item.name for item in items])
+        return [item for item in items if item.name not in policy.installed_from_no_repository], policy
 
     @staticmethod
     async def _resolve_versions(names: Sequence[str], run: Run, machine: str) -> list[AptPackageItem]:
@@ -651,30 +683,37 @@ class AptProbe:
         require_answer(command, result, self._machines.target, answers=len(installed), answer_noun="installed package")
         return installed
 
-    async def collect_target_policy(self, names: Sequence[str]) -> TargetPolicy:
+    async def collect_target_policy(self, names: Sequence[str], target_names: Sequence[str] = ()) -> TargetPolicy:
         """ONE batched `apt-cache policy` on the target over the source's whole package set
-        (never one call per package, and never one call per question it answers).
+        AND the target's own manual set (never one call per package, and never one call per
+        question it answers).
 
-        The set is the source's names rather than only the missing ones because two
+        The source's set is asked whole rather than only the missing names because two
         questions are asked of the same output: what the target would install for a name it
         lacks, and where the copy it already has came from — the second is what makes a
         package installed on both machines from two different vendors visible at all
-        (ADR-020 D-34).
+        (ADR-020 D-34). `target_names` adds the third: which of the target's own packages
+        came from no repository at all, which is `PKG-FR-DEB-OWNERSHIP`'s exclusion on the
+        machine the source-side one cannot see.
 
-        Exit code only, deliberately without the `blocks` half (ADR-022): these are the
-        SOURCE's names asked of the TARGET's apt, and a name the target has never heard of
-        is the ordinary case this call exists to detect. No block is owed for any single
-        name, so no count can be required.
+        Exit code only, deliberately without the `blocks` half (ADR-022): most of these are
+        the SOURCE's names asked of the TARGET's apt, and a name the target has never heard
+        of is the ordinary case this call exists to detect. The exclusion half degrades in
+        the safe direction on its own — `packages_installed_from_no_repository` indicts no
+        name apt printed nothing about, so an answer missing a block excludes nothing rather
+        than excluding everything.
         """
-        if not names:
+        asked = sorted(set(names) | set(target_names))
+        if not asked:
             return TargetPolicy.empty()
 
-        command = policy_command(sorted(names))
+        command = policy_command(asked)
         result = await self._target.run_command(command, login_shell=False)
         require_apt_answer(command, result, self._machines.target)
         return TargetPolicy(
             candidate_origins=candidate_origins_by_package(result.stdout),
             installed_origins=installed_origins_by_package(result.stdout),
+            installed_from_no_repository=packages_installed_from_no_repository(result.stdout, target_names),
         )
 
     async def capture_target_manual_set(self) -> frozenset[str]:

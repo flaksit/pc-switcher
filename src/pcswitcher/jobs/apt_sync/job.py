@@ -343,7 +343,11 @@ class AptSyncJob(PackageSyncJob):
 
         captured, source_origins = await self._probe.capture_source_items()
         source_items = await filter_inert(captured, source_decisions)
-        target_items = await filter_inert(await self._probe.query_target_items(), target_decisions)
+        # Both manifests drop the hand-`.deb` installs `manual_installs_sync` owns before
+        # anything is diffed (`PKG-FR-DEB-OWNERSHIP`), and the target's exclusion rides in
+        # the same batched policy call that answers this run's origin questions.
+        target_captured, policy = await self._probe.capture_target_items([item.name for item in source_items])
+        target_items = await filter_inert(target_captured, target_decisions)
         source_hold_names, target_hold_names = await self._probe.collect_hold_sets()
         # A hold naming a package the target does not have is dpkg selection state that
         # freezes nothing and refuses the install the source is asking for. Kept apart from
@@ -351,7 +355,6 @@ class AptSyncJob(PackageSyncJob):
         self._stale_holds = frozenset()
         if target_hold_names:
             self._stale_holds = target_hold_names - await self._installed_on_target()
-        policy = await self._probe.collect_target_policy([item.name for item in source_items])
         origin_plan = origins.classify(source_items, target_items, policy, source_origins)
         diffs = self._drop_inert_diffs(
             diff_apt_packages(
@@ -531,6 +534,21 @@ class AptSyncJob(PackageSyncJob):
         diffs.extend(pin_diffs)
         diffs.extend(diff_apt_configs(source_repo.conf_digests, target_repo.conf_digests, self.machines))
         return diffs
+
+    @override
+    def _software_for_block(self, block: ItemDiff, software: Mapping[str, ItemDiff]) -> ItemDiff | None:
+        """The package an `apt:hold:<name>` item freezes, where that package is itself an
+        item this run (`PKG-FR-APT-HOLD-ITEM`, `PKG-FR-BLOCKS-REPLICATE`).
+
+        A hold names exactly one package, so the pairing is a lookup rather than a match. A
+        package that is only REPORTED — a version difference, an origin divergence, an origin
+        the run cannot reproduce — is absent from `software` and so pairs with nothing: there
+        is no decision on it for the hold to ride, which is what leaves `PKG-FR-APT-HOLD-INERT`
+        deciding those cases as it always did.
+        """
+        if block.item_class is not ItemClass.APT_HOLD:
+            return None
+        return software.get(f"{APT_PACKAGE_ID_PREFIX}{block.item_id.removeprefix(APT_HOLD_ID_PREFIX)}")
 
     @override
     def _build_review_groups(self, diffs: Sequence[ItemDiff]) -> tuple[ReviewGroup, ...]:

@@ -17,7 +17,11 @@ review-before-any-change ordering checkable and testable per job:
   way out for identities no input item carries (`apt:hold:`, `snap:hold:`), and
   `_build_review_groups` at the end. Every implementation issues READ commands only.
 - `accept_review()` stores this job's plan plus the outcome its own review returned, so
-  `apply()` and the apt guards read a consistent pair.
+  `apply()` and the apt guards read a consistent pair. It is also where a block-state item
+  that rode its software's question takes that software's decision
+  (`PKG-FR-BLOCKS-REPLICATE`): the reviewer never saw a row for it, so nothing else would
+  give it one, and every consumer downstream — the log line, the machine-specific mark,
+  the converge loop — reads the answer from the same place.
 - `apply()` converges the `APPLY`-decided diffs, one item at a time, catching and
   collecting per-item failures (D-27) so one bad item never stops the rest. It also
   persists a permanent decision (D-08a) for every `SKIP_ALWAYS`-decided item, on
@@ -210,6 +214,49 @@ _UPGRADE_COMMANDS: dict[str, str] = {
     "flatpak": "flatpak update",
 }
 
+# The block-state item classes: what the user set to stop software moving — an apt hold, a
+# snap refresh hold, a flatpak mask (`PKG-FR-BLOCKS-REPLICATE`).
+BLOCK_ITEM_CLASSES: frozenset[ItemClass] = frozenset({ItemClass.APT_HOLD, ItemClass.SNAP_HOLD, ItemClass.FLATPAK_MASK})
+
+# The block kinds that freeze an INSTALLED copy of the software, as against a standing rule
+# about what may be installed. One of these is never registered for software the target does
+# not end the run with: apt records a hold for a package that is merely absent, where it
+# blocks every later install of it (`PKG-FR-APT-HELD-TARGET`). A flatpak mask is the other
+# kind — it is a pattern, and masking software the machine does not have is its whole point.
+FREEZE_BLOCK_CLASSES: frozenset[ItemClass] = frozenset({ItemClass.APT_HOLD, ItemClass.SNAP_HOLD})
+
+# The actions that carry a converge verb, and so make an item something the user decides.
+_DECIDED_ACTIONS: tuple[DiffAction, ...] = (DiffAction.INSTALL, DiffAction.CHANGE, DiffAction.REMOVE)
+
+# What the merged question says about the block riding it (`PKG-FR-BLOCKS-REPLICATE`): the
+# software's own row carries a clause naming the block's effect on the target, because the
+# block has no row of its own to say it. `{name}` is the block's own name where the block
+# does not name its software (a mask names a pattern); the hold clauses need none, since the
+# row they join already names the package or snap.
+_BLOCK_RIDER_CLAUSE: dict[tuple[ItemClass, DiffAction], str] = {
+    (ItemClass.APT_HOLD, DiffAction.INSTALL): "{target} ends up holding it, as {source} does",
+    (ItemClass.APT_HOLD, DiffAction.REMOVE): "{target}'s hold on it comes off with it",
+    (ItemClass.SNAP_HOLD, DiffAction.INSTALL): "{target} ends up holding its refreshes, as {source} does",
+    (ItemClass.SNAP_HOLD, DiffAction.REMOVE): "{target}'s refresh hold on it comes off with it",
+    (ItemClass.FLATPAK_MASK, DiffAction.INSTALL): "{target} ends up masking {name}, as {source} does",
+    (ItemClass.FLATPAK_MASK, DiffAction.REMOVE): "{target}'s mask on {name} comes off with it",
+}
+
+# The clause for a freeze block whose software is leaving the target: nothing is registered,
+# because there would be nothing on that machine to freeze.
+_FREEZE_BLOCK_DROPPED_CLAUSE = "{target} is left holding nothing for it"
+
+
+def _with_rider_clauses(detail: str | None, clauses: Sequence[str]) -> str | None:
+    """`detail` with each riding block's clause appended, or `detail` unchanged.
+
+    Appended rather than prefixed: the detail says what the change itself does, and the
+    block is a consequence of it.
+    """
+    if not clauses:
+        return detail
+    return "; ".join([*([detail] if detail else []), *clauses])
+
 
 class PackageSyncJob(SyncJob):
     """Shared plan()/apply() pipeline every package-manager job subclasses.
@@ -316,6 +363,60 @@ class PackageSyncJob(SyncJob):
                 kept.append(diff)
         return tuple(kept)
 
+    def _software_for_block(self, block: ItemDiff, software: Mapping[str, ItemDiff]) -> ItemDiff | None:
+        """The item in `software` that `block` applies to, or `None` where it has none here.
+
+        `PKG-FR-BLOCKS-REPLICATE`: a block is its own item EXCEPT where the software it
+        applies to is itself an item this run, and this is the hook that decides which case
+        a given block is in. `software` holds only the items the user actually decides —
+        installs, removals and changes, never a report-only finding — keyed by item id.
+
+        No-op on the base and overridden by each manager, because the pairing is written in
+        the manager's own identity strings: `apt:hold:<name>` names one package, a snap hold
+        names one snap, and a flatpak mask names software by PATTERN and so has to be matched
+        rather than looked up. A manager that does not override this keeps every block a
+        separate item, which is the rule the exception is carved out of.
+        """
+        return None
+
+    def _block_name(self, block: ItemDiff) -> str:
+        """What the merged question calls this block, where the clause needs to name it.
+
+        The block's label by default (`pkg-a (hold)`); a manager whose label carries more
+        than the name — flatpak's `<pattern> (mask, <scope>)` — overrides it, because the
+        clause already says which machine masks it and in what.
+        """
+        return block.label
+
+    def _blocks_riding_software(self, diffs: Sequence[ItemDiff]) -> dict[str, ItemDiff]:
+        """`{block item id: the software item it rides}` for this run's merged questions.
+
+        Recomputed from the diffs wherever it is needed rather than carried on the plan:
+        it is a pure function of them, and `apt_sync` rebuilds its `PackagePlan` twice
+        between the review and the converge loop.
+        """
+        software = {
+            diff.item_id: diff
+            for diff in diffs
+            if diff.item_class not in BLOCK_ITEM_CLASSES and diff.action in _DECIDED_ACTIONS
+        }
+        riders: dict[str, ItemDiff] = {}
+        for diff in diffs:
+            if diff.item_class not in BLOCK_ITEM_CLASSES or diff.action not in _DECIDED_ACTIONS:
+                continue
+            owner = self._software_for_block(diff, software)
+            if owner is not None:
+                riders[diff.item_id] = owner
+        return riders
+
+    def _rider_clause(self, block: ItemDiff, owner: ItemDiff) -> str:
+        """The sentence the merged question adds to the software's row for `block`."""
+        if block.item_class in FREEZE_BLOCK_CLASSES and owner.action is DiffAction.REMOVE:
+            template = _FREEZE_BLOCK_DROPPED_CLAUSE
+        else:
+            template = _BLOCK_RIDER_CLAUSE.get((block.item_class, block.action), "{name} travels with it")
+        return template.format(source=self.machines.source, target=self.machines.target, name=self._block_name(block))
+
     def _build_review_groups(self, diffs: Sequence[ItemDiff]) -> tuple[ReviewGroup, ...]:
         """One `ReviewGroup` per `(action, item_class)` present in `diffs`, keyed on
         `(manager, action)` for the reviewer's removal-direction test (D-24) so removals
@@ -335,7 +436,18 @@ class PackageSyncJob(SyncJob):
         within one action the item classes in first-seen order — which, because
         `diff_apt_packages` emits package diffs before hold diffs, keeps a package group
         ahead of its hold group.
+
+        A block whose software is itself an item this run gets no row of its own
+        (`PKG-FR-BLOCKS-REPLICATE`): it is dropped here and its effect is stated as a clause
+        on the software's own row, so the two are one question and one answer.
         """
+        riders = self._blocks_riding_software(diffs)
+        clauses: dict[str, list[str]] = {}
+        for block_id, owner in riders.items():
+            block = next(diff for diff in diffs if diff.item_id == block_id)
+            clauses.setdefault(owner.item_id, []).append(self._rider_clause(block, owner))
+        diffs = [diff for diff in diffs if diff.item_id not in riders]
+
         # A reported condition is keyed by its CAUSE as well (ruled by the user): version
         # drift, an origin the target cannot reproduce and a package installed from two
         # different repositories were one group called "Report apt packages", which named
@@ -391,7 +503,12 @@ class PackageSyncJob(SyncJob):
                         # software the user asked for overwrites nothing they authored.
                         overwrites_authored_content=item_class is ItemClass.APT_CONFIG and action is DiffAction.CHANGE,
                         entries=tuple(
-                            ReviewEntry(item_id=diff.item_id, label=diff.label, action_label=verb, detail=diff.detail)
+                            ReviewEntry(
+                                item_id=diff.item_id,
+                                label=diff.label,
+                                action_label=verb,
+                                detail=_with_rider_clauses(diff.detail, clauses.get(diff.item_id, [])),
+                            )
                             for diff in entries
                         ),
                     )
@@ -401,7 +518,30 @@ class PackageSyncJob(SyncJob):
     # -- plan() / accept_review() / apply() / execute() -------------------------------
 
     def accept_review(self, plan: PackagePlan, outcome: ReviewOutcome) -> None:
-        """Store this job's plan plus the outcome its own review returned."""
+        """Store this job's plan plus the outcome its own review returned, with each riding
+        block carrying the answer its software got (`PKG-FR-BLOCKS-REPLICATE`).
+
+        The block had no row of its own, so the reviewer returned no decision for it; the
+        answer to the one question they were asked together is what governs both. Done here
+        rather than in `apply()` so every consumer of the accepted outcome sees the same
+        decision — the log line the block gets, and the machine-specific mark
+        `_record_permanent_skips` writes for it on its own holding machine.
+
+        Deliberately after any subclass has finished rewriting the outcome (`apt_sync`'s
+        collateral resolution downgrades an approved install to skip-once), so the block
+        follows the decision that actually stands.
+        """
+        riders = self._blocks_riding_software(plan.diffs)
+        if riders:
+            decisions = dict(outcome.decisions)
+            for block_id, owner in riders.items():
+                decisions[block_id] = decisions.get(owner.item_id, Decision.SKIP_ONCE)
+            outcome = ReviewOutcome(
+                decisions=decisions,
+                was_interactive=outcome.was_interactive,
+                snippets=outcome.snippets,
+                unresolved=outcome.unresolved,
+            )
         self._accepted_plan = plan
         self._accepted_outcome = outcome
 
@@ -466,16 +606,38 @@ class PackageSyncJob(SyncJob):
         await self._record_permanent_skips(plan, decisions)
         await self._finalize_unreproducible(plan, outcome)
 
-        apply_diffs = [
+        approved = [
             diff
             for diff in plan.diffs
             if decisions.get(diff.item_id) == Decision.APPLY and diff.action != DiffAction.REPORT_ONLY
         ]
+        # A freeze block riding software that LEAVES the target is approved and still not
+        # applied (`PKG-FR-BLOCKS-REPLICATE`): the answer approved the removal, and a hold
+        # registered for a package the machine no longer has freezes nothing while blocking
+        # every later install of it. Not a failure — the user's own answer is what withdrew
+        # it — so it lands with the declined items rather than the failed ones.
         prefix = "[dry-run] " if self.context.dry_run else ""
-        total = len(apply_diffs)
-
+        riders = self._blocks_riding_software(plan.diffs)
         failures: list[tuple[ItemDiff, str]] = []
         declined: list[tuple[ItemDiff, str]] = []
+        withdrawn: list[tuple[ItemDiff, str]] = []
+        apply_diffs: list[ItemDiff] = []
+        for diff in approved:
+            owner = riders.get(diff.item_id)
+            if (
+                owner is not None
+                and diff.item_class in FREEZE_BLOCK_CLASSES
+                and diff.action is DiffAction.INSTALL
+                and owner.action is DiffAction.REMOVE
+            ):
+                reason = f"{owner.label} is being removed from {self.machines.target}, so there is nothing to hold"
+                withdrawn.append((diff, reason))
+                self._log(Host.TARGET, LogLevel.FULL, f"{prefix}{diff.label} not applied: {reason}")
+                continue
+            apply_diffs.append(diff)
+
+        total = len(apply_diffs)
+
         if total == 0:
             self._log(Host.TARGET, LogLevel.INFO, f"{prefix}No {self.manager_id} changes to apply")
             self._report_progress(ProgressUpdate(percent=100))
@@ -500,13 +662,18 @@ class PackageSyncJob(SyncJob):
                 LogLevel.INFO,
                 f"{prefix}{succeeded}/{total} {self.manager_id} change(s) applied",
             )
-            if declined:
-                summary = "; ".join(f"{diff.label}: {reason}" for diff, reason in declined)
-                self._log(
-                    Host.TARGET,
-                    LogLevel.INFO,
-                    f"{len(declined)} {self.manager_id} change(s) not applied, by the user's answer: {summary}",
-                )
+
+        # Outside the branch above: a run whose only approved change was a block its
+        # software's removal withdrew has nothing left to converge, and must still say what
+        # became of it.
+        not_applied = [*withdrawn, *declined]
+        if not_applied:
+            summary = "; ".join(f"{diff.label}: {reason}" for diff, reason in not_applied)
+            self._log(
+                Host.TARGET,
+                LogLevel.INFO,
+                f"{len(not_applied)} {self.manager_id} change(s) not applied, by the user's answer: {summary}",
+            )
 
         all_failures = [*failures, *self._unresolved_as_failures(plan, outcome)]
         if all_failures:

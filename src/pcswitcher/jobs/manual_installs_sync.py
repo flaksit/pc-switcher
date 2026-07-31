@@ -3,9 +3,11 @@ can reproduce (D-15, D-18, D-19, D-20, D-21).
 
 Two detectors, both run on the SOURCE:
 
-- apt packages in the source's `apt-mark showmanual` set whose INSTALLED version comes
-  from no repository the source has configured — installed via `dpkg --install` of a bare
-  `.deb`, so only dpkg's own status file accounts for them.
+- apt packages installed on the source whose INSTALLED version comes from no repository the
+  source has configured — installed via `dpkg --install` of a bare `.deb`, so only dpkg's
+  own status file accounts for them. Every installed package, not the `apt-mark showmanual`
+  set: apt's manual/automatic mark says how the package got there, not whether any
+  repository can supply it.
 - paths directly under `/usr/local` and `/opt` (plus the immediate children of
   `/usr/local/bin` and `/usr/local/lib`) that no dpkg package owns — software an install
   script dropped there, bypassing apt entirely.
@@ -393,30 +395,41 @@ class ManualInstallsSyncJob(PackageSyncJob):
 
     # -- Detection (D-18/D-19), all on the source ---------------------------------------
 
-    async def _scan_no_candidate_apt_packages(self, manual_names: Sequence[str]) -> list[UnreproducibleItem]:
-        """D-18: manually-installed packages whose INSTALLED version comes from no
-        repository the SOURCE has configured — put there by `dpkg --install` of a bare `.deb`.
+    async def _scan_no_candidate_apt_packages(self, installed_names: Sequence[str]) -> list[UnreproducibleItem]:
+        """D-18: installed packages whose INSTALLED version comes from no repository the
+        SOURCE has configured — put there by `dpkg --install` of a bare `.deb`.
 
-        One batched `apt-cache policy` over the whole manual set (never one call per
-        package), read through `packages_installed_from_no_repository`: a package's own
-        `Candidate:` line cannot answer this, because dpkg's status entry makes apt report
-        a hand-installed package's installed version as its candidate.
+        Over the whole INSTALLED set, not `apt-mark showmanual`. `PKG-FR-MANUAL-SCOPE` draws
+        the boundary at "every installed version no configured repository supplies", and
+        apt's manual/automatic mark is a different fact: a `.deb` installed to satisfy
+        another one, or one the user ran `apt-mark auto` over, is outside the manual set and
+        is still software no package manager can put on the other machine. Narrowing to the
+        manual set left it invisible to this job and — being automatic — invisible to
+        `apt_sync` as well, so nothing named it anywhere.
+
+        One batched `apt-cache policy` over that set (never one call per package), read
+        through `packages_installed_from_no_repository`: a package's own `Candidate:` line
+        cannot answer this, because dpkg's status entry makes apt report a hand-installed
+        package's installed version as its candidate. Measured on the development machine
+        (Ubuntu 24.04, apt 2.8.3): 2282 installed against 153 manual, 3.1s against 0.4s and
+        718KB of output against 96KB — one command either way, and the wider set is what the
+        article asks for.
 
         Guarded on the exit code AND on the block count (ADR-022 D-04), which is the guard
-        `apt_sync._source_policy` puts on the byte-identical command: same names, same host,
-        same probe, so the same strictness. Its silence indicts nothing on its own — an
+        `apt_sync._source_policy` puts on its own copy of this command: same host, same
+        probe, so the same strictness. Its silence indicts nothing on its own — an
         unanswered probe reports no unreproducible packages, which proposes nothing — but
         it does not stay harmless in a whole run: `apt_sync.capture_source_items` DROPS the
         same bare-`.deb` packages from its own manifest off its own copy of this probe, so
         one probe answering and the other not makes a package vanish from the run with
-        nothing said about it anywhere. Every name here came from this machine's own
-        `apt-mark showmanual`, so apt owes a block for each and no block at all is apt not
-        answering rather than a machine with unusual packages.
+        nothing said about it anywhere. Every name here is installed on this machine, so apt
+        owes a block for each and no block at all is apt not answering rather than a machine
+        with unusual packages.
         """
-        if not manual_names:
+        if not installed_names:
             return []
 
-        quoted = " ".join(shlex.quote(name) for name in manual_names)
+        quoted = " ".join(shlex.quote(name) for name in installed_names)
         command = f"apt-cache policy {quoted}"
         result = await self.source.run_command(command)
         # A key per block apt printed, whatever it said inside it — so this counts blocks and
@@ -428,7 +441,7 @@ class ManualInstallsSyncJob(PackageSyncJob):
             answers=len(installed_origins_by_package(result.stdout)),
             answer_noun="package block",
         )
-        no_repository = packages_installed_from_no_repository(result.stdout, manual_names)
+        no_repository = packages_installed_from_no_repository(result.stdout, installed_names)
         return [
             UnreproducibleItem(
                 origin="apt-no-candidate",
@@ -497,21 +510,38 @@ class ManualInstallsSyncJob(PackageSyncJob):
 
     async def capture_source_items(self) -> Sequence[UnreproducibleItem]:  # pyright: ignore[reportIncompatibleMethodOverride]
         """The source's unreproducible items: apt-no-candidate packages plus unowned
-        `/usr/local`/`/opt` installs (D-18). `apt-mark showmanual` runs once here and its
-        result feeds the no-candidate scan.
+        `/usr/local`/`/opt` installs (D-18). One `dpkg-query` names the source's installed
+        set here and its result feeds the no-candidate scan.
 
         This job overrides `plan()` and never routes through `PackageSyncJob.diff_items`'s
         apt-package-shaped dispatch, so widening this hook's item type is safe (same
         reasoning as `SnapSyncJob.capture_source_items`).
         """
-        command = "apt-mark showmanual"
-        manual = await self.source.run_command(command)
-        require_answer(command, manual, self.machines.source)
-        manual_names = _lines(manual.stdout)
         return [
-            *await self._scan_no_candidate_apt_packages(manual_names),
+            *await self._scan_no_candidate_apt_packages(await self._source_installed_names()),
             *await self._scan_unowned_installs(),
         ]
+
+    async def _source_installed_names(self) -> list[str]:
+        """Every package name dpkg reports as INSTALLED on the source — the population
+        `PKG-FR-MANUAL-SCOPE` draws the no-candidate scan from.
+
+        `${Package}`, not `${binary:Package}`: the arch-qualified form only appears for a
+        foreign architecture, and `apt-cache policy` speaks the plain name. Two dpkg entries
+        for one name (multi-arch) therefore collapse to one, which is what the batched policy
+        call wants anyway.
+
+        Guarded on the exit code AND on emptiness (ADR-022): a machine with no installed
+        packages does not exist, so nothing here is a legitimate empty answer, and silence
+        read as data would report "nothing on this machine was hand-installed" — the one
+        answer this job exists to be able to contradict.
+        """
+        command = "dpkg-query --show --showformat='${Package}\\t${db:Status-Status}\\n'"
+        result = await self.source.run_command(command)
+        fields = (line.partition("\t") for line in _lines(result.stdout))
+        installed = sorted({name for name, _, status in fields if status == "installed"})
+        require_answer(command, result, self.machines.source, answers=len(installed), answer_noun="installed package")
+        return installed
 
     async def query_target_items(self) -> Sequence[UnreproducibleItem]:  # pyright: ignore[reportIncompatibleMethodOverride]
         """No target-side manifest exists for unreproducible items: they are always

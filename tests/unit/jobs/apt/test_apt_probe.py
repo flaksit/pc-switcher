@@ -52,6 +52,7 @@ from tests.unit.jobs.test_manual_installs_sync import (
     _POLICY_HAND_DEB,
     _POLICY_PINNED_NO_CANDIDATE,
     _POLICY_REPO_INSTALLED,
+    _hand_deb_policy,
 )
 
 
@@ -509,6 +510,107 @@ class TestBareDebPackagesAreNotAptSyncsBusiness:
         plan = await AptSyncJob(context).plan()
 
         assert not any(d.item_id == "apt:collateral:install:remove:code" for d in plan.diffs)
+
+    @pytest.mark.asyncio
+    async def test_a_hand_deb_both_machines_hold_produces_no_item(self) -> None:
+        """A14 — `code` came from a hand `.deb` on the source AND is in the target's manual
+        set. Neither manifest may carry it, so nothing is left to diff.
+        """
+        context, _source, _target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "code\n", ""),
+                "dpkg-query": CommandResult(0, "code\t1.129.1-1784303641\n", ""),
+                "apt-cache policy": CommandResult(0, _POLICY_HAND_DEB, ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "code\n", ""),
+                "dpkg-query": CommandResult(0, "code\t1.129.1-1784303641\n", ""),
+                "apt-cache policy": CommandResult(0, _POLICY_HAND_DEB, ""),
+            },
+        )
+
+        plan = await AptSyncJob(context).plan()
+
+        assert list(plan.diffs) == []
+        assert not any("code" in entry.item_id for group in plan.groups for entry in group.entries)
+
+    @pytest.mark.asyncio
+    async def test_a_hand_deb_only_the_target_holds_is_never_offered_for_removal(self) -> None:
+        """A15 — the source does not have `code` at all and the target's copy came from no
+        repository. `PKG-FR-DEB-OWNERSHIP` binds "in any configuration", so the general
+        removal rule does not reach it: no item, no review line, no `apt-get remove`.
+        """
+        context, _source, target = make_context(
+            source_responses={"apt-mark showmanual": CommandResult(0, "", "")},
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "code\n", ""),
+                "dpkg-query": CommandResult(0, "code\t1.129.1-1784303641\n", ""),
+                "apt-cache policy": CommandResult(0, _POLICY_HAND_DEB, ""),
+            },
+        )
+        job = AptSyncJob(context)
+        install_reviewer(job, {"apt:package:code": Decision.APPLY})
+
+        await job.execute()
+
+        assert job._accepted_plan is not None
+        assert list(job._accepted_plan.diffs) == []
+        assert not any("code" in entry.item_id for group in job._accepted_plan.groups for entry in group.entries)
+        assert not any("apt-get remove" in cmd for cmd in all_calls(target))
+
+    @pytest.mark.asyncio
+    async def test_a_repository_package_is_still_installed_over_the_targets_hand_deb(self) -> None:
+        """A77 — the two copies are not the same software: identity is name AND origin, so
+        the source's repository `gh` is an ordinary install and the target's hand-`.deb` copy
+        is `manual_installs_sync`'s. No removal, no version report about the two.
+        """
+        context, _source, _target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "gh\n", ""),
+                "dpkg-query": CommandResult(0, "gh\t2.96.0\n", ""),
+                "apt-cache policy": CommandResult(0, _POLICY_REPO_INSTALLED, ""),
+                _SOURCE_SCAN_CMD: CommandResult(0, _POLICY_FIXTURE_SCAN, ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "gh\n", ""),
+                "dpkg-query": CommandResult(0, "gh\t2.50.0\n", ""),
+                "apt-cache policy": CommandResult(0, _hand_deb_policy("gh", "2.50.0"), ""),
+            },
+        )
+
+        plan = await AptSyncJob(context).plan()
+
+        assert [(d.item_id, d.diff_class, d.action) for d in plan.diffs] == [
+            ("apt:package:gh", DiffClass.MISSING_ON_TARGET, DiffAction.INSTALL)
+        ]
+
+    @pytest.mark.asyncio
+    async def test_the_targets_exclusion_costs_no_policy_call_of_its_own(self) -> None:
+        """A76 — the target's hand-`.deb` exclusion and the origin questions asked about the
+        source's names are answered by ONE `apt-cache policy` on the target, naming both
+        sets — never one call per question and never one per package.
+        """
+        context, _source, target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "gh\n", ""),
+                "dpkg-query": CommandResult(0, "gh\t2.96.0\n", ""),
+                "apt-cache policy": CommandResult(0, _POLICY_REPO_INSTALLED, ""),
+                _SOURCE_SCAN_CMD: CommandResult(0, _POLICY_FIXTURE_SCAN, ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "code\n", ""),
+                "dpkg-query": CommandResult(0, "code\t1.129.1-1784303641\n", ""),
+                "apt-cache policy": CommandResult(0, _POLICY_HAND_DEB, ""),
+            },
+        )
+
+        plan = await AptSyncJob(context).plan()
+
+        policy_calls = [cmd for cmd in all_calls(target) if "apt-cache policy" in cmd]
+        assert len(policy_calls) == 1
+        assert "code" in policy_calls[0]
+        assert "gh" in policy_calls[0]
+        assert {d.item_id for d in plan.diffs} == {"apt:package:gh"}
 
 
 class TestRepoStateCapture:

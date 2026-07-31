@@ -2667,6 +2667,92 @@ class TestMaskReviewVerbs:
             assert not any(e.item_id.startswith("flatpak:mask:") for e in group.entries)
 
 
+class TestAMaskRidesTheApplicationItCovers:
+    """`PKG-FR-BLOCKS-REPLICATE`, `PKG-FR-FLATPAK-MASK`: a mask is its own item except where
+    the application it covers is itself an item this run, and then the two are one question.
+
+    A mask names software by PATTERN rather than by name, so the pairing has to be exact
+    about how many items a pattern catches: one, and it rides that item's question; none or
+    several, and it keeps a row of its own. Unlike a hold, a mask riding a removal still
+    lands — a mask is a rule about what may be installed, and masking software the machine no
+    longer has is the point of it.
+    """
+
+    _APP = "org.example.App/x86_64/stable"
+    _APP_ID = f"flatpak:ref:user:{_APP}"
+
+    @staticmethod
+    def _entries(plan: PackagePlan) -> dict[str, ReviewEntry]:
+        return {entry.item_id: entry for group in plan.groups for entry in group.entries}
+
+    @pytest.mark.asyncio
+    async def test_a_mask_covering_an_installed_application_is_one_question_with_it(self) -> None:
+        """F148 — the mask has no row of its own; the install's row says the target ends up
+        masking the pattern.
+        """
+        context, _source, _target = make_context(
+            source_responses={
+                "flatpak list --app": CommandResult(0, _ref_line(self._APP, "1.0", "flathub", "user"), ""),
+                "flatpak remotes --user --columns=name,url": CommandResult(0, _FLATHUB_REMOTE_LINE, ""),
+                "flatpak --user mask": CommandResult(0, "  org.example.App\n", ""),
+            },
+        )
+        plan = await FlatpakSyncJob(context).plan()
+
+        entries = self._entries(plan)
+        assert "flatpak:mask:user:org.example.App" not in entries
+        assert "target-host ends up masking org.example.App" in (entries[self._APP_ID].detail or "")
+
+    @pytest.mark.asyncio
+    async def test_a_pattern_covering_two_of_this_runs_items_keeps_its_own_question(self) -> None:
+        """F149 — two applications, two answers that can disagree, so there is no single
+        decision for the mask to obey and it stays an item of its own.
+        """
+        refs = _ref_line("org.example.One/x86_64/stable", "1.0", "flathub", "user") + _ref_line(
+            "org.example.Two/x86_64/stable", "1.0", "flathub", "user"
+        )
+        context, _source, _target = make_context(
+            source_responses={
+                "flatpak list --app": CommandResult(0, refs, ""),
+                "flatpak remotes --user --columns=name,url": CommandResult(0, _FLATHUB_REMOTE_LINE, ""),
+                "flatpak --user mask": CommandResult(0, "  org.example.*\n", ""),
+            },
+        )
+        plan = await FlatpakSyncJob(context).plan()
+
+        entries = self._entries(plan)
+        assert "flatpak:mask:user:org.example.*" in entries
+        for ref in ("org.example.One", "org.example.Two"):
+            assert "masking" not in (entries[f"flatpak:ref:user:{ref}/x86_64/stable"].detail or "")
+
+    @pytest.mark.asyncio
+    async def test_a_mask_riding_a_removal_still_lands(self) -> None:
+        """F150 — the application leaves the target and the source's mask goes on, in that
+        order: a mask is not a hold, and it does not need its software to be there.
+        """
+        context, _source, target = make_context(
+            source_responses={"flatpak --user mask": CommandResult(0, "  org.example.App\n", "")},
+            target_responses={
+                "flatpak list --app": CommandResult(0, _ref_line(self._APP, "1.0", "flathub", "user"), ""),
+                "flatpak remotes --user --columns=name,url": CommandResult(0, _FLATHUB_REMOTE_LINE, ""),
+            },
+        )
+        job = FlatpakSyncJob(context)
+        plan = await job.plan()
+
+        entries = self._entries(plan)
+        assert "flatpak:mask:user:org.example.App" not in entries
+        assert "target-host ends up masking org.example.App" in (entries[self._APP_ID].detail or "")
+
+        job.accept_review(plan, ReviewOutcome(decisions={self._APP_ID: Decision.APPLY}, was_interactive=True))
+        await job.apply()
+
+        commands = all_calls(target)
+        uninstall = next(i for i, cmd in enumerate(commands) if "uninstall" in cmd and self._APP in cmd)
+        mask = next(i for i, cmd in enumerate(commands) if "mask org.example.App" in cmd)
+        assert uninstall < mask
+
+
 class TestUnusedRemoteIsDeleted:
     """`PKG-FR-FLATPAK-REMOTE-DELETE` — a remote the source does not have is deleted once
     nothing on the target still uses it, and is a review item in no direction.

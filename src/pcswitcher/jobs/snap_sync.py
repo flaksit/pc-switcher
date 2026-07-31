@@ -54,7 +54,7 @@ every value that differs, satisfying D-07's "review names the concrete action".
 from __future__ import annotations
 
 import shlex
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, ClassVar, override
@@ -549,6 +549,19 @@ class SnapSyncJob(PackageSyncJob):
         )
         groups = self._build_review_groups(diffs)
         return PackagePlan(manager=self.manager_id, diffs=diffs, groups=groups)
+
+    @override
+    def _software_for_block(self, block: ItemDiff, software: Mapping[str, ItemDiff]) -> ItemDiff | None:
+        """The snap a `snap:hold:<name>` item freezes, where that snap is itself an item this
+        run (`PKG-FR-SNAP-HOLD`, `PKG-FR-BLOCKS-REPLICATE`).
+
+        A refresh hold names exactly one snap, so this is a lookup. The removal direction
+        never pairs: `_diff_snap_holds` reads hold intent off the SOURCE's snaps alone, so a
+        snap only the target has has no hold item to ride its removal.
+        """
+        if block.item_class is not ItemClass.SNAP_HOLD:
+            return None
+        return software.get(f"{_SNAP_ID_PREFIX}{block.item_id.removeprefix(_SNAP_HOLD_ID_PREFIX)}")
 
     @override
     async def converge(self, diff: ItemDiff) -> CommandResult:

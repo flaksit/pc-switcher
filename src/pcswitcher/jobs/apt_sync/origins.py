@@ -25,6 +25,17 @@ from pcswitcher.jobs.packages.items import DiffAction, ItemClass, ItemDiff, Mach
 from pcswitcher.jobs.packages.review import Decision
 from pcswitcher.models import Host
 
+# The distribution as one member of an identity set. Not a URI and unable to collide with
+# one: every real origin here has been through `normalise_repo_uri`, which never strips a
+# scheme, so no origin can reduce to this string. `PKG-FR-DISTRO-ORIGIN` makes a machine's
+# whole distribution ONE origin, which is exactly one member.
+_DISTRIBUTION_ORIGIN = "<distribution>"
+
+
+def _origin_identity(vendors: tuple[str, ...], from_distribution: bool) -> frozenset[str]:
+    """One machine's origins for a package, as identity counts them."""
+    return frozenset(vendors) | ({_DISTRIBUTION_ORIGIN} if from_distribution else frozenset())
+
 
 class OriginOutcome(StrEnum):
     """What the origin facts say can be done about one package missing on the target.
@@ -84,6 +95,13 @@ class OriginPlan:
     origins, sorted. Filtered against the target's own distribution files so two machines
     on different Ubuntu mirrors do not read as two vendors."""
 
+    source_from_distribution: bool = False
+    """Whether any of `source_origins` is one of the SOURCE's own distribution origins."""
+
+    target_from_distribution: bool = False
+    """Whether any of the package's installed origins on the target is one of the TARGET's
+    own distribution origins."""
+
     unwritable: str | None = None
     """Why no file serving `source_origins` can be written on the target, or `None` when at
     least one can. A file whose `Signed-By:` resolves to no key on the source is a
@@ -125,6 +143,23 @@ class OriginPlan:
         """
         return self.source_files if self.outcome() is OriginOutcome.REPLICABLE else frozenset()
 
+    @property
+    def source_origin_identity(self) -> frozenset[str]:
+        """Where the SOURCE's copy comes from, as `PKG-FR-APT-IDENTITY` counts origins:
+        each vendor origin on its own, plus the distribution as ONE origin however many
+        mirrors and pockets declared it (`PKG-FR-DISTRO-ORIGIN`).
+
+        Empty means apt named no origin for that machine's copy at all, which is absence of
+        evidence and never a finding (`df48cd07`).
+        """
+        return _origin_identity(self.vendor_source_origins, self.source_from_distribution)
+
+    @property
+    def target_origin_identity(self) -> frozenset[str]:
+        """`source_origin_identity` for the TARGET's installed copy, computed against the
+        TARGET's own distribution files so two machines on different mirrors agree."""
+        return _origin_identity(self.vendor_target_origins, self.target_from_distribution)
+
     def unavailable_cause(self, machines: Machines) -> str:
         """Why the source's origin cannot be provided on the target — the second half of a
         `REPO_UNAVAILABLE` detail, after the origin itself.
@@ -137,18 +172,21 @@ class OriginPlan:
 
 
 def is_origin_mismatch(plan: OriginPlan) -> bool:
-    """Whether a package present on BOTH machines came from two different vendors (§2.6).
+    """Whether a package present on BOTH machines came from two different origins (§2.6).
 
-    Both sides must name a vendor and the two sets must not overlap. A side with no vendor
-    origin at all is served by the distribution, and the distribution is not a vendor — that
-    suppression is the whole reason this can be asked of every package without two machines
-    on different Ubuntu mirrors reporting every one of them as mismatched.
+    Compared as `PKG-FR-APT-IDENTITY` defines identity, over the two identity sets rather
+    than over the vendor lists: each vendor counts on its own, and each machine's whole
+    distribution counts as ONE origin (`PKG-FR-DISTRO-ORIGIN`). So `gh` from
+    `cli.github.com` against `gh` from the Ubuntu archive is a divergence — the requirement's
+    own example of one name and two pieces of software — while the same package from two
+    different Ubuntu mirrors is not, because both mirrors reduce to that one origin.
+
+    Both sides must be non-empty: a machine whose copy apt named no origin for at all has
+    told us nothing, and absence of evidence is never a finding.
     """
-    return (
-        bool(plan.vendor_source_origins)
-        and bool(plan.vendor_target_origins)
-        and not (frozenset(plan.vendor_source_origins) & frozenset(plan.vendor_target_origins))
-    )
+    source = plan.source_origin_identity
+    target = plan.target_origin_identity
+    return bool(source) and bool(target) and not (source & target)
 
 
 class OriginClassifier:
@@ -215,6 +253,8 @@ class OriginClassifier:
                 target_candidate_known=item.name in policy.candidate_origins,
                 vendor_source_origins=tuple(sorted(origins - source_distribution)),
                 vendor_target_origins=tuple(sorted(target_installed - target_distribution)),
+                source_from_distribution=bool(origins & source_distribution),
+                target_from_distribution=bool(target_installed & target_distribution),
                 unwritable=self.unwritable_reason(files),
             )
         self._plans = plans

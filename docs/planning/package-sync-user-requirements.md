@@ -154,7 +154,7 @@ Three situations are reported and never acted on:
 
 ### Holds
 
-An apt hold is its own item, decided separately from its package, both when it is added and when it is removed.
+An apt hold is its own item, decided separately from its package, both when it is added and when it is removed — unless the package is itself something this run is changing. Then the two are one question: the hold is named in the same line as the package it applies to, and the answer given about the package is the answer about the hold. Approving an install holds it afterwards; approving a removal leaves no hold behind, because a hold on a package the machine does not have freezes nothing and blocks every later attempt to install it; declining declines both; and marking the pair machine-specific silences both, so neither comes back on its own next run.
 
 A hold blocks everything: apt will not install, upgrade or remove a held package, not even as an unused dependency. So it serves two intents at once — "never lose this" and "never move this off the version that works" — and apt gives no way to tell them apart.
 
@@ -226,7 +226,7 @@ Removing a snap leaves snapd's own pre-removal snapshot in place — the only re
 
 ### Refresh holds
 
-Refresh holds replicate as their own items, both when added and when removed. A hold recorded for a snap the source no longer has produces no item.
+Refresh holds replicate as their own items, both when added and when removed — unless the snap is itself something this run installs or moves to another revision or channel, in which case the hold rides that snap's question and its answer. A hold recorded for a snap the source no longer has produces no item.
 
 ### Sideloaded snaps
 
@@ -263,6 +263,8 @@ A remote the source restricts with a filter is replicated **with its filter**. T
 ### Masks and scopes
 
 Mask patterns replicate per scope, added and removed alike, whether or not anything currently matches them, and land after the applications.
+
+A mask is its own item, like the two holds — unless its pattern covers exactly one application this run is installing or removing in that scope, in which case it rides that application's question and its answer. A pattern covering nothing this run touches, or covering two of its applications, keeps a question of its own: the first because there is nothing to attach it to, the second because two answers can disagree and the mask would have no single one to obey. Unlike a hold, a mask riding a removal still lands — a mask says what may not be installed, so it means something precisely when the application is gone.
 
 A flatpak installation that is neither the user nor the system one is skipped. Remotes belong to an installation, not to the machine, so nothing in such an installation depends on a remote a sync touches — a remote of the same name in the user or system installation is a different remote.
 

@@ -16,6 +16,7 @@ import re
 from collections.abc import Sequence
 
 from pcswitcher.jobs.packages.items import Machines
+from pcswitcher.redaction import redact_credentials
 
 # A URI's scheme, stripped for DISPLAY only (ruling 9). Matches `cdrom:`-style schemes too,
 # whose `//` is optional, so an origin apt can never replicate still reads as itself.
@@ -23,16 +24,27 @@ _URI_SCHEME_RE = re.compile(r"^[a-z][a-z0-9+.\-]*:(//)?", re.IGNORECASE)
 
 
 def display_origin(uri: str) -> str:
-    """A repository URI in the form the review shows it (ruling 9): the FULL path with its
-    scheme stripped — `ppa.launchpadcontent.net/git-core/ppa/ubuntu`.
+    """A repository URI in the form the review shows it (ruling 9): the FULL path, its
+    credential withheld and its scheme stripped — `ppa.launchpadcontent.net/git-core/ppa/ubuntu`,
+    `***@repo.example.test/apt`.
 
     The path, never the bare host: one Launchpad host serves thousands of unrelated PPAs and
     one vendor host often serves several channels, so a hostname does not identify the
     repository the package actually came from. Only the display strips; the comparison form
     stays exactly what `normalise_repo_uri` produces, scheme included, because that is what
     apt prints and what the two machines' URIs are matched on.
+
+    Withholding the userinfo (`PKG-FR-CREDENTIAL-PRIVACY`) happens HERE, before the scheme
+    goes, and not only in the redaction pass every label and detail already goes through
+    (`ItemDiff.__post_init__`). `redact_credentials` is anchored on `://` so that it cannot
+    touch an scp-style `user@host:path`, which carries no credential — so a string this
+    function has already reformatted is one that pass can no longer redact. Making the
+    reformatting do the withholding is what stops the order of the two from mattering: there
+    is no window in which a scheme-less origin exists un-redacted, whichever caller builds
+    the sentence. A private repository carries its password in its own address, so an origin
+    line is exactly what that article was written for.
     """
-    return _URI_SCHEME_RE.sub("", uri).rstrip("/")
+    return _URI_SCHEME_RE.sub("", redact_credentials(uri)).rstrip("/")
 
 
 def build_origin_detail(origins: Sequence[str]) -> str | None:
@@ -65,15 +77,28 @@ def build_repo_unavailable_detail(name: str, origins: Sequence[str], cause: str,
 def build_origin_mismatch_detail(
     source_origins: Sequence[str], target_origins: Sequence[str], machines: Machines
 ) -> str:
-    """Detail for an `ORIGIN_MISMATCH` diff: the same package, two vendors.
+    """Detail for an `ORIGIN_MISMATCH` diff: the same package, two origins.
 
     Report only, and both sides are named because neither is wrong — converging it would
-    mean a cross-vendor reinstall, which is not a float (D-04) and not something the user
+    mean a cross-origin reinstall, which is not a float (D-04) and not something the user
     asked for. The user is the only one who can say which machine is the odd one out.
+
+    An empty sequence is that machine's DISTRIBUTION, not a missing half of the sentence.
+    `is_origin_mismatch` is what puts a diff here, and it needs both machines' identity sets
+    non-empty; a machine with no vendor origin and a non-empty identity set has exactly one
+    member, the distribution `PKG-FR-DISTRO-ORIGIN` collapses every mirror and pocket into.
+    That is the `gh`-from-GitHub against `gh`-from-Ubuntu case, so this branch is the
+    requirement's own worked example rather than a defensive fallback.
     """
-    source = ", ".join(display_origin(uri) for uri in source_origins)
-    target = ", ".join(display_origin(uri) for uri in target_origins)
+    source = _named_origins(source_origins, machines.source)
+    target = _named_origins(target_origins, machines.target)
     return f"{machines.source} installed it from {source}, {machines.target} from {target}"
+
+
+def _named_origins(origins: Sequence[str], machine: str) -> str:
+    if not origins:
+        return f"{machine}'s own distribution archive"
+    return ", ".join(display_origin(uri) for uri in origins)
 
 
 def build_origin_refusal_detail(
