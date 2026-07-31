@@ -235,11 +235,20 @@ def _summarize_job_outcomes(job_results: list[JobResult]) -> tuple[SessionStatus
     themselves, or a sync where every item failed would still exit 0.
 
     ``SKIPPED`` is a normal outcome for a disabled or not-applicable job, not a failure.
+
+    Each failed job contributes its own recorded reason, not just its name: the end-of-run
+    message is what the user reads once the review screens are gone, and a failure has to
+    name the item, package or file it concerns wherever it is reported
+    (``PKG-FR-OUTCOME-FAILED``, ``PKG-FR-FAIL-NAMED``). The reasons are already one line
+    each — ``PackageItemFailures`` names every failed item on a single line — so a job with
+    forty failed items adds one line here, not forty, and the message stays as long as the
+    number of failed jobs.
     """
-    failed_jobs = [r.job_name for r in job_results if r.status is JobStatus.FAILED]
-    if not failed_jobs:
+    failures = [r for r in job_results if r.status is JobStatus.FAILED]
+    if not failures:
         return SessionStatus.COMPLETED, None
-    return SessionStatus.FAILED, f"Jobs reported failures: {', '.join(failed_jobs)}"
+    lines = [f"{r.job_name} — {r.error_message or 'no reason recorded'}" for r in failures]
+    return SessionStatus.FAILED, "\n".join(lines)
 
 
 class Orchestrator:

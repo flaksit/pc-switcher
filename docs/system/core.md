@@ -331,7 +331,7 @@ Lineage: 001-core edge cases, 003-core-tests edge cases
 - **CORE-FR-LOCK** `[Reliability Without Compromise]`: A single unified lock per machine MUST prevent it from taking part in two syncs at once, in either role
   Lineage: 001-FR-047
 
-- **CORE-FR-SUMMARY**: Every job that ran MUST contribute one `JobResult` with SUCCESS, SKIPPED or FAILED and its start/end timestamps; the session status MUST be derived from those results, the failed job names MUST be named in the outcome message, and the exit code MUST be non-zero when any job failed
+- **CORE-FR-SUMMARY**: Every job that ran MUST contribute one `JobResult` with SUCCESS, SKIPPED or FAILED and its start/end timestamps; the session status MUST be derived from those results, the outcome message MUST name each failed job together with the reason it recorded, and the exit code MUST be non-zero when any job failed
   Lineage: 001-FR-048
 
 ### Core Test Requirements
@@ -448,6 +448,8 @@ A skipped job does not fail the run: the remaining jobs still execute, the sessi
 FAILED behaves the same way for every failure of a package job (`apt_sync`, `snap_sync`, `flatpak_sync`, `manual_installs_sync`): a FAILED `JobResult`, a CRITICAL log, and the remaining jobs still run. What isolates a failure is the job it came out of, not its exception class — a package job that dies on a registry transfer, a filesystem error or a parser defect says no more about another manager's already-approved work than one whose items failed to converge. `PackageItemFailures` and `ProbeFailed` isolate wherever they are raised, being by construction one manager's trouble.
 
 Two things still end the run: a `SyncLockedError`, because the machine is no longer entitled to sync at all, and any failure of a job outside package sync (`folder_sync`, `vscode_state_sync`, the core jobs). Which of those may survive a failure is GitHub issue #220.
+
+The end-of-run message names each failed job with the reason it recorded, not the job names alone — one line per failed job, so a job that names forty failed items still costs one line.
 
 Dry-run is not a reason to report SKIPPED on its own: a rehearsal that completes did succeed. A rehearsal that hits one of the situations above is skipped like any other run.
 

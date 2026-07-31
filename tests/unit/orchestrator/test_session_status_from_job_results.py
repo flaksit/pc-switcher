@@ -29,12 +29,13 @@ from pcswitcher.models import (
 from pcswitcher.orchestrator import _summarize_job_outcomes
 
 
-def _job_result(job_name: str, status: JobStatus) -> JobResult:
+def _job_result(job_name: str, status: JobStatus, error_message: str | None = None) -> JobResult:
     return JobResult(
         job_name=job_name,
         status=status,
         started_at=datetime(2025, 1, 15, 10, 0, 0, tzinfo=UTC),
         ended_at=datetime(2025, 1, 15, 10, 1, 0, tzinfo=UTC),
+        error_message=error_message,
     )
 
 
@@ -101,13 +102,55 @@ class TestSessionStatusReflectsJobResults:
         assert error_message is None
 
 
+class TestTheOutcomeMessageNamesWhatFailed:
+    """`PKG-FR-OUTCOME-FAILED` / `PKG-FR-FAIL-NAMED`: the end-of-run message is what the
+    user reads once the review screens are gone, so the names have to survive into it.
+    """
+
+    def test_each_failed_jobs_reason_reaches_the_message(self) -> None:
+        _status, error_message = _summarize_job_outcomes(
+            [
+                _job_result(
+                    "apt_sync",
+                    JobStatus.FAILED,
+                    "2 apt item(s) failed to converge: ripgrep 14.1.0-1, fd-find 9.0.0-1",
+                ),
+                _job_result("snap_sync", JobStatus.FAILED, "probe did not answer — `snap list --all` exited 1"),
+            ]
+        )
+
+        assert error_message is not None
+        assert "ripgrep 14.1.0-1" in error_message
+        assert "fd-find 9.0.0-1" in error_message
+        assert "`snap list --all` exited 1" in error_message
+
+    def test_a_job_with_many_failed_items_stays_on_one_line(self) -> None:
+        """Volume rule: one line per failed job, however many items it names."""
+        names = ", ".join(f"pkg-{n}" for n in range(40))
+        _status, error_message = _summarize_job_outcomes(
+            [
+                _job_result("apt_sync", JobStatus.FAILED, f"40 apt item(s) failed to converge: {names}"),
+                _job_result("flatpak_sync", JobStatus.FAILED, "1 flatpak item(s) failed to converge: org.gimp.GIMP"),
+            ]
+        )
+
+        assert error_message is not None
+        assert len(error_message.splitlines()) == 2
+
+    def test_a_failure_without_a_recorded_reason_still_names_its_job(self) -> None:
+        _status, error_message = _summarize_job_outcomes([_job_result("folder_sync", JobStatus.FAILED)])
+
+        assert error_message is not None
+        assert error_message.startswith("folder_sync")
+
+
 class TestCliExitCodeFromSessionStatus:
     """The CLI exit code comes from the session status, not from "nothing raised"."""
 
     @pytest.mark.asyncio
     async def test_failed_session_exits_non_zero(self) -> None:
         """A FAILED session must not exit 0, or a broken sync reads as a success."""
-        session = _session(SessionStatus.FAILED, error_message="Jobs reported failures: snap_sync")
+        session = _session(SessionStatus.FAILED, error_message="snap_sync — 1 snap item(s) failed to converge: bw")
 
         with patch("pcswitcher.cli.Orchestrator") as orchestrator_cls:
             orchestrator_cls.return_value.run = AsyncMock(return_value=session)
