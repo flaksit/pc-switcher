@@ -1,0 +1,29 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "6fb4701f6c54",
+  "strategy": "manual-commit",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "docs/adr/adr-005-asyncio-concurrency.md",
+    "docs/dev/development-guide.md",
+    "docs/jobs/vscode-state-sync.md",
+    "docs/reading-sync-logs.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/6f/b4701f6c54/0/metadata.json",
+      "transcript": "/6f/b4701f6c54/0/full.jsonl",
+      "compact_transcript": "/6f/b4701f6c54/0/transcript.jsonl",
+      "content_hash": "/6f/b4701f6c54/0/content_hash.txt",
+      "prompt": "/6f/b4701f6c54/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 75,
+    "cache_creation_tokens": 113123,
+    "cache_read_tokens": 2999941,
+    "output_tokens": 29926,
+    "api_call_count": 42
+  }
+}

@@ -1,0 +1,51 @@
+Sweep the docs Phase 02's conformance wave did not reach.
+
+Read .planning/phases/02-package-management-sync/02-HANDOVER-conformance.md ("Standing instructions").
+~60 commits changed many requirements, logic and much of what a user sees.
+
+Already swept, do NOT redo: all docs/system/, all docs/ops/, docs/dev/testing-guide.md, both
+docs/planning/package-sync-*.md, ADR-020/021/022, README.md, docs/README.md,
+docs/configuration.md, docs/planning/high-level-requirements.md, docs/jobs/{package,folder}-sync.md.
+
+Your scope:
+- docs/reading-sync-logs.md — the log changed most; likely the stalest.
+- docs/jobs/vscode-state-sync.md, docs/dev/development-guide.md — never opened.
+- ADRs 001–019 — ADR-010 and ADR-014 the likely casualties. Correct claims in place; never restructure an ADR, never touch a Status field.
+- docs/adr/_index.md
+- docs/planning/feature-breakdown.md.
+
+Out of scope: everything else
+
+Rules: fix the docs, never change code to match one — report defects instead (but your task is NOT to find bugs). Verify every symbol, path, command and quoted string against the code with grep, not memory; several were renamed.
+
+Gate: `uv run codespell` (you touch no code). Commit with explicit pathspec:
+`git commit -F - -- path1 path2`. Never `git add -A`, never a bare `git commit`.
+
+Report what was wrong, what you shortened, and every code defect you did not fix.
+
+---
+
+Sweep the docs Phase 02's conformance wave did not reach.
+
+Read .planning/phases/02-package-management-sync/02-HANDOVER-conformance.md ("Standing instructions").
+~60 commits changed many requirements, logic and much of what a user sees.
+
+Already swept, do NOT redo: all docs/system/, all docs/ops/, docs/dev/testing-guide.md, both
+docs/planning/package-sync-*.md, ADR-020/021/022, README.md, docs/README.md,
+docs/configuration.md, docs/planning/high-level-requirements.md, docs/jobs/{package,folder}-sync.md.
+
+Your scope:
+- docs/reading-sync-logs.md — the log changed most; likely the stalest.
+- docs/jobs/vscode-state-sync.md, docs/dev/development-guide.md — never opened.
+- ADRs 001–019 — ADR-010 and ADR-014 the likely casualties. Correct claims in place; never restructure an ADR, never touch a Status field.
+- docs/adr/_index.md
+- docs/planning/feature-breakdown.md.
+
+Out of scope: everything else
+
+Rules: fix the docs, never change code to match one — report defects instead (but your task is NOT to find bugs). Verify every symbol, path, command and quoted string against the code with grep, not memory; several were renamed.
+
+Gate: `uv run codespell` (you touch no code). Commit with explicit pathspec:
+`git commit -F - -- path1 path2`. Never `git add -A`, never a bare `git commit`.
+
+Report what was wrong, what you shortened, and every code defect you did not fix.
