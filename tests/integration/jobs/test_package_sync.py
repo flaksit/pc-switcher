@@ -1291,6 +1291,12 @@ class TestAptSyncEndToEnd:
         `preferences.d` file, all written on the SOURCE (pc1). Because it is `--dry-run`
         nothing on pc2 changes; the synthetic files are removed from pc1 in a `finally`
         regardless of outcome.
+
+        Every claim here is a PREVIEW LINE, never the bare presence of a filename: the run's
+        log records each command's own output verbatim at DEBUG (`PKG-FR-LOG-VERBATIM`) and
+        this config sets `tui: DEBUG`, so pc1's `sha256sum` listing of `/etc/apt/keyrings`
+        and the `Signed-By:` scan both put the key's name on the run's output whatever the
+        preview says about it.
         """
         _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
 
@@ -1324,21 +1330,29 @@ class TestAptSyncEndToEnd:
             )
 
             combined_output = sync_result.stdout + sync_result.stderr
+            collapsed = _collapse_run_output(combined_output)
             # The always-sync pin is previewed as a derived write, with no review entry.
-            assert f"Would write {pin_dest}" in combined_output, (
+            assert f"Would write {pin_dest}" in collapsed, (
                 f"always-sync pin {pin_dest!r} was not previewed as a derived write.\n{combined_output}"
             )
-            # The repository feeds no approved package, so nothing about it travels — and it
-            # is offered in no direction, which is what makes "derived, never ticked" true.
-            assert f"install {source_filename}" not in combined_output, (
+            # The repository feeds no approved package, so nothing about it is written — and
+            # it is offered in no direction, which is what makes "derived, never ticked" true.
+            assert f"install {source_filename}" not in collapsed, (
                 f"repository {source_filename!r} was still offered as a review entry.\n{combined_output}"
             )
-            assert key_filename not in combined_output, (
-                f"signing key {key_filename!r} travelled for a repository no package needed.\n{combined_output}"
+            assert f"Would write {source_dest}" not in collapsed, (
+                f"repository {source_dest!r} was previewed as a derived write although no approved package needs "
+                f"it.\n{combined_output}"
+            )
+            # A key is previewed by `AptSyncJob.apply` for the repositories that survive the
+            # run (`PKG-FR-DERIVED-VISIBLE`), and this repository is not one of them.
+            assert f"Would write signing key {key_dest}" not in collapsed, (
+                f"signing key {key_dest!r} was previewed as a write for a repository no package needed.\n"
+                f"{combined_output}"
             )
             # The intended metadata refresh (the apt-get update the pin write requires) is
-            # reported as its own marker item.
-            assert "apt-get update" in combined_output, (
+            # reported as its own marker item, by the label that item carries.
+            assert "Would change Refresh apt package metadata (apt-get update)" in collapsed, (
                 f"intended apt-get update (metadata refresh) not reported.\n{combined_output}"
             )
         finally:
