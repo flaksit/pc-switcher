@@ -2,26 +2,13 @@
 
 Every situation the package sync requirements distinguish, with the test that proves each one. Sections A–K enumerate single-run branches; section N composes them into the behaviours that only appear across runs or when the two machines swap roles.
 
-## The two machines
+## The machines Atlas, Nomad, Vega
 
-Two machines, named throughout. In a sync launched from **Atlas**:
-
-| | |
-| --- | --- |
-| **Atlas** | the machine the run reads — its installed state is the intent being replicated, and the run changes it only in the three ways `PKG-FR-SOURCE-INTENT` allows (a machine-specific mark, a snippet the review authored, the snap refresh pause) |
-| **Nomad** | the machine the run changes — software is installed on it, removed from it, and its `/etc/apt` is written |
-
-In the vocabulary of the requirements Atlas is the source and Nomad the target, but those are roles a run assigns rather than names of machines, which is why the rows use hostnames — and why `PKG-FR-NAME-THE-MACHINES` requires the tool itself to do the same. A row saying "`pkg-a` is installed on Atlas" therefore describes state that is already there, while "installed on Nomad" describes something a sync did.
-
-**Sections A–K are launched from Atlas, always.** No row there swaps the roles. Where a branch is about the machine holding a mark being the one changed, it says so by putting the mark on Nomad (H126) rather than by reversing the run — the hostnames are labels, so the branch reads the same either way and only one way keeps the section readable straight across. Swapping the roles is section N's job.
+**Sections A–K** are launched from Atlas, so **Atlas is the source** and **Nomad is the target**.
 
 About a dozen A–K rows do span more than one run in that one direction — A54, B45, B47, C33, C61, C115, C119, D21, G35, G37, G82, G90, H114, H145 — and each says so ("asked again next sync", "inert next run"). One row is deliberately direction-agnostic: C175 asserts that its outcome holds whichever machine launches the run, which is the point of it.
 
-**Section N is where multiple runs are the point, and its rows differ from each other.** Read each one's own wording before setting it up:
-
-- most are two or three syncs, because a second run is what makes the outcome visible at all — some repeat the run from Atlas to see what the first one recorded, and some launch the second from Nomad, which swaps the roles so Atlas becomes the machine being changed;
-- a few are a single run whose interest is that it composes several A–K branches at once (N10, N13, and N22, the two-machine walkthrough);
-- two state a standing property rather than a run count — N14 and N20 say a thing never happens "in that run or any later one".
+**Section N is where multiple runs are the point.** Read each one's own wording before setting it up:
 
 `Vega` appears only where a scenario needs a third machine.
 
@@ -369,7 +356,7 @@ Flowchart edges are named in the Scenario column as `A→B`, `B→C`, etc.
 | C60 | a repository and a pin are both approved for deletion | the repository goes first, the pin second — the reverse of the write order | U | `test_apt_job:TestTwoAnswerRemovals::test_the_repository_goes_before_the_pin_that_prefers_it` |
 | C61 | the deletion is declined | nothing is recorded, so the file is offered again on the next sync | U | `tests/unit/jobs/test_block_state_decisions.py:TestAptRepoItemDecisions::test_no_repository_or_pin_id_can_reach_a_decision_file` (records nothing even when `SKIP_ALWAYS` is forced) |
 | C62 | a legacy `.list` and a deb822 `.sources` both offered for deletion | each entry names its own format | U | `test_apt_probe:TestRepoStateCapture::test_deb822_and_legacy_source_each_record_own_format` |
-| C63 | a real target-only repository with an unreachable host, deleted on a VM | the file and its key leave `/etc/apt`, and `apt-get update` stops naming that host and still exits 0 | V | integration:`TestCrossDirectionRoundTrips::test_apt_source_and_its_key_removed_together` |
+| C63 | A repository only Nomad has, pointing at a host that no longer resolves, and the user approves its deletion | the file and its key leave `/etc/apt`, and `apt-get update` stops naming that host and still exits 0 | V | integration:`TestCrossDirectionRoundTrips::test_apt_source_and_its_key_removed_together` |
 | C172 | the only package coming from `vendor.list` is one this run proposes to remove, and the user declines that removal | `vendor-tool` stays on Nomad, so something still uses the repository: it is not raised as an item at all and it is not deleted | ‼ | none. `AptSyncJob._plan_repo_diffs` counts removal candidates rather than approved removals, so the file is raised in the same review as the package and can be deleted while `vendor-tool` is still installed. Same defect as C50 |
 
 ### C.5 A repository stranded by a declined install (article: PKG-FR-REPO-STRANDED)
@@ -435,7 +422,7 @@ Flowchart edges are named in the Scenario column as `A→B`, `B→C`, etc.
 | C101 | a collected key | backed up into the unit's backup directory before deletion, and its deletion declares `mutates=` | U | `test_apt_keyrings:TestUnusedKeyringCollection::test_a_collected_key_is_backed_up_and_gated_as_a_modification` |
 | C102 | backing up an about-to-be-collected key fails | the key is kept rather than deleted unbacked-up, with a warning | U | `test_apt_keyrings:TestUnusedKeyringCollection::test_a_key_that_cannot_be_backed_up_is_kept_rather_than_deleted` |
 | C103 | the `rm` of an unused key fails | a warning names the key; the run continues | U | `test_apt_keyrings:TestUnusedKeyringCollection::test_a_deletion_that_fails_warns_and_the_run_carries_on` |
-| C104 | a key that this run collects, on a VM, after a real repository deletion | both files are gone from `/etc/apt` and `apt-get update` no longer reaches the repository | V | integration:`TestCrossDirectionRoundTrips::test_apt_source_and_its_key_removed_together` |
+| C104 | A key this run collects, after an approved repository deletion | both files are gone from `/etc/apt` and `apt-get update` no longer reaches the repository | V | integration:`TestCrossDirectionRoundTrips::test_apt_source_and_its_key_removed_together` |
 
 ### C.7 Pins (articles: PKG-FR-PIN-ALWAYS, PKG-FR-PIN-DELETE, PKG-FR-PIN-NOT-INVENTORY, PKG-NG-PIN-LOCAL)
 
@@ -737,7 +724,7 @@ A sideload is a snap whose bytes came from a local `.snap` file; `snap list` sho
 | E46 | A sideload the user previously marked as this machine's own | Still named as unmanaged, still no item — the mark silences items, not the finding | U | `test_snap_sync:TestSideloadedSnaps::test_a_marked_sideloaded_snap_is_still_named_and_still_produces_no_diff` |
 | E47 | A run whose listing mixes a sideload and ordinary store snaps | The store snaps converge normally; no command ever names the sideload | U | `test_snap_sync:TestSideloadedSnaps::test_store_snaps_in_the_same_listing_still_diff_and_converge` |
 | E48 | Two sideloads on one machine | One finding names both, rather than one line each | U | `test_snap_sync:TestSideloadedSnaps::test_one_warning_names_the_skipped_sideloaded_snaps` (asserts a single record naming both) |
-| E49 | A real run on a VM carrying a sideloaded snap | The run finishes naming it, and the sideload is neither installed nor removed on either machine | — | no VM coverage of sideloads |
+| E49 | Atlas carries a sideloaded snap when a run starts | The run finishes, names the sideload, and leaves it installed and untouched on both machines | — | no VM coverage of sideloads |
 
 ### E.7 A snap that cannot be converged (article: PKG-FR-SNAP-FAIL-ITEM)
 
@@ -1221,7 +1208,7 @@ Driven by the orchestrator around the whole job window; listed here because the 
 | H28 | A collateral question is answered "go ahead". | The change that causes it proceeds and the apply-time guard allows the collateral loss. | U | `package_review:TestCollateralGroupResolution::test_go_ahead_records_apply`; `apt/test_apt_collateral:TestCollateralFlow::test_install_anyway_proceeds_and_guard_allows_the_collateral_removal` |
 | H29 | A collateral question is answered "keep the package". | Exactly the changes that cause the loss are left unapplied; no other approved change is cancelled. | U | `apt/test_apt_collateral:TestCollateralFlow::test_skip_leaves_the_triggering_install_unapproved`; `apt/test_apt_collateral:TestCollateralAttribution::test_skip_cancels_only_the_candidate_whose_transaction_causes_it` |
 | H30 | An unreproducible item is resolved by writing a snippet. | The snippet is persisted, transferred and replayed in the same run — nothing else is applied for it. | U V | `manual_installs_sync:TestSameRunApplication::test_on_the_fly_snippet_is_replayed_the_same_run`; integration:`TestManualInstallsSyncEndToEnd::test_manual_installs_sync_pushes_registry_and_replays_snippet` |
-| H31 | A removal item is left declined for a whole run, on a VM | Nomad keeps the package. The same item approved on the next run removes it, which is what makes the decline a decision rather than a deferral | V | integration:`TestCrossDirectionRoundTrips::test_install_propagates_then_reversed_removal_needs_approval` |
+| H31 | A removal item is declined for this run, and the same item approved on the next. | Nomad keeps the package through the first run and loses it in the second — the decline was a decision, not a deferral. | V | integration:`TestCrossDirectionRoundTrips::test_install_propagates_then_reversed_removal_needs_approval` |
 | H32 | An already-converged pair is synced. | Zero diffs, zero groups, zero converges, and no command carrying `mutates=`. | U V | `package_sync_core:TestIdempotency::test_identical_source_and_target_produce_no_diff_no_group_and_no_mutation`; integration:`TestPackageSyncIdempotency::test_second_consecutive_sync_has_nothing_to_do` |
 
 ### H.3 What batching permits and forbids (articles: PKG-FR-BATCHED, PKG-FR-ASK-AGAIN)

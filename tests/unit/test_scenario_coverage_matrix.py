@@ -118,6 +118,25 @@ def test_the_matrix_is_well_formed() -> None:
     assert not unknown, f"coverage marks outside the legend: {unknown}"
 
 
+def test_no_scenario_states_which_tier_proves_it() -> None:
+    """The Scenario and Expected columns describe a situation and its outcome, not a test.
+
+    Which tier proves a row is the Cov column's job, and saying it twice is how "on a VM"
+    ends up in a sentence a reviewer is meant to set up by hand. Where a branch genuinely
+    needs real package-manager behaviour, the Expected column says so by naming what a real
+    run prints — `apt-get update` exiting 0, say — rather than by naming the test.
+    """
+    tiers = re.compile(r"\b(on a VM|VM run|integration test|unit test|mocked|a real run on a VM)\b")
+    offenders: dict[str, str] = {}
+    for line in MATRIX.read_text().splitlines():
+        if not re.match(r"^\| [A-KN]\d", line):
+            continue
+        cells = [cell.strip() for cell in line.strip().strip("|").split(" | ")]
+        if len(cells) == 5 and (hit := tiers.search(f"{cells[1]} {cells[2]}")):
+            offenders[cells[0]] = hit.group(0)
+    assert not offenders, f"rows name a test tier in the Scenario or Expected column: {offenders}"
+
+
 def test_every_claim_of_coverage_names_a_test() -> None:
     """A row claiming coverage must say which test proves it."""
     silent = [sid for sid in CLAIMED if not ROWS[sid][2] and sid not in COMPOSITIONS]
