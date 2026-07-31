@@ -49,3 +49,114 @@ Verdicts: 120 U (many U V), 4 P, 18 —, 2 ‼.
 - **One genuine requirements ambiguity** flagged for the assembler: `PKG-FR-FLATPAK-FILTER`'s "a remote the source does not restrict MUST NOT stay restricted on the target" is unscoped and, read literally, contradicts `PKG-FR-FLATPAK-REMOTE-DERIVED`. The code takes the narrow (derived-remotes-only) reading.</result>
 <usage><subagent_tokens>255535</subagent_tokens><tool_uses>26</tool_uses><duration_ms>496856</duration_ms></usage>
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>a9a8d484d83f476c0</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/79395195-eaac-4280-9fbf-7a7610dd3e3a/tasks/a9a8d484d83f476c0.output</output-file>
+<status>completed</status>
+<summary>Agent "Sweep G: manual installs" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Wrote `/home/janfr/dev/pc-switcher/.planning/phases/02-package-management-sync/coverage-sweep/G-manual-installs.md` — 92 rows in seven sections (detection scope; three end states; same-run ordering; snippet opacity; registry transfer and consent; per-item failure; non-goals), plus a Gaps section with a test recipe per uncovered row and Notes for the assembler.
+
+Coverage picture for area G: detection and the probe-failure guards are densely unit-tested and the registry-consent guard is fully tested; the *write* side of decisions and several plumbing branches are not.
+
+Findings worth flagging to the caller:
+
+- **`_finalize_unreproducible`'s permanent-mark branch has no test at all** (rows G35/G36). The read side (a mark suppresses the item) is covered; nothing asserts that answering "never install it on Nomad" writes the mark on the source, nor that "not for now" writes nothing. This is the largest hole in the area.
+- **Registry-consent compares bodies only** (G72, marked ‼). `_guard_registry_overwrite` treats a target entry whose label or authoring record differs as additive and overwrites it silently. Whether that counts as "changing an entry the target holds" is genuinely unsettled by `PKG-FR-REGISTRY-CONSENT`; it needs an article decision, not a test decision.
+- **Two ADR-022 bad-data cases are uncovered** (G79/G80): a corrupt registry on the target reads as empty, so a lossy overwrite proceeds as "additive" with no question; a corrupt registry on the source makes every target entry count as lost and, if approved, sends the corrupt file.
+- **An interactive run with an empty review still transfers the registry** and nothing asserts it (G83) — the mirror of the covered no-terminal case, and the row that shows the registry travels for its own sake.
+- **The apt-no-candidate detector has no VM coverage** (G27) — both integration tests use unowned `/opt` paths. The parser's claimed handling of a package hand-installed *newer* than the repository offers (G6) has no test in any layer.
+- **Snippet authoring can't be driven from the integration harness**: `PCSWITCHER_PACKAGE_REVIEW_AUTOMATION` carries decisions only, no bodies, so every "written during the review" row is unit-only by construction. Anyone planning VM coverage there needs a new hook, not a new test.</result>
+<usage><subagent_tokens>190151</subagent_tokens><tool_uses>44</tool_uses><duration_ms>521227</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a42e8c29571b7e92a</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/79395195-eaac-4280-9fbf-7a7610dd3e3a/tasks/a42e8c29571b7e92a.output</output-file>
+<status>completed</status>
+<summary>Agent "Sweep C: apt /etc/apt" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Written to `/home/janfr/dev/pc-switcher/.planning/phases/02-package-management-sync/coverage-sweep/C-apt-etc-apt.md`.
+
+## What's in it
+
+170 rows (C1–C170) across eleven sections: the four `/etc/apt` file classes and what each may be; repository add / overwrite / delete / leave-alone; the conflict question and its every answer; stranding; keys (copy, refresh, leave-alone, collect — per location, per owner, plus every way a reference fails to resolve); pins; apt configuration in all three directions; the ESM gate; the atomic unit with its backup, single refresh, rollback and the rollback's own failure; derived-write failure and visibility.
+
+Every row's evidence was opened and read — no coverage claimed from a test name.
+
+## Key findings
+
+- **One `‼`**: `capture_dir_digests` applies an extension filter only to `sources.list.d`. `preferences.d` and `apt.conf.d` are captured unfiltered, so a `99-vendor.bak` or `.dpkg-dist` there becomes a syncable pin/config item though apt ignores such filenames. The recorded rationale ("apt reads extensionless files in both") justifies dropping the `*.list`/`*.sources` narrowing but not the absence of apt's own ignore-suffix rules. I did **not** verify apt's `Dir::Ignore-Files-Silently` behaviour for those two directories this session — that check gates whether this is a real defect. The article's wording ("repository configuration") also admits a strict reading that exempts them; both readings are recorded.
+
+- **Coverage in this area is strong.** ESM, keys, and the atomic unit are close to complete. The 20 genuine gaps are all unit-testable with the existing mocked-executor fixtures; none needs a VM.
+
+- **The highest-value gaps**, all trivially mockable: a repository is never written for an install declined *at the review* (the strongest form of `PKG-FR-REPO-DERIVED`, entirely untested); a differing repository feeding a marked package that no proposed install would write raises no question (`PKG-FR-REPO-CONFLICT`'s last sentence, untested); a failed derived write fails *every* package that needed it (`PKG-FR-DERIVED-FAILURE`'s "including ones that would otherwise have installed", untested — only the single-package case exists); and the real-run log line for a derived `/etc/apt` file (`PKG-FR-DERIVED-VISIBLE` — the key half is tested, the file half is not).
+
+- **Two structural notes for the assembler**: `PKG-FR-REPO-STRANDED` is reachable only via the late-collateral path, because `DerivedWrites.build` reads the accepted decisions — a review-time decline never derives the repository in the first place. And the conflict question is necessarily gated on the plan-time *superset* of proposed installs, not the approved set, which means a file can be asked about and then not written; no article covers that outcome.</result>
+<usage><subagent_tokens>301780</subagent_tokens><tool_uses>54</tool_uses><duration_ms>612369</duration_ms></usage>
+</task-notification>
+
+---
+
+codex can read the files in this folder
+
+---
+
+<task-notification>
+<task-id>afb3ce562c5d438b7</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/79395195-eaac-4280-9fbf-7a7610dd3e3a/tasks/afb3ce562c5d438b7.output</output-file>
+<status>completed</status>
+<summary>Agent "Sweep K: preconditions, orchestration" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Written to `/home/janfr/dev/pc-switcher/.planning/phases/02-package-management-sync/coverage-sweep/K-preconditions-orchestration.md` — 93 rows across 7 sections (opt-in/shipped default, independence, order, discovery, validation preconditions, dpkg lock, `folder_sync` boundary), plus Gaps and Notes.
+
+Key findings:
+
+- **Three ‼ rows.** (1) `~/.config/pc-switcher/package-snippets.yaml` is matched by no `folder_sync` exclusion — the decision glob is `*.decisions.yaml` and neither shipped filter file mentions it — so `folder_sync` mirrors the snippet registry regardless, bypassing `PKG-FR-REGISTRY-CONSENT` and the "no registry transferred" half of `PKG-FR-OUTCOME-SKIPPED`/`PKG-FR-NO-TERMINAL`. (2) `snap_sync_exclude_paths()` is computed from the source's filesystem before the review and never narrowed by it, so a declined or failed revision convergence still gets its current-revision data dir mirrored — a data dir for a revision the target's snapd never installed. (3) With `snap_sync` disabled, every revision dir is mirrored, which contradicts `PKG-FR-SNAP-DATA-BOUNDARY` read literally.
+- **A requirements conflict needing a ruling, not a fix.** `PKG-FR-JOB-INDEPENDENCE` ("no job's behaviour may depend on whether another is enabled") versus the deliberate D-29 gating of `folder_sync`'s exclusions on `snap_sync`/`flatpak_sync`. The article needs one clause either way.
+- **Missing coverage worth naming.** `apt_sync` shipping disabled is asserted nowhere (the shipped-config test covers the other three). The order rule's *refusal to start* is unasserted — only the helper's error list is. A validation error halting the run is likewise only simulated, never driven through discovery. Four of the flatpak scope gate's six inputs (target-side item, both remote branches, target-side mask) are undriven. `manual_installs_sync`'s two "none" sudo cells return no error but nothing asserts that no sudo probe was issued.
+- **Verified by reading, unasserted by tests:** every `sudo --non-interactive true` and `fuser` call site is inside a `validate()` body — the project's "check in validate(), never mid-execute" rule holds, but nothing guards it; an AST audit in the shape of `test_mutates_audit.py` would.
+- **No integration test enables a package job and `folder_sync` together**, so the whole boundary section is unit-only, including the two ‼ rows whose consequences are only observable on real machines.</result>
+<usage><subagent_tokens>220525</subagent_tokens><tool_uses>81</tool_uses><duration_ms>585032</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a1e2896f43dfaad32</task-id>
+<tool-use-id>toolu_01RMePcqiFZ5j5nbuXzZeXw1</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/79395195-eaac-4280-9fbf-7a7610dd3e3a/tasks/a1e2896f43dfaad32.output</output-file>
+<status>completed</status>
+<summary>Agent "Sweep H: review and consent" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done. Output written to `/home/janfr/dev/pc-switcher/.planning/phases/02-package-management-sync/coverage-sweep/H-review-consent.md`.
+
+## What's in it
+
+173 rows across 12 sections (H-A … H-L), enumerated from the 21 articles, then checked against the code and against tests I opened rather than named:
+
+- **H-A** ordering: nothing modified before approval, per job (18 rows — per-manager read-only plan, execute() order, the two no-terminal branches, the after-review seam, the gated state writes)
+- **H-B** only approved work applied, per action and per decision (14)
+- **H-C** batching and the permission to ask again (16 — including what ASK-AGAIN does *not* allow)
+- **H-D** which questions are asked; the four derived things that are never asked separately are rows asserting an absence, and all eight `PKG-FR-ASK-WHEN-NOT-DERIVABLE` questions are rows asserting they *are* asked (14)
+- **H-E** naming the machines, per class of surface, plus both stated exemptions (18)
+- **H-F** an answer's effect / machine / duration, and the answer set (16)
+- **H-G/H** removal gesture and the harmless default per item kind (15)
+- **H-I/J** decline-for-this-run, and the mark: which machine records it per direction, what it protects against, and the five places it may not be offered (36)
+- **H-K/L** abort at every kind of question, and the automation variable (26)
+
+## Key findings
+
+- **One requirement/code mismatch (‼, H167).** `PKG-NG-AUTOMATION-ENV` says a permanent answer from the variable "writes a machine-specific mark **or an install snippet**". The automation path (`_decisions_from_automation`) returns decisions only, so `ReviewOutcome.snippets` is always empty there and no snippet can ever be authored that way. Either the article overstates, or the hook is under-built.
+- **17 gap entries**, each with the test to write and whether mocks suffice. The load-bearing ones: nothing asserts a marked item does not converge (only that the mark lands); nothing asserts the second collateral round is batched over several installs or asked once per run; Ctrl-C is untested at the collateral and repository/pin deletion screens (shared code path, two cheap tests); the orchestrator's `except SyncAbortedByUser: raise` branch has no test; `manual_installs_sync` has no read-only-plan test; the automation variable's absence from the configuration schema is verified by reading `config.py` but untested.
+- **One wording question for the user, not a test gap (H93/H96).** `PKG-FR-ANSWERS-AS-A-SET`'s "one grammar" is not operationalised anywhere, and the repository-conflict screen's act hint (`"nomad changes this sync"`) is a declarative clause sitting beside imperative ones on every other screen. Flagged rather than silently rewritten.</result>
+<usage><subagent_tokens>302560</subagent_tokens><tool_uses>72</tool_uses><duration_ms>740113</duration_ms></usage>
+</task-notification>
