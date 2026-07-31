@@ -47,3 +47,48 @@ One detail of the claim is wrong and does not change the finding: the exclude se
 Consequence: the rsync command `folder_sync` issues — and therefore which files reach the target — differs according to whether `snap_sync` and `flatpak_sync` are enabled.
 
 Whether that VIOLATES `PKG-FR-JOB-INDEPENDENCE` ("no job's behaviour may depend on whether another is enabled") is a requirements question, not a code question, and is not ruled on here. The code carries a stated rationale for the dependency — an unmanaged path hidden from the mirror is invisible to every sync mechanism at once — which is an argument about what the article should say, and belongs to whoever owns the article.
+
+## Second round
+
+### C81 / C174 — CONFIRMED
+`AptProbe.capture_package_owned_keys` runs one `dpkg --search` over every key file the target has and, parsing each `<packages>: <path>` line, keeps the path and DISCARDS the package names; `Keyrings.manages` then exempts any path in that set, and `writes`, `referenced_writes` and `gap` all consult it. Nothing in `keyrings.py` or `probe.py` separates the distribution's own packaging from a vendor's — the same `frozenset[str]` of paths answers both.
+
+Consequence: a vendor key rotation that changed the key file's bytes on the source never reaches the target while any target package owns that path, so the target's apt keeps verifying that repository with the retired key — the rotation case `writes`' own docstring says content-based copying exists to catch, since a rotation changes no source FILE and nothing else in the run would notice.
+
+### D39 / D40 / D41 / D71 — CONFIRMED, and the claim's blanket phrasing is wrong
+A late question mechanism exists and is live: `LateCollateral.ensure_asked`, built in `AptSyncJob._build_work` with the job's own reviewer and handed to `PackageConverger` as `late`, refreshes metadata and puts one three-way `COLLATERAL_REVIEW_ACTION` group before the run's FIRST install command — but only over the approved installs `OriginClassifier.target_resolvable` kept out of the plan-time batch, i.e. those whose repository this run writes. Every other route reaches a bare refusal: `PackageConverger._install`'s `Collateral.unapproved` guard raises `ConvergeItemFailed` for any protected package the per-item simulation names that no answer approved — which is exactly the drifted case D39/D41/D71 describe, and which `LateCollateral` cannot reach because those packages WERE simulated at plan time — and `PackageConverger.remove` has no `late` path at all, so the whole removal direction (D40) refuses. `Collateral.classify` treats a would-remove, a downgrade and an upgrade identically, so D71's upgrade is the same branch as D41's downgrade and no separate gap.
+
+Consequence: on those routes the user is told, in a failed item naming the package, instead of being offered the accept / keep-the-package / stop-the-sync choice `PKG-FR-COLLATERAL-MANUAL` requires — the same shortfall the conformance document already records for the removal batch's skipped-candidate cascade, reached here by apply-time drift rather than by the plan-time exemption.
+
+Two corrections the claimant did not make. First, the finding is NOT that no late question exists: for an install from a repository this run writes, the three answers are put before any package transaction, which is what `PKG-FR-ASK-AGAIN` permits. Second, `OriginClassifier.target_resolvable`'s docstring still states the pre-`LateCollateral` behaviour ("the residual cost is that the user is told afterwards rather than asked beforehand"), which now describes only the drift case and is stale for the one it is written about.
+
+### E115 — CONFIRMED; the same defect as K82, reached by the install case
+`snap_sync_exclude_paths()` enumerates the SOURCE's `~/snap` and skips (does not exclude) each app's `current`-resolved revision dir, taking no decisions, no `ReviewOutcome` and no converge results as input; `FolderSyncJob._snap_sync_exclude_filters` turns that list into rsync filters. A snap the target does not have at all is indistinguishable there from one whose revision converged, so declining its install leaves `~/snap/<app>/<source-revision>` and `~/snap/<app>/common` outside the exclusions and rsync mirrors them.
+
+Consequence: the target receives a data directory for a revision — indeed for an application — its snapd never installed, which `PKG-FR-SNAP-DATA-BOUNDARY` forbids outright.
+
+One root cause, two routes: K82 is the declined/failed revision CHANGE, E115 the declined/failed INSTALL. Both are the single fact that the exclude set is computed from the source's filesystem alone; one fix (feeding the run's own outcomes into the exclusion) closes both, and neither can be closed without the other.
+
+### F79 — CONFIRMED
+`FlatpakSyncJob._origin_refusal` has four refusal branches, and only the URL-mismatch one names a URL: the verification branch returns a message naming the target's remote, the scope, and the two `_verification_word` values, with no URL on either side (the source-has-no-such-remote and target-does-not-configure-it branches name none either).
+
+Consequence: the refusal `PKG-FR-FLATPAK-INSTALL-ORIGIN` requires to name both URLs names neither, so the user is told a setting differs without being told which repository the application would have come from. Worth noting when fixing: this branch is only reached after the URL comparison passed, so the two URLs are necessarily equal — what is missing is the one shared URL, not a divergence between two.
+
+### F146 — CONFIRMED, and the gap is wider than the claim states
+`FlatpakSyncJob._installed_origin_refusal` reads the ref's own row fresh (`_FLATPAK_LIST_CMD`) but resolves the reported origin name against `_target_remotes_now()`, which caches `_target_remotes_now_by_id` until the next remote WRITE, and compares `landed_remote.url != source_url` only — `gpg_verify` is never compared after the install. The situation is not structurally prevented: nothing on the target stops a remote's verification being turned off during the install command.
+
+Consequence: an application can land from a remote that stopped verifying signatures between `_origin_refusal` and the read-back and the run reports success, where the article makes the verification setting part of the origin the landed state must be checked against.
+
+Beyond the claim: because the remote map is cached and none of the four invalidation sites (`plan`, remote provisioning, filter clear/apply, remote delete) fires between a ref's pre-check and its read-back, the read-back re-reads the SAME snapshot `_origin_refusal` used. So no mid-run change to that remote is visible there, URL included, and adding a `gpg_verify` comparison alone would not close the window without a fresh read.
+
+### G5 — CONFIRMED for the detector; the removal half is conditional
+`ManualInstallsSyncJob.capture_source_items` runs `apt-mark showmanual` on the source and passes only those names to `_scan_no_candidate_apt_packages`, which asks `apt-cache policy` about nothing else; a package apt has marked automatic is therefore never tested against `packages_installed_from_no_repository` and can never become an `UnreproducibleItem`. `AptProbe.capture_source_items` starts from the same `source_manual_names()`, so such a package is absent from apt's source manifest too.
+
+Consequence: a hand-installed `.deb` that apt marks automatic on the source is reproducible by nothing and reported by nobody — outside `PKG-FR-MANUAL-SCOPE`'s stated boundary, which is "no configured repository supplies the installed version" and says nothing about manual marks.
+
+The removal half is narrower than the claim: whether `apt_sync` offers it for removal depends on the TARGET's own `apt-mark showmanual` (`AptProbe.query_target_items`). Target-manual gives the A14 removal offer; target-automatic gives no item on either side and the package is simply invisible, which is what row G5's own evidence column says.
+
+### G46 — REFUTED
+`review_items`' non-interactive arm does decide every entry `SKIP_ONCE` and also returns the unreproducible entries in `ReviewOutcome.unresolved` — but nothing consumes that field on this path: `manual_installs_sync` deliberately does not override `_unresolved_as_failures` (the base returns `[]`), and no report, log line or exit code reads `unresolved`. It also never reaches `apply()`: `PackageSyncJob.execute` raises `JobSkipped` as soon as a non-empty group set comes back with `was_interactive` false, which is `PKG-FR-NO-TERMINAL`'s required outcome.
+
+What the claimant missed: the field is dead bookkeeping on the only path that populates it, so the item ends the run in the third of the three states (skipped for this run) and no fourth state is reported to anyone. The cited test asserts an internal attribute, not a run outcome.
