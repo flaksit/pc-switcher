@@ -3,7 +3,7 @@
   "checkpoint_id": "6fb4701f6c54",
   "strategy": "manual-commit",
   "branch": "gsd/phase-02-package-management-sync",
-  "checkpoints_count": 1,
+  "checkpoints_count": 6,
   "files_touched": [
     "docs/adr/adr-005-asyncio-concurrency.md",
     "docs/dev/development-guide.md",
@@ -17,13 +17,20 @@
       "compact_transcript": "/6f/b4701f6c54/0/transcript.jsonl",
       "content_hash": "/6f/b4701f6c54/0/content_hash.txt",
       "prompt": "/6f/b4701f6c54/0/prompt.txt"
+    },
+    {
+      "metadata": "/6f/b4701f6c54/1/metadata.json",
+      "transcript": "/6f/b4701f6c54/1/full.jsonl",
+      "compact_transcript": "/6f/b4701f6c54/1/transcript.jsonl",
+      "content_hash": "/6f/b4701f6c54/1/content_hash.txt",
+      "prompt": "/6f/b4701f6c54/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 75,
-    "cache_creation_tokens": 113123,
-    "cache_read_tokens": 2999941,
-    "output_tokens": 29926,
-    "api_call_count": 42
+    "input_tokens": 9136,
+    "cache_creation_tokens": 585157,
+    "cache_read_tokens": 65053953,
+    "output_tokens": 184385,
+    "api_call_count": 238
   }
 }
