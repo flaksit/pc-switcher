@@ -308,4 +308,5 @@ The provenance variable that remains is which revision of that one snap is insta
 - `docs/planning/package-sync-conformance-criteria.md`: that intent as individually checkable articles.
 - `.planning/phases/02-package-management-sync/02-SPEC-package-review-model.md`: the apt implementation contract — the four review screens, the origin classification, the enforcement point.
 - `.planning/phases/02-package-management-sync/02-SPEC-snap-flatpak-derivation.md`: the snap and flatpak implementation contract, and the measurements behind D-41 and D-42.
+- `docs/adr/considerations/adr-020-flatpak-filter-and-trust-measurements.md`: what flatpak does with a filter that excludes a ref, and which keyring directories libostree consults — the two premises the filter ordering and the trust-anchor capture rest on.
 - GitHub issue #118: the feature issue, including the snap-revision discussion motivating D-06.
