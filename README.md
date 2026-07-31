@@ -68,7 +68,7 @@ Before syncing, ensure:
 
 Trigger a sync:
 ```bash
-pc-switcher sync <target-hostname>
+pc-switcher sync <hostname>
 ```
 
 Monitor sync progress with:
@@ -80,7 +80,7 @@ After sync completes, power off the source machine and resume work on target.
 
 ## What Happens During a Sync
 
-`pc-switcher sync <target>` runs a fixed sequence of steps. The order matters: each step sets up the environment the next one may depend on. All steps run on the **source** machine, acting on the **target** over SSH.
+`pc-switcher sync <hostname>` runs a fixed sequence of steps. The order matters: each step sets up the environment the next one may depend on. All steps run on the **source** machine, acting on the **target** over SSH.
 
 The sequence stops at the first failure, and cleanup always runs: release locks, kill remote processes, close the connection.
 
@@ -131,10 +131,10 @@ pc-switcher --help            # Show help and list commands
 pc-switcher init [--force]    # Create default config at ~/.config/pc-switcher/config.yaml
 
 # Sync to target machine
-pc-switcher sync <target-hostname> [--config PATH]
+pc-switcher sync <hostname> [--config PATH]
 
 # Step through every individual modification, confirming each one (needs a terminal)
-pc-switcher sync <target-hostname> --confirm-each-command
+pc-switcher sync <hostname> --confirm-each-command
 
 # View logs
 pc-switcher logs              # Show logs directory and list recent logs

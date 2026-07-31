@@ -314,7 +314,7 @@ sequenceDiagram
     participant EventBus
     participant TerminalUI
 
-    User->>CLI: pc-switcher sync <target>
+    User->>CLI: pc-switcher sync <hostname>
     CLI->>CLI: Load and schema-validate config.yaml
     CLI->>Orchestrator: Orchestrator(target, config, flags).run()
 

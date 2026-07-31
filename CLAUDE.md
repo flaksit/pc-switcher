@@ -29,7 +29,7 @@ This file provides guidance to AI agents when working with code in this reposito
 ## CLI Commands
 
 ```bash
-pc-switcher sync <target>       # Sync to target machine
+pc-switcher sync <hostname>     # Sync to the named machine
 pc-switcher init                # Create default config
 pc-switcher logs                # Show logs directory
 pc-switcher cleanup-snapshots   # Clean up old btrfs snapshots

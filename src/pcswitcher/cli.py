@@ -222,7 +222,7 @@ def _display_log_file(log_file: Path) -> None:
 
 @app.command()
 def sync(
-    target: Annotated[str, typer.Argument(help="Target hostname to sync to")],
+    target: Annotated[str, typer.Argument(metavar="HOSTNAME", help="Hostname of the machine to sync to")],
     config: Annotated[
         Path | None,
         typer.Option(
@@ -252,8 +252,8 @@ def sync(
             "--allow-out-of-order",
             help=(
                 "Proceed even if this sync is out of the normal back-and-forth order. "
-                "Skips the target-state confirmation prompt. Use after manually reviewing "
-                "the target machine's current state."
+                "Skips the confirmation about that machine's state. Use after reviewing "
+                "by hand what it currently holds."
             ),
         ),
     ] = False,
@@ -263,8 +263,8 @@ def sync(
             "--allow-first-sync",
             help=(
                 "Proceed with a first-ever sync without interactive confirmation. "
-                "WARNING: everything on the target within the scope of the configured "
-                "sync jobs will be overwritten, except configured exclusions. "
+                "WARNING: everything on the machine you sync to, within the scope of the "
+                "configured sync jobs, will be overwritten, except configured exclusions. "
                 "Run with --dry-run first to preview."
             ),
         ),
@@ -281,11 +281,11 @@ def sync(
         ),
     ] = False,
 ) -> None:
-    """Sync to target machine.
+    """Sync to the machine named by HOSTNAME.
 
     Loads configuration, creates orchestrator, and runs the complete sync workflow.
     Use --allow-out-of-order to bypass the out-of-order topology check after manual review.
-    Use --allow-first-sync to auto-approve the first-sync overwrite of a target with no history.
+    Use --allow-first-sync to auto-approve the first-sync overwrite of a machine with no history.
     Use --confirm-each-command to step through every individual modification.
     """
     # Refused here rather than mid-run: the gate has no non-interactive fallback by design
