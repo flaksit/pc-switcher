@@ -11,6 +11,8 @@ Whether this is wrong depends on which reading is intended. `probes.py:42-48` ar
 
 **Closed 2026-07-30 (U3).** Ruled: it fails its own job only. `ProbeFailed` shares the orchestrator's non-aborting arm with `PackageItemFailures`, so the run records that job FAILED and continues. ADR-022 D-06 carries the reason; issue #220 stays open for every other job-level exception, which still aborts.
 
+**Amended 2026-07-31.** Two exception types was too narrow — a registry transfer failure, a filesystem error or a parser defect still ended the run. `Orchestrator._failure_stays_in_its_job` now keys on the JOB: any exception out of a `PackageSyncJob` stays in it. #220's remaining scope is `folder_sync`, `vscode_state_sync` and the core jobs.
+
 ## DIV-02 — The automation escape hatch writes permanent state and is documented nowhere
 
 `PCSWITCHER_PACKAGE_REVIEW_AUTOMATION` takes a JSON `item_id → decision` map and bypasses every prompt, returning `was_interactive=True` (`review.py:580-582`). Because the permanence guards test exactly that flag (`sync_core.py:454`, `manual_installs_sync.py:583`), this path **writes machine-specific marks and install snippets** — the two things `PKG-FR-SKIP-ONCE` and `PKG-FR-MACHINE-SPECIFIC` describe as coming from an explicit human choice.
@@ -130,7 +132,9 @@ The original reading was that this makes the filter unsyncable — "not reposito
 
 **Open within this ruling:** the ordering rule is stated as a design requirement, not from measurement. Whether flatpak actually refuses to install a ref its own filter excludes has not been tested.
 
-**Closed 2026-07-30 (U5).** The capture asks for `name,url,options,filter`; `_apply_remote_filters` copies the filter to the same absolute path and re-applies it after the converge loop, failing every approved ref whose own origin is that remote if it cannot land. `_delete_unused_remotes` replaces the removal review item, counting use against the target's own post-loop ref listing. `_warn_if_unverified` tells an ordinary run, and `_same_vendor` treats an absent URL as matching nothing. What survives, recorded in the criteria's gap register: the ordering rule's premise is still unmeasured.
+**Closed 2026-07-30 (U5).** The capture asks for `name,url,options,filter`; `_apply_remote_filters` copies the filter to the same absolute path and re-applies it after the converge loop, failing every approved ref whose own origin is that remote if it cannot land. `_delete_unused_remotes` replaces the removal review item, counting use against the target's own post-loop ref listing. `_warn_if_unverified` tells an ordinary run, and `_same_vendor` treats an absent URL as matching nothing.
+
+**Amended 2026-07-31.** Ordering after the converge loop was not enough: a filter the TARGET already had stayed in force during those installs, and a target-only filter was never removed. `_clear_target_filters` now takes every derived remote's filter off before the loop, so the article holds against a filter either machine set, and a remote the source no longer restricts stays clear. What survives, recorded in the criteria's gap register: the ordering rule's premise is still unmeasured, and a run whose re-apply fails leaves that remote unfiltered until the next one.
 
 ## DIV-12 — A skipped removal loses its collateral protection
 
@@ -143,6 +147,8 @@ So: a package offered for removal, kept by answering *skip*, is excluded from co
 `PKG-FR-COLLATERAL-MANUAL` now states that only an APPROVED removal exempts a package.
 
 **Closed 2026-07-30 (U1).** The install batch exempts nothing, so a removal candidate an install would take is a collateral question. What survives, and is recorded as a survivor in the criteria's gap register: inside the removal batch a candidate is still exempt from its own transaction, so a skipped candidate carried off by another approved removal's cascade is refused by the apply-time guard rather than asked about.
+
+**Amended 2026-07-31.** Two further gaps in the same protection closed. Consent is keyed to the consequence — `items.collateral_item_id` folds the causing change and its effect into the item id — so approving one loss of a package no longer exempts another. And an install whose repository this run writes, which cannot be simulated before that write lands, now gets a second question of its own (`LateCollateral.ensure_asked`) instead of a refusal at apply time.
 
 ## Rulings that close earlier divergences
 
@@ -159,7 +165,9 @@ Logs are written to `~/.local/share/pc-switcher/logs` with mode `rw-rw-r--`, so 
 
 `PKG-FR-CREDENTIAL-PRIVACY` now requires the embedded credential to be withheld wherever a URL is written or shown.
 
-**Closed 2026-07-30 (U2).** `redaction.redact_credentials` replaces every absolute URL's whole userinfo, applied at four exits: `logger.CredentialRedactionFilter` on both queue handlers, the confirmation prompt in `executor._announce`, `ReviewEntry.__post_init__` for everything a review shows including the files it prints whole, and `ItemDiff.__post_init__` for the label a recorded decision keeps.
+**Closed 2026-07-30 (U2).** `redaction.redact_credentials` replaces every absolute URL's whole userinfo, applied at five exits: `logger.CredentialRedactionFilter` on both queue handlers, the confirmation prompt in `executor._announce`, `ReviewEntry.__post_init__` for everything a review shows including the files it prints whole, `ItemDiff.__post_init__` for the label a recorded decision keeps, and `ManualInstallsSyncJob._render_overwrite_diff` for the one question a job composes itself.
+
+**Amended 2026-07-31.** The fifth exit was missing, so a snippet body shown for a registry-overwrite decision reached the terminal whole. And the match was written as an exclusion list, which a valid apostrophe in `userinfo` ended early; it is now RFC 3986's `userinfo` grammar itself. Redaction is display-only: what `SnippetRegistry` stores and replays stays byte-for-byte as written.
 
 Related, and already satisfied: `PKG-FR-ESM-PRIVACY` is honoured by construction rather than by filtering — `pro status --format json` is parsed and only the `attached` boolean escapes (`apt_sync.py:113-114`, `278-281`).
 

@@ -1,10 +1,8 @@
 # Independent review — codex, gpt-5.6-sol, effort high
 
-Run 2026-07-31 against `9a3938aa` (1598 unit+contract tests green), read-only, no files modified.
-Verdict as given: **the phase is not conformant and neither ADR is ready to leave Draft.**
+Run 2026-07-31 against `9a3938aa` (1598 unit+contract tests green), read-only, no files modified. Verdict as given: **the phase is not conformant and neither ADR is ready to leave Draft.**
 
-Every finding below is codex's own text. Nothing here is verified yet — each one is a claim to
-check against the code before acting, and a claim that may be wrong.
+Every finding below is codex's own text, kept as the record of what was said. Each was a claim to check against the code before acting, and some were wrong; the [Disposition](#disposition) section says which.
 
 ## Verdict
 
@@ -390,3 +388,30 @@ This compact matrix covers all 129 articles through their traceability sections.
 - I did not exhaustively inspect every rendered TUI string or every configuration-validation wording outside the package-specific paths.
 - I did not validate packaging defaults from an installed wheel; default enablement was assessed from repository configuration only.
 - I did not test every RFC-valid URL-userinfo character—apostrophe alone is sufficient to demonstrate the regex defect.
+
+## Disposition
+
+What each finding got. The findings above are the record of what was said and are not edited.
+
+| # | Disposition |
+|---|---|
+| 1 | Fixed, `d4b22693` — the match is RFC 3986's `userinfo` grammar, not an exclusion list. |
+| 2 | Fixed, `3ca7f647` — `_render_overwrite_diff` is a fifth redaction exit, display-only. |
+| 3 | Fixed, `672dd162` (code) and `bf4e883d` (tests) — isolation keys on the job, not the exception type. |
+| 4 | Fixed, `afd9d63c` — usage counts the full installed set; the false "apt removes it as unused" justification is gone from code and register alike. |
+| 5 | Fixed, `03e47338` — those installs get a second collateral question after `/etc/apt` converges. |
+| 6 | Fixed, `bc187c55` — filters come off before the installs and a target-only filter is not restored. New accepted cost in the gap register. |
+| 7 | Fixed, `dfdb0538` — a machine-level anchor now carries. The no-key-material case is stated by the article and stands in the register. |
+| 8 | Fixed, `672dd162` — an unreadable policy is left alone; the article now also states the warn-and-continue on a failed set or verification. |
+| 9 | Fixed, `e99b512f` — suppression applies only to a package the target has; `PKG-FR-APT-HELD-TARGET` says so. |
+| 10 | Fixed, `42d32581` — an empty plan transfers no registry, and reports success. |
+| 11 | Specification defect, real. `PKG-FR-SOURCE-INTENT` rewritten: it names the three writes a sync makes on the source instead of denying them. |
+| 12 | Partly upheld. The missing narrative obligation is now `PKG-FR-FLATPAK-REMOTE-DELETE`'s, `PKG-FR-APT-ORIGIN-VERIFY` gained the distribution exemption it always had in the code and the narrative, and `PKG-FR-SUDO-PRECONDITION`'s precondition is now in the narrative. The other eight articles were judged legitimate — each makes explicit what its section implies — and the traceability prose says why for each. `PKG-FR-SNAP-CONFINEMENT` is also met, not unmet: `_confinement_flags` carries it into the install and the refresh. |
+| 13 | Upheld. D-07's report-only contradiction, the TL;DR's derived pins and the implementation rule beside it corrected; `PKG-FR-APT-ORIGIN-VERIFY` was the wrong side of the distribution disagreement; `PKG-FR-BATCHED` now binds within a round, which is what ADR-020's SHOULD always meant. |
+| 14 | Upheld and closed by finding 2's fix. The exits are five and the ADR says five; the TL;DR no longer claims a rule over what is stored. |
+| 15 | Fixed, `61d9a25d` — consent is keyed to the consequence, item id `apt:collateral:<cause>:<effect>:<package>`. |
+| 16 | Fixed, `06bbb32c` — the `find` skips an absent root and a witness path proves `dpkg --search` answered. |
+| 17 | Specification defect, real. Success is a review that was put and settled, whatever the answers; skipped is a review that was never put. The two skipped cases are named. The code's SUCCESS for an all-skip review is right. |
+| 18 | Fixed, `79274d02` and `d9330215` — the final result carries each job's own failure text, which names the items. |
+
+Two user rulings landed with it: a hold whose install was declined is declined, not failed (`c6d7ce34`, `PKG-FR-APT-HOLD-INERT`); and a repository written for a declined install is named, not removed (`c6e4bf33`, `PKG-FR-REPO-STRANDED`).
