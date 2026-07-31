@@ -138,6 +138,7 @@ __all__ = [
     "Reviewer",
     "TerminalUIReviewer",
     "ask_gate",
+    "asks_for_a_decision",
     "review_items",
 ]
 
@@ -332,6 +333,18 @@ class ReviewOutcome:
     was_interactive: bool
     snippets: Mapping[str, str] = field(default_factory=dict)
     unresolved: tuple[str, ...] = ()
+
+
+def asks_for_a_decision(group: ReviewGroup) -> bool:
+    """Whether `group` puts something to the user that they have to answer.
+
+    A report-only group does not: it converges in neither direction, records nothing and
+    offers no answer — the user is told about it and moves on. `PKG-FR-NO-TERMINAL` turns
+    on this distinction rather than on whether a review printed anything, so a run with
+    nobody to ask has decided everything there was to decide when every group is one of
+    these (`sync_core.PackageSyncJob.execute`).
+    """
+    return group.action != _REPORT_ACTION
 
 
 def _is_removal_direction(action: str) -> bool:

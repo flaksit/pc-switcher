@@ -129,7 +129,9 @@ class DiskSpaceCriticalError(Exception):
 
 
 class SyncAbortedByUser(Exception):
-    """Raised when the user declines a confirmation prompt during sync.
+    """Raised when the user declines a confirmation prompt during sync, or when the run
+    must end for the user to repair something by hand before syncing again — an install
+    snippet registry that cannot be parsed (`packages.state`) is the second kind.
 
     Represents expected control flow, not an unrecoverable error: a user
     answering "no" to a confirmation is not a failure of the tool. Callers

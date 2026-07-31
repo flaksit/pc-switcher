@@ -42,7 +42,7 @@ from pcswitcher.jobs.packages.state import (
     filter_inert,
 )
 from pcswitcher.jobs.packages.sync_core import PackagePlan
-from pcswitcher.models import CommandResult, Host
+from pcswitcher.models import CommandResult, Host, SyncAbortedByUser
 from tests.unit.jobs.test_package_sync_core import FakeItem, FakeSyncJob
 
 # ---------------------------------------------------------------------------
@@ -782,20 +782,20 @@ class TestSnippetRegistry:
         assert await registry.load() == {}
 
     @pytest.mark.asyncio
-    async def test_malformed_registry_returns_empty_mapping_and_warns_naming_the_path(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        """G64 — a corrupt registry reads as "no snippets" and warns naming the file."""
+    async def test_a_registry_that_cannot_be_parsed_ends_the_run_naming_the_file(self) -> None:
+        """G95 — a registry that is there and unreadable is not "no snippets": the run ends,
+        naming the file, the machine holding it and what to do about it."""
         executor = MagicMock()
         executor.run_command = AsyncMock(return_value=CommandResult(0, "snippets: [\n  - broken\n", ""))
-        registry = SnippetRegistry(executor)
+        registry = SnippetRegistry(executor, "nomad")
 
-        with caplog.at_level(logging.WARNING, logger="pcswitcher.jobs.packages.state"):
-            entries = await registry.load()
+        with pytest.raises(SyncAbortedByUser) as exc_info:
+            await registry.load()
 
-        assert entries == {}
-        assert len(caplog.records) == 1
-        assert "package-snippets.yaml" in caplog.records[0].message
+        message = str(exc_info.value)
+        assert "package-snippets.yaml" in message
+        assert "nomad" in message
+        assert "start a new sync" in message
 
     @pytest.mark.asyncio
     async def test_add_then_get_round_trips_body_verbatim_including_whitespace(self) -> None:

@@ -823,12 +823,12 @@ class TestPackageJobExcludeFiltersGating:
             return job._build_rsync_cmd(folder, dry_run=False)  # pyright: ignore[reportPrivateUsage]
 
     def test_snap_sync_enabled_includes_revision_exclusion(self, tmp_path: Path) -> None:
-        """E109, K77, N21 — with snap_sync on, folder_sync leaves the revision dirs to it."""
+        """E109, K23, K77, N21 — with snap_sync on, folder_sync leaves the revision dirs to it."""
         cmd = self._build_cmd(tmp_path, {"snap_sync": True})
         assert "/alice/snap/firefox/2938" in cmd
 
     def test_snap_sync_disabled_excludes_nothing(self, tmp_path: Path) -> None:
-        """E110."""
+        """E110, K23 — with snap_sync off, nobody manages those dirs, so folder_sync mirrors them."""
         cmd = self._build_cmd(tmp_path, {"snap_sync": False})
         assert "snap/firefox/2938" not in cmd
 

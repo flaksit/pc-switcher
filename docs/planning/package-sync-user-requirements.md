@@ -94,7 +94,7 @@ The log holds more than the report. It names every item the job presented and th
 
 A credential embedded in a URL is withheld wherever the user or the log would otherwise see it — in a command, in a package manager's output, in a configuration file shown whole for a decision. A repository can carry its password in its own address, and a log file is readable by anyone with an account on the machine that wrote it.
 
-A **dry run** plans and reviews exactly as a real run does — the questions are still asked — then changes nothing and records nothing. A **non-interactive run** — one with no terminal to answer at, such as from cron or a script — asks nothing, treats every item as declined, and reports any job with a non-empty review as skipped.
+A **dry run** plans and reviews exactly as a real run does — the questions are still asked — then changes nothing and records nothing. A **non-interactive run** — one with no terminal to answer at, such as from cron or a script — asks nothing and leaves skipped for this run every item that needed a decision, and reports as skipped any job that held one. A job whose review held nothing to decide reports success instead: either it found nothing at all, or everything it found was reported rather than asked about, and no answer would have changed the outcome. Either way nothing is recorded and the snippet registry does not travel — it holds every snippet written on earlier runs, and sending it over the other machine's copy is a change nobody was there to approve.
 
 ## Decisions and their memory: "machine specific"
 
@@ -230,7 +230,7 @@ Refresh holds replicate as their own items, both when added and when removed. A 
 
 ### Sideloaded snaps
 
-Snaps installed from a local `.snap` file are out of scope (#221). They are ignored on both machines: never installed, never removed, never an item. A run names the ones it found so the user knows they are unmanaged, and does nothing else about them.
+Snaps installed from a local `.snap` file are out of scope (#221). They are ignored on both machines: never installed, never removed, never an item. A run does nothing else about them and does not report them.
 
 ## flatpak
 
@@ -258,13 +258,13 @@ A remote both machines have whose URL or verification differs is repointed silen
 
 One the source does not have is deleted once nothing on the target still uses it — after this run's approved removals, counted against what the machine actually has, including applications marked machine-specific. While anything still uses it, it stays. Deleting a remote takes its signing key with it.
 
-A remote the source restricts with a filter is replicated **with its filter**. The filter is a separate file at a path of the user's choosing — flatpak records the path, not the content — so it is copied byte-for-byte to the same path on the target and re-applied there. Like a signing key, it is derived and never a review item. It is applied after the approved applications from that remote have landed, because a filter can be narrower than what the source has installed and must not block replicating it. If it cannot land, every approved application from that remote fails.
+A remote the source restricts with a filter is replicated **with its filter**. The filter is a separate file at a path of the user's choosing — flatpak records the path, not the content — so it is copied byte-for-byte to the same path on the target and re-applied there. Like a signing key, it is derived and never a review item. It is applied after the approved applications from that remote have landed, because a filter can be narrower than what the source has installed and must not block replicating it. If it cannot land, every approved application from that remote fails. Filters follow the remotes: only a remote some approved application (or its dependency) needs this run is touched at all, so a remote nothing in the run installs from keeps whatever filter each machine had.
 
 ### Masks and scopes
 
 Mask patterns replicate per scope, added and removed alike, whether or not anything currently matches them, and land after the applications.
 
-A flatpak installation that is neither the user nor the system one is skipped.
+A flatpak installation that is neither the user nor the system one is skipped. Remotes belong to an installation, not to the machine, so nothing in such an installation depends on a remote a sync touches — a remote of the same name in the user or system installation is a different remote.
 
 ## Software no manager can reproduce
 
@@ -280,7 +280,7 @@ Every detected item ends the run with a snippet, marked machine-specific, or ski
 
 A snippet is **opaque** — stored and replayed exactly as written, never parsed. It runs as the target user with no privilege added around it and no standing input, so a command expecting an answer fails rather than hanging the sync.
 
-Reproducibility is judged by what the **source** holds. The snippet registry is synced; if that would lose or change an entry only the target has, the user is asked and declining aborts the run. A snippet written during a review is replayed in that same run.
+Reproducibility is judged by what the **source** holds. The snippet registry is synced; if that would lose or change an entry only the target has, the user is asked and declining aborts the run. A registry file on either machine that cannot be read as a registry aborts it too, naming the file: an unreadable one is not an empty one, and treating it as empty would push over snippets nobody could see. Repair it and sync again. A snippet written during a review is replayed in that same run.
 
 ## When something goes wrong
 

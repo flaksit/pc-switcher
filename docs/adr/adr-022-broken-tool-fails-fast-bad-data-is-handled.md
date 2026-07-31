@@ -39,7 +39,7 @@ A command call has two failure modes, and they are not the same kind of event.
 
 **The tool or its environment did not answer.** A transient network failure, a package-manager lock held by `unattended-upgrades`, an interrupted dpkg, an unreadable `/var/lib/dpkg/status`, an unparsable `apt.conf.d`, a snapd that is not running, a flatpak installation that cannot be opened, sudo that is not available. Nothing about pc-switcher's data or logic explains any of these, nothing in the run can repair them, and every conclusion drawn from the result is unfounded. This fails fast.
 
-**The tool answered, and the answer is not what the run wanted.** A package the target's apt has never heard of. A repository the source does not declare. An install that exits non-zero because its repository was never added. A snap that is sideloaded and cannot be reproduced. A snippet the user's own script fails on. Each of these is a fact about one item, produced by a tool that was working; deciding what to do with it is the whole job. These are handled, reported per item, and the run continues (ADR-020 D-27).
+**The tool answered, and the answer is not what the run wanted.** A package the target's apt has never heard of. A repository the source does not declare. An install that exits non-zero because its repository was never added. A snippet the user's own script fails on. Each of these is a fact about one item, produced by a tool that was working; deciding what to do with it is the whole job. These are handled, reported per item, and the run continues (ADR-020 D-27).
 
 The line is not "did the command succeed". It is **did the tool answer the question it was asked**.
 
@@ -92,6 +92,10 @@ The measured evidence behind `answers=`: `apt-cache policy <unknown-name>` exits
 A `ProbeFailed` escaping a job fails that job and no more: the orchestrator records it FAILED on the same non-aborting arm as `PackageItemFailures` and runs the rest, so a transient apt lock no longer stops `folder_sync`. The four package jobs are independent by D-15/D-16, which is what makes one manager's dead read no evidence about another's already-approved work.
 
 This is the package half of **GitHub issue #220** (job failure independence). The issue stays open for the rest: every other exception out of a job still aborts the run, so a `folder_sync` or `vscode_state_sync` failure remains terminal, and deciding which core jobs must stay terminal belongs there.
+
+### D-06a: The one read that ends the run instead
+
+pc-switcher's own install-snippet registry is not a package manager's answer, and it is the one read whose failure is not capped at its job. A `package-snippets.yaml` that cannot be parsed raises `SyncAbortedByUser` from `packages.state`, naming the file and the machine (`PKG-FR-REGISTRY-CONSENT`). Two things make it different from every read D-06 covers: nothing else in the run can repair it, but the USER can — it is a small file they wrote, on a machine they have — and the fix has to land before the next sync reads it. A `ProbeFailed` would fail `manual_installs_sync` and let the run carry on, which reads as a passing sync with one job down rather than as "go fix this file". An absent or empty registry stays ordinary data.
 
 ### D-07: One shared mechanism, no shared base class
 

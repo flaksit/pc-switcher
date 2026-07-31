@@ -35,7 +35,7 @@ COVERED = {"U", "V", "U V", "P"}
 
 #: Rows that hold by reading two other rows together, so no single test carries their id.
 #: Each states its composition in its own Test column; keep that wording if one changes.
-COMPOSITIONS = {"D61", "J18", "J129", "K66", "K71"}
+COMPOSITIONS = {"D61", "F121", "J18", "J129", "K66", "K71"}
 
 
 #: `::test_x` continues the class named just before it; `same test` / `same as C21` carry

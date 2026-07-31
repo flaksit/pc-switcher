@@ -313,9 +313,17 @@ class ManualInstallsSyncJob(PackageSyncJob):
         must confirm. Declining, or a non-interactive run that cannot confirm, aborts the
         whole sync (`SyncAbortedByUser`) so the user can consolidate the two registries by
         hand and re-run — the tool never silently discards a snippet only the target has.
+
+        Either registry being unparsable aborts the same way, inside the two reads below
+        (`state._unreadable_registry`): a file nobody can read says nothing about which
+        entries exist, so the comparison this method rests on cannot be made at all.
         """
-        source_snippets = load_snippets_from_text(source_path.read_text(encoding="utf-8"))
-        target_snippets = await SnippetRegistry(self.target).load()
+        source_snippets = load_snippets_from_text(
+            source_path.read_text(encoding="utf-8"),
+            display_path=str(source_path),
+            machine=self.machines.source,
+        )
+        target_snippets = await SnippetRegistry(self.target, self.machines.target).load()
 
         lost = [snippet for item_id, snippet in target_snippets.items() if item_id not in source_snippets]
         changed = [
@@ -532,7 +540,7 @@ class ManualInstallsSyncJob(PackageSyncJob):
         source_decisions = await DecisionFile(self.manager_id, self.source).load()
         items = await filter_inert(await self.capture_source_items(), source_decisions)
 
-        registry = SnippetRegistry(self.source)
+        registry = SnippetRegistry(self.source, self.machines.source)
         diffs: list[ItemDiff] = []
         for item in items:
             snippet = await registry.get(item.item_id)
@@ -596,7 +604,7 @@ class ManualInstallsSyncJob(PackageSyncJob):
         snippet exists, and a `REPORT_ONLY` diff never reaches this hook (`apply()`'s
         filter).
         """
-        return await SnippetRegistry(self.target).replay(diff.item_id, self.target)
+        return await SnippetRegistry(self.target, self.machines.target).replay(diff.item_id, self.target)
 
     # -- Unreproducible finalize hook (moved off the base, D-18) -------------------------
 
@@ -632,7 +640,7 @@ class ManualInstallsSyncJob(PackageSyncJob):
         by_id = {diff.item_id: diff for diff in plan.diffs}
 
         if outcome.snippets:
-            registry = SnippetRegistry(self.source)
+            registry = SnippetRegistry(self.source, self.machines.source)
             authored_at = datetime.now(UTC).isoformat()
             for item_id, body in outcome.snippets.items():
                 diff = by_id.get(item_id)

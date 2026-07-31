@@ -500,18 +500,6 @@ class SnapSyncJob(PackageSyncJob):
         require_answer(command, result, self.machines.target)
         return _parse_snap_list(result.stdout)
 
-    def _warn_sideloaded(self, host: Host, sideloaded: Sequence[SnapItem]) -> None:
-        """Name what this machine holds that the run leaves unmanaged, once per machine."""
-        if not sideloaded:
-            return
-        self._log(
-            host,
-            LogLevel.WARNING,
-            "Ignoring snap(s) installed from a local file: their revision exists in no store, so pc-switcher "
-            "neither installs nor removes them — "
-            + ", ".join(f"{item.name} (revision {item.revision})" for item in sideloaded),
-        )
-
     @override
     async def plan(self) -> PackagePlan:
         """Load decision files -> capture -> query -> diff -> build review groups.
@@ -521,27 +509,23 @@ class SnapSyncJob(PackageSyncJob):
         Caches the filtered source/target items by id for `converge()` (see
         `__init__`), since `ItemDiff.item_id` alone carries no revision/channel data.
 
-        Sideloaded snaps on either machine are named in a warning and dropped from the
-        diff input: their revision exists in no store and nothing carries the `.snap`
-        bytes between machines, so the run can neither reproduce one nor replace one it
-        removes. Every diff they could produce — install, revision/channel change, the
-        `snap:hold:` diff `_diff_snap_holds` derives from a source snap, and removal — is
-        withheld; the warning is all the user gets, since there is no action to take. It
-        names sideloads the machine-specific filter would otherwise have swallowed, because
-        it is drawn from the raw listing.
+        Sideloaded snaps on either machine are dropped from the diff input: their revision
+        exists in no store and nothing carries the `.snap` bytes between machines, so the
+        run can neither reproduce one nor replace one it removes. Every diff they could
+        produce — install, revision/channel change, the `snap:hold:` diff `_diff_snap_holds`
+        derives from a source snap, and removal — is withheld, and the run says nothing
+        about them: `PKG-FR-SNAP-SIDELOAD` puts them out of scope entirely, so there is
+        neither an action to take nor anything to report.
         """
         source_decisions = await DecisionFile(self.manager_id, self.source).load()
         target_decisions = await DecisionFile(self.manager_id, self.target).load()
 
         # Sideloads are partitioned off the RAW listing, before the machine-specific filter:
-        # a sideloaded snap the user once marked as this machine's own was still FOUND, and
-        # `PKG-FR-SNAP-SIDELOAD` requires the run to name every sideload it found. Filtering
-        # first hid exactly those from the warning. The mark costs the item nothing either
-        # way — a sideload produces no diff whether it is recorded or not.
+        # filtering first would drop a marked sideload before `withheld` below could see it,
+        # leaving the OTHER machine's copy of that name unmatched — and an unmatched entry is
+        # an item, which is exactly what the article forbids for a sideloaded name.
         source_items, source_sideloaded = _partition_sideloaded(await self.capture_source_items())
         target_items, target_sideloaded = _partition_sideloaded(await self.query_target_items())
-        self._warn_sideloaded(Host.SOURCE, source_sideloaded)
-        self._warn_sideloaded(Host.TARGET, target_sideloaded)
 
         source_items = await filter_inert(source_items, source_decisions)
         target_items = await filter_inert(target_items, target_decisions)

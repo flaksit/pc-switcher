@@ -6,7 +6,6 @@ All executor interactions are mocked; no real snap/snapd commands run.
 
 from __future__ import annotations
 
-import logging
 from collections.abc import Callable
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
@@ -1164,10 +1163,10 @@ SNAP_LIST_SOURCE_SIDELOADED_HELD = (
 
 
 class TestSideloadedSnaps:
-    """E38-E48, `PKG-FR-SNAP-SIDELOAD` — a snap installed from a local file (`snap install
+    """E38-E47, `PKG-FR-SNAP-SIDELOAD` — a snap installed from a local file (`snap install
     --dangerous`, `snap try`) sits at a store-less `x<N>` revision no store can serve.
     Such snaps are out of scope (#221) and ignored on both machines: every diff the name
-    could produce is dropped at plan time, and a warning per machine names them.
+    could produce is dropped at plan time, and the run says nothing about them.
     """
 
     @pytest.mark.asyncio
@@ -1184,30 +1183,10 @@ class TestSideloadedSnaps:
         assert [d.item_id for d in plan.diffs] == ["snap:beta"]
 
     @pytest.mark.asyncio
-    async def test_one_warning_names_the_skipped_sideloaded_snaps(self, caplog: pytest.LogCaptureFixture) -> None:
-        """E38, E48 — two sideloads on one machine produce one finding naming both."""
-        source = SNAP_LIST_SOURCE_SIDELOADED + "workshop  2.0        x2     -               -            try\n"
-        context, _source, _target = make_context(
-            source_responses={"snap list --all": CommandResult(0, source, "")},
-            target_responses={"snap list --all": CommandResult(0, "No snaps are installed yet.\n", "")},
-        )
-        job = SnapSyncJob(context)
-
-        with caplog.at_level(logging.WARNING, logger="pcswitcher.jobs.base"):
-            await job.plan()
-
-        assert len(caplog.records) == 1
-        message = caplog.records[0].message
-        assert "homemade" in message
-        assert "workshop" in message
-
-    @pytest.mark.asyncio
-    async def test_a_marked_sideloaded_snap_is_still_named_and_still_produces_no_diff(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        """E46 — E46, `PKG-FR-SNAP-SIDELOAD` asks the run to name the sideloads it FOUND, and a snap
-        the user marked as this machine's own was found. The mark silences review items,
-        not the warning that the snap is unmanaged.
+    async def test_a_marked_sideloaded_snap_still_produces_no_diff(self) -> None:
+        """E46 — the machine-specific mark changes nothing for a sideload: the name is already
+        withheld on both machines, so a marked one is neither an item nor a second reason to
+        become one.
         """
         decisions = (
             "machine_specific:\n"
@@ -1226,10 +1205,8 @@ class TestSideloadedSnaps:
         )
         job = SnapSyncJob(context)
 
-        with caplog.at_level(logging.WARNING, logger="pcswitcher.jobs.base"):
-            plan = await job.plan()
+        plan = await job.plan()
 
-        assert "homemade" in caplog.records[0].message
         assert [d.item_id for d in plan.diffs] == ["snap:beta"]
 
     @pytest.mark.asyncio
@@ -1271,11 +1248,9 @@ class TestSideloadedSnaps:
         assert not any("homemade" in c for c in commands)
 
     @pytest.mark.asyncio
-    async def test_target_only_sideloaded_snap_is_not_offered_for_removal(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_target_only_sideloaded_snap_is_not_offered_for_removal(self) -> None:
         """E39 — the tool must not offer to delete a snap it cannot reinstall: a sideloaded snap
-        only the target has is named and left alone, not turned into a removal candidate.
+        only the target has is left alone, not turned into a removal candidate.
         """
         target = _HEADER + "orphan    9.0        x3     -               -            try\n"
         context, _source, _target = make_context(
@@ -1284,11 +1259,9 @@ class TestSideloadedSnaps:
         )
         job = SnapSyncJob(context)
 
-        with caplog.at_level(logging.WARNING, logger="pcswitcher.jobs.base"):
-            plan = await job.plan()
+        plan = await job.plan()
 
         assert plan.diffs == ()
-        assert "orphan" in caplog.records[0].message
 
     @pytest.mark.asyncio
     async def test_store_snap_the_target_sideloaded_under_the_same_name_produces_no_diff(self) -> None:
@@ -1306,29 +1279,6 @@ class TestSideloadedSnaps:
         plan = await job.plan()
 
         assert plan.diffs == ()
-
-    @pytest.mark.asyncio
-    async def test_each_machines_sideloads_are_named_in_a_finding_of_their_own(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        """E41 — one finding per machine, each naming only what that machine holds: a
-        single merged list would leave the user unable to tell which computer to go to.
-        """
-        source = _HEADER + "homemade  1.0        x1     -               -            try\n"
-        target = _HEADER + "workshop  2.0        x2     -               -            try\n"
-        context, _source, _target = make_context(
-            source_responses={"snap list --all": CommandResult(0, source, "")},
-            target_responses={"snap list --all": CommandResult(0, target, "")},
-        )
-        job = SnapSyncJob(context)
-
-        with caplog.at_level(logging.WARNING, logger="pcswitcher.jobs.base"):
-            plan = await job.plan()
-
-        assert plan.diffs == ()
-        messages = [record.message for record in caplog.records]
-        assert len(messages) == 2
-        assert [("homemade" in m, "workshop" in m) for m in messages] == [(True, False), (False, True)]
 
     @pytest.mark.asyncio
     async def test_a_sideloaded_source_snap_withholds_the_targets_store_copy_too(self) -> None:

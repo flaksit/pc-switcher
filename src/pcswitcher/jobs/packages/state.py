@@ -46,7 +46,7 @@ import yaml
 
 from pcswitcher.config_sync import CONFIG_REMOTE_DIR
 from pcswitcher.jobs.packages.items import ItemClass
-from pcswitcher.models import CommandResult
+from pcswitcher.models import CommandResult, SyncAbortedByUser
 
 if TYPE_CHECKING:
     from pcswitcher.executor import Executor, RemoteExecutor
@@ -291,11 +291,34 @@ def _serialize_snippets(entries: Mapping[str, Snippet]) -> str:
     return f"{_SNIPPET_FILE_HEADER}\n{body}"
 
 
+#: Everything `yaml.safe_load` and the shape check below can throw for a file that is not
+#: a snippet registry. Named once so the two entry points that read a registry — the
+#: executor-backed `SnippetRegistry.load` and the on-disk `load_snippets_from_text` — cannot
+#: drift on which failures count as "unreadable".
+_UNREADABLE = (yaml.YAMLError, KeyError, TypeError, ValueError, AttributeError)
+
+
+def _unreadable_registry(display_path: str, machine: str | None, exc: Exception) -> SyncAbortedByUser:
+    """The abort a registry that cannot be parsed raises (`PKG-FR-REGISTRY-CONSENT`).
+
+    An absent or empty registry means "no snippets"; a file that is there and cannot be read
+    means nothing, and reading it as "no snippets" is what would let a wholesale push
+    silently discard every entry the other machine holds. The run ends instead of the job
+    failing, because the repair is a hand edit on one machine and the next sync is what
+    should see the result — the same reason declining the overwrite question ends the run.
+    """
+    where = f" on {machine}" if machine else ""
+    return SyncAbortedByUser(
+        f"the install-snippet registry {display_path}{where} cannot be read as a registry ({exc}); "
+        "repair or delete that file, then start a new sync"
+    )
+
+
 def _deserialize_snippets(raw: str) -> dict[str, Snippet]:
     """Parse a snippet registry's content into `{item_id: Snippet}`.
 
-    Raises on anything that isn't the expected shape; callers translate that into
-    the "no snippets" empty-mapping fallback (see `SnippetRegistry.load`).
+    Raises anything in `_UNREADABLE` for content that is not a snippet registry; both
+    callers turn that into `_unreadable_registry`'s abort.
     """
     data = yaml.safe_load(raw)
     snippets = data.get("snippets") if isinstance(data, dict) else None
@@ -314,24 +337,26 @@ def _deserialize_snippets(raw: str) -> dict[str, Snippet]:
     return entries
 
 
-def load_snippets_from_text(raw: str) -> dict[str, Snippet]:
-    """Parse snippet-registry file content into `{item_id: Snippet}`, degrading to an
-    empty mapping on empty or malformed input (the same rule `SnippetRegistry.load`
-    applies to executor-read content).
+def load_snippets_from_text(raw: str, *, display_path: str, machine: str | None = None) -> dict[str, Snippet]:
+    """Parse snippet-registry file content into `{item_id: Snippet}`; empty content means
+    "no snippets" and content that cannot be parsed ends the run (`_unreadable_registry`) —
+    the same rule `SnippetRegistry.load` applies to executor-read content.
 
     `manual_installs_sync` uses this to read the SOURCE's on-disk registry — the exact
     bytes `_push_snippet_registry` is about to `send_file` to the target — when deciding
     whether a wholesale overwrite is purely additive (decision 9). Reading the file that
     is actually sent keeps the additive check consistent with the transfer, rather than
     re-querying the source executor which may lag the just-finalized on-disk file.
+
+    `display_path` and `machine` are what the abort names, since the raw text carries
+    neither.
     """
     if not raw.strip():
         return {}
     try:
         return _deserialize_snippets(raw)
-    except (yaml.YAMLError, KeyError, TypeError, ValueError, AttributeError) as exc:
-        _logger.warning("Malformed snippet registry (%s); treating as no snippets", exc)
-        return {}
+    except _UNREADABLE as exc:
+        raise _unreadable_registry(display_path, machine, exc) from exc
 
 
 class SnippetRegistry:
@@ -349,8 +374,12 @@ class SnippetRegistry:
     run's push has already placed it there.
     """
 
-    def __init__(self, executor: Executor) -> None:
+    def __init__(self, executor: Executor, machine: str | None = None) -> None:
         self._executor = executor
+        # The hostname of the machine this instance reads and writes, for the one message
+        # that has to say WHICH copy of a same-named file is the problem. Optional so a
+        # caller with no hostname to hand still gets a message naming the path.
+        self._machine = machine
         # shlex.quote() is a no-op for this fixed, already-shell-safe relpath, applied
         # anyway per T-02-01 (ASVS V5) — see `DecisionFile.__init__`'s identical
         # reasoning for why it stays OUTSIDE the `~/` prefix.
@@ -358,9 +387,13 @@ class SnippetRegistry:
         self._display_path = f"~/{SNIPPET_REGISTRY_RELPATH}"
 
     async def load(self) -> dict[str, Snippet]:
-        """Read every snippet, or an empty mapping if the registry is absent, empty or
-        malformed — mirrors `DecisionFile.load`'s degrade rule; only the malformed case
-        logs a WARNING naming the path.
+        """Read every snippet, or an empty mapping if the registry is absent or empty.
+
+        A registry that is THERE and cannot be parsed is neither: it ends the whole run
+        (`_unreadable_registry`), because "no snippets" is a claim about the machine that
+        this file no longer supports, and acting on it would push over entries nobody can
+        see. Unlike `DecisionFile.load`, which degrades — a decision file that cannot be
+        read costs the user a question they answered before, not their snippets.
         """
         result = await self._executor.run_command(f"cat {self._path_expr} 2>/dev/null")
         if not result.success or not result.stdout.strip():
@@ -368,13 +401,8 @@ class SnippetRegistry:
 
         try:
             return _deserialize_snippets(result.stdout)
-        except (yaml.YAMLError, KeyError, TypeError, ValueError, AttributeError) as exc:
-            _logger.warning(
-                "Malformed snippet registry %s (%s); treating as no snippets",
-                self._display_path,
-                exc,
-            )
-            return {}
+        except _UNREADABLE as exc:
+            raise _unreadable_registry(self._display_path, self._machine, exc) from exc
 
     async def get(self, item_id: str) -> Snippet | None:
         """The snippet registered for `item_id`, or `None` if there is none."""

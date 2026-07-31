@@ -774,6 +774,17 @@ class _OrderRecordingJob(FakeSyncJob):
         await super().apply()
 
 
+class _ReportOnlyRecordingJob(_OrderRecordingJob):
+    """`_OrderRecordingJob` whose plan holds nothing but report-only findings, plus any
+    ordinary install its `source_items` produce — the shape `PKG-FR-NO-TERMINAL` turns on.
+    """
+
+    async def plan(self) -> PackagePlan:
+        planned = await super().plan()
+        diffs = (_diff("pkg-drift", DiffAction.REPORT_ONLY, DiffClass.VERSION_MISMATCH), *planned.diffs)
+        return PackagePlan(manager=self.manager_id, diffs=diffs, groups=self._build_review_groups(diffs))
+
+
 class _RecordingReviewer(FakeReviewer):
     """`FakeReviewer` that also appends `review` to a shared event list, to pin call order."""
 
@@ -897,6 +908,50 @@ class TestExecuteSelfContained:
         await job.execute()
 
         assert events == ["plan", "review", "accept_review", "apply"]
+
+    @pytest.mark.asyncio
+    async def test_a_review_of_nothing_but_report_only_findings_is_a_success_without_a_terminal(self) -> None:
+        """J169 — two machines differing only in versions: the review printed something, but
+        no answer of the user's could have changed anything, so nobody's absence cost the
+        run nothing and the job succeeded. Nothing converges either way.
+        """
+        events: list[str] = []
+        reviewer = _RecordingReviewer(events, was_interactive=False)
+        job = _ReportOnlyRecordingJob(make_context(reviewer=reviewer), events)
+
+        await job.execute()
+
+        assert events == ["plan", "review", "accept_review", "apply"]
+        assert job.converge_calls == []
+
+    @pytest.mark.asyncio
+    async def test_that_success_still_reaches_no_after_review_seam(self) -> None:
+        """J170 — the registry does not travel on the strength of a review nobody answered,
+        whether that review was empty or held only findings: `after_review` is the seam
+        `manual_installs_sync` pushes from, and it is not reached.
+        """
+        events: list[str] = []
+        reviewer = _RecordingReviewer(events, was_interactive=False)
+        job = _ReportOnlyRecordingJob(make_context(reviewer=reviewer), events)
+
+        await job.execute()
+
+        assert "after_review" not in events
+
+    @pytest.mark.asyncio
+    async def test_one_decidable_item_beside_the_findings_still_skips_the_job(self) -> None:
+        """J171 — what makes a job skipped is an item nobody could answer, not the number of
+        lines the review printed: one install among the report-only findings is enough.
+        """
+        events: list[str] = []
+        reviewer = _RecordingReviewer(events, was_interactive=False)
+        job = _ReportOnlyRecordingJob(make_context(reviewer=reviewer), events, source_items=[FakeItem("pkg-a")])
+
+        with pytest.raises(JobSkipped):
+            await job.execute()
+
+        assert events == ["plan", "review"]
+        assert job.converge_calls == []
 
     @pytest.mark.asyncio
     async def test_the_after_review_seam_runs_when_a_human_answered(self) -> None:

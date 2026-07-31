@@ -3231,6 +3231,31 @@ class TestRemoteFilterReplicates:
         assert not any("--filter=" in cmd for cmd in all_calls(target))
 
     @pytest.mark.asyncio
+    async def test_a_remote_no_approved_app_needs_keeps_the_targets_own_filter(self) -> None:
+        """F118 — `PKG-FR-FLATPAK-FILTER` reaches only the remotes this run provisions, so the
+        target's filter on a remote nothing installs from survives: `PKG-FR-FLATPAK-REMOTE-DERIVED`
+        forbids touching that remote at all, and taking its filter off would be touching it.
+        """
+        other_url = "https://other.example.org/repo/"
+        context, _source, target = make_context(
+            source_responses=derivation_source(
+                remotes=remote_row("customremote", self._URL) + remote_row("otherremote", other_url),
+                apps="org.example.Other\t1.0\totherremote\tuser\torg.example.Other/x86_64/stable\n",
+            ),
+            fake_target=FakeFlatpakTarget(
+                remotes={"user": {"customremote": self._URL, "otherremote": other_url}},
+                filters={("user", "customremote"): "/etc/nomad.filter"},
+            ),
+        )
+        job = FlatpakSyncJob(context)
+
+        await run_job(job)
+
+        assert ("user", "org.example.Other/x86_64/stable") in target.refs
+        assert target.filters == {("user", "customremote"): "/etc/nomad.filter"}
+        assert not any("--no-filter" in cmd for cmd in all_calls(target))
+
+    @pytest.mark.asyncio
     async def test_a_clear_that_fails_fails_the_app_naming_the_remote_and_the_filter(self, tmp_path: Path) -> None:
         """F108 — no install is attempted once the target's own filter could not be taken off."""
         path = self._filter_file(tmp_path)

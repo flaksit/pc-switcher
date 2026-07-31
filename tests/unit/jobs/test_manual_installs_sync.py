@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import io
 import logging
+import re
 import shlex
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -1957,12 +1958,11 @@ class TestSnippetRegistryOverwriteGuard:
         assert "--mode=[red]fast" in rendered
 
     @pytest.mark.asyncio
-    async def test_a_corrupt_source_registry_makes_every_target_entry_a_loss(
+    async def test_a_corrupt_source_registry_ends_the_run_and_sends_nothing(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """G80 — an unparsable source file reads as holding nothing, so every target entry
-        counts as lost and the user is asked; approving sends the corrupt file itself,
-        because the push is a byte-for-byte copy of what is on disk."""
+        """G80 — an unparsable source file is not a registry holding nothing: the run ends
+        naming the file, nothing is asked, and the corrupt bytes never reach the target."""
         corrupt = "snippets: [\n  - broken\n"
         source_registry = self._write_source_registry(tmp_path, corrupt)
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
@@ -1976,15 +1976,36 @@ class TestSnippetRegistryOverwriteGuard:
         )
         job = ManualInstallsSyncJob(context)
 
-        await job._push_snippet_registry()  # pyright: ignore[reportPrivateUsage]
+        with pytest.raises(SyncAbortedByUser, match=re.escape("package-snippets.yaml")):
+            await job._push_snippet_registry()  # pyright: ignore[reportPrivateUsage]
 
-        assert len(confirmer.calls) == 1
-        message = str(confirmer.calls[0]["message"])
-        assert "unreproducible:apt-no-candidate:brscan3" in message
-        assert "unreproducible:apt-no-candidate:cnpg" in message
-        target.send_file.assert_called_once()
-        assert target.send_file.call_args.args[0] == source_registry
+        assert confirmer.calls == []
+        target.send_file.assert_not_called()
         assert source_registry.read_text(encoding="utf-8") == corrupt
+
+    @pytest.mark.asyncio
+    async def test_a_corrupt_target_registry_ends_the_run_and_sends_nothing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """G79 — the target's file cannot be parsed, so what it holds is unknown: the run
+        ends rather than counting the push additive, and nothing is overwritten."""
+        self._write_source_registry(tmp_path)
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        confirmer = FakeConfirmer(approve=True)
+        context, _source, target = make_context(
+            target_responses={
+                "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, "snippets: [\n  - broken\n", ""),
+                "echo $HOME": CommandResult(0, "/home/user\n", ""),
+            },
+            confirmer=confirmer,
+        )
+        job = ManualInstallsSyncJob(context)
+
+        with pytest.raises(SyncAbortedByUser, match=re.escape("package-snippets.yaml")):
+            await job._push_snippet_registry()  # pyright: ignore[reportPrivateUsage]
+
+        assert confirmer.calls == []
+        target.send_file.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_an_absent_source_registry_leaves_the_targets_entries_alone(

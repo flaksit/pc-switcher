@@ -449,7 +449,7 @@ class FolderSyncJob(SyncJob):
 
     @staticmethod
     def _decision_file_exclude_filters(folder_path: str) -> list[str]:
-        """rsync `--filter` arg excluding every manager's machine-local decision file
+        """rsync `--filter` arg excluding every package manager's machine-local decision file
         that falls under `folder_path` (D-08, D-09).
 
         The home-relative GLOB (covers every `<manager>.decisions.yaml`, one filter

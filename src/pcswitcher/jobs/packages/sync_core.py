@@ -26,9 +26,10 @@ review-before-any-change ordering checkable and testable per job:
   self-contained: it plans, reviews through the injected `JobContext.reviewer`, accepts the
   outcome, then applies. A `plan()` failure propagates naturally out of `execute()` and
   lands in this job's own `JobResult` through the orchestrator's per-job exception handling.
-  A non-interactive run with a NON-EMPTY plan raises `JobSkipped` there instead of applying
-  nothing and reporting SUCCESS; an empty plan on the same path stays SUCCESS, and either
-  way `after_review()` is skipped so nothing is transferred without an answer.
+  A non-interactive run whose review held anything to DECIDE raises `JobSkipped` there
+  instead of applying nothing and reporting SUCCESS; a review holding nothing to decide —
+  empty, or nothing but report-only findings — stays SUCCESS, and either way
+  `after_review()` is skipped so nothing is transferred without an answer.
 """
 
 from __future__ import annotations
@@ -42,7 +43,7 @@ from typing import ClassVar
 from pcswitcher.jobs.base import SyncJob
 from pcswitcher.jobs.context import JobContext
 from pcswitcher.jobs.packages.items import DiffAction, DiffClass, ItemClass, ItemDiff, Machines
-from pcswitcher.jobs.packages.review import Decision, ReviewEntry, ReviewGroup, ReviewOutcome
+from pcswitcher.jobs.packages.review import Decision, ReviewEntry, ReviewGroup, ReviewOutcome, asks_for_a_decision
 from pcswitcher.jobs.packages.state import DecisionEntry, DecisionFile
 from pcswitcher.models import CommandResult, Host, JobSkipped, LogLevel, ProgressUpdate
 
@@ -646,18 +647,21 @@ class PackageSyncJob(SyncJob):
         A `plan()` failure propagates unchanged, so the orchestrator's per-job exception
         handling attributes it to this job's own `JobResult`.
 
-        A non-interactive run with a non-empty plan raises `JobSkipped`: D-26 forces every
-        item to SKIP_ONCE with nobody present to decide, so continuing would converge
-        nothing and report SUCCESS. It is raised before any mutating command, as
-        `JobSkipped` requires. An EMPTY plan on the same path stays SUCCESS — the target
-        already matches the source, which is the goal met.
+        A non-interactive run whose review held something to DECIDE raises `JobSkipped`:
+        D-26 forces every such item to SKIP_ONCE with nobody present to answer, so
+        continuing would converge nothing and report SUCCESS. It is raised before any
+        mutating command, as `JobSkipped` requires. What counts is a group that asks
+        (`review.asks_for_a_decision`), not a group that prints: a plan of nothing but
+        report-only findings — two machines differing only in versions — was never
+        answerable in either direction, so nobody's absence changed its outcome and it
+        stays SUCCESS, exactly as an empty plan does (`PKG-FR-NO-TERMINAL`).
 
         `after_review()` runs only when a human answered (`PKG-FR-NO-TERMINAL`: a
-        non-interactive run transfers no registry). The empty-plan case is exactly where
-        that matters: `manual_installs_sync`'s hook pushes the SOURCE's whole snippet
-        registry, which carries entries from earlier runs, so "this run found nothing to
-        review" is not "this run has nothing to transfer". Gated here rather than in the
-        hook so the rule holds for any job that ever needs the seam.
+        non-interactive run transfers no registry). The two SUCCESS cases above are
+        exactly where that matters: `manual_installs_sync`'s hook pushes the SOURCE's
+        whole snippet registry, which carries entries from earlier runs, so "this run had
+        nothing to decide" is not "this run has nothing to transfer". Gated here rather
+        than in the hook so the rule holds for any job that ever needs the seam.
         """
         assert self.context.reviewer is not None, (
             f"{self.manager_id} sync has no reviewer; the orchestrator must inject one "
@@ -665,7 +669,7 @@ class PackageSyncJob(SyncJob):
         )
         plan = await self.plan()
         outcome = await self.context.reviewer.review(plan.groups)
-        if plan.groups and not outcome.was_interactive:
+        if any(asks_for_a_decision(group) for group in plan.groups) and not outcome.was_interactive:
             raise JobSkipped(
                 self.name,
                 f"non-interactive run left every {self.manager_id} review item undecided",
