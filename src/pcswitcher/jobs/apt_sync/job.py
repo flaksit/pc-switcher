@@ -223,6 +223,7 @@ class AptSyncJob(PackageSyncJob):
                 late=LateCollateral(
                     collateral=collateral,
                     origins=origins,
+                    derived=derived,
                     machines=self.machines,
                     manager_id=self.manager_id,
                     reviewer=self.context.reviewer,

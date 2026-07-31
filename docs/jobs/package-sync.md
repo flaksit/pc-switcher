@@ -123,6 +123,8 @@ You are asked about those later in the same run, once the repositories have land
 
 An install you withdraw that way is neither applied nor failed. The run says what happened to it and moves on to the rest of what you approved. Its hold, if the source holds it, is withdrawn with it — that is true of every install you decline, however you decline it.
 
+The repository that install needed landed before the question could be asked, and it stays. If nothing else you approved comes from it, the run names it — by URL as well as by filename, since the filename is whatever whoever wrote the file chose — and says nothing installs from it any more. It is left where it is: removing it is yours to decide, and the answer you gave was about a package.
+
 ## Repositories, pins and keys are derived
 
 You are asked about packages. The `/etc/apt` machinery a package needs to be installable — the repository file it comes from, the signing key that makes that repository trusted, the pin that makes that repository's build win — follows from your answer and gets no review line of its own. Approving a repository without its package does nothing; approving a package without its repository cannot be installed; the pairing was never expressible as two review rows.

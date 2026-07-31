@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+from typing import NamedTuple
 
 from pcswitcher.jobs.apt_sync.items import (
     APT_PREFERENCES_DIR,
@@ -29,12 +30,27 @@ from pcswitcher.jobs.apt_sync.items import (
     APT_SOURCES_LIST,
     CONFLICT_ID_PREFIX,
     DISTRO_SOURCE_FILENAMES,
+    package_name,
     source_file_destination,
 )
 from pcswitcher.jobs.apt_sync.origins import OriginClassifier
 from pcswitcher.jobs.apt_sync.probe import OriginFacts, RepoFacts
 from pcswitcher.jobs.packages.items import DiffAction, ItemClass, ItemDiff, Machines
 from pcswitcher.jobs.packages.review import Decision
+
+
+class StrandedRepository(NamedTuple):
+    """One repository file that landed on the target for an install the user then declined,
+    and that no surviving approved install needs.
+
+    Carries the URLs as well as the destination because the filename is whatever its author
+    chose — the same reason `build_repo_removal_detail` names URLs — and the packages it was
+    written for, which is what makes the sentence say why it is there.
+    """
+
+    dest: str
+    uris: tuple[str, ...]
+    packages: tuple[str, ...]
 
 
 class DerivedWrites:
@@ -198,6 +214,32 @@ class DerivedWrites:
         """
         for dest in self.all_writes():
             self._failed[dest] = message
+
+    def stranded(self, declined: frozenset[str]) -> tuple[StrandedRepository, ...]:
+        """The repository files this run wrote for `declined` installs that nothing approved
+        still needs — what the target keeps after a mid-apply answer withdrew the packages
+        the file was derived from.
+
+        Read off the same `{package: the files it needs}` map the install refusal uses, so a
+        file a surviving approved install still needs cannot be named: it is doing exactly
+        the job it was written for. A file that never landed is not here either — a failed
+        write left nothing on the target to report.
+
+        Pins and the distribution's own files can never appear: they travel because the
+        source has them, not because a package was approved (`PKG-FR-REPO-DERIVED`), so no
+        answer about a package strands one.
+        """
+        needed = {dest for item_id, dests in self._package_dests.items() if item_id not in declined for dest in dests}
+        left: dict[str, list[str]] = {}
+        for item_id in sorted(declined):
+            for dest in sorted(self._package_dests.get(item_id, frozenset())):
+                if dest in needed or dest in self._failed or dest not in self._repo_writes:
+                    continue
+                left.setdefault(dest, []).append(package_name(item_id))
+        return tuple(
+            StrandedRepository(dest, self._source_origin.refs.uris_of(Path(dest).name), tuple(names))
+            for dest, names in left.items()
+        )
 
     def install_refusal(self, item_id: str, name: str) -> str | None:
         """Why this approved install may not run because a file it needed never landed

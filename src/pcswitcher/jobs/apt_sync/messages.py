@@ -144,6 +144,27 @@ def build_repo_removal_detail(uris: Sequence[str], machines: Machines) -> str:
     return f"{machines.target} would stop getting software from {where}"
 
 
+def build_stranded_repository_line(dest: str, uris: Sequence[str], packages: Sequence[str], machines: Machines) -> str:
+    """What the run says about a repository it wrote for an install a late collateral answer
+    then withdrew (`PKG-FR-REPO-DERIVED`).
+
+    The URL as well as the filename, for the reason `build_repo_removal_detail` gives: the
+    filename is whatever whoever created the file called it, and the URL is what the machine
+    is actually pointed at. A file declaring none says so rather than dropping half the
+    sentence.
+
+    Nothing broke here, so nothing in this reads as breakage: the run wrote the file for a
+    package the user's own answer then withdrew, the file is left where it is, and whether
+    the repository should go with the package is theirs to say.
+    """
+    where = ", ".join(uris) if uris else "no repository URL, since the file declares none"
+    return (
+        f"{dest} stays on {machines.target}: it was written for {', '.join(packages)}, whose install was "
+        f"declined, so nothing on {machines.target} installs from {where}. Left in place — remove it by "
+        "hand if it is not wanted."
+    )
+
+
 def build_esm_gate_message(esm_files: Sequence[str], machines: Machines, job_name: str) -> str:
     """The ESM gate's question (D-38): the fact, how to fix it, what skipping costs.
 

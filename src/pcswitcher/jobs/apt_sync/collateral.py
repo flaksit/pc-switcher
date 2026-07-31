@@ -36,6 +36,7 @@ from pcswitcher.jobs.apt_sync.commands import (
     remove_args,
     simulate_apt_transaction,
 )
+from pcswitcher.jobs.apt_sync.derived import DerivedWrites
 from pcswitcher.jobs.apt_sync.diffing import collateral_diff
 from pcswitcher.jobs.apt_sync.items import (
     APT_PACKAGE_ID_PREFIX,
@@ -43,7 +44,11 @@ from pcswitcher.jobs.apt_sync.items import (
     is_collateral_diff,
     package_name,
 )
-from pcswitcher.jobs.apt_sync.messages import build_collateral_group_title, build_trigger_phrase
+from pcswitcher.jobs.apt_sync.messages import (
+    build_collateral_group_title,
+    build_stranded_repository_line,
+    build_trigger_phrase,
+)
 from pcswitcher.jobs.apt_sync.origins import OriginClassifier
 from pcswitcher.jobs.apt_sync.reporting import Log
 from pcswitcher.jobs.packages.items import DiffAction, ItemClass, ItemDiff, Machines
@@ -535,6 +540,9 @@ class LateCollateral:
     later". A withdrawn install is therefore a `ConvergeItemDeclined`: not applied, not
     failed. The apply-time guard behind all of this is untouched and still refuses a real
     transaction that has drifted onto a protected package nobody saw.
+
+    The `/etc/apt` files written for a withdrawn install have already landed by then and
+    stay. `_report_stranded` names them instead of rolling them back.
     """
 
     def __init__(
@@ -542,6 +550,7 @@ class LateCollateral:
         *,
         collateral: Collateral,
         origins: OriginClassifier,
+        derived: DerivedWrites,
         machines: Machines,
         manager_id: str,
         reviewer: Reviewer | None,
@@ -551,6 +560,7 @@ class LateCollateral:
     ) -> None:
         self._collateral = collateral
         self._origins = origins
+        self._derived = derived
         self._machines = machines
         self._manager_id = manager_id
         self._reviewer = reviewer
@@ -637,6 +647,31 @@ class LateCollateral:
             finding = (item.detail or "").split("\n")[0]
             for trigger_id in self._collateral.triggers_of(item.item_id):
                 self._declined[trigger_id] = f"{item.label} was kept on {self._machines.target}: {finding}"
+        self._report_stranded()
+
+    def _report_stranded(self) -> None:
+        """Name every repository this run wrote for an install the answer has just withdrawn
+        and that no surviving approved install needs (`PKG-FR-REPO-DERIVED`,
+        `PKG-FR-LOG-DECISIONS`).
+
+        The file is left where it is, and saying so is the whole of what the run owes here:
+        the answer that withdrew its packages is the user's, and whether the repository goes
+        with them is theirs to decide. Rolling it back would undo a write on the strength of
+        an answer about a package.
+
+        INFO rather than a warning, because nothing is broken — an `/etc/apt` file nothing
+        installs from costs the machine one stanza of its next `apt-get update`, and this
+        line is the run's whole account of it. A run whose answer stranded nothing says
+        nothing.
+        """
+        if self._log is None:
+            return
+        for left in self._derived.stranded(frozenset(self._declined)):
+            self._log(
+                Host.TARGET,
+                LogLevel.INFO,
+                build_stranded_repository_line(left.dest, left.uris, left.packages, self._machines),
+            )
 
     async def _ask(self, found: Sequence[ItemDiff]) -> ReviewOutcome:
         """One `COLLATERAL_REVIEW_ACTION` group through the job's own reviewer, so the

@@ -36,6 +36,7 @@ from tests.unit.jobs.apt.helpers import (
     make_context,
     real_installs,
     respond_to,
+    respond_with_policy_sequence,
     target_offers,
 )
 
@@ -1159,3 +1160,122 @@ class TestCollateralForARepositoryThisRunWrites:
         await job.execute()
 
         assert len(reviewer.calls) == 1
+
+
+def _no_candidate(*names: str) -> str:
+    """`apt-cache policy` for names the target's apt cannot resolve yet — what a package whose
+    repository this run has not written answers at plan time."""
+    return "".join(f"{name}:\n  Installed: (none)\n  Candidate: (none)\n  Version table:\n" for name in names)
+
+
+def _two_late_installs_context() -> tuple[JobContext, MagicMock, MagicMock]:
+    """`pkg-a` and `pkg-b` both come from the repository `foo.sources` declares, and neither is
+    resolvable on the target until this run writes it.
+
+    Installing `pkg-a` would take `other-manual`; installing `pkg-b` takes nothing. So keeping
+    `other-manual` withdraws `pkg-a` alone and leaves `foo.sources` with a package to serve.
+    """
+    context, source, target = _repo_context(
+        source_responses=foo_source_responses(
+            **{
+                "apt-mark showmanual": CommandResult(0, "pkg-a\npkg-b\nother-manual\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\npkg-b\t1.0\nother-manual\t1.0\n", ""),
+                "apt-cache policy": CommandResult(
+                    0,
+                    _policy_block("pkg-a", "https://example.com")
+                    + _policy_block("pkg-b", "https://example.com")
+                    + _policy_block("other-manual", "https://example.com"),
+                    "",
+                ),
+            }
+        )
+    )
+    target.run_command = AsyncMock(
+        side_effect=respond_with_policy_sequence(
+            {
+                "echo $HOME": CommandResult(0, "/home/target-user", ""),
+                "apt-mark showmanual": CommandResult(0, "other-manual\n", ""),
+                "dpkg-query": CommandResult(0, "other-manual\t1.0\n", ""),
+                "test -f": CommandResult(1, "", ""),
+                # Longest first: `respond_to` matches by substring, first match wins, and the
+                # batch command contains both single-candidate patterns.
+                "--no-install-recommends pkg-a pkg-b": CommandResult(
+                    0, "Inst pkg-a (1.0)\nInst pkg-b (1.0)\nRemv other-manual [1.0]\n", ""
+                ),
+                "--no-install-recommends pkg-a": CommandResult(0, "Inst pkg-a (1.0)\nRemv other-manual [1.0]\n", ""),
+                "--no-install-recommends pkg-b": CommandResult(0, "Inst pkg-b (1.0)\n", ""),
+            },
+            [
+                CommandResult(0, _no_candidate("pkg-a", "pkg-b"), ""),
+                CommandResult(0, target_offers("pkg-a", "pkg-b", origin="https://example.com"), ""),
+            ],
+        )
+    )
+    return context, source, target
+
+
+_STRANDED_FOO = (
+    "/etc/apt/sources.list.d/foo.sources stays on target-host: it was written for pkg-a, whose install was "
+    "declined, so nothing on target-host installs from https://example.com. Left in place — remove it by "
+    "hand if it is not wanted."
+)
+
+
+class TestARepositoryWrittenForADeclinedInstall:
+    """The `/etc/apt` files a late decline leaves behind are kept, and the run says so
+    (`PKG-FR-REPO-DERIVED`, `PKG-FR-LOG-DECISIONS`).
+
+    The write has already landed when the question is put — that is the whole reason the
+    question is late — and undoing it would reverse a write on the strength of an answer
+    about a package. So the run names the file, by URL as well as by filename, and leaves it.
+    """
+
+    @pytest.mark.asyncio
+    async def test_the_repository_is_named_by_url_and_filename(self, caplog: pytest.LogCaptureFixture) -> None:
+        context, _source, _target = _late_collateral_context()
+        job = AptSyncJob(context)
+        job.context = dataclasses.replace(job.context, reviewer=CountingReviewer(_APPROVE_PKG_A))
+
+        with caplog.at_level(LogLevel.FULL.value):
+            await job.execute()
+
+        assert _STRANDED_FOO in [record.message for record in caplog.records]
+
+    @pytest.mark.asyncio
+    async def test_it_does_not_read_as_something_broken(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Nothing failed: the user answered, and this is the consequence of their answer."""
+        context, _source, _target = _late_collateral_context()
+        job = AptSyncJob(context)
+        job.context = dataclasses.replace(job.context, reviewer=CountingReviewer(_APPROVE_PKG_A))
+
+        with caplog.at_level(LogLevel.FULL.value):
+            await job.execute()
+
+        stranded = next(record for record in caplog.records if record.message == _STRANDED_FOO)
+        assert stranded.levelno == LogLevel.INFO.value
+        assert not any(record.levelno >= LogLevel.WARNING.value for record in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_a_repository_a_surviving_install_still_needs_is_not_named(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """`pkg-b` comes from the same repository and nothing withdrew it, so `foo.sources` is
+        doing exactly the job it was written for.
+        """
+        context, _source, target = _two_late_installs_context()
+        job = AptSyncJob(context)
+        job.context = dataclasses.replace(
+            job.context, reviewer=CountingReviewer({**_APPROVE_PKG_A, "apt:package:pkg-b": Decision.APPLY})
+        )
+
+        with caplog.at_level(LogLevel.FULL.value):
+            await job.execute()
+
+        commands = all_calls(target)
+        # The file really did land, so the negative below is about the rule and not about a
+        # run that derived nothing.
+        assert any("sudo install" in cmd and "sources.list.d/foo.sources" in cmd for cmd in commands)
+        installs = real_installs(target)
+        assert len(installs) == 1
+        assert "pkg-b" in installs[0]
+        assert not any("stays on target-host" in record.message for record in caplog.records)
