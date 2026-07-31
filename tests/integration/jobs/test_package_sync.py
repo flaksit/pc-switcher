@@ -1148,22 +1148,43 @@ async def _assert_flatpak_available(executor: BashLoginRemoteExecutor) -> None:
 # -- whole-machine package state, for "this run changed nothing" assertions ----------
 
 
+# The five `/etc/apt` directories a run can write, and the one directory-scoped read that
+# covers all of them. Digests, not content: the claim is "nothing was rewritten", and a
+# digest says that about a root-owned file without reading one.
+_APT_STATE_DIRS = (
+    _APT_SOURCES_DIR,
+    _APT_PREFERENCES_DIR,
+    "/etc/apt/apt.conf.d",
+    _APT_KEYRINGS_DIR,
+    "/etc/apt/trusted.gpg.d",
+)
+
+
 @dataclass(frozen=True)
 class _MachinePackageState:
     """Every piece of package-manager state the four jobs can write on one machine, read
-    from the package managers themselves (`apt-mark`, `dpkg-query`, `snap list`,
-    `flatpak list`) rather than from anything pc-switcher reports about them.
+    from the package managers and the filesystem themselves (`apt-mark`, `dpkg-query`,
+    `sha256sum` over `/etc/apt`, `snap list`, `flatpak list`, `flatpak remotes`) rather than
+    from anything pc-switcher reports about them.
 
     Compared whole for the idempotency claim: a second run that has nothing to do must
     leave all of it byte-identical, which is a far stronger statement than "the one
     package we diverged is still installed".
+
+    `/etc/apt` and the remote table are here because a run writes both WITHOUT a review line
+    of its own — derived repository files, pins and signing keys on one side, provisioned
+    remotes, replicated ref filters and deleted unused remotes on the other. A capture that
+    stopped at the installed sets would call a run that rewrote every one of them a fixed
+    point.
     """
 
     apt_manual: tuple[str, ...]
     apt_held: tuple[str, ...]
     apt_installed: tuple[str, ...]
+    etc_apt_digests: tuple[str, ...]
     snap_revisions: tuple[tuple[str, str], ...]
     flatpak_refs: tuple[tuple[str, str, str, str, str], ...]
+    flatpak_remotes: tuple[str, ...]
 
 
 async def _capture_machine_package_state(executor: BashLoginRemoteExecutor) -> _MachinePackageState:
@@ -1172,22 +1193,47 @@ async def _capture_machine_package_state(executor: BashLoginRemoteExecutor) -> _
     `snap list --all` is reduced to `{name: revision}` rather than kept as raw text: the
     Version column tracks the revision, so keeping both would only add a second way for
     the same fact to be reported.
+
+    The `/etc/apt` listing is `sudo`-qualified and guarded per directory the same way
+    `apt_sync.probe.capture_dir_digests` is: `/etc/apt/keyrings` is absent on a stock Ubuntu
+    24.04, and an absent directory must read as "nothing here" rather than as a failure.
+
+    Both flatpak scopes are read, because a job writes remotes in whichever scope an
+    approved application came from.
     """
     manual = await executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0)
     held = await executor.run_command("apt-mark showhold", login_shell=False, timeout=15.0)
     dpkg = await executor.run_command(
         "dpkg-query --show --showformat='${Package}\\t${Status}\\n'", login_shell=False, timeout=20.0
     )
+    etc_apt = await executor.run_command(
+        "; ".join(
+            f"if sudo test -d {shlex.quote(directory)}; then "
+            f"sudo find {shlex.quote(directory)} -maxdepth 1 -type f -exec sha256sum {{}} +; fi"
+            for directory in _APT_STATE_DIRS
+        ),
+        login_shell=False,
+        timeout=30.0,
+    )
+    assert etc_apt.success, f"Failed to read /etc/apt digests: {etc_apt.stderr}"
     snaps = await executor.run_command("snap list --all", login_shell=False, timeout=20.0)
     flatpaks = await executor.run_command(
         "flatpak list --app --columns=application,version,origin,installation,ref", login_shell=False, timeout=20.0
+    )
+    remotes = await executor.run_command(
+        "flatpak remotes --user --columns=name,url,options,filter; "
+        "flatpak remotes --system --columns=name,url,options,filter",
+        login_shell=False,
+        timeout=20.0,
     )
     return _MachinePackageState(
         apt_manual=tuple(sorted(nonblank_lines(manual.stdout))),
         apt_held=tuple(sorted(nonblank_lines(held.stdout))),
         apt_installed=tuple(sorted(parse_dpkg_installed(dpkg.stdout))),
+        etc_apt_digests=tuple(sorted(nonblank_lines(etc_apt.stdout))),
         snap_revisions=tuple(sorted(parse_snap_list_names_revisions(snaps.stdout).items())),
         flatpak_refs=tuple(sorted(parse_flatpak_list_lines(flatpaks.stdout))),
+        flatpak_remotes=tuple(sorted(nonblank_lines(remotes.stdout))),
     )
 
 
@@ -1410,16 +1456,14 @@ class TestAptSyncEndToEnd:
         the target's apt has never heard the name and refuses to rehearse any transaction
         containing it.
 
-        The property no mocked-executor test could establish, and the one a green
-        integration run previously reported as passing: the whole run survives it. `plan()`
-        used to propagate the rehearsal's exit 100 out of the job before the review was
-        drawn, so the user saw nothing at all — not the package, not the rest of the diff.
+        The property no mocked-executor test could establish: the whole run survives it, so
+        the user sees the package and the rest of the diff rather than nothing at all.
 
         Run WITHOUT the automation hook, on purpose -- the same carve-out F23 takes: the
         hook answers a review without ever printing it, so with it set the package's name
         in the run's output comes from the dry-run apply preview and witnesses no review at
-        all. D-26 then leaves every item `SKIP_ONCE`, which is why the empty apply list
-        asserted below is what pins the name to the printed group and nothing else.
+        all. `PKG-FR-NO-TERMINAL` then ends the job before `apply()`, which is what pins the
+        name below to the printed group and nothing else.
 
         `--dry-run`, so pc2's `/etc/apt` and package set are untouched; the subject is built
         on pc1 and removed from pc1 in a `finally` regardless of outcome.
@@ -2538,9 +2582,11 @@ class TestPackageSyncIdempotency:
         Two independent witnesses, both read off pc2's own package managers rather than
         pc-switcher's output:
 
-        1. `_MachinePackageState` (apt manual set, hold set and full dpkg-installed set;
-           `snap list` revisions; `flatpak list` refs) is captured immediately before and
-           after run 2 and must be identical -- no install, no removal, no re-mark.
+        1. `_MachinePackageState` (apt manual set, hold set, full dpkg-installed set and
+           `/etc/apt` digests; `snap list` revisions; `flatpak list` refs and the remote
+           table) is captured immediately before and after run 2 and must be identical --
+           no install, no removal, no re-mark, and none of the derived `/etc/apt` or remote
+           writes a run makes without a review line of its own.
         2. Run 2 maps the converged item to SKIP_ALWAYS. A SKIP_ALWAYS on a presented
            item writes a `DecisionEntry` on the machine that holds it (D-08a), so the
            entry's ABSENCE from both machines' decision files afterwards is state-based
