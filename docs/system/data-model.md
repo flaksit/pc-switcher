@@ -220,7 +220,7 @@ Every item class computes a stable `item_id` string rather than reusing the mana
 | `AptPinItem` | `apt:pin:<filename>` | — . Reviewed in the REMOVAL direction only |
 | `AptConfigItem` | `apt:config:<filename>` | — |
 | `AptHoldItem` | `apt:hold:<name>` | — . Distinct from `apt:package:<name>` so a package and its hold are two review items; converge dispatches on this prefix BEFORE the action-based package dispatch |
-| apt manual collateral | `apt:collateral:<name>` | not a captured item — a `REPORT_ONLY` diff for a target-held package an approved change would remove or downgrade. Its answer governs the change that causes it, never itself |
+| apt manual collateral | `apt:collateral:<cause>:<effect>:<package>` | the causing change and what it does, both folded in: one protected package can be the casualty of two approved changes in one run, and consenting to one consequence is not consenting to the other. Not a captured item — a diff for a protected package an approved change would remove, downgrade or upgrade. Its answer governs the change that causes it, never itself |
 | apt repository conflict | `apt:conflict:<filename>` | not an item at all — a two-answer review entry asking which of two versions of a file both machines have should win. Reaches no diff and no decision file |
 | apt metadata refresh | `apt:metadata-refresh` | not an item at all — the one synthetic `apt-get update` diff a run inserts when any repository-group item was approved. Carries `ItemClass.APT_SOURCE` so it sorts with that group, and is excluded from group membership by item_id, never by class |
 | `SnapItem` | `snap:<name>` | — (channel, revision, hold state and confinement are fields, not part of identity) |

@@ -6,7 +6,7 @@ Date: 2026-07-30
 
 ## TL;DR
 
-The log is the record of what pc-switcher did and why, so it names every item a review presented with the decision it received, every change a tool made on its own behalf that no review showed, and each command's own output verbatim at debug level. Against that, one class of content never reaches it: a credential embedded in a URL is withheld wherever pc-switcher writes or shows a URL, because the URL is the secret.
+The log is the record of what pc-switcher did and why, so it names every item a review presented with the decision it received, every change a tool made on its own behalf that no review showed, and each command's own output verbatim at debug level. Against that, one class of content never reaches it: a credential embedded in a URL is withheld wherever pc-switcher logs a URL or puts one in front of the user, because the URL is the secret. What is stored for replay is left exactly as its author wrote it.
 
 ## Implementation Rules
 
@@ -14,7 +14,8 @@ The log is the record of what pc-switcher did and why, so it names every item a 
 - Every item a review presented MUST be logged with the decision it received, including items the user skipped — an item that produced no change MUST still produce a line.
 - Every change a tool made on its own behalf that no review showed — a package manager resolving its own dependencies is the case that exists today — MUST be logged.
 - A command's own output MUST be recorded verbatim at DEBUG, alongside the command text the executor already traces there.
-- A credential embedded in a URL MUST be withheld wherever pc-switcher writes or shows that URL: the executor's command trace, a command's recorded output, anything the user reads while deciding, a configuration file displayed in full for a decision, and an install-snippet body displayed for one.
+- A credential embedded in a URL MUST be withheld wherever pc-switcher logs that URL or puts it in front of the user: the executor's command trace, a command's recorded output, anything the user reads while deciding, a configuration file displayed in full for a decision, and an install-snippet body displayed for one.
+- What counts as the credential MUST be the URL's `userinfo` as RFC 3986 defines it. A character that grammar permits MUST NOT end the match early.
 - Redaction MUST sit at each point a path leaves the process, never at each call site that builds a string. There are five: every log record, the per-command confirmation, everything a review shows while the user decides, the label a recorded decision keeps on disk, and the body of a question a job composes itself and puts straight to `Confirmer`.
 - A snippet body MUST be redacted only where it is displayed. It is stored and replayed as its author wrote it (`PKG-FR-SNIPPET-VERBATIM`), so redacting the file or the replay would break the item it installs.
 
