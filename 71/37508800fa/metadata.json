@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "7137508800fa",
+  "strategy": "manual-commit",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 4,
+  "files_touched": [
+    ".planning/phases/02-package-management-sync/02-SCENARIO-COVERAGE.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/71/37508800fa/0/metadata.json",
+      "transcript": "/71/37508800fa/0/full.jsonl",
+      "compact_transcript": "/71/37508800fa/0/transcript.jsonl",
+      "content_hash": "/71/37508800fa/0/content_hash.txt",
+      "prompt": "/71/37508800fa/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 503,
+    "cache_creation_tokens": 1625341,
+    "cache_read_tokens": 83050723,
+    "output_tokens": 208993,
+    "api_call_count": 266
+  }
+}

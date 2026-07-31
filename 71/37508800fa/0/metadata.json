@@ -1,0 +1,65 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "7137508800fa",
+  "session_id": "354077f7-8171-4dc7-8e2f-e2c4e73a7888",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-31T13:19:23.80203305Z",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 4,
+  "save_step_count": 3,
+  "files_touched": [
+    ".planning/phases/02-package-management-sync/02-SCENARIO-COVERAGE.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "5010663a7c24",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 503,
+    "cache_creation_tokens": 1625341,
+    "cache_read_tokens": 83050723,
+    "output_tokens": 208993,
+    "api_call_count": 266
+  },
+  "session_metrics": {
+    "turn_count": 41
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-31T13:19:23.547696833Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 1,
+    "human_modified": 2,
+    "human_removed": 0,
+    "total_committed": 1,
+    "total_lines_changed": 4,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 11,
+      "user_lines_removed": 2,
+      "agent_lines_added": 1,
+      "agent_lines_removed": 1,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9,
+        ".planning/phases/02-package-management-sync/02-SCENARIO-COVERAGE.md": 2
+      },
+      "user_removed_per_file": {
+        ".planning/phases/02-package-management-sync/02-SCENARIO-COVERAGE.md": 2
+      }
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 9,
+      "user_lines_removed": 0,
+      "agent_lines_added": 1,
+      "agent_lines_removed": 1,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9
+      }
+    }
+  ]
+}
