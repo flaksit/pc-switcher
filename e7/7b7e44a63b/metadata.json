@@ -1,0 +1,43 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "e77b7e44a63b",
+  "strategy": "manual-commit",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 19,
+  "files_touched": [
+    "docs/adr/adr-020-declarative-package-convergence.md",
+    "docs/dev/package-sync-scenario-coverage.md",
+    "docs/jobs/package-sync.md",
+    "docs/system/package-sync.md",
+    "src/pcswitcher/jobs/apt_sync/collateral.py",
+    "src/pcswitcher/jobs/apt_sync/job.py",
+    "src/pcswitcher/jobs/packages/sync_core.py",
+    "tests/integration/jobs/test_package_sync.py",
+    "tests/unit/jobs/apt/helpers.py",
+    "tests/unit/jobs/apt/test_apt_collateral.py",
+    "tests/unit/jobs/apt/test_apt_job.py",
+    "tests/unit/jobs/apt/test_apt_keyrings.py",
+    "tests/unit/jobs/apt/test_apt_origins.py",
+    "tests/unit/jobs/test_flatpak_sync.py",
+    "tests/unit/jobs/test_manual_installs_sync.py",
+    "tests/unit/jobs/test_package_sync_core.py",
+    "tests/unit/jobs/test_snap_sync.py",
+    "tests/unit/orchestrator/test_job_failure_isolation.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/e7/7b7e44a63b/0/metadata.json",
+      "transcript": "/e7/7b7e44a63b/0/full.jsonl",
+      "compact_transcript": "/e7/7b7e44a63b/0/transcript.jsonl",
+      "content_hash": "/e7/7b7e44a63b/0/content_hash.txt",
+      "prompt": "/e7/7b7e44a63b/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 83,
+    "cache_creation_tokens": 115176,
+    "cache_read_tokens": 10811658,
+    "output_tokens": 62121,
+    "api_call_count": 44
+  }
+}
