@@ -1033,8 +1033,9 @@ async def review_items(
     these questions.
 
     Non-interactive runs (`is_interactive(console)` is False) prompt for nothing: every
-    item comes back `SKIP_ONCE`, nothing is recorded permanently, a warning names how many
-    items went unresolved, and the group panels are printed as the report (D-26).
+    item comes back `SKIP_ONCE`, nothing is recorded permanently, one warning NAMES each
+    item nobody could be asked about (`_warn_every_item_unasked`), and the group panels are
+    printed as the report (D-26).
     Interactive runs pause `ui` around each group's blocking prompt (dispatched via
     `asyncio.to_thread`) and resume it in a `finally`, so the live display is always handed
     back even if the prompt raises. They print no group panel: the screen lists the items

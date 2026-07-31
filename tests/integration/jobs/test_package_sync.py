@@ -1464,8 +1464,9 @@ class TestPackageSyncWholeRunContracts:
         """A non-interactive `pc-switcher sync` (no `PACKAGE_REVIEW_AUTOMATION_ENV`, no
         TTY on stdin/stdout -- the default for a command run through this fixture's
         plain SSH exec, which requests no pty) applies nothing, records no permanent
-        decision, and reports every unresolved item (D-26), proven with an item
-        diverged in each direction.
+        decision, names every item it could not ask about, and reports the job as skipped
+        (`PKG-FR-NO-TERMINAL`, `PKG-FR-LOG-DECISIONS`), proven with an item diverged in
+        each direction.
         """
         _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
 
@@ -1514,13 +1515,20 @@ class TestPackageSyncWholeRunContracts:
             )
 
             # Secondary confirmation only -- the primary evidence above is pc2's own
-            # package state and the decision-file paths (this plan's own prohibition):
-            # the non-interactive branch prints every group's entries and logs how many
-            # were left unresolved (package_review.review_items).
+            # package state and the decision-file paths (this plan's own prohibition).
+            # `PKG-FR-LOG-DECISIONS` requires the run to NAME each item nobody could be
+            # asked about, so a count would no longer say which ones were declined; and
+            # `PKG-FR-NO-TERMINAL` requires the job itself to be reported skipped.
             combined_output = sync_result.stdout + sync_result.stderr
-            assert install_candidate in combined_output, "install-direction item not named in the run's output"
-            assert removal_candidate in combined_output, "removal-direction item not named in the run's output"
-            assert "unresolved" in combined_output.lower(), "run did not report unresolved items (D-26)"
+            collapsed = _collapse_run_output(combined_output)
+            for candidate, direction in ((install_candidate, "install"), (removal_candidate, "removal")):
+                assert f"not asked, declined for this run (no TTY): {candidate}" in collapsed, (
+                    f"{direction}-direction item {candidate} was not named as declined for this run.\n"
+                    f"{combined_output}"
+                )
+            assert "Job apt_sync skipped: non-interactive run left every apt review item undecided" in collapsed, (
+                f"the run did not report apt_sync as skipped (PKG-FR-NO-TERMINAL).\n{combined_output}"
+            )
         finally:
             await _restore_package(pc2_executor, install_candidate)
             await _restore_auto_marked_package(pc2_executor, removal_candidate)
