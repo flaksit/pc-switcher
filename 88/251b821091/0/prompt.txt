@@ -1,0 +1,51 @@
+<task-notification>
+<task-id>a08d93fb4214a9c21</task-id>
+<tool-use-id>toolu_01MV4X6X6ErxxCSu27hX6cwf</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/79395195-eaac-4280-9fbf-7a7610dd3e3a/tasks/a08d93fb4214a9c21.output</output-file>
+<status>completed</status>
+<summary>Agent "Sweep E: snap" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done. Wrote `/home/janfr/dev/pc-switcher/.planning/phases/02-package-management-sync/coverage-sweep/E-snap.md`.
+
+**Shape**: 113 rows across ten sections — scope/identity, presence-and-revision cases, `snap list` parsing, confinement, removal, sideloads, per-item failure, per-snap holds, the auto-refresh pause, and the `~/snap` data boundary. 22 rows are P or —; nothing is ‼ (I found no place where the code contradicts an article).
+
+**Key findings**
+
+- **Sideloads (rewritten article) are the best-covered branch family.** Nine of the eleven branches I derived have real unit assertions, including the machine-specific-marked sideload, the held sideload, and the store-snap-on-one-machine/sideload-on-the-other case. Two directions are untested only because their mirror is: source-sideload/target-store-snap (E43) and a held sideload whose name is a store snap elsewhere (E45).
+- **The command side of `PKG-FR-SNAP-CASES` is where the holes are.** The diff for each of the four cases is asserted; what the approved item then *does* is only partly asserted. Nothing checks that an install lands the source's channel, that a revision-only change issues no channel switch, that a channel-only change issues no revision refresh, or that a both-differ change issues both. Four cheap unit tests.
+- **`PKG-NG-SNAP-ORIGIN` has no test at all** (E5) — nothing asserts that a snap review never contains a store/publisher/key item. That is the only guard against a future regression re-introducing one.
+- **The refresh pause is densely covered** (32 rows, nearly all U): both-machine set, capture-before-set, privileged read, restore of a date and of an indefinite hold, unreadable-policy left untouched at both ends, per-machine independence, set-failed / did-not-stick / cannot-confirm / read-back-raises, dry-run, disabled job, idempotent restore, the confirm-each-command gate including the declined restore, and hostname naming in every warning. Only self-expiry (E88/E89) is unobserved.
+- **`PKG-FR-SNAP-REMOVE-SNAPSHOT` is asserted at command shape only** — no test observes snapd's pre-removal snapshot surviving. Needs a VM.
+- **No VM coverage** for: a sideload through a real run, a snap per-item failure (the equivalent apt test exists), or the `~/snap` boundary end to end.
+- **One requirements ambiguity flagged for the assembler**: the article says a run "MUST name" the sideloads it found; the code names them as a job WARNING, not a review line or report entry. I scored those rows covered on that reading and said so — if the intended reading is the report, two rows flip to ‼.</result>
+<usage><subagent_tokens>188753</subagent_tokens><tool_uses>30</tool_uses><duration_ms>354190</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a5d100260891a273c</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/79395195-eaac-4280-9fbf-7a7610dd3e3a/tasks/a5d100260891a273c.output</output-file>
+<status>completed</status>
+<summary>Agent "Sweep F: flatpak" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Written to `/home/janfr/dev/pc-switcher/.planning/phases/02-package-management-sync/coverage-sweep/F-flatpak.md`.
+
+## What's in it
+
+144 rows across 14 sections (F-A scope … F-N privilege), enumerated from the 18 articles assigned, then checked against `src/pcswitcher/jobs/flatpak_sync.py` by opening every test I cite in `test_flatpak_sync.py`, `test_block_state_decisions.py`, `test_folder_sync.py` and `tests/integration/jobs/test_package_sync.py`.
+
+Verdicts: 120 U (many U V), 4 P, 18 —, 2 ‼.
+
+## Key findings
+
+- **Coverage is genuinely dense** for identity, the four presence/version cases, derivation, trust, the repoint question and the filter — the filter and origin-divergence rules have both unit and VM assertions that discriminate (the VM origin test asserts both machines print the *same* remote name before the run, so a name comparison is provably blind).
+- **The two accepted gaps get their own `‼` rows**: F43 (a key held via ostree `gpgkeypath` replicates as no key) and F117 (a failed filter re-apply leaves the remote unfiltered until the next run).
+- **One requirement branch has no test at all**: F66 — an application reported as an *origin divergence* must keep its remote alive during deletion. `PKG-FR-FLATPAK-REMOTE-DELETE` names it explicitly; the machine-specific and runtime siblings are both tested, this one is not. Unit-testable.
+- **Delegated-to-flatpak behaviour is unasserted**: F72, "deleting a remote takes its signing key with it". The VM derivation test *depends* on it (it deletes Flathub to strip Nomad's only trust) but asserts nothing about the keyring file. Needs one VM assertion.
+- **Privilege coverage is per-verb and uneven**: install, mask, remote-add and remote-delete are asserted in both scopes; the system-scope uninstall, the system-scope repoint, and the whole system-scope filter write path have no sudo assertion, and the user-scope uninstall test is substring-based so a `sudo ` prefix would pass it.
+- **Two documentation defects, not behaviour defects**: the module docstring still claims a keyless verified remote is "refused outright" (the code warns and provisions, which is what the article requires and what a test asserts); and the VM filter test's assertion message names a non-existent `flatpak_sync._FILTERED_OPTION`.
+- **One genuine requirements ambiguity** flagged for the assembler: `PKG-FR-FLATPAK-FILTER`'s "a remote the source does not restrict MUST NOT stay restricted on the target" is unscoped and, read literally, contradicts `PKG-FR-FLATPAK-REMOTE-DERIVED`. The code takes the narrow (derived-remotes-only) reading.</result>
+<usage><subagent_tokens>255535</subagent_tokens><tool_uses>26</tool_uses><duration_ms>496856</duration_ms></usage>
+</task-notification>
