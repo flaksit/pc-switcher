@@ -303,7 +303,7 @@ class VscodeStateSyncJob(SyncJob):
             # Not applicable is not synced: no state DB exists to merge, so the job did
             # nothing rather than converging anything.
             self._report_progress(ProgressUpdate(percent=100))
-            raise JobSkipped(self.name, "no VS Code state DBs found on source")
+            raise JobSkipped(self.name, f"no VS Code state DBs found on {self.context.source_hostname}")
 
         total = len(present)
         self._log(Host.SOURCE, LogLevel.INFO, f"{prefix}Syncing VS Code state DBs")
@@ -358,7 +358,7 @@ class VscodeStateSyncJob(SyncJob):
             try:
                 _run_sql(local_tmp, source_strip_sql(globs))
             except sqlite3.Error as error:
-                self._raise(Host.SOURCE, label, "source-strip", str(error))
+                self._raise(Host.SOURCE, label, "preserved-key strip", str(error))
 
             # Step B — transfer the neutral DB into the target live DB's directory.
             # Ensure that directory exists first: folder_sync normally creates it, but
@@ -368,10 +368,10 @@ class VscodeStateSyncJob(SyncJob):
             mkdir = await self.target.run_command(
                 f"mkdir --parents {shlex.quote(Path(target_db).parent.as_posix())}",
                 login_shell=False,
-                mutates=f"create the editor state directory for {label} on the target",
+                mutates=f"create the editor state directory for {label}",
             )
             if not mkdir.success:
-                self._raise(Host.TARGET, label, "mkdir target dir", mkdir.stderr)
+                self._raise(Host.TARGET, label, "state-directory creation", mkdir.stderr)
             await self.target.send_file(
                 local_tmp, remote_tmp, mutates=f"upload this machine's {label} to a staging file beside the live one"
             )
@@ -381,16 +381,16 @@ class VscodeStateSyncJob(SyncJob):
                 inject = await self.target.run_command(
                     target_sql_command(remote_tmp, target_inject_sql(target_db, globs)),
                     login_shell=False,
-                    mutates=f"write the target's own preserved {label} keys into the staged copy",
+                    mutates=f"write this machine's own preserved {label} keys into the staged copy",
                 )
                 if not inject.success:
-                    self._raise(Host.TARGET, label, "target-inject", inject.stderr)
+                    self._raise(Host.TARGET, label, "preserved-key merge", inject.stderr)
 
             # Atomic replace within the same directory.
             move = await self.target.run_command(
                 f"mv --force {shlex.quote(remote_tmp)} {shlex.quote(target_db)}",
                 login_shell=False,
-                mutates=f"replace the target's live {label} with the merged database, discarding the current file",
+                mutates=f"replace the live {label} with the merged database, discarding the current file",
             )
             if not move.success:
                 self._raise(Host.TARGET, label, "atomic mv", move.stderr)

@@ -71,7 +71,9 @@ class InstallOnTargetJob(SystemJob):
         return await self.target.run_command(
             cmd,
             login_shell=False,
-            mutates=f"install pc-switcher {label} on the target, replacing any existing installation",
+            mutates=(
+                f"install pc-switcher {label} on {self.context.target_hostname}, replacing any existing installation"
+            ),
         )
 
     async def execute(self) -> None:
@@ -127,7 +129,7 @@ class InstallOnTargetJob(SystemJob):
             )
             result = await self._run_install(source_release)
             if not result.success:
-                raise RuntimeError(f"Failed to install pc-switcher on target: {result.stderr}")
+                raise RuntimeError(f"Failed to install pc-switcher on {self.context.target_hostname}: {result.stderr}")
             installed_version_str = source_release.tag
 
         # Verify installation (login_shell ensures PATH includes ~/.local/bin)

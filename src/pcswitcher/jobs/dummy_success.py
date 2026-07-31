@@ -134,4 +134,4 @@ class DummySuccessJob(SyncJob):
         # Wait for process to complete
         result = await process.wait()
         if result.exit_code != 0:
-            raise RuntimeError(f"Target phase failed: {result.stderr}")
+            raise RuntimeError(f"Phase on {self.context.target_hostname} failed: {result.stderr}")

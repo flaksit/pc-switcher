@@ -277,7 +277,8 @@ class EtcApt:
                 f"ROLLBACK INCOMPLETE, {len(rollback_failures)} file(s) left unrestored "
                 f"(backup kept at {backup_dir}): {'; '.join(rollback_failures)}"
             )
-        return "target apt recovered after rollback" if reprobe.success else "target apt still broken after rollback"
+        recovered = "apt recovered after rollback" if reprobe.success else "apt still broken after rollback"
+        return f"{self._machines.target} {recovered}"
 
     def _record_failure(self, group_diffs: Sequence[ItemDiff], marker_present: bool, message: str) -> None:
         """Mark every `group_diffs` item (and the metadata-refresh marker, if present)
