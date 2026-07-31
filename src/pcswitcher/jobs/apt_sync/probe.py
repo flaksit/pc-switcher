@@ -794,14 +794,15 @@ class AptProbe:
         the target's packages this file feeds, so `names` carries the union of the two
         populations and each caller reads its own subset back out.
 
-        The withholding caller counts the target's manually-installed set plus its
+        The withholding caller counts everything installed on the target plus its
         machine-specific marks; the conflict caller counts the marks alone. Marks are in both
         because a machine-specific package is structurally invisible — `filter_inert` drops
         it from the target manifest before anything is diffed, so it can never produce an
         `ItemDiff` of its own — and the user's explicit "this machine keeps this" is exactly
-        the promise a silent deletion or repoint breaks. Automatically-installed packages are
-        in neither: apt pulled them in for something else and removes them as unused once
-        that something goes.
+        the promise a silent deletion or repoint breaks. Automatically-installed packages
+        count as usage: `commands.remove_args` runs `apt-get remove`, never `autoremove`, so
+        nothing in this job takes one away when its reason goes, and a manual package the
+        user keeps can require it regardless.
 
         There is no key counterpart: a signing key is never offered for deletion or change,
         so there is no review text for one to carry. The user approves the REPOSITORY;

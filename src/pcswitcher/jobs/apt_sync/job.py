@@ -280,9 +280,7 @@ class AptSyncJob(PackageSyncJob):
         )
         collateral_diffs = await collateral.plan_time(base_plan.diffs)
 
-        repo_diffs = await self._plan_repo_diffs(
-            source_facts, target_facts, origins, collateral, base_plan.diffs, target_manual_set
-        )
+        repo_diffs = await self._plan_repo_diffs(source_facts, target_facts, origins, collateral, base_plan.diffs)
 
         if not collateral_diffs and not repo_diffs and not self._conflicts:
             return base_plan
@@ -414,7 +412,6 @@ class AptSyncJob(PackageSyncJob):
         origins: OriginClassifier,
         collateral: Collateral,
         package_diffs: Sequence[ItemDiff],
-        target_manual_set: frozenset[str],
     ) -> list[ItemDiff]:
         """Capture the two remaining `/etc/apt` directories and diff the item classes that
         still HAVE a review direction (D-11/D-13, ADR-020 D-37), by whole-file digest.
@@ -428,9 +425,10 @@ class AptSyncJob(PackageSyncJob):
         installs, before any diff is built:
 
         - a repository the source no longer has is WITHHELD outright while the target still
-          gets software from it (`PKG-FR-REPO-DELETE`). Usage is counted after this run's own
-          removal candidates, which is the approve-everything reading the review has not
-          happened yet to improve on, and machine-specific marks count as usage always —
+          gets software from it (`PKG-FR-REPO-DELETE`). "Anything" is every package installed
+          there, automatic ones included, plus its machine-specific marks. Usage is counted
+          after this run's own removal candidates, which is the approve-everything reading
+          the review has not happened yet to improve on; marks count as usage always, since
           they are never removal candidates.
         - a repository the two machines disagree about becomes a question only when it is
           also one this run would write for an approved package (`PKG-FR-REPO-CONFLICT`), the
@@ -457,9 +455,20 @@ class AptSyncJob(PackageSyncJob):
         # ONE batched policy call answers both follow-ups (§4.4): withholding a repository
         # still in use and triggering the conflict question are the same computation over two
         # filename sets and two package populations.
+        #
+        # Counted over everything dpkg has installed, not the manual set: `remove_args` runs
+        # `apt-get remove`, never `autoremove`, so nothing here takes an automatically-
+        # installed package away when its reason goes, and a manual package the user keeps
+        # can require it regardless. Deleting its only repository strands it. The wider set
+        # costs one `apt-cache policy` over roughly 4000 names instead of a few hundred —
+        # measured on `ubuntu:24.04` at 1.1s and 0.9MB of output — paid only by a run that
+        # found a target-only or conflicting repository.
         conflict_candidates = changed & self._files_an_approval_would_write(package_diffs, origins)
+        counted: frozenset[str] = frozenset()
+        if extra or conflict_candidates:
+            counted = await self._installed_on_target() | marked
         by_file = await self._probe.packages_by_source_file(
-            extra | conflict_candidates, sorted(target_manual_set | marked), target_facts.refs
+            extra | conflict_candidates, sorted(counted), target_facts.refs
         )
         going = {
             package_name(diff.item_id)

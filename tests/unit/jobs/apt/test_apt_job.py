@@ -49,6 +49,7 @@ from tests.unit.jobs.apt.helpers import (
     decision_file,
     differing_repo_context,
     install_reviewer,
+    installed_on_target,
     make_context,
     real_installs,
     respond_to,
@@ -341,7 +342,7 @@ class TestRepoRemovalWithheldWhileInUse:
     """`PKG-FR-REPO-DELETE` — a repository the target still gets software from is not a
     review item at all, rather than an item disclosing what its deletion would strand.
 
-    Usage counts the target's manually-installed set plus the packages it marked
+    Usage counts every package installed on the target plus the ones it marked
     machine-specific, minus this run's own removal candidates. A marked package is why the
     rule cannot be left to the user's judgement: `filter_inert` drops it from the target
     manifest, so it produces no `ItemDiff` in any run and nothing else in the review would
@@ -413,6 +414,31 @@ class TestRepoRemovalWithheldWhileInUse:
                 ),
                 "apt-mark showmanual": CommandResult(0, "vendor-tool\n", ""),
                 "dpkg-query": CommandResult(0, "vendor-tool\t1.0\n", ""),
+            },
+        )
+        job = AptSyncJob(context)
+
+        plan = await job.plan()
+
+        assert "apt:source:vendor.list" not in {d.item_id for d in plan.diffs}
+
+    @pytest.mark.asyncio
+    async def test_a_repository_only_an_automatic_package_uses_is_withheld(self) -> None:
+        """Counting the manual set alone offered this file for deletion. Nothing here takes
+        `auto-dep` away with it — `remove_args` runs `apt-get remove`, never `autoremove` —
+        and a manual package the user keeps can require it, so deleting its only repository
+        strands an installed package.
+        """
+        context, _source, _target = make_context(
+            source_responses=_NO_PACKAGES,
+            target_responses={
+                **self._target_responses(
+                    source_files={"vendor.list": _VENDOR_LIST},
+                    source_digests=sha256_line("d1", "vendor.list"),
+                    decisions="machine_specific: {}\n",
+                    policy=_policy_block("auto-dep", "https://vendor.example.com/apt"),
+                ),
+                "db:Status-Status": installed_on_target("auto-dep"),
             },
         )
         job = AptSyncJob(context)

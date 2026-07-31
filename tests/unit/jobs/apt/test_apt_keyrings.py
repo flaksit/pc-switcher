@@ -37,6 +37,7 @@ from tests.unit.jobs.apt.helpers import (
     install_reviewer,
     key_writes,
     make_context,
+    respond_to,
     sha256_line,
 )
 
@@ -71,10 +72,7 @@ def _scanning_target(
             if sources_list:
                 scan += _scan_line("sources.list", sources_list, path="/etc/apt/sources.list")
             return CommandResult(0, scan, "")
-        for pattern, result in responses.items():
-            if pattern in cmd:
-                return result
-        return CommandResult(0, "", "")
+        return respond_to(responses)(cmd)
 
     return _side_effect
 

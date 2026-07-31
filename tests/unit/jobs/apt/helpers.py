@@ -46,21 +46,28 @@ def respond_to(
 ) -> Callable[..., CommandResult]:
     """Build a run_command side_effect matching by substring (first match wins).
 
-    A `dpkg-query` key answers two different questions — the version query and
-    `capture_target_installed`'s status query — so the status one is derived from the
-    version answer unless the mapping states it: a fixture saying the machine has `pkg-a` at
-    1.0 has said `pkg-a` is installed there. A test with a hold on a package the machine
-    does NOT have overrides it with its own `db:Status-Status` key.
+    `capture_target_installed`'s status query is DERIVED unless the mapping states it: a
+    fixture saying the machine has `pkg-a` at 1.0, or that `pkg-a` is in its manual set, has
+    said `pkg-a` is installed there. A fixture with no opinion answers a placeholder, since
+    a machine with nothing installed does not exist and the probe refuses that silence. A
+    test that needs the two to DISAGREE — which is what a stale hold is — states its own
+    `db:Status-Status` key.
     """
     fallback = default if default is not None else CommandResult(exit_code=0, stdout="", stderr="")
 
     def _side_effect(cmd: str, **_: object) -> CommandResult:
+        if _STATUS_QUERY in cmd and not any(_STATUS_QUERY in pattern for pattern in mapping):
+            names = {
+                line.split("\t")[0]
+                for pattern, result in mapping.items()
+                if pattern in ("dpkg-query", "apt-mark showmanual")
+                for line in result.stdout.splitlines()
+                if line
+            }
+            return installed_on_target(*sorted(names or {"placeholder-installed"}))
         for pattern, result in mapping.items():
-            if pattern not in cmd:
-                continue
-            if _STATUS_QUERY in cmd and _STATUS_QUERY not in pattern:
-                return installed_on_target(*(line.split("\t")[0] for line in result.stdout.splitlines() if line))
-            return result
+            if pattern in cmd:
+                return result
         return fallback
 
     return _side_effect
@@ -161,10 +168,7 @@ def respond_with_policy_sequence(
             index = min(state["policy_calls"], len(policy_results) - 1)
             state["policy_calls"] += 1
             return policy_results[index]
-        for pattern, result in mapping.items():
-            if pattern in cmd:
-                return result
-        return fallback
+        return respond_to(mapping, fallback)(cmd)
 
     return _side_effect
 

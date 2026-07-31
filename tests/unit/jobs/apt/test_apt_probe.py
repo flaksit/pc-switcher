@@ -37,6 +37,7 @@ from tests.unit.jobs.apt.helpers import (
     decision_file,
     differing_repo_context,
     install_reviewer,
+    installed_on_target,
     make_context,
     respond_to,
     sha256_line,
@@ -1305,6 +1306,7 @@ class TestAReadThatDidNotAnswer:
                 _SOURCE_SCAN_CMD: CommandResult(0, _scan_line("vendor.list", _VENDOR_LIST), ""),
                 "find /etc/apt/sources.list.d": CommandResult(0, sha256_line("d1", "vendor.list"), ""),
                 "apt.decisions.yaml": CommandResult(0, decision_file("apt:package:vendor-tool"), ""),
+                "db:Status-Status": installed_on_target("vendor-tool"),
                 "apt-cache policy": CommandResult(100, "", "E: Unable to read the package lists\n"),
             },
         )
