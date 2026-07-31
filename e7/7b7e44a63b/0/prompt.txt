@@ -602,3 +602,18 @@ Ten register entries deleted (E36, E37, E49, E53, E88, E89, "E113, E115", F72, G
 Two fixture risks worth flagging, both of which fail legibly at setup rather than silently: E53 depends on `snap set system store.access=offline` (snapd ≥ 2.60), and E49 depends on `snap try` accepting a directory whose declared base is already installed. Nothing was committed or staged.</result>
 <usage><subagent_tokens>360615</subagent_tokens><tool_uses>107</tool_uses><duration_ms>1597649</duration_ms></usage>
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>a2057ebee4028d2c7</task-id>
+<tool-use-id>toolu_01TzobjUPyrfbZ2ebZ3MMXHJ</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/81c7a538-876b-47ee-bd10-6f31ec117d7e/tasks/a2057ebee4028d2c7.output</output-file>
+<status>completed</status>
+<summary>Agent "Questions built after answers exist" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Everything I intended is present in the tree — all four docs (system pipeline/mermaid/repo-delete count/collateral protection, jobs doc's four passages, ADR-020 D-24's three new paragraphs, and every matrix change), all nine rows (C172, C176, C177, D46, D47, H175–H177, N12) with the `‼` marks dropped and the question section, the C172/N12 defect entry and the stale D46 gap entry gone, and all seven code symbols plus every docstring and comment line I wrote, including `_reason`'s same-run-mark sentence. Nothing was lost; nothing re-applied.
+
+Re-verified after the check: 4301 passed, ruff format/check clean, codespell clean, basedpyright 0 errors, nothing staged. (Test count is up from 4285 — the other agent has been adding tests in their own files.) Noted on the stash: my report was wrong about it lingering.</result>
+<usage><subagent_tokens>408433</subagent_tokens><tool_uses>6</tool_uses><duration_ms>109070</duration_ms></usage>
+</task-notification>
