@@ -44,6 +44,24 @@ app.add_typer(self_app, name="self")
 console = Console()
 
 
+def _print_labeled(
+    out: Console, label: str, detail: str, *, label_style: str = "bold red", detail_style: str = ""
+) -> None:
+    """Print `label` in `label_style`, then `detail` rendered literally.
+
+    `detail` carries text pc-switcher did not author — package-manager stderr, `uv`
+    output, OSError text, log-file content, arguments the user typed. In a Rich markup
+    string a `[...]`-shaped substring is consumed as a style tag: `[installed]` silently
+    vanishes from the message and `[/usr/bin/apt]` raises MarkupError, which at the
+    end-of-run summary crashes the run after all its work is done. A `Text` never parses
+    markup, so every such value goes through here instead of an f-string.
+
+    `out` is explicit rather than defaulting to the module-level `console`, because
+    `_maybe_check_for_update` renders to the console it is handed, not to that global.
+    """
+    out.print(Text.assemble((label, label_style), " ", (detail, detail_style)))
+
+
 def _load_configuration(config_path: Path) -> Configuration:
     """Load configuration with helpful error messages.
 
@@ -64,19 +82,19 @@ def _load_configuration(config_path: Path) -> Configuration:
         # Check if this is a missing config file error
         config_missing = any("not found" in error.message.lower() for error in e.errors)
         if config_missing:
-            console.print(f"  {config_path}: Configuration file not found")
+            console.print(Text(f"  {config_path}: Configuration file not found"))
             console.print("\nTo initialize configuration, run:")
             console.print("  [cyan]pc-switcher init[/cyan]")
         else:
             for error in e.errors:
                 if error.job:
-                    console.print(f"  [yellow]{error.job}[/yellow].{error.path}: {error.message}")
+                    console.print(Text.assemble("  ", (error.job, "yellow"), f".{error.path}: {error.message}"))
                 else:
-                    console.print(f"  {error.path}: {error.message}")
+                    console.print(Text(f"  {error.path}: {error.message}"))
 
         raise typer.Exit(1) from e
     except Exception as e:
-        console.print(f"[bold red]Error loading configuration:[/bold red] {e}")
+        _print_labeled(console, "Error loading configuration:", str(e))
         raise typer.Exit(1) from e
 
 
@@ -180,10 +198,10 @@ def _display_log_file(log_file: Path) -> None:
 
                 except json.JSONDecodeError:
                     # Handle malformed lines gracefully
-                    console.print(f"[dim]Line {line_num}:[/dim] {line}")
+                    _print_labeled(console, f"Line {line_num}:", line, label_style="dim")
 
     except OSError as e:
-        console.print(f"[bold red]Error reading log file:[/bold red] {e}")
+        _print_labeled(console, "Error reading log file:", str(e))
         sys.exit(1)
 
 
@@ -385,7 +403,8 @@ async def _async_run_sync(
             # collected rather than raised (D-27), so the exit code comes from the session
             # status the orchestrator derived from job_results, not from "nothing raised".
             if session.status is SessionStatus.FAILED:
-                console.print(f"\n[bold red]Sync finished with failures:[/bold red] {session.error_message}")
+                console.print()
+                _print_labeled(console, "Sync finished with failures:", session.error_message or "no reason recorded")
                 return 1
             return 0
 
@@ -399,18 +418,19 @@ async def _async_run_sync(
         # The orchestrator already logged this once at WARNING; print a single
         # calm summary here instead of falling through to the red "Sync failed"
         # message, which would duplicate what the user just declined.
-        console.print(f"[yellow]Sync aborted:[/yellow] {e}")
+        _print_labeled(console, "Sync aborted:", str(e), label_style="yellow")
         return 1
 
     except SyncLockedError as e:
         # The orchestrator already logged this once at WARNING; print a single
         # calm summary (with the how-to-unblock guidance carried in the message)
         # instead of the red "Sync failed" path — a lock conflict is retryable.
-        console.print(f"[yellow]Sync blocked:[/yellow] {e}")
+        _print_labeled(console, "Sync blocked:", str(e), label_style="yellow")
         return 1
 
     except Exception as e:
-        console.print(f"\n[bold red]Sync failed:[/bold red] {e}")
+        console.print()
+        _print_labeled(console, "Sync failed:", str(e))
         return 1
 
     finally:
@@ -491,7 +511,7 @@ def cleanup_snapshots(
         try:
             max_age_days = parse_older_than(older_than)
         except ValueError as e:
-            console.print(f"[bold red]Error:[/bold red] {e}")
+            _print_labeled(console, "Error:", str(e))
             sys.exit(1)
     else:
         max_age_days = cfg.btrfs_snapshots.max_age_days
@@ -543,7 +563,7 @@ def init(
         for name in filter_file_names:
             (config_path.parent / name).write_text(files("pcswitcher").joinpath(name).read_text())
     except OSError as e:
-        console.print(f"[bold red]Error writing configuration:[/bold red] {e}")
+        _print_labeled(console, "Error writing configuration:", str(e))
         raise typer.Exit(1) from e
 
     console.print(f"[green]Created configuration file:[/green] {config_path}")
@@ -690,11 +710,11 @@ def _resolve_target_version(version: str | None, prerelease: bool) -> Release:
             parsed_version = Version.parse(version)
             release = parsed_version.get_release()
             if release is None:
-                console.print(f"[bold red]Error:[/bold red] Version {version} is not a GitHub release")
+                _print_labeled(console, "Error:", f"Version {version} is not a GitHub release")
                 sys.exit(1)
             return release
         except ValueError:
-            console.print(f"[bold red]Error:[/bold red] Invalid version format: {version}")
+            _print_labeled(console, "Error:", f"Invalid version format: {version}")
             sys.exit(1)
 
     console.print("[dim]Checking for latest version...[/dim]")
@@ -707,7 +727,7 @@ def _resolve_target_version(version: str | None, prerelease: bool) -> Release:
                 "Use --prerelease to install a pre-release version."
             )
         else:
-            console.print(f"[bold red]Error:[/bold red] {e}")
+            _print_labeled(console, "Error:", str(e))
         sys.exit(1)
 
 
@@ -751,12 +771,12 @@ def update(
     except UpgradeNotStartedError as e:
         # `uv` missing from PATH or otherwise unspawnable — surface a clean error
         # instead of a raw traceback. Nothing was installed.
-        console.print(f"[bold red]Error:[/bold red] Could not run the upgrade: {e}")
+        _print_labeled(console, "Error:", f"Could not run the upgrade: {e}")
         sys.exit(1)
     except UpdateFailedError as e:
-        console.print(f"[bold red]Error:[/bold red] {e}")
+        _print_labeled(console, "Error:", str(e))
         if e.detail:
-            console.print(f"[dim]{e.detail}[/dim]")
+            console.print(Text(e.detail, style="dim"))
         sys.exit(1)
 
     console.print(f"[green]Successfully updated to version {target_display}[/green]")
@@ -802,7 +822,7 @@ def _maybe_check_for_update(console: Console, *, no_version_check: bool) -> None
         current = get_this_version()
         latest = get_highest_release(include_prereleases=False)
     except Exception as e:
-        console.print(f"[yellow]Warning:[/yellow] Could not check for updates: {e}")
+        _print_labeled(console, "Warning:", f"Could not check for updates: {e}", label_style="yellow")
         return
 
     if latest.version <= current:
@@ -821,15 +841,20 @@ def _maybe_check_for_update(console: Console, *, no_version_check: bool) -> None
     except UpgradeNotStartedError as e:
         # `uv` never ran (e.g. not on PATH): the on-disk install is untouched, so
         # the current process is not stale — warn and let the command proceed.
-        console.print(f"[yellow]Warning:[/yellow] Could not run the upgrade: {e}. Continuing on the current version.")
+        _print_labeled(
+            console,
+            "Warning:",
+            f"Could not run the upgrade: {e}. Continuing on the current version.",
+            label_style="yellow",
+        )
         return
     except UpdateFailedError as e:
         # uv already modified the on-disk install but it did not end verified-good.
         # The running process may now be stale, so we must NOT continue: exit and
         # point the user at a clean recovery.
-        console.print(f"[bold red]Error:[/bold red] Upgrade failed: {e}")
+        _print_labeled(console, "Error:", f"Upgrade failed: {e}")
         if e.detail:
-            console.print(f"[dim]{e.detail}[/dim]")
+            console.print(Text(e.detail, style="dim"))
         console.print(
             "The installation may be in an inconsistent state. Run "
             "[cyan]pc-switcher self update[/cyan] to restore a known-good version, then retry."
@@ -851,9 +876,11 @@ def _maybe_check_for_update(console: Console, *, no_version_check: bool) -> None
         # is already installed and verified on disk, making the current in-memory
         # process stale. Do not continue it (a later lazy import could load the new,
         # mismatched code); exit and let the user re-run under the new binary.
-        console.print(
-            f"[bold red]Error:[/bold red] Upgraded to {installed.semver_str()}, but could not restart "
-            f"automatically ({e}). Please re-run your command."
+        _print_labeled(
+            console,
+            "Error:",
+            f"Upgraded to {installed.semver_str()}, but could not restart automatically ({e}). "
+            "Please re-run your command.",
         )
         raise typer.Exit(1) from e
 
