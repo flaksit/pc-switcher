@@ -46,6 +46,10 @@ Articles and the whole doc surface against finished code. `02-DOC-DEBT.md` empty
 
 ADR-020 and ADR-021 leave Draft once the code matches them.
 
+## The scenario matrix
+
+`docs/dev/package-sync-scenario-coverage.md`, rebuilt from the 130 articles. Scenario ids were reassigned in that rebuild, so an id quoted in an older document in this directory means nothing in the new one. It outlives the phase; the documents here do not.
+
 ## How to work
 
 Commit with an explicit pathspec: `git commit -F - -- path1 path2`. Never `git add -A`, never a bare `git commit` — the user stages their own files in the same tree.

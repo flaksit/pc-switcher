@@ -21,6 +21,7 @@ Instructions and expectations for AI agents when developing:
 
 - [development-guide.md](dev/development-guide.md) - Development workflow and code expectations
 - [testing-guide.md](dev/testing-guide.md) - How to write tests
+- [package-sync-scenario-coverage.md](dev/package-sync-scenario-coverage.md) - Every branch the package sync requirements impose, the test that proves each, and what is still unproven
 
 ## For Operations (`ops/`)
 

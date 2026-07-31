@@ -33,7 +33,7 @@ conventions established below by the tracer.
 
 `TestPackageSyncIdempotency`, `TestSnapHoldCaptureTiming`, `TestBlockStateDecisionRoundTrip`
 and `TestCrossDirectionRoundTrips` cover what only more than one run can show
-(02-SCENARIO-COVERAGE.md J10/N2, L10, N3, N4, C24): that a converged pair is a fixed
+(docs/dev/package-sync-scenario-coverage.md N8, E71, N4, N5, N9, N13): that a converged pair is a fixed
 point, that a system-wide snapd `refresh.hold` does not mask the per-snap `held` note
 snap_sync reads inside that same window (#208 D9's promised VM check), that a
 skip-always recorded against a hold silences it in the next run, and that an install
