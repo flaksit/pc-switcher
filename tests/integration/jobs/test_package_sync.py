@@ -81,7 +81,13 @@ from pcswitcher.jobs.apt_sync.items import AptPackageItem, collateral_item_id
 from pcswitcher.jobs.flatpak_sync import FlatpakItem
 from pcswitcher.jobs.manual_installs_sync import UnreproducibleItem
 from pcswitcher.jobs.packages.review import PACKAGE_REVIEW_AUTOMATION_ENV, Decision
-from pcswitcher.jobs.packages.state import DECISION_FILE_RELPATH_TEMPLATE, DecisionFile, Snippet, SnippetRegistry
+from pcswitcher.jobs.packages.state import (
+    DECISION_FILE_RELPATH_TEMPLATE,
+    SNIPPET_REGISTRY_RELPATH,
+    DecisionFile,
+    Snippet,
+    SnippetRegistry,
+)
 from pcswitcher.models import CommandResult
 
 pytestmark = pytest.mark.area_package
@@ -3990,6 +3996,9 @@ class TestTheSnapExclusionIsBuiltFromTheTargetsOwnSnapList:
     target machine and getting the revision its snapd is genuinely active at. That handoff is
     the whole of what this costs two VMs for — the rest of the article is settled as strings
     at the unit tier.
+
+    Two shapes of one listing, one test each: an app pc2 holds, where the answer names a
+    revision, and an app pc2 holds no revision of, where it names nothing at all.
     """
 
     async def test_the_revision_the_targets_snapd_holds_is_the_one_that_travels(
@@ -4088,6 +4097,250 @@ class TestTheSnapExclusionIsBuiltFromTheTargetsOwnSnapList:
                 await _put_paths_back(pc1_executor, source_aside, [snap_root])
             if target_aside:
                 await _put_paths_back(pc2_executor, target_aside, [snap_root])
+
+    async def test_an_app_the_target_holds_no_revision_of_keeps_every_revision_dir_home(
+        self,
+        pc1_executor: BashLoginRemoteExecutor,
+        pc2_executor: BashLoginRemoteExecutor,
+        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
+        pc2_with_pcswitcher: BashLoginRemoteExecutor,
+        reset_pcswitcher_state: None,
+    ) -> None:
+        """E115 — pc1 has a snap pc2 does not, the install is declined, and no revision
+        directory of that app reaches pc2 — while `~/snap/<app>/common`, which belongs to no
+        revision, does.
+
+        The same read of pc2's own `snap list` the test above rests on, over the other answer
+        it can give: no entry for the app at all, rather than an entry naming a different
+        revision. Only a real run can produce that answer honestly — the app is absent from
+        pc2 because pc2's snapd genuinely never installed it, the decline being what leaves it
+        that way, and `folder_sync` reads that state itself after `snap_sync` has run
+        (`PKG-FR-JOB-ORDER`).
+
+        `common` arriving is the witness: it sits inside the same app directory and is never
+        excluded, so the revision directory's absence is the exclusion at work rather than a
+        transfer that never reached the app's tree.
+
+        `~/snap` alone is the synced folder, and both machines' real one is set aside for the
+        duration, for the reason the test above states.
+        """
+        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
+
+        home = await _home_dir(pc1_executor)
+        assert await _home_dir(pc2_executor) == home, (
+            "the two machines' SSH users have different home directories, so `~/snap` is not one path to mirror"
+        )
+        snap_root = f"{home}/snap"
+
+        # The second fixture snap, so the app whose revisions the test above works inside is
+        # left alone: this one is removed from pc2 outright.
+        absent_app = (await _snap_subjects(pc1_executor, pc2_executor, count=2))[1]
+        source_revision = await _snap_revision(pc1_executor, absent_app)
+        target_revision = await _snap_revision(pc2_executor, absent_app)
+        assert source_revision and target_revision, (
+            f"{absent_app} must be installed on both machines before this test removes it from pc2"
+        )
+
+        uniq = uuid4().hex[:12]
+        revision_dir = f"{snap_root}/{absent_app}/{source_revision}"
+        revision_marker = f"{revision_dir}/pcswitcher-it-{uniq}"
+        common_marker = f"{snap_root}/{absent_app}/common/pcswitcher-it-{uniq}"
+
+        source_aside = ""
+        target_aside = ""
+        removed = False
+        try:
+            # `--purge` leaves snapd no snapshot behind, so the machine ends this test as it
+            # started it once the snap is put back.
+            purged = await pc2_executor.run_command(
+                f"sudo snap remove --purge {shlex.quote(absent_app)}", login_shell=False, timeout=180.0
+            )
+            assert purged.success, f"could not remove {absent_app} from pc2: {purged.stderr}"
+            removed = True
+            assert await _snap_revision(pc2_executor, absent_app) is None, (
+                f"{absent_app} is still installed on pc2 after `snap remove --purge`, so pc2 holds a revision of it "
+                "and this run cannot exercise the branch"
+            )
+
+            source_aside = await _take_paths_aside(pc1_executor, [snap_root])
+            target_aside = await _take_paths_aside(pc2_executor, [snap_root])
+
+            # `current` decides which revision dir the source offers at all; without it the
+            # exclusion falls back to excluding every one for a different reason than the one
+            # under test.
+            build = "\n".join(
+                ["set -eu"]
+                + [
+                    f"mkdir --parents {shlex.quote(path.rsplit('/', 1)[0])}"
+                    for path in (revision_marker, common_marker)
+                ]
+                + [f"printf %s {uniq} > {shlex.quote(path)}" for path in (revision_marker, common_marker)]
+                + [
+                    f"ln --symbolic --no-dereference --force {shlex.quote(source_revision)} "
+                    f"{shlex.quote(f'{snap_root}/{absent_app}/current')}"
+                ]
+            )
+            built = await pc1_executor.run_command(build, login_shell=False, timeout=30.0)
+            assert built.success, f"could not build the ~/snap fixture on pc1: {built.stderr}"
+
+            await _write_package_sync_config(
+                pc1_executor,
+                extra_sections=_folder_sync_section(snap_root),
+                snap_sync=True,
+                folder_sync=True,
+            )
+
+            # The install is declined for this run, which is what keeps pc2 off every revision
+            # of the app. Stated rather than left to the automation hook's SKIP_ONCE default,
+            # since it is the premise of everything below.
+            decisions = {f"snap:{absent_app}": Decision.SKIP_ONCE}
+            sync_cmd = f"{_automation_env_assignment_multi(decisions)} pc-switcher sync pc2 --yes --allow-first-sync"
+            sync_result = await pc1_executor.run_command(sync_cmd, timeout=900.0, login_shell=True)
+            assert sync_result.success, (
+                f"pc-switcher sync exited {sync_result.exit_code}.\n"
+                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
+            )
+
+            assert await _snap_revision(pc2_executor, absent_app) is None, (
+                f"{absent_app} was installed on pc2 although its install was declined, so pc2 holds a revision of it "
+                f"and the absence below would prove nothing.\n"
+                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
+            )
+
+            listing = await pc2_executor.run_command(
+                f"find {shlex.quote(snap_root)} -mindepth 1 | sort", login_shell=False, timeout=30.0
+            )
+            assert listing.success, f"could not read pc2's {snap_root}: {listing.stderr}"
+            arrived = set(nonblank_lines(listing.stdout))
+
+            assert common_marker in arrived, (
+                f"{common_marker} did not reach pc2, so the mirror never reached {absent_app}'s tree at all and the "
+                f"absence of its revision directory says nothing.\n{listing.stdout}"
+            )
+            assert not any(path == revision_dir or path.startswith(f"{revision_dir}/") for path in arrived), (
+                f"a data directory for revision {source_revision} of {absent_app} exists on pc2, whose snapd holds no "
+                f"revision of that app at all.\n{listing.stdout}"
+            )
+        finally:
+            if source_aside:
+                await _put_paths_back(pc1_executor, source_aside, [snap_root])
+            if target_aside:
+                await _put_paths_back(pc2_executor, target_aside, [snap_root])
+            if removed:
+                await _restore_snap(pc2_executor, absent_app, target_revision)
+
+
+# The directory the install-snippet registry lives in, derived from the relpath
+# `packages.state` owns rather than restated, so moving the registry moves this with it.
+_REGISTRY_DIR_RELPATH = SNIPPET_REGISTRY_RELPATH.rsplit("/", 1)[0]
+
+
+class TestTheSnippetRegistrySurvivesAMirrorOfItsOwnDirectory:
+    """`PKG-FR-REGISTRY-CONSENT` where `folder_sync` could undo it: the registry travels only
+    as `manual_installs_sync`'s own push, which names the entries an overwrite would lose and
+    asks first, so a mirror of the same file is that transfer with the question removed.
+
+    The unit tests assert the `--filter` argument `folder_sync` builds for it. What they
+    cannot show is that argument holding against real rsync over the directory the registry
+    actually lives in — a `--delete` mirror that both overwrites and deletes, and carries
+    every other file in that directory across, while the target's own registry stands. The
+    exclusion is also built from live machine state: the path is resolved against the
+    invoking user's real home on the source and anchored to the transfer root.
+
+    The run has no terminal, one of the two shapes in which the push is never made, so
+    whatever reaches pc2's registry in it could only have come from the mirror.
+    """
+
+    async def test_a_deleting_mirror_of_the_registrys_directory_leaves_the_targets_copy_alone(
+        self,
+        pc1_executor: BashLoginRemoteExecutor,
+        pc2_executor: BashLoginRemoteExecutor,
+        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
+        pc2_with_pcswitcher: BashLoginRemoteExecutor,
+        reset_pcswitcher_state: None,
+    ) -> None:
+        """K88 — `folder_sync` mirrors the very directory the registry sits in and
+        `manual_installs_sync` runs with nobody to ask: pc2 ends the run holding its own
+        registry, entry for entry, and pc1's entry is nowhere in it.
+
+        The two machines hold registries that disagree — one entry each, neither known to the
+        other — which is exactly the loss `PKG-FR-REGISTRY-CONSENT` exists to put a question
+        in front of. pc1 also has a matching unowned `/opt` path, so the source's entry is one
+        this run genuinely has a use for rather than an inert line in a file.
+
+        A file of pc1's own beside the registry is the witness: it must arrive, or the mirror
+        never covered this directory and the registry surviving proves nothing about the
+        exclusion.
+
+        `~/.config/pc-switcher` alone is the synced folder — the tightest mirror that can
+        reach the registry at all, so the run touches nothing else on pc2, and the fixture
+        that clears that directory on both machines around every test is what makes each
+        registry exactly what this test wrote.
+        """
+        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
+
+        home = await _home_dir(pc1_executor)
+        assert await _home_dir(pc2_executor) == home, (
+            "the two machines' SSH users have different home directories, so the registry's directory is not one "
+            "path to mirror"
+        )
+        registry_dir = f"{home}/{_REGISTRY_DIR_RELPATH}"
+
+        uniq = uuid4().hex[:12]
+        source_path = f"/opt/pcswitcher-it-k88-source-{uniq}"
+        source_item = _unowned_item_id(source_path)
+        target_path = f"/opt/pcswitcher-it-k88-target-{uniq}"
+        target_item = _unowned_item_id(target_path)
+        target_body = f"# pc2's own snippet {uniq}"
+        travelling = f"{registry_dir}/pcswitcher-it-{uniq}"
+
+        try:
+            await _create_unowned_marker(pc1_executor, source_path)
+            await _author_snippet(pc1_executor, source_item, source_path, f"touch /tmp/pcswitcher-it-{uniq}")
+            await _author_snippet(pc2_executor, target_item, target_path, target_body)
+
+            await _write_package_sync_config(
+                pc1_executor,
+                extra_sections=_folder_sync_section(registry_dir),
+                manual_installs_sync=True,
+                folder_sync=True,
+            )
+            seeded = await pc1_executor.run_command(
+                f"printf %s {uniq} > {shlex.quote(travelling)}", login_shell=False, timeout=15.0
+            )
+            assert seeded.success, f"could not seed {travelling} on pc1: {seeded.stderr}"
+
+            # No pty and no automation hook: nobody is there to answer, so `manual_installs_sync`
+            # makes no push and the mirror is the only route left to the registry.
+            sync_result = await pc1_executor.run_command(
+                "pc-switcher sync pc2 --yes --allow-first-sync", timeout=900.0, login_shell=True
+            )
+            assert sync_result.success, (
+                f"pc-switcher sync exited {sync_result.exit_code}.\n"
+                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
+            )
+
+            arrived = await pc2_executor.run_command(f"cat {shlex.quote(travelling)}", login_shell=False, timeout=15.0)
+            assert arrived.success and arrived.stdout.strip() == uniq, (
+                f"{travelling} did not reach pc2, so the mirror never covered the directory the registry lives in and "
+                f"the registry surviving below says nothing.\nstdout: {arrived.stdout}\nstderr: {arrived.stderr}"
+            )
+
+            entries = await SnippetRegistry(pc2_executor).load()
+            assert source_item not in entries, (
+                f"pc1's snippet for {source_path} is in pc2's registry although nobody was asked: the registry "
+                f"reached pc2 without the question that is its only route.\nregistry holds: {sorted(entries)}"
+            )
+            assert set(entries) == {target_item}, (
+                f"pc2's registry is no longer its own: it holds {sorted(entries)} rather than the single entry "
+                f"{target_item} pc2 had before the run"
+            )
+            assert entries[target_item].body == target_body, (
+                f"pc2's own entry for {target_path} was overwritten: its body reads {entries[target_item].body!r} "
+                f"rather than {target_body!r}"
+            )
+        finally:
+            await _remove_unowned_marker(pc1_executor, source_path)
 
 
 class TestADeletedFlatpakRemoteTakesItsKey:
