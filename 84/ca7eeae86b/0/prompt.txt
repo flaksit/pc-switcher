@@ -1397,3 +1397,40 @@ New ids: **E119** only (a snap hold whose install was declined). Everything else
 - `note_declined` treats "no decision at all" as declined, which is the harmless default and the `PKG-FR-NO-TERMINAL` shape — but on such a run nothing is approved either, so the pass returns early and costs no command.</result>
 <usage><subagent_tokens>196377</subagent_tokens><tool_uses>87</tool_uses><duration_ms>847358</duration_ms></usage>
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>a8ff361c2eb856243</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/81c7a538-876b-47ee-bd10-6f31ec117d7e/tasks/a8ff361c2eb856243.output</output-file>
+<status>completed</status>
+<summary>Agent "Flatpak filter order and remote trust" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Both flatpak rulings are implemented, documented and verified.
+
+## The article text (`PKG-FR-FLATPAK-FILTER`, rewritten)
+
+&gt; A remote the source restricts with a filter MUST be replicated with that filter. The filter file MUST be copied byte-for-byte from the source to the same absolute path on the target and applied to the replicated remote. It is derived like a signing key and MUST NOT be a review item. The filter MUST be in force before the first approved application from that remote installs — the remote is added or repointed, its filter brought to the source's, and only then are the applications installed — and a remote the source does not restrict MUST NOT stay restricted on the target, its filter coming off in that same step. Both clauses reach only the remotes an approved application (or its dependency) needs… A filter that cannot be copied, written or applied MUST warn naming the remote and the path, and MUST fail every approved application from that remote. A source filter that denies an application the source itself has installed from that remote MUST end the run, before anything is written; the message MUST name the application, the remote and the filter, and MUST say the filter has to be corrected before syncing again.
+
+Three *Why* clauses: the path-not-content mechanism; the ordering (a filter put back after the installs leaves the remote unfiltered whenever the re-apply fails, and nothing about replicating applications requires that window); and the abort (the measured `Nothing matches` refusal is real, but the state is one machine contradicting itself — a bookkeeping failure of `PKG-FR-HOLD-WITHOUT-PACKAGE`'s kind). The narrative in `package-sync-user-requirements.md`, ADR-020's consequence bullet, `docs/system/package-sync.md` and `docs/jobs/package-sync.md` were moved with it.
+
+## What the code does now
+
+`apply()` is remote → filter → install → delete-unused. `_clear_target_filters` and `_apply_remote_filters` are replaced by one pass, `_converge_remote_filters`, run between the derived writes and the converge loop: the source's filter is copied and applied (`_apply_source_filter`), or the target's is taken off when the source does not restrict that remote (`_clear_target_filter`). Nothing is cleared for an install's benefit, so a filter that cannot land leaves the target's remote exactly as the run found it. A failure warns naming the remote and the path and is recorded in `_failed_remote_filters`, which `_converge_ref` reads exactly as it reads a failed derived write — so the applications whose **own** origin is that remote fail before any install is attempted (F113's rule survives; the post-loop failure merge in `apply()` is gone).
+
+`plan()` now calls `_abort_on_a_source_filter_that_denies_its_own_apps`, raising `SyncAbortedByUser` (the run ends ABORTED, one WARNING, nothing written). It evaluates the filter as flatpak does — `_filter_glob_to_regexp`/`_filter_denies` are transcribed from `flatpak_filter_glob_to_regexp`, `flatpak_parse_filters` and `flatpak_filters_allow_ref` at flatpak 1.14.6, quirks included — and a file that cannot be read, or that flatpak itself would reject, claims nothing, because an abort needs certainty.
+
+For trust: `_capture_source_remotes` adds one `cat &lt;repo&gt;/config` per scope on the source, `_parse_repo_config_key_paths` reads `gpgkeypath` out of it onto the new `FlatpakRemoteItem.key_paths` (`compare=False` — the target never reports one), and `_stage_source_keys`/`_gpgkeypath_files` carry the files it names byte-for-byte, never over the network. `;` and `,` both separate entries and a named directory means every regular file in it, per libostree v2024.5. Those keys travel **alongside** the machine anchors, not instead of them: I read `_ostree_repo_gpg_prepare_verifier` at v2024.5 and a per-remote `trustedkeys.gpg` sets `add_global_keyrings = FALSE` while `gpgkeypath` does not. `_warn_about_trust`, `_trust_mutation_phrase` and `_write_derived_remote`'s equality short-circuit all account for it.
+
+## Rows
+
+Rewritten: **F43** (‼ → U, the key travels), **F100** (now the abort), **F101** (source filter replaces the target's before the install, no `--no-filter`), **F102**, **F103**, **F108**, **F109** (warning), **F110**, **F115**, **F116**, **F117** (‼ → U: a filter that cannot be applied leaves the target's own in force and installs nothing), **F40** (gpgkeypath file included), **F99** (renamed test). New: **F151** (a file flatpak would reject does not end the run), **F152** (directory and multi-path `gpgkeypath`), **F153** (gpgkeypath alongside the anchors). No row deleted, no id renumbered. Both flatpak entries under "Where the tool does not yet meet these requirements" are gone — the FILTER one deleted, the TRUST one trimmed to the "no key material anywhere" cost the article itself states. F101's `V` was dropped: the integration test's run 1 provisions a remote the target does not have, so it never proved a target-carried filter being replaced.
+
+## Verification
+
+`uv run pytest -q` 4427 passed · `ruff format` clean · `ruff check` clean · `basedpyright` 0 errors · `codespell` clean. Nothing committed or staged.
+
+Two things worth flagging: I touched `tests/unit/test_mutates_audit.py` (one read-count line, forced by the new config read) and two docstrings/assertion strings in `tests/integration/jobs/test_package_sync.py` that named the deleted symbols — its behavioural assertions still hold under the new order, and its filter body is allow-only so it never triggers the abort. I left `.planning/phases/02-.../02-DIVERGENCES.md`'s historical entries alone; they still describe the clear-then-install design, and sweeping them belongs to the later doc-sweep items.</result>
+<usage><subagent_tokens>342735</subagent_tokens><tool_uses>166</tool_uses><duration_ms>1631183</duration_ms></usage>
+</task-notification>
