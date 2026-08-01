@@ -1,0 +1,97 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "1e76830184ed",
+  "session_id": "81c7a538-876b-47ee-bd10-6f31ec117d7e",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-01T14:03:11.232481523Z",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 2,
+  "save_step_count": 2,
+  "files_touched": [
+    "docs/adr/adr-020-declarative-package-convergence.md",
+    "docs/dev/package-sync-scenario-coverage.md",
+    "tests/integration/jobs/test_package_sync.py",
+    "tests/unit/jobs/apt/test_apt_collateral.py",
+    "tests/unit/jobs/apt/test_apt_etc_apt.py",
+    "tests/unit/jobs/apt/test_apt_job.py",
+    "tests/unit/jobs/test_flatpak_sync.py",
+    "tests/unit/jobs/test_folder_sync.py",
+    "tests/unit/jobs/test_package_state.py",
+    "tests/unit/jobs/test_snap_sync.py",
+    "tests/unit/test_scenario_coverage_matrix.py"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "f696d19322fa",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 351,
+    "cache_creation_tokens": 1905637,
+    "cache_read_tokens": 60735257,
+    "output_tokens": 241216,
+    "api_call_count": 185
+  },
+  "session_metrics": {
+    "turn_count": 21
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-01T14:03:10.956528739Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 200,
+    "human_modified": 129,
+    "human_removed": 0,
+    "total_committed": 200,
+    "total_lines_changed": 329,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 169,
+      "user_lines_removed": 121,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9,
+        "docs/adr/adr-020-declarative-package-convergence.md": 2,
+        "docs/dev/package-sync-scenario-coverage.md": 9,
+        "tests/integration/jobs/test_package_sync.py": 10,
+        "tests/unit/jobs/apt/test_apt_collateral.py": 5,
+        "tests/unit/jobs/apt/test_apt_etc_apt.py": 60,
+        "tests/unit/jobs/apt/test_apt_job.py": 60,
+        "tests/unit/jobs/test_flatpak_sync.py": 6,
+        "tests/unit/jobs/test_folder_sync.py": 3,
+        "tests/unit/jobs/test_package_state.py": 4,
+        "tests/unit/test_scenario_coverage_matrix.py": 1
+      },
+      "user_removed_per_file": {
+        "docs/adr/adr-020-declarative-package-convergence.md": 2,
+        "docs/dev/package-sync-scenario-coverage.md": 14,
+        "tests/integration/jobs/test_package_sync.py": 97,
+        "tests/unit/jobs/apt/test_apt_collateral.py": 1,
+        "tests/unit/jobs/test_flatpak_sync.py": 3,
+        "tests/unit/jobs/test_folder_sync.py": 1,
+        "tests/unit/jobs/test_package_state.py": 2,
+        "tests/unit/test_scenario_coverage_matrix.py": 1
+      }
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 110,
+      "user_lines_removed": 4,
+      "agent_lines_added": 215,
+      "agent_lines_removed": 121,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9,
+        "docs/dev/package-sync-scenario-coverage.md": 2,
+        "tests/unit/jobs/test_flatpak_sync.py": 66,
+        "tests/unit/jobs/test_manual_installs_sync.py": 33
+      },
+      "user_removed_per_file": {
+        "docs/dev/package-sync-scenario-coverage.md": 4
+      }
+    }
+  ]
+}

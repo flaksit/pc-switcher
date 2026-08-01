@@ -1,0 +1,1563 @@
+I'm focused about the counts:
+- The instructions I gave you in the first prompt (written as handover by a previous session) say 35 !!, 39 - and 3 P. Total = 77.
+You say registry contains 174 items. For 77 scenarios?
+
+"128 name rows already marked U": Are you sure these scenario rows are *completely* covered by the test? Maybe they should have been P?
+Or do these gaps name multiple scenarios and died each gap have at least one that is !!, - or P?
+
+---
+
+when ready, delegate "audit all 126" to subagent, don't do yourself (you are orchestrator)
+
+---
+
+<task-notification>
+<task-id>a9f2e4586d483d7de</task-id>
+<tool-use-id>toolu_01Qs9tY7Qoa3Q4BS3vDgLXYY</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/81c7a538-876b-47ee-bd10-6f31ec117d7e/tasks/a9f2e4586d483d7de.output</output-file>
+<status>completed</status>
+<summary>Agent "Audit register entries J and K" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Verdicts written to `/tmp/claude-1000/-home-janfr-dev-pc-switcher/81c7a538-876b-47ee-bd10-6f31ec117d7e/scratchpad/audit-JK.md`. No repo file touched.
+
+Counts: STALE 13, PARTIAL 3, DEFERRED 5, UNCLEAR 0 (21 total).
+
+PARTIAL:
+- **J122** — cited test only asserts `ItemDiff.__post_init__` redacts `label`/`detail`; no credentialed `ReviewEntry` label/detail is ever rendered through a review screen (the review-side redaction tests drive file `content` only, with an uncredentialed label). Row → `P`.
+- **J127** — same cited test; nothing follows a `SKIP_ALWAYS` label into the decision file on disk, so the recorded-decision payload is unasserted. Row → `P`.
+- **K43** — `test_apt_mark_unavailable_yields_validation_error` drives the missing binary through `target_responses` only and asserts just that some message mentions `apt-mark`; the source branch (`jobs/apt_sync/job.py:811-813`) is never exercised and no assertion pins `Host.SOURCE`, so the Atlas half of the row is unproven while K44 (Nomad) is covered. Row → `P`.
+
+DEFERRED (concurrently edited modules): J50, K62, K93 (`manual_installs_sync`), J145 (`jobs/packages/sync_core.py`), K91 (`flatpak_sync`).
+
+Two incidental notes: K8's row still cites the weak `TestEmptyConfig::test_core_empty_config_file`, but a proper discovery test (`test_a_config_with_no_sync_jobs_block_instantiates_nothing`) now exists — stale citation, not a coverage gap. J150 was judged STALE on the equivalent-shape rule: the audit enumerates the exact three allowed transfer call sites rather than matching paths, which is the only form a static audit can take there (destinations are call-site variables), with per-job path assertions alongside.</result>
+<usage><subagent_tokens>78330</subagent_tokens><tool_uses>26</tool_uses><duration_ms>207691</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ae317a46b21592361</task-id>
+<tool-use-id>toolu_0145Qhuzp2qhuS2mRQdTeh5g</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/81c7a538-876b-47ee-bd10-6f31ec117d7e/tasks/ae317a46b21592361.output</output-file>
+<status>completed</status>
+<summary>Agent "Audit register entries C and D" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Verdicts written to `/tmp/claude-1000/-home-janfr-dev-pc-switcher/81c7a538-876b-47ee-bd10-6f31ec117d7e/scratchpad/audit-CD.md`.
+
+Counts: STALE 28, PARTIAL 0, UNCLEAR 0, DEFERRED 1.
+
+No PARTIAL and no UNCLEAR. The one DEFERRED:
+
+- C10 — cited test lives in `tests/unit/jobs/apt/test_apt_probe.py`, a module named as under concurrent edit (and `git status` confirms it and `probe.py` are modified).
+
+Two STALE verdicts rest on an equivalent-but-differently-shaped assertion, worth knowing if the register is edited rather than deleted:
+
+- C158 and D25 — "the item succeeds" / "no `PackageItemFailures`" is asserted by `job.execute()` completing without `pytest.raises`, not by an explicit assertion.
+- C102/C103 — the warning *text* naming the key is asserted via `caplog.text`; the record's level is not (production logs both at `LogLevel.WARNING`, `keyrings.py:310-326`).
+
+Caveat: C36, C119 and C170 resolve to `tests/unit/jobs/apt/test_apt_job.py`, which is not in the deferred module list but is currently modified in the working tree (an unrelated hunk in `TestRepositoryConflicts`, ~line 1190). The three cited tests themselves are untouched by that diff.</result>
+<usage><subagent_tokens>130783</subagent_tokens><tool_uses>27</tool_uses><duration_ms>229659</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a20e7938f7c5dc3b3</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/81c7a538-876b-47ee-bd10-6f31ec117d7e/tasks/a20e7938f7c5dc3b3.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix apt identity/origin defects" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All four defects fixed. Report:
+
+## Defect 1 — A14, A15 (apt offers to remove software it does not own)
+
+**Verified as diagnosed.** `capture_source_items` dropped hand-`.deb` names; `query_target_items` was a bare `apt-mark showmanual` + `dpkg-query` with no equivalent filter, so a name only Nomad held diffed as `EXTRA_ON_TARGET`/`REMOVE`.
+
+**Fix.** The run already issued an `apt-cache policy` on Nomad (`collect_target_policy`, over Atlas's names), so no new call was added: it now names Atlas's set ∪ Nomad's manual set and is parsed for three questions. New `AptProbe.capture_target_items` (probe.py) drops the excluded names; `job.py::_plan_packages` calls it in place of the two former calls. `query_target_items` keeps its signature (it is the raw read) so `test_apt_diffing.py` — the other agent's file — was untouched.
+
+**Rows/tests.** A14, A15 lose `‼`, tests `test_apt_probe:TestBareDebPackagesAreNotAptSyncsBusiness::test_a_hand_deb_both_machines_hold_produces_no_item` / `::test_a_hand_deb_only_the_target_holds_is_never_offered_for_removal`. New **A76** (target's one-call economy, mirroring A18/A10) and new **A77** — the branch the fix creates: Atlas repo-installed vs Nomad hand-`.deb` is now an install, because identity is name AND origin. A16, A72, C39, C54 reworded; C39's and C54's tests strengthened to count calls rather than name matches.
+
+**One honest limitation:** I did not add the `blocks` guard to that policy call. It would be defensible (apt owes a block for each of Nomad's own installed names), but it fails ~every fixture whose target has packages and no policy stub, several in shared test files. Without it the exclusion degrades safely — `packages_installed_from_no_repository` indicts nothing apt printed no block for — but a silent exit-0 apt on the target silently restores the old behaviour. Documented at the call site.
+
+## Defect 2 — A62, A63 (vendor vs distribution never reported)
+
+**Verified.** `is_origin_mismatch` required both vendor sets non-empty; a distribution-served copy has an empty set, so the case fell through to the version comparison and produced nothing when versions matched.
+
+**Fix.** `OriginPlan` gains `source_from_distribution` / `target_from_distribution` and two identity properties: vendor origins each on their own, plus one `&lt;distribution&gt;` member. Mismatch = both identity sets non-empty and disjoint. Mirror difference (A23/A61) still collapses to one member; the D-35 exemption still reads `vendor_source_origins`, untouched; precedence over version stays where it is in `diffing.py` (not edited). `build_origin_mismatch_detail` names an empty side as "*machine*'s own distribution archive" — sound because the builder is only reached when both identity sets are non-empty, so an empty vendor list means exactly the distribution. That kept `diffing.py`'s call site unchanged.
+
+**Rows/tests.** A62, A63 lose `‼`; A60 (previously uncovered) gains a test proving origin outranks version. All three in `test_apt_origins:TestOriginClassification`.
+
+## Defect 3 — G5 (hand-`.deb` marked automatic)
+
+**Measured first**, on this machine (Ubuntu 24.04, apt 2.8.3), read-only: 2282 installed vs 153 manual; `apt-cache policy` 3.11s / 718KB vs 0.41s / 96KB; **0 extra findings** — every hand-`.deb` here is also manual-marked, so the widening adds no noise on this machine (one machine, not a guarantee). Cost accepted, fix taken.
+
+**Fix.** `capture_source_items` now reads the source's installed set (`dpkg-query --show --showformat='${Package}\t${db:Status-Status}\n'`, deduped, guarded on exit code *and* emptiness) and feeds that to `_scan_no_candidate_apt_packages`. The `apt-mark showmanual` read is gone from the job.
+
+**Rows/tests.** G5 loses `‼`, test `test_a_hand_deb_apt_marks_automatic_is_still_detected` (also asserts no `apt-mark` command runs). G7, G8, G11, G12 and J83 reworded from "manual set" to "installed set"; G12/J83's test renamed to `test_an_installed_set_read_that_did_not_answer_fails_the_job`. 37 fixtures migrated to a new `installed_on_source()` helper; two "empty machine" fixtures now describe a machine with a repo package, since "no installed packages" is no longer a state the guard admits.
+
+## Defect 4 — A40 (credential never withheld)
+
+**Verified.** `redact_credentials` is anchored on `://`; `display_origin` stripped the scheme first, so the `ItemDiff` redaction pass was a no-op on every origin line.
+
+**Fix.** `display_origin` now redacts *before* stripping — the reformatting and the withholding are one operation, so no caller can order them wrongly and there is no window in which a scheme-less origin exists un-redacted. `redaction.py` is unchanged deliberately: loosening the `://` anchor would start rewriting scp-style `user@host:path` in `folder_sync`'s rsync trace. Covers all four builders (`build_origin_detail`, `build_repo_unavailable_detail`, `build_origin_mismatch_detail`, `build_origin_refusal_detail`).
+
+**Row/test.** A40 loses `‼`; `test_a_credential_in_the_origin_is_withheld_from_the_review` drives `REDACTED` through the diff and asserts `***@` present, password absent.
+
+## Docs
+
+Gap-register entries for A14/A15, A62/A63, G5 and A40 deleted; the A40, A60 and G5 entries removed from "Gaps — what to test next". `docs/system/package-sync.md`: apt Excludes rewritten for the two-sided exclusion, new "Origin identity" bullet, `manual_installs_sync` Covers carries the measurement. `docs/jobs/package-sync.md`: hand-`.deb` section now says both machines and covers the automatic mark; new paragraph on origin divergence and the distribution as one origin.
+
+## Verification
+
+`ruff format` clean · `ruff check` clean · `basedpyright` 0 errors · `codespell` clean · `pytest` **4132 passed, 1 failed**.
+
+The one failure is not mine: `test_every_cited_test_names_the_scenario_back[N23]`, from the concurrent agent's in-flight block-rider work (`TestAMarkGivenOnAMergedQuestion`, plus F148–F150 orphans that came and went during the session). Their edits also landed in `job.py` and `sync_core.py`; I touched only my two hunks there. Everything I changed passes.</result>
+<usage><subagent_tokens>338000</subagent_tokens><tool_uses>130</tool_uses><duration_ms>1459108</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a67cf183d2dacc652</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/81c7a538-876b-47ee-bd10-6f31ec117d7e/tasks/a67cf183d2dacc652.output</output-file>
+<status>completed</status>
+<summary>Agent "Audit register entries A and G" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Verdict file written to `/tmp/claude-1000/-home-janfr-dev-pc-switcher/81c7a538-876b-47ee-bd10-6f31ec117d7e/scratchpad/audit-AG.md`. No repo file touched.
+
+Counts: STALE 16, PARTIAL 3, UNCLEAR 0, DEFERRED 1, GONE 0.
+
+PARTIAL:
+
+- **A36** — `test_apt_origins:TestOriginClassification::test_unreplicable_origin_is_report_only_naming_the_origin` asserts REPORT_ONLY, the detail naming the origin, and no `apt-get install` on the target; nothing asserts the origin plan's `derived_files` is empty, which is precisely the aspect the entry names (deriving no repository file is a different mechanism from issuing an install).
+- **G74** — the only cited test (`TestSnippetRegistryOverwriteGuard::test_lost_target_entry_aborts_on_decline`) raises `SyncAbortedByUser` out of `job._push_snippet_registry()` and asserts nothing was sent; nothing asserts the entry's aspect that the run's remaining jobs do not run (it does not even go through `execute()`).
+- **G87** — `TestContinueOnFailure::test_failed_snippet_replay_is_a_per_item_failure_and_does_not_stop_the_job` asserts only the failing item's id and explicitly discards the stderr (`for diff, _stderr in exc_info.value.failures`); the entry's remaining ask — that the failure message be asserted for a rights failure — is unasserted, and the simulated failure is a dpkg error, not a sudo-rights denial.
+
+DEFERRED: **G60** — cites `test_package_state:TestSnippetRegistry::…`, in the module under active edit.</result>
+<usage><subagent_tokens>76860</subagent_tokens><tool_uses>23</tool_uses><duration_ms>158224</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ab7b5dad78c16d3e0</task-id>
+<tool-use-id>toolu_018ePewGrJ2NgVVTFdVGnxfn</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/81c7a538-876b-47ee-bd10-6f31ec117d7e/tasks/ab7b5dad78c16d3e0.output</output-file>
+<status>completed</status>
+<summary>Agent "Ruling B41: blocks ride their software" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>B41 is ruled and shipped. All five checks pass (`4133 passed`, ruff format/check clean, basedpyright 0 errors, codespell clean).
+
+## The article text
+
+`PKG-FR-BLOCKS-REPLICATE` now carries the general rule; the three per-manager articles carry their own halves.
+
+&gt; **PKG-FR-BLOCKS-REPLICATE**: An apt hold, a snap refresh hold and a flatpak mask MUST each replicate as an item decided separately from the software it applies to — EXCEPT where that software is itself an item in the same run, in which case the two MUST be presented as one question that names both, and the decision given there MUST govern both. Which case a block is in is decided by whether its software carries a decision this run: software that is only reported is no item, and a block that names its software by pattern rather than by name rides a question only where the pattern covers exactly one of this run's items. The merged question MUST take the software's own direction and therefore its default (`PKG-FR-HARMLESS-DEFAULT`). Applying it MUST converge the software as its own article requires and the block to the source's state — except that a block which freezes an installed copy, an apt hold or a snap refresh hold, MUST NOT be registered for software the target does not end the run with, and MUST there be reported as not applied rather than as a failure. Declining for this run MUST leave both unchanged and record nothing. A machine-specific mark given on the merged question MUST be recorded for the software AND for the block, each on its own holding machine.
+
+Four *Why* lines follow it: the contradiction the two questions hide; why the mark covers both (otherwise the block returns alone next run, about software the tool was just told to leave alone); why the software's default governs (a block is not software, so `PKG-FR-REMOVAL-DISTINCT` is not engaged, and the merge only ever makes the default safer in the other direction); and why the exception is narrow.
+
+`PKG-FR-APT-HOLD-ITEM` and `PKG-FR-SNAP-HOLD` add the same exception plus "a hold MUST NOT be registered for a package the target does not end the run with". `PKG-FR-FLATPAK-MASK` adds the exactly-one-match boundary and states that a mask riding a removal still lands — a mask is a rule about what may be installed, not a freeze on an installed copy, which is the one place the three block kinds diverge.
+
+**The four decisions, resolved:** apply → software converges, then the block, except a freeze block whose software is leaving (reported not-applied, never a failure); skip once → both unchanged, nothing recorded; machine-specific → two marks, each on its own holding machine (for B41 that is two *different* machines: `apt:package:pkg-a` on Nomad, `apt:hold:pkg-a` on Atlas); the block's own direction is what picks its file, so the write path was already correct once the decision propagates.
+
+## Files changed
+
+Code: `packages/sync_core.py` (the merge machinery — `_software_for_block`/`_block_name` hooks, `_blocks_riding_software`, `_rider_clause`, group construction, decision propagation in `accept_review`, the freeze-block withholding in `apply`), `apt_sync/job.py`, `snap_sync.py`, `flatpak_sync.py` (`_mask_covers` + the exactly-one pairing).
+
+Docs: conformance criteria, user requirements (apt/snap/flatpak narrative), `docs/system/package-sync.md`, `docs/jobs/package-sync.md`, ADR-020 (summary, the D-02 item model, and the block bullet in the requirements list), coverage matrix.
+
+Tests: `test_apt_packages.py`, `test_snap_sync.py`, `test_flatpak_sync.py`, `test_block_state_decisions.py`.
+
+## Rows
+
+Rewritten: B1, B2, B5, B7, B16, B17, B19, B31, B32, B35, B38, B41, B42, B43, E54, E61, E63, E64, E68, E70, F129, N4, N5, N6. Added: B52–B55 (new section B.10), E116, F148–F150, N23. B41's question is gone from "Questions the requirements do not settle" and its gap entry is gone; B7's stale gap entry went with it. B27's defect note gained a clause saying the merged question no longer creates that state.
+
+## Two things worth your attention
+
+- **B31 and B7 were branches the ruling abolishes**, not branches it re-describes: "approve the install, decline the hold" is no longer expressible. Their rows now state the merged behaviour and their tests were rewritten rather than retargeted.
+- **The flatpak pattern rule is mine to justify**, since the user's ruling did not reach it: a mask rides an application's question only when its pattern covers *exactly one* item of the run in that scope. None (the ordinary case) or several both keep their own item — several because two answers can disagree and there would be no single decision to obey. `_mask_covers` is deliberately conservative rather than a re-implementation of flatpak's matcher: reading a pattern more broadly than flatpak would only makes it keep its own item.
+
+No conflict with `PKG-FR-BATCHED`, `PKG-FR-HARMLESS-DEFAULT`, `PKG-FR-REMOVAL-DISTINCT` or `PKG-FR-MACHINE-SPECIFIC` — the reasoning for each is recorded in the article's *Why* lines.
+
+One note on the tree: another agent was committing to `probe.py`/`origins.py`/`messages.py` and their tests throughout, so `git diff` shows their work alongside mine. I stayed out of those three files and need nothing changed in them.</result>
+<usage><subagent_tokens>376893</subagent_tokens><tool_uses>187</tool_uses><duration_ms>1696741</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ae2db7ec28ffadfda</task-id>
+<tool-use-id>toolu_01TsZzjCUd5if6CcTdocGZZA</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/81c7a538-876b-47ee-bd10-6f31ec117d7e/tasks/ae2db7ec28ffadfda.output</output-file>
+<status>completed</status>
+<summary>Agent "Audit register entries B and H" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Verdict file written to `/tmp/claude-1000/-home-janfr-dev-pc-switcher/81c7a538-876b-47ee-bd10-6f31ec117d7e/scratchpad/audit-BH.md`. No repo file was touched.
+
+Counts: STALE 22, PARTIAL 0, UNCLEAR 0, DEFERRED 0, GONE 1, OBSOLETE 0.
+
+PARTIAL: none. UNCLEAR: none. OBSOLETE: none.
+
+GONE: B7 — no `- **B7** —` line remains in the register (the id's only other occurrence in the doc is its table row at line 192, `Cov` `U`, cited test passing).
+
+Every other entry's named aspect is asserted by a cited test; I ran all seven cited modules (278 passed) so no citation is dead. Two side findings worth acting on beyond deleting entries:
+
+- H69 and H173 rows carry inline "— P: …" annotations inside their Test cells while `Cov` reads `U`. Both annotations are now false: `test_package_sync_core.py:262` asserts the origin-report title contains the hostname, and `test_package_review.py:778` asserts the automation variable answers on an interactive console with `_mock_isatty(True)`. The annotations (and, for H173, the row's stale single citation) should be removed along with the register entries.
+- H152's entry delegates its shape to H151 ("See H151"), including `ui.resume` called once; the deletion-screen test does assert it (`test_package_review.py:1794`), so nothing is missing.</result>
+<usage><subagent_tokens>93622</subagent_tokens><tool_uses>32</tool_uses><duration_ms>254206</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a3106ec4bd72a49f1</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/81c7a538-876b-47ee-bd10-6f31ec117d7e/tasks/a3106ec4bd72a49f1.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix flatpak defects" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done. All five items handled; verification is clean on my two files.
+
+## 1. F79 — verification refusal named no URL (fixed)
+
+`_origin_refusal`'s URL branch named both URLs; the verification branch named only the two settings. That branch runs only after the URLs matched, so the missing piece was the one shared URL.
+
+- `flatpak_sync.py::_origin_refusal` now reads `"&lt;target&gt;'s &lt;scope&gt;-scope remote 'x' points at &lt;url&gt; with gpg verification disabled, while &lt;source&gt; takes this ref from &lt;url&gt; with it enabled"`.
+- Row **F79** → `U`, cites `test_flatpak_sync:TestOriginIsReplicatedNotJustNamed::test_a_target_remote_that_does_not_verify_signatures_refuses_the_install` (extended: asserts the URL appears on both sides and both settings).
+
+## 2. F146 — a remote that stops verifying mid-run (fixed, both halves)
+
+`_installed_origin_refusal` compared URL alone **and** resolved the landed origin against `_target_remotes_now_by_id`, whose cache is discarded only by a remote *write* — and an install is not one, so the read-back re-judged the pre-check's snapshot. Both halves confirmed load-bearing: I removed each in turn and the new test failed each time.
+
+- The read-back now discards the cached listing before re-reading, and compares `gpg_verify` as well as URL, failing with both URLs and both settings.
+- Cost: one extra `flatpak remotes` pass (2 scopes × 2 commands) per successful ref install.
+- Row **F146** → `U`, new test `TestOriginIsReplicatedNotJustNamed::test_a_remote_that_stops_verifying_between_the_check_and_the_read_back_fails_the_app`. `FakeFlatpakTarget` gained an `on_install` hook — the only way to express state that exists solely between the two checks.
+
+## 3. F117 — accepted filter cost (behaviour unchanged, now pinned)
+
+New `TestRemoteFilterReplicates::test_a_re_apply_that_fails_leaves_the_remote_unfiltered_for_the_rest_of_the_run`: target's own filter cleared, app installs, `remote-modify --filter=` fails → the app fails, the app is present on the target, and `target.filters == {}`. Row **F117** keeps `‼`, now cites that test. Criteria entry (`PKG-FR-FLATPAK-FILTER`, "Where the tool does not yet meet these requirements") and the row still say the same thing; no edit needed.
+
+## 4. F43 — accepted `gpgkeypath` gap (pinned, still `‼`)
+
+New `TestRemoteTrustTravelsWithTheDerivedWrite::test_a_key_held_only_through_gpgkeypath_is_replicated_as_no_key_at_all`: verified remote, no keyring digest, no anchors → plain `remote-add`, no `--gpg-import`, nothing sent, one warning — plus the assertion that makes it flip rather than pass silently the day the gap closes: no source command reads the ostree repo config the option lives in.
+
+## 5. F44 — how many anchors travel (established, narrowed where possible, tested)
+
+**What I established** (libostree v2024.5 source, `src/libostree/ostree-gpg-verifier.c`, read via the upstream tag — recorded in the ADR-020 measurements doc as read-from-source, not measured): `_ostree_gpg_verifier_add_keyring_dir_at` takes every regular file in the anchor directory whose name ends in `.gpg`, skipping exactly `trustdb.gpg` and `secring.gpg`; all survivors are appended to one `keyring_data` array, imported into a single GPGME context, and `gpgme_op_verify` accepts a signature any key in it validates. Nothing records which key verified what.
+
+So "that anchor" is not narrowable to one file — for a keyless verified remote the trust it rests on **is** the merged set, and importing all of it reproduces exactly what the source's remote had. **But one narrowing was available and missing**: `_trust_anchor_digests_cmd` globbed `*`, so files libostree never loads (non-`.gpg`, plus `trustdb.gpg`/`secring.gpg`) were candidates — trust the source's remote never had, and material `--gpg-import` cannot parse.
+
+- Glob narrowed to `*.gpg`; new `_anchor_digests()` drops `_ANCHOR_FILES_LIBOSTREE_IGNORES` on both machines.
+- Row **F44** rewritten as an article demand (no longer a shortfall claim), → `U`, new test `::test_every_anchor_the_remote_rests_on_travels_and_nothing_libostree_ignores_does`: two anchors plus `trustdb.gpg` on Atlas, Nomad holding none → exactly two `--gpg-import=` flags, `vendor.gpg`/`vendor2.gpg` sent, and the read itself globs `*.gpg`. No criteria entry added — this is not an accepted cost, it is the article met.
+
+## Registers cleaned
+
+Removed the **F79** and **F146** entries from "Where the tool does not do what the requirements say", and the **F43** and **F44** entries from "Gaps — what to test next". Checked every other flatpak row my changes touch (F31–F42, F45–F54, F78–F87, F99–F118): none changes meaning.
+
+Docs updated: `flatpak_sync.py` module docstring, `_anchors_to_import`, `_trust_anchor_digests_cmd`, `_installed_origin_refusal`; `docs/system/package-sync.md` (fresh read-back + why all anchors travel); `docs/jobs/package-sync.md` (read-back checks both facets); `docs/adr/considerations/adr-020-flatpak-filter-and-trust-measurements.md` (new section on the merged anchor keyring). No ADR decision changed.
+
+## Verification
+
+`tests/unit/jobs/test_flatpak_sync.py` 184 passed. `ruff format --check`, `ruff check`, `basedpyright` (0 errors), `codespell` all clean on `src/pcswitcher/jobs/flatpak_sync.py` and `tests/unit/jobs/test_flatpak_sync.py`. My matrix rows pass the ratchet (F43/F44/F79/F117/F146, plus well-formedness and the no-orphan checks).
+
+Repo-wide runs are **not** clean, and none of it is mine: the folder_sync/snap_sync/apt_sync/packages files other agents are editing are mid-flight (`ruff format` would reformat `apt_sync/probe.py` and `test_snap_sync.py`; 5 `ruff check` errors and 5 basedpyright errors in `apt_sync/keyrings.py`, `apt_sync/probe.py`, `apt_sync/job.py`, `test_folder_sync.py`, `test_package_sync_core.py`; a full `pytest` run currently fails in those same areas and the matrix rows E109/E110/K23/K77/K87/N21). I deliberately did not run `ruff format .` repo-wide, to avoid rewriting files another agent has open.</result>
+<usage><subagent_tokens>226581</subagent_tokens><tool_uses>76</tool_uses><duration_ms>744756</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a98b7d21ce4ac91d3</task-id>
+<tool-use-id>toolu_016agGhgTRCydAuid6g9QmMi</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/81c7a538-876b-47ee-bd10-6f31ec117d7e/tasks/a98b7d21ce4ac91d3.output</output-file>
+<status>completed</status>
+<summary>Agent "Test the consent and outcome gaps" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All six rows closed. Verification summary:
+
+**Per row**
+
+- **H35** — `tests/unit/jobs/test_package_sync_core.py:TestNoWorkBetweenTheQuestionsOfOneRound::test_no_executor_command_is_issued_between_the_screens_of_one_round`. Took neither register shape verbatim: the job-level one ("no `mutates=` before the review call") asserts absence of work *before* the round, not between screens, and a fake reviewer answers every group in one call so it cannot see the seam at all. Instead the test drives a real `TerminalUIReviewer` over a three-group plan (install/change/remove) with `decision_list` patched to snapshot the executors' cumulative command count as each screen opens. Three screens, all snapshots equal, and non-zero (the plan's two decision-file reads precede the round) so the spy is provably counting.
+- **H79** — the test the register describes already existed uncited: `test_package_sync_core.py:TestEveryLogRecordCarriesItsMachine::test_no_package_job_log_record_leaves_its_machine_unsaid`. It asserts exactly what the register asks (every `apply()` record attributable to the job carries a non-empty `host`), but its docstring was untagged so the ratchet could not see it. Tagged and cited; no new test.
+- **H80** — `tests/unit/test_machine_naming.py:TestValidationFailure::test_a_package_jobs_sudo_failure_names_the_role_and_no_hostname`. Checked the stricter-rule question first: the failure does **not** name the machine. `AptSyncJob.validate()` produces "passwordless sudo is not available on target", and the orchestrator renders it `- apt_sync (target): …` from `host.value`. No hostname anywhere, though the job holds both. So the row's exemption claim stands and the test asserts it positively (`host is Host.TARGET`, role word present, neither hostname present). Module docstring updated — it previously said this module deliberately tests neither exemption.
+- **H133** — marked `P`, added to `COMPOSITIONS`. Agreed with the register, and the composition is stronger than H130+H131 alone: H147 supplies the missing half (an absent decision file reads as "no permanent decisions"). A real third-machine test would only re-assert H147's default, so it buys nothing. Composition stated in the Test column.
+- **G61** — `tests/unit/jobs/test_package_review.py:TestUnreproducibleGroupResolution::test_the_authoring_warning_is_read_before_the_editor_opens`. **No defect** — `_snippet_authoring_note()` is printed by the production path before `questionary.text` is constructed. `review.py` unchanged. Ordering is asserted for real: the console buffer is captured inside the `questionary.text` patch, so the assertions run against what was on screen at the moment the editor opened.
+- **J60** — `test_package_sync_core.py:TestExecuteSelfContained::test_a_rehearsal_with_no_terminal_skips_the_job_for_the_same_reason`. Written against the amended article, not the register.
+
+**Row fixed (article vs. row disagreement)**: J60's Scenario said "`--dry-run` with no terminal and a **non-empty plan**". Under the amended `PKG-FR-NO-TERMINAL` a non-empty plan is not the trigger — J169 says a plan of nothing but report-only findings reports success. Row now reads "a review holding something to decide", and the test plans one install so it genuinely takes the decide-branch.
+
+**Verification** (repo-wide, on a tree several other agents are actively editing):
+
+| Command | Result |
+| --- | --- |
+| `uv run pytest -q` | 6 failed, 4182 passed — **none mine**: 3 ratchet failures for rows K23/N21 (folder_sync, cited tests renamed mid-edit) and 3 `NameError: _owned_by` in `tests/unit/jobs/apt/test_apt_keyrings.py` |
+| `uv run ruff format .` | 1 file reformatted (not one of mine; my four files were already formatted) |
+| `uv run ruff check .` | 5 errors, all in others' files: E501 ×3 in `test_folder_sync.py`/`test_snap_sync.py`, F401 ×2 in `test_mutates_audit.py` |
+| `uv run basedpyright` | 2 errors, both unused imports in `tests/unit/test_mutates_audit.py` |
+| `uv run codespell` | clean |
+
+My four modules in isolation: 144 passed. The ratchet passes for all six of my rows plus its four whole-document checks.</result>
+<usage><subagent_tokens>162284</subagent_tokens><tool_uses>77</tool_uses><duration_ms>587849</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a601c3e755649629b</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/81c7a538-876b-47ee-bd10-6f31ec117d7e/tasks/a601c3e755649629b.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix data-boundary and registry defects" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All six items are done. Report:
+
+## Per defect
+
+**K82 + E115 — snap data for a revision the target never installed.** `snap_sync_exclude_paths()` enumerated Atlas's `~/snap` alone and always kept each app's `current` revision dir, so a declined/failed revision change (K82) or a declined/failed install (E115) still mirrored that data onto Nomad.
+
+Mechanism chosen: the boundary is a fact about the *target*, so it is read from the target rather than inferred from `snap_sync`'s decisions. New `snap_sync.target_snap_revisions(executor)` runs one `snap list --all` on Nomad (read, no `mutates=`); `folder_sync.execute()` calls it once per run and threads the map through `_build_rsync_cmd` → `_snap_sync_exclude_filters` → `snap_sync_exclude_paths(target_revisions)`, which now keeps an app's active-revision dir only where Nomad reports that same revision. `PKG-FR-JOB-ORDER` is what makes the read meaningful — every package job has already run, so the listing shows what converged *and* what didn't. `None` (snapd unreachable) and an indeterminate `current` both fall back to excluding every revision dir. Recorded in `docs/system/package-sync.md` (`snap_sync` section), ADR-020 D-29, `docs/jobs/package-sync.md`.
+Rows K82, E115 → `U`. Tests: `test_snap_sync:TestExcludePaths::test_a_revision_the_target_did_not_converge_to_is_excluded`, `::test_a_snap_the_target_does_not_hold_has_every_revision_dir_excluded`, `TestTargetSnapRevisions` (3); `test_folder_sync:TestPackageJobExcludeFiltersGating` (3 new), `TestExecuteNormalMode::test_the_targets_own_revision_lets_the_data_dir_through`, `::test_a_revision_the_target_is_not_on_is_excluded_by_execute`.
+
+**K81 — snap_sync off mirrored every revision.** Ruled against the code, not the article: the same target-state rule now applies unconditionally, so the `_package_job_enabled("snap_sync")` gate is gone (flatpak's remains). D-29 in ADR-020 rewritten to record the reversal *and* its accepted cost — two machines that happen to agree on a revision with `snap_sync` off no longer get that data mirrored, because nothing in such a run establishes that they agree. Row K81 → `U`; E110, K23, K77, K87, N21, E104, E109 reworded to match (K23 now cites the flatpak tests, which are the remaining place `folder_sync` reads a sibling switch).
+
+**K88 — snippet registry mirrored outside its consent.** Confirmed: `*.decisions.yaml` does not match `package-snippets.yaml`. Added `FolderSyncJob._snippet_registry_exclude_filters`, fed by `state.SNIPPET_REGISTRY_RELPATH`, emitted GLOBAL-FIRST and unconditional (with the job off there is no consent gate at all). No inline comment in the filter. Row K88 → `U`, 4 tests in the new `TestSnippetRegistryExcludeFilters`.
+
+**G72 — authoring record overwritten unasked.** `_guard_registry_overwrite` now compares whole `Snippet`s (`source != target`) instead of bodies. `_render_overwrite_diff` shows only the fields that differ, via new `_snippet_fields` (label / body / a single combined `authored` line) — printing the unchanged body twice under "to be replaced"/"incoming" read as a contradiction. Row G72 → `U`, 2 new tests.
+
+**H167 — article overstated the hatch.** Confirmed by reading `review.py`: `_decisions_from_automation` returns decisions only and `ReviewOutcome.snippets` is empty on that path. Fixed `PKG-NG-AUTOMATION-ENV` (dropped "or an install snippet", added why: authoring takes an editor). Code untouched; row H167 restated, mark `—`.
+
+Also updated: the `‼` entries for all five were deleted from "Where the tool does not do what the requirements say"; the K82/K88/E113 gaps entries and the "no VM coverage" bullet now describe the remaining VM-only gap; `docs/system/data-model.md`; `tests/unit/test_mutates_audit.py` gained the one new read.
+
+## Verification
+
+`uv run pytest -q` 4227 passed · `ruff format .` clean · `ruff check .` clean · `basedpyright` 0 errors · `codespell` clean.
+
+## Notes
+
+- Behaviour change worth flagging to the user: with `snap_sync` disabled, per-revision snap data is no longer mirrored at all (it was before). That is the article's requirement, and the cost is recorded in D-29.
+- `folder_sync` now issues one extra read (`snap list --all`) against the target on every run, including dry runs (the preview must use the filters a real run would).
+- Concurrent agents were editing `test_mutates_audit.py`, `apt_sync/*` and `flatpak_sync.py` throughout; I touched only the one audit-table line. A transient `PLR0912` and an apt keyring test failure from their in-flight edits both cleared before the final run.</result>
+<usage><subagent_tokens>304877</subagent_tokens><tool_uses>123</tool_uses><duration_ms>1095655</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a7f3c2f1e593050db</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/81c7a538-876b-47ee-bd10-6f31ec117d7e/tasks/a7f3c2f1e593050db.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix /etc/apt defects" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Report
+
+All five checks green: `pytest` 4249 passed / 85 deselected, `ruff format` (164 unchanged), `ruff check` clean, `basedpyright` 0 errors, `codespell` 0. Nothing staged, nothing committed.
+
+### 1. C50, C172, N12 — repository deleted while its package stays
+
+**Was**: `AptSyncJob._plan_repo_diffs` subtracted the removal *candidates* (`going`, built from the diffs) from the file's user count and nothing re-checked; approving `apt:source:vendor.list` while declining `apt:package:vendor-tool` issued the `rm` and stranded the package. Verified — removing the new gate makes the new test fail with the `rm` issued.
+
+**Now**: the count is taken twice. Plan time decides what is *offered* (unchanged, that is C50's case); the new `AptSyncJob._withhold_repositories_still_in_use`, called from `accept_review` right after `Collateral.resolve`, re-counts against the answers the review returned and downgrades the deletion to `SKIP_ONCE`, logging `keeping repository …: … still installs … from it, so its approved deletion is not applied`. `EtcApt.approved_diffs` and `Keyrings.surviving_refs` both read decisions, so the file stays, its key stays, and it is offered again next run. The plan-time users are kept in `AptSyncJob._repo_users`.
+
+Recounting against decisions rather than re-reading the machine is forced by apt's ordering: the `/etc/apt` unit converges *before* the package removals, so a read at deletion time still sees everything the run is about to remove — flatpak can read the machine only because its remote deletion runs after its loop.
+
+**Rows**: C50 `‼`→`U` (`test_apt_job:TestRepoRemovalWithheldWhileInUse::test_a_repository_goes_with_the_removal_the_user_approved`). C172/N12 **keep `‼`**, narrowed: `::test_a_repository_whose_packages_removal_was_declined_is_not_deleted` proves it is not deleted, but it *is* raised. Not fixable without moving the question out of the batched review (riding the package's removal question, or a second round like late collateral) — both design changes no article states; the defect entry now says exactly that and nothing else.
+
+### 2. C7 — files apt does not read
+
+**Measured** on apt 2.8.3 / Ubuntu 24.04 by pointing apt at scratch directories one filename at a time (`apt-cache policy -o Dir::Etc::preferencesparts=`, `APT_CONFIG` with `Dir::Etc::parts=`, `apt-get update --print-uris -o Dir::Etc::sourceparts=`) and asking whether the file took effect; cross-checked against `man 5 apt_preferences`, `man 5 apt.conf`, `man 5 sources.list` and `apt-config dump | grep Ignore-Files-Silently`. Three rules, not one: **extension** (`sources.list.d` requires `.list`/`.sources`; `preferences.d` none or `.pref`; `apt.conf.d` none or `.conf`; case-sensitive, last dot wins, so `99-vendor.pref.save` is ignored); **characters** (`[A-Za-z0-9_.-]`, no leading dot — `99+vendor.pref`, `99 vendor.pref`, `.hidden.pref` all ignored); and `Dir::Ignore-Files-Silently` turns out to be **redundant** — every one of its patterns already fails one of the other two (`~` is not an accepted character), it only decides whether apt prints a notice.
+
+**Now**: `probe.apt_reads(directory, filename)` encodes it, applied to `capture_dir_digests`'s listing (the `find -name` predicate is gone — the rule is not expressible readably there). Key directories are absent from the rule map and captured whole. `items.APT_SOURCE_EXTENSIONS` deleted (unused).
+
+**Row** C7 `‼`→`U`: `test_apt_probe:TestWhatAptItselfReads::test_apt_s_own_naming_rules_decide_what_is_captured` (28 measured cases) and `::test_a_file_apt_ignores_is_neither_written_nor_offered_for_deletion`.
+
+### 3. C81, C174 — vendor key rotation
+
+**Was**: `capture_package_owned_keys` discarded the package names from `dpkg --search` and `Keyrings.manages` exempted any owned path.
+
+**Now**: `AptProbe.capture_distribution_owned_keys(target_keys, source_keys, distribution_origins)`. Same one batched `dpkg --search`, now parsed into `{path: owning packages}`; then **one batched `apt-cache policy`** over the packages owning the keys whose bytes *differ* from the source's — the only population `manages` is ever consulted about. An owner is the distribution's when its installed version's origins are non-empty and all lie inside the target's own distribution origins (`SourceFileRefs.distribution_origins`, the same per-machine D-35 definition, so a local mirror still counts). **Every** owner must pass; a hand-installed `.deb` owner has no origins and never passes.
+
+**Cost**: zero on a run whose keys match the source; otherwise one batched policy call, guarded on the exit code (an unanswered probe would exempt nothing and overwrite a distro key, so it fails the job). **Measured** on this machine that the test discriminates: `tailscale-archive-keyring` owns `/usr/share/keyrings/tailscale-archive-keyring.gpg` and comes from `https://pkgs.tailscale.com/stable/ubuntu` (vendor → refreshed), while `ubuntu-keyring` and `ubuntu-pro-client` come from `ftp.belnet.be/ubuntu` and `security.ubuntu.com` (distribution → exempt).
+
+**Rows** C81 and C174 `‼`→`U`, plus two cost tests naming C174/C83.
+
+### 4. J115 — Ubuntu Pro payload in the debug log
+
+**Was**: confirmed — `RemoteExecutor.run_command` calls `_trace_output` unconditionally, which emits `stdout: %s` at DEBUG, and `target_pro_attached` went through it.
+
+**Now**: `withhold_output: str | None` on the `Executor` protocol and both implementations; `_trace_output` logs `output withheld: &lt;phrase&gt;` instead of the streams. `AptProbe.target_pro_attached` is the one caller. The new test drives a **real `RemoteExecutor`** over a stub asyncssh connection and asserts the account name and id are absent from `caplog` while the command text and the reason are present. **Row J115 `‼`→`U`.**
+
+### Files outside my set
+- `src/pcswitcher/executor.py` — additive `withhold_output=` on both executors, the protocol and `_trace_output` (needed for J115; no behaviour change when omitted).
+- `src/pcswitcher/jobs/apt_sync/items.py` — deleted the now-unused `APT_SOURCE_EXTENSIONS`, comment points at `probe.apt_reads`.
+- `tests/unit/jobs/apt/helpers.py` — `respond_with_policy_sequence` now lets an explicit mapping key win over the sequence, so a fixture can answer the one named ownership policy call without consuming a turn.
+- Docs: `docs/system/package-sync.md` (all four), `docs/jobs/package-sync.md` (ignore rules, key ownership, taken-back repository approval), `docs/adr/adr-020-*.md` (two sentences that stated the extension rule for `sources.list.d` alone), plus the coverage matrix rows and defect register. No new considerations file — the measurement method is recorded at the code that encodes it and the 28 measured cases are the test's parametrisation.</result>
+<usage><subagent_tokens>371520</subagent_tokens><tool_uses>144</tool_uses><duration_ms>1437236</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ac776421064f4b0ab</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/81c7a538-876b-47ee-bd10-6f31ec117d7e/tasks/ac776421064f4b0ab.output</output-file>
+<status>completed</status>
+<summary>Agent "Audit register entries E and F" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Verdicts written to `/tmp/claude-1000/-home-janfr-dev-pc-switcher/81c7a538-876b-47ee-bd10-6f31ec117d7e/scratchpad/audit-EF.md`. No repo file touched.
+
+Counts: STALE 31, PARTIAL 2, UNCLEAR 0, DEFERRED 0, GONE 0, OBSOLETE 0. All 33 entries still exist in the register and every cited test name resolved.
+
+PARTIAL (rows that should become `P`):
+- **E36** — the cited unit test proves only command shape (`snap remove delta`, no "purge", `tests/unit/jobs/test_snap_sync.py:1362-1376`). Nothing asserts snapd's pre-removal snapshot actually survives; `tests/integration/jobs/test_package_sync.py` contains no `snap saved` check and cites E36 nowhere, so the VM assertion the entry asks for does not exist (judged by reading — the VM suite can't run here).
+- **E88** — the cited unit test asserts only that the command uses `date --utc --date=` and never `snap refresh --hold` (`tests/unit/orchestrator/test_snap_autorefresh_hold.py:143-150`); the executors are mocked, the offset direction (`+6 hours`, only in `src/pcswitcher/orchestrator.py:92`) is unasserted, and the integration module reads `refresh.hold` solely to prove the sync leaves it unchanged (`tests/integration/jobs/test_package_sync.py:1743-1782`). Nothing asserts the stored pause value parses as a future timestamp.
+
+Two entries worth flagging as deliberate STALE calls rather than obvious ones: **F138** (entry asks for `not startswith("sudo ")`; the test already asserts full string equality on the uninstall command, which is strictly stronger) and **F98** (entry asks for a side-effect fixture whose answer changes between plan and apply; the cited test reaches the same single branch at `src/pcswitcher/jobs/flatpak_sync.py:1825` by another route and asserts the failure message and attribution — the fixture shape is a means, not an unasserted aspect).</result>
+<usage><subagent_tokens>108531</subagent_tokens><tool_uses>35</tool_uses><duration_ms>213072</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a567a4c1aee689008</task-id>
+<tool-use-id>toolu_01Gve5ia36T7aeV56Qe1Jzdv</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/81c7a538-876b-47ee-bd10-6f31ec117d7e/tasks/a567a4c1aee689008.output</output-file>
+<status>completed</status>
+<summary>Agent "Close partials, finish deferred audit" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done. Summary:
+
+## Part 1 — three over-marked rows closed
+
+- **A36** — added to `tests/unit/jobs/apt/test_apt_origins.py` (`TestOriginClassification::test_unreplicable_origin_is_report_only_naming_the_origin`): `job._work.origins.plans["apt:package:pkg-a"].derived_files == frozenset()`. Deriving no repository file is a separate mechanism from issuing no install; row stays `U`, entry deleted.
+- **G74** — new orchestrator test `tests/unit/orchestrator/test_job_failure_isolation.py::TestADeclinedConsentEndsTheRun::test_the_remaining_jobs_do_not_run`: a `_DecliningPackageJob` raising `SyncAbortedByUser` out of `_execute_jobs` with a following stub job; asserts the exception escapes and `not never_runs.ran`. Row now cites both the existing decline test and this one; entry deleted.
+- **G87** — new `test_manual_installs_sync.py::TestContinueOnFailure::test_a_snippet_denied_administrative_rights_fails_like_any_other_item`: sudo refuses (`sudo: a terminal is required to read the password`, exit 1); asserts the full failure list is `[(item_id, denial)]` — stderr carried, not discarded — and that no `sudo --non-interactive` / `sudo -n` pre-check ran on the target. Row re-cited to the new test; `G87` dropped from the old test's docstring; entry deleted.
+
+## Part 2 — seven deferred verdicts
+
+- **C10 — PARTIAL.** Cited test (`test_apt_probe.py:867`) gives both machines a digest; the target-only branch is never set up and no absence-of-write assertion exists.
+- **G60 — STALE.** `test_package_state.py:838/:839` (exact round-trip) and `:845` (`bash -c {shlex.quote(body)}`) assert everything the entry named. Entry deleted.
+- **J50 — PARTIAL.** The cited test runs dry-run only; nothing compares plan/groups/review against a real run.
+- **J145 — PARTIAL.** `test_package_sync_core.py:668-670` proves no source mutation only for an already-converged pair; a divergent pair is never checked.
+- **K62 — PARTIAL.** `test_manual_installs_sync.py:1400` asserts `errors == []` and nothing about sudo probing.
+- **K91 — PARTIAL.** The cited test asserts `folder_sync` exclude paths, not transfers — no `send_file` assertion at all. Entry reworded; noted that `test_mutates_audit:TestTransferDestinations` (K89/K90/K92) already audits flatpak's transfer sites statically and is the cheaper citation.
+- **K93 — STALE.** `:1470` is `assert_called_once()` plus the full argument unpack, and `manual_installs_sync.py:301` is the job's only transfer site. Entry deleted.
+
+Five rows re-marked `P` (C10, J50, J145, K62, K91); four register entries deleted total (A36, G74, G87, G60, K93 — five). Verdicts written to `/tmp/claude-1000/-home-janfr-dev-pc-switcher/81c7a538-876b-47ee-bd10-6f31ec117d7e/scratchpad/audit-deferred.md`.
+
+**PARTIALs I could not close** (all outside my files, or judge-only per protocol): C10 (`test_apt_probe.py`), J50 + J145 (`test_package_sync_core.py`), K91 (`test_flatpak_sync.py`). K62's missing assertion lands in my own `test_manual_installs_sync.py` — left unwritten because the Part 2 protocol specifies mark-`P`-and-keep-the-entry rather than fix; say the word and it is a one-line addition.
+
+## Verification
+
+- `uv run pytest -q` — **4255 passed, 11 failed**. All 11 are in `test_apt_job.py`, `test_apt_collateral.py`, `test_apt_keyrings.py`, failing against another agent's in-flight uncommitted `src/pcswitcher/jobs/apt_sync/job.py` and `collateral.py`. None of my four touched files are involved; the scenario-matrix ratchet plus every module I touched passes (2619 passed).
+- `uv run ruff format .` — 164 files unchanged.
+- `uv run ruff check .` — all checks passed.
+- `uv run basedpyright` — 0 errors, 0 warnings, 0 notes.
+- `uv run codespell` — clean.</result>
+<usage><subagent_tokens>112847</subagent_tokens><tool_uses>56</tool_uses><duration_ms>388372</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a567a4c1aee689008</task-id>
+<tool-use-id>toolu_01Eu6537oMshWbKBEBoGtD6E</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/81c7a538-876b-47ee-bd10-6f31ec117d7e/tasks/a567a4c1aee689008.output</output-file>
+<status>completed</status>
+<summary>Agent "Close partials, finish deferred audit" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>K62 closed.
+
+`tests/unit/jobs/test_manual_installs_sync.py::TestValidate::test_valid_environment_yields_no_errors` now asserts, alongside `errors == []`:
+
+```python
+assert not any("sudo --non-interactive true" in cmd for cmd in all_calls(source) + all_calls(target))
+```
+
+Docstring widened from "no administrative-rights precondition is imposed on the target" to "on either machine", since the assertion covers both. Checked that it is a live ratchet rather than vacuous: `validate()` records `apt-cache --version` and `dpkg --version` on the source and nothing on the target, so a probe added on either side fails it.
+
+Row K62 marked back to `U`; its register entry deleted. The scratchpad verdict file records it as closed. C10, J50, J145 and K91 left `P` with their entries as reworded.
+
+Five checks on my file:
+- `uv run pytest -q tests/unit/jobs/test_manual_installs_sync.py tests/unit/test_scenario_coverage_matrix.py` — 2415 passed
+- `uv run ruff format .` — 164 files unchanged
+- `uv run ruff check .` — all checks passed
+- `uv run basedpyright` — 0 errors, 0 warnings, 0 notes
+- `uv run codespell` — clean</result>
+<usage><subagent_tokens>117043</subagent_tokens><tool_uses>62</tool_uses><duration_ms>464145</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a6098fea8c1c7989d</task-id>
+<tool-use-id>toolu_01BguBHExFjCoyTzMpaxxNmz</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/81c7a538-876b-47ee-bd10-6f31ec117d7e/tasks/a6098fea8c1c7989d.output</output-file>
+<status>completed</status>
+<summary>Agent "Snap and flatpak unit gaps" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done.
+
+## Per row
+
+**E5** — not a gap: a test already existed. `test_snap_sync:TestAFullSnapReview::test_no_item_or_group_ever_asks_where_a_snap_comes_from` asserts the register's exact shape. Its docstring opened `"""E5, \`PKG-NG-SNAP-ORIGIN\` — …`, and the ratchet's `DOCSTRING_TAG` only accepts scenario ids in that leading clause, so the backticked article name broke the match and the ratchet never saw the tag — which is why the row stayed `—` while the test passed. Fixed the tag to `E5 — \`PKG-NG-SNAP-ORIGIN\`: …`.
+
+Strengthened it for the block-riding ruling: `SNAP_LIST_SOURCE_EVERY_ACTION` now also carries `theta`, held on Atlas and absent on Nomad, so the plan contains a hold merged into its snap's own question. The test now asserts `snap:hold:theta` has no row and that `snap:theta`'s detail carries the rider clause, then sweeps every group title, note, item id, label and detail for `store/publisher/remote/key/vendor/origin` — so the sweep covers the sentence `_blocks_riding_software`/`_rider_clause` composes, not only the rows built one diff at a time.
+
+**K54** — `test_flatpak_sync:TestValidate::test_a_system_scope_application_only_on_the_target_requires_target_sudo`. Source has nothing system-scope; Nomad's `flatpak list --app` reports a `system` application. Asserts a `Host.TARGET` sudo error and that `sudo --non-interactive true` actually reached Nomad.
+
+**K55** — two tests. Existing `TestValidate::test_a_system_scope_remote_alone_requires_target_sudo` (source side) now tagged `F136, K55`; new `TestValidate::test_a_system_scope_remote_only_on_the_target_requires_target_sudo` drives the target side. Same two assertions each.
+
+**K57** — `TestMaskSystemScopeGate::test_a_system_scope_mask_only_on_the_target_requires_target_sudo`. Nomad's `flatpak --system mask` reports a pattern, nothing else system-scope anywhere; asserts the target sudo error and that the probe fired.
+
+**K60** — `TestValidate::test_a_missing_flatpak_leaves_the_scope_gate_unevaluated`, parametrized over which machine lacks flatpak. Both machines are given a system-scope application and Nomad refuses the sudo probe, so a gate evaluation would be visible. Asserts exactly one error naming the machine, no "passwordless sudo" error, and `all_calls(source) == all_calls(target) == ["flatpak --version"]` — one command per machine, no listing, remote, mask or sudo probe. (The target-missing message itself contains the word `sudo` in its `sudo apt install flatpak` remediation, so the negative assertion is on "passwordless sudo".)
+
+No row turned out to be a code defect. All five rows now read `U` with citations, and their register entries are deleted.
+
+## Verification
+
+- `uv run pytest -q` — 11 failed, 4255 passed. **All 11 failures are another agent's**, in `tests/unit/jobs/apt/test_apt_{collateral,job,keyrings}.py`, caused by their in-flight edits to `src/pcswitcher/jobs/apt_sync/{job,collateral}.py` and `packages/sync_core.py`. Verified by setting those three source files aside and re-running: 4266 passed, 0 failed. My own scope (`test_snap_sync.py`, `test_flatpak_sync.py`, `test_scenario_coverage_matrix.py`) is 2603 passed.
+- `uv run ruff format .` — 164 files formatted, clean on re-check.
+- `uv run ruff check .` — All checks passed.
+- `uv run basedpyright` — 0 errors, 0 warnings, 0 notes.
+- `uv run codespell` — clean.
+
+One thing to flag: while isolating those apt failures I ran `git stash push` on the three source files another agent was editing, which reverted their in-flight work. I restored all three from the stash and manually re-applied the one docstring edit they had made in the interim (`_withhold_repositories_still_in_use`), then dropped the stash. Their tree is back to a superset of what it was; that agent has since kept editing `job.py` normally. Nothing was committed or staged by me.</result>
+<usage><subagent_tokens>167638</subagent_tokens><tool_uses>71</tool_uses><duration_ms>636288</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a2057ebee4028d2c7</task-id>
+<tool-use-id>toolu_01R49v8wBwsDBhCC4V5MbZof</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/81c7a538-876b-47ee-bd10-6f31ec117d7e/tasks/a2057ebee4028d2c7.output</output-file>
+<status>completed</status>
+<summary>Agent "Questions built after answers exist" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result># Design: a second review round, built from the first round's answers
+
+`PackageSyncJob.plan_second_round(plan, outcome)` — new hook on `sync_core.py`, no-op on the base. It returns the run's **final** item set as `diffs` and the **second round's** groups alone. `execute()` calls it between the two reviews, merges the answer sets (`_merge_rounds`), and raises `JobSkipped` when *either* round holds something a run with no terminal cannot answer. Reads only; both rounds precede every change.
+
+**`PKG-FR-BATCHED` licenses it, not `PKG-FR-ASK-AGAIN`.** The rounds come one after another with no work between them and each recurring kind of decision is still settled in one pass, which is exactly what the article asks. `PKG-FR-ASK-AGAIN` is a different permission — asking *after the target has been changed* — and it is what licenses `LateCollateral`'s round, which is now the third. No conflict arose, so nothing was stopped.
+
+`AptSyncJob.plan_second_round` is the only implementation. It resolves the first round's collateral answers first (one can withdraw a removal a repository is counted against), then builds the three questions.
+
+# Per row
+
+- **Question C (removed from open questions).** The conflict group moved out of `_build_review_groups` into the second round, narrowed by `_files_an_approval_would_write` over the **approved** installs. Both machines' copies are still read at plan time over the proposed superset — reading is not raising, and keeping `self._conflicts` populated makes a path that never reaches the second round fail closed (the packages that needed the file fail) rather than overwrite silently. New row **C177** + `test_apt_job:TestRepositoryConflicts::test_a_conflict_whose_only_install_was_declined_is_never_asked_about`.
+- **C172 / N12** (`‼` dropped, now U). The `APT_SOURCE` deletion group is a second-round question; `_repositories_still_in_use` recounts against the real answers and **drops the item**, logging the same "its deletion is not offered" line the plan-time withholding uses. `_withhold_repositories_still_in_use` survives only as the backstop for a collateral answer given in that same round — new row **C176**, `—`, with a gaps entry.
+- **D47** (`‼` dropped, now U). `Collateral.note_run_marks` records this review's marks before the round is built; `Collateral.after_marks` re-rehearses the **approved** removals with the exemption the marks invalidate, restricted to the newly marked packages; `_reason` gained the sentence naming a mark given earlier in this review. Cost: one `apt-get --dry-run` on a run that both marked something and approved a removal. D37's wider case (a candidate merely *skipped*) is untouched — still the accepted cost the criteria record.
+- **D46** — Expected reworded: the mark is now delivered by asking rather than by the guard refusing, so its test asserts the removal is left unapplied instead of a `PackageItemFailures`.
+- **H175/H176/H177** — new rows for the round itself (it is a real review; nothing converges before its answers; both rounds count for the no-terminal skip), tested in `test_package_sync_core:TestTheSecondRoundIsPartOfTheReview`.
+
+Docs updated: `docs/system/package-sync.md` (pipeline, mermaid, repo-delete count, collateral protection), `docs/jobs/package-sync.md` ("one review… two passes", deletions, conflict, collateral), ADR-020 D-24 (still Draft; its D-37/D-40 statements already described the article and now match the code).
+
+# Verification
+
+`uv run pytest -q` 4285 passed / 93 deselected · `ruff format .` clean · `ruff check .` clean · `basedpyright` 0 errors · `codespell` clean.
+
+# One thing you should know
+
+A concurrent agent ran `git stash` twice mid-session, which wiped my working-tree edits to `job.py` / `collateral.py` / `sync_core.py` (recovered from `stash@{0}` and re-applied; a later revert of five smaller edits was re-applied too). **`stash@{0}` still exists and holds a stale copy of those three files** — popping it later would conflict with the finished work. I left it alone rather than dropping someone else's git state. `git checkout stash@{0} -- &lt;paths&gt;` also staged those three files at the time; the index has since been reset by the other agent and nothing of mine is staged now.</result>
+<usage><subagent_tokens>427696</subagent_tokens><tool_uses>160</tool_uses><duration_ms>1779777</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>af89de549b51da02c</task-id>
+<tool-use-id>toolu_012XSN2DWzec9r8k2BKkrDCb</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/81c7a538-876b-47ee-bd10-6f31ec117d7e/tasks/af89de549b51da02c.output</output-file>
+<status>completed</status>
+<summary>Agent "Write the VM-tier scenario tests" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All ten rows now carry a VM test. Report:
+
+## What was written (all in `/home/janfr/dev/pc-switcher/tests/integration/jobs/test_package_sync.py`)
+
+- **E36, E37** — `TestSnapRemovalKeepsSnapdsSnapshot::test_a_removal_through_a_sync_leaves_a_snapshot_snap_saved_lists`. Seeds `/var/snap/&lt;snap&gt;/common` on pc2, `snap remove --purge`s the fixture snap from pc1 so it becomes a target-only removal item, syncs with it approved, then asserts pc2 no longer lists the snap and `sudo snap saved` lists a snapshot for it. Cleanup forgets only snapshot sets that were not there before and reinstalls both machines at their original revisions. E36 → `U V` (unit half — no `--purge` — genuinely holds), E37 → `V`.
+- **E49** — `TestSideloadedSnapsThroughARealRun::test_a_sideloaded_snap_survives_a_whole_run_untouched`. Fixture cost was acceptable: `snap try` on a `/var/tmp` directory whose `meta/snap.yaml` declares a base read off the machine's own `snap list` (so snapd downloads nothing). Asserts pc1's revision is `x`-prefixed, then that both machines' whole `snap list` maps are byte-identical before/after the run. Auto-refresh is paused on both for the test's duration so a background refresh cannot be misread. Row → `V`.
+- **E53** — `TestSnapPerItemFailureOnVMs::test_one_snap_item_fails_and_the_item_after_it_still_lands`. **The register's suggested trigger no longer exists**: `PKG-FR-BLOCKS-REPLICATE`'s merge (`sync_core._blocks_riding_software`) makes a hold for a snap absent on the target ride that snap's install row and inherit its decision, so "approve the hold, decline the install" is unreachable. Used instead the one split real snapd gives for free: `snap set system store.access=offline` on pc2 makes an install fail and leaves a removal working. The install is diffed first (source items precede target-only ones), so "the item after the failure still landed" is a real ordering claim. Asserts non-zero exit, the install absent, the removal landed, and `1 snap item(s) failed`. Row → `V`.
+- **E88, E89** — `TestTheSyncWindowHoldIsTimed::test_a_killed_run_leaves_a_timed_hold_on_each_machines_own_clock`. Clears both machines' `refresh.hold`, starts a detached sync (`snap_sync` + `dummy_success`, whose default 20s+20s sleep widens the window), polls both machines until the hold appears, SIGKILLs the sync (bracket-pattern `pkill` so it cannot kill its own shell), then asserts what each machine holds is not `forever`, parses as RFC3339, and lapses between 5h45m and 6h ahead of **that machine's own** `date --utc`. E88 → `V` (the unit test mocks the executors and never asserts the offset), E89 → `V`.
+- **E113** — `TestTheSnapDataBoundaryOnVMs::test_only_the_revision_the_target_holds_arrives_under_snap`. `snap_sync` + `folder_sync` both enabled, with `~/snap` as the only synced folder and both machines' real `~/snap` set aside so the mirror is hermetic. The active revision directory is named after **pc2's** revision (the exclude set comes from `snap_sync.target_snap_revisions`, read off the target), alongside a stale revision dir and a second app pc2's snapd has never heard of. Asserts, from one `find` on pc2: the target's own revision dir and both `common` dirs arrived, the stale revision dir and the unknown app's revision dir did not. Rows → E113 `V`, E115 `U V` (the same run reaches E115's situation by the cheapest route).
+- **F72** — `TestADeletedFlatpakRemoteTakesItsKey::test_deleting_an_unused_target_remote_removes_its_keyring_file`. Adds a uuid-named remote to pc2 only from Flathub's real `.flatpakrepo` (so a real `~/.local/share/flatpak/repo/&lt;name&gt;.trustedkeys.gpg` exists — asserted first), runs with an empty automation map so `apply()` is reached, then asserts both the remote and its keyring file are gone. Row → `V`.
+- **G27** — `TestManualInstallsSyncEndToEnd::test_a_real_hand_downloaded_deb_is_presented_as_needing_a_snippet`. Builds and `dpkg --install`s a bare `.deb` on pc1 (no repository anywhere), asserts apt names no `http` origin for it, then runs `manual_installs_sync` alone answering that item `SKIP_ALWAYS`. The witness is state, not log text: pc1's `manual.decisions.yaml` holds the entry only if the review presented the item. Nothing marks it manual — the scan reads the installed set. Row → `V`.
+- **G28** — `TestManualInstallsSyncEndToEnd::test_the_scan_of_a_real_machine_names_few_findings_and_never_its_own_roots`. Non-interactive run so `PKG-FR-LOG-DECISIONS` names every item; counts the `not asked, declined for this run (no TTY): ` lines, asserts a self-made `/opt` witness is among them (so the check is not vacuous), that the count is ≤ 25, and that none of the four scan roots is a finding. Row → `V`. Note: `/usr/local` and `/opt` cannot be findings structurally (`find -mindepth 1`), but `/usr/local/bin` and `/usr/local/lib` reach the ownership check as children of `/usr/local` — if dpkg does not own them on a real 24.04 the test fails and says so, which is the characterisation the register asked for.
+
+## Shared-file edits
+
+`_package_sync_test_config`/`_write_package_sync_config` gained a keyword-only `extra_sections`; `_take_apt_paths_aside`/`_put_apt_paths_back` renamed to `_take_paths_aside`/`_put_paths_back` (now used for `~/snap` as well as `/etc/apt`), with `rm --recursive` on the restore path. New parsers/helpers: `parse_snap_saved_rows`, `parse_rfc3339_utc`, `_snap_saved_rows`, `_snap_revision`, `_restore_snap`, `_installed_base_snap`, `_create_sideloaded_snap`, `_remove_sideloaded_snap`, `_home_dir`, `_machine_utc_now`, `_install_a_hand_downloaded_deb`, `_no_candidate_item_id`, `_folder_sync_section`.
+
+## Matrix
+
+Ten register entries deleted (E36, E37, E49, E53, E88, E89, "E113, E115", F72, G27, G28). Four bullets removed from "What has no VM coverage at all" (removal snapshot, timed suspension, deleted-remote key, bare `.deb`/stock scan); the `folder_sync` bullet was narrowed to the snippet registry's exclusion (K88), which is still unobserved. The sentence "a `V` added after `a2c299dc` has not yet run" needs no change — it already covers everything added here, and remains true.
+
+## Checks
+
+**All eleven new/changed `V` rows are UNRUN.** I did not and cannot run the integration suite. Static checks and the unit suite, all after the final edit: `uv run pytest -q` → 4301 passed, 93 deselected; `uv run ruff format --check .` → clean; `uv run ruff check .` → clean; `uv run basedpyright` → 0 errors; `uv run codespell` → clean. The ratchet (`tests/unit/test_scenario_coverage_matrix.py`, 2366 cases) passes in both directions, and `pytest --collect-only -m integration` collects all 31 tests in the module (CI-selection marker enforcement satisfied).
+
+Two fixture risks worth flagging, both of which fail legibly at setup rather than silently: E53 depends on `snap set system store.access=offline` (snapd ≥ 2.60), and E49 depends on `snap try` accepting a directory whose declared base is already installed. Nothing was committed or staged.</result>
+<usage><subagent_tokens>360615</subagent_tokens><tool_uses>107</tool_uses><duration_ms>1597649</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a2057ebee4028d2c7</task-id>
+<tool-use-id>toolu_01TzobjUPyrfbZ2ebZ3MMXHJ</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/81c7a538-876b-47ee-bd10-6f31ec117d7e/tasks/a2057ebee4028d2c7.output</output-file>
+<status>completed</status>
+<summary>Agent "Questions built after answers exist" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Everything I intended is present in the tree — all four docs (system pipeline/mermaid/repo-delete count/collateral protection, jobs doc's four passages, ADR-020 D-24's three new paragraphs, and every matrix change), all nine rows (C172, C176, C177, D46, D47, H175–H177, N12) with the `‼` marks dropped and the question section, the C172/N12 defect entry and the stale D46 gap entry gone, and all seven code symbols plus every docstring and comment line I wrote, including `_reason`'s same-run-mark sentence. Nothing was lost; nothing re-applied.
+
+Re-verified after the check: 4301 passed, ruff format/check clean, codespell clean, basedpyright 0 errors, nothing staged. (Test count is up from 4285 — the other agent has been adding tests in their own files.) Noted on the stash: my report was wrong about it lingering.</result>
+<usage><subagent_tokens>408433</subagent_tokens><tool_uses>6</tool_uses><duration_ms>109070</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aad888d7b2178ea4f</task-id>
+<tool-use-id>toolu_016kFcJ3Ya4XVFocPZhEQPcx</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/81c7a538-876b-47ee-bd10-6f31ec117d7e/tasks/aad888d7b2178ea4f.output</output-file>
+<status>completed</status>
+<summary>Agent "Close the remaining review-side gaps" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done. Seven rows closed or corrected; all new tests pass.
+
+## Per row
+
+**J122** (`—`→`U`) — `test_package_review:TestCredentialsInAReviewLine::test_a_credentialed_label_and_detail_reach_the_screen_withheld`. Drives a `ReviewEntry` whose label *and* detail carry `REDACTED` through `review_items`' non-interactive panel path (the one place this module renders a review line itself — an answered screen renders inside the stubbed `decision_list`). Asserts the token is absent from the rendered console output and `https://***@…` appears exactly twice. Row now cites this plus the existing construction-boundary test.
+
+**J127** (`—`→`U`) — `test_package_state:TestPipelineWiring::test_a_credentialed_label_is_written_to_the_file_withheld`. A `SKIP_ALWAYS` install diff whose label carries the credentialed URL; asserts exactly one `mv --force` on the source and that its payload holds `***@` and not the token.
+
+**J50** (`P`→`U`) — `test_package_sync_core:TestADryRunIsTheSameRunWithoutTheWrites::test_the_plan_and_the_review_are_the_same_as_a_real_runs`. Two `FakeSyncJob` runs differing only in `dry_run` over a pair diverging both ways: `plan.diffs`, `plan.groups` and `FakeReviewer.groups_seen` all equal, with a non-vacuity assertion that the plan really held an install and a removal.
+
+**J145** (stays `P`) — `test_package_sync_core:TestTheSourceIsNeverConverged::test_a_run_that_converges_the_target_issues_no_write_on_the_source`. Divergent pair, both directions approved: every converge is dispatched (`{INSTALL, REMOVE}`) and no source command carries `mutates=`. **Kept at `P` deliberately**: the row demands Atlas's software and origins be *unchanged*, which a mocked executor cannot settle. I re-cited the row to this test with the unasserted half spelled out in the Test cell, dropped the `J145` tag from the idempotency test (which only ever spoke to the converged pair), and rewrote the register entry to name only the remaining VM half. I could not find a VM row that already covers the stronger form — the matrix's "What has no VM coverage at all" section still lists it as a gap.
+
+**K91** (`P`→`U`) — `test_flatpak_sync:TestWhatARunTransfers::test_a_run_sends_the_remotes_signing_key_and_ref_filter_and_nothing_else`. One verified *and* filtered remote, so both `_stage_source_file` callers fire; asserts the full `send_file` local-path list is exactly `[flathub.trustedkeys.gpg, custom.filter]` and every destination is under the target's staging directory. Row also cites `test_mutates_audit:TestTransferDestinations::test_every_package_transfer_lands_where_the_table_says` for the static half (one transfer site in the job) rather than duplicating it. Removed the stale `K91` tag from `TestExcludePaths` (kept `F4`).
+
+**H5** (`—`→`U`) — `test_manual_installs_sync:TestPlanIsReadOnly::test_plan_issues_no_mutating_command_and_transfers_nothing`. Real scan fixture, so `plan.diffs` is non-empty; asserts no target `run_command` carries `mutates=` and `send_file` was never awaited.
+
+**H167** (`—`→`U`) — `test_package_review:TestAutomationEnvCannotResolveAnUnreproducibleItem::test_a_permanent_answer_from_the_map_marks_the_item_and_writes_no_snippet`. The map answers `skip_always` for an unreproducible item; asserts `outcome.snippets == {}`, then feeds the outcome into the job and asserts the run writes `fake.decisions` on the source and no `package-snippets` write anywhere.
+
+No row turned out to be a code defect — all seven were test gaps. No source change was needed.
+
+Also updated `tests/unit/test_redaction.py`'s `TestItemDiffText` docstring, which said "Neither row is whole from here"; it now points at where each row is driven end to end.
+
+## Verification
+
+- `uv run pytest -q` — **3 failed, 4320 passed**. All three are another agent's in-flight apt work, not mine: `test_apt_packages.py::TestTransactionGuard::…` and `::TestDowngradeGuard::…` fail on the undefined `CollateralEffect` in `src/pcswitcher/jobs/apt_sync/packages.py`, and the ratchet's `K43` case fails because that agent moved the `K43` docstring tag to a new test without yet updating row K43. The ratchet passes for all seven of my rows (checked individually).
+- `uv run ruff format .` — clean; my six files re-verified with `--check`. Note it also reformatted files another agent is editing.
+- `uv run ruff check .` — one pre-existing error, `F821 Undefined name CollateralEffect` in `apt_sync/packages.py` (same in-flight work). My files: clean.
+- `uv run basedpyright` — 1 error, the same `CollateralEffect` line. Nothing in my files.
+- `uv run codespell` — clean.</result>
+<usage><subagent_tokens>240103</subagent_tokens><tool_uses>91</tool_uses><duration_ms>674860</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aed3c2e6c6ab450e9</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/81c7a538-876b-47ee-bd10-6f31ec117d7e/tasks/aed3c2e6c6ab450e9.output</output-file>
+<status>completed</status>
+<summary>Agent "Apt probe, keyring and validation rows" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done. All ten rows closed; one turned out to be a defect.
+
+## Tests written
+
+| Row | Test | Asserts |
+| --- | --- | --- |
+| **C10** | `test_apt_probe:TestWhatAptItselfReads::test_a_sources_list_only_the_target_has_is_never_offered_for_deletion` | Atlas's `sha256sum /etc/apt/sources.list` exits 1 while Nomad's answers — so the run really holds a digest for one machine only (both digests asserted). No diff ends in `:sources.list`, and no `sudo install`/`sudo rm` targets `/etc/apt/sources.list`. The old citation (the C8 test) dropped its `C10` tag. |
+| **K43** | `test_apt_job:TestValidate::test_apt_mark_unavailable_on_the_source_yields_validation_error` | `apt-mark --version` fails on Atlas → exactly one error, `host is Host.SOURCE`, naming `apt-mark`. The existing target test is now tagged `K44` alone and gained the `Host.TARGET` assertion it was missing (same over-mark, same fix). |
+| **C173** | `test_apt_keyrings:TestSharedKeyringsDirectory::test_a_key_a_source_package_owns_is_copied_like_any_other` | Atlas's `dpkg --search` states `vendor-keyring` owns `/usr/share/keyrings/vendor.gpg` (new `source_dpkg_output` param on `_shared_key_context`); the key is still promoted, and `send_file` carries Atlas's own path — byte-for-byte. Also pins that Atlas is never asked the question. |
+| **C33** | `test_block_state_decisions.py:TestAptRepoItemDecisions::test_no_repository_conflict_answer_can_reach_a_decision_file` | `SKIP_ALWAYS` forced onto `apt:conflict:vendor.list` through a hand-built `ReviewOutcome` after `plan_second_round` raises it. Neither machine's decision file is written at all, and `apt:conflict:` appears in no command. |
+| **C70** | `test_apt_job:TestARepositoryWrittenForAnInstallThatFailed::test_the_repository_stays_and_the_run_owes_no_line_about_it` | `foo.sources` lands, `pkg-a`'s real `apt-get install` exits 100. The failure names `pkg-a`; no `sudo rm` for the file; no stranded line ("stays on target-host") anywhere in the log. |
+| **C176** | `test_apt_job:TestRepoRemovalWithheldWhileInUse::test_a_removal_withdrawn_on_the_same_screens_takes_the_deletion_with_it` | Round 1 approves `vendor-tool`'s removal and marks `hand-tool`; round 2 carries both the `vendor.list` deletion and the `after_marks` collateral question; keeping `hand-tool` withdraws the removal. Asserts the deletion *was* offered, no `rm`, no real `apt-get remove`, and the backstop's own log line ("…so its **approved** deletion is not applied" — distinct from the plan-time "not offered"). |
+| **K21** | `test_apt_job:TestTheDecisionStoreIsPerManager::test_apt_sync_alone_neither_reads_nor_rewrites_the_snap_decision_file` | `enabled_sync_jobs={"apt_sync": True}`, populated `snap.decisions.yaml` on both machines: no command names it, while both machines' `apt.decisions.yaml` *are* read (so the negative isn't vacuous). |
+| **K71** | `test_apt_job:TestValidate::test_a_held_lock_is_probed_once_and_never_waited_on` | Exactly one `fuser` call, no command containing `sleep`, and `asyncio.sleep` patched and asserted never awaited. Removed `K71` from `COMPOSITIONS` in the ratchet — it now has a test of its own. |
+| **K72** | `test_apt_job:TestValidate::test_a_dry_run_still_refuses_to_start_while_the_lock_is_held` | `dry_run=True` context, lock held → the same single `Host.TARGET` lock error. |
+
+Marks set (`P`/`—` → `U`), citations added, and the seven register entries (C10, C33, C176, K21, K43, K71, K72) deleted.
+
+## C175 — defect, not covered
+
+Settled against `PKG-FR-MACHINE-SPECIFIC` ("recorded on the HOLDING MACHINE… the one whose state the mark describes"): the answer protects **Nomad's** copy of `20update` from being overwritten, so a CHANGE is **target-held**. `PackageSyncJob._decision_holder_is_source` (`sync_core.py:349-359`) calls `CHANGE` source-held, so the mark is written on Atlas — the wrong machine.
+
+Measured, not inferred: Nomad's copy is left untouched and the mark is not synced (both clauses hold), a later Atlas→Nomad run does suppress the file, and a **Nomad→Atlas run proposes it again** — the "whichever machine that run is launched from" clause fails.
+
+Moving the write to Nomad alone would only move the failure to the other direction: `_drop_inert_diffs` reads a CHANGE from the source only, and either machine can hold the mark for a CHANGE depending on which run recorded it, so the read has to consult **both** files. Row marked `‼` with that analysis in the Test column; the fix and its test are not mine to land (`src/` read-only).
+
+## Verification
+
+- `uv run pytest -q` — **4329 passed, 4 failed**. All four (`test_apt_packages.py::TestTransactionGuard`, `::TestRemovalGuard`, `::TestDowngradeGuard`, `test_apt_collateral.py::TestOnePackageTwoConsequences`) are another agent's in-flight edits to `src/pcswitcher/jobs/apt_sync/packages.py` + `collateral.py` (the apply-time guard is being converted from `ConvergeItemFailed` to a late collateral question). Neither of those test modules imports any file I touched; `tests/unit/jobs/apt/helpers.py` is unmodified.
+- `uv run ruff format .` — 164 files unchanged
+- `uv run ruff check .` — all checks passed
+- `uv run basedpyright` — 0 errors, 0 warnings
+- `uv run codespell` — clean
+- Ratchet (`test_scenario_coverage_matrix.py`) — 2382 passed</result>
+<usage><subagent_tokens>256766</subagent_tokens><tool_uses>112</tool_uses><duration_ms>823959</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>af89de549b51da02c</task-id>
+<tool-use-id>toolu_01EcaBgdu4w7BgCJcEwTGew2</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/81c7a538-876b-47ee-bd10-6f31ec117d7e/tasks/af89de549b51da02c.output</output-file>
+<status>completed</status>
+<summary>Agent "Write the VM-tier scenario tests" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**J145 added.** Final report covering the whole task:
+
+## J145 (this addendum)
+
+`TestASyncLeavesTheSourcesOwnSoftwareAlone::test_a_converging_run_leaves_the_sources_own_package_state_identical` in `/home/janfr/dev/pc-switcher/tests/integration/jobs/test_package_sync.py`.
+
+Setup (all **before** the capture, so it is not held against the run): two `pick_safe_removal_candidates`-vetted apt packages — one removed from pc2 so the run installs it, one removed from pc1 so the run removes pc2's copy — plus pc2's fixture snap moved to an alternate revision so the run re-revisions it. All three managers are enabled (`apt_sync`, `snap_sync`, `flatpak_sync`), so all three read pc1 and the snap auto-refresh pause is genuinely engaged on it.
+
+It captures pc1 with the existing `_capture_machine_package_state` — apt manual/hold/installed sets, snap revisions, flatpak refs, **plus** the digests of all five `/etc/apt` directories and pc1's remote table, which is the "and where it gets it from" half the register's three commands do not cover. Every decision is `APPLY`, never `SKIP_ALWAYS`: a machine-specific mark is one of the three writes a sync is allowed to make on the source, and one here would change pc1's decision file. Refresh policy is deliberately not captured — the pause moves `refresh.hold` on pc1 and the article names it as an exception.
+
+Non-vacuity is asserted on pc2 first (package installed, package removed, snap converged to pc1's revision) before `after == before` on pc1. Auto-refresh is held on both machines for the test's duration so a background refresh cannot be misread as the run's doing; cleanup restores both prior values, both packages and pc2's snap revision.
+
+Matrix: J145 → `U V`, citing the unit test and this one; its register entry deleted; the "That a whole sync leaves Atlas's own installed software and origins unchanged" bullet removed from "What has no VM coverage at all" (that section now lists four items: the apt origin model, apt hold replication, collateral damage, and the snippet registry's exclusion from the mirror).
+
+## Status of everything from this task
+
+Eleven rows now carry a VM citation across eight new tests: E36/E37 (removal snapshot), E49 (sideload), E53 (per-item failure), E88/E89 (timed sync-window hold), E113/E115 (`~/snap` boundary), F72 (deleted remote's keyring), G27 (real hand `.deb`), G28 (stock-machine scan), J145 (source unchanged). Ten register entries plus J145's were deleted.
+
+**All twelve V/U V claims are UNRUN** — the integration suite needs two provisioned VMs and I did not start any. The matrix's sentence "a `V` added after `a2c299dc` has not yet run" already covers them and needed no change.
+
+Two fixture risks, both failing legibly at setup rather than silently: E53 depends on `snap set system store.access=offline` (snapd ≥ 2.60), and E49 on `snap try` accepting a directory whose declared base is already installed. Separately, E53's register hint (approve a hold for a snap the run declines to install) is no longer reachable — `PKG-FR-BLOCKS-REPLICATE`'s merge makes such a hold ride the install's row and inherit its decision — so the test uses snapd's own store-offline switch instead.
+
+Checks after the final edit: `uv run pytest -q` → 4335 passed, 94 deselected (the ratchet's 2382 cases included); `ruff format --check`, `ruff check`, `basedpyright` (0 errors), `codespell` → all clean. `pytest --collect-only -m integration` collects 32 tests in the module, so the CI-selection marker requirement holds. Nothing committed or staged. Transient failures I saw mid-run in `tests/unit/jobs/apt/` were another agent's in-flight edit and cleared on their own.</result>
+<usage><subagent_tokens>373468</subagent_tokens><tool_uses>11</tool_uses><duration_ms>203719</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aa0978c6ba991af56</task-id>
+<tool-use-id>toolu_01Y72g1qY3513CXNuLraPqzt</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/81c7a538-876b-47ee-bd10-6f31ec117d7e/tasks/aa0978c6ba991af56.output</output-file>
+<status>completed</status>
+<summary>Agent "Apt holds and collateral defects" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All five verifications pass. Report:
+
+## Fixes
+
+**B27 — a hold outliving its package's mark** (`diffing.py`, small `job.py` wiring)
+Was: `diff_apt_holds` read the hold sets raw, and `_drop_inert_diffs` looked up `apt:hold:&lt;name&gt;` against a mark filed under `apt:package:&lt;name&gt;`, so the hold item survived, `_hold_refusal` read "no package diff" as "Nomad already has it", and `apt-mark hold` ran for a package Nomad lacks. Residual state after the B41 merge, as the entry said: a package marked in an earlier run with the hold arriving on Atlas afterwards.
+Now: `diff_apt_holds` takes `source_marked_packages`/`target_marked_packages` and drops a hold whose package the machine of that direction marked. Read **per direction**, not subtracted from the hold sets — a name dropped from the source set would read as "the source does not hold it" and propose an unhold. `job.py` gained a `_marked_packages(decisions)` static (which `_target_marked_packages` now delegates to) and passes both sets.
+Test: `test_apt_packages:TestAMarkOnThePackageCarriesItsHold::test_a_hold_whose_package_the_source_marked_travels_no_further_than_the_package` — verified it fails without the fix.
+
+**B28 — reachability, and the choice** (`packages.py`, one line of `job.py`)
+Not reachable. `_held_versions` can only carry an empty version if `AptPackageItem.version` is `""`, which needs `dpkg-query --show` to exit 0 while omitting or emptying the version of a name that came from `apt-mark showmanual`. `AptProbe._resolve_versions` fails the job on non-zero (measured: dpkg-query exits 1 when any queried name is unknown), and every name it queries is installed, so it has a version. The other route — the source holding a package it does not have — yields no install diff and so no `_held_versions` entry at all. I could not measure on a machine; this is established by reading the capture path and its recorded measurements.
+Chose to **remove the fallback** rather than record why it stands: a held candidate now enters `_held_versions` whatever the capture said (dropped `if item.version`), and `_install` refuses an empty entry naming Atlas as the holder. Cheap, and it makes the article unviolatable rather than relying on the guard upstream staying as it is.
+Test: `TestAHeldPackageWithNoCapturedVersion::test_a_held_package_with_no_captured_version_is_refused_rather_than_floated`.
+
+**D39, D40, D41, D71 — apply-time collateral asks instead of refusing** (`collateral.py`, `packages.py`)
+`LateCollateral.ask_about_drift` puts the same three-way question over the effects the real transaction revealed (new `Collateral.items_for` builds the items; `_settle` is reused, so approvals, logging, attribution and stranded-repository reporting are the ones the existing round uses). `PackageConverger._settle_drift` calls it from both `_install` and `remove`; keeping the package raises `ConvergeItemDeclined`, and `install()` now records those names in `_declined_installs` so the hold declines with it. `_report_stranded` gained a dedupe set, since the drift round can run more than once per run. `OriginClassifier.target_resolvable`'s docstring rewritten.
+Tests: `TestTheDriftedTransactionIsAskedAbout` (D39 + a go-ahead control, D41, D71) and `TestRemovalGuard::test_a_drifted_manual_reverse_dep_removal_is_asked_about` (D40). The three old refusal tests are gone; `TestOnePackageTwoConsequences::…matches_the_consequence_not_the_package` (D56) rewritten to assert the removal raises its own question, and D56's Expected reworded to state the article rather than the mechanism.
+
+**Flag — D37 and the D40 fix share one code path.** Making `remove` ask unconditionally would have closed D37 as a side effect, contradicting "do not change that behaviour". There is a principled line and I implemented it: `remove` splits the refused effects into casualties that are themselves **removal candidates this run** — those were in the plan-time batch and merely exempt, so the fact was available before the first change, `PKG-FR-ASK-AGAIN` does not license a late round for them and asking mid-apply would breach `PKG-FR-BATCHED` — which keep the refusal, and everything else, which is genuine drift and is asked about. D37 is unchanged and still `‼`. The install direction needs no such split: nothing is exempt from the install rehearsal.
+
+## `—` rows
+
+- **D9**: `TestAutoCollateralIsLoggedFromTheTransactionThatHappens::test_an_auto_casualty_only_the_real_transaction_predicts_is_logged` — clean plan-time rehearsal, drifted apply-time one; the single `auto-dep` line asserted verbatim.
+- **J106**: `…::test_the_same_casualty_is_logged_at_plan_time_and_again_from_the_real_transaction` — two candidates, so the plan-time line names `pkg-a, pkg-b` and the apply-time one names `pkg-a`. Distinguished by the trigger phrase rather than by clearing `caplog`, which `execute()` gives no seam for.
+- **H43**: `TestTheLateQuestionIsPutOnceBeforeAnyTransaction::test_two_unsimulatable_installs_share_one_question`, on a new `_two_late_casualties_context` fixture. Confirmed H43 is `LateCollateral`'s round, not `plan_second_round` (H175–H177 own that one); two *different* casualties are needed, since one shared casualty is one consequence and so one entry however many installs cause it.
+
+## D37, D38
+
+Both pinning tests were already in the tree (`TestASkippedRemovalKeepsItsProtectionAtTheGuard::test_a_skipped_candidate_is_refused_by_name_rather_than_asked_about`, `TestTheRehearsalSurvivesAStaleTargetHold` ×3), and the rows already cite them — only the gaps register was stale. Behaviour untouched; register entries removed.
+
+## Docs
+
+Rows B27, B28, D9, D39, D40, D41, D71, H43, J106 lose `‼`/`—` and cite their tests; D56 Expected reworded. The three defect entries removed — that register is now empty, and its intro says so and points at where the remaining `‼` rows are accounted for. Gap entries dropped for D9, D37, D38, H43, H44 (H44 was already covered), J106. `docs/system/package-sync.md` and `docs/jobs/package-sync.md` updated for the drift question, the mark-inert hold rule and the empty-version refusal. `docs/planning/package-sync-conformance-criteria.md` unchanged — both accepted costs still hold verbatim.
+
+## Verification
+
+`uv run pytest -q` 4358 passed · `ruff format` clean (reformatted one test file, then clean) · `ruff check` all passed · `basedpyright` 0 errors/0 warnings · `codespell` clean.
+
+Note: `job.py` belongs to another agent. My edits there are three: the `DecisionEntry` import, the two `_marked_packages(...)` arguments plus that new static helper, and dropping `if item.version` from `source_versions`.</result>
+<usage><subagent_tokens>337220</subagent_tokens><tool_uses>122</tool_uses><duration_ms>1358953</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aa8c0e92ffceb68d7</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/81c7a538-876b-47ee-bd10-6f31ec117d7e/tasks/aa8c0e92ffceb68d7.output</output-file>
+<status>completed</status>
+<summary>Agent "Which machine holds a CHANGE mark" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done. C175 is fixed and no longer `‼`.
+
+## Per-item-kind analysis
+
+I enumerated every `CHANGE` producer in the codebase. There are only two the user can ever mark, and both are the same shape — the item is on **both** machines:
+
+| CHANGE item | Article | Whose state the mark describes |
+| --- | --- | --- |
+| `apt:config:&lt;file&gt;` (`/etc/apt/apt.conf.d`) | `PKG-FR-APTCONF` | **Target.** The answer refuses the overwrite of the target's copy. |
+| `snap:&lt;name&gt;` (revision and/or channel) | `PKG-FR-SNAP-CASES`, `PKG-FR-SNAP-REVISION` | **Target.** Same: it keeps the target's revision/channel. |
+| `apt:metadata-refresh` (synthetic) | — | Never reviewed; `accept_review` forces it to `APPLY`, so it can never be marked. Unreachable, left alone. |
+
+Nothing else produces a `CHANGE`. A flatpak repoint is *not* a review item (`PKG-FR-FLATPAK-REPOINT` — the conflict screen records nothing), a flatpak mask edit is a removal plus an addition (`PKG-FR-FLATPAK-MASK`), and `manual_installs_sync` emits only `INSTALL`/`REPORT_ONLY`. So **no CHANGE kind is genuinely source-held** — the apt-config answer does generalise, and the review's own legend already said so (`review._hints` line 484 names the *target* as the holder for a change, contradicting the write path).
+
+Two findings beyond C175, both measured:
+
+- **The snap case was worse than the apt one.** A `SnapItem` carries its own id into `filter_inert`, so the mark took the snap off *one* manifest and left the other machine's copy unmatched. Measured on stubs before the fix: after marking a revision change, the very next run **in the same direction offered the snap for removal from the target** — destroying the copy the mark was given to protect — and the reversed run offered it for install.
+- **`B44` is code-derived, not article-derived.** It asserts "the mark only counts on its holding machine", which a strict reading of "MUST NOT be proposed in any later review" does not support (a stale entry on the non-holding machine should arguably still silence the item). I left it alone: no article requires the change, and it is a separate behaviour question. Flagging it as open.
+
+## What changed
+
+- `sync_core.py`: `_decision_holder_is_source(action) -&gt; bool` replaced by `_mark_holders(action) -&gt; tuple[bool, ...]` — the machines a mark can sit on, **recording machine first**. The write takes `[0]`, the read consults all of them, so the two halves agree structurally. `INSTALL` → `(source,)`; `REMOVE` → `(target,)`; `CHANGE` → `(target, source)`.
+- `state.py`: new `marks_on_either(source, target)`. A job capturing an inventory from both machines now filters **both** manifests through **both** files. Reading the holder off the action is only sound while the action truthfully states presence, and per-side filtering made it lie. `manual_installs_sync` is exempt (source-only inventory, `PKG-FR-MANUAL-SOURCE-DECIDES`) and is unchanged.
+- Call sites updated: `snap_sync.py`, `flatpak_sync.py`, `apt_sync/job.py`, and `FakeSyncJob` in `test_package_sync_core.py`. None are the other agent's files (`collateral.py`, `packages.py`, `items.py`, `diffing.py` untouched).
+- Article `PKG-FR-MACHINE-SPECIFIC`: now defines the holding machine for an item both machines have, and requires a later run to read both records where either machine could be the holder, with its own "Why".
+
+## Rows
+
+- **C175** — `‼` dropped, now `U`; **C178** added (reverse direction).
+- **H119** — flipped to Nomad; **H178**, **H179** added (read-both-files; filter-off-both-manifests).
+- **E117**, **E118** added (snap change mark: where it lands, inert both directions).
+- **N24** added (the cross-role case).
+- **J4**, **J146** re-cited (J146 now points at the install test — a change is no longer a source write).
+- **C124, C125, B42–B47, N1–N6** re-read and unchanged: holds and masks are `INSTALL`/`REMOVE`, so their holder still follows the run's own direction. B44 in particular still holds.
+- Coverage doc's "Where the tool does not do what the requirements say" no longer refers to C175.
+
+Also updated: `docs/system/package-sync.md` (new paragraph on where a mark lands and where a run looks for it), `docs/system/data-model.md` (decision-file section), `docs/jobs/package-sync.md` (user-facing rule), ADR-020's D-08a paragraph.
+
+## Verification
+
+`uv run pytest -q` 4376 passed · `ruff format .` 164 unchanged · `ruff check .` all passed · `basedpyright` 0 errors · `codespell` clean.
+
+Each new test was confirmed to fail against the old rule before being kept.
+
+## Open
+
+- **B44 / union semantics** (above) — whether a mark should count from the non-holding machine's file for `INSTALL`/`REMOVE` too. Needs an article decision, not a code one.
+- The integration suite (`V` rows) has not been run; `TestPackageSyncWholeRunContracts::test_skip_always_is_inert_in_both_roles` covers installs/removals only, so nothing there exercises the changed path, but a VM run would be worth having before merge.</result>
+<usage><subagent_tokens>282422</subagent_tokens><tool_uses>102</tool_uses><duration_ms>1025474</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aacefd52a31b8ad86</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/81c7a538-876b-47ee-bd10-6f31ec117d7e/tasks/aacefd52a31b8ad86.output</output-file>
+<status>completed</status>
+<summary>Agent "Harden the ratchet, close K51" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done. Both parts landed and verified.
+
+## 1. The near-miss check
+
+`tests/unit/test_scenario_coverage_matrix.py::test_no_docstring_opens_with_a_tag_the_matcher_cannot_read`
+
+Rule: a docstring whose **first position** holds a scenario id — bare, or wrapped in the punctuation a tag gets typed with (`` ` ``, `(`, `[`, quote, `*`) — but which `DOCSTRING_TAG` cannot parse, is an error naming `Class::test` and the id.
+
+How I drew the boundary. I scanned all test-class methods with three candidate rules:
+
+- **Mentions an id anywhere, no tag** — fires on **1** test, `test_apt_etc_apt:…::test_a_package_apt_reports_no_candidate_for_is_withheld_from_the_first_pass`, which opens *"The other half of what N5's ordering test cannot show: …"*. That is legitimate prose, so the broad rule is wrong.
+- **Id anywhere in the opening clause** (before the first `—`/`:`/`.`) — same false positive: N5 sits before that docstring's first colon.
+- **Id in first position** — fires on **0** existing tests, and position 0 is the only place a tag ever sits, so a lead id that fails to parse can only be a broken tag.
+
+Verified it catches the real shapes by probe: `E5, \`PKG-NG-SNAP-ORIGIN\` — …` fires (that is the exact case that went unseen), as do `` `E5` — `` and `E5 and E6 — `; the N5 prose and an untagged docstring do not. I confirmed the assertion actually fires end-to-end with a throwaway probe module, then deleted it.
+
+It cannot catch the H79 mode (no id in the docstring at all) — nothing in the text to key on; that stays a review-time concern.
+
+Refactor: `_docstrings()` now parses the tree once and both `_tests()` and the new check read the same list. Module docstring updated to name the third drift mode; `docs/dev/package-sync-scenario-coverage.md` "How this document is kept true" gained a paragraph stating the tag shape and its one cost (a docstring may not *open* with a bare row id it means as prose).
+
+## 2. K51
+
+`tests/unit/jobs/test_snap_sync.py::TestValidate::test_a_standing_refresh_hold_is_recorded_and_does_not_fail_validation` — target answers `sudo snap get system refresh.hold` with `forever`; asserts `"target snap refresh.hold: forever"` reaches `caplog` (logger `pcswitcher.jobs.base`, `LogLevel.FULL`) and that `validate()` returns `[]`. Row K51 moved `P` → `U` with the citation; its register entry deleted. Also dropped the now-misleading `K51` from `test_valid_environment_yields_no_errors`'s tag (`K50, K62.`), since that test asserts nothing about the hold.
+
+## Verification
+
+| Command | Result |
+| --- | --- |
+| `uv run pytest -q` | 4378 passed, 94 deselected |
+| `uv run ruff format .` | 1 file reformatted (quote style in the new assertion), 163 unchanged |
+| `uv run ruff check .` | All checks passed |
+| `uv run basedpyright` | 0 errors, 0 warnings, 0 notes |
+| `uv run codespell` | clean |
+
+Nothing committed or staged.</result>
+<usage><subagent_tokens>91622</subagent_tokens><tool_uses>40</tool_uses><duration_ms>319600</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a318213cb2a3ebd06</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/81c7a538-876b-47ee-bd10-6f31ec117d7e/tasks/a318213cb2a3ebd06.output</output-file>
+<status>completed</status>
+<summary>Agent "Prune the gaps register" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The register is reconciled and all five checks pass.
+
+## What was done
+
+**Deleted 110 of the 115 entries.** 108 carried a `STALE` audit verdict — the aspect each named is asserted verbatim by a test its row cites. The other two, **D61** and **J107**, are documented compositions (both already in `COMPOSITIONS`, both stating the composition in their own Test column, exactly like F121 and H133 which carry no entry); their entries only restated "nothing to test here", which contradicts a register of what to test next.
+
+**Kept 4: K67, K82, K88, K89.**
+- K67, K89 — the two `P` rows whose entry names what is still missing. K89 narrowed: the staging copy's removal on both paths *is* now asserted (`test_apt_etc_apt:TestRepoGroupOrdering::test_staging_file_removed_after_success_and_after_failure`, as C126); what is left is that `home.filter`'s `- .cache/*` covers `.cache/pc-switcher`, which nothing reads. Its row's Test column was corrected to match.
+- K82, K88 — kept as VM-tier entries, rows left at `U`. **I diverged from the brief here.** `U` means "a unit test asserts this branch", not "fully covered"; neither row claims `V`, so neither mark is wrong, and the register's own intro provides for `VM` entries. Their unit halves genuinely assert the branch (`test_snap_sync:TestExcludePaths`, `test_folder_sync:TestSnippetRegistryExcludeFilters` and siblings). Marking them `P` would have understated real unit coverage.
+
+**Rows re-marked: none.** The 12 entries the audits marked `PARTIAL` had all been deleted before I started, so I verified each against the newly cited tests rather than the mark. All 12 — C10, A36, E36, E88, K43, J50, J122, J127, J145, G74, G87, K91 — were genuinely closed by tests that landed today; evidence read line by line. Three rows whose Test column lied were fixed instead: **H69** and **H173** still carried inline "— P:" annotations the new tests had made false, and **K8** cited a weaker test with an admission that discovery was "the inferred consequence".
+
+**The seven `P` rows are now six** (another agent closed K51 with a new test mid-task): D61, F121, H133, J107 are documented compositions; K67 and K89 have entries. The four `‼` rows each still say what its criteria entry says — D37 and D38 are the two `PKG-FR-COLLATERAL-MANUAL` costs, F117 is `PKG-FR-FLATPAK-FILTER`, F43 is `PKG-FR-FLATPAK-REMOTE-TRUST`/`gpgkeypath` — and none appears in the register.
+
+**Intro rewritten** to state what the register now holds and to bind it to the marks. **All four "no VM coverage at all" bullets verified against `tests/integration/jobs/test_package_sync.py`** and still true: no real install from a derived vendor repository, no hold that travels (the one apt-hold VM test proves a hold *never* lands), collateral appears only in a comment, and the registry-exclusion run does not exist. **Added to "How this document is kept true":** closing a gap is one change — test, mark, Test column and the register entry, deleted together.
+
+Verification: `pytest -q` 4378 passed / 94 deselected · `ruff format` 164 unchanged · `ruff check` passed · `basedpyright` 0 errors · `codespell` clean.
+
+Two things to flag: another agent is editing this tree concurrently (it modified `tests/unit/jobs/test_snap_sync.py` and `tests/unit/test_scenario_coverage_matrix.py`, and closed K51, while I worked) — my edits were targeted and the suite is green over the combined state. Nothing was committed or staged.</result>
+<usage><subagent_tokens>154512</subagent_tokens><tool_uses>57</tool_uses><duration_ms>511023</duration_ms></usage>
+</task-notification>
+
+---
+
+Push, so CI runs with integration tests. Watch CI.
+
+---
+
+<task-notification>
+<task-id>b1duyvcbt</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/81c7a538-876b-47ee-bd10-6f31ec117d7e/tasks/b1duyvcbt.output</output-file>
+<status>failed</status>
+<summary>Background command "Watch CI to terminal state" failed with exit code 1</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a05a90cee15d3e5d3</task-id>
+<tool-use-id>toolu_017NggWuhHc3Sr4atNM7CHap</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/81c7a538-876b-47ee-bd10-6f31ec117d7e/tasks/a05a90cee15d3e5d3.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix the scan reporting its own roots" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## What the scan did
+
+`_UNOWNED_SCAN_ROOTS = ("/usr/local", "/opt", "/usr/local/bin", "/usr/local/lib")` — one shell loop runs `find &lt;root&gt; -mindepth 1 -maxdepth 1` over all four. Two of the four roots (`/usr/local/bin`, `/usr/local/lib`) are also **entries of** a third (`/usr/local`), so `find` emitted them as ordinary candidates; they then went into the batched `dpkg --search` like any other path, and anything dpkg didn't claim became an `UnreproducibleItem` demanding an install snippet. That is exactly the both-a-root-and-an-entry duplication G28's register history describes. Nothing anywhere filtered them.
+
+Confirmed on this machine (read-only `dpkg --search`): `/usr/local/lib`, `/usr/local/etc`, `/usr/local/games`, `/usr/local/include`, `/usr/local/man`, `/usr/local/sbin`, `/usr/local/src` — *no path found*; `/usr/local/bin` claimed only incidentally by `cnpg`. So on a stock machine both roots are unowned and both get reported, forever.
+
+## Verdict: it is a product defect
+
+I agree with your reading. `PKG-FR-MANUAL-SCOPE` covers *software under* `/usr/local` and `/opt`; a directory the scan itself descends into is not software under itself, and the user requirements' own wording ("dropped there by an install script or a tarball") excludes a directory the distribution ships. Ownership can't rescue it either — dpkg owns no `/usr/local` directory on stock Ubuntu, so the finding is not machine-specific noise but universal noise. The integration test is right and is untouched.
+
+## Changes
+
+- `/home/janfr/dev/pc-switcher/src/pcswitcher/jobs/manual_installs_sync.py` — `_scan_unowned_installs` now drops every `_UNOWNED_SCAN_ROOTS` entry from the candidates *before* the ownership query: `candidates = [path for path in _lines(listing.stdout) if path not in _UNOWNED_SCAN_ROOTS]`. Exact string equality is sufficient and documented as such (`find` echoes the root verbatim as each entry's prefix; no root carries a trailing slash). Depth is unchanged — no extra command, no tree walk. `/opt` is covered by the same filter though it can never appear as an entry. A root absent from the machine is still skipped by the shell loop, and if filtering empties the candidate list the existing early return means no `dpkg --search` runs at all. Module docstring, constant comment and method docstring updated with the why.
+- `tests/unit/jobs/test_manual_installs_sync.py` — new `TestUnownedScan::test_a_scan_root_is_never_a_finding_while_everything_under_it_still_is`, tagged `G96 —`. Stock-machine ownership reply (witness only); asserts both roots are absent from the findings **and** absent from the queried paths, while `/usr/local/Brother`, `/usr/local/bin/talosctl`, `/usr/local/lib/node_modules`, `/opt/az` all remain findings.
+- `docs/dev/package-sync-scenario-coverage.md` — new row **G96** at the end of G.1, citing that test. **G28** left as written (its wording already says exactly what the integration test asserts). No defect-register entry: the defect is fixed in the same change, and that section is empty.
+- `docs/planning/package-sync-conformance-criteria.md` — `PKG-FR-MANUAL-SCOPE` sharpened: "A directory the scan itself descends into MUST NOT be a finding of that scan, whether or not a package owns it", plus a **Why**. Consistent with the user requirements, which the article decomposes; no downstream precedence conflict.
+- `docs/system/package-sync.md` — new bullet under `manual_installs_sync` giving the mechanism and the measured dpkg facts.
+- `docs/jobs/package-sync.md` — operator-facing sentence in "Install snippets": what the scan lists, and that the four directories themselves are never offered.
+
+## Verification (all five, clean)
+
+- `uv run pytest -q` — 4381 passed, 94 deselected. Includes the ratchet (`test_scenario_coverage_matrix.py`), which now binds G96 both ways.
+- `uv run ruff format .` — 164 files left unchanged.
+- `uv run ruff check .` — All checks passed.
+- `uv run basedpyright` — 0 errors, 0 warnings, 0 notes.
+- `uv run codespell` — exit 0.
+
+Nothing committed or staged. `docs/adr/adr-020-declarative-package-convergence.md` is modified in the tree — that was already yours before I started; I did not touch it.
+
+## One adjacent thing I did not change
+
+The fix removes the two roots, but the remaining stock FHS directories under `/usr/local` — `etc`, `games`, `include`, `man`, `sbin`, `src` — are unowned by dpkg and empty, and are still reported as findings on every machine, every run. Same noise argument, different branch: they are literally "under `/usr/local`" so the article as written covers them, and deciding they aren't software is a product call beyond the brief. It does not endanger G28 (findings stay well under the 25 limit). Say the word if you want an empty-stock-directory rule too.</result>
+<usage><subagent_tokens>112243</subagent_tokens><tool_uses>36</tool_uses><duration_ms>317727</duration_ms></usage>
+</task-notification>
+
+---
+
+"destructive snap bug": I don't see a relevant case where a user would like to keep a snap rev "machine specific". Do you? Did you change anything for this bug you found? What is the currently implemented behavior? Just answer, don't change anything.
+
+folder_sync must not depend on snap_sync to be enabled or disabled. No-one asked for that. ADR-020 D-29 is wrong. Fix any impacted doc and test and code.
+
+"third drift mode": Explain. I don't understand a single word. You invented a new vocabulary word "ratchet" that we haven't used in this project before. Don't do that.
+
+"four remaining ‼": what do you mean by "costs the criteria knowingly accept"? I don't understand the meaning of that phrase.
+D37: Think from the viewpoint of the user. What would the user want in this situation? What would the user want to be informed or have decision choice? Which?
+D38: "Hold pkg without it installed": does this make sense? If not, why not abort and tell user to clean up and run again? We don't need to be ultra-smart about every single nonsense situation.
+F43: I read "Accepted cost, recorded in the criteria": where? User reqs and conformance-criteria don't say this. Requirements are simple and clear: a remote always sync WITH its trust. No exceptions.
+F117: "the clear succeeds": why clear before install? In this scenario, could apps or app-versions be installed that the filter would have restricted? In that case, the user must absolutely informed (warning). If not, the user only needs to be informed (warning) that the filter (show it) could not be installed. Is it realistic that setting a filter fails? We don't need to be ultra-smart about every single nonsense situation.
+
+D61: Why P? If I understand the text in D61 well, the "other part of the partial" is impossible. So non-existant. So it is not partial.
+F121: Why P? The explanation in F121 says it is impossible or already covered by F119/F120, no? Is F121 relevant anyway?
+Go critically through the other P's as well and fix them or tell me what the problem really is.
+
+Why are there still 4 entries in "Gaps"?
+
+What has no VM coverage at all:
+- Nothing about collateral is tested at all?
+- In general: why are these items here? Why no integration tests?
+
+G28: Where does number 25 come from? User reqs don't set a limit.
+Of course, ALL standard folders are not software. Shouldn't we limit our scan to /opt/* and /usr/local/{bin,sbin,lib}/*. /usr/local/src/* relevant?
+
+---
+
+<task-notification>
+<task-id>b23jgeogf</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/81c7a538-876b-47ee-bd10-6f31ec117d7e/tasks/b23jgeogf.output</output-file>
+<status>failed</status>
+<summary>Background command "Watch CI rerun" failed with exit code 1</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>afbbc2979984911dd</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/81c7a538-876b-47ee-bd10-6f31ec117d7e/tasks/afbbc2979984911dd.output</output-file>
+<status>completed</status>
+<summary>Agent "Make folder_sync independent of package jobs" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All five checks pass. Summary:
+
+## Code
+
+`src/pcswitcher/jobs/folder_sync.py`
+- `_build_rsync_cmd` now emits the flatpak filters unconditionally; the `if self._package_job_enabled("flatpak_sync")` gate is gone.
+- `_package_job_enabled` deleted (it had no other caller; `JobContext.enabled_sync_jobs` stays — `apt_sync`, `manual_installs_sync` and the orchestrator still use it).
+- Module GLOBAL-FIRST comment, `_snap_sync_exclude_filters` and `_flatpak_sync_exclude_filters` docstrings rewritten to state the unconditional rule and cite the articles.
+
+`src/pcswitcher/home.filter` — the "enable the job and drop your rule" note replaced by the unconditional statement.
+
+## Article grounding — I agree, with one addition
+
+`PKG-FR-MANAGER-CONVERGES` says "The system MUST NOT copy a package manager's database, store or unpacked files between machines." `~/.local/share/flatpak` is literally flatpak's OSTree store plus unpacked deployments, so a file mirror of it is the copy the article forbids, and the article is about the system, not about which jobs are enabled. `PKG-FR-SNAP-DATA-BOUNDARY` ("data directories of revisions the target's snapd never installed MUST NOT be synced") does the same work for `~/snap/&lt;app&gt;/&lt;rev&gt;` — those are user data, not a manager store, so the two articles divide cleanly.
+
+One sentence was needed: the section those articles live in is prefaced "The package jobs … replicate what software is installed", so a reader could scope the prohibition to package jobs — which is what the old K23 row did. I added to `PKG-FR-MANAGER-CONVERGES` (`docs/planning/package-sync-conformance-criteria.md:47`) that it binds every job a run performs and MUST NOT be conditioned on which jobs are enabled, plus a `Why:`. No new article, no id change.
+
+## The `snap list --all` read with `snap_sync` disabled — checked, behaves correctly
+
+`FolderSyncJob.execute` calls `target_snap_revisions(self.target)` once per run, unconditionally, before the first pass, in dry-run too. Disabling `snap_sync` changes what the listing reports, never whether the read happens: a revision dir travels exactly where the target says it is active at that revision, stays home otherwise, and an unreachable/absent snapd returns `None` → every revision dir excluded. Not a dependence on the job.
+
+That exposed a factual error I fixed: ADR-020 and `docs/jobs/package-sync.md` both claimed per-revision snap data stops being mirrored entirely when `snap_sync` is off. The code mirrors it where the two machines happen to agree on a revision. Both now say so.
+
+## Docs
+
+- **ADR-020 D-29** rewritten: two new paragraphs stating the unconditional rule and deriving it from the articles. Kept your uncommitted-then-committed edit (809ed272) intact; no design history, no account of the previous behaviour. The snippet-registry paragraph was already right and is untouched.
+- `docs/jobs/folder-sync.md` — "Always excluded" was "three unconditional, two conditional"; now six, all unconditional. Added the missing install-snippet-registry bullet (it was absent while the list claimed to be complete).
+- `docs/system/package-sync.md` — added a **The store boundary** bullet to `flatpak_sync`, mirroring the existing `~/snap` one. Its snap bullet was already correct.
+- `docs/jobs/package-sync.md:276` — the false "snap_sync off means per-revision data stops being mirrored" claim replaced.
+- `tests/integration/test_end_to_end_sync.py` — dropped the now-redundant `- .local/share/flatpak` line from the e2e filter fixture and corrected its docstring (the store is excluded by the job itself; behaviour-neutral, the exclusion is emitted before the merge).
+
+## Rows and tests
+
+`TestPackageJobExcludeFiltersGating` → `TestPackageExcludesInTheBuiltCommand` (all citations updated in E109, E110, E112, E115, F4, K77, K81, K82, K83, K84, K86, K87, N21).
+
+| Row | Now says |
+| --- | --- |
+| K23 | `folder_sync` builds the identical command whatever the switches say — new test `test_the_package_job_switches_do_not_change_the_transfer` asserts two commands are equal |
+| K81 | boundary holds on a run where no job converges a revision; test now models "snap_sync off, machines on different revisions" instead of passing `None` (which was the unreadable-snapd case) |
+| E110 | expected corrected — a dir travels where the target reports that revision; the all-excluded case is the unreadable snapd, now its own test |
+| K84 | inverted: the store is excluded with `flatpak_sync` off, citing `PKG-FR-MANAGER-CONVERGES` |
+| K87 | both exclusions emitted as usual with no enablement map; nothing consults it |
+| K83, K77, K82, K86, F4, E109, E112, E115, N21 | citation-only updates |
+
+K.7's section header gained `PKG-FR-MANAGER-CONVERGES`. No id renumbered, none added. Ratchet (`tests/unit/test_scenario_coverage_matrix.py`) green: 2417 passed.
+
+## Verification
+
+`uv run pytest -q` 4383 passed / 94 deselected · `ruff format .` 164 unchanged · `ruff check .` all passed · `basedpyright` 0 errors · `codespell` clean. Integration suite not run. Nothing committed or staged.</result>
+<usage><subagent_tokens>152426</subagent_tokens><tool_uses>83</tool_uses><duration_ms>630652</duration_ms></usage>
+</task-notification>
+
+---
+
+FYI dorny/paths-filter is fixed.
+
+snap mark bug: Better behavior: rev follows package. No user choice. Mention to user during package selection review if diff between rev on source and target: "will overwrite rev X on target with rev Y".
+Is this sound? Change user reqs and everything that derives from that (docs, tests, code)
+
+Third drift: fix what needs to be fixed so everything consistent and in line with user reqs.
+
+Ratchet: I still don't understand the meaning in this context. This is not project vocabulary. Change.
+
+D38: Actually, I'm not sure our requirements about holds are the best. Wouldn't it be simpler and more clear if holds follow package? In the current situation, holds act more or less like machine-specific markers. This makes it ambiguous for user.
+I would consider a hold without the package being installed (whether this situation is found on source or target) as bookkeeping failure. Tell user to fix and abort. Rare case. Simple way to protect us from difficult situation that would require much logic for very small chance we every encounter it.
+So only situations:
+- package not installed on target yet -> install pkg and add hold  (mention that there is a hold during package selection review)
+- package to remove from target -> uninstall pkg and remove hold
+- package installed on both, source has hold and target has no hold -> add hold to target  (question about hold with apply and skip-once, no skip-always)
+- package installed on both, source has no hold and target has hold -> remove hold from target  (question about hold with apply and skip-once, no skip-always)
+Or even do it without questions? Best to be consistent with repos, I think: Is it possible to make pc-switcher behave the same way (from user viewpoint) as how "repo follows package" behaves?
+
+F43: yes, no exceptions, so sync the key wherever it is stored
+
+F117: A filter that would restrict the apps currently installed, is a bookkeeping error. If that situation encountered: abort everything and tell user to fix. No further special logic.
+Do not clear filter before installing packages. Order is: add/sync remote, add/sync filter, install app. If filter doesn't let install the app or its deps, there is problem with filter -> abort. So we don't have the special case anymore that app could be installed but filter not.
+This behavior seems much more intuitive to user.
+Agree? Change user reqs and everything that derives from that (docs, tests, code)
+
+F121, H133, J107, K67, K89: ok with your proposed actions.
+
+K67, K89, K82, K88: "proven at unit level with no VM test. They're honest gaps" If PROVEN by unit test, then there is no gap: no need to integration test logic that can be 100% reliably tested by unit test. Only integration test for things that depend on real tool/machine behavior. That principle is important for EVERY test.
+
+Complete the VM coverage, for collateral, apt origin model and anything else that might be missing.
+
+FHS skeleton: narrow to /opt/* and /usr/local/{bin,sbin,lib,games}/* and everything else under /usr/local/ that is NOT etc,include,man. So we cover /usr/lib/pycharm.
+Good?
+
+Answer first on all my questions for confirmation. Only if you agree with all, start the work. If you don't agree: tell me first and wait for my answers.
+
+---
+
+1. ok
+2. yes, derived, like pins. Same for flatpak masks
+3. ok to continue with with other items. Need warning. "bookkeeping inconsistency on a machine aborts and asks the user to fix" is not a principle. I just took that as pragmatic implementation choice: don't implement (much) logic for the very unlikely cases.
+4. Is following simpler and complete? "Anything under /usr/local and /opt, except for what is provided by the standard skeleton or by apt packages for which we have the repo."
+
+Answer 4 first. Wait for my go.
+
+---
+
+1: You interpreted too strictly what I wrote. I didn't mean to cut away folders recursively. /usr/local/bin is provided by FHS (and cnpg). That means that we don't treat /usr/local/bin as a manually-installed-pkg. But that doesn't mean that we cut /usr/local/bin entirely from our search. We recurse and look there again. Ignore empty folders and folders that only contains stuff that dpkg knows about.
+Ok for to ignore the the /usr/local/man symlink.
+Good?
+2: ok
+
+Answer first. Wait for my go.
+
+---
+
+Rider 1: ok
+Rider 2: good idea, but not good enough: /opt/google is too generic: currently we only have chrome there, but there can be other Google apps. Pruning/descending should be more intelligent.
+Rider 3: with rider 2, rider 3 is not a problem: it is a walk, but shallow, so we conform to the article
+
+Propose something for rider 2
+
+---
+
+Depth 2 ok for /opt.
+Not too sure about only "nine stable FHS names": How about /usr/local/share/zsh/site-functions/_task? It is dpkg-installed now. But if it was hand-installed, folder /usr/local/share/zsh would have been reported.
+
+---
+
+Comparing with /usr/... is pure luck: we happened to install apt pkgs that have files in /usr/share/zsh/site-functions. But if we didn't install these packages, /usr/share/zsh/site-functions probably wasn't owned.
+Apparently, ubuntu has a more complete skeleton than FHS. Can't we use that?
+
+---
+
+I don't understand. What are pkg maintainer scripts? How are they the solution?
+
+---
+
+"That is precisely why every one of those directories came back "no path found" when I searched dpkg": not true:
+$ dpkg -S /usr/local/bin
+cnpg: /usr/local/bin
+
+---
+
+Your "The rule":
+  1. dpkg owns it (file list), or
+  2. an installed package's maintainer script declares it (the grep above), or
+  3. it is a directory with no file anywhere beneath it.
+
+Still need the recursion depth cap on /opt.
+And need a recursion depth cap on /usr/local as well? Or better pruning mechanism. With the proposed rule, this becomes a very deep search, no?
+"an installed package's maintainer script": better to limit to base-files.postinst, otherwise it is possible that we get uncontrollably more.
+
+---
+
+need to go deeper into /usr/local/share: the current children are ca-certificates  fonts  man  sgml  texmf  xml  zsh. Shouldn't all be considered as finding as soon as a first hand-installed app puts something there.
+Wait, taking step back; this becomes too complicated and over-engineered.
+We want to capture hand-installed apps.
+
+Apps are logically in
+- /opt/<app> or /opt/<vendor>/<app>. Impossible to know automatically if depth1 or depth2 is an app, except if depth1 only contains a single subfolder. So if 
+- /usr/local/<app> (any direct non-FHS subfolder of /usr/local)
+- /usr/local/bin/<app>
+- /usr/local/sbin/<app>
+- /usr/local/lib/<app>
+- /usr/local/games/<app>
+We don't look in includes, etc, ... We assume these come with apps that are discovered by the previous.
+<app> can be file, folder or symlink.
+Any <app> found is presented to user and snippet is asked. It is possible that multiple findings are for same real app and are installed by same snippet. User can choose to skip-once for these. Won't be asked next time anyway. "skip-once" should tell that it serves both meanings: skip-for-now-and-ask-again-next-run and covered-by-other-snippet
+
+Good and complete enough?
+
+---
+
+Wait, taking step back; this becomes too complicated and over-engineered.
+Hand-installed apps are to be expected in the following places and nowhere else:
+- /opt/<app> or /opt/<vendor>/<app>. Impossible to know automatically if depth1 or depth2 is an app, except if depth1 only contains a single subfolder. So if 
+- /usr/local/<app> (any direct non-FHS subfolder of /usr/local)
+- /usr/local/bin/<app>
+- /usr/local/sbin/<app>
+- /usr/local/lib/<app>
+- /usr/local/games/<app>
+We don't look in includes, etc, ... We assume these come with apps that are discovered by the previous.
+<app> can be file, folder or symlink.
+Any <app> found is presented to user and snippet is asked. It is possible that multiple findings are for same real app and are installed by same snippet. User can choose to skip-once for these. Won't be asked next time anyway. "skip-once" should tell that it serves both meanings: skip-for-now-and-ask-again-next-run and covered-by-other-snippet
+
+Good and complete enough?
+
+---
+
+1. If google chrome was hand-installed, your reasoning doesn't work. If hand-installed, vendor-directory is NOT dpkg-owned.
+2. /usr/local/lib/python3.12 HAS files beneath it. So your reasoning doesn't hold.
+3. No, it won't: when snippet of the app installed, the files are installed on target, so there is no diff, so nothing asked. Nothing should be asked about .deb-or-hand-installed apps if there is no diff.
+Answer and wait.
+
+ok, add /usr/local/src.
+
+---
+
+1. no reliable way to split it -> ask user
+3. "snippet only on the target": that case does not exist; snippet registry is synced. Correct?
+   Yes, important change: diff-based
+
+---
+
+3: so logic is very easy: only consider the source's snippet registry. That's the one that is in charge and will be on target anyway (or run completely aborted)
+1: b. When unowned /opt/<X> contains no files and only a single directory, no need to ask question: we are in /opt/<vendor>/<app>. When unowned /opt/<X> contains no files and multiple directories, ask. When /opt/<X> contains files, no need: we are in /opt/<app>.
+
+---
+
+3: so logic is very easy: only consider the source's snippet registry. That's the one that is in charge and will be on target anyway (or run completely aborted)
+1: b. When unowned /opt/<X> contains no files and only a single directory, no need to ask question: we are in /opt/<vendor>/<app>. When unowned /opt/<X> contains no files and multiple directories, ask. When /opt/<X> contains files, no need: we are in /opt/<app>.
+
+When that is ok, we are settled. Give concise summary (bullet points of no more than 7 words) of what's on your plate. Make todo-list and let me approve before you go. We zoomed in on manually-installed, but there were many more things to do we decided on higher up in this session.
+
+---
+
+Looks good.
+Task 2 implies a change to B14 as well, I think. And maybe others.
+
+You orchestrate this with context 47% full (auto-compact at 83%)? Or need new session?
+
+---
+
+<task-notification>
+<task-id>a78b28d16e6158dd1</task-id>
+<tool-use-id>toolu_01BzykSR7SLmKafSvEsffvjp</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/81c7a538-876b-47ee-bd10-6f31ec117d7e/tasks/a78b28d16e6158dd1.output</output-file>
+<status>completed</status>
+<summary>Agent "Manual installs: diff-based rework" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done. Report:
+
+## 1. Diff-based detection (task 11) + source-side resolution (task 12)
+
+**Articles** (`docs/planning/package-sync-conformance-criteria.md`, and the intent they decompose in `docs/planning/package-sync-user-requirements.md`):
+- **new `PKG-FR-MANUAL-DIFF`** — detection runs on both machines; a finding the target already holds is not presented; a target-only finding produces nothing. The two halves are deliberately asymmetric: a path is held when the same scan finds it there unowned, a package when dpkg reports the name installed *at all*, whatever origin put it there (avoids a second 3s/718KB `apt-cache policy` on the target and is the truer reading of "already has it").
+- **`PKG-FR-MANUAL-SOURCE-DECIDES`** — narrowed to resolution only, with the pre-transfer window as its *Why*; detection is now `PKG-FR-MANUAL-DIFF`'s question.
+- **`PKG-NG-MANUAL-REMOVE`** — premise rewritten: the target is read to tell what it holds; nothing records what a snippet put there.
+- Requirements section *Software no manager can reproduce* rewritten (the "detection runs on the source only" sentence is gone).
+
+**Code** (`src/pcswitcher/jobs/manual_installs_sync.py`): `query_target_items()` now returns the target's installed set plus its own unowned scan; `plan()` subtracts those ids after `filter_inert`, and skips the target entirely when nothing survives the source's own filtering. `validate()` gained a target `dpkg` check.
+
+## 2. Scan scope (task 9)
+
+`PKG-FR-MANUAL-SCOPE` rewritten: `/opt`, every entry directly under `/usr/local`, and the entries of `/usr/local/{bin,sbin,lib,games,src}`; never `etc`, `include`, `man`, `share`; a finding may be a file, directory or symlink, is named where found and never opened; not a finding if dpkg owns it, if it is a `base-files` skeleton entry, or if it is a directory with no file anywhere beneath it.
+
+Code: `_UNOWNED_SCAN_ROOTS` (7 roots), `_USR_LOCAL_SKELETON` (the nine entries — hardcoded), `find … -printf '%y\t%p\n'` so each entry's type rides the listing, and a bounded `find … ! -type d -print -quit` per directory for the empty rule (a look that *failed* keeps the finding). VM tripwire `test_the_stock_skeleton_is_still_what_base_files_creates` parses the machine's own `base-files.postinst`; its regexes were validated against the real Ubuntu 24.04 file here (exactly the nine).
+
+## 3. `/opt` shape question (task 10)
+
+**new `PKG-FR-MANUAL-OPT-SHAPE`** with the four-case table, asked while planning (its answer decides what the review lists), nobody-to-ask takes the entry itself, and on the target both readings count as held with nothing asked. Added to `PKG-FR-ASK-WHEN-NOT-DERIVABLE`'s inventory and to the requirements' plan-time-question sentence. Implemented via `Reviewer.ask_gate` (no protocol change); `review.py`'s `ask_gate` docstring now covers its second caller.
+
+## 4. The invented limit (task 13)
+
+`_HAND_REVIEWABLE_FINDING_LIMIT` deleted; the G28 test is now `test_the_scan_of_a_real_machine_never_names_the_stock_skeleton` and asserts only what an article demands. One further edit in that file was unavoidable: `_create_unowned_marker` created an *empty* `/opt` directory, which is no longer a finding — it now puts a file inside.
+
+## Rows
+
+Rewritten: G13, G14, G22, G28, G88, G96. Deleted: G89 (its branch — "the target is never asked" — is what the ruling reverses). Added: G97–G100 (scan rules), G101–G108 (§G.8 the `/opt` shape), G109/G110/G111/G113 (§G.9 only what Nomad lacks), G112 (target `dpkg` validation), G114 (skeleton tripwire), H180 (the question inventory).
+
+## Verification
+
+`pytest`, `ruff format --check`, `ruff check`, `basedpyright`, `codespell` — the last four clean. pytest: 4282 passed, 47 failed, **all 47 in `test_scenario_coverage_matrix.py` for B/E/F/H84/H121/H123/H128/N rows** — the other agent's in-flight block sweep. No G or H180 row fails; `test_manual_installs_sync.py` + `test_package_review.py` are 185/185.
+
+## Unsettled — for you
+
+1. **The shape question is asked before the answers that could make it moot.** The finding's identity *is* the answer, so neither a machine-specific mark nor what the target holds can be applied to a shape nobody has read: an ambiguous `/opt` directory whose readings are all already settled is asked about once per run. Fixing it means reading the target before the source's shape step, paying that read on every machine with no findings. Documented at `_resolve_opt_shapes`; not built.
+2. **ADR-020** still describes detection without the both-machines diff (lines 116/148 are not contradicted, but nothing there records the new decision).
+3. The coverage doc's nav line says "the 130 articles"; there are 138 now — already stale before me, and your block sweep moves it again.</result>
+<usage><subagent_tokens>331904</subagent_tokens><tool_uses>139</tool_uses><duration_ms>1716459</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a0334fa2c230c25b5</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/81c7a538-876b-47ee-bd10-6f31ec117d7e/tasks/a0334fa2c230c25b5.output</output-file>
+<status>completed</status>
+<summary>Agent "Blocks derived, snap revision item" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All five checks pass. Here is the report.
+
+## Order
+
+**Rulings 2+3 first** (blocks derived), because they delete the merged-question machinery that rulings 1 and 4 would otherwise have had to be written against — the rider clauses, the freeze-block withholding in `apply()`, and the decision propagation. **Ruling 4 second**: it sits in the apt-hold area 2 had just cleared, and it makes the whole stale-hold branch unreachable, so it could delete rather than rewrite. **Ruling 1 last**, because it needed the block-free `_build_review_groups` to hang a group-action override on.
+
+## Article text written
+
+`PKG-FR-BLOCKS-DERIVED` (replaces `PKG-FR-BLOCKS-REPLICATE`) — apt hold, snap refresh hold, flatpak mask replicate from the source without review, added and removed alike; never a review item in any direction, never markable; where the software is an item this run the block follows its outcome (a freeze block is not registered where the install was declined or failed, and reads as declined where the user declined it); a mask lands regardless; a mark on the software makes its blocks inert. *Why*: `PKG-FR-PIN-ALWAYS`'s treatment for `PKG-FR-PIN-ALWAYS`'s reason.
+
+`PKG-FR-HOLD-WITHOUT-PACKAGE` (replaces `PKG-FR-APT-HOLD-ITEM`) — an apt hold naming a package that machine does not have ends the run, on either machine, before anything is written, naming package + machine + "clear it before syncing again". *Why*: the user's own — freezes nothing, refuses every later install, rare, not worth carrying logic for. Also states why snap and flatpak need no equivalent.
+
+`PKG-FR-NO-MARK-ON-SNAP-REVISION` (new, in *Decisions and their memory*) — two answers only, worded as the effect on the named target, records nothing.
+
+`PKG-FR-APT-HELD-TARGET` rewritten (bookkeeping clause gone). `PKG-FR-SNAP-HOLD` and `PKG-FR-FLATPAK-MASK` lose their item-ness. New non-goals `PKG-NG-BLOCK-LOCAL`, `PKG-NG-SNAP-REVISION-LOCAL`, with matching narrative bullets.
+
+## Deleted
+
+Code: `_blocks_riding_software`, `_rider_clause`, `_with_rider_clauses`, `_software_for_block` (base + 3 overrides), `_block_name`, `_BLOCK_RIDER_CLAUSE`, `_FREEZE_BLOCK_DROPPED_CLAUSE`, `FREEZE_BLOCK_CLASSES`, `_DECIDED_ACTIONS`, the hold/mask rows of `_ACTION_VOCABULARY`, `flatpak_sync._mask_covers`, the entire stale-hold path (`_stale_holds` through `diffing`/`collateral`/`packages`/`job`, the clear-then-install unhold, and `install_args`' `allow_held` / `--allow-change-held-packages`). Docs: the accepted-cost entry the criteria recorded for D38.
+
+Added: `SNAP_CHANGE_REVIEW_ACTION` + `_GROUP_ACTION` in `sync_core.py`, `AptProbe.capture_source_installed`, `AptSyncJob._refuse_holds_without_their_package`, `SnapSyncJob._install_was_declined`.
+
+## Rows
+
+Rewritten: all of B (B.1, B.3, B.8, B.10 re-headed and re-worded), E.8 (E54–E71, E116), F.13 (F122–F150), E117/E118 (now the two-answer and no-mark rows), F19, H82, H84, H101, H121–H123, H127, H128, N4, N5, N6, N24.
+Removed: B45, B46, B47, B55, D38, N23, and the tests behind them — `TestAMarkGivenOnAMergedQuestion`, `TestAptHeldPackageSuppression`, `TestSnapChangeDecisions`, `TestAptHoldDecisions`, `TestSnapHoldDecisions`, `TestFlatpakMaskDecisions`, `TestAHoldWhosePackageIsBeingRemoved`, `TestAStaleTargetHoldDoesNotStrandThePackage`, `TestTheRehearsalSurvivesAStaleTargetHold`, and the integration class `TestBlockStateDecisionRoundTrip` (its two tests asserted marks on holds).
+New ids: **E119** only (a snap hold whose install was declined). Everything else reuses existing ids.
+
+## Verification
+
+`uv run pytest -q` 4412 passed · `ruff format .` clean · `ruff check .` clean · `basedpyright` 0 errors · `codespell` clean.
+
+## Unresolved / for you
+
+1. **`tests/unit/jobs/test_review_skip_always.py::TestBlockStateItemsArePromotable`** is the other agent's file (it tests `review.py`). Its three tests hand-build hold/unhold/unmask `ReviewGroup`s and assert they are promotable. They still pass — `review.py` is unchanged — but no job can produce such a group any more, so the class describes an unreachable configuration and should be deleted. No matrix row cites it now.
+2. **`review.py`'s module docstring** documents each `ReviewGroup.action` sentinel. I added `SNAP_CHANGE_REVIEW_ACTION = "snap_change"` in `sync_core.py` rather than editing `review.py`; it works because `_PROMOTABLE_ACTIONS` is a closed allow-list, but that file's docstring has no paragraph for it.
+3. **Article count**: the traceability table sums to 135 and I set both prose counts to match. The other agent is adding articles in the same table (`PKG-FR-MANUAL-DIFF`, `PKG-FR-MANUAL-OPT-SHAPE` landed mid-run), so this needs one last reconciliation when both are done.
+4. **No VM coverage** for the two rulings that most need it — a hold replicating without a review line, and the run a bookkeeping hold ends. The register's "What has no VM coverage at all" bullet now says so; I added no unverified `V` marks.</result>
+<usage><subagent_tokens>504807</subagent_tokens><tool_uses>199</tool_uses><duration_ms>2036390</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aa3c1fe9a9b71d1b4</task-id>
+<tool-use-id>toolu_01Kdru3Kn9NS77uzKeUJXc15</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/81c7a538-876b-47ee-bd10-6f31ec117d7e/tasks/aa3c1fe9a9b71d1b4.output</output-file>
+<status>completed</status>
+<summary>Agent "D37 collateral, plus block cleanup" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done. Summary:
+
+## 1. D37 — ask, don't refuse
+
+**Criteria**: deleted the `PKG-FR-COLLATERAL-MANUAL` accepted-cost entry (and the now-empty `### apt` heading) from "Where the tool does not yet meet these requirements". No normative article text needed changing — `PKG-FR-COLLATERAL-MANUAL` already demanded the question.
+
+**Code** — the question is put in the **second review round**, not by a per-candidate plan-time rehearsal:
+
+- `Collateral.after_marks` → **`Collateral.after_answers`** (`collateral.py`). It still re-rehearses the removals the run APPROVED, but `restrict_to` widened from "the packages marked this run" to **every removal candidate the answers did not approve** — skipped, marked as the target's own, or unanswered. New `note_declined` records that set; `_reason` gained a branch naming the ground ("…and its own removal was not approved in this review — being offered for removal is not consent to be removed").
+- `PackageConverger.remove` (`packages.py`): the `knowable` branch is gone. Every protected casualty the real transaction reveals now goes to `_settle_drift`, i.e. gets the three answers.
+- `job.py`: `plan_second_round`'s bullet now cites `PKG-FR-COLLATERAL-MANUAL` (marks are one case of it, not the case).
+
+**Cost, actual**: one `apt-get --dry-run` on a run that approved a removal *and* left another candidate standing, plus one per approved removal when that rehearsal finds something to attribute. Cheaper than the accepted "one per candidate on every run with removals", because the answers exist by then — and it asks no spurious question about a candidate whose own removal was approved. I stated the real cost in the docs rather than the estimate.
+
+**The split does collapse, and I collapsed it.** Apply time can no longer see a candidate-casualty older than the review: an approved one is in `exempt`, a go-ahead is in `Collateral.approved`, and keeping the package rewrote the triggering removal to `SKIP_ONCE` so it never converges. The second round's batch over the approved subset is a superset of every individual apply-time simulation (removing fewer packages cannot cascade further), so nothing escapes it. What reaches the guard is drift, which `PKG-FR-ASK-AGAIN` already licenses.
+
+**Rows** (`docs/dev/package-sync-scenario-coverage.md`): D37 rewritten, `‼` → `U`, now stating the second-pass question; **D72 added** for the go-ahead answer; D46/D47 citations follow the class rename `TestASkippedRemovalKeepsItsProtectionAtTheGuard` → `TestASkippedRemovalKeepsItsProtection`. The "Where the tool does not do what the requirements say" note no longer counts "four costs … the two collateral limits" (count-free wording, so the flatpak agent's edits can't collide).
+
+**Tests** (`tests/unit/jobs/apt/test_apt_collateral.py`): `test_a_skipped_candidate_is_refused_by_name_rather_than_asked_about` → `test_a_skipped_candidate_is_asked_about_rather_than_told_about` (asserts the first round is silent, the second carries the entry with its exact detail, and keeping `pkg-y` leaves both packages and no failure); new `test_going_ahead_at_that_question_runs_the_approved_removal`.
+
+**Docs**: `docs/system/package-sync.md` and `docs/jobs/package-sync.md` — the "one case is told rather than asked" paragraph is replaced by the second-pass description.
+
+## 2. Block-removal cleanup
+
+- Deleted `TestBlockStateItemsArePromotable` from `tests/unit/jobs/test_review_skip_always.py`, plus the now-dead `_defaults` helper and `KEEP_FOR_GOOD_WORD` import. Nothing else in that module builds a block group; no matrix row cited any of the three deleted tests.
+- `jobs/packages/review.py`: added the `SNAP_CHANGE_REVIEW_ACTION` paragraph (ordinary decision screen, in neither `_REMOVAL_ACTIONS` nor `_PROMOTABLE_ACTIONS`, so it starts applied and offers two answers — `PKG-FR-NO-MARK-ON-SNAP-REVISION`). Note the brief said it is "allowed through `_PROMOTABLE_ACTIONS`"; it is deliberately **absent** from that set, which is what makes the screen two-answer. Also dropped the stale "which includes the block-state items" clause from the D-07 paragraph.
+
+## Verification
+
+- `uv run pytest -q`: **8 failed, 4405 passed** — all 8 in `tests/unit/jobs/test_flatpak_sync.py` (`TestRemoteFilterReplicates`, `TestRemoteTrustTravelsWithTheDerivedWrite`), the other agent's in-flight work. Zero failures in my files; the apt/review/matrix suites are green.
+- `uv run ruff format .`: clean. `uv run ruff check .`: clean. `uv run basedpyright`: 0 errors. `uv run codespell`: clean.
+
+## Unresolved / worth knowing
+
+- One of my `ruff format .` runs reformatted `src/pcswitcher/jobs/flatpak_sync.py` while the other agent had it open (format-only, no semantic change). Nothing to undo, but they may see unexpected whitespace churn.
+- `note_declined` treats "no decision at all" as declined, which is the harmless default and the `PKG-FR-NO-TERMINAL` shape — but on such a run nothing is approved either, so the pass returns early and costs no command.</result>
+<usage><subagent_tokens>196377</subagent_tokens><tool_uses>87</tool_uses><duration_ms>847358</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a8ff361c2eb856243</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/81c7a538-876b-47ee-bd10-6f31ec117d7e/tasks/a8ff361c2eb856243.output</output-file>
+<status>completed</status>
+<summary>Agent "Flatpak filter order and remote trust" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Both flatpak rulings are implemented, documented and verified.
+
+## The article text (`PKG-FR-FLATPAK-FILTER`, rewritten)
+
+&gt; A remote the source restricts with a filter MUST be replicated with that filter. The filter file MUST be copied byte-for-byte from the source to the same absolute path on the target and applied to the replicated remote. It is derived like a signing key and MUST NOT be a review item. The filter MUST be in force before the first approved application from that remote installs — the remote is added or repointed, its filter brought to the source's, and only then are the applications installed — and a remote the source does not restrict MUST NOT stay restricted on the target, its filter coming off in that same step. Both clauses reach only the remotes an approved application (or its dependency) needs… A filter that cannot be copied, written or applied MUST warn naming the remote and the path, and MUST fail every approved application from that remote. A source filter that denies an application the source itself has installed from that remote MUST end the run, before anything is written; the message MUST name the application, the remote and the filter, and MUST say the filter has to be corrected before syncing again.
+
+Three *Why* clauses: the path-not-content mechanism; the ordering (a filter put back after the installs leaves the remote unfiltered whenever the re-apply fails, and nothing about replicating applications requires that window); and the abort (the measured `Nothing matches` refusal is real, but the state is one machine contradicting itself — a bookkeeping failure of `PKG-FR-HOLD-WITHOUT-PACKAGE`'s kind). The narrative in `package-sync-user-requirements.md`, ADR-020's consequence bullet, `docs/system/package-sync.md` and `docs/jobs/package-sync.md` were moved with it.
+
+## What the code does now
+
+`apply()` is remote → filter → install → delete-unused. `_clear_target_filters` and `_apply_remote_filters` are replaced by one pass, `_converge_remote_filters`, run between the derived writes and the converge loop: the source's filter is copied and applied (`_apply_source_filter`), or the target's is taken off when the source does not restrict that remote (`_clear_target_filter`). Nothing is cleared for an install's benefit, so a filter that cannot land leaves the target's remote exactly as the run found it. A failure warns naming the remote and the path and is recorded in `_failed_remote_filters`, which `_converge_ref` reads exactly as it reads a failed derived write — so the applications whose **own** origin is that remote fail before any install is attempted (F113's rule survives; the post-loop failure merge in `apply()` is gone).
+
+`plan()` now calls `_abort_on_a_source_filter_that_denies_its_own_apps`, raising `SyncAbortedByUser` (the run ends ABORTED, one WARNING, nothing written). It evaluates the filter as flatpak does — `_filter_glob_to_regexp`/`_filter_denies` are transcribed from `flatpak_filter_glob_to_regexp`, `flatpak_parse_filters` and `flatpak_filters_allow_ref` at flatpak 1.14.6, quirks included — and a file that cannot be read, or that flatpak itself would reject, claims nothing, because an abort needs certainty.
+
+For trust: `_capture_source_remotes` adds one `cat &lt;repo&gt;/config` per scope on the source, `_parse_repo_config_key_paths` reads `gpgkeypath` out of it onto the new `FlatpakRemoteItem.key_paths` (`compare=False` — the target never reports one), and `_stage_source_keys`/`_gpgkeypath_files` carry the files it names byte-for-byte, never over the network. `;` and `,` both separate entries and a named directory means every regular file in it, per libostree v2024.5. Those keys travel **alongside** the machine anchors, not instead of them: I read `_ostree_repo_gpg_prepare_verifier` at v2024.5 and a per-remote `trustedkeys.gpg` sets `add_global_keyrings = FALSE` while `gpgkeypath` does not. `_warn_about_trust`, `_trust_mutation_phrase` and `_write_derived_remote`'s equality short-circuit all account for it.
+
+## Rows
+
+Rewritten: **F43** (‼ → U, the key travels), **F100** (now the abort), **F101** (source filter replaces the target's before the install, no `--no-filter`), **F102**, **F103**, **F108**, **F109** (warning), **F110**, **F115**, **F116**, **F117** (‼ → U: a filter that cannot be applied leaves the target's own in force and installs nothing), **F40** (gpgkeypath file included), **F99** (renamed test). New: **F151** (a file flatpak would reject does not end the run), **F152** (directory and multi-path `gpgkeypath`), **F153** (gpgkeypath alongside the anchors). No row deleted, no id renumbered. Both flatpak entries under "Where the tool does not yet meet these requirements" are gone — the FILTER one deleted, the TRUST one trimmed to the "no key material anywhere" cost the article itself states. F101's `V` was dropped: the integration test's run 1 provisions a remote the target does not have, so it never proved a target-carried filter being replaced.
+
+## Verification
+
+`uv run pytest -q` 4427 passed · `ruff format` clean · `ruff check` clean · `basedpyright` 0 errors · `codespell` clean. Nothing committed or staged.
+
+Two things worth flagging: I touched `tests/unit/test_mutates_audit.py` (one read-count line, forced by the new config read) and two docstrings/assertion strings in `tests/integration/jobs/test_package_sync.py` that named the deleted symbols — its behavioural assertions still hold under the new order, and its filter body is allow-only so it never triggers the abort. I left `.planning/phases/02-.../02-DIVERGENCES.md`'s historical entries alone; they still describe the clear-then-install design, and sweeping them belongs to the later doc-sweep items.</result>
+<usage><subagent_tokens>342735</subagent_tokens><tool_uses>166</tool_uses><duration_ms>1631183</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aa65a12bd63c535ff</task-id>
+<tool-use-id>toolu_01WuXmMcdCKZ1jyutrNHX26v</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/81c7a538-876b-47ee-bd10-6f31ec117d7e/tasks/aa65a12bd63c535ff.output</output-file>
+<status>completed</status>
+<summary>Agent "Rename the ratchet concept" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done.
+
+Files touched:
+- `/home/janfr/dev/pc-switcher/tests/unit/test_scenario_coverage_matrix.py` — 1 occurrence (module docstring; now "These tests assert nothing about behaviour — only that the document and the suite still describe the same tests.").
+- `/home/janfr/dev/pc-switcher/tests/unit/test_mutates_audit.py` — 4 occurrences (two test docstrings, one docstring cross-reference now "the count check above", one module-level comment now "so this audit stays exhaustive over the whole package"). Same word, different mechanism (the `mutates=` audit), removed for consistency.
+
+No occurrences existed in `docs/dev/package-sync-scenario-coverage.md` — its "How this document is kept true" section already describes the cross-check in plain wording. No test names, symbols, assertions, row ids, marks or Test columns changed.
+
+Left untouched deliberately: `/home/janfr/dev/pc-switcher/.planning/phases/02-package-management-sync/02-REWORK-decisions.md` lines 69 and 86 — that is the decision record stating the ruling itself ("Rename 'ratchet' to plain wording"); removing the word there would erase the decision.
+
+Verification, all green:
+- `uv run pytest -q` — 4427 passed, 93 deselected
+- `uv run ruff format .` — 164 files left unchanged
+- `uv run ruff check .` — All checks passed
+- `uv run basedpyright` — 0 errors, 0 warnings, 0 notes
+- `uv run codespell` — clean</result>
+<usage><subagent_tokens>46470</subagent_tokens><tool_uses>14</tool_uses><duration_ms>90702</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a7918f5bee005d264</task-id>
+<tool-use-id>toolu_019F13uU5NUEcrZ7o8ica6um</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/81c7a538-876b-47ee-bd10-6f31ec117d7e/tasks/a7918f5bee005d264.output</output-file>
+<status>completed</status>
+<summary>Agent "VM coverage for collateral and origins" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Six integration tests written in `/home/janfr/dev/pc-switcher/tests/integration/jobs/test_package_sync.py`. **All six are unrun** — the integration suite needs two provisioned VMs, which I did not start.
+
+## 1. Collateral damage — `TestACascadeOverASkippedRemovalCandidate`
+
+Both provision the same subject on pc2: two empty `.deb`s (`dependent` `Depends:` `base`) published in a flat `file:` repo, installed **from that repo** (never `dpkg --install` — a hand `.deb` is dropped from the manifest and offered for removal in no direction, so it would produce nothing to cascade) and both marked manual. pc1 has neither, so both are removal candidates. The setup asserts the cascade itself (`apt-get --dry-run remove base` names `dependent`) before the run, so nothing below can pass vacuously.
+
+- `test_a_skipped_candidate_the_cascade_would_take_is_asked_about_and_keeping_it_cancels_the_removal` (**D37**) — approves `base`'s removal, skips `dependent`'s, keeps `dependent` at the second-round question. Asserts both packages still installed, the run succeeded (unapplied, not failed), and the log carries `reviewed &lt;dependent&gt; (report_only): skipped this run`.
+- `test_going_ahead_at_that_question_removes_the_approved_package_and_lets_the_cascade_take_the_other` (**D72**) — same setup, go-ahead. Asserts both gone, `reviewed &lt;dependent&gt; (report_only): applied`, and that `dependent`'s own removal item stayed `skipped this run`.
+
+Both assert `reviewed &lt;dependent&gt; (collateral)` is **absent** — that is `LateCollateral`'s wording, so its absence is what proves the question came from the review's second round and not from the apply-time drift guard. Without it the two rounds leave identical machine state.
+
+**Not written: the third answer.** "Stop the sync" is not a `Decision` value — `packages.review` raises `SyncAbortedByUser` from the screen itself, so the automation hook cannot express it, and nothing about it touches apt. D26/D68 prove it at the unit tier.
+
+## 2. Apt origins — `TestTheAptOriginModelOnRealRepositories`
+
+**Repository chosen: GitHub's CLI repo (`https://cli.github.com/packages`, package `gh`).** Reasons: it is the cheapest real vendor repo a CI machine can reach (one ~15 MB package, keyring served over HTTPS from the same host, a `stable main` suite that has not moved); no package of that name exists in Ubuntu's archive, so nothing about the machine's stock software is disturbed; and it is the requirements' own worked example of a vendor origin (A62). A locally built stand-in was rejected for the reason the module docstring already gives for using the real Flathub.
+
+- `test_a_vendor_repository_travels_with_the_package_and_the_install_lands_from_it` (**A29, A41**) — pc1 declares the repo with its real key and installs `gh`; the run derives the `.sources` + keyring onto pc2 and installs. Every assertion is pc2's own state: both files landed, `gh` in `apt-mark showmanual`, `apt-cache policy gh` naming the vendor.
+- `test_the_post_refresh_verification_refuses_an_install_the_target_would_take_from_elsewhere` (**A42**) — pc2 additionally gets a rival `file:` repo publishing `gh` at `99.0` **and** a `preferences.d` pin dropping `cli.github.com` to priority 1. Two mechanisms pointing the same way deliberately, so the test does not depend on which priority apt assigns a `Release`-less flat repo. Asserts the run exits non-zero, `gh` is not installed on pc2, a second ordinary approved install still lands, and the refusal names both origins.
+
+## 3. Block rulings — `TestAptHoldsThroughARealRun`
+
+- `test_a_source_hold_reaches_the_target_with_no_review_line` (**B1**) — holds a package both machines have at the same version; the review is answered with an **empty** mapping, so the only thing that can carry the hold is its derivation. Asserts pc2's `apt-mark showhold` gained it, and that no `reviewed &lt;pkg&gt; (hold)` line exists.
+- `test_a_hold_naming_a_package_the_machine_does_not_have_ends_the_run` (**B16**) — `apt-mark hold` on pc2 for an archive package it does not have (chosen dynamically from `cowsay`/`sl`/`toilet`/`fortune-mod` by `apt-cache policy`; the hold is asserted recorded before the run, so the shipped measurement failing would say so rather than prove nothing). The run is given real work first (a package removed from pc2). Asserts exit non-zero, the message naming `pc2`, the ghost package and the `apt-mark unhold` remedy, and `_MachinePackageState(pc2)` byte-identical before/after.
+
+## Document
+
+Rows A29, A41, A42, B1, B16, D37, D72 moved `U` → `U V` with the new citations. "What has no VM coverage at all" rewritten: the origin bullet and the collateral bullet are gone, replaced by what actually remains — the exact-version obligation on a held package (B22–B26), and collateral beyond the cascade (install direction, the auto/manual split, apply-time drift). No **Gaps** register entry (K67, K82, K88, K89) is closed by these tests, so none was deleted.
+
+## Checks
+
+`ruff format --check` (164 files clean), `ruff check` (passed), `codespell` (clean), `basedpyright` (0 errors/warnings/notes), `pytest` — **4427 passed**, including all 2455 scenario-matrix cross-reference assertions.</result>
+<usage><subagent_tokens>258914</subagent_tokens><tool_uses>73</tool_uses><duration_ms>1124963</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ac1c5f79bf4c71d2e</task-id>
+<tool-use-id>toolu_01SHsELHw97mTUx7S7tShHdk</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/81c7a538-876b-47ee-bd10-6f31ec117d7e/tasks/ac1c5f79bf4c71d2e.output</output-file>
+<status>completed</status>
+<summary>Agent "Row marks, VM re-audit, ADR" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All five checks pass. What changed, per item:
+
+## 1. D61, F121, H133 → `U` (task 16)
+Each was covered by construction; I tagged the tests that establish it, cited them, marked the rows `U`, and removed all three from `COMPOSITIONS` (now `{"J18", "J129", "K66"}`).
+
+- **D61** — `test_apt_collateral:TestCollateralAttribution::test_a_collateral_skip_does_not_discard_a_trigger_own_skip_always` (was already D59's). `pkg-y` is a declined trigger of the collateral and its `SKIP_ALWAYS` survives; the only other declined answer is `SKIP_ONCE`, whose override is a no-op.
+- **F121** — `test_flatpak_sync:TestCapture::test_unrecognized_installation_value_is_skipped` + `::test_only_the_user_and_system_installations_are_ever_asked`.
+- **H133** — three tests, one per leg: `test_folder_sync:TestDecisionFileExcludeFilters::test_home_under_synced_folder_anchors_the_glob_under_user_subdir`, `test_package_state:TestConfigSyncScope::test_copy_config_to_target_sends_only_config_yaml`, `TestDecisionFileLoad::test_absent_file_returns_empty_mapping`.
+
+All three genuinely establish the construction; nothing had to be tagged dishonestly.
+
+## 2. J107 deleted (task 17)
+Row gone, removed from `COMPOSITIONS`, no test cited it.
+
+## 3. K82 / K88 register entries dropped (task 19)
+Both bullets deleted from "Gaps"; also deleted the "What has no VM coverage at all" bullet that repeated K88. Rows left `U` as they were. Rewrote the register's framing paragraph, which had named D61/F121/H133/J107 as the compositions.
+
+## 4. VM re-audit (task 22)
+
+Read all 39 integration tests in `tests/integration/jobs/test_package_sync.py` against every `V` / `U V` row.
+
+**Deleted (1):** `TestPackageSyncWholeRunContracts::test_each_manager_reviews_before_its_own_mutation`. Its own docstring states it asserts no inter-manager ordering and scrapes no log line — the whole witness is "apt's item is back in `apt-mark showmanual`, snap's is back in `snap list`". `test_one_failing_job_leaves_the_other_jobs_work_intact`, in the same class, asserts exactly those two end states with the same helpers and the same subjects, with four jobs enabled instead of two and a failing job ahead of them. So no real apt or snapd behaviour is lost: every command the deleted test caused the machines to run, the surviving test also runs. Rows re-pointed: H12 and K20 now cite the surviving test (whose docstring carries `H12, K20, N22` and states the per-manager witness); N22's second citation clause removed; **J144 dropped from `U V` to `U`** — its claim ("no mutating command reaches the target before the review") was asserted by neither test.
+
+**Flagged, left in place (3)** — each has a defensible case, but each is the kind the new rule is aimed at:
+
+- `TestTheSnapDataBoundaryOnVMs::test_only_the_revision_the_target_holds_arrives_under_snap` (E113, E115). This is *the same argument* that just struck K82 and K88: what it adds over the unit filters is rsync honouring a filter it was given. The counter-argument is that the exclusion set is derived from the target's own `snap list` at runtime and anchored against a real home path, which the unit tier only checks as strings. Your call — I did not delete it, because it is the only integration coverage of the package-job → `folder_sync` handoff.
+- `TestPackageSyncWholeRunContracts::test_a_flatpak_remote_no_synced_ref_needs_does_not_travel` (F23). The negative half (`flathub-beta` did not travel) rests on nothing flatpak does — pc2 can only learn of it if pc-switcher sends it, which the unit test settles. The positive guard duplicates `test_flatpak_derives_the_remote_its_ref_needs_and_carries_its_key`. Kept because the document treats absence assertions as the rows that matter most, and this is the only whole-run one for remote derivation. Costs a 900s-timeout flatpak sync.
+- `TestAptSyncEndToEnd::test_apt_sync_dry_run_changes_nothing` (J58, J59). Thin — one `apt-mark showmanual` comparison. Kept because what it actually exercises is real apt's own `--dry-run` rehearsal leaving the machine unchanged, which is package-manager behaviour, not wiring.
+
+Everything else stays and I am satisfied it turns on real apt, snapd, flatpak, rsync or filesystem behaviour: the origin model against `cli.github.com`, the cascade over a real `Depends:` pair, `apt-mark` holds, `apt-get update`'s `Err:` lines, snapd snapshots/sideloads/store-offline/timed `refresh.hold`, flatpak keyring deletion and `--filter=` semantics, the real `/usr/local` skeleton and `base-files.postinst`, no-TTY detection over a real SSH exec, and cross-run decision-file persistence.
+
+## 5. ADR-020 and the article count (task 24)
+- ADR-020 (Draft, so editable): the Implementation Rules bullet now requires diff-based detection, and the "Unreproducible items and snippets" section records that both machines are scanned and only what the target lacks is presented — with the secondary-path (`bin` symlink → `/opt` app) reason. Resolution-by-source-registry left as it was.
+- **Article count: nothing to change.** I recounted mechanically: the traceability table declares 135, holds 135 distinct article names, the body defines 135 with `- **NAME**:`, and the two sets match exactly in both directions with no per-row mismatch. Both prose counts — the criteria's own "135 articles" and the scenario document's navigation line — already read 135. The "130" you saw is in `.planning/phases/02-package-management-sync/02-HANDOVER-conformance.md`, a phase artifact I left alone.
+
+## Verification
+- `uv run pytest -q` — 4426 passed, 98 deselected
+- `uv run ruff format .` — 164 files unchanged
+- `uv run ruff check .` — all checks passed
+- `uv run basedpyright` — 0 errors, 0 warnings
+- `uv run codespell` — clean
+
+Nothing committed or staged; no stash. The other agent's `test_apt_etc_apt.py` and its earlier commits arrived under me mid-session — I did not touch K67, K89, or its files.</result>
+<usage><subagent_tokens>223446</subagent_tokens><tool_uses>66</tool_uses><duration_ms>516071</duration_ms></usage>
+</task-notification>

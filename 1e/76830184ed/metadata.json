@@ -1,0 +1,36 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "1e76830184ed",
+  "strategy": "manual-commit",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "docs/adr/adr-020-declarative-package-convergence.md",
+    "docs/dev/package-sync-scenario-coverage.md",
+    "tests/integration/jobs/test_package_sync.py",
+    "tests/unit/jobs/apt/test_apt_collateral.py",
+    "tests/unit/jobs/apt/test_apt_etc_apt.py",
+    "tests/unit/jobs/apt/test_apt_job.py",
+    "tests/unit/jobs/test_flatpak_sync.py",
+    "tests/unit/jobs/test_folder_sync.py",
+    "tests/unit/jobs/test_package_state.py",
+    "tests/unit/jobs/test_snap_sync.py",
+    "tests/unit/test_scenario_coverage_matrix.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/1e/76830184ed/0/metadata.json",
+      "transcript": "/1e/76830184ed/0/full.jsonl",
+      "compact_transcript": "/1e/76830184ed/0/transcript.jsonl",
+      "content_hash": "/1e/76830184ed/0/content_hash.txt",
+      "prompt": "/1e/76830184ed/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 351,
+    "cache_creation_tokens": 1905637,
+    "cache_read_tokens": 60735257,
+    "output_tokens": 241216,
+    "api_call_count": 185
+  }
+}
