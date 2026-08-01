@@ -1,0 +1,74 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "847b0f22fbe9",
+  "session_id": "81c7a538-876b-47ee-bd10-6f31ec117d7e",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-01T13:46:58.970044042Z",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 2,
+  "save_step_count": 2,
+  "files_touched": [
+    "tests/unit/test_mutates_audit.py",
+    "tests/unit/test_scenario_coverage_matrix.py"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "a7eb70d3c32b",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 339,
+    "cache_creation_tokens": 1891349,
+    "cache_read_tokens": 57528230,
+    "output_tokens": 234406,
+    "api_call_count": 179
+  },
+  "session_metrics": {
+    "turn_count": 19
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-01T13:46:58.692505121Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 821,
+    "human_modified": 20,
+    "human_removed": 0,
+    "total_committed": 821,
+    "total_lines_changed": 852,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 17,
+      "user_lines_removed": 9,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9,
+        "tests/unit/test_mutates_audit.py": 6,
+        "tests/unit/test_scenario_coverage_matrix.py": 2
+      },
+      "user_removed_per_file": {
+        "tests/unit/test_mutates_audit.py": 7,
+        "tests/unit/test_scenario_coverage_matrix.py": 2
+      }
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 842,
+      "user_lines_removed": 11,
+      "agent_lines_added": 8,
+      "agent_lines_removed": 9,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9,
+        "docs/dev/package-sync-scenario-coverage.md": 9,
+        "tests/integration/jobs/test_package_sync.py": 824
+      },
+      "user_removed_per_file": {
+        "docs/dev/package-sync-scenario-coverage.md": 10,
+        "tests/integration/jobs/test_package_sync.py": 1
+      }
+    }
+  ]
+}
