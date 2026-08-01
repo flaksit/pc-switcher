@@ -1766,3 +1766,13 @@ Tests 1 and 2 rewritten to match; test 3 untouched (the gate is unchanged). Test
 - I did not verify against a live machine that `allow *` in a flatpak filter lists Sopwith, nor that `snap refresh --revision=&lt;N&gt;` accepts a revision from another channel; both are taken from existing code comments and the integration suite (`test_snap_revision_converges_without_hold` does exactly the latter).</result>
 <usage><subagent_tokens>259593</subagent_tokens><tool_uses>92</tool_uses><duration_ms>1056528</duration_ms></usage>
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>bayopj5f3</task-id>
+<tool-use-id>toolu_01QijdDhwgzde9Fvi9i7LUtM</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/81c7a538-876b-47ee-bd10-6f31ec117d7e/tasks/bayopj5f3.output</output-file>
+<status>completed</status>
+<summary>Background command "Watch CI" completed (exit code 0)</summary>
+</task-notification>
