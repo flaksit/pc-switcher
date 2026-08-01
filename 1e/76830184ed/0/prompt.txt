@@ -1561,3 +1561,42 @@ Everything else stays and I am satisfied it turns on real apt, snapd, flatpak, r
 Nothing committed or staged; no stash. The other agent's `test_apt_etc_apt.py` and its earlier commits arrived under me mid-session — I did not touch K67, K89, or its files.</result>
 <usage><subagent_tokens>223446</subagent_tokens><tool_uses>66</tool_uses><duration_ms>516071</duration_ms></usage>
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>a112d73397490f493</task-id>
+<tool-use-id>toolu_01RcgTyJTs7y199eNuenLJAh</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/81c7a538-876b-47ee-bd10-6f31ec117d7e/tasks/a112d73397490f493.output</output-file>
+<status>completed</status>
+<summary>Agent "Sweep untagged tests, close K67 K89" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done. All five verifications green.
+
+## 1. Untagged-test sweep (task 15)
+
+**Numbers**: 1469 tests in the named modules (`tests/unit/jobs/`, `tests/unit/jobs/apt/`, `tests/unit/orchestrator/`, `test_redaction.py`, `test_mutates_audit.py`, `test_machine_naming.py`, `test_logging.py`). **486 carry no docstring tag** `DOCSTRING_TAG` can read. Of those, **469 are cited by no row at all** — the other 17 are second citations on rows whose first citation carries the tag, so the document already sees them. I went through all 469. **Zero mattered.**
+
+The reason is structural, and worth recording: **no row in the matrix reads `—` any more.** Marks today are 1123 `U`, 63 `U V`, 38 `V`, and — after this task — zero `P`. So there is no row for an untagged test to raise. The only rows whose mark understated what was proven were the six `P`s: four compositions (the other agent has since closed them) and K67/K89, and neither of those was closed by an existing test — both needed tests written.
+
+What the 469 actually are: mechanism and parser tests (`test_apt_policy`'s block parsing, `test_package_sync_candidate_selection`'s `parse_*`), review-UI layout and rendering (`test_decision_list`, `test_package_review`, `test_prompt_navigation`), and whole modules outside package sync's requirements (`test_folder_sync` internals, `test_vscode_state_sync`, `test_snapshot_job`, `test_config_system`, `test_logging`, the `CORE-FR-*` orchestrator suites). Nothing there states a branch an article imposes that a row does not already cite. I invented no rows and tagged no test with a row it only partly proves.
+
+Note `test_redaction.py` and `test_mutates_audit.py` produced no untagged-and-uncited tests at all.
+
+## 2. K89 and K67 (task 18) — both closed, `P` → `U`
+
+**K89** — `tests/unit/jobs/apt/test_apt_etc_apt.py`, new `TestTheStagingCopyIsInsideASyncedFolder`. The test derives the staging directory from the real `TargetFiles.staging_dir()` (so it fails if apt moves it out of `.cache`), builds a `/home`-shaped tree, and runs **real `rsync --dry-run`** over the shipped `src/pcswitcher/home.filter` rather than restating rsync's first-match-wins in Python — the restatement would have been the thing under test. `.cache/uv` rides along as a control so a filter that excluded everything cannot pass. Mutation-checked: deleting the `- .cache/*` line fails it.
+
+**K67** — the degradation half, per job, each measuring one run's commands against that same job's `validate()`:
+- `test_apt_job:TestNoRunReachesSudoValidationDidNotClear::test_every_machine_the_run_sudoes_on_is_one_validation_cleared`
+- `test_snap_sync:` same class and test name — both jobs need the grant on both machines
+- `test_flatpak_sync:` `::test_a_system_scope_run_sudoes_only_where_validation_cleared_it` plus `::test_a_user_scope_only_run_escalates_nowhere_so_there_is_nothing_to_degrade`, because flatpak's need is conditional on scope and the gate must hold in both directions
+- `test_manual_installs_sync:::test_neither_the_capture_nor_validation_asks_either_machine_to_escalate` — its table row is "none" on both, so the risk is the reverse one: a `sudo` added to a scan would be established by nothing, and a machine refusing it answers with a shorter `/opt` listing.
+
+The shape is behavioural, not another AST audit: run the job, record who was asked to `sudo`; run `validate()`, record who was cleared; assert the first set is a subset. That is exactly "the degraded path is unreachable" — apt's `if sudo test -d …` wrapper collapses a refused grant to exit 0 with no output, indistinguishable from an empty `/etc/apt`, so nothing downstream can catch it and the only defence is that the run never starts.
+
+Both register entries deleted. That left the register's own preamble claiming "K67 and K89 are the two `P` rows with an entry", which my change falsified, so I corrected that sentence and the double blank line the emptied list left behind.
+
+I touched only: `docs/dev/package-sync-scenario-coverage.md` (K67 row, K89 row, two register bullets, the preamble sentence) and four test modules. Nothing committed, nothing staged. The other agent's rows and the "What has no VM coverage at all" section are untouched — note they have since closed D61/F121/H133/J107 and removed the K82/K88 entries, so the gap register now holds no per-row entries at all.</result>
+<usage><subagent_tokens>188826</subagent_tokens><tool_uses>95</tool_uses><duration_ms>866983</duration_ms></usage>
+</task-notification>
