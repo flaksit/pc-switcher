@@ -1,0 +1,1 @@
+dorny/paths-filter@v4 failed. This is not the first time. What is happening? Can you fix? E.g. https://github.com/flaksit/pc-switcher/actions/runs/30691143582/job/91349040828
