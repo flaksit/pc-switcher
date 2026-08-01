@@ -3,7 +3,7 @@ status: testing
 phase: 02-package-management-sync
 source: [02-VERIFICATION.md]
 started: 2026-07-24T12:02:22Z
-updated: 2026-07-31T00:00:00Z
+updated: 2026-08-01T00:00:00Z
 ---
 
 ## Current Test
@@ -21,17 +21,19 @@ Intent under test: `docs/planning/package-sync-user-requirements.md` and its tes
 ### 1. The package review on two machines
 expected: |
   On a real terminal, with the two machines diverged as the runbook sets them up:
-  - One question per group: arrow keys between lines, `<y>`/`<s>`/`<x>` on the focused line, a shifted key on every line, `<enter>` to confirm, `<ctrl-c>` to abort the sync. No second pass and no leftover set. A question that records nothing offers two answers, its legend shorter by exactly `<x>`. The questions that must show something first — a repository being deleted, a collateral package, an unreproducible item — come one item at a time.
+  - One question per group: arrow keys between lines, `<y>`/`<s>`/`<x>` on the focused line, a shifted key on every line, `<enter>` to confirm, `<ctrl-c>` to abort the sync. Nothing is asked twice and no set is left over. A question that records nothing offers two answers, its legend shorter by exactly `<x>` — a repository being deleted and a snap's revision are both that shape. The questions that must show something first — a repository being deleted, a collateral package, an unreproducible item — come one item at a time, and the ones an answer brings into being come in a second round after it.
+  - A hold and a mask are asked about nowhere at all; the shape of an `/opt` directory that could be one application or a publisher's shelf is asked while the run is still planning.
   - Every title, detail and answer names the two machines by hostname and states its own effect on one of them; the permanent answer says the user will not be asked again and whose machine the item is. A collateral question names the change that causes it and the ground that protects the package, and is answered per consequence. "source" and "target" name no machine anywhere.
-  - What each column said is what lands in `*.decisions.yaml` on the machine that holds the item: an install on the source, a removal on the target. The snippet editor rejects a whitespace-only body, and an accepted snippet lands in `~/.config/pc-switcher/package-snippets.yaml` and replays on the target in the same run.
+  - What each column said is what lands in `*.decisions.yaml` on the machine that holds the item: an install on the source, a removal on the target, an unreproducible finding on the source. The snippet editor rejects a whitespace-only body, and an accepted snippet lands in `~/.config/pc-switcher/package-snippets.yaml` and replays on the target in the same run.
 result: [pending]
 
 ### 2. What the run leaves behind
 expected: |
-  The same run, checked afterwards on both machines (runbook §5):
+  The same run, checked afterwards on both machines (runbook §6):
   - Packages replicate, except what the user skipped or marked; conflicts and version differences are reported before any change, never silently converged; a package marked as a machine's own stays inert, and is named rather than taken when another change would remove it.
-  - A held package arrives at the source's version, including one the target held without having it; a sideloaded snap is left alone on both machines and named in a warning; a flatpak remote's filter reaches the target at the same path and the target's own comes off before the installs; a repository the target still installs from is not offered for deletion; a remote nothing uses is deleted with no question.
-  - The log names every item and the answer it received, carries each package manager's own output, and shows a URL credential as `***@` and never in full, whatever characters it holds. With no terminal, no snippet registry is transferred and no snapd refresh policy is written on a machine whose own could not be read; a read that went dark fails its own job, the other jobs still run, and the end-of-run message gives one line per failed job naming the reason it recorded (runbook §6).
+  - A held package arrives at the source's version and its hold follows it; a snap moves to the source's revision; a sideloaded snap is left alone on both machines and mentioned nowhere; the source's flatpak filter reaches the target at the same path and is in force before anything installs from that remote; a repository the target still installs from is not offered for deletion; a remote nothing uses is deleted with no question; only what the target lacks is presented as unreproducible, and the registry reaches the target through that job's own push and nothing else.
+  - Three bookkeeping failures end the run while planning, before anything is written, each naming what to repair: a hold on a package its machine does not have, a source remote whose filter does not offer what the source installed from it, and a snippet registry that cannot be parsed (runbook §3).
+  - The log names every item and the answer it received, carries each package manager's own output, and shows a URL credential as `***@` and never in full, whatever characters it holds. With no terminal, no snippet registry is transferred and no snapd refresh policy is written on a machine whose own could not be read; a read that went dark fails its own job, the other jobs still run, and the end-of-run message gives one line per failed job naming the reason it recorded (runbook §7).
 result: [pending]
 
 ### 3. --confirm-each-command gate and verbatim debug trace
