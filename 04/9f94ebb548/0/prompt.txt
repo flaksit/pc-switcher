@@ -1299,3 +1299,53 @@ Rewritten: G13, G14, G22, G28, G88, G96. Deleted: G89 (its branch — "the targe
 3. The coverage doc's nav line says "the 130 articles"; there are 138 now — already stale before me, and your block sweep moves it again.</result>
 <usage><subagent_tokens>331904</subagent_tokens><tool_uses>139</tool_uses><duration_ms>1716459</duration_ms></usage>
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>a0334fa2c230c25b5</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/81c7a538-876b-47ee-bd10-6f31ec117d7e/tasks/a0334fa2c230c25b5.output</output-file>
+<status>completed</status>
+<summary>Agent "Blocks derived, snap revision item" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All five checks pass. Here is the report.
+
+## Order
+
+**Rulings 2+3 first** (blocks derived), because they delete the merged-question machinery that rulings 1 and 4 would otherwise have had to be written against — the rider clauses, the freeze-block withholding in `apply()`, and the decision propagation. **Ruling 4 second**: it sits in the apt-hold area 2 had just cleared, and it makes the whole stale-hold branch unreachable, so it could delete rather than rewrite. **Ruling 1 last**, because it needed the block-free `_build_review_groups` to hang a group-action override on.
+
+## Article text written
+
+`PKG-FR-BLOCKS-DERIVED` (replaces `PKG-FR-BLOCKS-REPLICATE`) — apt hold, snap refresh hold, flatpak mask replicate from the source without review, added and removed alike; never a review item in any direction, never markable; where the software is an item this run the block follows its outcome (a freeze block is not registered where the install was declined or failed, and reads as declined where the user declined it); a mask lands regardless; a mark on the software makes its blocks inert. *Why*: `PKG-FR-PIN-ALWAYS`'s treatment for `PKG-FR-PIN-ALWAYS`'s reason.
+
+`PKG-FR-HOLD-WITHOUT-PACKAGE` (replaces `PKG-FR-APT-HOLD-ITEM`) — an apt hold naming a package that machine does not have ends the run, on either machine, before anything is written, naming package + machine + "clear it before syncing again". *Why*: the user's own — freezes nothing, refuses every later install, rare, not worth carrying logic for. Also states why snap and flatpak need no equivalent.
+
+`PKG-FR-NO-MARK-ON-SNAP-REVISION` (new, in *Decisions and their memory*) — two answers only, worded as the effect on the named target, records nothing.
+
+`PKG-FR-APT-HELD-TARGET` rewritten (bookkeeping clause gone). `PKG-FR-SNAP-HOLD` and `PKG-FR-FLATPAK-MASK` lose their item-ness. New non-goals `PKG-NG-BLOCK-LOCAL`, `PKG-NG-SNAP-REVISION-LOCAL`, with matching narrative bullets.
+
+## Deleted
+
+Code: `_blocks_riding_software`, `_rider_clause`, `_with_rider_clauses`, `_software_for_block` (base + 3 overrides), `_block_name`, `_BLOCK_RIDER_CLAUSE`, `_FREEZE_BLOCK_DROPPED_CLAUSE`, `FREEZE_BLOCK_CLASSES`, `_DECIDED_ACTIONS`, the hold/mask rows of `_ACTION_VOCABULARY`, `flatpak_sync._mask_covers`, the entire stale-hold path (`_stale_holds` through `diffing`/`collateral`/`packages`/`job`, the clear-then-install unhold, and `install_args`' `allow_held` / `--allow-change-held-packages`). Docs: the accepted-cost entry the criteria recorded for D38.
+
+Added: `SNAP_CHANGE_REVIEW_ACTION` + `_GROUP_ACTION` in `sync_core.py`, `AptProbe.capture_source_installed`, `AptSyncJob._refuse_holds_without_their_package`, `SnapSyncJob._install_was_declined`.
+
+## Rows
+
+Rewritten: all of B (B.1, B.3, B.8, B.10 re-headed and re-worded), E.8 (E54–E71, E116), F.13 (F122–F150), E117/E118 (now the two-answer and no-mark rows), F19, H82, H84, H101, H121–H123, H127, H128, N4, N5, N6, N24.
+Removed: B45, B46, B47, B55, D38, N23, and the tests behind them — `TestAMarkGivenOnAMergedQuestion`, `TestAptHeldPackageSuppression`, `TestSnapChangeDecisions`, `TestAptHoldDecisions`, `TestSnapHoldDecisions`, `TestFlatpakMaskDecisions`, `TestAHoldWhosePackageIsBeingRemoved`, `TestAStaleTargetHoldDoesNotStrandThePackage`, `TestTheRehearsalSurvivesAStaleTargetHold`, and the integration class `TestBlockStateDecisionRoundTrip` (its two tests asserted marks on holds).
+New ids: **E119** only (a snap hold whose install was declined). Everything else reuses existing ids.
+
+## Verification
+
+`uv run pytest -q` 4412 passed · `ruff format .` clean · `ruff check .` clean · `basedpyright` 0 errors · `codespell` clean.
+
+## Unresolved / for you
+
+1. **`tests/unit/jobs/test_review_skip_always.py::TestBlockStateItemsArePromotable`** is the other agent's file (it tests `review.py`). Its three tests hand-build hold/unhold/unmask `ReviewGroup`s and assert they are promotable. They still pass — `review.py` is unchanged — but no job can produce such a group any more, so the class describes an unreachable configuration and should be deleted. No matrix row cites it now.
+2. **`review.py`'s module docstring** documents each `ReviewGroup.action` sentinel. I added `SNAP_CHANGE_REVIEW_ACTION = "snap_change"` in `sync_core.py` rather than editing `review.py`; it works because `_PROMOTABLE_ACTIONS` is a closed allow-list, but that file's docstring has no paragraph for it.
+3. **Article count**: the traceability table sums to 135 and I set both prose counts to match. The other agent is adding articles in the same table (`PKG-FR-MANUAL-DIFF`, `PKG-FR-MANUAL-OPT-SHAPE` landed mid-run), so this needs one last reconciliation when both are done.
+4. **No VM coverage** for the two rulings that most need it — a hold replicating without a review line, and the run a bookkeeping hold ends. The register's "What has no VM coverage at all" bullet now says so; I added no unverified `V` marks.</result>
+<usage><subagent_tokens>504807</subagent_tokens><tool_uses>199</tool_uses><duration_ms>2036390</duration_ms></usage>
+</task-notification>
