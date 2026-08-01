@@ -244,9 +244,8 @@ class TestMutatesCoverage:
     def test_no_ungated_call_site_is_unaccounted_for(self) -> None:
         """J162 — every executor call without `mutates=` is listed above as a read or a known gap.
 
-        This is the ratchet: a newly added write that forgets `mutates=` lands in a
-        function whose expected count no longer matches, and fails here until it is either
-        gated or justified.
+        A newly added write that forgets `mutates=` lands in a function whose expected
+        count no longer matches, and fails here until it is either gated or justified.
         """
         ungated = _collect_ungated()
         problems: list[str] = []
@@ -278,7 +277,7 @@ class TestMutatesCoverage:
     def test_every_ungated_write_is_tracked(self) -> None:
         """J162 — the requirement: a write either carries `mutates=` or has an issue saying why not.
 
-        Kept separate from the ratchet above so the two failures read differently — that one
+        Kept separate from the count check above so the two failures read differently — that one
         says "you added something unaccounted for", this one says "the codebase still has
         ungated writes". It holds today: the only ungated write left is the rsync pass under
         #209, so adding a `_UNGATED_WRITES` entry without an issue fails here.
@@ -331,8 +330,8 @@ _SOURCE_WRITES: dict[str, str] = {
 }
 
 # Source-capable writes that are not a package sync's: they belong to other jobs and other
-# requirements, and are listed only so this audit's ratchet stays closed over the whole
-# package. A key here may never be under `_PACKAGE_SYNC_PATHS`, which is asserted.
+# requirements, and are listed only so this audit stays exhaustive over the whole package.
+# A key here may never be under `_PACKAGE_SYNC_PATHS`, which is asserted.
 _OUTSIDE_PACKAGE_SYNC: dict[str, str] = {
     "btrfs_snapshots.py::create_snapshot::run_command": "the pre-sync snapshot, taken on both machines",
     "btrfs_snapshots.py::validate_snapshots_directory::run_command": "creates /.snapshots on either machine",
@@ -436,7 +435,7 @@ class TestSourceWrites:
         assert len(gated) > 40, f"only {len(gated)} `mutates=` call sites found — the AST walk is not finding them"
 
     def test_no_write_that_can_reach_the_source_is_unaccounted_for(self) -> None:
-        """J149 — the ratchet: a new write through a handle that is not the target's lands here.
+        """J149 — a new write through a handle that is not the target's lands here.
 
         Its author must either route it through the target, or name it — and naming a new
         one inside a package job means adding a fourth entry to `_SOURCE_WRITES`, which the

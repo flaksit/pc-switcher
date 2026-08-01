@@ -8,8 +8,8 @@ citing nothing, a renumbered scenario leaves a docstring pointing at someone els
 branch, and a tag one character off the shape `DOCSTRING_TAG` reads leaves a proven branch
 looking unproven.
 
-These tests are the ratchet. They assert nothing about behaviour — only that the document
-and the suite still describe the same tests.
+These tests assert nothing about behaviour — only that the document and the suite still
+describe the same tests.
 """
 
 from __future__ import annotations

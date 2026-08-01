@@ -77,7 +77,7 @@ from uuid import uuid4
 import pytest
 
 from pcswitcher.executor import BashLoginRemoteExecutor
-from pcswitcher.jobs.apt_sync.items import AptPackageItem
+from pcswitcher.jobs.apt_sync.items import AptPackageItem, collateral_item_id
 from pcswitcher.jobs.flatpak_sync import FlatpakItem
 from pcswitcher.jobs.manual_installs_sync import UnreproducibleItem
 from pcswitcher.jobs.packages.review import PACKAGE_REVIEW_AUTOMATION_ENV, Decision
@@ -4417,3 +4417,826 @@ class TestASyncLeavesTheSourcesOwnSoftwareAlone:
             await _restore_snap(pc2_executor, snap_name, target_snap_revision)
             await _restore_system_refresh_hold(pc1_executor, pc1_prior_hold)
             await _restore_system_refresh_hold(pc2_executor, pc2_prior_hold)
+
+
+# ---------------------------------------------------------------------------------
+# Three things only a real apt settles: what a removal takes with it, which repository
+# wins a candidate, and what `apt-mark` records. Every subject below is BUILT, for the
+# reason the module docstring gives for the snap and flatpak ones -- two VMs provisioned
+# from one baseline hold no package pair with the dependency a cascade needs, and no
+# vendor repository at all.
+# ---------------------------------------------------------------------------------
+
+_SYNTHETIC_PACKAGE_VERSION = "1.0"
+
+# Splits several reads issued as ONE command back into their own outputs
+# (testing-guide.md's command-grouping rule). Chosen so no apt or dpkg output can contain
+# it.
+_SECTION_MARKER = "@@PCSWITCHER_IT_SECTION@@"
+
+
+def _synthetic_control(name: str, *, version: str = _SYNTHETIC_PACKAGE_VERSION, depends: str = "") -> str:
+    """A `DEBIAN/control` stanza for an empty package built on a VM.
+
+    Empty on purpose -- control metadata and no files -- so installing one changes nothing
+    about the machine beyond dpkg's own records. `Depends:` is the only field that makes two
+    of them behave like a real dependency pair.
+    """
+    dependency = f"Depends: {depends}\n" if depends else ""
+    return (
+        f"Package: {name}\nVersion: {version}\nArchitecture: all\n{dependency}"
+        "Maintainer: pc-switcher integration tests <nobody@example.invalid>\n"
+        "Description: synthetic package for pc-switcher integration tests\n"
+    )
+
+
+def _packages_index_stanza(name: str, control: str) -> tuple[str, str]:
+    """The two shell lines that append one package's stanza to a flat repository's
+    `Packages` index: the control fields, then the `Filename`/`Size`/`SHA256` apt needs to
+    fetch and verify the `.deb`.
+
+    Size and digest are computed on the machine from the file `dpkg-deb` has just produced:
+    apt rejects an index whose digest does not match the file it points at.
+    """
+    return (
+        f"printf %s {shlex.quote(control)}",
+        f'printf "Filename: ./{name}.deb\\nSize: %s\\nSHA256: %s\\n\\n"'
+        f' "$(stat --format=%s "$work/{name}.deb")"'
+        f' "$(sha256sum "$work/{name}.deb" | cut --delimiter=" " --fields=1)"',
+    )
+
+
+async def _publish_a_cascading_pair(executor: BashLoginRemoteExecutor) -> tuple[str, str, str, str]:
+    """On `executor`: publish two packages in a flat `file:` apt repository -- `dependent`
+    declaring `Depends:` on `base` -- install both from it and mark both manual. Returns
+    `(base, dependent, repo_dir, list_filename)`.
+
+    From a REPOSITORY and never `dpkg --install`: a package apt names no origin for is
+    dropped from the manifest and offered for removal in no direction
+    (`PKG-FR-DEB-OWNERSHIP`), so a hand-`.deb` pair would produce no removal item at all.
+    Both end up manually installed, which is what makes each of them a removal candidate on
+    a machine the source does not have them on AND puts each inside `Collateral.protected()`.
+
+    `apt-get remove <base>` then genuinely takes `dependent` with it. That is apt's own
+    resolution, and it is the whole of what this construction exists to put in front of the
+    job.
+    """
+    uniq = uuid4().hex[:12]
+    base = f"pcswitcher-it-base-{uniq}"
+    dependent = f"pcswitcher-it-dependent-{uniq}"
+    repo_dir = f"/opt/pcswitcher-it-cascade-{uniq}"
+    list_filename = f"pcswitcher-it-cascade-{uniq}.list"
+    base_control = _synthetic_control(base)
+    dependent_control = _synthetic_control(dependent, depends=base)
+
+    build = "\n".join(
+        (
+            "set -euo pipefail",
+            "work=$(mktemp --directory)",
+            f'mkdir --parents "$work/{base}/DEBIAN" "$work/{dependent}/DEBIAN"',
+            f'printf %s {shlex.quote(base_control)} > "$work/{base}/DEBIAN/control"',
+            f'printf %s {shlex.quote(dependent_control)} > "$work/{dependent}/DEBIAN/control"',
+            f'dpkg-deb --build "$work/{base}" "$work/{base}.deb" > /dev/null',
+            f'dpkg-deb --build "$work/{dependent}" "$work/{dependent}.deb" > /dev/null',
+            f"sudo mkdir --parents {shlex.quote(repo_dir)}",
+            f'sudo cp "$work/{base}.deb" "$work/{dependent}.deb" {shlex.quote(repo_dir)}/',
+            "{",
+            *_packages_index_stanza(base, base_control),
+            *_packages_index_stanza(dependent, dependent_control),
+            f"}} | sudo tee {shlex.quote(f'{repo_dir}/Packages')} > /dev/null",
+            f"printf '%s\\n' {shlex.quote(f'deb [trusted=yes] file:{repo_dir} ./')}"
+            f" | sudo tee {shlex.quote(f'{_APT_SOURCES_DIR}/{list_filename}')} > /dev/null",
+        )
+    )
+    built = await executor.run_command(build, login_shell=False, timeout=60.0)
+    assert built.success, f"Failed to build the cascading pair's repository: {built.stderr}"
+
+    updated = await _apt_get_update(executor)
+    assert updated.success, f"apt-get update failed after adding {repo_dir}: {updated.stderr}"
+
+    installed = await executor.run_command(
+        f"sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes "
+        f"{shlex.quote(base)} {shlex.quote(dependent)} "
+        f"&& sudo apt-mark manual {shlex.quote(base)} {shlex.quote(dependent)}",
+        login_shell=False,
+        timeout=120.0,
+    )
+    assert installed.success, f"Failed to install the cascading pair from {repo_dir}: {installed.stderr}"
+
+    # The cascade itself, asserted rather than assumed: without it the run below has no
+    # collateral to ask about and every assertion after it would pass vacuously.
+    rehearsal = await executor.run_command(
+        f"apt-get --dry-run remove --assume-yes {shlex.quote(base)}", login_shell=False, timeout=60.0
+    )
+    assert rehearsal.success and dependent in rehearsal.stdout, (
+        f"removing {base} does not take {dependent} with it, so there is no cascade to ask about.\n"
+        f"stdout: {rehearsal.stdout}\nstderr: {rehearsal.stderr}"
+    )
+    return base, dependent, repo_dir, list_filename
+
+
+async def _remove_cascading_pair(
+    executor: BashLoginRemoteExecutor, base: str, dependent: str, repo_dir: str, list_filename: str
+) -> None:
+    """Undo `_publish_a_cascading_pair`, whether or not the run under test removed either
+    package.
+
+    Every step runs unconditionally (`;`, not `&&`) so a setup that failed halfway still has
+    the rest of itself removed.
+    """
+    await executor.run_command(
+        f"sudo DEBIAN_FRONTEND=noninteractive apt-get purge --assume-yes "
+        f"{shlex.quote(dependent)} {shlex.quote(base)}; "
+        f"sudo rm --force --recursive {shlex.quote(repo_dir)} "
+        f"{shlex.quote(f'{_APT_SOURCES_DIR}/{list_filename}')}; "
+        f"sudo rm --force /var/lib/apt/lists/_opt_{repo_dir.rsplit('/', 1)[-1]}_*",
+        login_shell=False,
+        timeout=120.0,
+    )
+
+
+def _collateral_removal_item_id(package: str) -> str:
+    """The item id a removal's cascade over `package` produces
+    (`apt:collateral:remove:remove:<package>`), built from the shipped function so a change
+    to the identity fails here rather than silently answering nothing.
+    """
+    return collateral_item_id("remove", "remove", package)
+
+
+class TestACascadeOverASkippedRemovalCandidate:
+    """`PKG-FR-COLLATERAL-MANUAL` where only a real apt can produce the situation: an
+    approved removal whose transaction carries off a second manually-installed package the
+    user did NOT approve for removal.
+
+    The unit tier proves the shape against a mocked `apt-get --dry-run`, which answers with
+    whatever the test wrote into it. What it cannot settle is that apt really takes
+    `dependent` when `base` goes, that the review's second round rehearses the transaction
+    that will really run, and that the answer given there is what the real `apt-get remove`
+    then does.
+
+    "Stop the sync" is the one answer not driven here. It is not a `Decision` value at all
+    -- `packages.review` raises `SyncAbortedByUser` from the screen itself -- so the
+    automation hook cannot express it, and nothing about it depends on apt.
+
+    Each test asserts the question was put in the REVIEW and not at the apply-time guard, by
+    the words each writes: the review's own decision pass logs `reviewed <pkg>
+    (report_only)`, while `LateCollateral` logs `reviewed <pkg> (collateral)`. Both answers
+    would otherwise leave the same machine state whichever round asked.
+    """
+
+    async def test_a_skipped_candidate_the_cascade_would_take_is_asked_about_and_keeping_it_cancels_the_removal(
+        self,
+        pc1_executor: BashLoginRemoteExecutor,
+        pc2_executor: BashLoginRemoteExecutor,
+        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
+        pc2_with_pcswitcher: BashLoginRemoteExecutor,
+        reset_pcswitcher_state: None,
+    ) -> None:
+        """D37 — pc2 holds two manually-installed packages pc1 does not have, so both are removal
+        candidates; the user approves one removal and skips the other, and apt would take the
+        skipped one anyway.
+
+        Keeping it leaves the approved removal unapplied rather than failing it, so both
+        packages survive and the run still succeeds.
+        """
+        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
+
+        base, dependent, repo_dir, list_filename = await _publish_a_cascading_pair(pc2_executor)
+        try:
+            await _write_apt_sync_config(pc1_executor)
+
+            decisions = {
+                AptPackageItem(name=base, version="").item_id: Decision.APPLY,
+                AptPackageItem(name=dependent, version="").item_id: Decision.SKIP_ONCE,
+                _collateral_removal_item_id(dependent): Decision.SKIP_ONCE,
+            }
+            sync_cmd = f"{_automation_env_assignment_multi(decisions)} pc-switcher sync pc2 --yes --allow-first-sync"
+            sync_result = await pc1_executor.run_command(sync_cmd, timeout=300.0, login_shell=True)
+            assert sync_result.success, (
+                "keeping a collateral package must leave the change that causes it unapplied, not fail it.\n"
+                f"exit {sync_result.exit_code}\nstdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
+            )
+
+            installed = parse_dpkg_installed(
+                (
+                    await pc2_executor.run_command(
+                        "dpkg-query --show --showformat='${Package}\\t${Status}\\n'", login_shell=False, timeout=20.0
+                    )
+                ).stdout
+            )
+            assert dependent in installed, (
+                f"{dependent} was removed from pc2 although the user kept it at the collateral question"
+            )
+            assert base in installed, (
+                f"{base}'s approved removal still ran after {dependent} was kept -- keeping a collateral package "
+                "must cancel the change that causes it"
+            )
+
+            collapsed = _collapse_run_output(sync_result.stdout + sync_result.stderr)
+            assert f"reviewed {dependent} (report_only): skipped this run" in collapsed, (
+                f"{dependent} was never put to the user as a collateral question in the review.\n"
+                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
+            )
+            assert f"reviewed {dependent} (collateral)" not in collapsed, (
+                f"{dependent} was asked about at the apply-time guard instead of in the review's second round"
+            )
+        finally:
+            await _remove_cascading_pair(pc2_executor, base, dependent, repo_dir, list_filename)
+
+    async def test_going_ahead_at_that_question_removes_the_approved_package_and_lets_the_cascade_take_the_other(
+        self,
+        pc1_executor: BashLoginRemoteExecutor,
+        pc2_executor: BashLoginRemoteExecutor,
+        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
+        pc2_with_pcswitcher: BashLoginRemoteExecutor,
+        reset_pcswitcher_state: None,
+    ) -> None:
+        """D72 — the same question answered "go ahead": the approved removal runs and the real
+        `apt-get remove` takes the kept candidate with it, past the apply-time guard.
+
+        The skipped candidate's OWN removal item stays skipped -- what was approved is the
+        consequence, not the item -- which is why the run's decision log has to say both
+        things about the same package.
+        """
+        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
+
+        base, dependent, repo_dir, list_filename = await _publish_a_cascading_pair(pc2_executor)
+        try:
+            await _write_apt_sync_config(pc1_executor)
+
+            decisions = {
+                AptPackageItem(name=base, version="").item_id: Decision.APPLY,
+                AptPackageItem(name=dependent, version="").item_id: Decision.SKIP_ONCE,
+                _collateral_removal_item_id(dependent): Decision.APPLY,
+            }
+            sync_cmd = f"{_automation_env_assignment_multi(decisions)} pc-switcher sync pc2 --yes --allow-first-sync"
+            sync_result = await pc1_executor.run_command(sync_cmd, timeout=300.0, login_shell=True)
+            assert sync_result.success, (
+                f"pc-switcher sync exited {sync_result.exit_code}.\n"
+                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
+            )
+
+            installed = parse_dpkg_installed(
+                (
+                    await pc2_executor.run_command(
+                        "dpkg-query --show --showformat='${Package}\\t${Status}\\n'", login_shell=False, timeout=20.0
+                    )
+                ).stdout
+            )
+            assert base not in installed, f"{base}'s approved removal did not run after the collateral go-ahead"
+            assert dependent not in installed, (
+                f"{dependent} survived a removal the user let go ahead -- the apply-time guard refused a "
+                "consequence that was approved"
+            )
+
+            collapsed = _collapse_run_output(sync_result.stdout + sync_result.stderr)
+            assert f"reviewed {dependent} (report_only): applied" in collapsed, (
+                f"the go-ahead for {dependent} was never recorded against a collateral item in the review.\n"
+                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
+            )
+            assert f"reviewed {dependent} (collateral)" not in collapsed, (
+                f"{dependent} was asked about at the apply-time guard instead of in the review's second round"
+            )
+            assert f"reviewed {dependent} ({_SYNTHETIC_PACKAGE_VERSION}) (remove): skipped this run" in collapsed, (
+                f"{dependent}'s own removal item did not stay skipped -- the go-ahead answered the consequence, "
+                f"not the item.\nstdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
+            )
+        finally:
+            await _remove_cascading_pair(pc2_executor, base, dependent, repo_dir, list_filename)
+
+
+# -- the apt origin model: one real vendor repository, and a rival for its candidate ----
+#
+# GitHub's CLI repository, and not a locally built stand-in, for the reason the module
+# docstring gives for using the real Flathub: a stand-in only ever tests this project's
+# MODEL of a repository. Among the vendor repositories a CI machine can reach it is the
+# cheapest real one -- a single ~15 MB package, one keyring served over HTTPS from the same
+# host, a `stable main` suite that has not moved, and no package of that name anywhere in
+# Ubuntu's own archive, so nothing about the machine's stock software changes. It is also
+# the requirements' own worked example of a vendor origin (`gh` from `cli.github.com`).
+_VENDOR_REPO_URI = "https://cli.github.com/packages"
+_VENDOR_REPO_KEY_URL = "https://cli.github.com/packages/githubcli-archive-keyring.gpg"
+_VENDOR_REPO_HOST = "cli.github.com"
+_VENDOR_PACKAGE = "gh"
+
+
+async def _install_from_the_vendor_repository(executor: BashLoginRemoteExecutor) -> tuple[str, str]:
+    """On `executor` (the source): declare the vendor repository with its real signing key
+    and install `_VENDOR_PACKAGE` from it. Returns `(source_filename, key_filename)`.
+
+    A deb822 `.sources` naming the keyring in `Signed-By:`, which is the shape the derived
+    write and the key copy both have to carry to the target for the install to be possible
+    there at all. Filenames are uuid-suffixed so a fresh target provably lacks them and the
+    divergence is exactly the one this builds.
+    """
+    uniq = uuid4().hex[:12]
+    source_filename = f"pcswitcher-it-vendor-{uniq}.sources"
+    key_filename = f"pcswitcher-it-vendor-{uniq}.gpg"
+    key_dest = f"{_APT_KEYRINGS_DIR}/{key_filename}"
+    source_dest = f"{_APT_SOURCES_DIR}/{source_filename}"
+
+    declare = "\n".join(
+        (
+            "set -euo pipefail",
+            f"sudo mkdir --parents {shlex.quote(_APT_KEYRINGS_DIR)}",
+            f"curl --fail --silent --show-error --location {shlex.quote(_VENDOR_REPO_KEY_URL)}"
+            f" | sudo tee {shlex.quote(key_dest)} > /dev/null",
+            f"sudo chmod 0644 {shlex.quote(key_dest)}",
+            f"printf 'Types: deb\\nURIs: %s\\nSuites: stable\\nComponents: main\\n"
+            f"Architectures: %s\\nSigned-By: %s\\n'"
+            f' {shlex.quote(_VENDOR_REPO_URI)} "$(dpkg --print-architecture)" {shlex.quote(key_dest)}'
+            f" | sudo tee {shlex.quote(source_dest)} > /dev/null",
+        )
+    )
+    declared = await executor.run_command(declare, login_shell=False, timeout=60.0)
+    assert declared.success, (
+        f"Failed to declare {_VENDOR_REPO_URI} on the source. It is fetched over the network with curl, so an "
+        f"unreachable host or a missing curl reports itself here.\n{declared.stderr}"
+    )
+
+    updated = await _apt_get_update(executor)
+    assert updated.success, f"apt-get update failed after adding {_VENDOR_REPO_URI}: {updated.stderr}"
+
+    installed = await executor.run_command(
+        f"sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes --no-install-recommends "
+        f"{shlex.quote(_VENDOR_PACKAGE)}",
+        login_shell=False,
+        timeout=300.0,
+    )
+    assert installed.success, f"Failed to install {_VENDOR_PACKAGE} from {_VENDOR_REPO_URI}: {installed.stderr}"
+    return source_filename, key_filename
+
+
+async def _remove_the_vendor_repository(
+    executor: BashLoginRemoteExecutor, source_filename: str, key_filename: str
+) -> None:
+    """Undo `_install_from_the_vendor_repository` on either machine, whether or not the run
+    under test installed anything there.
+
+    The cached index goes too: an `/etc/apt/sources.list.d` file is what makes a repository
+    configured, but a list left in `/var/lib/apt/lists` keeps its name in every later
+    `apt-cache policy` on the machine.
+    """
+    await executor.run_command(
+        f"sudo DEBIAN_FRONTEND=noninteractive apt-get purge --assume-yes {shlex.quote(_VENDOR_PACKAGE)}; "
+        f"sudo rm --force {shlex.quote(f'{_APT_SOURCES_DIR}/{source_filename}')} "
+        f"{shlex.quote(f'{_APT_KEYRINGS_DIR}/{key_filename}')}; "
+        f"sudo rm --force /var/lib/apt/lists/*{_VENDOR_REPO_HOST}*",
+        login_shell=False,
+        timeout=180.0,
+    )
+
+
+async def _publish_a_rival_candidate(executor: BashLoginRemoteExecutor) -> tuple[str, str, str]:
+    """On `executor` (the target): make apt prefer somebody else's `_VENDOR_PACKAGE` to the
+    vendor's. Returns `(repo_dir, list_filename, pin_filename)`.
+
+    Two mechanisms pointing the same way, because the point is that apt's own arithmetic
+    decides this and the test must not depend on which half of it does:
+
+    - a flat `file:` repository publishing the same NAME at a version far above anything the
+      vendor ships, so the version comparison alone would already pick it;
+    - a `preferences.d` pin dropping the vendor origin to priority 1, so the priority
+      comparison picks it whatever priority apt assigns a `Release`-less flat repository.
+
+    The pin is the target's own and the source has none, so a run offers it for deletion and
+    nothing here approves that -- it survives the run it is set up for.
+    """
+    uniq = uuid4().hex[:12]
+    repo_dir = f"/opt/pcswitcher-it-rival-{uniq}"
+    list_filename = f"pcswitcher-it-rival-{uniq}.list"
+    pin_filename = f"pcswitcher-it-demote-{uniq}"
+    control = _synthetic_control(_VENDOR_PACKAGE, version="99.0")
+    pin_body = f"Package: {_VENDOR_PACKAGE}\nPin: origin {_VENDOR_REPO_HOST}\nPin-Priority: 1\n"
+
+    build = "\n".join(
+        (
+            "set -euo pipefail",
+            "work=$(mktemp --directory)",
+            f'mkdir --parents "$work/{_VENDOR_PACKAGE}/DEBIAN"',
+            f'printf %s {shlex.quote(control)} > "$work/{_VENDOR_PACKAGE}/DEBIAN/control"',
+            f'dpkg-deb --build "$work/{_VENDOR_PACKAGE}" "$work/{_VENDOR_PACKAGE}.deb" > /dev/null',
+            f"sudo mkdir --parents {shlex.quote(repo_dir)}",
+            f'sudo cp "$work/{_VENDOR_PACKAGE}.deb" {shlex.quote(repo_dir)}/',
+            "{",
+            *_packages_index_stanza(_VENDOR_PACKAGE, control),
+            f"}} | sudo tee {shlex.quote(f'{repo_dir}/Packages')} > /dev/null",
+            f"printf '%s\\n' {shlex.quote(f'deb [trusted=yes] file:{repo_dir} ./')}"
+            f" | sudo tee {shlex.quote(f'{_APT_SOURCES_DIR}/{list_filename}')} > /dev/null",
+            f"printf %s {shlex.quote(pin_body)}"
+            f" | sudo tee {shlex.quote(f'{_APT_PREFERENCES_DIR}/{pin_filename}')} > /dev/null",
+        )
+    )
+    built = await executor.run_command(build, login_shell=False, timeout=60.0)
+    assert built.success, f"Failed to publish the rival candidate on the target: {built.stderr}"
+
+    updated = await _apt_get_update(executor)
+    assert updated.success, f"apt-get update failed after adding {repo_dir}: {updated.stderr}"
+
+    # The rival is what the target would install today, before the vendor's repository has
+    # been written there at all -- asserted so a run that refuses the install below is
+    # refusing it for the reason this test is about.
+    policy = await executor.run_command(
+        f"apt-cache policy {shlex.quote(_VENDOR_PACKAGE)}", login_shell=False, timeout=30.0
+    )
+    assert policy.success and repo_dir in policy.stdout, (
+        f"the target's candidate for {_VENDOR_PACKAGE} does not come from {repo_dir}.\n{policy.stdout}"
+    )
+    return repo_dir, list_filename, pin_filename
+
+
+async def _remove_the_rival_candidate(
+    executor: BashLoginRemoteExecutor, repo_dir: str, list_filename: str, pin_filename: str
+) -> None:
+    """Undo `_publish_a_rival_candidate`, every step unconditional."""
+    await executor.run_command(
+        f"sudo rm --force --recursive {shlex.quote(repo_dir)} "
+        f"{shlex.quote(f'{_APT_SOURCES_DIR}/{list_filename}')} "
+        f"{shlex.quote(f'{_APT_PREFERENCES_DIR}/{pin_filename}')}; "
+        f"sudo rm --force /var/lib/apt/lists/_opt_{repo_dir.rsplit('/', 1)[-1]}_*",
+        login_shell=False,
+        timeout=60.0,
+    )
+
+
+class TestTheAptOriginModelOnRealRepositories:
+    """`PKG-FR-APT-ORIGIN-DERIVED` and `PKG-FR-APT-ORIGIN-VERIFY` against a repository apt
+    really fetches from.
+
+    Everything the unit tier proves here it proves against `apt-cache policy` output written
+    by hand, which is the one thing the model is about: which version apt would install, from
+    which of several repositories, once priorities and version ordering are applied. A run
+    that carries a repository and its key to the target and then installs from it is the only
+    place that arithmetic is done by apt rather than by the test.
+    """
+
+    async def test_a_vendor_repository_travels_with_the_package_and_the_install_lands_from_it(
+        self,
+        pc1_executor: BashLoginRemoteExecutor,
+        pc2_executor: BashLoginRemoteExecutor,
+        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
+        pc2_with_pcswitcher: BashLoginRemoteExecutor,
+        reset_pcswitcher_state: None,
+    ) -> None:
+        """A29, A41 — pc1 has a package from a vendor repository pc2 does not have; approving the
+        install carries that repository and its signing key across, and pc2's own apt then
+        installs the vendor's build.
+
+        The whole chain is asserted on pc2's own state: the `.sources` file and the keyring
+        the approval derived, the package in `apt-mark showmanual`, and `apt-cache policy`
+        naming the vendor as where it came from. Nothing here reads the run's output --
+        every claim is something the target's package manager says about itself.
+        """
+        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
+
+        source_filename = key_filename = ""
+        try:
+            source_filename, key_filename = await _install_from_the_vendor_repository(pc1_executor)
+            source_dest = f"{_APT_SOURCES_DIR}/{source_filename}"
+            key_dest = f"{_APT_KEYRINGS_DIR}/{key_filename}"
+
+            absent = await pc2_executor.run_command(
+                f"test ! -e {shlex.quote(source_dest)} && test ! -e {shlex.quote(key_dest)}",
+                login_shell=False,
+                timeout=10.0,
+            )
+            assert absent.success, "the vendor repository is already on pc2, so nothing here would be derived"
+
+            await _write_apt_sync_config(pc1_executor)
+
+            item_id = AptPackageItem(name=_VENDOR_PACKAGE, version="").item_id
+            sync_cmd = f"{_automation_env_assignment(item_id)} pc-switcher sync pc2 --yes --allow-first-sync"
+            sync_result = await pc1_executor.run_command(sync_cmd, timeout=600.0, login_shell=True)
+            assert sync_result.success, (
+                f"pc-switcher sync exited {sync_result.exit_code}.\n"
+                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
+            )
+
+            landed = await pc2_executor.run_command(
+                f"sudo test -f {shlex.quote(source_dest)} && sudo test -f {shlex.quote(key_dest)}",
+                login_shell=False,
+                timeout=10.0,
+            )
+            assert landed.success, (
+                f"the approved install did not carry {source_dest} and {key_dest} to pc2.\n"
+                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
+            )
+
+            manual = await pc2_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0)
+            assert _VENDOR_PACKAGE in nonblank_lines(manual.stdout), (
+                f"{_VENDOR_PACKAGE} was not installed on pc2.\n"
+                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
+            )
+
+            policy = await pc2_executor.run_command(
+                f"apt-cache policy {shlex.quote(_VENDOR_PACKAGE)}", login_shell=False, timeout=30.0
+            )
+            assert _VENDOR_REPO_URI.removeprefix("https://") in policy.stdout, (
+                f"pc2 has {_VENDOR_PACKAGE} but apt names no {_VENDOR_REPO_URI} version for it, so the copy that "
+                f"landed is not the vendor's.\n{policy.stdout}"
+            )
+        finally:
+            if source_filename:
+                await _remove_the_vendor_repository(pc2_executor, source_filename, key_filename)
+                await _remove_the_vendor_repository(pc1_executor, source_filename, key_filename)
+
+    async def test_the_post_refresh_verification_refuses_an_install_the_target_would_take_from_elsewhere(
+        self,
+        pc1_executor: BashLoginRemoteExecutor,
+        pc2_executor: BashLoginRemoteExecutor,
+        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
+        pc2_with_pcswitcher: BashLoginRemoteExecutor,
+        reset_pcswitcher_state: None,
+    ) -> None:
+        """A42 — the vendor's repository lands on pc2 and still does not win: another repository
+        there offers the same name at a higher version and a pin holds the vendor's build at
+        priority 1, so after the run's `apt-get update` pc2's candidate is somebody else's
+        software.
+
+        That install is refused as its own failure naming both origins, and nothing of that
+        name is installed. A second, ordinary install approved in the same run lands anyway,
+        which is what makes the refusal one item's failure rather than the run's.
+        """
+        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
+
+        other_candidate = await _removable_candidate(pc1_executor, pc2_executor)
+        source_filename = key_filename = ""
+        repo_dir = list_filename = pin_filename = ""
+        try:
+            source_filename, key_filename = await _install_from_the_vendor_repository(pc1_executor)
+            repo_dir, list_filename, pin_filename = await _publish_a_rival_candidate(pc2_executor)
+
+            removed = await pc2_executor.run_command(
+                f"sudo DEBIAN_FRONTEND=noninteractive apt-get remove --assume-yes {shlex.quote(other_candidate)}",
+                login_shell=False,
+                timeout=120.0,
+            )
+            assert removed.success, f"Failed to remove {other_candidate} from pc2: {removed.stderr}"
+
+            await _write_apt_sync_config(pc1_executor)
+
+            decisions = {
+                AptPackageItem(name=_VENDOR_PACKAGE, version="").item_id: Decision.APPLY,
+                AptPackageItem(name=other_candidate, version="").item_id: Decision.APPLY,
+            }
+            sync_cmd = f"{_automation_env_assignment_multi(decisions)} pc-switcher sync pc2 --yes --allow-first-sync"
+            sync_result = await pc1_executor.run_command(sync_cmd, timeout=600.0, login_shell=True)
+            assert not sync_result.success, (
+                "a refused install is its own failure, so the run must not report success.\n"
+                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
+            )
+
+            installed = parse_dpkg_installed(
+                (
+                    await pc2_executor.run_command(
+                        "dpkg-query --show --showformat='${Package}\\t${Status}\\n'", login_shell=False, timeout=20.0
+                    )
+                ).stdout
+            )
+            assert _VENDOR_PACKAGE not in installed, (
+                f"pc2 installed {_VENDOR_PACKAGE} from {repo_dir} -- the verification let through a build that is "
+                f"not the one pc1 has"
+            )
+            assert other_candidate in installed, (
+                f"{other_candidate} was not installed, so the refusal ended the run instead of failing one item.\n"
+                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
+            )
+
+            collapsed = _collapse_run_output(sync_result.stdout + sync_result.stderr)
+            assert f"{_VENDOR_PACKAGE} was not installed:" in collapsed, (
+                f"the run did not report {_VENDOR_PACKAGE} as refused.\n"
+                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
+            )
+            assert (
+                f"has it from {_VENDOR_REPO_URI.removeprefix('https://')}, but after this run's apt-get update"
+                in collapsed
+            ), f"the refusal did not name the origin pc1 has it from.\n{collapsed}"
+            assert f"would install it from {repo_dir}" in collapsed, (
+                f"the refusal did not name the origin pc2 would have taken it from.\n{collapsed}"
+            )
+        finally:
+            if repo_dir:
+                await _remove_the_rival_candidate(pc2_executor, repo_dir, list_filename, pin_filename)
+            if source_filename:
+                await _remove_the_vendor_repository(pc2_executor, source_filename, key_filename)
+                await _remove_the_vendor_repository(pc1_executor, source_filename, key_filename)
+            await _restore_package(pc2_executor, other_candidate)
+
+
+# -- apt holds through a real run: what `apt-mark` records, and what it records without ---
+
+# Small archive packages a stock Ubuntu 24.04 does not install, for the hold that names a
+# package its machine does not have. Several, because the one requirement is that apt knows
+# the name and dpkg does not have it, and which of them satisfies that is the machine's
+# business rather than this module's.
+_UNINSTALLED_ARCHIVE_CANDIDATES = ("cowsay", "sl", "toilet", "fortune-mod")
+
+
+async def _apt_selection_snapshot(
+    executor: BashLoginRemoteExecutor,
+) -> tuple[set[str], set[str], dict[str, str]]:
+    """One machine's `(manual set, hold set, {package: installed version})`, read in ONE
+    command (testing-guide.md's command-grouping rule).
+    """
+    result = await executor.run_command(
+        f"apt-mark showmanual; echo {_SECTION_MARKER}; apt-mark showhold; echo {_SECTION_MARKER}; "
+        "dpkg-query --show --showformat='${Package}\\t${Version}\\n'",
+        login_shell=False,
+        timeout=30.0,
+    )
+    assert result.success, f"Failed to read the machine's apt selection state: {result.stderr}"
+    manual_block, hold_block, version_block = result.stdout.split(_SECTION_MARKER)
+    versions: dict[str, str] = {}
+    for line in nonblank_lines(version_block):
+        name, _, version = line.partition("\t")
+        versions[name] = version
+    return set(nonblank_lines(manual_block)), set(nonblank_lines(hold_block)), versions
+
+
+async def _a_package_both_machines_have_unheld(
+    pc1_executor: BashLoginRemoteExecutor, pc2_executor: BashLoginRemoteExecutor
+) -> str:
+    """A package manually installed at the SAME version on both machines and held on
+    neither, so holding it on the source is the run's only apt work.
+    """
+    source_manual, source_held, source_versions = await _apt_selection_snapshot(pc1_executor)
+    target_manual, target_held, target_versions = await _apt_selection_snapshot(pc2_executor)
+    shared = sorted(
+        name
+        for name in source_manual & target_manual
+        if name not in source_held
+        and name not in target_held
+        and name in source_versions
+        and source_versions[name] == target_versions.get(name)
+    )
+    assert shared, (
+        "No package is manually installed at the same version on both machines and held on neither. The two VMs "
+        "come from one baseline, so an empty result means the machines are not what these tests assume."
+    )
+    return shared[0]
+
+
+async def _a_name_apt_knows_the_machine_does_not_have(executor: BashLoginRemoteExecutor) -> str:
+    """A package `_UNINSTALLED_ARCHIVE_CANDIDATES` names that this machine's apt can resolve
+    and dpkg does not have installed -- the only state `apt-mark hold` can be given to
+    produce a hold that freezes nothing.
+    """
+    result = await executor.run_command(
+        f"apt-cache policy {' '.join(_UNINSTALLED_ARCHIVE_CANDIDATES)}", login_shell=False, timeout=30.0
+    )
+    assert result.success, f"Failed to read apt's policy for the hold candidates: {result.stderr}"
+
+    facts: dict[str, dict[str, str]] = {}
+    current = ""
+    for line in result.stdout.splitlines():
+        stripped = line.strip()
+        if line and not line[0].isspace() and stripped.endswith(":"):
+            current = stripped[:-1]
+            facts[current] = {}
+            continue
+        for field in ("Installed:", "Candidate:"):
+            if current and stripped.startswith(field):
+                facts[current][field] = stripped.removeprefix(field).strip()
+
+    for name in _UNINSTALLED_ARCHIVE_CANDIDATES:
+        block = facts.get(name, {})
+        if block.get("Installed:") == "(none)" and block.get("Candidate:", "(none)") != "(none)":
+            return name
+    raise AssertionError(
+        f"None of {list(_UNINSTALLED_ARCHIVE_CANDIDATES)} is both known to apt and absent from dpkg on this "
+        f"machine, so no hold naming a package it does not have can be set up.\n{result.stdout}"
+    )
+
+
+class TestAptHoldsThroughARealRun:
+    """`PKG-FR-BLOCKS-DERIVED` and `PKG-FR-HOLD-WITHOUT-PACKAGE` against real `apt-mark`
+    state.
+
+    Both rulings are about dpkg selection state rather than about any transaction, and the
+    unit tier can only assert that the commands we believe in are the commands we send. What
+    a real run has to show is that the hold arrives on the target with nothing asked, and
+    that a hold naming a package its machine does not have ends the run before anything is
+    written.
+    """
+
+    async def test_a_source_hold_reaches_the_target_with_no_review_line(
+        self,
+        pc1_executor: BashLoginRemoteExecutor,
+        pc2_executor: BashLoginRemoteExecutor,
+        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
+        pc2_with_pcswitcher: BashLoginRemoteExecutor,
+        reset_pcswitcher_state: None,
+    ) -> None:
+        """B1 — pc1 holds a package both machines already have at the same version, so the package
+        itself is no item; the run registers the hold on pc2 having asked nothing about it.
+
+        The review is answered with an EMPTY mapping, so the only thing that can carry the
+        hold is its derivation: any item that did reach a group is left skipped, and a hold
+        that needed a decision would be skipped with them. The run's decision log names every
+        item it presented, so the absence of a line for the hold is what says no question was
+        put.
+        """
+        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
+
+        subject = await _a_package_both_machines_have_unheld(pc1_executor, pc2_executor)
+        try:
+            held = await pc1_executor.run_command(
+                f"sudo apt-mark hold {shlex.quote(subject)}", login_shell=False, timeout=30.0
+            )
+            assert held.success, f"Failed to hold {subject} on pc1: {held.stderr}"
+
+            await _write_apt_sync_config(pc1_executor)
+
+            sync_cmd = f"{_automation_env_assignment_multi({})} pc-switcher sync pc2 --yes --allow-first-sync"
+            sync_result = await pc1_executor.run_command(sync_cmd, timeout=300.0, login_shell=True)
+            assert sync_result.success, (
+                f"pc-switcher sync exited {sync_result.exit_code}.\n"
+                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
+            )
+
+            target_holds = await pc2_executor.run_command("apt-mark showhold", login_shell=False, timeout=15.0)
+            assert subject in nonblank_lines(target_holds.stdout), (
+                f"pc1's hold on {subject} did not reach pc2, although a block replicates without review.\n"
+                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
+            )
+
+            collapsed = _collapse_run_output(sync_result.stdout + sync_result.stderr)
+            assert f"reviewed {subject} (hold)" not in collapsed, (
+                f"the hold on {subject} was presented as a reviewed item -- a block is never a question"
+            )
+        finally:
+            await pc1_executor.run_command(
+                f"sudo apt-mark unhold {shlex.quote(subject)}", login_shell=False, timeout=30.0
+            )
+            await pc2_executor.run_command(
+                f"sudo apt-mark unhold {shlex.quote(subject)}", login_shell=False, timeout=30.0
+            )
+
+    async def test_a_hold_naming_a_package_the_machine_does_not_have_ends_the_run(
+        self,
+        pc1_executor: BashLoginRemoteExecutor,
+        pc2_executor: BashLoginRemoteExecutor,
+        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
+        pc2_with_pcswitcher: BashLoginRemoteExecutor,
+        reset_pcswitcher_state: None,
+    ) -> None:
+        """B16 — pc2 records a hold for a package it does not have; the run ends naming the package
+        and pc2, and pc2's package state is byte-identical afterwards.
+
+        The run is given real work first -- a package removed from pc2 that it would
+        otherwise install -- so "nothing was written" is a claim about a run that had
+        something to write. `_MachinePackageState` is the comparison, because the article's
+        "before anything is written" reaches further than the one package.
+        """
+        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
+
+        ghost = await _a_name_apt_knows_the_machine_does_not_have(pc2_executor)
+        install_candidate = await _removable_candidate(pc1_executor, pc2_executor)
+        try:
+            removed = await pc2_executor.run_command(
+                f"sudo DEBIAN_FRONTEND=noninteractive apt-get remove --assume-yes {shlex.quote(install_candidate)}",
+                login_shell=False,
+                timeout=120.0,
+            )
+            assert removed.success, f"Failed to remove {install_candidate} from pc2: {removed.stderr}"
+
+            held = await pc2_executor.run_command(
+                f"sudo apt-mark hold {shlex.quote(ghost)}", login_shell=False, timeout=30.0
+            )
+            assert held.success, f"Failed to hold {ghost} on pc2: {held.stderr}"
+            recorded = await pc2_executor.run_command("apt-mark showhold", login_shell=False, timeout=15.0)
+            assert ghost in nonblank_lines(recorded.stdout), (
+                f"pc2 did not record a hold for {ghost}, so the bookkeeping failure this test is about does not "
+                f"exist on it.\n{recorded.stdout}"
+            )
+
+            await _write_apt_sync_config(pc1_executor)
+            before = await _capture_machine_package_state(pc2_executor)
+
+            item_id = AptPackageItem(name=install_candidate, version="").item_id
+            sync_cmd = f"{_automation_env_assignment(item_id)} pc-switcher sync pc2 --yes --allow-first-sync"
+            sync_result = await pc1_executor.run_command(sync_cmd, timeout=300.0, login_shell=True)
+            assert not sync_result.success, (
+                "a hold naming a package the machine does not have must end the run.\n"
+                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
+            )
+
+            collapsed = _collapse_run_output(sync_result.stdout + sync_result.stderr)
+            assert f"pc2 holds apt package(s) it does not have installed: {ghost}" in collapsed, (
+                f"the run did not name {ghost} and the machine holding it.\n"
+                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
+            )
+            assert f"sudo apt-mark unhold {ghost}" in collapsed, (
+                f"the run did not say how to clear the hold on {ghost}.\n{collapsed}"
+            )
+
+            after = await _capture_machine_package_state(pc2_executor)
+            assert after == before, (
+                "the run wrote to pc2 before ending over a hold it could not act on.\n"
+                f"before: {before}\nafter: {after}"
+            )
+        finally:
+            await pc2_executor.run_command(
+                f"sudo apt-mark unhold {shlex.quote(ghost)}", login_shell=False, timeout=30.0
+            )
+            await _restore_package(pc2_executor, install_candidate)
