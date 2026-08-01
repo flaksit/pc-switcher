@@ -942,3 +942,47 @@ Push, so CI runs with integration tests. Watch CI.
 <status>failed</status>
 <summary>Background command "Watch CI to terminal state" failed with exit code 1</summary>
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>a05a90cee15d3e5d3</task-id>
+<tool-use-id>toolu_017NggWuhHc3Sr4atNM7CHap</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/81c7a538-876b-47ee-bd10-6f31ec117d7e/tasks/a05a90cee15d3e5d3.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix the scan reporting its own roots" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## What the scan did
+
+`_UNOWNED_SCAN_ROOTS = ("/usr/local", "/opt", "/usr/local/bin", "/usr/local/lib")` — one shell loop runs `find &lt;root&gt; -mindepth 1 -maxdepth 1` over all four. Two of the four roots (`/usr/local/bin`, `/usr/local/lib`) are also **entries of** a third (`/usr/local`), so `find` emitted them as ordinary candidates; they then went into the batched `dpkg --search` like any other path, and anything dpkg didn't claim became an `UnreproducibleItem` demanding an install snippet. That is exactly the both-a-root-and-an-entry duplication G28's register history describes. Nothing anywhere filtered them.
+
+Confirmed on this machine (read-only `dpkg --search`): `/usr/local/lib`, `/usr/local/etc`, `/usr/local/games`, `/usr/local/include`, `/usr/local/man`, `/usr/local/sbin`, `/usr/local/src` — *no path found*; `/usr/local/bin` claimed only incidentally by `cnpg`. So on a stock machine both roots are unowned and both get reported, forever.
+
+## Verdict: it is a product defect
+
+I agree with your reading. `PKG-FR-MANUAL-SCOPE` covers *software under* `/usr/local` and `/opt`; a directory the scan itself descends into is not software under itself, and the user requirements' own wording ("dropped there by an install script or a tarball") excludes a directory the distribution ships. Ownership can't rescue it either — dpkg owns no `/usr/local` directory on stock Ubuntu, so the finding is not machine-specific noise but universal noise. The integration test is right and is untouched.
+
+## Changes
+
+- `/home/janfr/dev/pc-switcher/src/pcswitcher/jobs/manual_installs_sync.py` — `_scan_unowned_installs` now drops every `_UNOWNED_SCAN_ROOTS` entry from the candidates *before* the ownership query: `candidates = [path for path in _lines(listing.stdout) if path not in _UNOWNED_SCAN_ROOTS]`. Exact string equality is sufficient and documented as such (`find` echoes the root verbatim as each entry's prefix; no root carries a trailing slash). Depth is unchanged — no extra command, no tree walk. `/opt` is covered by the same filter though it can never appear as an entry. A root absent from the machine is still skipped by the shell loop, and if filtering empties the candidate list the existing early return means no `dpkg --search` runs at all. Module docstring, constant comment and method docstring updated with the why.
+- `tests/unit/jobs/test_manual_installs_sync.py` — new `TestUnownedScan::test_a_scan_root_is_never_a_finding_while_everything_under_it_still_is`, tagged `G96 —`. Stock-machine ownership reply (witness only); asserts both roots are absent from the findings **and** absent from the queried paths, while `/usr/local/Brother`, `/usr/local/bin/talosctl`, `/usr/local/lib/node_modules`, `/opt/az` all remain findings.
+- `docs/dev/package-sync-scenario-coverage.md` — new row **G96** at the end of G.1, citing that test. **G28** left as written (its wording already says exactly what the integration test asserts). No defect-register entry: the defect is fixed in the same change, and that section is empty.
+- `docs/planning/package-sync-conformance-criteria.md` — `PKG-FR-MANUAL-SCOPE` sharpened: "A directory the scan itself descends into MUST NOT be a finding of that scan, whether or not a package owns it", plus a **Why**. Consistent with the user requirements, which the article decomposes; no downstream precedence conflict.
+- `docs/system/package-sync.md` — new bullet under `manual_installs_sync` giving the mechanism and the measured dpkg facts.
+- `docs/jobs/package-sync.md` — operator-facing sentence in "Install snippets": what the scan lists, and that the four directories themselves are never offered.
+
+## Verification (all five, clean)
+
+- `uv run pytest -q` — 4381 passed, 94 deselected. Includes the ratchet (`test_scenario_coverage_matrix.py`), which now binds G96 both ways.
+- `uv run ruff format .` — 164 files left unchanged.
+- `uv run ruff check .` — All checks passed.
+- `uv run basedpyright` — 0 errors, 0 warnings, 0 notes.
+- `uv run codespell` — exit 0.
+
+Nothing committed or staged. `docs/adr/adr-020-declarative-package-convergence.md` is modified in the tree — that was already yours before I started; I did not touch it.
+
+## One adjacent thing I did not change
+
+The fix removes the two roots, but the remaining stock FHS directories under `/usr/local` — `etc`, `games`, `include`, `man`, `sbin`, `src` — are unowned by dpkg and empty, and are still reported as findings on every machine, every run. Same noise argument, different branch: they are literally "under `/usr/local`" so the article as written covers them, and deciding they aren't software is a product call beyond the brief. It does not endanger G28 (findings stay well under the 25 limit). Say the word if you want an empty-stock-directory rule too.</result>
+<usage><subagent_tokens>112243</subagent_tokens><tool_uses>36</tool_uses><duration_ms>317727</duration_ms></usage>
+</task-notification>
