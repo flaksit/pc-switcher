@@ -3980,17 +3980,19 @@ class TestTheSyncWindowHoldIsTimed:
             await pc1_executor.run_command(f"rm --force {run_log}", login_shell=False, timeout=15.0)
 
 
-class TestTheSnapDataBoundaryOnVMs:
-    """`PKG-FR-SNAP-DATA-BOUNDARY` with both jobs on: what `~/snap` actually looks like on
-    the target after a real transfer.
+class TestTheSnapExclusionIsBuiltFromTheTargetsOwnSnapList:
+    """`PKG-FR-SNAP-DATA-BOUNDARY` where it hands off from one job to another: the exclusion
+    `folder_sync` applies is built from the TARGET's live `snap list`, read mid-run after the
+    package jobs have gone (`PKG-FR-JOB-ORDER` is what makes that read meaningful).
 
-    The unit tests assert which absolute paths `snap_sync` hands `folder_sync` and which
-    rsync filters that produces. Neither runs rsync, so neither shows the one thing the
-    article is about: that the directories those rules name really do stay home while the
-    rest of the tree travels.
+    The unit tests compute that exclusion from a revision map a test wrote into them, so the
+    one thing they cannot show is where the map comes from: `folder_sync` asking the real
+    target machine and getting the revision its snapd is genuinely active at. That handoff is
+    the whole of what this costs two VMs for — the rest of the article is settled as strings
+    at the unit tier.
     """
 
-    async def test_only_the_revision_the_target_holds_arrives_under_snap(
+    async def test_the_revision_the_targets_snapd_holds_is_the_one_that_travels(
         self,
         pc1_executor: BashLoginRemoteExecutor,
         pc2_executor: BashLoginRemoteExecutor,
@@ -3998,19 +4000,15 @@ class TestTheSnapDataBoundaryOnVMs:
         pc2_with_pcswitcher: BashLoginRemoteExecutor,
         reset_pcswitcher_state: None,
     ) -> None:
-        """E113, E115 — With `snap_sync` and `folder_sync` both enabled, pc2 ends the run holding
-        the data directory of the revision its OWN snapd is on, and none of the others.
+        """E113 — With `snap_sync` and `folder_sync` both enabled, the data directory that
+        reaches pc2 is the one for the revision pc2's OWN snapd reports, and not the one for a
+        revision it has never installed.
 
-        Two apps, because the boundary has two sides. One is a snap pc2 genuinely holds:
-        its active revision's directory travels, its retained older one does not. The other
-        is a name pc2's snapd has never heard of, standing for a snap whose install was
-        declined, failed, or never offered: not one of its revision directories may arrive.
-        Both keep their revision-independent `common` directory, which is what separates
-        "the boundary held" from "nothing was transferred at all".
-
-        The revision the first app's `current` points at is read off PC2 — the exclusion set
-        is computed from the target's own `snap list --all`, so a directory travels because
-        the target holds that revision, not because the source does.
+        One app, two revision directories on pc1: the revision pc2 is active at — read off
+        pc2, never chosen here, so the directory travels because the target holds that
+        revision — and one no snapd on either machine has ever installed. The first arriving
+        is what makes the second's absence a witness rather than a run that transferred
+        nothing at all.
 
         `~/snap` alone is the synced folder, and both machines' real one is set aside for the
         duration: the mirror is a `--delete` one, so a hermetic tree is the only way the
@@ -4030,15 +4028,9 @@ class TestTheSnapDataBoundaryOnVMs:
         stale_revision = str(int(held_revision) + 1000) if held_revision.isdigit() else f"{held_revision}0"
 
         uniq = uuid4().hex[:12]
-        absent_app = f"pcswitcher-it-nosnap-{uniq}"
-        absent_revision = "1"
-        markers = {
-            "held-active": f"{snap_root}/{held_app}/{held_revision}/pcswitcher-it-{uniq}",
-            "held-stale": f"{snap_root}/{held_app}/{stale_revision}/pcswitcher-it-{uniq}",
-            "held-common": f"{snap_root}/{held_app}/common/pcswitcher-it-{uniq}",
-            "absent-revision": f"{snap_root}/{absent_app}/{absent_revision}/pcswitcher-it-{uniq}",
-            "absent-common": f"{snap_root}/{absent_app}/common/pcswitcher-it-{uniq}",
-        }
+        held_marker = f"{snap_root}/{held_app}/{held_revision}/pcswitcher-it-{uniq}"
+        stale_dir = f"{snap_root}/{held_app}/{stale_revision}"
+        stale_marker = f"{stale_dir}/pcswitcher-it-{uniq}"
 
         source_aside = ""
         target_aside = ""
@@ -4046,14 +4038,15 @@ class TestTheSnapDataBoundaryOnVMs:
             source_aside = await _take_paths_aside(pc1_executor, [snap_root])
             target_aside = await _take_paths_aside(pc2_executor, [snap_root])
 
+            # `current` decides which revision dir the source offers at all; without it every
+            # one of the app's revision dirs is excluded and the run below proves nothing.
             build = "\n".join(
                 ["set -eu"]
-                + [f"mkdir --parents {shlex.quote(path.rsplit('/', 1)[0])}" for path in markers.values()]
-                + [f"printf %s {uniq} > {shlex.quote(path)}" for path in markers.values()]
+                + [f"mkdir --parents {shlex.quote(path.rsplit('/', 1)[0])}" for path in (held_marker, stale_marker)]
+                + [f"printf %s {uniq} > {shlex.quote(path)}" for path in (held_marker, stale_marker)]
                 + [
-                    f"ln --symbolic --no-dereference --force {shlex.quote(revision)} "
-                    f"{shlex.quote(f'{snap_root}/{app}/current')}"
-                    for app, revision in ((held_app, held_revision), (absent_app, absent_revision))
+                    f"ln --symbolic --no-dereference --force {shlex.quote(held_revision)} "
+                    f"{shlex.quote(f'{snap_root}/{held_app}/current')}"
                 ]
             )
             built = await pc1_executor.run_command(build, login_shell=False, timeout=30.0)
@@ -4067,7 +4060,8 @@ class TestTheSnapDataBoundaryOnVMs:
             )
 
             # An empty automation map: both machines are converged on the snaps themselves,
-            # and what this asserts is the transfer, not a convergence.
+            # and what this asserts is which listing the exclusion was built from, not a
+            # convergence.
             sync_cmd = f"{_automation_env_assignment_multi({})} pc-switcher sync pc2 --yes --allow-first-sync"
             sync_result = await pc1_executor.run_command(sync_cmd, timeout=600.0, login_shell=True)
             assert sync_result.success, (
@@ -4081,22 +4075,13 @@ class TestTheSnapDataBoundaryOnVMs:
             assert listing.success, f"could not read pc2's {snap_root}: {listing.stderr}"
             arrived = set(nonblank_lines(listing.stdout))
 
-            for key in ("held-active", "held-common", "absent-common"):
-                assert markers[key] in arrived, (
-                    f"{markers[key]} did not reach pc2, although nothing excludes it.\n{listing.stdout}"
-                )
-            assert markers["held-stale"] not in arrived, (
-                f"{markers['held-stale']} reached pc2, which is on revision {held_revision} of {held_app} and has "
-                f"no snapd that ever installed {stale_revision}.\n{listing.stdout}"
+            assert held_marker in arrived, (
+                f"{held_marker} did not reach pc2, which is itself active at revision {held_revision} of "
+                f"{held_app}.\n{listing.stdout}"
             )
-            stale_dir = f"{snap_root}/{held_app}/{stale_revision}"
             assert not any(path == stale_dir or path.startswith(f"{stale_dir}/") for path in arrived), (
-                f"a data directory for revision {stale_revision} of {held_app} exists on pc2.\n{listing.stdout}"
-            )
-            absent_dir = f"{snap_root}/{absent_app}/{absent_revision}"
-            assert not any(path == absent_dir or path.startswith(f"{absent_dir}/") for path in arrived), (
-                f"a data directory arrived on pc2 for {absent_app}, a snap its own snapd has never installed.\n"
-                f"{listing.stdout}"
+                f"a data directory for revision {stale_revision} of {held_app} exists on pc2, whose snapd is on "
+                f"{held_revision} and never installed {stale_revision}.\n{listing.stdout}"
             )
         finally:
             if source_aside:

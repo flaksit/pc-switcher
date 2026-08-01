@@ -78,6 +78,19 @@ def remote_row(name: str, url: str, *, options: str = "", ref_filter: str = "-")
     return f"{name}\t{url}\t{options}\t{ref_filter}\n"
 
 
+def offered_refs(apps: str) -> str:
+    """`flatpak remote-ls --columns=ref` output for a remote offering exactly the apps in a
+    `flatpak list` block: the same refs, each with the `app/` kind in front (measured, Flatpak
+    1.14.6).
+
+    Every source fake answers with this, because a remote that did not offer the app installed
+    from it ends the run (`_abort_on_a_source_filter_that_denies_its_own_apps`) — and only for a
+    remote carrying a filter, so most tests never reach the question at all.
+    """
+    refs = [fields[4] for fields in (line.split("\t") for line in apps.splitlines()) if len(fields) == 5]
+    return "".join(f"app/{ref}\n" for ref in refs)
+
+
 _FLATHUB_REMOTE_LINE = remote_row("flathub", "https://dl.flathub.org/repo/")
 
 SOURCE_RESPONSES = {
@@ -838,6 +851,7 @@ def derivation_source(
         "--show-runtime": CommandResult(0, runtime, ""),
         "flatpak remotes --user": CommandResult(0, remotes, ""),
         "flatpak remotes --system": CommandResult(0, system_remotes, ""),
+        "remote-ls": CommandResult(0, offered_refs(apps), ""),
     }
 
 
@@ -1606,6 +1620,7 @@ def trust_responses(
         "flatpak list --columns": CommandResult(0, apps, ""),
         "--show-runtime": CommandResult(0, "", ""),
         f"flatpak remotes {scope_flag}": CommandResult(0, remote_line, ""),
+        "remote-ls": CommandResult(0, offered_refs(apps), ""),
         f"sha256sum {keyring_dir}": CommandResult(0, digest_output, ""),
         f"cat {keyring_dir}/config": CommandResult(0, repo_config, ""),
         "echo $HOME": CommandResult(0, "/home/tester\n", ""),
@@ -3366,20 +3381,36 @@ class TestRemoteFilterReplicates:
     at that path, which is what makes carrying it possible at all.
     """
 
+    _REMOTE = "customremote"
     _URL = "https://custom.example.org/repo/"
     _APP_LINE = "org.example.App\t1.0\tcustomremote\tuser\torg.example.App/x86_64/stable\n"
     _APP_ID = "flatpak:ref:user:org.example.App/x86_64/stable"
 
     def _source(self, ref_filter: str, *, extra: str = "") -> dict[str, CommandResult]:
+        """A source whose remote offers the app it has installed (`offered_refs`) — the ordinary
+        case, in which the filter contradicts nothing and the run goes on.
+        """
         return derivation_source(
             remotes=remote_row("customremote", self._URL, ref_filter=ref_filter) + extra, apps=self._APP_LINE
         )
 
     @staticmethod
+    def _listing(offered: CommandResult) -> dict[str, CommandResult]:
+        """What flatpak answers when asked what the remote offers — the only judge of a filter
+        this job has, since a listing by remote NAME carries that remote's own filter (measured,
+        Flatpak 1.14.6) and no unfiltered counterpart exists to compare it against.
+        """
+        return {"remote-ls": offered}
+
+    @staticmethod
+    def _listing_calls(source: MagicMock) -> list[str]:
+        return [cmd for cmd in all_calls(source) if "remote-ls" in cmd]
+
+    @staticmethod
     def _filter_file(tmp_path: Path, content: str = "deny *\nallow org.example.*\n") -> Path:
-        """The source's filter file. Its default content allows the app these tests replicate:
-        a filter that denied it would end the run rather than reach the target
-        (`_abort_on_a_source_filter_that_denies_its_own_apps`).
+        """The source's filter file. Its content is what travels and nothing else: whether it
+        denies an app the source installed is decided by flatpak's own two listings, never by
+        reading the file here (`_abort_on_a_source_filter_that_denies_its_own_apps`).
         """
         path = tmp_path / "filters" / "custom.filter"
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -3450,9 +3481,15 @@ class TestRemoteFilterReplicates:
         itself: it says both "install this from there" and "nothing from there may be
         installed". The run ends naming the app, the remote and the filter, before anything is
         asked or written — no filter is taken off to make such an install possible.
+
+        What the remote offers under that filter is flatpak's own answer, not this job's
+        reading of the file: the app is absent from the remote's own listing of itself.
         """
         path = self._filter_file(tmp_path, content="deny *\n")
-        context, _source, target = make_context(source_responses=self._source(str(path)), fake_target=self._target())
+        context, _source, target = make_context(
+            source_responses=self._source(str(path)) | self._listing(CommandResult(0, "", "")),
+            fake_target=self._target(),
+        )
         job = FlatpakSyncJob(context)
 
         with pytest.raises(SyncAbortedByUser) as raised:
@@ -3465,18 +3502,49 @@ class TestRemoteFilterReplicates:
         assert not any("flatpak install" in cmd for cmd in all_calls(target))
 
     @pytest.mark.asyncio
-    async def test_a_filter_file_flatpak_would_reject_does_not_end_the_run(self, tmp_path: Path) -> None:
-        """F151 — An abort needs certainty. A file flatpak itself refuses says nothing about what
-        it denies, so the run proceeds and flatpak's own error reaches the user when
-        `remote-modify --filter` is given the same file.
+    async def test_a_listing_flatpak_will_not_produce_does_not_end_the_run(self, tmp_path: Path) -> None:
+        """F151 — An abort needs certainty, and flatpak declines to answer at all for a filter
+        file it cannot parse (`error: Failed to parse filter <path>`, exit 1, measured) as for a
+        remote it cannot reach. Neither says anything about what that remote offers, so the run
+        proceeds and flatpak's own error reaches the user when `remote-modify --filter` is given
+        the same file.
         """
         path = self._filter_file(tmp_path, content="deny\n")
-        context, _source, target = make_context(source_responses=self._source(str(path)), fake_target=self._target())
+        refused = CommandResult(1, "", f"error: Failed to parse filter '{path}': Unexpected word 'deny' on line 1")
+        context, _source, target = make_context(
+            source_responses=self._source(str(path)) | self._listing(refused), fake_target=self._target()
+        )
         job = FlatpakSyncJob(context)
 
         await run_job(job)
 
         assert any(f"--filter={path}" in cmd for cmd in all_calls(target))
+
+    @pytest.mark.asyncio
+    async def test_a_filter_that_denies_nothing_asks_the_remote_once(self, tmp_path: Path) -> None:
+        """F154 — The remote's own listing carries every app the source installed from it, so
+        the run goes on, and one listing per filtered remote is the whole cost of asking.
+        """
+        path = self._filter_file(tmp_path)
+        context, source, target = make_context(source_responses=self._source(str(path)), fake_target=self._target())
+        job = FlatpakSyncJob(context)
+
+        await run_job(job)
+
+        assert ("user", "org.example.App/x86_64/stable") in target.refs
+        assert self._listing_calls(source) == [f"flatpak remote-ls --user --arch='*' --columns=ref {self._REMOTE}"]
+
+    @pytest.mark.asyncio
+    async def test_an_unfiltered_remote_is_never_asked_what_it_offers(self) -> None:
+        """F155 — The question is about a filter, so a remote carrying none is never put to it:
+        whatever such a remote does or does not offer, it can end no run.
+        """
+        context, source, _target = make_context(source_responses=self._source("-"), fake_target=self._target())
+        job = FlatpakSyncJob(context)
+
+        await run_job(job)
+
+        assert self._listing_calls(source) == []
 
     @pytest.mark.asyncio
     async def test_the_source_filter_replaces_the_targets_before_the_first_install(self, tmp_path: Path) -> None:

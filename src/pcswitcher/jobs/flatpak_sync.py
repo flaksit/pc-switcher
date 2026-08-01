@@ -118,12 +118,30 @@ would block them — measured, not assumed: on Flatpak 1.14.6 an install of a re
 filter denies exits 1 with `Nothing matches <id> in remote <remote>` and lands nothing, while
 the same install of an allowed ref succeeds
 (`docs/adr/considerations/adr-020-flatpak-filter-and-trust-measurements.md`). But a source
-whose own filter denies an app that source has installed is contradicting itself, and
-`_abort_on_a_source_filter_that_denies_its_own_apps` ends the run at plan time naming the app,
-the remote and the filter rather than carrying logic for a state that should not exist. The
-filter is evaluated exactly as flatpak evaluates it (`_filter_glob_to_regexp`), and a file
-flatpak itself would reject claims nothing: the abort needs certainty, and `remote-modify
---filter` reports that file's real error later.
+whose own filtered remote will not offer an app that source has installed from it is
+contradicting itself, and `_abort_on_a_source_filter_that_denies_its_own_apps` ends the run at
+plan time naming the app, the remote and the filter rather than carrying logic for a state that
+should not exist.
+
+WHICH app that is, flatpak answers rather than this job: `flatpak remote-ls <name>` lists the
+remote AS ITS FILTER RESTRICTS IT (measured), so an app the source installed from that remote
+and absent from that remote's own listing is one the two machines cannot be made to agree on.
+Nothing here reimplements flatpak's glob matching, so nothing here can drift from it when
+flatpak changes it, and a filter file edited since it was applied is judged as it now stands,
+which reading the file could not tell (flatpak re-reads the configured path per listing and
+keeps a backup copy of its own — measured).
+
+The listing is the whole of the evidence, and it does not say WHY: a delisted ref and a ref
+`remote-ls` will not list for its architecture are absent from it exactly as a denied one is,
+and flatpak 1.14.6 offers no unfiltered view of the same remote to tell them apart — the
+`remote-ls <uri>` form its help documents is refused for an `http(s)` URL, `remote-info` is
+filtered too, and the only unfiltered answer would come from reconfiguring the source's own
+remote, which no run may do. So the abort names what was measured — the remote does not offer
+the app under the filter it carries — and names the filter and the app as the two things that
+can be corrected, rather than asserting which of them is wrong. A listing flatpak declines to
+produce — an unreachable remote, a filter file it refuses to parse — says nothing at all and
+ends no run: the abort needs certainty, and `remote-modify --filter` reports that file's real
+error later.
 
 The flatpak OSTree store stays authoritative for its own state (D-01): this job never
 WRITES into `/var/lib/flatpak` or `~/.local/share/flatpak`, only shells out to `flatpak`
@@ -241,9 +259,12 @@ _FLATPAK_RUNTIME_CMD_TEMPLATE = "flatpak info {flag} --show-runtime {ref}"
 # `filter` is the path `flatpak remote-modify --filter=<path> <name>` recorded. Measured in a
 # stock `ubuntu:24.04` container on Flatpak 1.14.6: that command exits 0 and stores the path
 # VERBATIM as `xa.filter` in the installation's `repo/config`, without validating it — a
-# relative path and a path that does not exist are both accepted. So the path is the whole of
-# what flatpak knows, and the filter's content is an ordinary file at an arbitrary absolute
-# location outside the ostree store, which is what `_converge_remote_filters` carries.
+# relative path and a path that does not exist are both accepted. The path is what flatpak
+# reports and what it re-reads on every use, so the filter's content is an ordinary file at an
+# arbitrary absolute location outside the ostree store, which is what `_converge_remote_filters`
+# carries. flatpak keeps a copy of its own beside the config (`repo/<name>.filter`, headed
+# `backup copy of <path>, do not edit!`) and falls back to it once the path is gone, which is
+# why the file is the thing to replicate and the copy is not.
 #
 # An unfiltered remote prints `-` in that column rather than nothing (measured), so with
 # `filter` requested last a line carries four fields even for a remote with no options at all
@@ -254,12 +275,27 @@ _FLATPAK_REMOTES_CMD_TEMPLATE = "flatpak remotes {flag} --columns=name,url,optio
 # What that column prints for a remote carrying no filter.
 _NO_FILTER = "-"
 
-# What one segment of a filter glob's partial ref may hold, and how many segments follow the
-# `app/`/`runtime/` kind: id, arch, branch (`flatpak_filter_glob_to_regexp`, flatpak 1.14.6).
-# The class is flatpak's own translation of `*` AND of an omitted segment, so a glob naming
-# only an id matches every arch and branch of it.
-_FILTER_REF_TOKEN = "[.\\-_a-zA-Z0-9]*"
-_FILTER_REF_SEGMENTS = 3
+# What a remote offers, in flatpak's own words — the only judge of a filter this job has
+# (`_abort_on_a_source_filter_that_denies_its_own_apps`). One ref per line, printed with its
+# kind: `app/<id>/<arch>/<branch>`, i.e. exactly what `flatpak list --columns=ref` prints with
+# `app/` in front (measured, Flatpak 1.14.6).
+#
+# The listing carries the named remote's own filter, which is what makes it an answer about the
+# filter at all (measured, over `file://` and over `http://` alike). There is no unfiltered
+# counterpart to compare it against: `remote-ls <uri>`, which flatpak's own help documents, is
+# accepted for a `file://` URL and refused for an `http(s)` one with `Remote "<url>" not found
+# in the system installation`, and `remote-info` applies the filter as well.
+#
+# `--arch='*'` because `remote-ls` otherwise lists the running machine's architecture alone
+# (measured: an `aarch64` ref in a single-summary repository appears only with it). It is not a
+# guarantee of completeness — a real remote serves per-architecture subsummaries and flathub
+# answered `--arch='*'` with 10178 refs, not one of them `i386`, on an x86_64 host — which is
+# among the reasons the abort claims only what the listing shows and never a cause.
+_FLATPAK_REMOTE_LS_CMD_TEMPLATE = "flatpak remote-ls {flag} --arch='*' --columns=ref {remote}"
+
+# The kind prefix `remote-ls` prints and `flatpak list --columns=ref` does not, and the only
+# kind the filter check asks about: `capture_source_items` lists apps (`--app`).
+_APP_REF_PREFIX = "app/"
 
 # The token `flatpak remotes --columns=options` prints for a remote with GPG
 # verification turned off.
@@ -803,102 +839,6 @@ def _parse_flatpak_remotes(
             )
         )
     return items
-
-
-def _filter_glob_segment(segment: str) -> str | None:
-    """One `/`-separated piece of a filter glob as a regular expression, or `None` for a
-    character flatpak refuses the whole file for.
-
-    Only `*` is a wildcard, and only within the characters a ref token may hold — flatpak
-    treats anything else as invalid data rather than as a literal
-    (`flatpak_filter_glob_to_regexp`, flatpak 1.14.6, `common/flatpak-utils.c`).
-    """
-    regexp = ""
-    for char in segment:
-        if char == "*":
-            regexp += _FILTER_REF_TOKEN
-        elif char == ".":
-            regexp += r"\."
-        elif (char.isascii() and char.isalnum()) or char in "-_":
-            regexp += char
-        else:
-            return None
-    return regexp
-
-
-def _filter_glob_to_regexp(glob: str) -> str | None:
-    """One filter-file glob as the regular expression flatpak builds from it, or `None` for a
-    glob flatpak itself rejects.
-
-    A transcription of `flatpak_filter_glob_to_regexp` (flatpak 1.14.6), quirks included,
-    because the only useful answer here is flatpak's own: this decides whether a source filter
-    contradicts the source's own installed set, and that answer ends the run
-    (`_abort_on_a_source_filter_that_denies_its_own_apps`). A glob is a partial ref — an
-    optional `app/`/`runtime/` kind, then id, arch and branch — and each segment it omits is
-    padded to the token class. An empty segment is padded the same way, except a trailing one:
-    flatpak fills an empty part when it meets the NEXT `/`, so `org.foo/` ends up with the
-    double slash that matches nothing, and reproducing that is the point of transcribing.
-    """
-    for kind in ("app/", "runtime/"):
-        if glob.startswith(kind):
-            prefix, glob = kind, glob[len(kind) :]
-            break
-    else:
-        prefix = "(app|runtime)/"
-    if not glob:
-        return None
-
-    segments = glob.split("/")
-    if len(segments) > _FILTER_REF_SEGMENTS:
-        return None
-    translated: list[str] = []
-    for index, segment in enumerate(segments):
-        piece = _FILTER_REF_TOKEN if not segment and index < len(segments) - 1 else _filter_glob_segment(segment)
-        if piece is None:
-            return None
-        translated.append(piece)
-    translated.extend([_FILTER_REF_TOKEN] * (_FILTER_REF_SEGMENTS - len(segments)))
-    return prefix + "/".join(translated)
-
-
-def _filter_denies(filter_text: str, ref: str) -> bool | None:
-    """Whether the filter file's content denies `ref` (an `app/<id>/<arch>/<branch>` string),
-    or `None` when flatpak would reject the file and there is no answer to give.
-
-    `flatpak_parse_filters` + `flatpak_filters_allow_ref` (flatpak 1.14.6): a ref is denied
-    when a `deny` glob matches it and no `allow` glob does. An allow-only file therefore
-    narrows nothing — measured as well as read
-    (`docs/adr/considerations/adr-020-flatpak-filter-and-trust-measurements.md`).
-    """
-    globs: dict[str, list[str]] = {"allow": [], "deny": []}
-    for raw in filter_text.splitlines():
-        words = raw.split("#", maxsplit=1)[0].split()
-        if not words:
-            continue
-        if words[0] not in globs or len(words) != 2:
-            return None
-        regexp = _filter_glob_to_regexp(words[1])
-        if regexp is None:
-            return None
-        globs[words[0]].append(regexp)
-
-    if not any(re.fullmatch(regexp, ref) for regexp in globs["deny"]):
-        return False
-    return not any(re.fullmatch(regexp, ref) for regexp in globs["allow"])
-
-
-def _read_source_filter(path: str) -> str | None:
-    """The source's filter file as text, or `None` when it cannot be read at all.
-
-    Read off the local filesystem for the reason `_source_keyring_path` documents: the source
-    executor runs on this machine as this user. Unreadable is not an error here — the only
-    caller uses the content to decide whether to end the run, and a file it could not read
-    says nothing either way.
-    """
-    try:
-        return Path(path).read_text(encoding="utf-8")
-    except OSError, UnicodeDecodeError:
-        return None
 
 
 def _parse_flatpak_masks(output: str, scope: Literal["user", "system"]) -> list[FlatpakMaskItem]:
@@ -1635,9 +1575,9 @@ class FlatpakSyncJob(PackageSyncJob):
     async def plan(self) -> PackagePlan:
         """Load decision files -> capture -> query -> diff -> build review groups.
 
-        Read-only: only `flatpak list`/`flatpak remotes`/`flatpak mask`/`flatpak info` (both
-        machines, both scopes) and a decision-file `cat` run here — no `flatpak install`/
-        `uninstall`/`remote-add`/`remote-delete`/`mask` mutation before this returns.
+        Read-only: only `flatpak list`/`flatpak remotes`/`flatpak mask`/`flatpak info`/`flatpak
+        remote-ls` (both machines, both scopes) and a decision-file `cat` run here — no `flatpak
+        install`/`uninstall`/`remote-add`/`remote-delete`/`mask` mutation before this returns.
         Caches the source/target refs and remotes by id for `converge()` (see `__init__`);
         masks need no cache (pattern is fully in the item_id).
 
@@ -1690,7 +1630,7 @@ class FlatpakSyncJob(PackageSyncJob):
         self._source_ref_origins = await self._capture_source_ref_origins()
         self._source_runtime_by_ref_id = await self._capture_source_runtimes(source_refs)
         await self._capture_trust_anchors()
-        self._abort_on_a_source_filter_that_denies_its_own_apps(source_refs, source_remotes)
+        await self._abort_on_a_source_filter_that_denies_its_own_apps(source_refs, source_remotes)
 
         ref_diffs = _diff_flatpak_refs(
             source_refs,
@@ -1713,11 +1653,32 @@ class FlatpakSyncJob(PackageSyncJob):
         groups = self._build_review_groups(diffs)
         return PackagePlan(manager=self.manager_id, diffs=diffs, groups=groups)
 
-    def _abort_on_a_source_filter_that_denies_its_own_apps(
+    async def _refs_the_remote_offers(self, scope: str, remote: str) -> frozenset[str] | None:
+        """What one of the source's remotes offers under its own filter, or `None` when flatpak
+        did not answer (`_FLATPAK_REMOTE_LS_CMD_TEMPLATE`).
+
+        Deliberately unguarded, unlike every other capture here: the one caller uses this to
+        decide whether to END THE RUN, and every way flatpak has of not answering — an
+        unreachable remote, a filter file it refuses to parse — is a reason to say nothing
+        rather than to fail a run over a question about a filter. `None` is that silence, and
+        it stays distinct from an empty listing, which is a remote answering that it offers
+        nothing.
+
+        A listing is a read: it needs no elevation even for a `--system` remote and caches
+        under the invoking user's own `~/.cache/flatpak` (measured), so it carries no
+        `mutates=` phrase.
+        """
+        command = _FLATPAK_REMOTE_LS_CMD_TEMPLATE.format(flag=_scope_flag(scope), remote=shlex.quote(remote))
+        result = await self.source.run_command(command)
+        if result.exit_code != 0:
+            return None
+        return frozenset(line.strip() for line in _lines(result.stdout))
+
+    async def _abort_on_a_source_filter_that_denies_its_own_apps(
         self, source_refs: Sequence[FlatpakItem], source_remotes: Sequence[FlatpakRemoteItem]
     ) -> None:
-        """End the run when the source has an application the filter of its own origin remote
-        denies (`PKG-FR-FLATPAK-FILTER`).
+        """End the run when a filtered source remote does not offer an application the source
+        installed from it (`PKG-FR-FLATPAK-FILTER`).
 
         The filter is in force before the installs, so a filter narrower than the set being
         replicated would block them — but that is the source contradicting itself, not a case
@@ -1726,28 +1687,36 @@ class FlatpakSyncJob(PackageSyncJob):
         before the user is asked to decide anything, is what puts the repair in front of them
         (`SyncAbortedByUser`, the same end an unparsable snippet registry gets).
 
-        Read on the source's own filesystem, like the keyring bytes and for the same reason:
-        the source executor runs on this machine as this user. A file that cannot be read, or
-        one flatpak itself would reject, claims nothing — an abort needs certainty, and the
-        real error reaches the user from `remote-modify --filter` later.
+        What a remote offers under its filter is flatpak's own business, so flatpak is asked
+        rather than imitated: one listing per filtered remote, whatever the source's apps from
+        it, and the filter's semantics stay where they are implemented (module docstring).
+
+        The listing is all the evidence there is, and it names no cause: a ref the remote has
+        delisted and a ref `remote-ls` will not list for its architecture are absent from it
+        exactly as a denied one is, and flatpak offers no unfiltered view of the same remote to
+        separate them (module docstring). So the run ends on what was measured — this remote,
+        under this filter, does not offer this app — with both repairs named and neither
+        blamed. Nothing is measured at all when flatpak declines to answer, and nothing is
+        claimed then either.
         """
         filtered = {item.item_id: item for item in source_remotes if item.filter_path is not None}
-        contents: dict[str, str | None] = {}
+        offered_by: dict[str, frozenset[str] | None] = {}
         for ref in source_refs:
             remote = filtered.get(f"{_REMOTE_ITEM_ID_PREFIX}{ref.scope}:{ref.origin}")
             if remote is None or remote.filter_path is None:
                 continue
-            if remote.item_id not in contents:
-                contents[remote.item_id] = _read_source_filter(remote.filter_path)
-            text = contents[remote.item_id]
-            if text is None or not _filter_denies(text, f"app/{ref.ref}"):
+            if remote.item_id not in offered_by:
+                offered_by[remote.item_id] = await self._refs_the_remote_offers(remote.scope, remote.name)
+            offered = offered_by[remote.item_id]
+            if offered is None or f"{_APP_REF_PREFIX}{ref.ref}" in offered:
                 continue
             raise SyncAbortedByUser(
                 f"{self.machines.source} has the {ref.scope}-scope flatpak {ref.ref} installed from the remote "
-                f"{ref.origin}, whose own ref filter {remote.filter_path} denies it. That filter is applied to "
-                f"{self.machines.target} before anything installs from that remote, so replicating the two "
-                f"together is impossible; correct the filter or uninstall {ref.ref} on {self.machines.source} "
-                "before syncing again"
+                f"{ref.origin}, which does not offer it under the ref filter {remote.filter_path} that "
+                f"{self.machines.source} applies to that remote. That filter is applied to {self.machines.target} "
+                f"before anything installs from that remote, so replicating the two together is impossible; correct "
+                f"the filter — or, if {ref.origin} no longer carries {ref.ref} at all, uninstall it on "
+                f"{self.machines.source} — before syncing again"
             )
 
     def _capture_remote_conflicts(

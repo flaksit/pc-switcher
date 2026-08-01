@@ -1,12 +1,12 @@
 # Flatpak ref filters and libostree trust anchors, measured
 
-Two premises `flatpak_sync` rests on, measured rather than reasoned about. Both hold.
+The premises `flatpak_sync` rests on, measured rather than reasoned about. All hold.
 
 Everything below ran in a throwaway `ubuntu:24.04` container: flatpak `1.14.6-1ubuntu0.1`, `libostree-1-1` `2024.5-1build2`.
 
 ## Does flatpak refuse to install a ref its own remote filter excludes?
 
-Yes. `PKG-FR-FLATPAK-FILTER`'s ordering — clear the target's filter before the installs, re-apply the source's after — is necessary, not merely harmless.
+Yes. That is what `PKG-FR-FLATPAK-FILTER`'s ordering — remote, filter, install, with nothing cleared for the installs' benefit — has to reckon with: a filter narrower than the set being replicated blocks the very installs it travels with.
 
 Setup: `flatpak remote-add --system flathub https://dl.flathub.org/repo/flathub.flatpakrepo`, then `flatpak remote-modify --system --filter=/etc/flatpak/filters/f1 flathub`.
 
@@ -24,7 +24,62 @@ The refusal is the filter and not the ref: the two commands differ only in which
 
 An application already installed when the filter arrives is untouched by it. Adwaita-dark installed with no filter, then the denying `f1` applied: `remote-modify` exited 0, `flatpak list --system` still showed the ref, `flatpak info` exited 0. `flatpak update --system --noninteractive` exited 0, removed nothing, and printed `F: Warning: Treating remote fetch error as non-fatal since runtime/org.gtk.Gtk3theme.Adwaita-dark/x86_64/3.22 is already installed: No entry for runtime/org.gtk.Gtk3theme.Adwaita-dark/x86_64/3.22 in remote 'flathub' summary flatpak cache` followed by `Nothing to do.`. Only a fresh install is refused: `flatpak install --reinstall` of the denied ref exited 1 with the same `Nothing matches` error.
 
-So the late re-apply costs the target nothing that has already landed, and the early clear is what lets the approved applications land at all.
+So a filter arriving over an application that already landed costs that application nothing, and only the applications still to install can be blocked by one.
+
+## Can flatpak itself be asked what a filter denies?
+
+It can be asked what a remote OFFERS under its filter, and no more than that. `flatpak remote-ls <name>` applies the named remote's filter to its own listing, which is what `_abort_on_a_source_filter_that_denies_its_own_apps` rests on instead of transcribing `flatpak_filter_glob_to_regexp` into Python. What no question reaches is why a ref is missing from that listing: flatpak 1.14.6 offers no unfiltered view of the same remote to compare it against.
+
+Rig: a local `archive-z2` repository holding `app/org.test.One/x86_64/{stable,beta}`, `app/org.test.Two/x86_64/stable` and `app/org.test.Nine/i386/stable`, indexed with `flatpak build-update-repo`, served over `file://` and (the same repository again) over `http://127.0.0.1:8099/`; `flatpak remote-add --system --no-gpg-verify r <url>`.
+
+| Filter on `r` | `flatpak remote-ls --system --arch='*' --columns=ref r` |
+| - | - |
+| none | One/beta, One/stable, Two |
+| `deny *` + `allow app/org.test.One/*/*` | One/beta, One/stable |
+| `deny *` + `allow app/org.test.One` (the id alone) | One/beta, One/stable — a glob naming the id covers every arch and branch of it |
+
+The same filter over `http://` gave the same listing, and `flatpak install r app/org.test.Two/x86_64/stable` exited 1 with `Nothing matches org.test.Two in remote r`, so the listing and the install agree about what the filter withholds.
+
+The listing prints the ref with its kind — `app/<id>/<arch>/<branch>`, and `runtime/…` for a runtime — which is exactly what `flatpak list --columns=ref` prints without the kind, so `app/` in front of an installed ref is the string to look for.
+
+### No unfiltered second opinion exists
+
+`flatpak remote-ls`'s help documents a `[REMOTE or URI]` argument, but only a `file://` URI is accepted as one:
+
+| Argument | Result |
+| - | - |
+| `file:///srv/repo` | listed, unfiltered — the URI form ignores the configured remote's filter |
+| `http://127.0.0.1:8099/`, with or without the trailing slash | exit 1, `error: Remote "http://127.0.0.1:8099/" not found in the system installation` |
+| `https://dl.flathub.org/repo/` | exit 1, same error, against real flathub |
+| `http://127.0.0.1:8099/t.flatpakrepo` | exit 1, same error |
+| `/srv/repo` (a local path, no scheme) | exit 1, same error |
+
+`flatpak remote-info <name> <ref>` is filtered too — for a denied ref it exits 1 with `No entry for app/org.test.Two/x86_64/stable in remote 'r' summary flatpak cache`, and for an allowed one it exits 0 — and `flatpak search` matched nothing. So for the remotes that matter (`https://`), the only unfiltered answer would come from reconfiguring the source's own remote, which no plan-time read may do.
+
+### A missing ref names no cause
+
+Two states other than a `deny` line take a ref out of the listing:
+
+- **Delisted.** With the filter allowing both applications, `ostree refs --delete app/org.test.Two/x86_64/stable` followed by `flatpak build-update-repo` took Two out of the listing.
+- **Not listable for its architecture.** `--arch='*'` is required — without it only the running machine's architecture is listed, and an `aarch64` ref appeared only with it — and it is still not complete. `app/org.test.Nine/i386/stable` sat in the local repository's summary (`ostree summary --view` shows it) and was listed by neither `--arch='*'` nor `--arch=i386` on an x86_64 host; real flathub answered `--arch='*'` with 10178 refs, not one of them `i386`, while `flatpak --supported-arches` printed `x86_64` and `i386`.
+
+So "absent from the listing" is all that can be established, and the abort states exactly that rather than naming a culprit.
+
+### When flatpak declines to answer
+
+It declines rather than answering wrongly:
+
+| Situation | `remote-ls` |
+| - | - |
+| filter file holds a line flatpak cannot parse | exit 1, `error: Failed to parse filter '/etc/flatpak/filters/bad': Unexpected word 'bogus' on line 2` |
+| filter path never existed | exit 1, `error: Failed to load filter '/var/lib/flatpak/repo/fresh.filter': … No such file or directory` |
+| filter path is a directory | exit 1, `error: Failed to load filter … Is a directory` |
+| remote's URL serves no summary | exit 1, `error: Unable to load summary from remote gone: …` |
+| remote unreachable (`https://127.0.0.1:9/repo`) | exit 1, `… Couldn't connect to server` |
+
+`flatpak remote-modify --filter=<path>` copies the file to `<installation>/repo/<remote>.filter`, headed `# backup copy of <path>, do not edit!`, and re-reads the configured path on every use: editing the file in place changed the next listing with no `remote-modify` at all, and deleting it fell back to the backup copy. A path that never existed has no backup to fall back on, which is the second row above.
+
+A listing is an ordinary read. An unprivileged user with no TTY listed a `--system` remote, exit 0, and the only thing the read created was that user's own `~/.cache/flatpak`. It took 7 ms against a `file://` remote and 0.3 s against real flathub.
 
 ## Does libostree read any keyring directory beyond `/usr/share/ostree/trusted.gpg.d`?
 

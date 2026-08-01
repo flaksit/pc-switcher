@@ -176,6 +176,10 @@ _READ_ONLY_CALLS: dict[str, int] = {
     # and the runtime each app is built against (one local `flatpak info` per app).
     "jobs/flatpak_sync.py::FlatpakSyncJob._capture_source_ref_origins::run_command": 1,
     "jobs/flatpak_sync.py::FlatpakSyncJob._capture_source_runtimes::run_command": 1,
+    # What a filtered source remote offers under its own filter (`PKG-FR-FLATPAK-FILTER`).
+    # `flatpak remote-ls` is a query: it needs no elevation even for a `--system` remote and
+    # caches under the invoking user's own `~/.cache/flatpak` (measured).
+    "jobs/flatpak_sync.py::FlatpakSyncJob._refs_the_remote_offers::run_command": 1,
     # The post-install origin read-back: the same `flatpak list` the capture uses, re-run on
     # the target so a ref's real provenance is checked rather than inferred (ADR-020 D-35).
     "jobs/flatpak_sync.py::FlatpakSyncJob._installed_origin_refusal::run_command": 1,
