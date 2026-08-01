@@ -1,0 +1,54 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "049f94ebb548",
+  "strategy": "manual-commit",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "docs/adr/adr-020-declarative-package-convergence.md",
+    "docs/dev/package-sync-scenario-coverage.md",
+    "docs/jobs/package-sync.md",
+    "docs/planning/package-sync-conformance-criteria.md",
+    "docs/planning/package-sync-user-requirements.md",
+    "docs/system/package-sync.md",
+    "src/pcswitcher/jobs/apt_sync/collateral.py",
+    "src/pcswitcher/jobs/apt_sync/commands.py",
+    "src/pcswitcher/jobs/apt_sync/diffing.py",
+    "src/pcswitcher/jobs/apt_sync/job.py",
+    "src/pcswitcher/jobs/apt_sync/packages.py",
+    "src/pcswitcher/jobs/apt_sync/probe.py",
+    "src/pcswitcher/jobs/flatpak_sync.py",
+    "src/pcswitcher/jobs/manual_installs_sync.py",
+    "src/pcswitcher/jobs/packages/review.py",
+    "src/pcswitcher/jobs/packages/sync_core.py",
+    "src/pcswitcher/jobs/snap_sync.py",
+    "tests/integration/jobs/test_package_sync.py",
+    "tests/unit/jobs/apt/helpers.py",
+    "tests/unit/jobs/apt/test_apt_collateral.py",
+    "tests/unit/jobs/apt/test_apt_diffing.py",
+    "tests/unit/jobs/apt/test_apt_job.py",
+    "tests/unit/jobs/apt/test_apt_packages.py",
+    "tests/unit/jobs/test_block_state_decisions.py",
+    "tests/unit/jobs/test_flatpak_sync.py",
+    "tests/unit/jobs/test_manual_installs_sync.py",
+    "tests/unit/jobs/test_package_sync_core.py",
+    "tests/unit/jobs/test_snap_sync.py",
+    "tests/unit/test_mutates_audit.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/04/9f94ebb548/0/metadata.json",
+      "transcript": "/04/9f94ebb548/0/full.jsonl",
+      "compact_transcript": "/04/9f94ebb548/0/transcript.jsonl",
+      "content_hash": "/04/9f94ebb548/0/content_hash.txt",
+      "prompt": "/04/9f94ebb548/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 309,
+    "cache_creation_tokens": 1864658,
+    "cache_read_tokens": 49801461,
+    "output_tokens": 219664,
+    "api_call_count": 164
+  }
+}
