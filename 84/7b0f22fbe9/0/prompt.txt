@@ -1462,3 +1462,47 @@ Verification, all green:
 - `uv run codespell` — clean</result>
 <usage><subagent_tokens>46470</subagent_tokens><tool_uses>14</tool_uses><duration_ms>90702</duration_ms></usage>
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>a7918f5bee005d264</task-id>
+<tool-use-id>toolu_019F13uU5NUEcrZ7o8ica6um</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/81c7a538-876b-47ee-bd10-6f31ec117d7e/tasks/a7918f5bee005d264.output</output-file>
+<status>completed</status>
+<summary>Agent "VM coverage for collateral and origins" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Six integration tests written in `/home/janfr/dev/pc-switcher/tests/integration/jobs/test_package_sync.py`. **All six are unrun** — the integration suite needs two provisioned VMs, which I did not start.
+
+## 1. Collateral damage — `TestACascadeOverASkippedRemovalCandidate`
+
+Both provision the same subject on pc2: two empty `.deb`s (`dependent` `Depends:` `base`) published in a flat `file:` repo, installed **from that repo** (never `dpkg --install` — a hand `.deb` is dropped from the manifest and offered for removal in no direction, so it would produce nothing to cascade) and both marked manual. pc1 has neither, so both are removal candidates. The setup asserts the cascade itself (`apt-get --dry-run remove base` names `dependent`) before the run, so nothing below can pass vacuously.
+
+- `test_a_skipped_candidate_the_cascade_would_take_is_asked_about_and_keeping_it_cancels_the_removal` (**D37**) — approves `base`'s removal, skips `dependent`'s, keeps `dependent` at the second-round question. Asserts both packages still installed, the run succeeded (unapplied, not failed), and the log carries `reviewed &lt;dependent&gt; (report_only): skipped this run`.
+- `test_going_ahead_at_that_question_removes_the_approved_package_and_lets_the_cascade_take_the_other` (**D72**) — same setup, go-ahead. Asserts both gone, `reviewed &lt;dependent&gt; (report_only): applied`, and that `dependent`'s own removal item stayed `skipped this run`.
+
+Both assert `reviewed &lt;dependent&gt; (collateral)` is **absent** — that is `LateCollateral`'s wording, so its absence is what proves the question came from the review's second round and not from the apply-time drift guard. Without it the two rounds leave identical machine state.
+
+**Not written: the third answer.** "Stop the sync" is not a `Decision` value — `packages.review` raises `SyncAbortedByUser` from the screen itself, so the automation hook cannot express it, and nothing about it touches apt. D26/D68 prove it at the unit tier.
+
+## 2. Apt origins — `TestTheAptOriginModelOnRealRepositories`
+
+**Repository chosen: GitHub's CLI repo (`https://cli.github.com/packages`, package `gh`).** Reasons: it is the cheapest real vendor repo a CI machine can reach (one ~15 MB package, keyring served over HTTPS from the same host, a `stable main` suite that has not moved); no package of that name exists in Ubuntu's archive, so nothing about the machine's stock software is disturbed; and it is the requirements' own worked example of a vendor origin (A62). A locally built stand-in was rejected for the reason the module docstring already gives for using the real Flathub.
+
+- `test_a_vendor_repository_travels_with_the_package_and_the_install_lands_from_it` (**A29, A41**) — pc1 declares the repo with its real key and installs `gh`; the run derives the `.sources` + keyring onto pc2 and installs. Every assertion is pc2's own state: both files landed, `gh` in `apt-mark showmanual`, `apt-cache policy gh` naming the vendor.
+- `test_the_post_refresh_verification_refuses_an_install_the_target_would_take_from_elsewhere` (**A42**) — pc2 additionally gets a rival `file:` repo publishing `gh` at `99.0` **and** a `preferences.d` pin dropping `cli.github.com` to priority 1. Two mechanisms pointing the same way deliberately, so the test does not depend on which priority apt assigns a `Release`-less flat repo. Asserts the run exits non-zero, `gh` is not installed on pc2, a second ordinary approved install still lands, and the refusal names both origins.
+
+## 3. Block rulings — `TestAptHoldsThroughARealRun`
+
+- `test_a_source_hold_reaches_the_target_with_no_review_line` (**B1**) — holds a package both machines have at the same version; the review is answered with an **empty** mapping, so the only thing that can carry the hold is its derivation. Asserts pc2's `apt-mark showhold` gained it, and that no `reviewed &lt;pkg&gt; (hold)` line exists.
+- `test_a_hold_naming_a_package_the_machine_does_not_have_ends_the_run` (**B16**) — `apt-mark hold` on pc2 for an archive package it does not have (chosen dynamically from `cowsay`/`sl`/`toilet`/`fortune-mod` by `apt-cache policy`; the hold is asserted recorded before the run, so the shipped measurement failing would say so rather than prove nothing). The run is given real work first (a package removed from pc2). Asserts exit non-zero, the message naming `pc2`, the ghost package and the `apt-mark unhold` remedy, and `_MachinePackageState(pc2)` byte-identical before/after.
+
+## Document
+
+Rows A29, A41, A42, B1, B16, D37, D72 moved `U` → `U V` with the new citations. "What has no VM coverage at all" rewritten: the origin bullet and the collateral bullet are gone, replaced by what actually remains — the exact-version obligation on a held package (B22–B26), and collateral beyond the cascade (install direction, the auto/manual split, apply-time drift). No **Gaps** register entry (K67, K82, K88, K89) is closed by these tests, so none was deleted.
+
+## Checks
+
+`ruff format --check` (164 files clean), `ruff check` (passed), `codespell` (clean), `basedpyright` (0 errors/warnings/notes), `pytest` — **4427 passed**, including all 2455 scenario-matrix cross-reference assertions.</result>
+<usage><subagent_tokens>258914</subagent_tokens><tool_uses>73</tool_uses><duration_ms>1124963</duration_ms></usage>
+</task-notification>
