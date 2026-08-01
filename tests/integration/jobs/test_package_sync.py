@@ -1768,10 +1768,9 @@ class TestAptSyncEndToEnd:
 class TestPackageSyncWholeRunContracts:
     """VM-level proof of the phase's whole-run contracts (plan 02-11): properties of an
     entire sync -- non-interactive skip-all, continue-on-item-failure, snap/flatpak
-    convergence, skip-always inertness in both roles, per-manager review-before-own-
-    mutation, and one job's failure leaving every other job's approved work intact --
-    rather than any single item's diff/converge, and therefore invisible to plans
-    02-03/02-05/02-07/02-08's mocked-executor unit tests.
+    convergence, skip-always inertness in both roles, and one job's failure leaving every
+    other job's approved work intact -- rather than any single item's diff/converge, and
+    therefore invisible to plans 02-03/02-05/02-07/02-08's mocked-executor unit tests.
     """
 
     async def test_non_interactive_skip_all(
@@ -2623,97 +2622,6 @@ class TestPackageSyncWholeRunContracts:
         finally:
             await _restore_package(pc2_executor, candidate)
 
-    async def test_each_manager_reviews_before_its_own_mutation(
-        self,
-        pc1_executor: BashLoginRemoteExecutor,
-        pc2_executor: BashLoginRemoteExecutor,
-        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
-        pc2_with_pcswitcher: BashLoginRemoteExecutor,
-        reset_pcswitcher_state: None,
-    ) -> None:
-        """H12, J144, K20 — The corrected D-24 (per-manager review): with two package jobs enabled and
-        both machines diverged, each enabled manager completes its OWN batched review
-        before that same manager issues its OWN first mutating command. With the
-        cross-manager coordinator gone (plan 02-15), the old "no manager mutates before
-        EVERY manager has diffed" contract no longer exists and is not asserted here --
-        each job runs plan -> review -> apply inside its own `execute()`, independently.
-
-        The per-manager property is proven by end state, not a log witness: an item
-        converges on pc2 ONLY because that manager's own review returned APPLY for it
-        (`apply()` reads the accepted review outcome), so both items landing on pc2's own
-        package managers -- apt via `apt-mark showmanual`, snap via `snap list` -- is the
-        witness that each manager reviewed-then-mutated its own diff. No inter-manager
-        ordering is asserted (this plan's prohibition), and no run-log line is scraped.
-        """
-        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
-
-        apt_candidate = await _removable_candidate(pc1_executor, pc2_executor)
-        snap_candidate = await _snap_subject(pc1_executor, pc2_executor)
-
-        pc2_snap_list_before = await pc2_executor.run_command("snap list --all", login_shell=False, timeout=20.0)
-        original_snap_revision = parse_snap_list_names_revisions(pc2_snap_list_before.stdout)[snap_candidate]
-
-        try:
-            remove_apt = await pc2_executor.run_command(
-                f"sudo DEBIAN_FRONTEND=noninteractive apt-get remove --assume-yes {shlex.quote(apt_candidate)}",
-                login_shell=False,
-                timeout=120.0,
-            )
-            assert remove_apt.success, f"Failed to remove {apt_candidate} from pc2: {remove_apt.stderr}"
-
-            remove_snap = await pc2_executor.run_command(
-                f"sudo snap remove {shlex.quote(snap_candidate)}", login_shell=False, timeout=60.0
-            )
-            assert remove_snap.success, f"Failed to remove {snap_candidate} from pc2: {remove_snap.stderr}"
-
-            await _write_package_sync_config(pc1_executor, apt_sync=True, snap_sync=True)
-
-            apt_item_id = AptPackageItem(name=apt_candidate, version="").item_id
-            snap_item_id = f"snap:{snap_candidate}"
-            decisions = {apt_item_id: Decision.APPLY, snap_item_id: Decision.APPLY}
-            sync_cmd = f"{_automation_env_assignment_multi(decisions)} pc-switcher sync pc2 --yes --allow-first-sync"
-            sync_result = await pc1_executor.run_command(sync_cmd, timeout=180.0, login_shell=True)
-            assert sync_result.success, (
-                f"pc-switcher sync exited {sync_result.exit_code}.\n"
-                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
-            )
-
-            # Per-manager end state is the witness (this plan's prohibition: assert the
-            # target's own package-manager state, not a run-log line): apt's item is back
-            # in pc2's own `apt-mark showmanual`, and snap's item is back in pc2's own
-            # `snap list`. Each converged only because its OWN manager's review approved
-            # it, so both landing proves each manager reviewed-then-mutated its own diff.
-            after_apt = await pc2_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0)
-            assert apt_candidate in nonblank_lines(after_apt.stdout), (
-                f"{apt_candidate} not reinstalled on pc2 -- apt_sync did not converge its own approved diff"
-            )
-            after_snap = await pc2_executor.run_command(
-                f"snap list {shlex.quote(snap_candidate)}", login_shell=False, timeout=15.0
-            )
-            assert after_snap.success, (
-                f"{snap_candidate} not reinstalled on pc2 -- snap_sync did not converge its own approved diff: "
-                f"{after_snap.stderr}"
-            )
-        finally:
-            await _restore_package(pc2_executor, apt_candidate)
-            current_snap = await pc2_executor.run_command(
-                f"snap list {shlex.quote(snap_candidate)}", login_shell=False, timeout=15.0
-            )
-            if original_snap_revision not in current_snap.stdout:
-                restore_result = await pc2_executor.run_command(
-                    f"sudo snap install --revision={shlex.quote(original_snap_revision)} "
-                    f"{shlex.quote(snap_candidate)} || "
-                    f"sudo snap refresh --revision={shlex.quote(original_snap_revision)} "
-                    f"{shlex.quote(snap_candidate)}",
-                    login_shell=False,
-                    timeout=120.0,
-                )
-                if not restore_result.success:
-                    print(
-                        f"[cleanup] failed to restore {snap_candidate} to revision "
-                        f"{original_snap_revision} on pc2: {restore_result.stderr}"
-                    )
-
     async def test_one_failing_job_leaves_the_other_jobs_work_intact(
         self,
         pc1_executor: BashLoginRemoteExecutor,
@@ -2722,9 +2630,14 @@ class TestPackageSyncWholeRunContracts:
         pc2_with_pcswitcher: BashLoginRemoteExecutor,
         reset_pcswitcher_state: None,
     ) -> None:
-        """N22 — All four package jobs enabled in one run, the first of them failing: the three
-        ordered after it still review and converge their own diffs, and the sync's own exit
+        """H12, K20, N22 — All four package jobs enabled in one run, the first of them failing: the
+        three ordered after it still review and converge their own diffs, and the sync's own exit
         code reports the failure (`PKG-FR-JOB-INDEPENDENCE`, `PKG-FR-OUTCOME-FAILED`).
+
+        Each manager settling its OWN review before its OWN mutation is carried by the same
+        witness: an item converges only because that manager's review returned APPLY for it, so
+        apt's and snap's items both landing is what says each reviewed then mutated its own diff.
+        No inter-manager ordering is asserted and no run-log line is scraped for it.
 
         The failure has to come FIRST for the claim to mean anything -- a job that fails last
         leaves the others' work intact whatever the orchestrator does. Jobs run in the order

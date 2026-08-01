@@ -350,7 +350,9 @@ class TestCapture:
 
     @pytest.mark.asyncio
     async def test_unrecognized_installation_value_is_skipped(self) -> None:
-        """F119 — an installation that is neither `user` nor `system` yields no item at all."""
+        """F119, F121 — an installation that is neither `user` nor `system` yields no item at all,
+        so no third-scope application can keep a remote alive in the listings the run parses.
+        """
         weird = "org.example.Weird\t1.0\tflathub\tcustom-install\torg.example.Weird/x86_64/stable\n"
         context, _source, _target = make_context(source_responses={"flatpak list --app": CommandResult(0, weird, "")})
         job = FlatpakSyncJob(context)
@@ -359,8 +361,9 @@ class TestCapture:
 
     @pytest.mark.asyncio
     async def test_only_the_user_and_system_installations_are_ever_asked(self) -> None:
-        """F120 — a third installation's remotes and masks are never read: every remotes and mask
-        command names one of the two installations this job knows about.
+        """F120, F121 — a third installation's remotes and masks are never read: every remotes and
+        mask command names one of the two installations this job knows about, so a remote that
+        exists only in a third installation reaches no listing the run could delete from.
         """
         context, source, target = make_context(source_responses=SOURCE_RESPONSES, target_responses=TARGET_RESPONSES)
 
@@ -4022,6 +4025,72 @@ class TestExcludePaths:
 
         assert paths == [tmp_path / ".local" / "share" / "flatpak"]
         assert not any(p == tmp_path / ".var" / "app" for p in paths)
+
+
+class TestNoRunReachesSudoValidationDidNotClear:
+    """`PKG-FR-SUDO-PRECONDITION`'s "rather than degrading", for this job.
+
+    Alone among the four, this job's need for sudo is conditional: `_sudo_prefix` escalates
+    for a system-scope operation and for nothing else, and the validation gate fires on the
+    same condition. So the pairing is what has to hold in both directions — a run that
+    escalates only where validation cleared it, and a run that escalates nowhere asking for
+    nothing.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_system_scope_run_sudoes_only_where_validation_cleared_it(self) -> None:
+        """K67 — a system-scope convergence escalates on the target, which is the machine the
+        gate makes validation probe. The source is never asked, at either step.
+        """
+        fake_target = converge_target()
+        fake_target.remotes["system"]["flathub"] = _FLATHUB_URL
+        context, source, _target = make_context(source_responses=SOURCE_RESPONSES, fake_target=fake_target)
+        job = FlatpakSyncJob(context)
+        plan = await job.plan()
+
+        await job.converge(
+            next(d for d in plan.diffs if d.item_id == "flatpak:ref:system:com.slack.Slack/x86_64/stable")
+        )
+
+        sudoed = {
+            name
+            for name, machine in (("source", source), ("target", fake_target))
+            if any("sudo " in cmd for cmd in all_calls(machine))
+        }
+        assert sudoed, "the run escalated nowhere, so the comparison below proves nothing"
+
+        validate_context, validate_source, validate_target = make_context(source_responses=SOURCE_RESPONSES)
+        assert await FlatpakSyncJob(validate_context).validate() == []
+        cleared = {
+            name
+            for name, machine in (("source", validate_source), ("target", validate_target))
+            if "sudo --non-interactive true" in all_calls(machine)
+        }
+
+        assert sudoed <= cleared, (
+            f"the run sudoes on {sorted(sudoed - cleared)}, which validation never probed:"
+            f" a machine refusing the grant there is discovered mid-execute"
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_user_scope_only_run_escalates_nowhere_so_there_is_nothing_to_degrade(self) -> None:
+        """K67 — the other side of the conditional gate: with nothing system-scope in play the
+        run issues no `sudo` on either machine, so a machine without the grant loses nothing.
+        """
+        fake_target = FakeFlatpakTarget(remotes={"user": {"flathub": _FLATHUB_URL}})
+        context, source, _target = make_context(
+            source_responses={
+                "flatpak list --app": CommandResult(0, _ref_line(_FIREFOX_REF, "1.0", "flathub", "user"), ""),
+                "flatpak remotes --user": CommandResult(0, remote_row("flathub", _FLATHUB_URL), ""),
+            },
+            fake_target=fake_target,
+        )
+        job = FlatpakSyncJob(context)
+
+        await run_job(job)
+
+        for name, machine in (("source", source), ("target", fake_target)):
+            assert not any("sudo" in cmd for cmd in all_calls(machine)), f"{name} was asked to escalate"
 
 
 class TestValidate:

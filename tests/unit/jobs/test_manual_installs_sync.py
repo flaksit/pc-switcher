@@ -1862,6 +1862,39 @@ class TestContinueOnFailure:
         assert not any("sudo --non-interactive" in cmd or "sudo -n " in cmd for cmd in all_calls(target))
 
 
+class TestNoRunReachesSudoValidationDidNotClear:
+    """`PKG-FR-SUDO-PRECONDITION`'s "rather than degrading", for this job.
+
+    Its row of the article's table is the only "none" on both machines, and `validate()`
+    accordingly probes for no grant at all. That makes the pairing fragile in the one
+    direction that matters here: a `sudo` added to either scan would be established by
+    nothing, and a machine refusing it would answer with a shorter list of `/opt` and
+    `/usr/local` entries — a reduced capture that reads as "the source has nothing to sync".
+    A snippet's own body may of course escalate; it is the user's opaque blob, run only after
+    they approved it, and not a command this job composes.
+    """
+
+    @pytest.mark.asyncio
+    async def test_neither_the_capture_nor_validation_asks_either_machine_to_escalate(self) -> None:
+        """K67 — no command this job composes runs under sudo, on either machine, at either
+        step. Nothing is established, so nothing may be needed.
+        """
+        context, source, target = make_context(
+            source_responses={
+                _STATUS_QUERY: installed_on("code"),
+                "apt-cache policy": CommandResult(0, _POLICY_HAND_DEB, ""),
+            }
+        )
+        job = ManualInstallsSyncJob(context)
+
+        await job.plan()
+        assert await job.validate() == []
+
+        for name, machine in (("source", source), ("target", target)):
+            escalations = [cmd for cmd in all_calls(machine) if "sudo" in cmd]
+            assert not escalations, f"{name} was asked to escalate: {escalations}"
+
+
 class TestValidate:
     @pytest.mark.asyncio
     async def test_apt_cache_unavailable_on_source_yields_validation_error(self) -> None:

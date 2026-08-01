@@ -693,7 +693,9 @@ class TestDecisionFileExcludeFilters:
             return FolderSyncJob._decision_file_exclude_filters(folder_path)  # pyright: ignore[reportPrivateUsage]
 
     def test_home_under_synced_folder_anchors_the_glob_under_user_subdir(self) -> None:
-        """H130, K73 — a machine's own "always skip" list never reaches the other machine."""
+        """H130, H133, K73 — a machine's own "always skip" list never reaches the other machine, so
+        a machine synced for the first time has none.
+        """
         assert self._filters("/home", "/home/alice") == [
             f"--filter={shlex.quote('- /alice/.config/pc-switcher/*.decisions.yaml')}"
         ]

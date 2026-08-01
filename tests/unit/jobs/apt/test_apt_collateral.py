@@ -565,10 +565,14 @@ class TestCollateralAttribution:
 
     @pytest.mark.asyncio
     async def test_a_collateral_skip_does_not_discard_a_trigger_own_skip_always(self) -> None:
-        """D59 — the permanent decision is the user's, not the collateral question's. Both
+        """D59, D61 — the permanent decision is the user's, not the collateral question's. Both
         candidates really do take `other-manual` with them, so both are cancelled by the
         skip — but `pkg-y`'s "always skip" must survive the
         cancellation and still be recorded (D-08a: a REMOVE is target-held).
+
+        `pkg-y` is a declined trigger of the collateral, so this is also the whole of D61 that
+        can be observed: the only other declined answer, `SKIP_ONCE`, would be overridden to
+        the value it already holds.
         """
         context, _source, target = make_context(
             source_responses={

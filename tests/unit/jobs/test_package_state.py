@@ -182,7 +182,9 @@ class TestFilterInert:
 class TestDecisionFileLoad:
     @pytest.mark.asyncio
     async def test_absent_file_returns_empty_mapping(self) -> None:
-        """H147."""
+        """H147, H133 — an absent file reads as "no permanent decisions", which is what a machine
+        that has never been synced holds.
+        """
         executor = MagicMock()
         executor.run_command = AsyncMock(return_value=CommandResult(1, "", ""))
         store = DecisionFile("apt", executor)
@@ -826,7 +828,7 @@ class TestDecisionScopeReachesCollateral:
 class TestConfigSyncScope:
     @pytest.mark.asyncio
     async def test_copy_config_to_target_sends_only_config_yaml(self, tmp_path: Path) -> None:
-        """H131."""
+        """H131, H133 — the other route between machines carries no decision file either."""
         source_path = tmp_path / "config.yaml"
         source_path.write_text("logging: {}\n")
 

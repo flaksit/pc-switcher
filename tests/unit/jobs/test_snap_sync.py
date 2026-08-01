@@ -1590,6 +1590,61 @@ class TestTargetSnapRevisions:
         assert await target_snap_revisions(target) == {}
 
 
+class TestNoRunReachesSudoValidationDidNotClear:
+    """`PKG-FR-SUDO-PRECONDITION`'s "rather than degrading", for this job.
+
+    Every snap convergence is a `sudo snap` on the target, and the run's own refresh pause is
+    a `sudo snap set system` on both. None of them can fall back to a lesser action, so the
+    only shape a missing grant could take is a machine being asked for one validation never
+    established — which is what this refuses.
+    """
+
+    @pytest.mark.asyncio
+    async def test_every_machine_the_run_sudoes_on_is_one_validation_cleared(self) -> None:
+        """K67 — the machines this job runs `sudo` on are machines its own `validate()`
+        probed for passwordless sudo, so no reduced capture is reachable.
+
+        Both halves are measured on the same job rather than read off the source: a run drives
+        the plan and its convergence and records who was asked to `sudo`, a second drives
+        `validate()` and records who was cleared.
+        """
+        context, source, target = make_context(
+            source_responses={"snap list --all": CommandResult(0, SNAP_LIST_SOURCE, "")},
+            target_responses={"snap list --all": CommandResult(0, SNAP_LIST_TARGET, "")},
+        )
+        job = SnapSyncJob(context)
+        plan = await job.plan()
+        job.accept_review(
+            plan,
+            ReviewOutcome(
+                decisions={diff.item_id: Decision.APPLY for diff in plan.diffs},
+                was_interactive=True,
+            ),
+        )
+
+        await job.apply()
+
+        sudoed = {
+            name
+            for name, machine in (("source", source), ("target", target))
+            if any("sudo " in cmd for cmd in all_calls(machine))
+        }
+        assert sudoed, "the run issued no sudo at all, so the comparison below proves nothing"
+
+        validate_context, validate_source, validate_target = make_context()
+        assert await SnapSyncJob(validate_context).validate() == []
+        cleared = {
+            name
+            for name, machine in (("source", validate_source), ("target", validate_target))
+            if "sudo --non-interactive true" in all_calls(machine)
+        }
+
+        assert sudoed <= cleared, (
+            f"the run sudoes on {sorted(sudoed - cleared)}, which validation never probed:"
+            f" a machine refusing the grant there is discovered mid-execute"
+        )
+
+
 class TestValidate:
     @pytest.mark.asyncio
     async def test_snap_unavailable_on_source_yields_validation_error(self) -> None:

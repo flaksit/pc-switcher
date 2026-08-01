@@ -6,7 +6,9 @@ Split out of the former single `test_apt_sync.py`.
 from __future__ import annotations
 
 import dataclasses
+import subprocess
 from collections.abc import Callable
+from importlib.resources import files
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -14,6 +16,7 @@ import pytest
 
 from pcswitcher.jobs import JobContext
 from pcswitcher.jobs.apt_sync import AptSyncJob
+from pcswitcher.jobs.apt_sync.files import TargetFiles
 from pcswitcher.jobs.apt_sync.items import METADATA_REFRESH_ITEM_ID
 from pcswitcher.jobs.packages.items import DiffAction, DiffClass
 from pcswitcher.jobs.packages.review import (
@@ -433,6 +436,63 @@ class TestRepoGroupOrdering:
         for dest in destinations:
             assert dest.startswith("/home/target-user")
             assert "/etc" not in dest
+
+
+class TestTheStagingCopyIsInsideASyncedFolder:
+    """The one place `apt_sync` writes inside `/home`, and the shipped filter that covers it.
+
+    Every other byte the job puts on the target is `/etc/apt` or the dpkg database, which no
+    `folder_sync` entry reaches. The staging copy is the exception, and it needs no
+    apt-specific exclusion only because the central `home.filter` already drops the whole of
+    `.cache` bar two named package caches.
+    """
+
+    @pytest.mark.asyncio
+    async def test_the_shipped_home_filter_excludes_the_directory_the_staging_copy_lives_in(
+        self, tmp_path: Path
+    ) -> None:
+        """K89 — the staging directory `TargetFiles` builds is inside a synced folder, and
+        `home.filter`'s `- .cache/*` keeps it out of the mirror.
+
+        The verdict comes from real `rsync --dry-run` over the shipped filter rather than from
+        a matcher written here: first-match-wins across `+ .cache/`, the two `+` overrides and
+        the trailing `- .cache/*` is exactly the semantics at issue, so restating it in Python
+        would test the restatement. `.cache/uv` is carried alongside as the control — without
+        it, a filter that excluded everything would pass.
+        """
+        target = MagicMock()
+        target.run_command = AsyncMock(return_value=CommandResult(0, "/home/alice\n", ""))
+        staging_dir = await TargetFiles(target).staging_dir()
+        relative = Path(staging_dir).relative_to("/home/alice")
+        assert relative.parts[0] == ".cache", f"staging no longer lives under .cache: {staging_dir}"
+
+        # The transfer root is `/home` with each user's directory as its immediate content,
+        # which is what makes `home.filter`'s floating patterns match.
+        source_root = tmp_path / "home"
+        staged = source_root / "alice" / relative / "etc_apt_sources.list.d_foo.sources"
+        control = source_root / "alice" / ".cache" / "uv" / "pkg"
+        for path in (staged, control):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.touch()
+
+        shipped_filter = files("pcswitcher").joinpath("home.filter")
+        listing = subprocess.run(
+            [
+                "rsync",
+                "--dry-run",
+                "--recursive",
+                "--itemize-changes",
+                f"--filter=merge {shipped_filter}",
+                f"{source_root}/",
+                f"{tmp_path / 'mirror'}/",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+
+        assert "alice/.cache/uv/pkg" in listing, f"the filter was not read: {listing}"
+        assert str(relative) not in listing, f"the staging directory is mirrored: {listing}"
 
 
 class TestRepoGroupRemovalAndKeyChange:

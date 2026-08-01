@@ -428,6 +428,66 @@ class TestValidate:
         assert all(command in target_sudo_errors[0].message for command in TARGET_SUDO_COMMANDS)
 
 
+class TestNoRunReachesSudoValidationDidNotClear:
+    """`PKG-FR-SUDO-PRECONDITION`'s "rather than degrading", for this job.
+
+    A missing grant does not announce itself here. `capture_dir_digests` wraps its scan in
+    `if sudo test -d …`, so a `sudo` the machine refuses collapses the whole command to exit 0
+    with no output — indistinguishable from `/etc/apt` genuinely holding nothing. The run
+    would then replicate no repository configuration and report success. Nothing downstream
+    can tell the two apart, which is why the only defence is that the run never starts: the
+    grant the capture needs is a grant `validate()` established first, on the same machine.
+    """
+
+    @pytest.mark.asyncio
+    async def test_every_machine_the_run_sudoes_on_is_one_validation_cleared(self) -> None:
+        """K67 — the machines this job runs `sudo` on are machines its own `validate()`
+        probed for passwordless sudo, so no reduced capture is reachable.
+
+        Both halves are measured on the same job rather than read off the source: a run drives
+        `execute()` and records who was asked to `sudo`, a second drives `validate()` and
+        records who was cleared. Moving a `sudo` read onto a machine validation says nothing
+        about fails this, which is the whole failure mode.
+        """
+        run_context, source, target = _repo_context(
+            source_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/apt.conf.d": CommandResult(0, sha256_line("c1", "99conf"), ""),
+            },
+            target_responses={
+                **_NO_PACKAGES,
+                "test -f /etc/apt/apt.conf.d/99conf": CommandResult(1, "", ""),
+                "sudo apt-get update": CommandResult(0, "", ""),
+            },
+        )
+        job = AptSyncJob(run_context)
+        install_reviewer(job, {"apt:config:99conf": Decision.APPLY})
+
+        await job.execute()
+
+        sudoed = {
+            name
+            for name, machine in (("source", source), ("target", target))
+            if any("sudo " in cmd for cmd in all_calls(machine))
+        }
+        assert sudoed, "the run issued no sudo at all, so the comparison below proves nothing"
+
+        validate_context, validate_source, validate_target = make_context(
+            target_responses={"fuser /var/lib/dpkg/lock-frontend": CommandResult(1, "", "")}
+        )
+        assert await AptSyncJob(validate_context).validate() == []
+        cleared = {
+            name
+            for name, machine in (("source", validate_source), ("target", validate_target))
+            if "sudo --non-interactive true" in all_calls(machine)
+        }
+
+        assert sudoed <= cleared, (
+            f"the run sudoes on {sorted(sudoed - cleared)}, which validation never probed:"
+            f" a machine refusing the grant there yields a silently reduced capture"
+        )
+
+
 class TestTheDecisionStoreIsPerManager:
     """`PKG-FR-JOB-INDEPENDENCE`: no package job's behaviour may depend on whether another
     one is enabled — and the decision store is where the two could most easily be wired
