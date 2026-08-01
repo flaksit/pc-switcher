@@ -210,7 +210,9 @@ A machine-specific package never appears in a review again, which is why the run
 
 ## Install snippets
 
-Some installed things no package manager can reproduce — a bare `.deb` downloaded and installed by hand, or software dropped under `/usr/local` or `/opt` by an install script. `manual_installs_sync` detects these and surfaces them in its review as items needing a resolution. Each gets a decision screen of its own — one item per screen, because answering `<y>` opens an editor for that item — with the review's usual three answers in the usual order:
+Some installed things no package manager can reproduce — a bare `.deb` downloaded and installed by hand, or software dropped under `/usr/local` or `/opt` by an install script. `manual_installs_sync` detects these and surfaces them in its review as items needing a resolution.
+
+The filesystem half of that scan is deliberately shallow: it lists `/usr/local` and `/opt` one level deep, plus `/usr/local/bin` and `/usr/local/lib` one level deeper, and reports whatever dpkg does not own. It names what is there so you can decide about it; it never walks a tree. Those four directories are themselves never offered — only what is inside them — so a stock `/usr/local/bin` is not something you are asked to write an install snippet for. Each gets a decision screen of its own — one item per screen, because answering `<y>` opens an editor for that item — with the review's usual three answers in the usual order:
 
 - `<y>` `install` — `write a command snippet that installs it; nomad runs it`, now and on every future sync.
 - `<s>` `skip now` — `do not install on nomad for now; will be asked again next sync`.

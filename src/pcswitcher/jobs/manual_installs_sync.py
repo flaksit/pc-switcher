@@ -10,7 +10,8 @@ Two detectors, both run on the SOURCE:
   repository can supply it.
 - paths directly under `/usr/local` and `/opt` (plus the immediate children of
   `/usr/local/bin` and `/usr/local/lib`) that no dpkg package owns — software an install
-  script dropped there, bypassing apt entirely.
+  script dropped there, bypassing apt entirely. Never one of those four scan roots itself:
+  they are directories the distribution ships, not software under themselves.
 
 D-18 gives them their own job and their own enable flag, because half of what they cover is
 not apt's business at all (unowned files under `/usr/local`/`/opt`), and folding them into
@@ -93,6 +94,10 @@ __all__ = ["ManualInstallsSyncJob"]
 # (`_scan_unowned_installs`). Enough to NAME a finding (D-18), never
 # enough to walk an entire tree — the item is decided on, not replicated (deferred ideas,
 # CONTEXT.md). Owned by this job now, no longer shared with apt_sync (D-18).
+#
+# A root is never a finding of its own scan (`PKG-FR-MANUAL-SCOPE`): two of these four are
+# also ENTRIES of a third (`/usr/local/bin` and `/usr/local/lib` sit under `/usr/local`),
+# so `find` names them like any other candidate — see `_scan_unowned_installs`.
 _UNOWNED_SCAN_ROOTS = ("/usr/local", "/opt", "/usr/local/bin", "/usr/local/lib")
 
 # Matches one `dpkg --search` "owned" line: `<package>[,<package>...]: <path>`. A path dpkg does
@@ -508,6 +513,16 @@ class ManualInstallsSyncJob(PackageSyncJob):
           means dpkg did not answer. Without it a dead `dpkg --search` prints nothing, every
           candidate looks unowned, and the user is asked to write an install snippet for
           every entry under `/opt` and `/usr/local`.
+
+        A scan ROOT is dropped from the candidates before ownership is even asked. The scan
+        covers software UNDER its roots (`PKG-FR-MANUAL-SCOPE`), and `/usr/local/bin` and
+        `/usr/local/lib` are roots that `find` also names as entries of `/usr/local`.
+        Ownership cannot settle it either: dpkg owns no `/usr/local` directory on a stock
+        machine (`base-files` ships none), so both would be reported on every machine, in
+        every run, forever — asking every user for an install snippet for a directory the
+        distribution ships and whose interesting contents are already scanned one level
+        deeper. Exact string equality suffices: `find` echoes the root verbatim as the
+        prefix of each entry it prints, and no root carries a trailing slash.
         """
         quoted_roots = " ".join(shlex.quote(root) for root in _UNOWNED_SCAN_ROOTS)
         # One line, never a multi-line script: the command is echoed verbatim into the debug
@@ -518,7 +533,7 @@ class ManualInstallsSyncJob(PackageSyncJob):
         )
         listing = await self.source.run_command(listing_command)
         require_answer(listing_command, listing, self.machines.source)
-        candidates = _lines(listing.stdout)
+        candidates = [path for path in _lines(listing.stdout) if path not in _UNOWNED_SCAN_ROOTS]
         if not candidates:
             return []
 

@@ -664,6 +664,49 @@ class TestUnownedScan:
 
         assert [item.identifier for item in items] == ["/opt/az"]
 
+    @pytest.mark.asyncio
+    async def test_a_scan_root_is_never_a_finding_while_everything_under_it_still_is(self) -> None:
+        """G96 — `/usr/local/bin` and `/usr/local/lib` are scan roots AND entries of
+        `/usr/local`, so `find` names them like any other candidate; dpkg owns no
+        `/usr/local` directory on a stock machine, so without this they would be presented on
+        every machine, in every run, forever.
+
+        The ownership reply here is the stock machine's: nothing but the witness is owned.
+        The roots are dropped before ownership is asked at all — they are not among the
+        queried paths — while every path genuinely under them stays a finding.
+        """
+        context, source, _target = make_context(
+            source_responses={
+                "for root in": CommandResult(
+                    0,
+                    "/usr/local/bin\n/usr/local/lib\n/usr/local/Brother\n"
+                    "/usr/local/bin/talosctl\n/usr/local/lib/node_modules\n/opt/az\n",
+                    "",
+                ),
+                "dpkg --search": CommandResult(1, DPKG_WITNESS_LINE, "dpkg-query: no path found matching pattern"),
+            }
+        )
+        job = ManualInstallsSyncJob(context)
+
+        items = await job._scan_unowned_installs()  # pyright: ignore[reportPrivateUsage]
+
+        assert {item.identifier for item in items} == {
+            "/usr/local/Brother",
+            "/usr/local/bin/talosctl",
+            "/usr/local/lib/node_modules",
+            "/opt/az",
+        }
+        ownership_call = next(
+            c.args[0] for c in source.run_command.call_args_list if c.args[0].startswith("dpkg --search")
+        )
+        assert shlex.split(ownership_call)[2:] == [
+            "/usr/local/Brother",
+            "/usr/local/bin/talosctl",
+            "/usr/local/lib/node_modules",
+            "/opt/az",
+            "/usr/bin/dpkg",
+        ]
+
 
 class TestSnippetResolution:
     """A registry snippet makes an item reproducible: INSTALL + replay; without one it is

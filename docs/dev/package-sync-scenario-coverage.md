@@ -1093,6 +1093,7 @@ Driven by the orchestrator around the whole job window; listed here because the 
 | G26 | Only this job is enabled — apt sync is not in the configuration at all | The hand-`.deb` finding is still detected and presented; the job asks apt and dpkg its own questions | U V | `test_manual_installs_sync:TestExecuteIndependentOfApt::test_plan_runs_with_apt_absent_from_config_and_manual_enabled`; `test_package_sync:TestManualInstallsSyncEndToEnd::test_manual_installs_sync_pushes_registry_and_replays_snippet` |
 | G27 | A genuine hand-downloaded `.deb` installed on a real machine | Presented as an item needing a snippet | V | `test_package_sync:TestManualInstallsSyncEndToEnd::test_a_real_hand_downloaded_deb_is_presented_as_needing_a_snippet` |
 | G28 | A stock Ubuntu 24.04 machine's own `/usr/local` and `/opt` are scanned | The findings are few enough to review by hand; the scan roots themselves are not reported as findings | V | `test_package_sync:TestManualInstallsSyncEndToEnd::test_the_scan_of_a_real_machine_names_few_findings_and_never_its_own_roots` |
+| G96 | `/usr/local/bin` and `/usr/local/lib` are scanned directories and are themselves entries of `/usr/local`, and no package owns either | Neither is presented as a finding, and neither is even asked about; everything genuinely under them still is | U | `test_manual_installs_sync:TestUnownedScan::test_a_scan_root_is_never_a_finding_while_everything_under_it_still_is` |
 
 ### G.2 The three end states (articles: PKG-FR-MANUAL-RESOLUTION, PKG-FR-MANUAL-SOURCE-DECIDES)
 
