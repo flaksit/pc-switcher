@@ -27,13 +27,15 @@ Package sync is one job per package manager — apt, snap, flatpak — plus a jo
 
 **The holding machine** is the machine that has the item being decided about — the source for something it has and the target lacks, the target for something only the target has.
 
-An **item** is one thing the user can be asked about: a package, a snap, a flatpak application, an apt hold, a flatpak mask, a configuration file. Its identity is stable across runs, so a decision about it can be remembered.
+An **item** is one thing the user can be asked about: a package, a snap, a flatpak application, a configuration file. Its identity is stable across runs, so a decision about it can be remembered.
 
 A **decision** is the user's answer about an item: apply it, skip it this run, or always skip it in future runs.
 
 **Machine-specific** describes an item marked "always skip". The job that marked it never touches that item again on that machine of its own accord, whichever machine the sync runs from — it is neither sent to the other machine nor changed by it. Where an approved change would touch it anyway, the user is asked first.
 
-**Derived** describes plumbing that is synced because approved software needs it — the repository a package comes from, its signing key, a pin, a flatpak remote. It is never a question of its own.
+**Derived** describes plumbing that is synced because approved software needs it — the repository a package comes from, its signing key, a pin, a flatpak remote, a block. It is never a question of its own.
+
+A **block** is a standing refusal to let software move: an apt hold, a snap refresh hold, a flatpak mask.
 
 An **origin** is where software actually comes from — a repository or remote URL. Not its name: two remotes can share a name and serve different builds.
 
@@ -47,7 +49,7 @@ A **snippet** is a shell recipe, written once, for software no package manager c
 
 **Identity includes the origin.** `gh` from GitHub's repository and `gh` from Ubuntu's archive share a name and are different software. A package is installed on the target from the same origin it has on the source.
 
-**The user is asked about software; the plumbing is derived.** Approving a package also approves the repository it comes from — a repository without its package does nothing, and a package without its repository cannot be installed.
+**The user is asked about software; the plumbing is derived.** Approving a package also approves the repository it comes from — a repository without its package does nothing, and a package without its repository cannot be installed. A block is plumbing too: it changes nothing about what software exists, only about what may move, so it follows the software it applies to rather than being asked about.
 
 **Consent precedes every change.** Nothing is written to the target before the user has approved the changes that job proposes.
 
@@ -78,7 +80,7 @@ Snap auto-refresh is paused on both machines for the run and restored afterwards
 
 Each job then plans, reviews, applies and reports.
 
-**Plan** issues read commands only: what each machine has, filtered by the standing machine-specific marks, and the difference between them. A question that cannot be derived is asked here rather than in the review — [apt's Ubuntu Pro question (see below)](#esm-repositories--ubuntu-pro) is one, because one of its answers ends the job before there is anything to review.
+**Plan** issues read commands only: what each machine has, filtered by the standing machine-specific marks, and the difference between them. A question that cannot be derived is asked here rather than in the review — [apt's Ubuntu Pro question (see below)](#esm-repositories--ubuntu-pro) is one, because one of its answers ends the job before there is anything to review, and the [`/opt` shape question](#software-no-manager-can-reproduce) is another, because its answer decides what the review lists.
 
 **Review** presents one group at a time: items of one kind, all doing the same thing, each carrying its own decision and all settled in a single pass. The default choice for each item is the action that does no harm: *apply* for an install, *skip* for anything that removes or overwrites. Three answers are offered, or two where a permanent decision is not meaningful.
 
@@ -107,6 +109,10 @@ A machine-specific item is filtered out before the difference is computed, so it
 Marks never sync between machines. Snippets do, because how to install something is knowledge about the software rather than the machine.
 
 Repositories and pins cannot be marked machine-specific, whether they are being added, changed or deleted; a flatpak remote is never asked about at all, so there is nothing to mark. Where the two machines disagree about where software comes from, that disagreement keeps surfacing every run instead of being silenced once, and the remedy is to align the two machines. apt's own configuration files *can* be marked, because they say how apt behaves rather than where software comes from.
+
+Blocks cannot be marked either. A hold and a mask are never asked about at all, so there is nothing to mark, and a mark on the software they apply to silences them with it.
+
+A snap's revision or channel cannot be marked. Nobody holds a revision as a standing preference about one machine, and a mark would leave the two machines' manifests disagreeing about a snap neither would raise again; skipping it for the run says what the user means, and the difference surfaces again next sync.
 
 Report-only findings cannot be marked either — no machine holds a version difference, and a mark would stop the package syncing rather than stop the report.
 
@@ -154,7 +160,9 @@ Three situations are reported and never acted on:
 
 ### Holds
 
-An apt hold is its own item, decided separately from its package, both when it is added and when it is removed — unless the package is itself something this run is changing. Then the two are one question: the hold is named in the same line as the package it applies to, and the answer given about the package is the answer about the hold. Approving an install holds it afterwards; approving a removal leaves no hold behind, because a hold on a package the machine does not have freezes nothing and blocks every later attempt to install it; declining declines both; and marking the pair machine-specific silences both, so neither comes back on its own next run.
+An apt hold follows the package it applies to. It replicates from the source without review, added and removed alike, exactly as a pin does: a hold changes nothing about what software exists, only about what may move, so replicating it costs nothing and there is nothing per-package to get wrong. Where the package is itself something this run installs, the hold lands after the install; where that install was declined or failed, no hold is registered, since there would be nothing on the target to freeze. A package marked machine-specific takes its hold with it into silence.
+
+A hold naming a package the machine does not have ends the run, on either machine. It names the package and the machine and says the hold must be cleared before the next sync. Such a hold freezes nothing while blocking every later attempt to install that name; it is a bookkeeping failure, it is rare, and it is not worth carrying logic for.
 
 A hold blocks everything: apt will not install, upgrade or remove a held package, not even as an unused dependency. So it serves two intents at once — "never lose this" and "never move this off the version that works" — and apt gives no way to tell them apart.
 
@@ -218,7 +226,7 @@ snap follows the shape every job has: what the source has is offered for install
 
 snap converges the source's **exact revision and channel**, where apt and flatpak let versions float: snap keeps per-user data in `~/snap/<app>/<revision>/`, which folder sync can only mirror correctly when both machines are on the same revision.
 
-So a difference of revision or channel is a change to apply, naming both values, rather than something reported; an install lands the source's revision and channel on the target; and the same revision and channel on both machines produces nothing.
+So a difference of revision or channel is a change to apply rather than something reported. It is worded as the effect it has — what the target's copy is overwritten with — and it takes two answers, apply and skip for this run, because a revision is not a standing preference anyone holds per machine. An install lands the source's revision and channel on the target; the same revision and channel on both machines produces nothing.
 
 ### Removing a snap
 
@@ -226,7 +234,7 @@ Removing a snap leaves snapd's own pre-removal snapshot in place — the only re
 
 ### Refresh holds
 
-Refresh holds replicate as their own items, both when added and when removed — unless the snap is itself something this run installs or moves to another revision or channel, in which case the hold rides that snap's question and its answer. A hold recorded for a snap the source no longer has produces no item.
+A refresh hold follows the snap it applies to, exactly as an apt hold follows its package: replicated from the source without review, added and removed alike, and never a question of its own. A hold recorded for a snap the source no longer has produces nothing.
 
 ### Sideloaded snaps
 
@@ -264,7 +272,7 @@ A remote the source restricts with a filter is replicated **with its filter**. T
 
 Mask patterns replicate per scope, added and removed alike, whether or not anything currently matches them, and land after the applications.
 
-A mask is its own item, like the two holds — unless its pattern covers exactly one application this run is installing or removing in that scope, in which case it rides that application's question and its answer. A pattern covering nothing this run touches, or covering two of its applications, keeps a question of its own: the first because there is nothing to attach it to, the second because two answers can disagree and the mask would have no single one to obey. Unlike a hold, a mask riding a removal still lands — a mask says what may not be installed, so it means something precisely when the application is gone.
+A mask is derived, like the two holds: replicated from the source without review and never a question of its own. Unlike a hold, a mask whose application this run removes still lands — a mask says what may not be installed, so it means something precisely when the application is gone.
 
 A flatpak installation that is neither the user nor the system one is skipped. Remotes belong to an installation, not to the machine, so nothing in such an installation depends on a remote a sync touches — a remote of the same name in the user or system installation is a different remote.
 
@@ -273,10 +281,12 @@ A flatpak installation that is neither the user nor the system one is skipped. R
 Software that arrived on the source by a route nothing can replay automatically. Several kinds, one mechanism: the **install snippet**, a shell recipe written once that is synced with the software.
 
 - **A hand-downloaded `.deb`** — apt knows the name, but no configured repository offers that version.
-- **Unowned software under `/usr/local` or `/opt`** — dropped there by an install script or a tarball. The scan is deliberately shallow: it names a finding so the user can decide, it does not walk a tree.
+- **Unowned software under `/usr/local` or `/opt`** — dropped there by an install script or a tarball. The scan looks in `/opt`, directly under `/usr/local`, and inside `/usr/local`'s `bin`, `sbin`, `lib`, `games` and `src`. It never looks in `etc`, `include`, `man` or `share`: whatever is installed there arrives with an application the scan finds elsewhere. A finding — a file, a directory or a symlink — is named where it is found and never opened, or one application under `/opt` would arrive as thousands of findings. The directories the distribution itself creates under `/usr/local` are not findings, and neither is a directory with no file anywhere beneath it.
 - **A sideloaded snap**, and **a flatpak from a local bundle or a dead remote** — out of scope for now (#221).
 
-Detection runs on the **source** only, so there is no record of what was installed this way on the target and **nothing here is ever removed**.
+Both machines are scanned, and only what the target lacks is presented. That is what stops a second path to one application — the symlink in `bin` that starts what the snippet unpacked under `/opt` — from being asked about again every run after the snippet has already installed it. What only the target has produces nothing: **nothing here is ever removed**, and no record is kept of what a snippet put there.
+
+One shape cannot be judged by looking at it. An unowned `/opt/<name>` holding files of its own is one application. Holding a single directory and no file, it is a publisher's own directory and the application is that directory. Holding several directories and no file, it is either, and the user is asked which — the one question here that shapes the list of items rather than answering about one of them, so it is asked while the run is still planning.
 
 Every detected item ends the run with a snippet, marked machine-specific, or skipped for this run.
 
@@ -298,6 +308,8 @@ A read that does not answer is different. If a package manager cannot be queried
 
 - **The target's apt configuration is not under line-by-line control.** Repositories, keys and pins appear because a package was approved; declining the package is the only way to decline them.
 - **A pin cannot be kept on one machine only.** It is asked about every run until source and target have the same pin.
+- **A hold or a mask cannot be kept on one machine only.** Like a pin, it replicates from the source until the source drops it.
+- **A snap's revision cannot be kept on one machine only.** The difference is offered every run until the two machines agree.
 - **Version drift and origin divergence are reported, never resolved**, for apt and flatpak.
 - **Hand-installed software is never removed from the target.**
 - **A target with no Ubuntu Pro attachment costs the whole apt job for that run.**

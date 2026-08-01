@@ -21,11 +21,12 @@ review-before-any-change ordering checkable and testable per job:
   the run's final item set plus the groups of a second review round. No-op on the base;
   only `apt_sync` has such questions today.
 - `accept_review()` stores this job's plan plus the outcome its own review returned, so
-  `apply()` and the apt guards read a consistent pair. It is also where a block-state item
-  that rode its software's question takes that software's decision
-  (`PKG-FR-BLOCKS-REPLICATE`): the reviewer never saw a row for it, so nothing else would
-  give it one, and every consumer downstream — the log line, the machine-specific mark,
-  the converge loop — reads the answer from the same place.
+  `apply()` and the apt guards read a consistent pair. It is also where every block diff
+  takes `Decision.APPLY` (`PKG-FR-BLOCKS-DERIVED`): a block is derived, so no review row
+  exists for it and the reviewer returns no answer, and every consumer downstream — the
+  converge loop, the dry-run preview — reads the same decision from the same place.
+  Whether the block actually lands is then its own manager's business: a freeze block
+  whose software this run did not put on the target is refused by that manager's converger.
 - `apply()` converges the `APPLY`-decided diffs, one item at a time, catching and
   collecting per-item failures (D-27) so one bad item never stops the rest. It also
   persists a permanent decision (D-08a) for every `SKIP_ALWAYS`-decided item, on
@@ -56,12 +57,25 @@ from pcswitcher.jobs.packages.state import DecisionEntry, DecisionFile
 from pcswitcher.models import CommandResult, Host, JobSkipped, LogLevel, ProgressUpdate
 
 __all__ = [
+    "SNAP_CHANGE_REVIEW_ACTION",
     "ConvergeItemDeclined",
     "ConvergeItemFailed",
     "PackageItemFailures",
     "PackagePlan",
     "PackageSyncJob",
 ]
+
+# The `ReviewGroup.action` a snap's revision/channel convergence carries
+# (`PKG-FR-NO-MARK-ON-SNAP-REVISION`). It is deliberately not `DiffAction.CHANGE.value`:
+# `packages.review` offers the permanent answer only for the actions in its own promotable
+# set, and "change" is in it because an `/etc/apt/apt.conf.d` overwrite genuinely is a
+# standing per-machine preference. A snap's revision is not one — nobody keeps a revision as
+# a preference about one machine, and the mark left the two machines' records disagreeing
+# about a snap neither would raise again — so this group asks with two answers.
+#
+# Not in `review`'s removal set either, so the rows still start applied: converging a
+# revision the user asked for overwrites nothing they authored (`PKG-FR-HARMLESS-DEFAULT`).
+SNAP_CHANGE_REVIEW_ACTION = "snap_change"
 
 
 class ConvergeItemFailed(RuntimeError):
@@ -153,23 +167,11 @@ _ACTION_VOCABULARY: dict[tuple[ItemClass, DiffAction], str] = {
     (ItemClass.APT_CONFIG, DiffAction.CHANGE): "update",
     (ItemClass.APT_CONFIG, DiffAction.REMOVE): "delete",
     (ItemClass.SNAP_CHANNEL, DiffAction.CHANGE): "retrack",
-    # Block-state membership items (#208): the add direction reads "hold"/"mask" and the
-    # remove direction "unhold"/"unmask", never "install"/"remove". `_build_review_groups`
-    # keys the group title AND every entry's action_label off this table by the group's own
-    # item class, so a hold/mask item never displays under an "Install/Remove packages"
-    # group even when it shares a `DiffAction` with a package.
-    (ItemClass.APT_HOLD, DiffAction.INSTALL): "hold",
-    (ItemClass.APT_HOLD, DiffAction.REMOVE): "unhold",
-    (ItemClass.SNAP_HOLD, DiffAction.INSTALL): "hold",
-    (ItemClass.SNAP_HOLD, DiffAction.REMOVE): "unhold",
-    (ItemClass.FLATPAK_MASK, DiffAction.INSTALL): "mask",
-    (ItemClass.FLATPAK_MASK, DiffAction.REMOVE): "unmask",
 }
 
 # What a group's title calls the things it lists, when they are not packages. A verb alone
 # cannot make an apt-config title true: the title reads "<verb> <manager> packages", so
-# every `/etc/apt/apt.conf.d` group would still end in "apt packages". Hold and mask items
-# are absent on purpose — they ARE about the software, so the manager's own noun is right.
+# every `/etc/apt/apt.conf.d` group would still end in "apt packages".
 _ITEM_CLASS_NOUN: dict[ItemClass, str] = {
     ItemClass.APT_CONFIG: "apt configuration files",
 }
@@ -183,6 +185,12 @@ _MANAGER_NOUN: dict[str, str] = {"flatpak": "applications"}
 # What a manager calls the place software comes from, for the `ORIGIN_MISMATCH` title.
 # Never "vendor" (the user's ruling): apt has repositories, flatpak has remotes.
 _MANAGER_ORIGIN_NOUN: dict[str, str] = {"flatpak": "remotes"}
+
+# The `ReviewGroup.action` a given (item_class, action) pair asks under, where the raw
+# `DiffAction` value would offer the wrong set of answers. One entry today.
+_GROUP_ACTION: dict[tuple[ItemClass, DiffAction], str] = {
+    (ItemClass.SNAP, DiffAction.CHANGE): SNAP_CHANGE_REVIEW_ACTION,
+}
 
 # Fixed emission order for review groups: install before change before remove keeps
 # the most common/least-destructive action first; report_only trails since it needs a
@@ -223,37 +231,11 @@ _UPGRADE_COMMANDS: dict[str, str] = {
     "flatpak": "flatpak update",
 }
 
-# The block-state item classes: what the user set to stop software moving — an apt hold, a
-# snap refresh hold, a flatpak mask (`PKG-FR-BLOCKS-REPLICATE`).
+# The block item classes: what stops software moving — an apt hold, a snap refresh hold, a
+# flatpak mask. All three are DERIVED (`PKG-FR-BLOCKS-DERIVED`): they replicate from the
+# source without review, they reach no review group, no decision file may record one, and
+# `accept_review` gives every one of them `Decision.APPLY` because nobody was asked.
 BLOCK_ITEM_CLASSES: frozenset[ItemClass] = frozenset({ItemClass.APT_HOLD, ItemClass.SNAP_HOLD, ItemClass.FLATPAK_MASK})
-
-# The block kinds that freeze an INSTALLED copy of the software, as against a standing rule
-# about what may be installed. One of these is never registered for software the target does
-# not end the run with: apt records a hold for a package that is merely absent, where it
-# blocks every later install of it (`PKG-FR-APT-HELD-TARGET`). A flatpak mask is the other
-# kind — it is a pattern, and masking software the machine does not have is its whole point.
-FREEZE_BLOCK_CLASSES: frozenset[ItemClass] = frozenset({ItemClass.APT_HOLD, ItemClass.SNAP_HOLD})
-
-# The actions that carry a converge verb, and so make an item something the user decides.
-_DECIDED_ACTIONS: tuple[DiffAction, ...] = (DiffAction.INSTALL, DiffAction.CHANGE, DiffAction.REMOVE)
-
-# What the merged question says about the block riding it (`PKG-FR-BLOCKS-REPLICATE`): the
-# software's own row carries a clause naming the block's effect on the target, because the
-# block has no row of its own to say it. `{name}` is the block's own name where the block
-# does not name its software (a mask names a pattern); the hold clauses need none, since the
-# row they join already names the package or snap.
-_BLOCK_RIDER_CLAUSE: dict[tuple[ItemClass, DiffAction], str] = {
-    (ItemClass.APT_HOLD, DiffAction.INSTALL): "{target} ends up holding it, as {source} does",
-    (ItemClass.APT_HOLD, DiffAction.REMOVE): "{target}'s hold on it comes off with it",
-    (ItemClass.SNAP_HOLD, DiffAction.INSTALL): "{target} ends up holding its refreshes, as {source} does",
-    (ItemClass.SNAP_HOLD, DiffAction.REMOVE): "{target}'s refresh hold on it comes off with it",
-    (ItemClass.FLATPAK_MASK, DiffAction.INSTALL): "{target} ends up masking {name}, as {source} does",
-    (ItemClass.FLATPAK_MASK, DiffAction.REMOVE): "{target}'s mask on {name} comes off with it",
-}
-
-# The clause for a freeze block whose software is leaving the target: nothing is registered,
-# because there would be nothing on that machine to freeze.
-_FREEZE_BLOCK_DROPPED_CLAUSE = "{target} is left holding nothing for it"
 
 
 def _merge_rounds(first: ReviewOutcome, second: ReviewOutcome) -> ReviewOutcome:
@@ -270,17 +252,6 @@ def _merge_rounds(first: ReviewOutcome, second: ReviewOutcome) -> ReviewOutcome:
         snippets={**first.snippets, **second.snippets},
         unresolved=(*first.unresolved, *second.unresolved),
     )
-
-
-def _with_rider_clauses(detail: str | None, clauses: Sequence[str]) -> str | None:
-    """`detail` with each riding block's clause appended, or `detail` unchanged.
-
-    Appended rather than prefixed: the detail says what the change itself does, and the
-    block is a consequence of it.
-    """
-    if not clauses:
-        return detail
-    return "; ".join([*([detail] if detail else []), *clauses])
 
 
 class PackageSyncJob(SyncJob):
@@ -400,10 +371,18 @@ class PackageSyncJob(SyncJob):
         the wrong way, and this pass would then look the mark up in the wrong file.
 
         `REPORT_ONLY` diffs pass through untouched: they carry no converge verb, so
-        `_record_permanent_skips` never records one and there is no holder to match.
+        `_record_permanent_skips` never records one and there is no holder to match. So do
+        block diffs, in every direction: a block is derived and no answer about one can be
+        recorded (`PKG-FR-BLOCKS-DERIVED`), so an entry naming one — left by an older
+        version of the tool, or written by hand — must not silence a replication the user
+        never declined. A mark on the SOFTWARE still reaches its blocks, in each manager's
+        own diff, because that is a mark the user did give.
         """
         kept: list[ItemDiff] = []
         for diff in diffs:
+            if diff.item_class in BLOCK_ITEM_CLASSES:
+                kept.append(diff)
+                continue
             if diff.action not in (DiffAction.INSTALL, DiffAction.CHANGE, DiffAction.REMOVE):
                 kept.append(diff)
                 continue
@@ -414,90 +393,30 @@ class PackageSyncJob(SyncJob):
                 kept.append(diff)
         return tuple(kept)
 
-    def _software_for_block(self, block: ItemDiff, software: Mapping[str, ItemDiff]) -> ItemDiff | None:
-        """The item in `software` that `block` applies to, or `None` where it has none here.
-
-        `PKG-FR-BLOCKS-REPLICATE`: a block is its own item EXCEPT where the software it
-        applies to is itself an item this run, and this is the hook that decides which case
-        a given block is in. `software` holds only the items the user actually decides —
-        installs, removals and changes, never a report-only finding — keyed by item id.
-
-        No-op on the base and overridden by each manager, because the pairing is written in
-        the manager's own identity strings: `apt:hold:<name>` names one package, a snap hold
-        names one snap, and a flatpak mask names software by PATTERN and so has to be matched
-        rather than looked up. A manager that does not override this keeps every block a
-        separate item, which is the rule the exception is carved out of.
-        """
-        return None
-
-    def _block_name(self, block: ItemDiff) -> str:
-        """What the merged question calls this block, where the clause needs to name it.
-
-        The block's label by default (`pkg-a (hold)`); a manager whose label carries more
-        than the name — flatpak's `<pattern> (mask, <scope>)` — overrides it, because the
-        clause already says which machine masks it and in what.
-        """
-        return block.label
-
-    def _blocks_riding_software(self, diffs: Sequence[ItemDiff]) -> dict[str, ItemDiff]:
-        """`{block item id: the software item it rides}` for this run's merged questions.
-
-        Recomputed from the diffs wherever it is needed rather than carried on the plan:
-        it is a pure function of them, and `apt_sync` rebuilds its `PackagePlan` twice
-        between the review and the converge loop.
-        """
-        software = {
-            diff.item_id: diff
-            for diff in diffs
-            if diff.item_class not in BLOCK_ITEM_CLASSES and diff.action in _DECIDED_ACTIONS
-        }
-        riders: dict[str, ItemDiff] = {}
-        for diff in diffs:
-            if diff.item_class not in BLOCK_ITEM_CLASSES or diff.action not in _DECIDED_ACTIONS:
-                continue
-            owner = self._software_for_block(diff, software)
-            if owner is not None:
-                riders[diff.item_id] = owner
-        return riders
-
-    def _rider_clause(self, block: ItemDiff, owner: ItemDiff) -> str:
-        """The sentence the merged question adds to the software's row for `block`."""
-        if block.item_class in FREEZE_BLOCK_CLASSES and owner.action is DiffAction.REMOVE:
-            template = _FREEZE_BLOCK_DROPPED_CLAUSE
-        else:
-            template = _BLOCK_RIDER_CLAUSE.get((block.item_class, block.action), "{name} travels with it")
-        return template.format(source=self.machines.source, target=self.machines.target, name=self._block_name(block))
-
     def _build_review_groups(self, diffs: Sequence[ItemDiff]) -> tuple[ReviewGroup, ...]:
         """One `ReviewGroup` per `(action, item_class)` present in `diffs`, keyed on
         `(manager, action)` for the reviewer's removal-direction test (D-24) so removals
         never share a group with installs. The title's verb and every entry's
-        `action_label` come from `_ACTION_VOCABULARY`, keyed by the group's own item
-        class — so a block-state membership item (`apt:hold:`, `snap:hold:`,
-        `flatpak:mask:`) whose add direction shares the `INSTALL` action with a package
-        still reads "Hold/Mask ..." rather than displaying under "Install packages"
-        (#208). `_ITEM_CLASS_NOUN` does the same for the title's OBJECT, so the one
-        reviewed class that is not a package — `/etc/apt/apt.conf.d` — is not announced as
-        one. Grouping by item class as well as action is what keeps that verb correct
-        when one action mixes item classes (e.g. apt package INSTALL alongside apt hold
-        INSTALL); the group's `action` value stays the raw `DiffAction` so add-direction
-        stays default-checked and remove-direction lands in its own unticked group.
+        `action_label` come from `_ACTION_VOCABULARY`, keyed by the group's own item class.
+        `_ITEM_CLASS_NOUN` does the same for the title's OBJECT, so the one reviewed class
+        that is not a package — `/etc/apt/apt.conf.d` — is not announced as one. Grouping by
+        item class as well as action is what keeps that verb correct when one action mixes
+        item classes; the group's `action` value is normally the raw `DiffAction`, so
+        add-direction stays default-checked and remove-direction lands in its own unticked
+        group. `_GROUP_ACTION` overrides it where a class must not be offered the permanent
+        answer — a snap's revision or channel (`PKG-FR-NO-MARK-ON-SNAP-REVISION`), whose
+        group action is a sentinel the reviewer's promotable set does not contain.
 
         Emission order: `_ACTION_ORDER` (install, change, remove, report) outer, and
-        within one action the item classes in first-seen order — which, because
-        `diff_apt_packages` emits package diffs before hold diffs, keeps a package group
-        ahead of its hold group.
+        within one action the item classes in first-seen order.
 
-        A block whose software is itself an item this run gets no row of its own
-        (`PKG-FR-BLOCKS-REPLICATE`): it is dropped here and its effect is stated as a clause
-        on the software's own row, so the two are one question and one answer.
+        Blocks are absent from every group, whichever direction they are in
+        (`PKG-FR-BLOCKS-DERIVED`): a hold and a mask replicate because the software they
+        apply to does, exactly as a pin does, so there is nothing here for the user to
+        answer. They stay in `PackagePlan.diffs`, where `accept_review` gives them
+        `Decision.APPLY` and `apply()` converges and reports them by name.
         """
-        riders = self._blocks_riding_software(diffs)
-        clauses: dict[str, list[str]] = {}
-        for block_id, owner in riders.items():
-            block = next(diff for diff in diffs if diff.item_id == block_id)
-            clauses.setdefault(owner.item_id, []).append(self._rider_clause(block, owner))
-        diffs = [diff for diff in diffs if diff.item_id not in riders]
+        diffs = [diff for diff in diffs if diff.item_class not in BLOCK_ITEM_CLASSES]
 
         # A reported condition is keyed by its CAUSE as well (ruled by the user): version
         # drift, an origin the target cannot reproduce and a package installed from two
@@ -544,7 +463,7 @@ class PackageSyncJob(SyncJob):
                 groups.append(
                     ReviewGroup(
                         manager=self.manager_id,
-                        action=action.value,
+                        action=_GROUP_ACTION.get((item_class, action), action.value),
                         title=title,
                         note=note or None,
                         # `PKG-FR-HARMLESS-DEFAULT`: an `/etc/apt/apt.conf.d` file the target
@@ -558,7 +477,7 @@ class PackageSyncJob(SyncJob):
                                 item_id=diff.item_id,
                                 label=diff.label,
                                 action_label=verb,
-                                detail=_with_rider_clauses(diff.detail, clauses.get(diff.item_id, [])),
+                                detail=diff.detail,
                             )
                             for diff in entries
                         ),
@@ -596,26 +515,27 @@ class PackageSyncJob(SyncJob):
         return PackagePlan(manager=plan.manager, diffs=plan.diffs, groups=())
 
     def accept_review(self, plan: PackagePlan, outcome: ReviewOutcome) -> None:
-        """Store this job's plan plus the outcome its own review returned, with each riding
-        block carrying the answer its software got (`PKG-FR-BLOCKS-REPLICATE`).
+        """Store this job's plan plus the outcome its own review returned, with every block
+        decided `APPLY` (`PKG-FR-BLOCKS-DERIVED`).
 
-        The block had no row of its own, so the reviewer returned no decision for it; the
-        answer to the one question they were asked together is what governs both. Done here
-        rather than in `apply()` so every consumer of the accepted outcome sees the same
-        decision — the log line the block gets, and the machine-specific mark
-        `_record_permanent_skips` writes for it on its own holding machine.
+        A block reached no review group, so the reviewer returned no answer for it, and the
+        default for a missing answer is skip-once — which would silently drop the very
+        replication the article requires without review. It is decided here rather than in
+        `apply()` so every consumer of the accepted outcome sees the same thing: the converge
+        loop and the dry-run preview alike.
+
+        This is not a decision about whether the block LANDS. A freeze block whose software
+        this run did not put on the target is refused by its own manager's converger, which
+        is the only place that knows whether the install ran (`PKG-FR-APT-HOLD-INERT`).
 
         Deliberately after any subclass has finished rewriting the outcome (`apt_sync`'s
-        collateral resolution downgrades an approved install to skip-once), so the block
-        follows the decision that actually stands.
+        collateral resolution downgrades an approved install to skip-once), so nothing here
+        overwrites an answer the user gave about software.
         """
-        riders = self._blocks_riding_software(plan.diffs)
-        if riders:
-            decisions = dict(outcome.decisions)
-            for block_id, owner in riders.items():
-                decisions[block_id] = decisions.get(owner.item_id, Decision.SKIP_ONCE)
+        blocks = [diff.item_id for diff in plan.diffs if diff.item_class in BLOCK_ITEM_CLASSES]
+        if blocks:
             outcome = ReviewOutcome(
-                decisions=decisions,
+                decisions={**outcome.decisions, **dict.fromkeys(blocks, Decision.APPLY)},
                 was_interactive=outcome.was_interactive,
                 snippets=outcome.snippets,
                 unresolved=outcome.unresolved,
@@ -684,35 +604,14 @@ class PackageSyncJob(SyncJob):
         await self._record_permanent_skips(plan, decisions)
         await self._finalize_unreproducible(plan, outcome)
 
-        approved = [
+        prefix = "[dry-run] " if self.context.dry_run else ""
+        failures: list[tuple[ItemDiff, str]] = []
+        declined: list[tuple[ItemDiff, str]] = []
+        apply_diffs = [
             diff
             for diff in plan.diffs
             if decisions.get(diff.item_id) == Decision.APPLY and diff.action != DiffAction.REPORT_ONLY
         ]
-        # A freeze block riding software that LEAVES the target is approved and still not
-        # applied (`PKG-FR-BLOCKS-REPLICATE`): the answer approved the removal, and a hold
-        # registered for a package the machine no longer has freezes nothing while blocking
-        # every later install of it. Not a failure — the user's own answer is what withdrew
-        # it — so it lands with the declined items rather than the failed ones.
-        prefix = "[dry-run] " if self.context.dry_run else ""
-        riders = self._blocks_riding_software(plan.diffs)
-        failures: list[tuple[ItemDiff, str]] = []
-        declined: list[tuple[ItemDiff, str]] = []
-        withdrawn: list[tuple[ItemDiff, str]] = []
-        apply_diffs: list[ItemDiff] = []
-        for diff in approved:
-            owner = riders.get(diff.item_id)
-            if (
-                owner is not None
-                and diff.item_class in FREEZE_BLOCK_CLASSES
-                and diff.action is DiffAction.INSTALL
-                and owner.action is DiffAction.REMOVE
-            ):
-                reason = f"{owner.label} is being removed from {self.machines.target}, so there is nothing to hold"
-                withdrawn.append((diff, reason))
-                self._log(Host.TARGET, LogLevel.FULL, f"{prefix}{diff.label} not applied: {reason}")
-                continue
-            apply_diffs.append(diff)
 
         total = len(apply_diffs)
 
@@ -741,16 +640,13 @@ class PackageSyncJob(SyncJob):
                 f"{prefix}{succeeded}/{total} {self.manager_id} change(s) applied",
             )
 
-        # Outside the branch above: a run whose only approved change was a block its
-        # software's removal withdrew has nothing left to converge, and must still say what
-        # became of it.
-        not_applied = [*withdrawn, *declined]
-        if not_applied:
-            summary = "; ".join(f"{diff.label}: {reason}" for diff, reason in not_applied)
+        # Outside the branch above: a run whose every converge declined still has to say so.
+        if declined:
+            summary = "; ".join(f"{diff.label}: {reason}" for diff, reason in declined)
             self._log(
                 Host.TARGET,
                 LogLevel.INFO,
-                f"{len(not_applied)} {self.manager_id} change(s) not applied, by the user's answer: {summary}",
+                f"{len(declined)} {self.manager_id} change(s) not applied, by the user's answer: {summary}",
             )
 
         all_failures = [*failures, *self._unresolved_as_failures(plan, outcome)]
@@ -776,8 +672,15 @@ class PackageSyncJob(SyncJob):
         Recorded on the machine the answer acts on, which for a removal is the target and
         for an install the source's intent landing on the target; both are the target, so
         one host label is correct for all of them.
+
+        Blocks are excluded: nobody was asked about one (`PKG-FR-BLOCKS-DERIVED`), so a line
+        saying it was "reviewed" would name a question the run never put. What a block gets
+        instead is `apply()`'s own converge line, which is what every other derived write
+        gets (`PKG-FR-DERIVED-VISIBLE`).
         """
         for diff in plan.diffs:
+            if diff.item_class in BLOCK_ITEM_CLASSES:
+                continue
             decision = decisions.get(diff.item_id, Decision.SKIP_ONCE)
             self._log(
                 Host.TARGET,
@@ -822,6 +725,12 @@ class PackageSyncJob(SyncJob):
         repo-unavailable, origin-mismatch and unreproducible are informational only), so
         there is no "holder" for D-08a to record against.
 
+        Blocks and a snap's revision change are excluded whatever the decisions say
+        (`PKG-FR-BLOCKS-DERIVED`, `PKG-FR-NO-MARK-ON-SNAP-REVISION`): neither is offered the
+        permanent answer by any screen, but "no entry can exist for it" is a property of the
+        model rather than of one prompt's wiring, and a decision can also arrive from the
+        review's automation hook or from a caller assembling a `ReviewOutcome` by hand.
+
         Two guards, both required before anything is ever written: never for a
         non-interactive outcome (D-26 — nothing is recorded permanently when nothing
         was actually decided by a human), and never during a dry run (ADR-014 — a
@@ -833,6 +742,10 @@ class PackageSyncJob(SyncJob):
         recorded_at = datetime.now(UTC).isoformat()
         for diff in plan.diffs:
             if decisions.get(diff.item_id) != Decision.SKIP_ALWAYS:
+                continue
+            if diff.item_class in BLOCK_ITEM_CLASSES:
+                continue
+            if diff.item_class is ItemClass.SNAP and diff.action is DiffAction.CHANGE:
                 continue
             if diff.action not in (DiffAction.INSTALL, DiffAction.CHANGE, DiffAction.REMOVE):
                 continue

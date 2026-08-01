@@ -2505,7 +2505,7 @@ class TestMaskDiff:
 
     @pytest.mark.asyncio
     async def test_source_user_mask_absent_on_target_yields_install(self) -> None:
-        """F3, F122 — a source-only mask is its own item in the install direction."""
+        """F3, F122 — a source-only mask replicates in the install direction."""
         context, _source, _target = make_context(
             source_responses={"flatpak --user mask": CommandResult(0, "  org.freedesktop.Platform.ffmpeg-full\n", "")},
         )
@@ -2522,7 +2522,7 @@ class TestMaskDiff:
 
     @pytest.mark.asyncio
     async def test_target_only_system_mask_yields_removal(self) -> None:
-        """F3, F123 — a target-only mask is offered for unmasking, in the removal direction."""
+        """F3, F123 — a target-only mask is unmasked because the source does not have it."""
         context, _source, _target = make_context(
             target_responses={"flatpak --system mask": CommandResult(0, "  org.example.Blocked\n", "")},
         )
@@ -2536,9 +2536,7 @@ class TestMaskDiff:
         assert diff.item_id == "flatpak:mask:system:org.example.Blocked"
         assert diff.action == DiffAction.REMOVE
         assert diff.diff_class == DiffClass.EXTRA_ON_TARGET
-        # A removal lands in its own unticked removal group, never the install group.
-        remove_group = next(g for g in plan.groups if g.action == "remove")
-        assert "flatpak:mask:system:org.example.Blocked" in {e.item_id for e in remove_group.entries}
+        assert plan.groups == ()
 
     @pytest.mark.asyncio
     async def test_mask_present_on_both_yields_no_diff(self) -> None:
@@ -2658,12 +2656,12 @@ class TestMaskEditsAndScopeMoves:
         assert mask_diffs[0].action == DiffAction.INSTALL
 
 
-class TestMaskSkipAlways:
+class TestAMarkOnAMaskCannotSilenceIt:
     @pytest.mark.asyncio
-    async def test_recorded_mask_produces_no_diff_on_the_next_run(self) -> None:
-        """F130, N6 — A `skip always` recorded for a mask in the machine-local decision file makes it
-        inert on the next run: masks reach `filter_inert` under the SAME item_id the
-        decision was written against, so `plan()` never re-emits the diff.
+    async def test_a_recorded_mask_decision_does_not_silence_the_replication(self) -> None:
+        """F131, N6 — `PKG-FR-BLOCKS-DERIVED`: no answer about a mask can be recorded, so an
+        entry naming one — left by an older version of the tool, or written by hand — must not
+        stop the mask replicating. Nobody declined it.
         """
         pattern = "org.example.Blocked"
         item_id = f"flatpak:mask:user:{pattern}"
@@ -2685,16 +2683,12 @@ class TestMaskSkipAlways:
 
         plan = await job.plan()
 
-        assert not any(d.item_class == ItemClass.FLATPAK_MASK for d in plan.diffs)
+        assert [d.item_id for d in plan.diffs if d.item_class == ItemClass.FLATPAK_MASK] == [item_id]
 
 
-class TestMaskReviewVerbs:
-    """#208 D3 — a mask item NEVER displays under an install/remove flatpak group.
-
-    `_build_review_groups` keys the group title AND every entry's `action_label` off
-    `_ACTION_VOCABULARY` by the group's own item class, so a `FLATPAK_MASK` INSTALL reads
-    "mask" and a REMOVE reads "unmask" even when ref and remote diffs share those very
-    actions in the same plan.
+class TestMasksReachNoReviewGroup:
+    """`PKG-FR-BLOCKS-DERIVED` — a mask replicates because the applications it covers do, so
+    it reaches no review group in either direction and no application group absorbs one.
     """
 
     @staticmethod
@@ -2726,26 +2720,16 @@ class TestMaskReviewVerbs:
         return next(g for g in plan.groups if any(e.item_id == item_id for e in g.entries))
 
     @pytest.mark.asyncio
-    async def test_mask_install_group_reads_mask_never_install(self) -> None:
-        """F122 — the group reads mask, never install."""
+    async def test_no_mask_in_either_direction_reaches_any_group(self) -> None:
+        """F122, F123 — the plan carries a mask add and a mask removal, and neither is
+        anywhere the user is asked anything.
+        """
         plan = await self._mixed_plan()
 
-        group = self._group_holding(plan, "flatpak:mask:user:org.example.MaskNew")
-
-        assert group.title == "Mask flatpak applications"
-        assert [e.action_label for e in group.entries] == ["mask"]
-        assert {e.item_id for e in group.entries} == {"flatpak:mask:user:org.example.MaskNew"}
-
-    @pytest.mark.asyncio
-    async def test_mask_remove_group_reads_unmask_and_is_removal_direction(self) -> None:
-        """F123 — the group reads unmask and arrives in the removal direction."""
-        plan = await self._mixed_plan()
-
-        group = self._group_holding(plan, "flatpak:mask:user:org.example.MaskOld")
-
-        assert group.title == "Unmask flatpak applications"
-        assert [e.action_label for e in group.entries] == ["unmask"]
-        assert _is_removal_direction(group.action)
+        assert {"flatpak:mask:user:org.example.MaskNew", "flatpak:mask:user:org.example.MaskOld"} <= {
+            d.item_id for d in plan.diffs
+        }
+        assert not any(e.item_id.startswith("flatpak:mask:") for g in plan.groups for e in g.entries)
 
     @pytest.mark.asyncio
     async def test_ref_groups_keep_their_own_verbs_and_exclude_masks(self) -> None:
@@ -2768,15 +2752,11 @@ class TestMaskReviewVerbs:
             assert not any(e.item_id.startswith("flatpak:mask:") for e in group.entries)
 
 
-class TestAMaskRidesTheApplicationItCovers:
-    """`PKG-FR-BLOCKS-REPLICATE`, `PKG-FR-FLATPAK-MASK`: a mask is its own item except where
-    the application it covers is itself an item this run, and then the two are one question.
-
-    A mask names software by PATTERN rather than by name, so the pairing has to be exact
-    about how many items a pattern catches: one, and it rides that item's question; none or
-    several, and it keeps a row of its own. Unlike a hold, a mask riding a removal still
-    lands — a mask is a rule about what may be installed, and masking software the machine no
-    longer has is the point of it.
+class TestAMaskFollowsTheApplicationsItCovers:
+    """`PKG-FR-BLOCKS-DERIVED`, `PKG-FR-FLATPAK-MASK`: a mask replicates without review, and
+    unlike a hold it lands whether or not the application it covers is still there — a mask
+    is a rule about what may be installed, and masking software the machine no longer has is
+    the point of it.
     """
 
     _APP = "org.example.App/x86_64/stable"
@@ -2787,10 +2767,8 @@ class TestAMaskRidesTheApplicationItCovers:
         return {entry.item_id: entry for group in plan.groups for entry in group.entries}
 
     @pytest.mark.asyncio
-    async def test_a_mask_covering_an_installed_application_is_one_question_with_it(self) -> None:
-        """F148 — the mask has no row of its own; the install's row says the target ends up
-        masking the pattern.
-        """
+    async def test_a_mask_covering_an_installed_application_asks_nothing_of_its_own(self) -> None:
+        """F148 — the application is the one question; the mask covering it has no row."""
         context, _source, _target = make_context(
             source_responses={
                 "flatpak list --app": CommandResult(0, _ref_line(self._APP, "1.0", "flathub", "user"), ""),
@@ -2801,13 +2779,13 @@ class TestAMaskRidesTheApplicationItCovers:
         plan = await FlatpakSyncJob(context).plan()
 
         entries = self._entries(plan)
-        assert "flatpak:mask:user:org.example.App" not in entries
-        assert "target-host ends up masking org.example.App" in (entries[self._APP_ID].detail or "")
+        assert set(entries) == {self._APP_ID}
+        assert "flatpak:mask:user:org.example.App" in {d.item_id for d in plan.diffs}
 
     @pytest.mark.asyncio
-    async def test_a_pattern_covering_two_of_this_runs_items_keeps_its_own_question(self) -> None:
-        """F149 — two applications, two answers that can disagree, so there is no single
-        decision for the mask to obey and it stays an item of its own.
+    async def test_a_pattern_covering_two_of_this_runs_items_still_asks_nothing(self) -> None:
+        """F149 — a pattern covering two of the run's applications is no different: it is
+        derived either way, so how many items it catches decides nothing.
         """
         refs = _ref_line("org.example.One/x86_64/stable", "1.0", "flathub", "user") + _ref_line(
             "org.example.Two/x86_64/stable", "1.0", "flathub", "user"
@@ -2822,12 +2800,14 @@ class TestAMaskRidesTheApplicationItCovers:
         plan = await FlatpakSyncJob(context).plan()
 
         entries = self._entries(plan)
-        assert "flatpak:mask:user:org.example.*" in entries
-        for ref in ("org.example.One", "org.example.Two"):
-            assert "masking" not in (entries[f"flatpak:ref:user:{ref}/x86_64/stable"].detail or "")
+        assert set(entries) == {
+            "flatpak:ref:user:org.example.One/x86_64/stable",
+            "flatpak:ref:user:org.example.Two/x86_64/stable",
+        }
+        assert "flatpak:mask:user:org.example.*" in {d.item_id for d in plan.diffs}
 
     @pytest.mark.asyncio
-    async def test_a_mask_riding_a_removal_still_lands(self) -> None:
+    async def test_a_mask_whose_application_is_removed_still_lands(self) -> None:
         """F150 — the application leaves the target and the source's mask goes on, in that
         order: a mask is not a hold, and it does not need its software to be there.
         """
@@ -2841,9 +2821,7 @@ class TestAMaskRidesTheApplicationItCovers:
         job = FlatpakSyncJob(context)
         plan = await job.plan()
 
-        entries = self._entries(plan)
-        assert "flatpak:mask:user:org.example.App" not in entries
-        assert "target-host ends up masking org.example.App" in (entries[self._APP_ID].detail or "")
+        assert set(self._entries(plan)) == {self._APP_ID}
 
         job.accept_review(plan, ReviewOutcome(decisions={self._APP_ID: Decision.APPLY}, was_interactive=True))
         await job.apply()

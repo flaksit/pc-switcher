@@ -185,37 +185,6 @@ class TestDiffEngine:
 
         assert [(diff.item_id, diff.action) for diff in diffs] == [("apt:hold:pkg-a", DiffAction.REMOVE)]
 
-    def test_a_hold_for_a_package_the_target_lacks_still_proposes_the_install(self) -> None:
-        """B16 — `PKG-FR-APT-HOLD-VERSION`: `apt-mark hold` records a hold for a package the
-        machine merely does not have (measured on `ubuntu:24.04`, exit 0), and suppressing
-        on it left the target without the package for good — no install item, and no hold
-        item either when both machines hold the name. The hold lands after the install.
-        """
-        source_items = [AptPackageItem(name="pkg-a", version="1.0")]
-
-        diffs = diff_apt_packages(
-            source_items, [], {}, MACHINES, frozenset({"pkg-a"}), frozenset({"pkg-a"}), frozenset({"pkg-a"})
-        )
-
-        assert [(diff.item_id, diff.action) for diff in diffs] == [
-            ("apt:package:pkg-a", DiffAction.INSTALL),
-            ("apt:hold:pkg-a", DiffAction.INSTALL),
-        ]
-
-    def test_a_stale_hold_the_source_does_not_share_proposes_install_and_unhold(self) -> None:
-        """B17 — only the target carries the stale hold: the install is proposed as well as
-        the unhold, rather than the unhold alone leaving the package a run behind."""
-        source_items = [AptPackageItem(name="pkg-a", version="1.0")]
-
-        diffs = diff_apt_packages(
-            source_items, [], {}, MACHINES, frozenset(), frozenset({"pkg-a"}), frozenset({"pkg-a"})
-        )
-
-        assert [(diff.item_id, diff.action) for diff in diffs] == [
-            ("apt:package:pkg-a", DiffAction.INSTALL),
-            ("apt:hold:pkg-a", DiffAction.REMOVE),
-        ]
-
     def test_held_on_both_yields_no_diff(self) -> None:
         """B3 — both machines hold the package and both have it: nothing to replicate."""
         source_items = [AptPackageItem(name="pkg-a", version="1.0")]
@@ -227,21 +196,13 @@ class TestDiffEngine:
 
     def test_a_package_only_the_target_has_and_holds_yields_the_unhold_alone(self) -> None:
         """B14 — the target has `pkg-a`, holds it, and the source does not have it at all.
-        The hold suppresses the package action in BOTH directions, so no removal is offered;
-        the unhold is still the target's own selection state to give up.
+        `PKG-FR-APT-HELD-TARGET` suppresses every package-level item for a held package, so
+        no removal is offered; the unhold replicates because the source does not hold it, and
+        is nobody's question (`PKG-FR-BLOCKS-DERIVED`).
         """
         target_items = [AptPackageItem(name="pkg-a", version="1.0")]
 
         diffs = diff_apt_packages([], target_items, {}, MACHINES, frozenset(), frozenset({"pkg-a"}))
-
-        assert [(diff.item_id, diff.action) for diff in diffs] == [("apt:hold:pkg-a", DiffAction.REMOVE)]
-
-    def test_a_hold_for_a_package_neither_machine_has_yields_the_unhold_alone(self) -> None:
-        """B18 — pure bookkeeping: the target records a hold for a name nobody has installed.
-        There is no package to diff in either direction, and the selection state the source
-        does not share is still offered for removal.
-        """
-        diffs = diff_apt_packages([], [], {}, MACHINES, frozenset(), frozenset({"pkg-a"}), frozenset({"pkg-a"}))
 
         assert [(diff.item_id, diff.action) for diff in diffs] == [("apt:hold:pkg-a", DiffAction.REMOVE)]
 

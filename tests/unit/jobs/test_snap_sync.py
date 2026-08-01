@@ -20,7 +20,9 @@ from pcswitcher.jobs.packages.review import (
     Decision,
     ReviewGroup,
     ReviewOutcome,
+    _is_promotable_group,  # pyright: ignore[reportPrivateUsage]
     _is_removal_direction,  # pyright: ignore[reportPrivateUsage]
+    _options_for,  # pyright: ignore[reportPrivateUsage]
 )
 from pcswitcher.jobs.packages.sync_core import PackageItemFailures, PackagePlan
 from pcswitcher.jobs.snap_sync import SnapItem, SnapSyncJob, snap_sync_exclude_paths, target_snap_revisions
@@ -262,8 +264,8 @@ class TestDiff:
 
         beta = next(d for d in plan.diffs if d.item_id == "snap:beta")
         assert beta.detail == (
-            "revision: source-host has 20, target-host has 15; "
-            "channel: source-host has latest/edge, target-host has latest/stable"
+            "overwrites revision 15 on target-host with revision 20; "
+            "overwrites channel latest/stable on target-host with channel latest/edge"
         )
 
     @pytest.mark.asyncio
@@ -531,7 +533,7 @@ SNAP_LIST_TARGET_MIXED_HOLDS = (
     + "zeta      1.0        60     latest/stable   pub✓         held\n"
 )
 
-# The same plan plus a revision/channel CHANGE and a hold that rides its own snap's install,
+# The same plan plus a revision/channel CHANGE and a hold on a snap the same run installs,
 # so every shape snap can review — install, change, remove, hold, unhold, and a hold merged
 # into the question of the snap it belongs to — is present at once.
 SNAP_LIST_SOURCE_EVERY_ACTION = (
@@ -567,7 +569,8 @@ class TestHolds:
 
     @pytest.mark.asyncio
     async def test_source_held_yields_install_hold_diff_and_converges_hold_forever(self) -> None:
-        """E54, E55 — Atlas's hold is an item of its own, and applying it holds the snap on Nomad."""
+        """E54, E55 — Atlas's hold replicates with no row of its own, and applying it holds
+        the snap on Nomad."""
         context, _source, target = make_context(
             source_responses={"snap list --all": CommandResult(0, SNAP_LIST_SOURCE_HELD_ALPHA, "")},
             target_responses={"snap list --all": CommandResult(0, SNAP_LIST_TARGET_UNHELD, "")},
@@ -579,17 +582,19 @@ class TestHolds:
         hold = next(d for d in plan.diffs if d.item_id == "snap:hold:alpha")
         assert hold.action == DiffAction.INSTALL
         assert hold.diff_class == DiffClass.MISSING_ON_TARGET
+        assert not any(e.item_id == "snap:hold:alpha" for g in plan.groups for e in g.entries)
 
-        await job.converge(hold)
+        job.accept_review(plan, ReviewOutcome(decisions={}, was_interactive=True))
+        await job.apply()
 
         commands = all_calls(target)
         assert any("snap refresh --hold=forever alpha" in cmd for cmd in commands)
 
     @pytest.mark.asyncio
-    async def test_a_hold_on_a_snap_this_run_installs_is_one_question_with_it(self) -> None:
-        """E116 — `alpha` is missing on the target and held on the source, so the two are one
-        merged question: no `alpha (hold)` row anywhere, and the install's own row says the
-        target ends up holding its refreshes (`PKG-FR-BLOCKS-REPLICATE`).
+    async def test_a_hold_on_a_snap_this_run_installs_lands_after_the_install(self) -> None:
+        """E116 — `alpha` is missing on the target and held on the source. The snap is the one
+        question; the hold reaches no group at all and lands after the install
+        (`PKG-FR-BLOCKS-DERIVED`).
         """
         context, _source, target = make_context(
             source_responses={"snap list --all": CommandResult(0, SNAP_LIST_SOURCE_HELD_ALPHA, "")},
@@ -598,9 +603,9 @@ class TestHolds:
         job = SnapSyncJob(context)
         plan = await job.plan()
 
-        entries = {entry.item_id: entry for group in plan.groups for entry in group.entries}
+        entries = {entry.item_id for group in plan.groups for entry in group.entries}
         assert "snap:hold:alpha" not in entries
-        assert "target-host ends up holding its refreshes" in (entries["snap:alpha"].detail or "")
+        assert "snap:alpha" in entries
 
         job.accept_review(plan, ReviewOutcome(decisions={"snap:alpha": Decision.APPLY}, was_interactive=True))
         await job.apply()
@@ -611,8 +616,39 @@ class TestHolds:
         assert install < hold
 
     @pytest.mark.asyncio
+    async def test_a_hold_whose_install_was_declined_is_declined_not_failed(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """E119 — the same pair with the install skipped for this run: nothing is held, the
+        hold is reported as not applied by the user's answer, and the job does not fail.
+        """
+        context, _source, target = make_context(
+            source_responses={"snap list --all": CommandResult(0, SNAP_LIST_SOURCE_HELD_ALPHA, "")},
+            target_responses={"snap list --all": CommandResult(0, _HEADER, "")},
+        )
+        job = SnapSyncJob(context)
+        plan = await job.plan()
+
+        job.accept_review(
+            plan,
+            ReviewOutcome(
+                decisions={"snap:alpha": Decision.SKIP_ONCE, "snap:beta": Decision.SKIP_ONCE},
+                was_interactive=True,
+            ),
+        )
+        with caplog.at_level(LogLevel.FULL.value):
+            await job.apply()
+
+        commands = all_calls(target)
+        assert not any("--hold" in cmd for cmd in commands)
+        assert not any("snap install" in cmd for cmd in commands)
+        assert any("alpha" in record.message and "not applied" in record.message for record in caplog.records)
+        assert not any(record.levelno >= LogLevel.ERROR.value for record in caplog.records)
+
+    @pytest.mark.asyncio
     async def test_target_held_only_yields_remove_hold_diff_and_converges_unhold(self) -> None:
-        """E56, E57 — Nomad's own hold is an item proposing to lift it, and applying it does."""
+        """E56, E57 — Nomad's own hold is lifted because Atlas does not hold it, with no row
+        of its own."""
         context, _source, target = make_context(
             source_responses={"snap list --all": CommandResult(0, SNAP_LIST_TARGET_UNHELD, "")},
             target_responses={"snap list --all": CommandResult(0, SNAP_LIST_TARGET_HELD_ALPHA, "")},
@@ -624,8 +660,10 @@ class TestHolds:
         hold = next(d for d in plan.diffs if d.item_id == "snap:hold:alpha")
         assert hold.action == DiffAction.REMOVE
         assert hold.diff_class == DiffClass.EXTRA_ON_TARGET
+        assert not any(e.item_id == "snap:hold:alpha" for g in plan.groups for e in g.entries)
 
-        await job.converge(hold)
+        job.accept_review(plan, ReviewOutcome(decisions={}, was_interactive=True))
+        await job.apply()
 
         commands = all_calls(target)
         assert any("snap refresh --unhold alpha" in cmd for cmd in commands)
@@ -672,9 +710,9 @@ class TestHolds:
         )
         job = SnapSyncJob(context)
         plan = await job.plan()
-        hold = next(d for d in plan.diffs if d.item_id == "snap:hold:alpha")
+        job.accept_review(plan, ReviewOutcome(decisions={}, was_interactive=True))
 
-        await job.converge(hold)
+        await job.apply()
 
         for cmd in all_calls(target):
             assert "--hold=forever alpha" in cmd or "--hold" not in cmd
@@ -683,13 +721,9 @@ class TestHolds:
             assert not cmd.rstrip().endswith("--hold")
 
 
-class TestHoldReviewVerbs:
-    """#208 D3 — a hold item NEVER displays under an install/remove snap group.
-
-    `_build_review_groups` keys the group title AND every entry's `action_label` off
-    `_ACTION_VOCABULARY` by the group's own item class, so a `SNAP_HOLD` INSTALL reads
-    "hold" and a `SNAP_HOLD` REMOVE reads "unhold" even when ordinary `SNAP` INSTALL and
-    REMOVE diffs share those very actions in the same plan.
+class TestHoldsReachNoReviewGroup:
+    """`PKG-FR-BLOCKS-DERIVED` — a refresh hold replicates because the snap it applies to
+    does, so it reaches no review group in either direction, and no snap group absorbs one.
     """
 
     @staticmethod
@@ -705,32 +739,14 @@ class TestHoldReviewVerbs:
         return next(g for g in plan.groups if any(e.item_id == item_id for e in g.entries))
 
     @pytest.mark.asyncio
-    async def test_hold_install_group_reads_hold_never_install(self) -> None:
-        """E61 — a hold item sits in a group of its own reading "hold", never in the install group."""
-        plan = await self._mixed_plan()
-
-        group = self._group_holding(plan, "snap:hold:epsilon")
-
-        assert group.title == "Hold snap packages"
-        assert [e.action_label for e in group.entries] == ["hold"]
-        # The hold has its own group: it never joins the snap install group.
-        assert {e.item_id for e in group.entries} == {"snap:hold:epsilon"}
-
-    @pytest.mark.asyncio
-    async def test_hold_remove_group_reads_unhold_and_is_removal_direction(self) -> None:
-        """E61, E62 — the unhold group must be removal-direction so the checkbox screen leaves it
-        unticked — the right friction for undoing a block the user deliberately set. That
-        classification is `packages/review._is_removal_direction` applied to
-        `ReviewGroup.action`, so this asserts against the real classifier rather than
-        restating the string.
+    async def test_no_hold_in_either_direction_reaches_any_group(self) -> None:
+        """E61, E62 — the plan carries a hold add and a hold removal, and neither is anywhere
+        the user is asked anything.
         """
         plan = await self._mixed_plan()
 
-        group = self._group_holding(plan, "snap:hold:zeta")
-
-        assert group.title == "Unhold snap packages"
-        assert [e.action_label for e in group.entries] == ["unhold"]
-        assert _is_removal_direction(group.action)
+        assert {"snap:hold:epsilon", "snap:hold:zeta"} <= {d.item_id for d in plan.diffs}
+        assert not any(e.item_id.startswith("snap:hold:") for g in plan.groups for e in g.entries)
 
     @pytest.mark.asyncio
     async def test_snap_groups_keep_their_own_verbs_and_exclude_hold_items(self) -> None:
@@ -744,19 +760,13 @@ class TestHoldReviewVerbs:
         assert [e.action_label for e in install_group.entries] == ["install"]
         assert remove_group.title == "Remove snap packages"
         assert [e.action_label for e in remove_group.entries] == ["remove"]
-        # Neither presence group absorbed a hold item despite sharing its DiffAction.
         assert not any(e.item_id.startswith("snap:hold:") for e in (*install_group.entries, *remove_group.entries))
-        # No entry anywhere reads a package verb for a hold item.
-        for group in plan.groups:
-            for entry in group.entries:
-                if entry.item_id.startswith("snap:hold:"):
-                    assert entry.action_label in {"hold", "unhold"}
 
 
 class TestAFullSnapReview:
-    """One plan carrying every action snap reviews — install, change, remove, hold and
-    unhold — plus a hold merged into the install of the snap it belongs to, used for the
-    claims that are about the review as a whole.
+    """One plan carrying every action snap produces — install, change, remove, hold and
+    unhold, plus a hold on a snap the same run installs — used for the claims that are about
+    the review as a whole.
     """
 
     @staticmethod
@@ -782,6 +792,50 @@ class TestAFullSnapReview:
         assert not _is_removal_direction(change_group.action)
 
     @pytest.mark.asyncio
+    async def test_the_change_group_offers_two_answers_and_never_the_permanent_one(self) -> None:
+        """E117, H101 — `PKG-FR-NO-MARK-ON-SNAP-REVISION`: a revision or channel difference is not a
+        standing per-machine preference, so its screen offers converge or skip-once and
+        nothing else. Asserted through the real reviewer's own classifier rather than by
+        restating the sentinel string.
+        """
+        plan = await self._every_action_plan()
+
+        change_group = next(g for g in plan.groups if any(e.item_id == "snap:beta" for e in g.entries))
+
+        assert not _is_promotable_group(change_group.action)
+        assert not _is_removal_direction(change_group.action)
+        options = _options_for(change_group, source_hostname="source-host", target_hostname="target-host")
+        assert [option.value for option in options] == [Decision.APPLY, Decision.SKIP_ONCE]
+
+    @pytest.mark.asyncio
+    async def test_a_forced_permanent_answer_on_a_revision_change_records_nothing(self) -> None:
+        """E118 — no screen offers it, but the automation hook and a hand-built outcome can
+        still carry one, and no decision file may come of it.
+        """
+        context, source, target = make_context(
+            source_responses={"snap list --all": CommandResult(0, SNAP_LIST_SOURCE, "")},
+            target_responses={"snap list --all": CommandResult(0, SNAP_LIST_TARGET, "")},
+        )
+        job = SnapSyncJob(context)
+        plan = await job.plan()
+        changes = [d.item_id for d in plan.diffs if d.action is DiffAction.CHANGE]
+        assert changes
+
+        job.accept_review(
+            plan,
+            ReviewOutcome(
+                decisions=dict.fromkeys(changes, Decision.SKIP_ALWAYS),
+                was_interactive=True,
+            ),
+        )
+        await job.apply()
+
+        writes = [
+            cmd for mock in (source, target) for cmd in all_calls(mock) if "decisions" in cmd and "cat " not in cmd
+        ]
+        assert not writes
+
+    @pytest.mark.asyncio
     async def test_no_item_or_group_ever_asks_where_a_snap_comes_from(self) -> None:
         """E5 — `PKG-NG-SNAP-ORIGIN`: one store serves the device and snapd pins name ->
         publisher itself, so snap has no store, publisher, remote or key for the user to
@@ -802,11 +856,8 @@ class TestAFullSnapReview:
         }
 
         assert {d.item_class for d in plan.diffs} == {ItemClass.SNAP, ItemClass.SNAP_HOLD}
-        entries = {entry.item_id: entry for group in plan.groups for entry in group.entries}
-        # `theta`'s hold rides its install, so the sweep also covers the sentence the merged
-        # question composes rather than only the rows built one diff at a time.
-        assert "snap:hold:theta" not in entries
-        assert "holding its refreshes" in (entries["snap:theta"].detail or "")
+        # Every hold is derived, so the sweep below covers only the rows the user reads.
+        assert not any(e.item_id.startswith("snap:hold:") for g in plan.groups for e in g.entries)
 
         origin_words = ("store", "publisher", "remote", "key", "vendor", "origin")
         for group in plan.groups:

@@ -353,10 +353,9 @@ class TestAptHold:
         assert not any("apt-get install" in cmd for cmd in commands)
 
     @pytest.mark.asyncio
-    async def test_a_hold_whose_package_is_no_item_this_run_keeps_a_row_of_its_own(self) -> None:
-        """B53 — the boundary the merged question is an exception to: `pkg-a` is on both
-        machines at the same version, so it is no item at all and its hold is decided alone,
-        in its own group, with the permanent answer available.
+    async def test_a_hold_whose_package_is_no_item_this_run_still_asks_nothing(self) -> None:
+        """B53 — `pkg-a` is on both machines at the same version, so it is no item at all.
+        Its hold is still nobody's question: it is derived either way.
         """
         context, _source, _target = make_context(
             source_responses={
@@ -373,9 +372,7 @@ class TestAptHold:
         plan = await AptSyncJob(context).plan()
 
         assert [diff.item_id for diff in plan.diffs] == ["apt:hold:pkg-a"]
-        group = next(g for g in plan.groups if any(e.item_id == "apt:hold:pkg-a" for e in g.entries))
-        assert group.title == "Hold apt packages"
-        assert [entry.detail for entry in group.entries] == [None]
+        assert plan.groups == ()
 
     @pytest.mark.asyncio
     async def test_target_held_only_yields_remove_unhold_item(self) -> None:
@@ -453,9 +450,11 @@ class TestAptHold:
         assert "apt:package:pkg-a" not in by_id
 
     @pytest.mark.asyncio
-    async def test_skip_always_on_a_hold_writes_the_decision_file(self) -> None:
-        """SKIP_ALWAYS on an `apt:hold:` INSTALL item (source-held) persists a decision
-        on the SOURCE via the machine-local decision file (D-08a)."""
+    async def test_a_forced_permanent_answer_on_a_hold_records_nothing(self) -> None:
+        """B10 — `PKG-FR-BLOCKS-DERIVED`: no screen offers the permanent answer for a hold,
+        but the automation hook and a hand-built outcome can still carry one, and no decision
+        file may come of it.
+        """
         context, source, _target = make_context()
         job = AptSyncJob(context)
         hold_diff = ItemDiff(
@@ -473,8 +472,8 @@ class TestAptHold:
 
         await job.apply()
 
-        source_cmds = all_calls(source)
-        assert any("mv --force" in cmd and "apt.decisions" in cmd for cmd in source_cmds)
+        for machine in (source, _target):
+            assert not any("mv --force" in cmd and "apt.decisions" in cmd for cmd in all_calls(machine))
 
     def test_apt_mark_is_in_the_target_sudo_command_list(self) -> None:
         assert "/usr/bin/apt-mark" in TARGET_SUDO_COMMANDS
@@ -553,24 +552,24 @@ class TestInstallBeforeHoldOrdering:
         assert key_idx < update_idx < install_idx < hold_idx
 
 
-class TestHoldOnAnAbsentPackage:
-    """#208 D6: a hold approved for a package the target does not have hits `apt-mark`'s
-    own error. That is a normal per-item failure (D-27 continue-and-report) — no gating
-    machinery, no crash, no aborted run.
+class TestAFailedHoldCommand:
+    """#208 D6: an `apt-mark` that exits non-zero is a normal per-item failure (D-27
+    continue-and-report) — no gating machinery, no crash, no aborted run.
     """
 
     @pytest.mark.asyncio
     async def test_failed_apt_mark_hold_fails_only_that_item(self) -> None:
-        """B9 — `apt-mark` refusing a name apt has never heard of fails that item alone;
-        every other approved item still converges."""
+        """B9 — `apt-mark` refusing a hold fails that item alone; every other approved item
+        in the run still converges."""
         context, _source, target = make_context(
             source_responses={
-                "apt-mark showmanual": CommandResult(0, "pkg-good\n", ""),
-                "dpkg-query": CommandResult(0, "pkg-good\t1.0\n", ""),
-                "apt-mark showhold": CommandResult(0, "ghost-pkg\n", ""),
+                "apt-mark showmanual": CommandResult(0, "pkg-good\nfrozen\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-good\t1.0\nfrozen\t1.0\n", ""),
+                "apt-mark showhold": CommandResult(0, "frozen\n", ""),
             },
             target_responses={
-                "apt-mark showmanual": CommandResult(0, "", ""),
+                "apt-mark showmanual": CommandResult(0, "frozen\n", ""),
+                "dpkg-query": CommandResult(0, "frozen\t1.0\n", ""),
                 "apt-mark showhold": CommandResult(0, "", ""),
                 "apt-get --dry-run install --assume-yes --no-install-recommends pkg-good": CommandResult(
                     0, "Inst pkg-good (1.0)\n", ""
@@ -578,17 +577,17 @@ class TestHoldOnAnAbsentPackage:
                 "sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes --no-install-recommends pkg-good": (
                     CommandResult(0, "", "")
                 ),
-                "sudo apt-mark hold ghost-pkg": CommandResult(1, "", "E: Unable to locate package ghost-pkg"),
+                "sudo apt-mark hold frozen": CommandResult(1, "", "E: dpkg selection could not be written"),
                 "sudo apt-get update": CommandResult(0, "", ""),
             },
         )
         job = AptSyncJob(context)
-        install_reviewer(job, {"apt:package:pkg-good": Decision.APPLY, "apt:hold:ghost-pkg": Decision.APPLY})
+        install_reviewer(job, {"apt:package:pkg-good": Decision.APPLY})
 
         with pytest.raises(PackageItemFailures) as exc_info:
             await job.execute()
 
-        assert [diff.item_id for diff, _ in exc_info.value.failures] == ["apt:hold:ghost-pkg"]
+        assert [diff.item_id for diff, _ in exc_info.value.failures] == ["apt:hold:frozen"]
         # The unrelated item in the same run still converged.
         assert any(
             "sudo DEBIAN_FRONTEND=noninteractive apt-get install" in c and "pkg-good" in c for c in all_calls(target)
@@ -719,10 +718,10 @@ class TestAHeldPackageIsInstalledAtTheSourcesVersion:
         }
 
     @pytest.mark.asyncio
-    async def test_the_install_and_its_hold_are_one_question_and_one_answer(self) -> None:
-        """B7, B52 — the hold rides the package it applies to, so there is no way to approve
-        the install and decline the hold: one row, whose own text says the target ends up
-        holding it, and one answer that installs at the source's version and then holds.
+    async def test_the_install_is_the_one_question_and_the_hold_follows_it(self) -> None:
+        """B7, B52 — the hold follows the package it applies to, so there is no way to approve
+        the install and decline the hold: one row, the install, and the hold lands after it at
+        the source's version.
         """
         context, _source, target = make_context(
             source_responses=_HELD_SOURCE, target_responses=self._target_lacking_pkg_a()
@@ -730,9 +729,8 @@ class TestAHeldPackageIsInstalledAtTheSourcesVersion:
         job = AptSyncJob(context)
         plan = await job.plan()
 
-        entries = {entry.item_id: entry for group in plan.groups for entry in group.entries}
-        assert "apt:hold:pkg-a" not in entries
-        assert "target-host ends up holding it" in (entries["apt:package:pkg-a"].detail or "")
+        entries = {entry.item_id for group in plan.groups for entry in group.entries}
+        assert entries == {"apt:package:pkg-a"}
 
         job.accept_review(plan, ReviewOutcome(decisions={"apt:package:pkg-a": Decision.APPLY}, was_interactive=True))
         await job.apply()
@@ -745,8 +743,8 @@ class TestAHeldPackageIsInstalledAtTheSourcesVersion:
 
     @pytest.mark.asyncio
     async def test_declining_the_one_question_leaves_neither_the_package_nor_the_hold(self) -> None:
-        """B54 — a skip-once on the merged question is a skip of both halves: nothing is
-        installed, nothing is held, and nothing is recorded on either machine.
+        """B54 — a skip-once on the install is a skip of its hold too: nothing is installed,
+        nothing is held, and nothing is recorded on either machine.
         """
         context, source, target = make_context(
             source_responses=_HELD_SOURCE, target_responses=self._target_lacking_pkg_a()
@@ -764,13 +762,10 @@ class TestAHeldPackageIsInstalledAtTheSourcesVersion:
 
 
 class TestAMarkOnThePackageCarriesItsHold:
-    """`PKG-FR-APT-HOLD-ITEM` with `PKG-FR-MACHINE-SPECIFIC`: a hold freezes an installed
-    copy, so a hold for a package the mark keeps off the target freezes nothing and blocks
-    every later install of the name.
-
-    A mark given on the merged question records both ids, so what this covers is the package
-    marked in an earlier run with the hold arriving on the source afterwards — a mark against
-    `apt:package:pkg-a` alone, which no lookup of the hold's own id can see.
+    """`PKG-FR-BLOCKS-DERIVED` with `PKG-FR-MACHINE-SPECIFIC`: a block follows the software
+    it applies to, and a mark on the package is the user's own answer about that software.
+    A hold for a package the mark keeps off the target would freeze nothing and block every
+    later install of the name.
     """
 
     @pytest.mark.asyncio
@@ -864,111 +859,10 @@ class TestAReplicatedHoldMovesNoVersion:
         assert not any("apt-get install" in cmd or "apt-get remove" in cmd for cmd in commands)
 
 
-class TestAHoldWhosePackageIsBeingRemoved:
-    """`PKG-FR-BLOCKS-REPLICATE`: the hold rides the removal it belongs to.
-
-    The source can hold a package that is outside its own manual set, so a run can carry an
-    approved removal of a package and an approved hold add for the same name. Registering the
-    hold after the removal leaves the target holding what it no longer has — the bookkeeping
-    hold `PKG-FR-APT-HELD-TARGET` calls harmful, and it blocks every later install of the
-    name.
+class TestAHeldPackageOnTheTargetIsNoItem:
+    """`PKG-FR-APT-HELD-TARGET`: apt refuses to move a held package, so a package the target
+    has and holds produces no package-level item of any kind.
     """
-
-    @staticmethod
-    def _context() -> tuple[JobContext, MagicMock, MagicMock]:
-        return make_context(
-            source_responses={
-                "apt-mark showmanual": CommandResult(0, "", ""),
-                "dpkg-query": CommandResult(0, "", ""),
-                "apt-mark showhold": CommandResult(0, "pkg-a\n", ""),
-            },
-            target_responses={
-                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
-                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
-                "apt-mark showhold": CommandResult(0, "", ""),
-                "apt-get --dry-run remove": CommandResult(0, "Remv pkg-a (1.0)\n", ""),
-                "sudo DEBIAN_FRONTEND=noninteractive apt-get remove": CommandResult(0, "", ""),
-            },
-        )
-
-    @pytest.mark.asyncio
-    async def test_the_removal_and_the_hold_are_one_question(self) -> None:
-        """B41 — one row, in the removal group, saying the target is left holding nothing.
-
-        The row keeps the PACKAGE's direction, so the merged question is still the removal's
-        unticked one and the hold's own add direction cannot tick it (`PKG-FR-HARMLESS-DEFAULT`).
-        """
-        context, _source, _target = self._context()
-        job = AptSyncJob(context)
-        plan = await job.plan()
-
-        entries = {entry.item_id: entry for group in plan.groups for entry in group.entries}
-        assert "apt:hold:pkg-a" not in entries
-        assert "target-host is left holding nothing for it" in (entries["apt:package:pkg-a"].detail or "")
-        group = next(g for g in plan.groups if any(e.item_id == "apt:package:pkg-a" for e in g.entries))
-        assert group.title == "Remove apt packages"
-        assert group.action == "remove"
-
-    @pytest.mark.asyncio
-    async def test_approving_it_removes_the_package_and_registers_no_hold(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        """B41 — the removal is approved, the hold rides it, and no `apt-mark hold` runs for
-        a package the target no longer has. Not a failure: the user's own answer withdrew it.
-        """
-        context, _source, target = self._context()
-        job = AptSyncJob(context)
-        install_reviewer(job, {"apt:package:pkg-a": Decision.APPLY})
-
-        with caplog.at_level(LogLevel.FULL.value):
-            await job.execute()
-
-        commands = all_calls(target)
-        assert any("apt-get remove" in cmd and "pkg-a" in cmd for cmd in commands)
-        assert not any("apt-mark hold" in cmd for cmd in commands)
-        assert not any(record.levelno >= LogLevel.ERROR.value for record in caplog.records)
-        assert any("nothing to hold" in record.message for record in caplog.records)
-
-
-class TestAStaleTargetHoldDoesNotStrandThePackage:
-    """`PKG-FR-APT-HOLD-VERSION`: `apt-mark hold` records a hold for a package the machine
-    merely does not have. Suppressing on the hold set alone meant such a name produced no
-    install and — with both machines holding it — no hold item either, so the target stayed
-    without the package for good. apt refuses the install while the selection stands, so the
-    run clears it first and re-registers the hold once the package lands.
-    """
-
-    @pytest.mark.asyncio
-    async def test_the_stale_hold_is_cleared_the_package_installed_and_the_hold_restored(self) -> None:
-        """B19, B40 — clear, install, hold, in that order, with the rehearsal after the
-        clear."""
-        context, _source, target = make_context(
-            source_responses=_HELD_SOURCE,
-            target_responses={
-                "apt-mark showmanual": CommandResult(0, "", ""),
-                "apt-mark showhold": CommandResult(0, "pkg-a\n", ""),
-                "db:Status-Status": installed_on_target("other-pkg"),
-                "apt-cache policy": CommandResult(0, _target_offering("1.0"), ""),
-                _PINNED_SIMULATION: CommandResult(0, "Inst pkg-a (1.0)\n", ""),
-                _PINNED_INSTALL: CommandResult(0, "", ""),
-                "sudo apt-mark unhold pkg-a": CommandResult(0, "Canceled hold on pkg-a.\n", ""),
-                "sudo apt-mark hold pkg-a": CommandResult(0, "pkg-a set on hold.\n", ""),
-                "sudo apt-get update": CommandResult(0, "", ""),
-            },
-        )
-        job = AptSyncJob(context)
-        install_reviewer(job, {"apt:package:pkg-a": Decision.APPLY, "apt:hold:pkg-a": Decision.APPLY})
-
-        await job.execute()
-
-        commands = all_calls(target)
-        unhold = index_of(commands, lambda cmd: cmd == "sudo apt-mark unhold pkg-a")
-        install = index_of(commands, lambda cmd: cmd == _PINNED_INSTALL)
-        hold = index_of(commands, lambda cmd: cmd == "sudo apt-mark hold pkg-a")
-        assert unhold < install < hold
-        # The simulation is refused on the same grounds as the install, so it too comes
-        # after the selection is cleared.
-        assert unhold < index_of(commands, lambda cmd: cmd == _PINNED_SIMULATION)
 
     @pytest.mark.asyncio
     async def test_a_hold_on_a_package_the_target_has_still_suppresses_its_install(self) -> None:
@@ -1016,8 +910,8 @@ class TestAHoldNeedsItsPackage:
     async def test_a_hold_whose_install_was_skipped_is_declined_not_failed(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """B31, B37 — the install and its hold are one question, so declining it declines
-        both: the hold is logged as skipped this run, not as something that broke.
+        """B31, B37 — declining the install declines its hold with it: the hold is logged as
+        not applied, not as something that broke.
         """
         context, _source, target = make_context(source_responses=_HELD_SOURCE, target_responses=self._target())
         job = AptSyncJob(context)
@@ -1027,9 +921,7 @@ class TestAHoldNeedsItsPackage:
             await job.execute()
 
         assert not any("apt-mark hold" in cmd for cmd in all_calls(target))
-        assert any(
-            "pkg-a (hold)" in record.message and "skipped this run" in record.message for record in caplog.records
-        )
+        assert any("pkg-a (hold)" in record.message and "not applied" in record.message for record in caplog.records)
         assert not any(record.levelno >= LogLevel.ERROR.value for record in caplog.records)
 
     @pytest.mark.asyncio

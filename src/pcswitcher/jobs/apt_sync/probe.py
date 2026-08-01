@@ -711,11 +711,11 @@ class AptProbe:
 
         Two callers need the same fact and neither can be answered from `apt-mark showmanual`:
 
-        - a hold recorded for a package the target does not HAVE freezes nothing and only
-          blocks the install of it (`PKG-FR-APT-HOLD-VERSION`). Measured on `ubuntu:24.04`:
-          `apt-mark hold` exits 0 and records the hold for a merely-uninstalled package, and
-          `apt-get install` then refuses with `E: Held packages were changed`. Membership
-          here is what separates that stale selection from a real hold.
+        - a hold naming a package the machine does not HAVE ends the run
+          (`PKG-FR-HOLD-WITHOUT-PACKAGE`). Measured on `ubuntu:24.04`: `apt-mark hold` exits
+          0 and records the hold for a merely-uninstalled package, and `apt-get install` then
+          refuses with `E: Held packages were changed`. Membership here is what separates
+          that bookkeeping selection from a real hold.
         - a repository is withheld from deletion while anything on the target still installs
           from it (`PKG-FR-REPO-DELETE`), and an automatically-installed package is still
           something: `commands.remove_args` runs `apt-get remove`, never `autoremove`, so
@@ -729,13 +729,27 @@ class AptProbe:
 
         Guarded on the exit code AND on emptiness (ADR-022): a machine with no installed
         packages does not exist, so nothing here is a legitimate empty answer, and silence
-        read as data would make every hold stale and every target-only repository deletable.
+        read as data would end every run whose target holds anything.
         """
+        return await self._capture_installed(self.target_run, self._machines.target)
+
+    async def capture_source_installed(self) -> frozenset[str]:
+        """The same set on the source, read only by a run whose source holds something.
+
+        `PKG-FR-HOLD-WITHOUT-PACKAGE` binds both machines, and the source's own hold set is
+        replicated wholesale, so a hold the source records for a package it does not have
+        would otherwise be pushed onto the target as a hold on something neither machine has.
+        The manual set cannot answer it: apt records a hold against a package it installed
+        automatically just as readily.
+        """
+        return await self._capture_installed(self.source_run, self._machines.source)
+
+    async def _capture_installed(self, run: Run, machine: str) -> frozenset[str]:
         command = "dpkg-query --show --showformat='${Package}\\t${db:Status-Status}\\n'"
-        result = await self._target.run_command(command, login_shell=False)
+        result = await run(command)
         fields = (line.partition("\t") for line in lines(result.stdout))
         installed = frozenset(name for name, _, status in fields if status == "installed")
-        require_answer(command, result, self._machines.target, answers=len(installed), answer_noun="installed package")
+        require_answer(command, result, machine, answers=len(installed), answer_noun="installed package")
         return installed
 
     async def collect_target_policy(self, names: Sequence[str], target_names: Sequence[str] = ()) -> TargetPolicy:

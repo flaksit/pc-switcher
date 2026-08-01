@@ -36,9 +36,9 @@ _STATUS_QUERY = "db:Status-Status"
 
 
 def installed_on_target(*names: str) -> CommandResult:
-    """What `AptProbe.capture_target_installed` reads on a machine that has exactly
-    `names` — the answer a test states when it disagrees with the version query, which is
-    what a stale hold is."""
+    """What `AptProbe.capture_target_installed` / `capture_source_installed` reads on a
+    machine that has exactly `names` — the answer a test states when it disagrees with the
+    hold set, which is the bookkeeping hold that ends the run."""
     return CommandResult(0, "".join(f"{name}\tinstalled\n" for name in names), "")
 
 
@@ -51,7 +51,8 @@ def respond_to(
     fixture saying the machine has `pkg-a` at 1.0, or that `pkg-a` is in its manual set, has
     said `pkg-a` is installed there. A fixture with no opinion answers a placeholder, since
     a machine with nothing installed does not exist and the probe refuses that silence. A
-    test that needs the two to DISAGREE — which is what a stale hold is — states its own
+    test that needs the installed set to DISAGREE with the hold set — which is the
+    bookkeeping hold `PKG-FR-HOLD-WITHOUT-PACKAGE` ends the run over — states its own
     `db:Status-Status` key.
     """
     fallback = default if default is not None else CommandResult(exit_code=0, stdout="", stderr="")

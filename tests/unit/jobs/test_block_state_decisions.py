@@ -1,18 +1,23 @@
-"""Skip-always durability for block-state items (#208 D3, ADR-020 D-08/D-08a).
+"""What a decision file may and may not hold (ADR-020 D-08/D-08a).
 
-A "skip always" recorded against a hold/mask item lands in the decision file of the
-machine that HOLDS it (INSTALL -> source, REMOVE -> target) and must never be
-re-emitted afterwards — least of all in the add direction, which comes back
-default-checked and so would be re-applied by a bulk accept.
+Two halves. The first is what CAN be recorded and must then stay inert: `apt:config:`,
+whose identity is a directory digest rather than an input item, and whose overwrite
+direction is where the holder rule stops following from the run's own direction — the
+file is on BOTH machines, the mark keeps the target's copy, and the next run may be
+launched the other way round.
 
-The two classes at the end cover the third direction, CHANGE, which is not a block-state
-item at all but shares the machinery and is where the holder rule stops following from
-the run's own direction: an `apt.conf.d` file and a snap's revision are on BOTH machines,
-so the mark keeps the target's copy, and the next run may be launched the other way round.
+The second is what can NEVER be recorded: a repository, a pin, a signing key, a snap's
+revision, and every block — an apt hold, a snap refresh hold, a flatpak mask
+(`PKG-FR-NO-MARK-ON-ORIGIN`, `PKG-FR-NO-MARK-ON-SNAP-REVISION`, `PKG-FR-BLOCKS-DERIVED`).
+No screen offers the permanent answer for any of them, but "no entry can exist" is a
+property of the model rather than of one prompt's wiring, so each is forced through
+`SKIP_ALWAYS` here and the decision files are asserted untouched. A block gets the
+converse test too: an entry naming one, left by an older version of the tool or written by
+hand, must not silence a replication nobody declined.
 
-Every case runs TWO rounds against the same stubbed state: round 1 records the decision
-and round 2 replays the exact file round 1 wrote back through the decision-file `cat`,
-then asserts the item is absent from both `plan.diffs` and every review group. All
+A recordable case runs TWO rounds against the same stubbed state: round 1 records the
+decision and round 2 replays the exact file round 1 wrote back through the decision-file
+`cat`, then asserts the item is absent from both `plan.diffs` and every review group. All
 executor interactions are mocked; no real apt/snap/flatpak commands run.
 """
 
@@ -26,7 +31,6 @@ import pytest
 
 from pcswitcher.jobs.apt_sync import AptSyncJob
 from pcswitcher.jobs.flatpak_sync import FlatpakSyncJob
-from pcswitcher.jobs.packages.items import ItemClass
 from pcswitcher.jobs.packages.review import Decision, ReviewOutcome
 from pcswitcher.jobs.packages.sync_core import PackageItemFailures, PackagePlan, PackageSyncJob
 from pcswitcher.jobs.snap_sync import SnapSyncJob
@@ -35,7 +39,6 @@ from tests.unit.jobs.apt.helpers import (
     all_calls,
     decision_file,
     differing_repo_context,
-    installed_on_target,
     make_context,
     sha256_line,
 )
@@ -105,12 +108,13 @@ class TestARunOfPureDeclines:
 
     @pytest.mark.asyncio
     async def test_a_run_whose_every_answer_is_a_decline_writes_no_decision_file(self) -> None:
-        """H113 — three items across three directions and two machines, all declined for
-        this run.
+        """H113 — every item the run puts to the user, across three directions and two
+        machines, declined for this run.
         """
         source_responses = {
             "apt-mark showhold": CommandResult(0, "pkg-a\n", ""),
-            "apt-mark showmanual": CommandResult(0, "", ""),
+            "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+            "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
             "find /etc/apt/apt.conf.d": CommandResult(0, sha256_line("c1", "99recommends"), ""),
         }
         target_responses = {
@@ -124,7 +128,7 @@ class TestARunOfPureDeclines:
         job = AptSyncJob(context)
         plan = await job.plan()
 
-        assert {"apt:hold:pkg-a", "apt:config:99recommends", "apt:source:vendor.list"} <= {
+        assert {"apt:package:pkg-a", "apt:config:99recommends", "apt:source:vendor.list"} <= {
             diff.item_id for diff in plan.diffs
         }
         job.accept_review(
@@ -137,187 +141,117 @@ class TestARunOfPureDeclines:
         assert not wrote_decision_file(target)
 
 
-class TestAptHoldDecisions:
-    """`apt:hold:<name>` — recorded on the source for a hold, the target for an unhold."""
+class TestABlockCanNeverBeRecorded:
+    """`PKG-FR-BLOCKS-DERIVED`: an apt hold, a snap refresh hold and a flatpak mask reach no
+    review group, so no answer about one exists to record — and an entry naming one, however
+    it got there, must not silence the replication.
+
+    Both directions matter. A recorded entry that silenced a block would stop a hold or a
+    mask travelling on the strength of a decision nobody made; a recordable block would
+    leave the two machines' files disagreeing about software neither would raise again.
+    """
+
+    @staticmethod
+    async def _force_permanent(job: PackageSyncJob, item_id: str) -> None:
+        """Decide `SKIP_ALWAYS` on `item_id` the way the automation hook can, and apply."""
+        plan = await job.plan()
+        assert item_id in {diff.item_id for diff in plan.diffs}, f"{item_id} was never diffed"
+        job.accept_review(
+            plan,
+            ReviewOutcome(decisions={diff.item_id: Decision.SKIP_ALWAYS for diff in plan.diffs}, was_interactive=True),
+        )
+        with contextlib.suppress(PackageItemFailures):
+            await job.apply()
 
     @pytest.mark.asyncio
-    async def test_declined_hold_is_recorded_on_source_and_never_re_offered(self) -> None:
-        """H121, H127 — a marked apt hold is recorded on the machine that holds it and never diffed again."""
-        source_responses = {"apt-mark showhold": CommandResult(0, "pkg-a\n", "")}
-        target_responses = {"apt-mark showhold": NO_HOLDS}
+    async def test_a_forced_permanent_answer_on_an_apt_hold_records_nothing(self) -> None:
+        """B42, B43, H121, N4 — neither the add nor the removal direction can reach a file."""
+        for source_holds, target_holds in (("pkg-a\n", ""), ("", "pkg-a\n")):
+            context, source, target = make_context(
+                source_responses={
+                    "apt-mark showhold": CommandResult(0, source_holds, ""),
+                    "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                    "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+                },
+                target_responses={
+                    "apt-mark showhold": CommandResult(0, target_holds, ""),
+                    "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                    "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+                },
+            )
+            await self._force_permanent(AptSyncJob(context), "apt:hold:pkg-a")
 
-        context, source, target = make_context(source_responses=source_responses, target_responses=target_responses)
-        await record_skip_always(AptSyncJob(context), "apt:hold:pkg-a")
-        assert wrote_decision_file(source)
-        assert not wrote_decision_file(target)
-        recorded = recorded_decision_file(source)
-        assert "apt:hold:pkg-a" in recorded
-
-        context, _source, _target = make_context(
-            source_responses={**source_responses, decision_cat("apt"): CommandResult(0, recorded, "")},
-            target_responses=target_responses,
-        )
-        plan = await AptSyncJob(context).plan()
-
-        assert "apt:hold:pkg-a" not in {diff.item_id for diff in plan.diffs}
-        assert "apt:hold:pkg-a" not in review_item_ids(plan)
-
-    @pytest.mark.asyncio
-    async def test_declined_unhold_is_recorded_on_target_and_never_re_offered(self) -> None:
-        """B43, H121, H127 — a marked unhold is recorded on the machine that holds the hold, and never diffed again."""
-        source_responses = {"apt-mark showhold": NO_HOLDS}
-        # The hold is a real one: pkg-a is installed on the target. A hold naming a package
-        # the target lacks is a different item entirely (`PKG-FR-APT-HOLD-VERSION`).
-        target_responses = {
-            "apt-mark showhold": CommandResult(0, "pkg-a\n", ""),
-            "db:Status-Status": installed_on_target("pkg-a"),
-        }
-
-        context, source, target = make_context(source_responses=source_responses, target_responses=target_responses)
-        await record_skip_always(AptSyncJob(context), "apt:hold:pkg-a")
-        assert wrote_decision_file(target)
-        assert not wrote_decision_file(source)
-        recorded = recorded_decision_file(target)
-
-        context, _source, _target = make_context(
-            source_responses=source_responses,
-            target_responses={**target_responses, decision_cat("apt"): CommandResult(0, recorded, "")},
-        )
-        plan = await AptSyncJob(context).plan()
-
-        assert "apt:hold:pkg-a" not in {diff.item_id for diff in plan.diffs}
-        assert "apt:hold:pkg-a" not in review_item_ids(plan)
+            assert not wrote_decision_file(source)
+            assert not wrote_decision_file(target)
 
     @pytest.mark.asyncio
-    async def test_recorded_hold_is_read_back_from_the_machine_that_holds_it_only(self) -> None:
-        """B44 — The decision is machine-local (D-08a): the same file on the WRONG machine must
-        not silence the diff, or the read path would be looking at the wrong end."""
-        source_responses = {"apt-mark showhold": CommandResult(0, "pkg-a\n", "")}
-        context, source, _target = make_context(
-            source_responses=source_responses, target_responses={"apt-mark showhold": NO_HOLDS}
-        )
-        await record_skip_always(AptSyncJob(context), "apt:hold:pkg-a")
-        recorded = recorded_decision_file(source)
-
+    async def test_a_recorded_apt_hold_decision_does_not_silence_the_replication(self) -> None:
+        """B44, H127 — an entry naming a hold is not an answer anybody gave, so the hold
+        still replicates."""
+        recorded = decision_file("apt:hold:pkg-a")
         context, _source, _target = make_context(
-            source_responses=source_responses,
-            target_responses={"apt-mark showhold": NO_HOLDS, decision_cat("apt"): CommandResult(0, recorded, "")},
+            source_responses={
+                "apt-mark showhold": CommandResult(0, "pkg-a\n", ""),
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+                decision_cat("apt"): CommandResult(0, recorded, ""),
+            },
+            target_responses={
+                "apt-mark showhold": NO_HOLDS,
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+            },
         )
+
         plan = await AptSyncJob(context).plan()
 
         assert "apt:hold:pkg-a" in {diff.item_id for diff in plan.diffs}
 
+    @pytest.mark.asyncio
+    async def test_a_forced_permanent_answer_on_a_snap_hold_records_nothing(self) -> None:
+        """E68, E69, H122, N5 — the snap analogue, in both directions."""
+        for source_list, target_list in (
+            (SNAP_ALPHA_HELD, SNAP_ALPHA_UNHELD),
+            (SNAP_ALPHA_UNHELD, SNAP_ALPHA_HELD),
+        ):
+            context, source, target = make_context(
+                source_responses={"snap list --all": CommandResult(0, source_list, "")},
+                target_responses={"snap list --all": CommandResult(0, target_list, "")},
+            )
+            await self._force_permanent(SnapSyncJob(context), "snap:hold:alpha")
 
-# The B41 shape: the target has `pkg-a`, the source holds it without having it. The package
-# is a removal (target-held) and its hold an addition (source-held), so one answer sends two
-# marks to two different machines.
-_MERGED_SOURCE = {
-    "apt-mark showmanual": CommandResult(0, "", ""),
-    "dpkg-query": CommandResult(0, "", ""),
-    "apt-mark showhold": CommandResult(0, "pkg-a\n", ""),
-}
-_MERGED_TARGET = {
-    "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
-    "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
-    "apt-mark showhold": NO_HOLDS,
-}
-
-
-class TestAMarkGivenOnAMergedQuestion:
-    """`PKG-FR-BLOCKS-REPLICATE`: a permanent answer to a question that covered a package and
-    its hold silences BOTH, each recorded on its own holding machine.
-
-    Recording only the package would leave the hold to come back alone on the next run,
-    asking about software the tool has just been told to leave alone. The two holders can be
-    two different machines: here the target holds `pkg-a` and the source holds the hold for
-    it, which is the pair `PKG-FR-MACHINE-SPECIFIC` sends to two different files.
-    """
+            assert not wrote_decision_file(source)
+            assert not wrote_decision_file(target)
 
     @pytest.mark.asyncio
-    async def test_one_permanent_answer_writes_a_mark_on_each_holding_machine(self) -> None:
-        """B55, N23 — one answer, two marks: the package's on the machine that has it, the
-        hold's on the machine that holds it. The next run raises neither.
-        """
-        context, source, target = make_context(source_responses=_MERGED_SOURCE, target_responses=_MERGED_TARGET)
-        await record_skip_always(AptSyncJob(context), "apt:package:pkg-a")
-
-        on_target = recorded_decision_file(target)
-        on_source = recorded_decision_file(source)
-        assert "apt:package:pkg-a" in on_target
-        assert "apt:hold:pkg-a" in on_source
-
+    async def test_a_recorded_snap_hold_decision_does_not_silence_the_replication(self) -> None:
+        """E70, H128 — and it silences nothing about the snap itself either."""
+        recorded = decision_file("snap:hold:alpha")
         context, _source, _target = make_context(
-            source_responses={**_MERGED_SOURCE, decision_cat("apt"): CommandResult(0, on_source, "")},
-            target_responses={**_MERGED_TARGET, decision_cat("apt"): CommandResult(0, on_target, "")},
+            source_responses={
+                "snap list --all": CommandResult(0, SNAP_ALPHA_HELD, ""),
+                decision_cat("snap"): CommandResult(0, recorded, ""),
+            },
+            target_responses={"snap list --all": CommandResult(0, SNAP_ALPHA_UNHELD, "")},
         )
-        plan = await AptSyncJob(context).plan()
 
-        assert not {"apt:package:pkg-a", "apt:hold:pkg-a"} & {diff.item_id for diff in plan.diffs}
-        assert not {"apt:package:pkg-a", "apt:hold:pkg-a"} & review_item_ids(plan)
+        plan = await SnapSyncJob(context).plan()
 
-
-class TestAptHeldPackageSuppression:
-    """The target hold SET keeps suppressing a held package's own install/upgrade action
-    (`diff_apt_packages`), whatever is recorded — which is why inertness is filtered on
-    the resulting `ItemDiff`s and never on the hold-name sets feeding the diff."""
-
-    @staticmethod
-    def _held_package_responses() -> tuple[dict[str, CommandResult], dict[str, CommandResult]]:
-        """pkg-b: newer on the source, held on the target and not on the source — so the
-        upgrade must stay suppressed while the unhold is offered."""
-        source_responses = {
-            "apt-mark showhold": NO_HOLDS,
-            "apt-mark showmanual": CommandResult(0, "pkg-b\n", ""),
-            "dpkg-query": CommandResult(0, "pkg-b\t2.0\n", ""),
-        }
-        target_responses = {
-            "apt-mark showhold": CommandResult(0, "pkg-b\n", ""),
-            "apt-mark showmanual": CommandResult(0, "pkg-b\n", ""),
-            "dpkg-query": CommandResult(0, "pkg-b\t1.0\n", ""),
-        }
-        return source_responses, target_responses
+        assert "snap:hold:alpha" in {diff.item_id for diff in plan.diffs}
 
     @pytest.mark.asyncio
-    async def test_declined_unhold_does_not_re_propose_the_held_packages_upgrade(self) -> None:
-        """B45."""
-        source_responses, target_responses = self._held_package_responses()
+    async def test_a_forced_permanent_answer_on_a_flatpak_mask_records_nothing(self) -> None:
+        """F130, H123, N6 — the mask analogue, in both directions."""
+        for responses in (
+            {"source_responses": {"flatpak --user mask": CommandResult(0, "  org.example.Blocked\n", "")}},
+            {"target_responses": {"flatpak --system mask": CommandResult(0, "  org.example.Blocked\n", "")}},
+        ):
+            scope = "user" if "source_responses" in responses else "system"
+            context, source, target = make_context(**responses)  # pyright: ignore[reportArgumentType]
+            await self._force_permanent(FlatpakSyncJob(context), f"flatpak:mask:{scope}:org.example.Blocked")
 
-        context, _source, target = make_context(source_responses=source_responses, target_responses=target_responses)
-        await record_skip_always(AptSyncJob(context), "apt:hold:pkg-b")
-        recorded = recorded_decision_file(target)
-
-        context, _source, _target = make_context(
-            source_responses=source_responses,
-            target_responses={**target_responses, decision_cat("apt"): CommandResult(0, recorded, "")},
-        )
-        plan = await AptSyncJob(context).plan()
-
-        item_ids = {diff.item_id for diff in plan.diffs}
-        assert "apt:hold:pkg-b" not in item_ids
-        assert "apt:package:pkg-b" not in item_ids
-
-    @pytest.mark.asyncio
-    async def test_unrelated_recorded_decision_leaves_the_hold_set_intact(self) -> None:
-        """B46, N4."""
-        source_responses, target_responses = self._held_package_responses()
-        # pkg-c is held on the target too; its unhold is the one declined.
-        source_responses = {**source_responses, "apt-mark showmanual": CommandResult(0, "pkg-b\n", "")}
-        target_responses = {**target_responses, "apt-mark showhold": CommandResult(0, "pkg-b\npkg-c\n", "")}
-
-        context, _source, target = make_context(source_responses=source_responses, target_responses=target_responses)
-        await record_skip_always(AptSyncJob(context), "apt:hold:pkg-c")
-        recorded = recorded_decision_file(target)
-
-        context, _source, _target = make_context(
-            source_responses=source_responses,
-            target_responses={**target_responses, decision_cat("apt"): CommandResult(0, recorded, "")},
-        )
-        plan = await AptSyncJob(context).plan()
-
-        item_ids = {diff.item_id for diff in plan.diffs}
-        assert "apt:hold:pkg-c" not in item_ids
-        assert "apt:hold:pkg-b" in item_ids
-        assert "apt:package:pkg-b" not in item_ids
+            assert not wrote_decision_file(source)
+            assert not wrote_decision_file(target)
 
 
 class TestAptRepoItemDecisions:
@@ -515,165 +449,3 @@ class TestAptConfigOverwriteDecision:
         plan = await AptSyncJob(context).plan()
         assert "apt:config:20update" not in {diff.item_id for diff in plan.diffs}
         assert "apt:config:20update" not in review_item_ids(plan)
-
-
-class TestSnapChangeDecisions:
-    """`snap:<name>` in the CHANGE direction — a snap both machines have at different
-    revisions, which is the case `filter_inert` used to half-drop.
-
-    A snap carries its own id into `filter_inert`, so a mark taken off ONE machine's
-    manifest left the other machine's copy unmatched — and an unmatched copy is a
-    one-sided item. Measured before the fix: the very next run in the same direction
-    offered the snap for REMOVAL from the machine whose copy the mark protects.
-    """
-
-    _SRC = _SNAP_HEADER + "alpha     1.0        10     latest/stable   pub                -\n"
-    _TGT = _SNAP_HEADER + "alpha     0.9        7      latest/edge     pub                -\n"
-
-    @pytest.mark.asyncio
-    async def test_a_marked_revision_change_leaves_no_item_in_either_direction(self) -> None:
-        """E117, E118, N24 — one answer, and neither a later run in the same direction nor one
-        launched from the other machine raises `alpha` again, in any direction.
-        """
-        source_responses = {"snap list --all": CommandResult(0, self._SRC, "")}
-        target_responses = {"snap list --all": CommandResult(0, self._TGT, "")}
-
-        context, source, target = make_context(source_responses=source_responses, target_responses=target_responses)
-        await record_skip_always(SnapSyncJob(context), "snap:alpha")
-        assert wrote_decision_file(target)
-        assert not wrote_decision_file(source)
-        recorded = recorded_decision_file(target)
-
-        context, _source, _target = make_context(
-            source_responses=source_responses,
-            target_responses={**target_responses, decision_cat("snap"): CommandResult(0, recorded, "")},
-        )
-        assert (await SnapSyncJob(context).plan()).diffs == ()
-
-        context, _source, _target = make_context(
-            source_responses={**target_responses, decision_cat("snap"): CommandResult(0, recorded, "")},
-            target_responses=source_responses,
-        )
-        assert (await SnapSyncJob(context).plan()).diffs == ()
-
-
-class TestSnapHoldDecisions:
-    """`snap:hold:<name>` — a distinct identity from the snap's own `snap:<name>`, so
-    only a filter on the diff can match it."""
-
-    @pytest.mark.asyncio
-    async def test_declined_hold_is_recorded_on_source_and_never_re_offered(self) -> None:
-        """H122 — a marked snap hold lands in snap's own decision file on the machine that holds it."""
-        source_responses = {"snap list --all": CommandResult(0, SNAP_ALPHA_HELD, "")}
-        target_responses = {"snap list --all": CommandResult(0, SNAP_ALPHA_UNHELD, "")}
-
-        context, source, target = make_context(source_responses=source_responses, target_responses=target_responses)
-        await record_skip_always(SnapSyncJob(context), "snap:hold:alpha")
-        assert wrote_decision_file(source)
-        assert not wrote_decision_file(target)
-        recorded = recorded_decision_file(source)
-        assert "snap:hold:alpha" in recorded
-
-        context, _source, _target = make_context(
-            source_responses={**source_responses, decision_cat("snap"): CommandResult(0, recorded, "")},
-            target_responses=target_responses,
-        )
-        plan = await SnapSyncJob(context).plan()
-
-        assert "snap:hold:alpha" not in {diff.item_id for diff in plan.diffs}
-        assert "snap:hold:alpha" not in review_item_ids(plan)
-
-    @pytest.mark.asyncio
-    async def test_declined_unhold_is_recorded_on_target_and_never_re_offered(self) -> None:
-        """E69, H122 — a marked snap unhold lands on the machine that holds the hold."""
-        source_responses = {"snap list --all": CommandResult(0, SNAP_ALPHA_UNHELD, "")}
-        target_responses = {"snap list --all": CommandResult(0, SNAP_ALPHA_HELD, "")}
-
-        context, source, target = make_context(source_responses=source_responses, target_responses=target_responses)
-        await record_skip_always(SnapSyncJob(context), "snap:hold:alpha")
-        assert wrote_decision_file(target)
-        assert not wrote_decision_file(source)
-        recorded = recorded_decision_file(target)
-
-        context, _source, _target = make_context(
-            source_responses=source_responses,
-            target_responses={**target_responses, decision_cat("snap"): CommandResult(0, recorded, "")},
-        )
-        plan = await SnapSyncJob(context).plan()
-
-        assert "snap:hold:alpha" not in {diff.item_id for diff in plan.diffs}
-        assert "snap:hold:alpha" not in review_item_ids(plan)
-
-    @pytest.mark.asyncio
-    async def test_recorded_hold_does_not_silence_the_snaps_own_presence_diff(self) -> None:
-        """E70, H128 — a mark given on a hold decided on its own is about the hold alone: a
-        later run that finds `alpha` gone from the target still offers the install, and the
-        question carries no hold clause.
-
-        Round 1 marks the hold while `alpha` sits on both machines, which is what makes the
-        hold an item of its own to mark; round 2 removes it from the target.
-        """
-        source_responses = {"snap list --all": CommandResult(0, SNAP_ALPHA_HELD, "")}
-        context, source, _target = make_context(
-            source_responses=source_responses,
-            target_responses={"snap list --all": CommandResult(0, SNAP_ALPHA_UNHELD, "")},
-        )
-        await record_skip_always(SnapSyncJob(context), "snap:hold:alpha")
-        recorded = recorded_decision_file(source)
-
-        context, _source, _target = make_context(
-            source_responses={**source_responses, decision_cat("snap"): CommandResult(0, recorded, "")},
-            target_responses={"snap list --all": CommandResult(0, "No snaps are installed yet.\n", "")},
-        )
-        plan = await SnapSyncJob(context).plan()
-
-        item_ids = {diff.item_id for diff in plan.diffs}
-        assert "snap:hold:alpha" not in item_ids
-        assert "snap:alpha" in item_ids
-        entries = {entry.item_id: entry for group in plan.groups for entry in group.entries}
-        assert "holding" not in (entries["snap:alpha"].detail or "")
-
-
-class TestFlatpakMaskDecisions:
-    """Positive control: a mask is a real `FlatpakMaskItem` carrying its own id, so it was
-    already filtered on the way in — and must stay filtered."""
-
-    @pytest.mark.asyncio
-    async def test_declined_mask_is_recorded_on_source_and_never_re_offered(self) -> None:
-        """H123, N6 — a marked flatpak mask lands in flatpak's own decision file on the machine that holds it."""
-        mask_id = "flatpak:mask:user:org.example.Blocked"
-        source_responses = {"flatpak --user mask": CommandResult(0, "  org.example.Blocked\n", "")}
-
-        context, source, target = make_context(source_responses=source_responses)
-        await record_skip_always(FlatpakSyncJob(context), mask_id)
-        assert wrote_decision_file(source)
-        assert not wrote_decision_file(target)
-        recorded = recorded_decision_file(source)
-
-        context, _source, _target = make_context(
-            source_responses={**source_responses, decision_cat("flatpak"): CommandResult(0, recorded, "")}
-        )
-        plan = await FlatpakSyncJob(context).plan()
-
-        assert not [diff for diff in plan.diffs if diff.item_class == ItemClass.FLATPAK_MASK]
-        assert mask_id not in review_item_ids(plan)
-
-    @pytest.mark.asyncio
-    async def test_declined_unmask_is_recorded_on_target_and_never_re_offered(self) -> None:
-        """F131, H123, N6 — a marked flatpak unmask lands on the machine that holds the mask."""
-        mask_id = "flatpak:mask:system:org.example.Blocked"
-        target_responses = {"flatpak --system mask": CommandResult(0, "  org.example.Blocked\n", "")}
-
-        context, source, target = make_context(target_responses=target_responses)
-        await record_skip_always(FlatpakSyncJob(context), mask_id)
-        assert wrote_decision_file(target)
-        assert not wrote_decision_file(source)
-        recorded = recorded_decision_file(target)
-
-        context, _source, _target = make_context(
-            target_responses={**target_responses, decision_cat("flatpak"): CommandResult(0, recorded, "")}
-        )
-        plan = await FlatpakSyncJob(context).plan()
-
-        assert not [diff for diff in plan.diffs if diff.item_class == ItemClass.FLATPAK_MASK]
-        assert mask_id not in review_item_ids(plan)

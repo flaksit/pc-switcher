@@ -77,7 +77,7 @@ from uuid import uuid4
 import pytest
 
 from pcswitcher.executor import BashLoginRemoteExecutor
-from pcswitcher.jobs.apt_sync.items import AptHoldItem, AptPackageItem
+from pcswitcher.jobs.apt_sync.items import AptPackageItem
 from pcswitcher.jobs.flatpak_sync import FlatpakItem
 from pcswitcher.jobs.manual_installs_sync import UnreproducibleItem
 from pcswitcher.jobs.packages.review import PACKAGE_REVIEW_AUTOMATION_ENV, Decision
@@ -466,22 +466,29 @@ _WHOLE_RUN_FAILURE_MARKER = f"{_CONTINUE_TEST_MARKER_ROOT}/pcswitcher-it-whole-r
 _WHOLE_RUN_FAILURE_MESSAGE = "deliberate whole-run integration-test failure"
 
 
-# The four directories `manual_installs_sync` scans one level deep, restated rather than
-# imported (the same rule this module's snap/flatpak parsers follow): the claim is about
-# what a real machine's own `/usr/local` and `/opt` contain, so a test agreeing with
-# whatever the shipped constant currently says would assert nothing.
-_UNOWNED_SCAN_ROOTS = ("/usr/local", "/opt", "/usr/local/bin", "/usr/local/lib")
+# What a stock Ubuntu 24.04 machine's own `/usr/local` holds — the two scan roots plus the
+# nine entries `base-files` creates under `/usr/local`, none of which may ever be presented
+# as a finding. Restated rather than imported (the same rule this module's snap/flatpak
+# parsers follow): the claim is about what a real machine looks like, so a test agreeing
+# with whatever the shipped constant currently says would assert nothing.
+_STOCK_DIRECTORIES = (
+    "/opt",
+    "/usr/local",
+    "/usr/local/bin",
+    "/usr/local/etc",
+    "/usr/local/games",
+    "/usr/local/include",
+    "/usr/local/lib",
+    "/usr/local/man",
+    "/usr/local/sbin",
+    "/usr/local/share",
+    "/usr/local/src",
+)
 
 # What a run with nobody to ask writes about each item it could not ask about
 # (`packages.review._warn_every_item_unasked`). It is the only place a run writes down its
 # WHOLE finding set, one line per item, which is what makes it countable.
 _UNASKED_ITEM_MARKER = "not asked, declined for this run (no TTY): "
-
-# How many unreproducible findings a user can still answer one at a time. Not a measured
-# figure — the criterion says "few enough to review by hand", and this is the number past
-# which that stops being true. It is deliberately loose: the test's subject is an order of
-# magnitude, not an exact inventory.
-_HAND_REVIEWABLE_FINDING_LIMIT = 25
 
 
 def _unowned_item_id(path: str) -> str:
@@ -493,11 +500,20 @@ def _unowned_item_id(path: str) -> str:
 
 
 async def _create_unowned_marker(executor: BashLoginRemoteExecutor, path: str) -> None:
-    """Create an empty, dpkg-unowned directory at `path` (requires root: `/opt` is
-    root-owned) so `ManualInstallsSyncJob._scan_unowned_installs` detects it as an UNREPRODUCIBLE
-    item on the next `plan()`.
+    """Create a dpkg-unowned directory at `path` holding one file (requires root: `/opt` is
+    root-owned) so `ManualInstallsSyncJob._scan_unowned_installs` detects `path` ITSELF as an
+    UNREPRODUCIBLE item on the next `plan()`.
+
+    The file is what makes it that item: a directory with no file anywhere beneath it is an
+    empty shape and no finding at all, and one holding only directories is judged by its
+    shape instead (`PKG-FR-MANUAL-SCOPE`, `PKG-FR-MANUAL-OPT-SHAPE`).
     """
-    result = await executor.run_command(f"sudo mkdir --parents {shlex.quote(path)}", login_shell=False, timeout=15.0)
+    quoted = shlex.quote(path)
+    result = await executor.run_command(
+        f"sudo mkdir --parents {quoted} && sudo touch {shlex.quote(f'{path}/marker')}",
+        login_shell=False,
+        timeout=15.0,
+    )
     assert result.success, f"Failed to create unowned marker {path}: {result.stderr}"
 
 
@@ -825,12 +841,6 @@ def parse_rfc3339_utc(value: str) -> datetime:
         raise AssertionError(f"{text!r} is not an RFC3339 instant: {exc}") from exc
 
 
-async def _apt_holds(executor: BashLoginRemoteExecutor) -> set[str]:
-    """The package names `apt-mark showhold` reports on `executor`'s machine."""
-    result = await executor.run_command("apt-mark showhold", login_shell=False, timeout=15.0)
-    return set(nonblank_lines(result.stdout))
-
-
 # The orchestrator's own sync-window hold expression (`orchestrator._SNAP_HOLD_TIMESTAMP_CMD`
 # / `_apply_snap_hold`), restated rather than imported: those names are private to
 # `orchestrator.py`, and this module deliberately re-derives what it asserts against (the
@@ -889,25 +899,6 @@ async def _holdable_snaps(executor: BashLoginRemoteExecutor, count: int = 1) -> 
         "They are created by tests/integration/scripts/internal/vm-test-fixtures.sh."
     )
     return subjects
-
-
-async def _common_apt_package(pc1_executor: BashLoginRemoteExecutor, pc2_executor: BashLoginRemoteExecutor) -> str:
-    """The first (alphabetically) package manually installed on BOTH machines -- a safe
-    subject for a hold round trip, which changes only dpkg selection state and never
-    installs or removes anything, so it needs none of `pick_safe_removal_candidates`'
-    reverse-dependency vetting.
-
-    Both VMs come from one baseline, so their manual sets are identical and non-empty;
-    an empty intersection means the machines are not what these tests assume.
-    """
-    pc1_manual = await pc1_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0)
-    pc2_manual = await pc2_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0)
-    shared = sorted(set(nonblank_lines(pc1_manual.stdout)) & set(nonblank_lines(pc2_manual.stdout)))
-    assert shared, (
-        "No package is manually installed on both pc1 and pc2: searched the intersection "
-        "of both machines' `apt-mark showmanual` output."
-    )
-    return shared[0]
 
 
 # -- flatpak helpers: independent of flatpak_sync's private parsers ------------------
@@ -2993,7 +2984,7 @@ class TestManualInstallsSyncEndToEnd:
                     timeout=120.0,
                 )
 
-    async def test_the_scan_of_a_real_machine_names_few_findings_and_never_its_own_roots(
+    async def test_the_scan_of_a_real_machine_never_names_the_stock_skeleton(
         self,
         pc1_executor: BashLoginRemoteExecutor,
         pc2_executor: BashLoginRemoteExecutor,
@@ -3001,19 +2992,18 @@ class TestManualInstallsSyncEndToEnd:
         pc2_with_pcswitcher: BashLoginRemoteExecutor,
         reset_pcswitcher_state: None,
     ) -> None:
-        """G28 — What the unreproducible scan actually names on a stock Ubuntu 24.04 machine:
-        few enough findings to review by hand, and never one of the four directories the scan
-        walks.
+        """G28 — What the unreproducible scan names on a stock Ubuntu 24.04 machine never
+        includes a directory the distribution itself created: neither scan root, nor any of
+        the nine entries `base-files` makes under `/usr/local`.
 
         A characterisation test, so it asserts the PROPERTY rather than a golden list: the
         set of things under `/usr/local` and `/opt` on a real machine is not this project's
         to fix, and a list of them would fail on every unrelated package that ships one.
 
-        The roots matter because two of them (`/usr/local/bin`, `/usr/local/lib`) are also
-        entries of another root (`/usr/local`), so they are queried twice and reach the
-        ownership check like any other candidate. That they are not reported rests on dpkg
-        owning them on a real machine — exactly the kind of fact no mocked `dpkg --search`
-        can settle.
+        It has to run on a real machine because the skeleton is exactly where ownership does
+        not settle the question: dpkg owns none of those directories on a stock install, so
+        nothing but the scan's own rule keeps them out — and a mocked `dpkg --search` can be
+        made to say anything about them.
 
         Run non-interactively on purpose, and with only this job enabled: with nobody to ask,
         the run NAMES every item it could not ask about (`PKG-FR-LOG-DECISIONS`,
@@ -3043,27 +3033,51 @@ class TestManualInstallsSyncEndToEnd:
 
             combined_output = sync_result.stdout + sync_result.stderr
             # A trailing space so the last finding on the line has the same right-hand
-            # boundary as every other one (see the root check below).
+            # boundary as every other one (see the skeleton check below).
             collapsed = f"{_collapse_run_output(combined_output)} "
-            findings = collapsed.count(_UNASKED_ITEM_MARKER)
             assert f"{_UNASKED_ITEM_MARKER}{witness_path} " in collapsed, (
                 f"the scan did not name {witness_path}, so this run says nothing about what it names.\n"
                 f"{combined_output}"
             )
-            assert findings <= _HAND_REVIEWABLE_FINDING_LIMIT, (
-                f"the scan named {findings} items on a stock machine, more than the "
-                f"{_HAND_REVIEWABLE_FINDING_LIMIT} a user can reasonably answer one at a time.\n{combined_output}"
-            )
-            for root in _UNOWNED_SCAN_ROOTS:
+            for stock in _STOCK_DIRECTORIES:
                 # The trailing space is the boundary: `/usr/local/bin` must not satisfy the
                 # check for `/usr/local`.
-                assert f"{_UNASKED_ITEM_MARKER}{root} " not in collapsed, (
-                    f"the scan reported its own root {root} as a finding, so dpkg does not own it on this machine "
-                    f"and every user would be asked to write an install snippet for a directory the distribution "
-                    f"ships.\n{combined_output}"
+                assert f"{_UNASKED_ITEM_MARKER}{stock} " not in collapsed, (
+                    f"the scan reported {stock}, a directory the distribution itself creates, so every user "
+                    f"would be asked to write an install snippet for a stock directory on every run.\n"
+                    f"{combined_output}"
                 )
         finally:
             await _remove_unowned_marker(pc1_executor, witness_path)
+
+    async def test_the_stock_skeleton_is_still_what_base_files_creates(
+        self, pc1_executor: BashLoginRemoteExecutor
+    ) -> None:
+        """G114 — the tripwire under the hardcoded skeleton: the machine's own
+        `base-files.postinst` must still create exactly the nine entries directly under
+        `/usr/local` that the scan refuses to present.
+
+        The list is hardcoded in the job for predictability — what the scan presents must not
+        change with whatever a postinst says on the day — so this is the assertion that
+        catches a distribution changing it: a failure here means the skeleton moved and the
+        constant has to follow, not that a run is broken.
+
+        `/usr/local` itself and `share/man` are excluded on purpose: the first is a scan root
+        rather than an entry of anything, and the second is not directly under `/usr/local`,
+        which is the only level the scan can meet these at.
+        """
+        postinst = await pc1_executor.run_command(
+            "cat /var/lib/dpkg/info/base-files.postinst", login_shell=False, timeout=15.0
+        )
+        assert postinst.success, f"could not read base-files.postinst: {postinst.stderr}"
+
+        created = set(re.findall(r"^\s*install_local_dir\s+(/usr/local/[^\s/]+)\s*$", postinst.stdout, re.MULTILINE))
+        symlinked = set(re.findall(r'ln -s\S*\s+\S+\s+"?\$DPKG_ROOT(/usr/local/[^\s/"]+)"?', postinst.stdout))
+
+        assert created | symlinked == {stock for stock in _STOCK_DIRECTORIES if stock.count("/") == 3}, (
+            "base-files no longer creates the `/usr/local` skeleton the scan is built on; "
+            f"it declares {sorted(created | symlinked)}.\n{postinst.stdout}"
+        )
 
 
 # `snap:hold:<name>` has no `SnapHoldItem` dataclass to build the id from -- `snap_sync`
@@ -3311,149 +3325,6 @@ class TestSnapHoldCaptureTiming:
                 f"pc1's per-snap hold on {name} did not reach pc2 (pc2 notes: {sorted(target_notes)}). "
                 "If the source capture ran inside the orchestrator's system-wide refresh.hold window and saw no "
                 "hold, #208 D9's capture-timing assumption is false and the capture must move earlier."
-            )
-        finally:
-            for executor in (pc1_executor, pc2_executor):
-                await executor.run_command(
-                    f"sudo snap refresh --unhold {shlex.quote(name)}", login_shell=False, timeout=60.0
-                )
-
-
-class TestBlockStateDecisionRoundTrip:
-    """A skip-always recorded against a hold in run 1 must silence that hold in run 2
-    (N3), for apt and for snap.
-
-    A block-state item's identity (`apt:hold:<pkg>`, `snap:hold:<name>`) exists on no
-    captured item -- it is derived from hold-set membership -- so the input-side
-    `filter_inert` cannot see it and the decision has to be honoured on the finished
-    diff. Getting this wrong is worse than merely noisy: the add direction is
-    default-ticked, so a re-emitted hold rides in on the next bulk accept and applies the
-    very block the user permanently declined.
-    """
-
-    async def test_skip_always_on_an_apt_hold_is_inert_next_run(
-        self,
-        pc1_executor: BashLoginRemoteExecutor,
-        pc2_executor: BashLoginRemoteExecutor,
-        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
-        pc2_with_pcswitcher: BashLoginRemoteExecutor,
-        reset_pcswitcher_state: None,
-    ) -> None:
-        """B42, B47, N4 — Run 1 records SKIP_ALWAYS for a source-only `apt-mark hold`; run 2 force-maps
-        the same item to APPLY and the hold still never lands on pc2.
-
-        Same proof shape as `test_skip_always_is_inert_in_both_roles`: if the item is
-        genuinely filtered out it never becomes a diff, so the APPLY has nothing to
-        attach to -- witnessed by pc2's own `apt-mark showhold`, not by log text.
-        """
-        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
-
-        candidate = await _common_apt_package(pc1_executor, pc2_executor)
-        item_id = AptHoldItem(name=candidate).item_id
-
-        try:
-            hold_result = await pc1_executor.run_command(
-                f"sudo apt-mark hold {shlex.quote(candidate)}", login_shell=False, timeout=30.0
-            )
-            assert hold_result.success, f"Failed to hold {candidate} on pc1: {hold_result.stderr}"
-            assert candidate not in await _apt_holds(pc2_executor), (
-                f"{candidate} is already held on pc2 before the run; the assertions below would prove nothing"
-            )
-
-            await _write_apt_sync_config(pc1_executor)
-
-            first_cmd = (
-                f"{_automation_env_assignment_multi({item_id: Decision.SKIP_ALWAYS})} "
-                "pc-switcher sync pc2 --yes --allow-first-sync"
-            )
-            first_result = await pc1_executor.run_command(first_cmd, timeout=300.0, login_shell=True)
-            assert first_result.success, (
-                f"skip-always run unexpectedly failed.\nstdout: {first_result.stdout}\nstderr: {first_result.stderr}"
-            )
-
-            # The hold is an INSTALL-direction item, so the decision lands on the SOURCE.
-            entries = await DecisionFile("apt", pc1_executor).load()
-            assert item_id in entries, (
-                f"{item_id} not recorded in pc1's apt decision file after a skip-always decision (D-08a)"
-            )
-            assert candidate not in await _apt_holds(pc2_executor), "skip-always must not itself apply the hold"
-
-            second_cmd = (
-                f"{_automation_env_assignment_multi({item_id: Decision.APPLY})} "
-                "pc-switcher sync pc2 --yes --allow-first-sync --allow-out-of-order"
-            )
-            second_result = await pc1_executor.run_command(second_cmd, timeout=300.0, login_shell=True)
-            assert second_result.success, (
-                f"second sync unexpectedly failed.\nstdout: {second_result.stdout}\nstderr: {second_result.stderr}"
-            )
-
-            assert candidate not in await _apt_holds(pc2_executor), (
-                f"{candidate} was held on pc2 despite a recorded skip-always for {item_id} -- the hold item was "
-                "re-emitted as a diff in the next run instead of being dropped (#208 D3's skip-always promise)"
-            )
-        finally:
-            for executor in (pc1_executor, pc2_executor):
-                await executor.run_command(
-                    f"sudo apt-mark unhold {shlex.quote(candidate)}", login_shell=False, timeout=30.0
-                )
-
-    async def test_skip_always_on_a_snap_hold_is_inert_next_run(
-        self,
-        pc1_executor: BashLoginRemoteExecutor,
-        pc2_executor: BashLoginRemoteExecutor,
-        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
-        pc2_with_pcswitcher: BashLoginRemoteExecutor,
-        reset_pcswitcher_state: None,
-    ) -> None:
-        """E68, H122, N5 — The snap half of the same requirement, whose identity (`snap:hold:<name>`) is
-        a strict superstring of the snap item's own (`snap:<name>`) -- so a filter that
-        matched on the plain prefix would silence the wrong item, and one that matched
-        only captured items would silence neither.
-        """
-        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
-
-        name = await _snap_subject(pc1_executor, pc2_executor)
-        item_id = _snap_hold_item_id(name)
-
-        try:
-            hold_result = await pc1_executor.run_command(
-                f"sudo snap refresh --hold=forever {shlex.quote(name)}", login_shell=False, timeout=60.0
-            )
-            assert hold_result.success, f"Failed to set a per-snap hold on pc1's {name}: {hold_result.stderr}"
-            assert "held" not in await _snap_notes(pc2_executor, name), (
-                f"{name} is already held on pc2 before the run; the assertions below would prove nothing"
-            )
-
-            await _write_package_sync_config(pc1_executor, snap_sync=True)
-
-            first_cmd = (
-                f"{_automation_env_assignment_multi({item_id: Decision.SKIP_ALWAYS})} "
-                "pc-switcher sync pc2 --yes --allow-first-sync"
-            )
-            first_result = await pc1_executor.run_command(first_cmd, timeout=300.0, login_shell=True)
-            assert first_result.success, (
-                f"skip-always run unexpectedly failed.\nstdout: {first_result.stdout}\nstderr: {first_result.stderr}"
-            )
-
-            entries = await DecisionFile("snap", pc1_executor).load()
-            assert item_id in entries, (
-                f"{item_id} not recorded in pc1's snap decision file after a skip-always decision (D-08a)"
-            )
-            assert "held" not in await _snap_notes(pc2_executor, name), "skip-always must not itself apply the hold"
-
-            second_cmd = (
-                f"{_automation_env_assignment_multi({item_id: Decision.APPLY})} "
-                "pc-switcher sync pc2 --yes --allow-first-sync --allow-out-of-order"
-            )
-            second_result = await pc1_executor.run_command(second_cmd, timeout=300.0, login_shell=True)
-            assert second_result.success, (
-                f"second sync unexpectedly failed.\nstdout: {second_result.stdout}\nstderr: {second_result.stderr}"
-            )
-
-            target_notes = await _snap_notes(pc2_executor, name)
-            assert "held" not in target_notes, (
-                f"{name} was held on pc2 despite a recorded skip-always for {item_id} (pc2 notes: "
-                f"{sorted(target_notes)}) -- the hold item was re-emitted as a diff in the next run"
             )
         finally:
             for executor in (pc1_executor, pc2_executor):

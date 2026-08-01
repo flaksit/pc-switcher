@@ -66,11 +66,16 @@ from pcswitcher.jobs.packages.items import (
     ItemClass,
     ItemDiff,
     Machines,
-    build_version_mismatch_detail,
 )
 from pcswitcher.jobs.packages.probes import require_answer
+from pcswitcher.jobs.packages.review import Decision
 from pcswitcher.jobs.packages.state import DecisionFile, filter_inert, marks_on_either
-from pcswitcher.jobs.packages.sync_core import ConvergeItemFailed, PackagePlan, PackageSyncJob
+from pcswitcher.jobs.packages.sync_core import (
+    ConvergeItemDeclined,
+    ConvergeItemFailed,
+    PackagePlan,
+    PackageSyncJob,
+)
 from pcswitcher.models import CommandResult, FirstSyncScope, Host, LogLevel, ValidationError
 from pcswitcher.sudoers import passwordless_sudo_hint
 
@@ -121,7 +126,8 @@ class SnapItem:
     FIELD, not part of the snap's identity, and defaults `False` so existing construction
     sites and the shared diff never have to name it. `snap_sync` populates it and diffs it
     into a separate `snap:hold:<name>` membership item (`ItemClass.SNAP_HOLD`), keeping the
-    hold a distinct review item from the snap itself.
+    hold's own `snap:hold:<name>` membership diff (`ItemClass.SNAP_HOLD`), which replicates
+    without review like every other block (`PKG-FR-BLOCKS-DERIVED`).
 
     `classic` and `devmode` are the snap's CONFINEMENT, likewise parsed from the Notes
     column and likewise FIELDS rather than identity, defaulted so existing construction
@@ -289,12 +295,17 @@ def _change_diff(item_id: str, source_item: SnapItem, target_item: SnapItem, mac
 
     `detail` names EVERY value that differs (`PKG-FR-SNAP-CASES`): one change can move
     both the revision and the channel, and naming the revision alone left the retrack out
-    of the only line the user reads before approving it. Each pair is labelled, since
-    "atlas has latest/edge" says nothing on its own about which of the two it is.
+    of the only line the user reads before approving it.
+
+    Worded as the effect on the target rather than as the two machines' states side by side
+    (`PKG-FR-NO-MARK-ON-SNAP-REVISION`): what the user is deciding is whether their machine's
+    revision is overwritten, and "atlas has 20, nomad has 15" leaves them to work out which
+    of the two survives. Naming each facet is still required — "20" says nothing on its own
+    about whether it is a revision or a channel.
     """
     detail = "; ".join(
-        f"{name}: {build_version_mismatch_detail(source_value, target_value, machines)}"
-        for name, source_value, target_value in (
+        f"overwrites {facet} {target_value} on {machines.target} with {facet} {source_value}"
+        for facet, source_value, target_value in (
             ("revision", source_item.revision, target_item.revision),
             ("channel", source_item.channel, target_item.channel),
         )
@@ -588,19 +599,6 @@ class SnapSyncJob(PackageSyncJob):
         return PackagePlan(manager=self.manager_id, diffs=diffs, groups=groups)
 
     @override
-    def _software_for_block(self, block: ItemDiff, software: Mapping[str, ItemDiff]) -> ItemDiff | None:
-        """The snap a `snap:hold:<name>` item freezes, where that snap is itself an item this
-        run (`PKG-FR-SNAP-HOLD`, `PKG-FR-BLOCKS-REPLICATE`).
-
-        A refresh hold names exactly one snap, so this is a lookup. The removal direction
-        never pairs: `_diff_snap_holds` reads hold intent off the SOURCE's snaps alone, so a
-        snap only the target has has no hold item to ride its removal.
-        """
-        if block.item_class is not ItemClass.SNAP_HOLD:
-            return None
-        return software.get(f"{_SNAP_ID_PREFIX}{block.item_id.removeprefix(_SNAP_HOLD_ID_PREFIX)}")
-
-    @override
     async def converge(self, diff: ItemDiff) -> CommandResult:
         """Install/refresh at the source's explicit revision, switch channel only when
         it differs, or remove (never purge) — the only D-06-safe verbs (module
@@ -734,11 +732,20 @@ class SnapSyncJob(PackageSyncJob):
         from the item_id's `snap:hold:` suffix, which `_diff_snap_holds` only ever built
         from a concrete source/target snap name, so it is never empty.
 
-        Selection state only, no gating (D6): a hold on a snap the user skipped
-        installing this run hits an absent snap and fails — that is a normal per-item
-        failure (D-27, the exit code alone decides pass/fail), not a gated abort.
+        A hold whose snap this run was asked to install and did not is refused before any
+        command (`PKG-FR-BLOCKS-DERIVED`): the hold replicates without review, so nothing
+        else carries the user's answer to it, and holding a snap the target does not have is
+        neither meaningful nor what they asked for. Declined, never failed — the user's own
+        answer is what withdrew it. An install that was approved and then BROKE is the other
+        case, and it needs nothing here: `snap refresh --hold` on the absent snap exits
+        non-zero and fails that hold as its own item (D-27).
         """
         raw_name = diff.item_id.removeprefix(_SNAP_HOLD_ID_PREFIX)
+        if diff.action == DiffAction.INSTALL and self._install_was_declined(raw_name):
+            raise ConvergeItemDeclined(
+                f"hold on {raw_name} not applied: its install was not approved, and holding a snap "
+                f"{self.machines.target} lacks is not what was asked for"
+            )
         name = shlex.quote(raw_name)
         flag = "--hold=forever" if diff.action == DiffAction.INSTALL else "--unhold"
         verb = "hold" if diff.action == DiffAction.INSTALL else "unhold"
@@ -746,6 +753,23 @@ class SnapSyncJob(PackageSyncJob):
             f"sudo snap refresh {flag} {name}",
             login_shell=False,
             mutates=f"{verb} snap {raw_name}",
+        )
+
+    def _install_was_declined(self, name: str) -> bool:
+        """Whether this run offered to install `name` and the user did not approve it.
+
+        `False` where the snap is no item at all — the target already has it and the hold is
+        the whole change — and where the item is a revision or channel change, which says
+        nothing about whether the snap is present.
+        """
+        assert self._accepted_plan is not None
+        assert self._accepted_outcome is not None
+        decisions = self._accepted_outcome.decisions
+        return any(
+            diff.item_id == f"{_SNAP_ID_PREFIX}{name}"
+            and diff.action is DiffAction.INSTALL
+            and decisions.get(diff.item_id) != Decision.APPLY
+            for diff in self._accepted_plan.diffs
         )
 
     @override

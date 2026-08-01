@@ -6,6 +6,7 @@ Split out of the former single `test_apt_sync.py`.
 from __future__ import annotations
 
 import dataclasses
+import inspect
 from collections.abc import Sequence
 from unittest.mock import AsyncMock, MagicMock
 
@@ -13,6 +14,7 @@ import pytest
 
 from pcswitcher.jobs import JobContext
 from pcswitcher.jobs.apt_sync import AptSyncJob
+from pcswitcher.jobs.apt_sync.commands import install_args
 from pcswitcher.jobs.packages.items import DiffAction, ItemDiff
 from pcswitcher.jobs.packages.review import (
     COLLATERAL_REVIEW_ACTION,
@@ -32,7 +34,6 @@ from tests.unit.jobs.apt.helpers import (
     foo_source_responses,
     foo_target_side_effect,
     install_reviewer,
-    installed_on_target,
     make_context,
     real_installs,
     respond_to,
@@ -255,87 +256,42 @@ def _manual_collateral_context() -> tuple[JobContext, MagicMock, MagicMock]:
     )
 
 
-class TestTheRehearsalSurvivesAStaleTargetHold:
-    """Measured on `ubuntu:24.04`: `apt-get --dry-run install --assume-yes` refuses the
-    WHOLE batch with `E: Held packages were changed` when one name in it carries a hold for
-    a package the machine does not have. Without the flag, one such name would end planning
-    for every package in the run.
+class TestNoRehearsalEverAsksToMoveHeldPackages:
+    """`--allow-change-held-packages` appears in no command a run issues, rehearsal included.
+
+    apt refusing to move a held package is the only thing protecting a held package apt
+    installed automatically on the target. The one case that used to need the flag — a name
+    the target held without having it installed, which apt refuses the whole batch over — can
+    no longer reach a rehearsal: `PKG-FR-HOLD-WITHOUT-PACKAGE` ends the run over such a hold
+    while planning.
     """
 
     @pytest.mark.asyncio
-    async def test_the_install_rehearsal_asks_apt_to_allow_the_held_name(self) -> None:
-        """B20, D38 — the flag the plan-time rehearsal asks for, and the real install withholds."""
-        rehearsal = "apt-get --dry-run install --assume-yes --no-install-recommends --allow-change-held-packages pkg-a"
-        context, _source, target = make_context(
-            source_responses={
-                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
-                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
-            },
-            target_responses={
-                "apt-mark showmanual": CommandResult(0, "other-manual\n", ""),
-                "db:Status-Status": installed_on_target("other-manual"),
-                "dpkg-query": CommandResult(0, "other-manual\t1.0\n", ""),
-                "apt-mark showhold": CommandResult(0, "pkg-a\n", ""),
-                "apt-cache policy": CommandResult(0, target_offers("pkg-a"), ""),
-                rehearsal: CommandResult(0, "Inst pkg-a (1.0)\nRemv other-manual [1.0]\n", ""),
-            },
-        )
-
-        plan = await AptSyncJob(context).plan()
-
-        assert rehearsal in all_calls(target)
-        assert "apt:collateral:install:remove:other-manual" in {diff.item_id for diff in plan.diffs}
-
-    @pytest.mark.asyncio
-    async def test_the_flag_can_raise_a_question_about_collateral_the_real_install_would_refuse(self) -> None:
-        """D38 — the accepted cost of the flag, pinned: `held-manual` is held AND installed on
-        the target, so the real `apt-get install` would refuse to touch it outright, while
-        the rehearsal — which asks apt to allow held packages — reports it as collateral and
-        a question is raised about a change that would never happen. Over-asking, never
-        under-asking.
-        """
-        rehearsal = "apt-get --dry-run install --assume-yes --no-install-recommends --allow-change-held-packages pkg-a"
-        context, _source, _target = make_context(
-            source_responses={
-                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
-                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
-            },
-            target_responses={
-                "apt-mark showmanual": CommandResult(0, "held-manual\n", ""),
-                # Listed before `dpkg-query`, which its command also contains: `pkg-a` is held
-                # without being installed — the stale hold that makes the run ask for the flag
-                # — while `held-manual` is held AND installed.
-                "db:Status-Status": installed_on_target("held-manual"),
-                "dpkg-query": CommandResult(0, "held-manual\t1.0\n", ""),
-                "apt-mark showhold": CommandResult(0, "pkg-a\nheld-manual\n", ""),
-                "apt-cache policy": CommandResult(0, target_offers("pkg-a"), ""),
-                rehearsal: CommandResult(0, "Inst pkg-a (1.0)\nRemv held-manual [1.0]\n", ""),
-            },
-        )
-
-        plan = await AptSyncJob(context).plan()
-
-        assert "apt:collateral:install:remove:held-manual" in {diff.item_id for diff in plan.diffs}
-
-    @pytest.mark.asyncio
     async def test_an_ordinary_run_never_asks_for_it(self) -> None:
-        """B21, D38 — the flag would also let apt move OTHER held packages, which apt refusing is the
-        only thing protecting a held package apt installed automatically.
-        """
+        """B21 — no command in a run carrying an install and a real hold asks for the flag."""
         context, _source, target = make_context(
             source_responses={
-                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
-                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+                "apt-mark showmanual": CommandResult(0, "pkg-a\npkg-b\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\npkg-b\t1.0\n", ""),
+                "apt-mark showhold": CommandResult(0, "pkg-b\n", ""),
             },
             target_responses={
-                "apt-mark showmanual": CommandResult(0, "", ""),
-                "apt-cache policy": CommandResult(0, target_offers("pkg-a"), ""),
+                "apt-mark showmanual": CommandResult(0, "pkg-b\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-b\t1.0\n", ""),
+                "apt-cache policy": CommandResult(0, target_offers("pkg-a", "pkg-b"), ""),
             },
         )
 
         await AptSyncJob(context).plan()
 
         assert not any("--allow-change-held-packages" in cmd for cmd in all_calls(target))
+
+    def test_the_install_arguments_cannot_express_it(self) -> None:
+        """B20 — the flag is unreachable by construction: `install_args` has no parameter that
+        could reintroduce it for the rehearsal alone.
+        """
+        assert "--allow-change-held-packages" not in install_args(["pkg-a"])
+        assert list(inspect.signature(install_args).parameters) == ["names"]
 
 
 class TestCollateralFlow:

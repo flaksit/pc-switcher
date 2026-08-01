@@ -67,7 +67,7 @@ from pcswitcher.jobs.packages.review import (
 )
 from pcswitcher.jobs.packages.state import DecisionEntry, DecisionFile, filter_inert, marks_on_either
 from pcswitcher.jobs.packages.sync_core import ConvergeItemFailed, PackagePlan, PackageSyncJob
-from pcswitcher.models import CommandResult, FirstSyncScope, Host, LogLevel, ValidationError
+from pcswitcher.models import CommandResult, FirstSyncScope, Host, LogLevel, SyncAbortedByUser, ValidationError
 from pcswitcher.sudoers import passwordless_sudo_hint
 
 
@@ -144,12 +144,11 @@ class AptSyncJob(PackageSyncJob):
         # `plan_second_round` decides which are raised at all.
         self._repo_users: dict[str, list[str]] = {}
         # Every package dpkg reports installed on the target, read at most once per run and
-        # only by a run that has something to ask it: the hold handling
-        # (`PKG-FR-APT-HOLD-VERSION`) and repository-usage counting (`PKG-FR-REPO-DELETE`)
-        # share the answer, and a machine holding nothing with no target-only repository
-        # pays no command at all. `None` means "not read yet".
+        # only by a run that has something to ask it: the bookkeeping-hold check
+        # (`PKG-FR-HOLD-WITHOUT-PACKAGE`) and repository-usage counting
+        # (`PKG-FR-REPO-DELETE`) share the answer, and a machine holding nothing with no
+        # target-only repository pays no command at all. `None` means "not read yet".
         self._target_installed: frozenset[str] | None = None
-        self._stale_holds: frozenset[str] = frozenset()
         self._work = self._assemble_work(
             source_facts=OriginFacts.empty(),
             target_facts=OriginFacts.empty(),
@@ -170,7 +169,6 @@ class AptSyncJob(PackageSyncJob):
         distribution_owned: frozenset[str],
         origins: OriginClassifier | None,
         collateral: Collateral | None,
-        stale_holds: frozenset[str] = frozenset(),
     ) -> _Work:
         """Wire the collaborators over one set of captured facts.
 
@@ -240,11 +238,9 @@ class AptSyncJob(PackageSyncJob):
                     manager_id=self.manager_id,
                     reviewer=self.context.reviewer,
                     refresh=partial(self._refresh.ensure, self.target, self.manager_id),
-                    stale_holds=stale_holds,
                     log=self._log,
                 ),
                 held_versions=self._held_versions,
-                stale_holds=stale_holds,
             ),
         )
 
@@ -299,7 +295,6 @@ class AptSyncJob(PackageSyncJob):
             target_manual_set=target_manual_set,
             origins=origins,
             marked=self._target_marked_packages(),
-            stale_holds=self._stale_holds,
             log=self._log,
         )
         collateral_diffs = await collateral.plan_time(base_plan.diffs)
@@ -367,12 +362,7 @@ class AptSyncJob(PackageSyncJob):
         target_captured, policy = await self._probe.capture_target_items([item.name for item in source_items])
         target_items = await filter_inert(target_captured, marked)
         source_hold_names, target_hold_names = await self._probe.collect_hold_sets()
-        # A hold naming a package the target does not have is dpkg selection state that
-        # freezes nothing and refuses the install the source is asking for. Kept apart from
-        # the real holds here, once, so the diff and the converger agree on which is which.
-        self._stale_holds = frozenset()
-        if target_hold_names:
-            self._stale_holds = target_hold_names - await self._installed_on_target()
+        await self._refuse_holds_without_their_package(source_hold_names, target_hold_names)
         origin_plan = origins.classify(source_items, target_items, policy, source_origins)
         diffs = self._drop_inert_diffs(
             diff_apt_packages(
@@ -382,7 +372,6 @@ class AptSyncJob(PackageSyncJob):
                 self.machines,
                 source_hold_names,
                 target_hold_names,
-                self._stale_holds,
                 self._marked_packages(source_decisions),
                 self._marked_packages(target_decisions),
             ),
@@ -414,6 +403,42 @@ class AptSyncJob(PackageSyncJob):
         if self._target_installed is None:
             self._target_installed = await self._probe.capture_target_installed()
         return self._target_installed
+
+    async def _refuse_holds_without_their_package(
+        self, source_hold_names: frozenset[str], target_hold_names: frozenset[str]
+    ) -> None:
+        """End the run over a hold naming a package that machine does not have
+        (`PKG-FR-HOLD-WITHOUT-PACKAGE`), on either machine.
+
+        Such a hold freezes nothing — there is no installed version to freeze — while
+        refusing every later attempt to install the name, on the machine that carries it and,
+        once replicated, on the other. It is a bookkeeping failure the user has to clear, so
+        the run ends and says which package on which machine, rather than carrying a branch
+        for a state that should not exist.
+
+        Raised while planning, before anything is written, which is where the reads that
+        answer it already are. Each machine's installed set is read only if that machine
+        holds something at all, so an ordinary run pays nothing; the target's is the same
+        single read `PKG-FR-REPO-DELETE`'s usage count uses.
+
+        `SyncAbortedByUser` for the same reason an unparsable snippet registry raises it
+        (`PKG-FR-REGISTRY-CONSENT`): the run must end for the user to repair something by
+        hand, which is not this job failing and not the tool breaking.
+        """
+        stray: list[tuple[str, frozenset[str]]] = []
+        if source_hold_names:
+            stray.append((self.machines.source, source_hold_names - await self._probe.capture_source_installed()))
+        if target_hold_names:
+            stray.append((self.machines.target, target_hold_names - await self._installed_on_target()))
+        for machine, names in stray:
+            if not names:
+                continue
+            listed = ", ".join(sorted(names))
+            raise SyncAbortedByUser(
+                f"{machine} holds apt package(s) it does not have installed: {listed}. "
+                f"A hold on a package the machine lacks freezes nothing and refuses every later attempt to "
+                f"install it. Clear it on {machine} with `sudo apt-mark unhold {listed}`, then sync again."
+            )
 
     @staticmethod
     def _marked_packages(decisions: Mapping[str, DecisionEntry]) -> frozenset[str]:
@@ -564,7 +589,6 @@ class AptSyncJob(PackageSyncJob):
             distribution_owned=distribution_owned,
             origins=origins,
             collateral=collateral,
-            stale_holds=self._stale_holds,
         )
 
         diffs: list[ItemDiff] = []
@@ -579,21 +603,6 @@ class AptSyncJob(PackageSyncJob):
         diffs.extend(pin_diffs)
         diffs.extend(diff_apt_configs(source_repo.conf_digests, target_repo.conf_digests, self.machines))
         return diffs
-
-    @override
-    def _software_for_block(self, block: ItemDiff, software: Mapping[str, ItemDiff]) -> ItemDiff | None:
-        """The package an `apt:hold:<name>` item freezes, where that package is itself an
-        item this run (`PKG-FR-APT-HOLD-ITEM`, `PKG-FR-BLOCKS-REPLICATE`).
-
-        A hold names exactly one package, so the pairing is a lookup rather than a match. A
-        package that is only REPORTED — a version difference, an origin divergence, an origin
-        the run cannot reproduce — is absent from `software` and so pairs with nothing: there
-        is no decision on it for the hold to ride, which is what leaves `PKG-FR-APT-HOLD-INERT`
-        deciding those cases as it always did.
-        """
-        if block.item_class is not ItemClass.APT_HOLD:
-            return None
-        return software.get(f"{APT_PACKAGE_ID_PREFIX}{block.item_id.removeprefix(APT_HOLD_ID_PREFIX)}")
 
     @override
     def _build_review_groups(self, diffs: Sequence[ItemDiff]) -> tuple[ReviewGroup, ...]:

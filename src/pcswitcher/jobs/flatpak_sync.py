@@ -156,7 +156,6 @@ uninstalling the app the user has and reinstalling it from the other vendor.
 
 from __future__ import annotations
 
-import fnmatch
 import shlex
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -1149,28 +1148,6 @@ def _remove_mask_diff(item: FlatpakMaskItem) -> ItemDiff:
     )
 
 
-def _mask_covers(mask_scope: str, pattern: str, ref_item_id: str) -> bool:
-    """Whether `pattern`, masked in `mask_scope`, covers the ref `ref_item_id` identifies.
-
-    flatpak matches a mask against `<application>/<arch>/<branch>`, and a pattern may name
-    fewer components than that — `org.example.App` masks every arch and branch of it. The
-    missing trailing components are therefore filled in as `*` before the glob runs, which
-    is what makes the bare-id form and the fully-qualified form both work.
-
-    Deliberately conservative rather than a re-implementation of flatpak's own matcher: the
-    only thing this decides is whether a mask rides an application's review question
-    (`FlatpakSyncJob._software_for_block`), and that pairing requires exactly one match — so
-    a pattern this reads as matching more broadly than flatpak would simply keeps its own
-    review item, which is the rule the pairing is an exception to.
-    """
-    scope, ref = _split_flatpak_item_id(ref_item_id, "ref")
-    if scope != mask_scope:
-        return False
-    parts = pattern.split("/")
-    completed = "/".join([*parts, *["*"] * (3 - len(parts))]) if len(parts) < 3 else pattern
-    return fnmatch.fnmatchcase(ref, completed)
-
-
 def _diff_flatpak_masks(
     source_items: Sequence[FlatpakMaskItem], target_items: Sequence[FlatpakMaskItem]
 ) -> list[ItemDiff]:
@@ -1495,8 +1472,14 @@ class FlatpakSyncJob(PackageSyncJob):
         # would hide the URL an origin comparison runs on or keep a dead remote configured
         # for good.
         installed_target_remotes = await self._query_all_target_remotes()
-        source_masks = await filter_inert(await self._capture_all_source_masks(), marked)
-        target_masks = await filter_inert(await self._query_all_target_masks(), marked)
+        # No `filter_inert` pass on either side's masks either: a mask is derived and no
+        # answer about one can be recorded (`PKG-FR-BLOCKS-DERIVED`), so an entry naming one
+        # — left by an older version of the tool, or written by hand — must not silence a
+        # replication the user never declined. A mark on an APPLICATION still reaches the
+        # masks that cover it, through the ref filtering above: the mask lands on a machine
+        # whose copy of that application the mark protects, which is what the mark is about.
+        source_masks = await self._capture_all_source_masks()
+        target_masks = await self._query_all_target_masks()
 
         self._source_refs_by_id = {item.item_id: item for item in source_refs}
         self._source_remotes_by_id = {item.item_id: item for item in source_remotes}
@@ -1518,9 +1501,9 @@ class FlatpakSyncJob(PackageSyncJob):
         # suppress an auto-pulled dependency of a ref being installed the same run;
         # converge() carries the pattern fully in the item_id, so masks (unlike refs) need no
         # source-side cache.
-        # Every flatpak item class carries its own id into `filter_inert` above, so this
-        # pass is a no-op backstop here — kept so all four `plan()`s end the same way and
-        # the read path can never drift from `_record_permanent_skips`'s write path.
+        # Every reviewable flatpak item class carries its own id into `filter_inert` above,
+        # so this pass is a no-op backstop here — kept so all four `plan()`s end the same way
+        # and the read path can never drift from `_record_permanent_skips`'s write path.
         diffs = self._drop_inert_diffs((*ref_diffs, *mask_diffs), source_decisions, target_decisions)
 
         self._capture_remote_conflicts(diffs, installed_target_refs, target_decisions)
@@ -1665,40 +1648,6 @@ class FlatpakSyncJob(PackageSyncJob):
         self._derived_remotes = tuple(item for item in derived if item.remote_id not in skipped)
         self._failed_derived_remotes = dict(skipped)
         super().accept_review(plan, outcome)
-
-    @override
-    def _software_for_block(self, block: ItemDiff, software: Mapping[str, ItemDiff]) -> ItemDiff | None:
-        """The one application a `flatpak:mask:<scope>:<pattern>` item covers, where that
-        application is itself an item this run (`PKG-FR-FLATPAK-MASK`,
-        `PKG-FR-BLOCKS-REPLICATE`).
-
-        Unlike an apt or snap hold, a mask names software by PATTERN, so this is a match and
-        not a lookup — and the match must be exact about how many items it catches. A pattern
-        matching NO item this run is the ordinary case (`PKG-FR-FLATPAK-MASK` replicates a
-        mask whether or not anything matches it) and keeps its own item; one matching MORE
-        than one item keeps its own item too, because it would otherwise have to ride two
-        questions whose answers can disagree, and there would be no single decision to obey.
-
-        The comparison is scope-first: a mask belongs to one installation and can never
-        cover an application in the other.
-        """
-        if block.item_class is not ItemClass.FLATPAK_MASK:
-            return None
-        scope, pattern = _split_flatpak_item_id(block.item_id, "mask")
-        matched = [
-            diff
-            for diff in software.values()
-            if diff.item_class is ItemClass.FLATPAK_REF and _mask_covers(scope, pattern, diff.item_id)
-        ]
-        return matched[0] if len(matched) == 1 else None
-
-    @override
-    def _block_name(self, block: ItemDiff) -> str:
-        """The bare pattern: the merged question's clause already says which machine masks it
-        and the row it joins names the application, so the label's `(mask, <scope>)` tail
-        would say both a second time.
-        """
-        return _split_flatpak_item_id(block.item_id, "mask")[1]
 
     @override
     async def _record_permanent_skips(self, plan: PackagePlan, decisions: Mapping[str, Decision]) -> None:

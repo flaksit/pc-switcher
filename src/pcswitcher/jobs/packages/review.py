@@ -1149,13 +1149,16 @@ async def ask_gate(
     ui: PausableUI,
     logger: logging.Logger | None = None,
 ) -> bool | None:
-    """Ask one two-answer question about the MACHINE, outside the item review.
+    """Ask one two-answer question about the MACHINE, before the review it precedes.
 
-    Sibling of `review_items`, not a group inside it: a gate asks whether the job may run
-    at all, so one of its answers means there is no review to present. It reuses this
-    module for the pause-ask-resume `finally` and the interactivity test, which is the only
-    place in the codebase that knows how to run a blocking `questionary` prompt under the
-    Rich live display.
+    Sibling of `review_items`, not a group inside it: both callers ask something whose
+    answer decides what the review holds, so neither can be a row inside one. `apt_sync`'s
+    Ubuntu Pro gate asks whether the job may run at all, and one of its answers means there
+    is no review to present; `manual_installs_sync` asks whether an unowned `/opt` directory
+    is one application or a publisher's shelf (`PKG-FR-MANUAL-OPT-SHAPE`), and the answer
+    decides which items the review lists. It reuses this module for the pause-ask-resume
+    `finally` and the interactivity test, which is the only place in the codebase that knows
+    how to run a blocking `questionary` prompt under the Rich live display.
 
     True is the proceed answer and False the stop answer. `None` means nobody was there to
     ask — the caller owns that fallback, because "no TTY" means something different to

@@ -30,7 +30,6 @@ cost this module exists to avoid.
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from functools import partial
 from typing import NamedTuple
 
 from pcswitcher.executor import RemoteExecutor
@@ -114,7 +113,6 @@ class Collateral:
         target_manual_set: frozenset[str],
         origins: OriginClassifier,
         marked: frozenset[str] = frozenset(),
-        stale_holds: frozenset[str] = frozenset(),
         log: Log | None = None,
     ) -> None:
         self._target = target
@@ -124,10 +122,6 @@ class Collateral:
         # in the run mentions them — which makes the collateral question the only place the
         # user can be told the mark is about to be overrun.
         self._marked = marked
-        # Names the TARGET holds without having them installed. apt refuses the whole
-        # rehearsal batch over one of them, so the install direction asks for the flag that
-        # models what the real install does — see `plan_time`.
-        self._stale_holds = stale_holds
         self._log = log
         # Marks this run's own review recorded (`note_run_marks`), so both the second round's
         # question and the apply-time guard honour a "never offer again" answer given minutes
@@ -226,18 +220,7 @@ class Collateral:
         # absent from the target, so it is outside `protected()` and cannot be collateral.
         collateral: list[ItemDiff] = []
         if rehearsed:
-            # A candidate the target holds without having freezes nothing, and the real
-            # install clears the selection before it runs (`PackageConverger._install`).
-            # Without the flag apt refuses the whole batch over that one name and planning
-            # ends. What it costs: apt may also report collateral to OTHER held packages,
-            # which the real command refuses outright — the rehearsal over-asks rather than
-            # under-asks, and never the reverse.
-            install = (
-                partial(install_args, allow_held=True)
-                if any(name in self._stale_holds for name in rehearsed)
-                else install_args
-            )
-            collateral.extend(await self.for_direction(rehearsed, frozenset(), install, verb="Installing"))
+            collateral.extend(await self.for_direction(rehearsed, frozenset(), install_args, verb="Installing"))
         if remove_names:
             # A removal candidate is by definition installed on the target, so apt can
             # always resolve it and that set is never narrowed.
@@ -642,7 +625,6 @@ class LateCollateral:
         manager_id: str,
         reviewer: Reviewer | None,
         refresh: Refresh,
-        stale_holds: frozenset[str] = frozenset(),
         log: Log | None = None,
     ) -> None:
         self._collateral = collateral
@@ -652,7 +634,6 @@ class LateCollateral:
         self._manager_id = manager_id
         self._reviewer = reviewer
         self._refresh = refresh
-        self._stale_holds = stale_holds
         self._log = log
         self._asked = False
         # `{install item_id: why it was not applied}` — the installs a kept package cancels,
@@ -698,14 +679,9 @@ class LateCollateral:
         # metadata refresh comes first. It is the run's single one either way: a failure
         # here fails this install exactly as it does without a question to ask.
         await self._refresh()
-        install = (
-            partial(install_args, allow_held=True)
-            if any(name in self._stale_holds for name in names)
-            else install_args
-        )
         found = [
             item
-            for item in await self._collateral.for_direction(names, frozenset(), install, verb="Installing")
+            for item in await self._collateral.for_direction(names, frozenset(), install_args, verb="Installing")
             # A consequence the plan-time question already got a go-ahead for is not put
             # twice: the id is the consequence, so that answer covers this cause too. A
             # DECLINED one IS asked again — that answer cancelled the changes it was about,

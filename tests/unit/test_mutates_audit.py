@@ -135,14 +135,14 @@ _READ_ONLY_CALLS: dict[str, int] = {
     # all of them that go through a `run` callable: the five `/etc/apt` directory digest
     # listings, `/etc/apt/sources.list`, the two source-file reference scans (including the
     # post-write re-scan keyring collection counts against), the `cat` of a file a diff
-    # implicates, `dpkg --search` over the key files, and the `dpkg-query` version resolution.
+    # implicates, `dpkg --search` over the key files, the `dpkg-query` version resolution and
+    # each machine's installed-package set (`capture_source_installed`/`_target_installed`).
     "jobs/apt_sync/probe.py::AptProbe.source_run::run_command": 1,
     "jobs/apt_sync/probe.py::AptProbe.target_run::run_command": 1,
     "jobs/apt_sync/probe.py::AptProbe.source_manual_names::run_command": 1,
     "jobs/apt_sync/probe.py::AptProbe.source_policy::run_command": 1,
     "jobs/apt_sync/probe.py::AptProbe.query_target_items::run_command": 1,
     "jobs/apt_sync/probe.py::AptProbe.collect_hold_sets::run_command": 2,
-    "jobs/apt_sync/probe.py::AptProbe.capture_target_installed::run_command": 1,
     "jobs/apt_sync/probe.py::AptProbe.collect_target_policy::run_command": 1,
     "jobs/apt_sync/probe.py::AptProbe.capture_target_manual_set::run_command": 1,
     # `pro status --format json` on the target — a read, and the only thing that leaves
@@ -187,12 +187,18 @@ _READ_ONLY_CALLS: dict[str, int] = {
     "jobs/folder_sync.py::FolderSyncJob._needs_copy_pass::run_command": 2,
     "jobs/install_on_target.py::InstallOnTargetJob.validate::run_command": 1,
     "jobs/install_on_target.py::InstallOnTargetJob.execute::run_command": 1,
-    # manual_installs_sync: unowned-file scan, apt queries, and the target's $HOME.
+    # manual_installs_sync: the unowned-file scan's four steps, the apt queries, and the
+    # target's $HOME. Each scan step runs on whichever machine it is handed, since both are
+    # read now that a finding the target already holds is not presented
+    # (`PKG-FR-MANUAL-DIFF`); validate checks three tools across the two.
     "jobs/manual_installs_sync.py::ManualInstallsSyncJob._push_snippet_registry::run_command": 1,
     "jobs/manual_installs_sync.py::ManualInstallsSyncJob._scan_no_candidate_apt_packages::run_command": 1,
-    "jobs/manual_installs_sync.py::ManualInstallsSyncJob._scan_unowned_installs::run_command": 2,
-    "jobs/manual_installs_sync.py::ManualInstallsSyncJob._source_installed_names::run_command": 1,
-    "jobs/manual_installs_sync.py::ManualInstallsSyncJob.validate::run_command": 2,
+    "jobs/manual_installs_sync.py::ManualInstallsSyncJob._list_scan_entries::run_command": 1,
+    "jobs/manual_installs_sync.py::ManualInstallsSyncJob._scan_unowned_installs::run_command": 1,
+    "jobs/manual_installs_sync.py::ManualInstallsSyncJob._resolve_opt_shapes::run_command": 1,
+    "jobs/manual_installs_sync.py::ManualInstallsSyncJob._directories_holding_a_file::run_command": 1,
+    "jobs/manual_installs_sync.py::ManualInstallsSyncJob._installed_names::run_command": 1,
+    "jobs/manual_installs_sync.py::ManualInstallsSyncJob.validate::run_command": 3,
     # The decision file and snippet registry are read with `cat`; their writes are gated.
     "jobs/packages/state.py::DecisionFile.load::run_command": 1,
     "jobs/packages/state.py::SnippetRegistry.load::run_command": 1,

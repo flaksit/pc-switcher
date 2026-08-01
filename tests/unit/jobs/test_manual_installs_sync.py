@@ -139,26 +139,78 @@ BRSCAN3_REGISTRY_YAML = (
 )
 
 
-# The `dpkg-query` that names the source's installed set, matched by its one distinctive
-# field so a fixture keys on the question rather than on the whole format string.
+# The `dpkg-query` that names a machine's installed set, matched by its one distinctive
+# field so a fixture keys on the question rather than on the whole format string. Both
+# machines answer it now that a finding the target already holds is not presented
+# (`PKG-FR-MANUAL-DIFF`).
 _STATUS_QUERY = "db:Status-Status"
 
 
-def installed_on_source(*names: str) -> CommandResult:
+def installed_on(*names: str) -> CommandResult:
     """What that `dpkg-query` answers on a machine holding exactly `names`."""
     return CommandResult(0, "".join(f"{name}\tinstalled\n" for name in names), "")
 
 
-def respond_to(
-    mapping: dict[str, CommandResult], default: CommandResult | None = None
-) -> Callable[..., CommandResult]:
-    """Build a run_command side_effect matching by substring (first match wins)."""
+# What the target answers about its own installed set unless a test says otherwise. A
+# machine with no packages installed does not exist, and reading one as empty is a probe
+# failure by design (`_installed_names`), so every context needs an ordinary answer here for
+# the target's half of the diff to be reachable at all.
+_TARGET_HOLDS_NOTHING_OF_INTEREST = ("coreutils",)
+
+
+def scan_finds(*paths: str) -> CommandResult:
+    """What the scan's `find` prints: one `<type letter>\\t<path>` line per entry.
+
+    A path written with a trailing `/` is a directory, anything else a plain file — the
+    shorthand keeps a listing readable, and the type is what the `/opt` shape rule and the
+    empty-directory rule both turn on.
+    """
+    return CommandResult(
+        0, "".join(f"{'d' if path.endswith('/') else 'f'}\t{path.rstrip('/')}\n" for path in paths), ""
+    )
+
+
+class FakeGate:
+    """A `Reviewer` that answers the `/opt` shape question with a preset value and records
+    what it was asked. `None` is the answer a run with no terminal gets."""
+
+    def __init__(self, *, answer: bool | None) -> None:
+        self._answer = answer
+        self.asked: list[dict[str, str]] = []
+
+    async def ask_gate(self, *, title: str, message: str, proceed_label: str, stop_label: str) -> bool | None:
+        self.asked.append(
+            {"title": title, "message": message, "proceed_label": proceed_label, "stop_label": stop_label}
+        )
+        return self._answer
+
+    async def review(self, groups: Sequence[ReviewGroup]) -> ReviewOutcome:
+        raise AssertionError(f"no review was expected; got {len(groups)} group(s)")
+
+
+def every_directory_holds_a_file(command: str) -> CommandResult:
+    """The empty-directory probe's answer on a machine where every directory it was handed
+    holds a file somewhere below: it echoes each one back."""
+    asked = shlex.split(command.partition("for dir in ")[2].partition(";")[0])
+    return CommandResult(0, "".join(f"{path}\n" for path in asked), "")
+
+
+_Answer = CommandResult | Callable[[str], CommandResult]
+
+
+def respond_to(mapping: dict[str, _Answer], default: CommandResult | None = None) -> Callable[..., CommandResult]:
+    """Build a run_command side_effect matching by substring (first match wins).
+
+    A mapped value may be a function of the command, for the probes whose answer depends on
+    what they were asked — the empty-directory look is handed a different set of directories
+    by every test that reaches it.
+    """
     fallback = default if default is not None else CommandResult(exit_code=0, stdout="", stderr="")
 
     def _side_effect(cmd: str, **_: object) -> CommandResult:
         for pattern, result in mapping.items():
             if pattern in cmd:
-                return result
+                return result(cmd) if callable(result) else result
         return fallback
 
     return _side_effect
@@ -166,8 +218,8 @@ def respond_to(
 
 def make_context(
     *,
-    source_responses: dict[str, CommandResult] | None = None,
-    target_responses: dict[str, CommandResult] | None = None,
+    source_responses: dict[str, _Answer] | None = None,
+    target_responses: dict[str, _Answer] | None = None,
     dry_run: bool = False,
     reviewer: object | None = None,
     confirmer: object | None = None,
@@ -176,7 +228,11 @@ def make_context(
     source = MagicMock()
     source.run_command = AsyncMock(side_effect=respond_to(source_responses or {}))
     target = MagicMock()
-    target.run_command = AsyncMock(side_effect=respond_to(target_responses or {}))
+    target.run_command = AsyncMock(
+        side_effect=respond_to(
+            {_STATUS_QUERY: installed_on(*_TARGET_HOLDS_NOTHING_OF_INTEREST), **(target_responses or {})}
+        )
+    )
     target.send_file = AsyncMock(return_value=None)
     context = JobContext(
         config={},
@@ -307,7 +363,7 @@ class TestNoCandidateDetection:
         accounts for is presented as an item no package manager can reproduce."""
         context, _source, _target = make_context(
             source_responses={
-                _STATUS_QUERY: installed_on_source("code"),
+                _STATUS_QUERY: installed_on("code"),
                 "apt-cache policy": CommandResult(0, _POLICY_HAND_DEB, ""),
             }
         )
@@ -329,7 +385,7 @@ class TestNoCandidateDetection:
         """
         context, _source, _target = make_context(
             source_responses={
-                _STATUS_QUERY: installed_on_source("gh"),
+                _STATUS_QUERY: installed_on("gh"),
                 "apt-cache policy": CommandResult(0, _POLICY_REPO_INSTALLED, ""),
             }
         )
@@ -347,7 +403,7 @@ class TestNoCandidateDetection:
         """
         context, _source, _target = make_context(
             source_responses={
-                _STATUS_QUERY: installed_on_source("docker.io"),
+                _STATUS_QUERY: installed_on("docker.io"),
                 "apt-cache policy": CommandResult(0, _POLICY_PINNED_NO_CANDIDATE, ""),
             }
         )
@@ -362,7 +418,7 @@ class TestNoCandidateDetection:
         """G4 — the installed version comes from an ESM origin, so a repository supplies it."""
         context, _source, _target = make_context(
             source_responses={
-                _STATUS_QUERY: installed_on_source("7zip"),
+                _STATUS_QUERY: installed_on("7zip"),
                 "apt-cache policy": CommandResult(0, _POLICY_AUTO_DEP, ""),
             }
         )
@@ -381,7 +437,7 @@ class TestNoCandidateDetection:
         """
         context, source, _target = make_context(
             source_responses={
-                _STATUS_QUERY: installed_on_source("code"),
+                _STATUS_QUERY: installed_on("code"),
                 "apt-mark showmanual": CommandResult(0, "", ""),
                 "apt-cache policy": CommandResult(0, _POLICY_HAND_DEB, ""),
             }
@@ -401,7 +457,7 @@ class TestNoCandidateDetection:
         presented rather than left to apt."""
         context, _source, _target = make_context(
             source_responses={
-                _STATUS_QUERY: installed_on_source("mytool"),
+                _STATUS_QUERY: installed_on("mytool"),
                 "apt-cache policy": CommandResult(0, _POLICY_NEWER_THAN_REPO, ""),
             }
         )
@@ -417,7 +473,7 @@ class TestNoCandidateDetection:
         policy = _POLICY_HAND_DEB + _POLICY_REPO_INSTALLED + _POLICY_PINNED_NO_CANDIDATE + _POLICY_AUTO_DEP
         context, source, _target = make_context(
             source_responses={
-                _STATUS_QUERY: installed_on_source("code", "gh", "docker.io", "7zip"),
+                _STATUS_QUERY: installed_on("code", "gh", "docker.io", "7zip"),
                 "apt-cache policy": CommandResult(0, policy, ""),
             }
         )
@@ -439,7 +495,7 @@ class TestNoCandidateDetection:
         so nothing but `gh`'s missing block can decide this."""
         context, _source, _target = make_context(
             source_responses={
-                _STATUS_QUERY: installed_on_source("code", "gh"),
+                _STATUS_QUERY: installed_on("code", "gh"),
                 "apt-cache policy": CommandResult(0, _POLICY_HAND_DEB, ""),
             }
         )
@@ -456,7 +512,7 @@ class TestNoCandidateDetection:
         """
         context, _source, _target = make_context(
             source_responses={
-                _STATUS_QUERY: installed_on_source("code", "gh"),
+                _STATUS_QUERY: installed_on("code", "gh"),
                 "apt-cache policy": CommandResult(100, "", "E: could not read the package lists\n"),
             }
         )
@@ -478,7 +534,7 @@ class TestNoCandidateDetection:
         """
         context, _source, _target = make_context(
             source_responses={
-                _STATUS_QUERY: installed_on_source("code", "gh"),
+                _STATUS_QUERY: installed_on("code", "gh"),
                 "apt-cache policy": CommandResult(0, "", ""),
             }
         )
@@ -497,7 +553,7 @@ class TestNoCandidateDetection:
         """
         context, _source, _target = make_context(
             source_responses={
-                _STATUS_QUERY: installed_on_source("code"),
+                _STATUS_QUERY: installed_on("code"),
                 "apt-cache policy": CommandResult(0, _POLICY_HAND_DEB, ""),
             }
         )
@@ -533,18 +589,25 @@ class TestNoCandidateDetection:
 
 
 class TestUnownedScan:
-    """Unowned-install scan (moved from test_package_state.py when D-18 moved ownership)."""
+    """The filesystem half of detection: what the scan looks at, what it refuses to call a
+    finding, and what it does when a read cannot answer (`PKG-FR-MANUAL-SCOPE`).
+    """
+
+    @staticmethod
+    async def scan(job: ManualInstallsSyncJob) -> list[UnreproducibleItem]:
+        """The source-side scan, where an ambiguous `/opt` shape is the user's to settle."""
+        return await job._scan_unowned_installs(  # pyright: ignore[reportPrivateUsage]
+            job.source, job.machines.source, ask_when_ambiguous=True
+        )
 
     @pytest.mark.asyncio
     async def test_scan_unowned_installs_yields_two_items_from_four_candidates(self) -> None:
-        """G13 — of four entries under `/usr/local` and `/opt`, only the two no package owns
-        are presented, each named by its path."""
+        """G13 — of four entries under the scan's roots, only the two no package owns are
+        presented, each named by its path."""
         context, _source, _target = make_context(
             source_responses={
-                "for root in": CommandResult(
-                    0,
-                    "/usr/local/flux\n/usr/local/bin/talosctl\n/usr/local/bin/kubectl-cnpg\n/opt/az\n",
-                    "",
+                "for root in": scan_finds(
+                    "/usr/local/flux", "/usr/local/bin/talosctl", "/usr/local/bin/kubectl-cnpg", "/opt/az"
                 ),
                 "dpkg --search": CommandResult(
                     0, f"cnpg: /usr/local/bin/kubectl-cnpg\nazure-cli: /opt/az\n{DPKG_WITNESS_LINE}", ""
@@ -553,28 +616,44 @@ class TestUnownedScan:
         )
         job = ManualInstallsSyncJob(context)
 
-        items = await job._scan_unowned_installs()  # pyright: ignore[reportPrivateUsage]
+        items = await self.scan(job)
 
         assert {item.identifier for item in items} == {"/usr/local/flux", "/usr/local/bin/talosctl"}
         assert all(item.origin == "unowned-path" for item in items)
         assert all(isinstance(item, UnreproducibleItem) for item in items)
 
     @pytest.mark.asyncio
-    async def test_unowned_scan_queries_only_usr_local_and_opt(self) -> None:
-        """G14 — the scan names top-level findings in ONE command over exactly four roots,
-        one level deep each; it never walks the tree below them."""
+    async def test_the_scan_covers_seven_roots_one_level_deep_in_one_command(self) -> None:
+        """G14 — `/opt`, everything directly under `/usr/local`, and the entries of
+        `/usr/local`'s `bin`, `sbin`, `lib`, `games` and `src`, one level deep each, in one
+        command; the tree below a finding is never walked."""
         context, source, _target = make_context()
         job = ManualInstallsSyncJob(context)
 
-        await job._scan_unowned_installs()  # pyright: ignore[reportPrivateUsage]
+        await self.scan(job)
 
         find_calls = [c.args[0] for c in source.run_command.call_args_list if "find " in c.args[0]]
         assert len(find_calls) == 1
         assert find_calls[0] == (
-            'for root in /usr/local /opt /usr/local/bin /usr/local/lib; do [ -d "$root" ] || continue; '
-            'find "$root" -mindepth 1 -maxdepth 1 || exit 1; done'
+            "for root in /opt /usr/local /usr/local/bin /usr/local/sbin /usr/local/lib /usr/local/games "
+            '/usr/local/src; do [ -d "$root" ] || continue; '
+            "find \"$root\" -mindepth 1 -maxdepth 1 -printf '%y\\t%p\\n' || exit 1; done"
         )
         assert "\n" not in find_calls[0], "a multi-line command is mangled in the trace and the confirm gate"
+
+    @pytest.mark.asyncio
+    async def test_four_usr_local_directories_are_never_looked_into(self) -> None:
+        """G97 — `etc`, `include`, `man` and `share` are not scanned: what a hand install puts
+        there arrives with an application the scan finds elsewhere, and `man` is a symlink to
+        `share/man` that following would walk twice."""
+        context, source, _target = make_context()
+        job = ManualInstallsSyncJob(context)
+
+        await self.scan(job)
+
+        listing = next(c.args[0] for c in source.run_command.call_args_list if "find " in c.args[0])
+        for never in ("/usr/local/etc", "/usr/local/include", "/usr/local/man", "/usr/local/share"):
+            assert f"{never} " not in f"{listing} ", listing
 
     @pytest.mark.asyncio
     async def test_a_find_that_could_not_run_fails_the_job_rather_than_reporting_nothing(self) -> None:
@@ -587,7 +666,7 @@ class TestUnownedScan:
         job = ManualInstallsSyncJob(context)
 
         with pytest.raises(ProbeFailed) as excinfo:
-            await job._scan_unowned_installs()  # pyright: ignore[reportPrivateUsage]
+            await self.scan(job)
 
         assert "Permission denied" in str(excinfo.value)
 
@@ -598,13 +677,13 @@ class TestUnownedScan:
         """
         context, source, _target = make_context(
             source_responses={
-                "for root in": CommandResult(0, "/opt/az\n", ""),
+                "for root in": scan_finds("/opt/az"),
                 "dpkg --search": CommandResult(1, DPKG_WITNESS_LINE, ""),
             }
         )
         job = ManualInstallsSyncJob(context)
 
-        items = await job._scan_unowned_installs()  # pyright: ignore[reportPrivateUsage]
+        items = await self.scan(job)
 
         assert [item.identifier for item in items] == ["/opt/az"]
         assert '[ -d "$root" ] || continue' in all_calls(source)[0]
@@ -617,14 +696,14 @@ class TestUnownedScan:
         """
         context, _source, _target = make_context(
             source_responses={
-                "for root in": CommandResult(0, "/usr/local/flux\n/opt/az\n", ""),
+                "for root in": scan_finds("/usr/local/flux", "/opt/az"),
                 "dpkg --search": CommandResult(1, "", "dpkg-query: error: unable to open files list file"),
             }
         )
         job = ManualInstallsSyncJob(context)
 
         with pytest.raises(ProbeFailed) as excinfo:
-            await job._scan_unowned_installs()  # pyright: ignore[reportPrivateUsage]
+            await self.scan(job)
 
         assert "/usr/bin/dpkg" in str(excinfo.value)
         assert "unable to open files list file" in str(excinfo.value)
@@ -636,7 +715,7 @@ class TestUnownedScan:
         """
         context, _source, _target = make_context(
             source_responses={
-                "for root in": CommandResult(0, "/usr/local/flux\n/opt/az\n", ""),
+                "for root in": scan_finds("/usr/local/flux", "/opt/az"),
                 "dpkg --search": CommandResult(
                     1, DPKG_WITNESS_LINE, "dpkg-query: no path found matching pattern /opt/az"
                 ),
@@ -644,7 +723,7 @@ class TestUnownedScan:
         )
         job = ManualInstallsSyncJob(context)
 
-        items = await job._scan_unowned_installs()  # pyright: ignore[reportPrivateUsage]
+        items = await self.scan(job)
 
         assert [item.identifier for item in items] == ["/opt/az", "/usr/local/flux"]
 
@@ -654,41 +733,51 @@ class TestUnownedScan:
         the candidates and never reported."""
         context, _source, _target = make_context(
             source_responses={
-                "for root in": CommandResult(0, "/opt/az\n", ""),
+                "for root in": scan_finds("/opt/az"),
                 "dpkg --search": CommandResult(0, DPKG_WITNESS_LINE, ""),
             }
         )
         job = ManualInstallsSyncJob(context)
 
-        items = await job._scan_unowned_installs()  # pyright: ignore[reportPrivateUsage]
+        items = await self.scan(job)
 
         assert [item.identifier for item in items] == ["/opt/az"]
 
     @pytest.mark.asyncio
     async def test_a_scan_root_is_never_a_finding_while_everything_under_it_still_is(self) -> None:
-        """G96 — `/usr/local/bin` and `/usr/local/lib` are scan roots AND entries of
-        `/usr/local`, so `find` names them like any other candidate; dpkg owns no
-        `/usr/local` directory on a stock machine, so without this they would be presented on
-        every machine, in every run, forever.
+        """G96 — the nine directories `base-files` creates under `/usr/local` are entries of
+        `/usr/local` like any other, and dpkg owns none of them on a stock machine, so without
+        this rule every user would be asked for an install snippet for a stock directory on
+        every run — including the five this scan looks inside, which would then be findings of
+        their own scan.
 
-        The ownership reply here is the stock machine's: nothing but the witness is owned.
-        The roots are dropped before ownership is asked at all — they are not among the
+        The ownership reply here is the stock machine's: nothing but the witness is owned. The
+        skeleton is dropped before ownership is asked at all — none of the nine is among the
         queried paths — while every path genuinely under them stays a finding.
         """
         context, source, _target = make_context(
             source_responses={
-                "for root in": CommandResult(
-                    0,
-                    "/usr/local/bin\n/usr/local/lib\n/usr/local/Brother\n"
-                    "/usr/local/bin/talosctl\n/usr/local/lib/node_modules\n/opt/az\n",
-                    "",
+                "for root in": scan_finds(
+                    "/usr/local/bin/",
+                    "/usr/local/etc/",
+                    "/usr/local/games/",
+                    "/usr/local/include/",
+                    "/usr/local/lib/",
+                    "/usr/local/man",
+                    "/usr/local/sbin/",
+                    "/usr/local/share/",
+                    "/usr/local/src/",
+                    "/usr/local/Brother",
+                    "/usr/local/bin/talosctl",
+                    "/usr/local/lib/node_modules",
+                    "/opt/az",
                 ),
                 "dpkg --search": CommandResult(1, DPKG_WITNESS_LINE, "dpkg-query: no path found matching pattern"),
             }
         )
         job = ManualInstallsSyncJob(context)
 
-        items = await job._scan_unowned_installs()  # pyright: ignore[reportPrivateUsage]
+        items = await self.scan(job)
 
         assert {item.identifier for item in items} == {
             "/usr/local/Brother",
@@ -700,12 +789,218 @@ class TestUnownedScan:
             c.args[0] for c in source.run_command.call_args_list if c.args[0].startswith("dpkg --search")
         )
         assert shlex.split(ownership_call)[2:] == [
+            "/opt/az",
             "/usr/local/Brother",
             "/usr/local/bin/talosctl",
             "/usr/local/lib/node_modules",
-            "/opt/az",
             "/usr/bin/dpkg",
         ]
+
+    @pytest.mark.asyncio
+    async def test_a_directory_with_no_file_beneath_it_is_not_a_finding(self) -> None:
+        """G98 — an empty shape is not software: there is nothing an install snippet could
+        reproduce. The directory holding a file somewhere below it stays a finding, and each
+        is asked about with one bounded look that stops at the first file it meets."""
+        context, source, _target = make_context(
+            source_responses={
+                "for root in": scan_finds("/usr/local/lib/node_modules/", "/usr/local/lib/leftover/"),
+                "dpkg --search": CommandResult(1, DPKG_WITNESS_LINE, ""),
+                "for dir in": CommandResult(0, "/usr/local/lib/node_modules\n", ""),
+            }
+        )
+        job = ManualInstallsSyncJob(context)
+
+        items = await self.scan(job)
+
+        assert [item.identifier for item in items] == ["/usr/local/lib/node_modules"]
+        emptiness_call = next(c.args[0] for c in source.run_command.call_args_list if c.args[0].startswith("for dir"))
+        assert "-print -quit" in emptiness_call
+
+    @pytest.mark.asyncio
+    async def test_a_directory_whose_emptiness_could_not_be_established_stays_a_finding(self) -> None:
+        """G99 — an unreadable subtree says nothing about whether a file is down there, so the
+        probe names the directory on its own failure branch too and the finding survives.
+        Dropping it would be silence read as data."""
+        context, source, _target = make_context(
+            source_responses={
+                "for root in": scan_finds("/usr/local/lib/node_modules/"),
+                "dpkg --search": CommandResult(1, DPKG_WITNESS_LINE, ""),
+                "for dir in": CommandResult(
+                    0, "/usr/local/lib/node_modules\n", "find: '/usr/local/lib/node_modules/x': Permission denied"
+                ),
+            }
+        )
+        job = ManualInstallsSyncJob(context)
+
+        items = await self.scan(job)
+
+        assert [item.identifier for item in items] == ["/usr/local/lib/node_modules"]
+        probe = next(c.args[0] for c in source.run_command.call_args_list if c.args[0].startswith("for dir"))
+        assert 'else echo "$dir"' in probe, "a look that failed must keep the directory, not drop it"
+
+    @pytest.mark.asyncio
+    async def test_a_file_and_a_symlink_are_findings_like_a_directory(self) -> None:
+        """G100 — a finding may be a file, a directory or a symlink; only the directory has an
+        emptiness question to answer at all."""
+        context, source, _target = make_context(
+            source_responses={
+                "for root in": CommandResult(0, "f\t/usr/local/bin/flux\nl\t/usr/local/bin/kubectl\n", ""),
+                "dpkg --search": CommandResult(1, DPKG_WITNESS_LINE, ""),
+            }
+        )
+        job = ManualInstallsSyncJob(context)
+
+        items = await self.scan(job)
+
+        assert {item.identifier for item in items} == {"/usr/local/bin/flux", "/usr/local/bin/kubectl"}
+        assert not [c.args[0] for c in source.run_command.call_args_list if c.args[0].startswith("for dir")]
+
+
+class TestTheShapeOfAnOptDirectory:
+    """`PKG-FR-MANUAL-OPT-SHAPE`: `/opt/<application>` and `/opt/<publisher>/<application>`
+    are the same shape from outside, so what the directory holds decides — and where it holds
+    several directories and no file, only the user can say which it is.
+    """
+
+    @staticmethod
+    def context_for(
+        opt_entry: str, children: CommandResult, *, reviewer: object | None = None
+    ) -> tuple[JobContext, MagicMock, MagicMock]:
+
+        return make_context(
+            source_responses={
+                "for root in": scan_finds(f"{opt_entry}/"),
+                "dpkg --search": CommandResult(1, DPKG_WITNESS_LINE, ""),
+                f"find {opt_entry}": children,
+                # Every directory that survives the shape rule holds a file somewhere below.
+                "for dir in": every_directory_holds_a_file,
+            },
+            reviewer=reviewer,
+        )
+
+    @staticmethod
+    async def scan(job: ManualInstallsSyncJob) -> list[str]:
+        items = await job._scan_unowned_installs(  # pyright: ignore[reportPrivateUsage]
+            job.source, job.machines.source, ask_when_ambiguous=True
+        )
+        return [item.identifier for item in items]
+
+    @pytest.mark.asyncio
+    async def test_a_directory_holding_a_file_of_its_own_is_the_finding(self) -> None:
+        """G101 — `/opt/az` holds files, so it is one application and it is what is named."""
+        context, _source, _target = self.context_for("/opt/az", scan_finds("/opt/az/bin/", "/opt/az/README"))
+        job = ManualInstallsSyncJob(context)
+
+        assert await self.scan(job) == ["/opt/az"]
+
+    @pytest.mark.asyncio
+    async def test_a_directory_holding_one_directory_and_no_file_names_that_directory(self) -> None:
+        """G102 — `/opt/vendor/app` is the application; the publisher's own directory is not
+        something a snippet reproduces."""
+        context, _source, _target = self.context_for("/opt/vendor", scan_finds("/opt/vendor/app/"))
+        job = ManualInstallsSyncJob(context)
+
+        assert await self.scan(job) == ["/opt/vendor/app"]
+
+    @pytest.mark.asyncio
+    async def test_a_directory_holding_nothing_is_not_a_finding(self) -> None:
+        """G103 — an empty `/opt/vendor` is a leftover shape, not software."""
+        context, _source, _target = self.context_for("/opt/vendor", CommandResult(0, "", ""))
+        job = ManualInstallsSyncJob(context)
+
+        assert await self.scan(job) == []
+
+    @pytest.mark.asyncio
+    async def test_several_directories_and_no_file_asks_the_user_which_it_is(self) -> None:
+        """G104, H180 — the question names both machines, shows what is inside, and offers the two
+        item lists that follow rather than the mechanism that produces them."""
+        reviewer = FakeGate(answer=True)
+        context, _source, _target = self.context_for(
+            "/opt/vendor", scan_finds("/opt/vendor/one/", "/opt/vendor/two/"), reviewer=reviewer
+        )
+        job = ManualInstallsSyncJob(context)
+
+        assert await self.scan(job) == ["/opt/vendor"]
+
+        asked = reviewer.asked[0]
+        spoken = " ".join(str(value) for value in asked.values())
+        assert "/opt/vendor/one" in spoken and "/opt/vendor/two" in spoken
+        assert "source-host" in spoken and "target-host" in spoken
+        assert "source" not in spoken.replace("source-host", "") and "target" not in spoken.replace("target-host", "")
+        assert "target-host" in asked["proceed_label"] and "target-host" in asked["stop_label"]
+
+    @pytest.mark.asyncio
+    async def test_answering_a_publishers_directory_names_each_application_under_it(self) -> None:
+        """G105 — the other answer: each directory is its own item, and the directory holding
+        them is not one."""
+        context, _source, _target = self.context_for(
+            "/opt/vendor", scan_finds("/opt/vendor/one/", "/opt/vendor/two/"), reviewer=FakeGate(answer=False)
+        )
+        job = ManualInstallsSyncJob(context)
+
+        assert await self.scan(job) == ["/opt/vendor/one", "/opt/vendor/two"]
+
+    @pytest.mark.asyncio
+    async def test_with_nobody_to_ask_the_directory_itself_is_the_finding(self) -> None:
+        """G106 — a run with no terminal takes the shallower reading rather than inventing a
+        list of applications nobody named."""
+        context, _source, _target = self.context_for(
+            "/opt/vendor", scan_finds("/opt/vendor/one/", "/opt/vendor/two/"), reviewer=FakeGate(answer=None)
+        )
+        job = ManualInstallsSyncJob(context)
+
+        assert await self.scan(job) == ["/opt/vendor"]
+
+    @pytest.mark.asyncio
+    async def test_the_question_is_put_while_the_run_is_planning(self) -> None:
+        """G107 — the answer decides what the review lists, so it cannot wait for the review;
+        planning still writes nothing to either machine."""
+        reviewer = FakeGate(answer=True)
+        context, _source, target = make_context(
+            source_responses={
+                _STATUS_QUERY: installed_on("gh"),
+                "apt-cache policy": CommandResult(0, _POLICY_REPO_INSTALLED, ""),
+                "for root in": scan_finds("/opt/vendor/"),
+                "dpkg --search": CommandResult(1, DPKG_WITNESS_LINE, ""),
+                "find /opt/vendor": scan_finds("/opt/vendor/one/", "/opt/vendor/two/"),
+                "for dir in": every_directory_holds_a_file,
+            },
+            reviewer=reviewer,
+        )
+        job = ManualInstallsSyncJob(context)
+
+        plan = await job.plan()
+
+        assert reviewer.asked, "the shape question was never put"
+        assert [diff.item_id for diff in plan.diffs] == ["unreproducible:unowned-path:/opt/vendor"]
+        for call in target.run_command.call_args_list:
+            assert "mutates" not in call.kwargs, call.args[0]
+
+    @pytest.mark.asyncio
+    async def test_the_same_shape_on_the_target_is_not_asked_about_and_counts_both_ways(self) -> None:
+        """G108 — on the machine being changed the shape decides nothing: both readings count
+        as already held, so whichever one the answer produced is subtracted, and one fact does
+        not cost two questions."""
+        reviewer = FakeGate(answer=True)
+        context, _source, _target = make_context(
+            target_responses={
+                "for root in": scan_finds("/opt/vendor/"),
+                "dpkg --search": CommandResult(1, DPKG_WITNESS_LINE, ""),
+                "find /opt/vendor": scan_finds("/opt/vendor/one/", "/opt/vendor/two/"),
+                "for dir in": CommandResult(0, "/opt/vendor\n/opt/vendor/one\n/opt/vendor/two\n", ""),
+            },
+            reviewer=reviewer,
+        )
+        job = ManualInstallsSyncJob(context)
+
+        held = {item.item_id for item in await job.query_target_items()}
+
+        assert {
+            "unreproducible:unowned-path:/opt/vendor",
+            "unreproducible:unowned-path:/opt/vendor/one",
+            "unreproducible:unowned-path:/opt/vendor/two",
+        } <= held
+        assert not reviewer.asked
 
 
 class TestSnippetResolution:
@@ -716,7 +1011,7 @@ class TestSnippetResolution:
     async def test_item_with_snippet_plans_install_and_converges_by_replaying_it(self) -> None:
         context, _source, target = make_context(
             source_responses={
-                _STATUS_QUERY: installed_on_source("brscan3"),
+                _STATUS_QUERY: installed_on("brscan3"),
                 "apt-cache policy": CommandResult(0, _hand_deb_policy("brscan3"), ""),
                 # plan() now classifies from the SOURCE registry (corrected D-23).
                 "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, BRSCAN3_REGISTRY_YAML, ""),
@@ -747,7 +1042,7 @@ class TestSnippetResolution:
         question and in no other list."""
         context, _source, _target = make_context(
             source_responses={
-                _STATUS_QUERY: installed_on_source("brscan3"),
+                _STATUS_QUERY: installed_on("brscan3"),
                 "apt-cache policy": CommandResult(0, _hand_deb_policy("brscan3"), ""),
             }
         )
@@ -837,9 +1132,9 @@ class TestPlanIsReadOnly:
         """H5 — planning reaches the target with neither a `mutates=` command nor a `send_file`."""
         context, _source, target = make_context(
             source_responses={
-                _STATUS_QUERY: installed_on_source("brscan3"),
+                _STATUS_QUERY: installed_on("brscan3"),
                 "apt-cache policy": CommandResult(0, _hand_deb_policy("brscan3"), ""),
-                "for root in": CommandResult(0, "/usr/local/flux\n", ""),
+                "for root in": scan_finds("/usr/local/flux"),
                 "dpkg --search": CommandResult(0, DPKG_WITNESS_LINE, ""),
             }
         )
@@ -855,37 +1150,27 @@ class TestPlanIsReadOnly:
 
 
 class TestInstallOnly:
-    """G24: `manual_installs_sync` is install-only. Unreproducible items describe what the
-    SOURCE has installed; there is no target-side manifest to be "extra" against, so no
-    input can make this job propose a removal.
+    """`PKG-NG-MANUAL-REMOVE`: what only the target has produces nothing. The target is read
+    to tell what is already there, never as a manifest to be "extra" against, so no input
+    can make this job propose a removal.
     """
-
-    @pytest.mark.asyncio
-    async def test_target_query_is_empty_by_design(self) -> None:
-        """G89 — the target is never asked what unreproducible software it holds."""
-        context, _source, _target = make_context(
-            target_responses={_STATUS_QUERY: installed_on_source("target-only-tool")}
-        )
-        job = ManualInstallsSyncJob(context)
-
-        assert await job.query_target_items() == []
 
     @pytest.mark.asyncio
     async def test_no_removal_diff_or_group_even_when_the_target_holds_items(self) -> None:
         """G22, G88 — the target is stocked with everything the source has plus its own extras — the
         shape that produces `EXTRA_ON_TARGET`/REMOVE in every other manager — and still no
-        removal is proposed, nor is the target ever asked for a manifest.
+        removal is proposed and nothing target-only is named anywhere.
         """
-        context, _source, target = make_context(
+        context, _source, _target = make_context(
             source_responses={
-                _STATUS_QUERY: installed_on_source("brscan3"),
+                _STATUS_QUERY: installed_on("brscan3"),
                 "apt-cache policy": CommandResult(0, _hand_deb_policy("brscan3"), ""),
-                "for root in": CommandResult(0, "/usr/local/flux\n", ""),
+                "for root in": scan_finds("/usr/local/flux"),
                 "dpkg --search": CommandResult(0, DPKG_WITNESS_LINE, ""),
             },
             target_responses={
-                _STATUS_QUERY: installed_on_source("brscan3", "target-only-tool"),
-                "for root in": CommandResult(0, "/usr/local/flux\n/usr/local/target-only\n", ""),
+                _STATUS_QUERY: installed_on("target-only-tool"),
+                "for root in": scan_finds("/usr/local/target-only"),
                 "dpkg --search": CommandResult(0, DPKG_WITNESS_LINE, ""),
             },
         )
@@ -896,8 +1181,106 @@ class TestInstallOnly:
         assert plan.diffs  # the source-side findings are present...
         assert all(diff.action != DiffAction.REMOVE for diff in plan.diffs)
         assert all(group.action != DiffAction.REMOVE.value for group in plan.groups)
-        # ...and no target-side detection ran at all, so nothing target-only can surface.
-        assert not [cmd for cmd in all_calls(target) if "showmanual" in cmd or "find " in cmd]
+        # ...and nothing the target alone holds appears in any list, in any direction.
+        named = {diff.item_id for diff in plan.diffs} | {
+            entry.item_id for group in plan.groups for entry in group.entries
+        }
+        assert not [item_id for item_id in named if "target-only" in item_id]
+
+
+class TestWhatTheTargetAlreadyHolds:
+    """`PKG-FR-MANUAL-DIFF`: both machines are scanned and only what the target lacks is
+    presented, which is what stops one snippet's several traces from being asked about on
+    every later run.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_finding_the_target_already_holds_is_not_presented(self) -> None:
+        """G109 — the target is asked what it holds, and the finding it answers with is dropped
+        rather than put to the user again."""
+        context, _source, target = make_context(
+            source_responses={
+                _STATUS_QUERY: installed_on("brscan3"),
+                "apt-cache policy": CommandResult(0, _hand_deb_policy("brscan3"), ""),
+                "for root in": scan_finds("/usr/local/flux", "/opt/az"),
+                "dpkg --search": CommandResult(0, DPKG_WITNESS_LINE, ""),
+            },
+            target_responses={
+                _STATUS_QUERY: installed_on("coreutils"),
+                "for root in": scan_finds("/opt/az"),
+                "dpkg --search": CommandResult(0, DPKG_WITNESS_LINE, ""),
+            },
+        )
+        job = ManualInstallsSyncJob(context)
+
+        plan = await job.plan()
+
+        assert [diff.item_id for diff in plan.diffs] == [
+            "unreproducible:apt-no-candidate:brscan3",
+            "unreproducible:unowned-path:/usr/local/flux",
+        ]
+        assert [cmd for cmd in all_calls(target) if cmd.startswith("for root in")], "the target was never scanned"
+
+    @pytest.mark.asyncio
+    async def test_a_second_path_to_one_application_stops_being_asked_about(self) -> None:
+        """G110 — the run after the snippet: one application under `/opt` and the symlink in
+        `bin` that starts it are both on the target now, so neither is raised again."""
+        both = ("/opt/az", "/usr/local/bin/az")
+        context, _source, _target = make_context(
+            source_responses={
+                _STATUS_QUERY: installed_on("gh"),
+                "apt-cache policy": CommandResult(0, _POLICY_REPO_INSTALLED, ""),
+                "for root in": scan_finds(*both),
+                "dpkg --search": CommandResult(0, DPKG_WITNESS_LINE, ""),
+            },
+            target_responses={
+                _STATUS_QUERY: installed_on("gh"),
+                "for root in": scan_finds(*both),
+                "dpkg --search": CommandResult(0, DPKG_WITNESS_LINE, ""),
+            },
+        )
+        job = ManualInstallsSyncJob(context)
+
+        plan = await job.plan()
+
+        assert plan.diffs == ()
+        assert plan.groups == ()
+
+    @pytest.mark.asyncio
+    async def test_a_package_the_target_has_from_a_repository_counts_as_held(self) -> None:
+        """G111 — the apt half of what the target holds is its installed set, whatever origin
+        put each name there: software that is on the machine is on the machine."""
+        context, _source, target = make_context(
+            source_responses={
+                _STATUS_QUERY: installed_on("code"),
+                "apt-cache policy": CommandResult(0, _hand_deb_policy("code"), ""),
+            },
+            target_responses={_STATUS_QUERY: installed_on("code")},
+        )
+        job = ManualInstallsSyncJob(context)
+
+        plan = await job.plan()
+
+        assert plan.diffs == ()
+        # No second origin analysis on the target: its installed set answers the question.
+        assert not [cmd for cmd in all_calls(target) if cmd.startswith("apt-cache policy")]
+
+    @pytest.mark.asyncio
+    async def test_a_machine_with_no_findings_costs_the_other_one_no_reads(self) -> None:
+        """G113 — nothing survives the source's own filtering, so there is nothing to subtract
+        from and the target is not asked anything."""
+        context, _source, target = make_context(
+            source_responses={
+                _STATUS_QUERY: installed_on("gh"),
+                "apt-cache policy": CommandResult(0, _POLICY_REPO_INSTALLED, ""),
+            }
+        )
+        job = ManualInstallsSyncJob(context)
+
+        plan = await job.plan()
+
+        assert plan.diffs == ()
+        assert all_calls(target) == []
 
 
 class TestInertFiltering:
@@ -917,7 +1300,7 @@ class TestInertFiltering:
         )
         context, _source, _target = make_context(
             source_responses={
-                _STATUS_QUERY: installed_on_source("brscan3"),
+                _STATUS_QUERY: installed_on("brscan3"),
                 "apt-cache policy": CommandResult(0, _hand_deb_policy("brscan3"), ""),
                 "cat ~/.config/pc-switcher/manual.decisions.yaml": CommandResult(0, decisions_yaml, ""),
             }
@@ -943,7 +1326,7 @@ class TestInertFiltering:
         )
         context, _source, target = make_context(
             source_responses={
-                _STATUS_QUERY: installed_on_source("brscan3"),
+                _STATUS_QUERY: installed_on("brscan3"),
                 "apt-cache policy": CommandResult(0, _hand_deb_policy("brscan3"), ""),
             },
             target_responses={"cat ~/.config/pc-switcher/manual.decisions.yaml": CommandResult(0, decisions_yaml, "")},
@@ -964,7 +1347,7 @@ class TestPermanentMarkWrites:
     def _brscan3_context(*, dry_run: bool = False) -> tuple[JobContext, MagicMock, MagicMock]:
         return make_context(
             source_responses={
-                _STATUS_QUERY: installed_on_source("brscan3"),
+                _STATUS_QUERY: installed_on("brscan3"),
                 "apt-cache policy": CommandResult(0, _hand_deb_policy("brscan3"), ""),
             },
             dry_run=dry_run,
@@ -977,7 +1360,7 @@ class TestPermanentMarkWrites:
         and its label."""
         context, source, target = make_context(
             source_responses={
-                _STATUS_QUERY: installed_on_source("brscan3"),
+                _STATUS_QUERY: installed_on("brscan3"),
                 "apt-cache policy": CommandResult(0, _hand_deb_policy("brscan3"), ""),
             }
         )
@@ -1031,7 +1414,7 @@ class TestEmptyDetection:
         nothing to apply."""
         context, _source, _target = make_context(
             source_responses={
-                _STATUS_QUERY: installed_on_source("gh"),
+                _STATUS_QUERY: installed_on("gh"),
                 "apt-cache policy": CommandResult(0, _POLICY_REPO_INSTALLED, ""),
             }
         )
@@ -1055,7 +1438,7 @@ class TestExecuteIndependentOfApt:
         configuration: this job asks apt and dpkg its own questions."""
         context, _source, _target = make_context(
             source_responses={
-                _STATUS_QUERY: installed_on_source("brscan3"),
+                _STATUS_QUERY: installed_on("brscan3"),
                 "apt-cache policy": CommandResult(0, _hand_deb_policy("brscan3"), ""),
             },
             enabled_sync_jobs={"manual_installs_sync": True, "folder_sync": True},
@@ -1072,7 +1455,7 @@ class TestExecuteIndependentOfApt:
         reviewer = FakeReviewer(decisions={item_id: Decision.APPLY})
         context, _source, target = make_context(
             source_responses={
-                _STATUS_QUERY: installed_on_source("brscan3"),
+                _STATUS_QUERY: installed_on("brscan3"),
                 "apt-cache policy": CommandResult(0, _hand_deb_policy("brscan3"), ""),
                 # plan() classifies INSTALL from the SOURCE registry (corrected D-23).
                 "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, BRSCAN3_REGISTRY_YAML, ""),
@@ -1102,9 +1485,9 @@ class TestTracerEndToEnd:
         alongside the rest, and converges by replaying it."""
         context, _source, target = make_context(
             source_responses={
-                _STATUS_QUERY: installed_on_source("brscan3"),
+                _STATUS_QUERY: installed_on("brscan3"),
                 "apt-cache policy": CommandResult(0, _hand_deb_policy("brscan3"), ""),
-                "for root in": CommandResult(0, "/usr/local/flux\n/opt/az\n", ""),
+                "for root in": scan_finds("/usr/local/flux", "/opt/az"),
                 "dpkg --search": CommandResult(0, f"azure-cli: /opt/az\n{DPKG_WITNESS_LINE}", ""),
                 # Source registry holds only brscan3 -> it plans INSTALL, flux plans REPORT_ONLY.
                 "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, BRSCAN3_REGISTRY_YAML, ""),
@@ -1168,7 +1551,7 @@ class TestSameRunApplication:
         reviewer = FakeReviewer(snippets={item_id: body})
         context, _source, target = make_context(
             source_responses={
-                _STATUS_QUERY: installed_on_source("falco-app"),
+                _STATUS_QUERY: installed_on("falco-app"),
                 "apt-cache policy": CommandResult(0, _hand_deb_policy("falco-app"), ""),
                 # Empty source registry -> plan classifies REPORT_ONLY (no source snippet).
                 "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, "snippets: {}\n", ""),
@@ -1201,7 +1584,7 @@ class TestClassificationAuthority:
         still asked to resolve it."""
         context, _source, _target = make_context(
             source_responses={
-                _STATUS_QUERY: installed_on_source("brscan3"),
+                _STATUS_QUERY: installed_on("brscan3"),
                 "apt-cache policy": CommandResult(0, _hand_deb_policy("brscan3"), ""),
                 # Source registry empty -> no source snippet.
                 "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, "snippets: {}\n", ""),
@@ -1223,7 +1606,7 @@ class TestClassificationAuthority:
         """G44 — a snippet the source holds resolves the item: it is presented as an install."""
         context, _source, _target = make_context(
             source_responses={
-                _STATUS_QUERY: installed_on_source("brscan3"),
+                _STATUS_QUERY: installed_on("brscan3"),
                 "apt-cache policy": CommandResult(0, _hand_deb_policy("brscan3"), ""),
                 "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, BRSCAN3_REGISTRY_YAML, ""),
             },
@@ -1248,7 +1631,7 @@ class TestClassificationAuthority:
         reviewer = FakeReviewer(snippets={item_id: body})
         context, source, target = make_context(
             source_responses={
-                _STATUS_QUERY: installed_on_source("falco-app"),
+                _STATUS_QUERY: installed_on("falco-app"),
                 "apt-cache policy": CommandResult(0, _hand_deb_policy("falco-app"), ""),
                 "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, "snippets: {}\n", ""),
             },
@@ -1280,7 +1663,7 @@ class TestClassificationAuthority:
         item_id = "unreproducible:apt-no-candidate:brscan3"
         context, _source, target = make_context(
             source_responses={
-                _STATUS_QUERY: installed_on_source("brscan3"),
+                _STATUS_QUERY: installed_on("brscan3"),
                 "apt-cache policy": CommandResult(0, _hand_deb_policy("brscan3"), ""),
                 "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, BRSCAN3_REGISTRY_YAML, ""),
             },
@@ -1313,7 +1696,7 @@ class TestNoTerminalRun:
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         context, _source, target = make_context(
             source_responses={
-                _STATUS_QUERY: installed_on_source("brscan3"),
+                _STATUS_QUERY: installed_on("brscan3"),
                 "apt-cache policy": CommandResult(0, _hand_deb_policy("brscan3"), ""),
             },
             target_responses={"echo $HOME": CommandResult(0, "/home/user\n", "")},
@@ -1350,7 +1733,7 @@ class TestSkipOnceResolution:
         """G34, J7 — a run whose only findings were all answered "not for now" ends clean."""
         context, _source, _target = make_context(
             source_responses={
-                _STATUS_QUERY: installed_on_source("brscan3"),
+                _STATUS_QUERY: installed_on("brscan3"),
                 "apt-cache policy": CommandResult(0, _hand_deb_policy("brscan3"), ""),
             }
         )
@@ -1373,7 +1756,7 @@ class TestSkipOnceResolution:
         cleanly rather than failing the job."""
         context, _source, _target = make_context(
             source_responses={
-                _STATUS_QUERY: installed_on_source("brscan3"),
+                _STATUS_QUERY: installed_on("brscan3"),
                 "apt-cache policy": CommandResult(0, _hand_deb_policy("brscan3"), ""),
             }
         )
@@ -1409,7 +1792,7 @@ class TestContinueOnFailure:
         )
         context, _source, _target = make_context(
             source_responses={
-                _STATUS_QUERY: installed_on_source("brscan3", "cnpg"),
+                _STATUS_QUERY: installed_on("brscan3", "cnpg"),
                 "apt-cache policy": CommandResult(0, _hand_deb_policy("brscan3") + _hand_deb_policy("cnpg"), ""),
                 # plan() classifies both INSTALL from the SOURCE registry (corrected D-23).
                 "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, registry_yaml, ""),
@@ -1453,7 +1836,7 @@ class TestContinueOnFailure:
         denial = "sudo: a terminal is required to read the password"
         context, _source, target = make_context(
             source_responses={
-                _STATUS_QUERY: installed_on_source("brscan3"),
+                _STATUS_QUERY: installed_on("brscan3"),
                 "apt-cache policy": CommandResult(0, _hand_deb_policy("brscan3"), ""),
                 "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, registry_yaml, ""),
             },
@@ -1503,6 +1886,20 @@ class TestValidate:
         errors = await job.validate()
 
         assert any(e.host is Host.SOURCE and "dpkg" in e.message for e in errors)
+
+    @pytest.mark.asyncio
+    async def test_dpkg_unavailable_on_target_yields_validation_error(self) -> None:
+        """G112 — the target is read too now that what it already holds decides what is
+        presented, so its missing tool is named before the run starts rather than as a dead
+        probe halfway through."""
+        context, _source, _target = make_context(
+            target_responses={"dpkg --version": CommandResult(127, "", "not found")}
+        )
+        job = ManualInstallsSyncJob(context)
+
+        errors = await job.validate()
+
+        assert any(e.host is Host.TARGET and "dpkg" in e.message for e in errors)
 
     @pytest.mark.asyncio
     async def test_valid_environment_yields_no_errors(self) -> None:
@@ -1578,7 +1975,7 @@ class TestSnippetPush:
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         context, _source, target = make_context(
             source_responses={
-                _STATUS_QUERY: installed_on_source("gh"),
+                _STATUS_QUERY: installed_on("gh"),
                 "apt-cache policy": CommandResult(0, _POLICY_REPO_INSTALLED, ""),
                 "for root in": CommandResult(0, "", ""),
             },
@@ -1601,7 +1998,7 @@ class TestSnippetPush:
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         context, _source, target = make_context(
             source_responses={
-                _STATUS_QUERY: installed_on_source("gh"),
+                _STATUS_QUERY: installed_on("gh"),
                 "apt-cache policy": CommandResult(0, _POLICY_REPO_INSTALLED, ""),
             },
             target_responses={"echo $HOME": CommandResult(0, "/home/user\n", "")},
@@ -1679,7 +2076,7 @@ class TestSnippetPush:
         )
         context, source, _target = make_context(
             source_responses={
-                _STATUS_QUERY: installed_on_source("falco-app"),
+                _STATUS_QUERY: installed_on("falco-app"),
                 "apt-cache policy": CommandResult(0, _hand_deb_policy("falco-app"), ""),
                 "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, "snippets: {}\n", ""),
             },
@@ -1717,7 +2114,7 @@ class TestSnippetPush:
         }
         context, _source, target = make_context(
             source_responses={
-                _STATUS_QUERY: installed_on_source("brscan3", "cnpg"),
+                _STATUS_QUERY: installed_on("brscan3", "cnpg"),
                 "apt-cache policy": CommandResult(0, _hand_deb_policy("brscan3") + _hand_deb_policy("cnpg"), ""),
                 "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, registry_yaml, ""),
             },
@@ -1807,7 +2204,7 @@ class TestSnippetPush:
         reviewer = FakeReviewer(decisions={item_id: Decision.APPLY})
         context, _source, target = make_context(
             source_responses={
-                _STATUS_QUERY: installed_on_source("brscan3"),
+                _STATUS_QUERY: installed_on("brscan3"),
                 "apt-cache policy": CommandResult(0, _hand_deb_policy("brscan3"), ""),
                 # plan() classifies INSTALL from the SOURCE registry (corrected D-23).
                 "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, BRSCAN3_REGISTRY_YAML, ""),

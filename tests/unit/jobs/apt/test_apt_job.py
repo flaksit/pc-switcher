@@ -26,7 +26,7 @@ from pcswitcher.jobs.packages.review import (
     _is_removal_direction,
 )
 from pcswitcher.jobs.packages.sync_core import PackageItemFailures
-from pcswitcher.models import CommandResult, Host
+from pcswitcher.models import CommandResult, Host, SyncAbortedByUser
 from pcswitcher.orchestrator import Orchestrator
 from tests.unit.jobs.apt.helpers import (
     _CHANGED_VENDOR,
@@ -182,60 +182,25 @@ class TestContinueOnFailure:
         assert len(simulations) == 4
 
 
-class TestHoldReviewVerbs:
-    """#208 D3 — the single behavioural promise of hold replication: a hold item reads
-    "hold"/"unhold" in its group title AND in every entry's `action_label`, and never
-    appears under an install/remove packages group, even when ordinary package installs
-    and removals share the same `DiffAction` in the same plan.
+class TestHoldsReachNoReviewGroup:
+    """`PKG-FR-BLOCKS-DERIVED` — a hold replicates because the package it applies to does, so
+    it reaches no review group in either direction and no package group absorbs one.
     """
 
     @pytest.mark.asyncio
-    async def test_hold_items_get_their_own_group_with_hold_and_unhold_verbs(self) -> None:
-        """B5, H84."""
-        context, _source, _target = make_context(
-            source_responses={
-                "apt-mark showmanual": CommandResult(0, "pkg-install\npkg-common\n", ""),
-                "dpkg-query": CommandResult(0, "pkg-install\t1.0\npkg-common\t1.0\n", ""),
-                "apt-mark showhold": CommandResult(0, "hold-add\n", ""),
-            },
-            target_responses={
-                "apt-mark showmanual": CommandResult(0, "pkg-extra\npkg-common\n", ""),
-                "dpkg-query": CommandResult(0, "pkg-extra\t9.9\npkg-common\t1.0\n", ""),
-                "apt-mark showhold": CommandResult(0, "hold-drop\n", ""),
-            },
-        )
-        job = AptSyncJob(context)
-
-        plan = await job.plan()
-
-        group_of = {entry.item_id: group for group in plan.groups for entry in group.entries}
-        label_of = {entry.item_id: entry.action_label for group in plan.groups for entry in group.entries}
-
-        # The package diffs still read as install/remove — the hold verbs are not a
-        # blanket rename, they are per item class.
-        assert group_of["apt:package:pkg-install"].title == "Install apt packages"
-        assert group_of["apt:package:pkg-extra"].title == "Remove apt packages"
-
-        assert group_of["apt:hold:hold-add"].title == "Hold apt packages"
-        assert group_of["apt:hold:hold-drop"].title == "Unhold apt packages"
-        assert label_of["apt:hold:hold-add"] == "hold"
-        assert label_of["apt:hold:hold-drop"] == "unhold"
-
-    @pytest.mark.asyncio
-    async def test_unhold_group_is_removal_direction_and_the_hold_group_is_not(self) -> None:
-        """B6 — `ReviewGroup.action` is what `review._REMOVAL_ACTIONS` tests to decide whether a
-        group's checkboxes default to unticked. Undoing a block the user deliberately set
-        needs that friction; adding one does not (#208 D3).
+    async def test_no_hold_in_either_direction_reaches_any_group(self) -> None:
+        """B5, B6, H84 — a run carrying an install, a removal, a hold add and a hold removal
+        puts four rows' worth of work through the review and asks about two of them.
         """
         context, _source, _target = make_context(
             source_responses={
-                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
-                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+                "apt-mark showmanual": CommandResult(0, "pkg-install\npkg-common\nhold-add\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-install\t1.0\npkg-common\t1.0\nhold-add\t1.0\n", ""),
                 "apt-mark showhold": CommandResult(0, "hold-add\n", ""),
             },
             target_responses={
-                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
-                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+                "apt-mark showmanual": CommandResult(0, "pkg-extra\npkg-common\nhold-add\nhold-drop\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-extra\t9.9\npkg-common\t1.0\nhold-add\t1.0\nhold-drop\t1.0\n", ""),
                 "apt-mark showhold": CommandResult(0, "hold-drop\n", ""),
             },
         )
@@ -243,9 +208,94 @@ class TestHoldReviewVerbs:
 
         plan = await job.plan()
 
+        assert {"apt:hold:hold-add", "apt:hold:hold-drop"} <= {diff.item_id for diff in plan.diffs}
         group_of = {entry.item_id: group for group in plan.groups for entry in group.entries}
-        assert group_of["apt:hold:hold-drop"].action in _REMOVAL_ACTIONS
-        assert group_of["apt:hold:hold-add"].action not in _REMOVAL_ACTIONS
+        assert not any(item_id.startswith("apt:hold:") for item_id in group_of)
+
+        # The package diffs still read as install/remove — the holds are simply not there.
+        assert group_of["apt:package:pkg-install"].title == "Install apt packages"
+        assert group_of["apt:package:pkg-extra"].title == "Remove apt packages"
+
+
+class TestAHoldWithoutItsPackageEndsTheRun:
+    """`PKG-FR-HOLD-WITHOUT-PACKAGE` — a hold naming a package the machine does not have
+    freezes nothing while refusing every later attempt to install that name. It is a
+    bookkeeping failure the user has to clear, and the run says so rather than carrying a
+    branch for it.
+    """
+
+    @staticmethod
+    def _context(
+        *, source_holds: str = "", target_holds: str = "", target_installed: str = "pkg-a"
+    ) -> tuple[JobContext, MagicMock, MagicMock]:
+        return make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+                "apt-mark showhold": CommandResult(0, source_holds, ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\n", ""),
+                "db:Status-Status": installed_on_target(*(n for n in target_installed.split() if n)),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
+                "apt-mark showhold": CommandResult(0, target_holds, ""),
+            },
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_hold_the_target_records_without_the_package_ends_the_run(self) -> None:
+        """B16 — Nomad holds `ghost` and does not have it: the run ends naming both, and says
+        the hold has to be cleared before the next sync.
+        """
+        context, _source, target = self._context(target_holds="ghost\n")
+
+        with pytest.raises(SyncAbortedByUser) as caught:
+            await AptSyncJob(context).plan()
+
+        assert "ghost" in str(caught.value)
+        assert "target-host" in str(caught.value)
+        assert "apt-mark unhold ghost" in str(caught.value)
+        assert not any(call.kwargs.get("mutates") for call in target.run_command.call_args_list)
+
+    @pytest.mark.asyncio
+    async def test_a_hold_the_source_records_without_the_package_ends_the_run(self) -> None:
+        """B17 — the same on Atlas, which the run would otherwise replicate onto Nomad."""
+        context, _source, _target = self._context(source_holds="ghost\n")
+
+        with pytest.raises(SyncAbortedByUser) as caught:
+            await AptSyncJob(context).plan()
+
+        assert "ghost" in str(caught.value)
+        assert "source-host" in str(caught.value)
+
+    @pytest.mark.asyncio
+    async def test_a_hold_neither_machine_has_the_package_for_ends_the_run(self) -> None:
+        """B18 — pure bookkeeping on one machine is still bookkeeping: the run ends."""
+        context, _source, _target = self._context(target_holds="ghost\n", target_installed="pkg-a")
+
+        with pytest.raises(SyncAbortedByUser):
+            await AptSyncJob(context).plan()
+
+    @pytest.mark.asyncio
+    async def test_holds_that_name_installed_packages_let_the_run_proceed(self) -> None:
+        """B19 — the ordinary case: both machines hold only packages they have, and planning
+        finishes normally.
+        """
+        context, _source, _target = self._context(source_holds="pkg-a\n", target_holds="pkg-a\n")
+
+        plan = await AptSyncJob(context).plan()
+
+        assert not any(diff.item_id.startswith("apt:hold:") for diff in plan.diffs)
+
+    @pytest.mark.asyncio
+    async def test_a_machine_holding_nothing_is_never_asked_what_it_has_installed(self) -> None:
+        """B51 — the check costs nothing on a run with no holds anywhere."""
+        context, source, target = self._context()
+
+        await AptSyncJob(context).plan()
+
+        for mock in (source, target):
+            assert not any("db:Status-Status" in cmd for cmd in all_calls(mock))
 
 
 class TestValidate:

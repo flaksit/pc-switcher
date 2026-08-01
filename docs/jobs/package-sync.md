@@ -25,7 +25,7 @@ All four ship **disabled**: enabling any of them lets pc-switcher change install
 - **`apt_sync`** — the manually-installed apt package set (`apt-mark showmanual`, not the full dpkg selection — apt resolves dependencies on the target itself), minus the packages you installed from a hand-downloaded `.deb` (see below), plus the `/etc/apt` configuration that governs where packages come from. Three things under `/etc/apt` are reviewed: `apt.conf.d` files — added, changed or deleted — the deletion of a repository or pin file the source no longer has, and one narrow repository conflict. Repository files under `sources.list.d`, their signing keys, and pins under `preferences.d` are derived from the packages you approve and never get a review row — see [Repositories, pins and keys are derived](#repositories-pins-and-keys-are-derived).
 - **`snap_sync`** — installed snaps, converged to the source's exact revision and tracking channel.
 - **`flatpak_sync`** — installed flatpak refs, per user/system installation scope, plus the remotes those refs are derived to need.
-- **`manual_installs_sync`** — everything no package manager can reproduce: apt packages installed from no configured repository (a `.deb` you installed by hand, whether or not apt marks it as one you chose), plus unowned files under `/usr/local` and `/opt`. It also owns the [install-snippet registry](#install-snippets).
+- **`manual_installs_sync`** — everything no package manager can reproduce: apt packages installed from no configured repository (a `.deb` you installed by hand, whether or not apt marks it as one you chose), plus unowned software under `/opt` and `/usr/local`. It also owns the [install-snippet registry](#install-snippets).
 
 ### Hand-installed `.deb` packages belong to one job only
 
@@ -49,9 +49,9 @@ Because an enabled package job can install or remove software on the target, eac
 
 Every screen names the two machines by their **hostnames** — `atlas`, `nomad` — never as "the source" and "the target". Those are the tool's names for the two ends of a run, and the question a review asks is always about one of your computers: which machine loses the package, which machine's version of a file wins, which machine an install snippet runs on.
 
-The review lists every difference the job found between the two machines, grouped by action, and installs are always kept separate from removals: a group that would install software is never mixed with one that would remove it, and a removal group names the removal explicitly (`Remove apt packages`) rather than saying "apply". Removal rows start at **skip now**, so a bulk approval can never silently delete something. So do rows that would replace an `apt.conf.d` file the target already holds — that file is your own work, and overwriting it unread is as irreversible as a deletion. A snap the run moves to another revision or channel still starts applied: converging software you asked for overwrites nothing you wrote.
+The review lists every difference the job found between the two machines, grouped by action, and installs are always kept separate from removals: a group that would install software is never mixed with one that would remove it, and a removal group names the removal explicitly (`Remove apt packages`) rather than saying "apply". Removal rows start at **skip now**, so a bulk approval can never silently delete something. So do rows that would replace an `apt.conf.d` file the target already holds — that file is your own work, and overwriting it unread is as irreversible as a deletion. A snap the run moves to another revision or channel still starts applied: converging software you asked for overwrites nothing you wrote. That one is offered with **two** answers rather than three — its line says what your machine's copy is overwritten with ("overwrites revision 15 on nomad with revision 20"), and there is no permanent answer, because nobody keeps a revision as a standing preference about one machine.
 
-Most items that would actually change something — packages, holds, masks and `apt.conf.d` files — offer the same three-way choice:
+Most items that would actually change something — packages, applications and `apt.conf.d` files — offer the same three-way choice:
 
 - **Apply** it — make this change on the target.
 - **Skip now** — leave it alone this sync; it comes back next sync.
@@ -212,7 +212,15 @@ A machine-specific package never appears in a review again, which is why the run
 
 Some installed things no package manager can reproduce — a bare `.deb` downloaded and installed by hand, or software dropped under `/usr/local` or `/opt` by an install script. `manual_installs_sync` detects these and surfaces them in its review as items needing a resolution.
 
-The filesystem half of that scan is deliberately shallow: it lists `/usr/local` and `/opt` one level deep, plus `/usr/local/bin` and `/usr/local/lib` one level deeper, and reports whatever dpkg does not own. It names what is there so you can decide about it; it never walks a tree. Those four directories are themselves never offered — only what is inside them — so a stock `/usr/local/bin` is not something you are asked to write an install snippet for. Each gets a decision screen of its own — one item per screen, because answering `<y>` opens an editor for that item — with the review's usual three answers in the usual order:
+The filesystem half of that scan is deliberately shallow. It looks in `/opt`, directly under `/usr/local`, and inside `/usr/local`'s `bin`, `sbin`, `lib`, `games` and `src` — one level each — and reports whatever dpkg does not own. It names what is there so you can decide about it; it never walks a tree, so an application under `/opt` is one finding rather than a thousand. `etc`, `include`, `man` and `share` are not looked into at all: what a hand install puts there comes with an application the scan finds elsewhere.
+
+Three things are never offered. A path a package owns. One of the nine directories Ubuntu itself creates under `/usr/local` — `bin`, `etc`, `games`, `include`, `lib`, `man`, `sbin`, `share`, `src` — so a stock `/usr/local/bin` is not something you are asked to write an install snippet for. And a directory with no file anywhere beneath it, which is a leftover shape rather than software.
+
+You are asked about only what the OTHER machine does not already have. Both machines are scanned, and a finding that is already there is dropped. That is what stops one snippet's several traces — the tree it unpacks under `/opt` and the symlink in `bin` that starts it — from coming back at you on every later sync once the snippet has run. Nothing the other machine alone has is ever named, in either direction.
+
+One directory under `/opt` cannot be judged by looking at it, and you are asked about it while the sync is still planning, before the review. If `/opt/something` holds files of its own it is one application. If it holds a single directory and no file, that directory is the application. If it holds several directories and no file, it is either one application or one publisher's directory holding several, and only you know which — so the question names what is inside and offers the two answers as what each would mean for the other machine.
+
+Each finding then gets a decision screen of its own — one item per screen, because answering `<y>` opens an editor for that item — with the review's usual three answers in the usual order:
 
 - `<y>` `install` — `write a command snippet that installs it; nomad runs it`, now and on every future sync.
 - `<s>` `skip now` — `do not install on nomad for now; will be asked again next sync`.
@@ -319,23 +327,25 @@ A remote the source no longer has is **deleted**, not offered. Nothing is asked,
 
 ## Holds and masks
 
-Beyond *what is installed*, pc-switcher also replicates what you deliberately set to stop a package from updating: apt holds (`apt-mark hold`), per-snap refresh holds (`snap refresh --hold`), and flatpak masks (`flatpak mask`). (apt version *pins* are already synced, as derived files rather than as items.)
+Beyond *what is installed*, pc-switcher also replicates what you deliberately set to stop a package from moving: apt holds (`apt-mark hold`), per-snap refresh holds (`snap refresh --hold`), and flatpak masks (`flatpak mask`).
 
-A hold or mask is its own review item — its own line, with the usual three-way choice — **apply** (make the target match the source), **skip now**, or **skip for good** — whenever the software it applies to is not itself something this run is changing. That is the common case: both machines already have the package, and what differs is only whether it is held. Adding one (present on the source but not the target) starts applied. **Removing** one — undoing a hold or mask you set, present on the target but not the source — lands in its own removal group starting at **skip now**, so a bulk approval can never silently drop something you meant to keep.
+None of them is a review item. They travel exactly as apt version *pins* do — because the software they apply to travels, without a line of their own and without a question. A hold or a mask changes nothing about what software exists, only about what may move, so replicating it costs nothing and there is nothing per-package to get wrong. What the source has, added and removed alike, is what the target ends the run with; the log names each one as it lands, and a dry run previews it.
 
-When the software *is* being changed this run, the two are **one question**. The package's own line says what happens to its hold — "nomad ends up holding it, as atlas does" — and the answer you give about the package is the answer about the hold. There is no way to install a package and decline its hold, or to remove it and keep one: those were the pairs whose two answers could contradict each other. Skipping for this run skips both, and answering permanently marks both, each on the machine that holds it, so neither comes back on its own next run. The merged line keeps the *package's* direction, so a removal still starts at **skip now**.
+Because they follow the software, an install you decline takes its hold with it. Nothing is held on a machine that did not get the package: `apt-mark hold` accepts a package that is not installed and a hold recorded that way blocks every later attempt to install it. The run says the hold was not applied — not a failure, since your own answer is what withdrew it. If the install was approved and then failed, or the package is only reported because the run cannot reproduce the repository it comes from, the hold fails as its own item.
 
-A run can remove a package and carry a hold for it at the same time, because the source can hold a package it does not have itself. Approving the removal removes the package and leaves **no** hold behind: `apt-mark hold` accepts a package that is not installed, and a hold recorded that way blocks every later attempt to install it. The run says the hold was not applied; it is not a failure, because your own answer is what withdrew it.
+A flatpak mask is different in one way: it lands whether or not the application it covers is still there. A mask says what may not be installed, so masking software the machine no longer has is exactly what it is for. Masks are patterns, replicated whether or not a matching ref is installed; a pattern edit reads as remove-old plus add-new, and a user/system scope change as add plus remove, reported as found rather than normalised. Masks land after the applications, so one can never suppress a dependency the same run is pulling in.
 
-A flatpak mask is a pattern, so it rides an application's question only when it covers exactly **one** application this run is installing or removing in that scope. Covering nothing this run touches, or covering two of its applications, it keeps a question of its own — in the second case because two answers can disagree and the mask would have no single one to obey. And unlike a hold, a mask riding a removal still lands: a mask says what may not be installed, so it means something precisely when the application is gone.
-
-Replicating a hold never touches the package's version: a held apt package is never installed or upgraded by a sync, and its version is left exactly as it is. That protection is for a package the target actually has. A hold recorded on the target for a package it does not have freezes nothing — it only refuses the install — so the package is offered as an ordinary install, the run clears the leftover hold just before installing, and the hold is registered again afterwards if the source holds it too. Neither the clearing nor the reinstating is a question: the item you decide is the install.
+Replicating a hold never touches the package's version: a held apt package is never installed or upgraded by a sync, and its version is left exactly as it is. A package the target has and holds produces no item at all — apt refuses to move it, so an item proposing that could only fail.
 
 There is one case where the version is not the target's own to choose: an apt package the source holds and the target does not have at all. apt gives a hold no way to say "at whatever version you happen to get", so installing the target's version and then holding it would freeze the two machines apart for good — nothing moves a held package again. That install therefore asks for the source's exact version. If the target cannot supply it, the install fails as its own item naming both versions, and the hold fails with it rather than pinning a package that is not there.
 
-A hold whose package this run did not put on the target is never registered, for the same reason. Which outcome it gets follows why the package is missing. Declining the merged question declines both, and so does keeping a package its collateral question was about — neither is reported as broken, because a hold freezes a version and a package nobody installed has none to freeze. If the install was approved and failed, or the package is only reported because the run cannot reproduce the repository it comes from — in which case the hold was a question of its own, since a reported package is nothing you answer — the hold fails as its own item.
+### A hold on a package the machine does not have
 
-The review verbs match the mechanism: apt and snap holds read *hold* / *unhold*, flatpak masks read *mask* / *unmask*. flatpak masks are patterns, replicated whether or not a matching ref is installed; a pattern edit reads as remove-old plus add-new, and a user/system scope change as add plus remove, reported as found rather than normalised.
+`apt-mark hold` accepts a name that is not installed, and the hold it records then refuses every later attempt to install that name — while freezing nothing, because there is nothing there to freeze. It is a bookkeeping mistake rather than a state worth replicating or protecting.
+
+If either machine carries one, the run **stops**, before anything is written. It names the package and the machine and gives you the `sudo apt-mark unhold` that clears it. Clear it and sync again.
+
+Snap and flatpak need no equivalent: snapd records a refresh hold only against an installed snap, and a flatpak mask is a rule about what may be installed rather than a freeze on an installed copy.
 
 ## Deletions
 
@@ -351,7 +361,7 @@ A pin file is shown **whole**: its content is printed above the screen, one file
 
 The distribution's own source files are never offered for removal at all.
 
-`manual_installs_sync` is **install-only**: it has no target-side manifest of what it installed, so it never proposes removals. Removing a hand-installed item on the target is manual work today (tracking removal for manual installs is deferred to a future issue).
+`manual_installs_sync` is **install-only**: it reads the target only to tell what is already there, and keeps no record of what it put there, so it never proposes removals. Removing a hand-installed item on the target is manual work today (tracking removal for manual installs is deferred to a future issue).
 
 ## Prerequisites: passwordless sudo
 

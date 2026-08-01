@@ -29,6 +29,7 @@ from pcswitcher.jobs.packages.review import Decision, ReviewGroup, ReviewOutcome
 from pcswitcher.jobs.packages.state import DecisionFile, filter_inert, marks_on_either
 from pcswitcher.jobs.packages.sync_core import (  # pyright: ignore[reportPrivateUsage]
     _ACTION_VOCABULARY,
+    BLOCK_ITEM_CLASSES,
     PackageItemFailures,
     PackagePlan,
     PackageSyncJob,
@@ -284,11 +285,13 @@ class TestReviewGroupsByAction:
         nobody thought about".
         """
         job = FakeSyncJob(make_context())
+        # Blocks are excluded: they reach no review group at all (`PKG-FR-BLOCKS-DERIVED`),
+        # which is the whole point of them, not a missing vocabulary row.
         uncovered = [
             (item_class, action)
             for item_class in ItemClass
             for action in DiffAction
-            if (item_class, action) not in _ACTION_VOCABULARY
+            if (item_class, action) not in _ACTION_VOCABULARY and item_class not in BLOCK_ITEM_CLASSES
         ]
         assert uncovered, "every pair is in the vocabulary — the fallback backstop is untested"
 

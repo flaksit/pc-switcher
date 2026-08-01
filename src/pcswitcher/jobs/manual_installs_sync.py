@@ -1,17 +1,21 @@
 """`manual_installs_sync`: the fourth package job, owning everything no package manager
 can reproduce (D-15, D-18, D-19, D-20, D-21).
 
-Two detectors, both run on the SOURCE:
+Two detectors, run on BOTH machines (`PKG-FR-MANUAL-DIFF`) — the source's findings are the
+candidates, and a finding the target already holds is dropped rather than presented:
 
 - apt packages installed on the source whose INSTALLED version comes from no repository the
   source has configured — installed via `dpkg --install` of a bare `.deb`, so only dpkg's
   own status file accounts for them. Every installed package, not the `apt-mark showmanual`
   set: apt's manual/automatic mark says how the package got there, not whether any
-  repository can supply it.
-- paths directly under `/usr/local` and `/opt` (plus the immediate children of
-  `/usr/local/bin` and `/usr/local/lib`) that no dpkg package owns — software an install
-  script dropped there, bypassing apt entirely. Never one of those four scan roots itself:
-  they are directories the distribution ships, not software under themselves.
+  repository can supply it. On the target the question is only whether dpkg reports the name
+  installed at all: software that is there is there, whatever origin put it there.
+- paths under `/opt`, directly under `/usr/local`, and inside `/usr/local`'s `bin`, `sbin`,
+  `lib`, `games` and `src` that no dpkg package owns — software an install script dropped
+  there, bypassing apt entirely (`PKG-FR-MANUAL-SCOPE`). Never `/usr/local`'s own skeleton
+  (`_USR_LOCAL_SKELETON`), and never a directory with no file anywhere beneath it. An
+  unowned entry directly under `/opt` is judged by its own shape, which can take a question
+  (`PKG-FR-MANUAL-OPT-SHAPE`).
 
 D-18 gives them their own job and their own enable flag, because half of what they cover is
 not apt's business at all (unowned files under `/usr/local`/`/opt`), and folding them into
@@ -41,7 +45,7 @@ from __future__ import annotations
 
 import re
 import shlex
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -50,6 +54,7 @@ from typing import Any, ClassVar, Literal, override
 from rich.markup import escape
 
 from pcswitcher.config_sync import CONFIG_REMOTE_DIR
+from pcswitcher.executor import Executor
 from pcswitcher.jobs.context import JobContext
 from pcswitcher.jobs.packages.apt_policy import installed_origins_by_package, packages_installed_from_no_repository
 from pcswitcher.jobs.packages.items import (
@@ -87,18 +92,63 @@ from pcswitcher.redaction import redact_credentials
 
 __all__ = ["ManualInstallsSyncJob"]
 
-# D-19's bounded unowned-install scan: top-level entries of `/usr/local` and `/opt`, plus
-# the immediate children of `/usr/local/bin` and `/usr/local/lib` — one shell loop runs
-# `find <root> -mindepth 1 -maxdepth 1` over each of the four, skipping any that is not
-# there so a missing root is not an error to tell apart from a broken one
-# (`_scan_unowned_installs`). Enough to NAME a finding (D-18), never
-# enough to walk an entire tree — the item is decided on, not replicated (deferred ideas,
-# CONTEXT.md). Owned by this job now, no longer shared with apt_sync (D-18).
+# The bounded unowned-install scan (`PKG-FR-MANUAL-SCOPE`): `/opt`, every entry directly
+# under `/usr/local`, and the entries of the five `/usr/local` subdirectories software
+# actually lands in. One shell loop runs `find <root> -mindepth 1 -maxdepth 1` over each,
+# skipping any that is not there so a missing root is not an error to tell apart from a
+# broken one (`_list_scan_entries`). Enough to NAME a finding, never enough to walk a tree:
+# the item is decided on, not replicated.
 #
-# A root is never a finding of its own scan (`PKG-FR-MANUAL-SCOPE`): two of these four are
-# also ENTRIES of a third (`/usr/local/bin` and `/usr/local/lib` sit under `/usr/local`),
-# so `find` names them like any other candidate — see `_scan_unowned_installs`.
-_UNOWNED_SCAN_ROOTS = ("/usr/local", "/opt", "/usr/local/bin", "/usr/local/lib")
+# `etc`, `include`, `man` and `share` are deliberately absent. What a hand install puts
+# there arrives with an application this scan finds elsewhere, so scanning them would raise
+# a second finding for software already named once — and `man` is a symlink to `share/man`,
+# which a scan that followed it would walk twice.
+_UNOWNED_SCAN_ROOTS = (
+    "/opt",
+    "/usr/local",
+    "/usr/local/bin",
+    "/usr/local/sbin",
+    "/usr/local/lib",
+    "/usr/local/games",
+    "/usr/local/src",
+)
+
+# The nine entries `base-files.postinst` creates directly under `/usr/local`: eight through
+# its own `install_local_dir` helper, plus `man` as a symlink to `share/man`. Hardcoded for
+# predictability rather than read off the machine — the scan's shape must not change with
+# whatever a postinst happens to say on the day — with a VM test asserting that the machine's
+# own `base-files.postinst` still declares exactly these, so a distribution that changes the
+# skeleton is a failing test rather than a surprise in a review.
+#
+# None of them is ever a finding (`PKG-FR-MANUAL-SCOPE`): the distribution ships them and no
+# package need own them, so presenting one would ask every user, on every machine, on every
+# run, to write an install snippet for a stock directory whose contents this scan already
+# names one level deeper. This is also what keeps a scanned directory out of its own scan —
+# the five `/usr/local` roots above are all in this set, and `find` names them as entries of
+# `/usr/local` like any other candidate.
+_USR_LOCAL_SKELETON = frozenset(
+    {
+        "/usr/local/bin",
+        "/usr/local/etc",
+        "/usr/local/games",
+        "/usr/local/include",
+        "/usr/local/lib",
+        "/usr/local/man",
+        "/usr/local/sbin",
+        "/usr/local/share",
+        "/usr/local/src",
+    }
+)
+
+# Where the vendor-or-application shape question applies (`PKG-FR-MANUAL-OPT-SHAPE`).
+# `/usr/local` has no such ambiguity: its own layout puts an application's parts under the
+# skeleton directories this scan already looks in one at a time.
+_OPT_ROOT = "/opt"
+
+# `find`'s type letter for a directory (`-printf '%y'`). Every other letter — `f`, `l`, `s`,
+# `p`, `b`, `c` — means "not a directory", which is all this scan asks of it: a file, a
+# symlink and a socket are equally a thing that is there rather than an empty shape.
+_DIRECTORY = "d"
 
 # Matches one `dpkg --search` "owned" line: `<package>[,<package>...]: <path>`. A path dpkg does
 # not own produces no such line at all (its "no path found" diagnostic goes to stderr,
@@ -171,6 +221,25 @@ def _owned_paths_from_dpkg_s(output: str) -> frozenset[str]:
         if match:
             owned.add(match.group("path"))
     return frozenset(owned)
+
+
+def _typed_entries(output: str) -> list[tuple[str, str]]:
+    """`(type letter, path)` per line of a `find -printf '%y\\t%p\\n'` listing.
+
+    The type rides along with the path because every rule after the listing needs it — the
+    `/opt` shape question counts directories against files, and the empty-directory rule
+    only applies to a directory. Asking `find` for it costs nothing; asking again per path
+    would be one command per candidate.
+
+    A line without a tab is dropped rather than guessed at: a path containing a newline
+    would arrive as one, and this scan reports what it can name for certain.
+    """
+    entries: list[tuple[str, str]] = []
+    for line in output.splitlines():
+        kind, tab, path = line.partition("\t")
+        if tab and path.startswith("/"):
+            entries.append((kind, path))
+    return entries
 
 
 class ManualInstallsSyncJob(PackageSyncJob):
@@ -430,7 +499,7 @@ class ManualInstallsSyncJob(PackageSyncJob):
             ),
         ]
 
-    # -- Detection (D-18/D-19), all on the source ---------------------------------------
+    # -- Detection (D-18/D-19), run on both machines (`PKG-FR-MANUAL-DIFF`) --------------
 
     async def _scan_no_candidate_apt_packages(self, installed_names: Sequence[str]) -> list[UnreproducibleItem]:
         """D-18: installed packages whose INSTALLED version comes from no repository the
@@ -488,90 +557,234 @@ class ManualInstallsSyncJob(PackageSyncJob):
             for name in sorted(no_repository)
         ]
 
-    async def _scan_unowned_installs(self) -> list[UnreproducibleItem]:
-        """D-18/D-19: paths under `/usr/local` and `/opt` that no dpkg package owns —
-        software an install script dropped there directly, bypassing apt entirely.
+    async def _scan_unowned_installs(
+        self, executor: Executor, machine: str, *, ask_when_ambiguous: bool
+    ) -> list[UnreproducibleItem]:
+        """Paths no dpkg package owns under this scan's roots — software an install script
+        dropped there directly, bypassing apt entirely (`PKG-FR-MANUAL-SCOPE`).
 
-        One batched `find` over `_UNOWNED_SCAN_ROOTS` names every candidate path, then one
-        batched `dpkg --search` over those candidates decides ownership; a path absent from the
-        `dpkg --search` output is unowned. Both steps run on the SOURCE (D-18) — a fact about
-        what the source machine has installed, not the target.
+        Four bounded steps, each one command, each skipped when the step before it left
+        nothing to ask about:
 
-        Both are guarded, and neither by its bare exit code (ADR-022, `PKG-FR-READ-FAILS-JOB`):
+        1. `_list_scan_entries` names every entry of every root, with its type.
+        2. `dpkg --search` decides ownership over what is left once `_USR_LOCAL_SKELETON` is
+           dropped; a path absent from the reply is unowned.
+        3. `_resolve_opt_shapes` turns an unowned `/opt` entry into the finding its own shape
+           makes it (`PKG-FR-MANUAL-OPT-SHAPE`), asking the user where the shape is genuinely
+           ambiguous and `ask_when_ambiguous` says this machine's findings are the items.
+        4. `_directories_holding_a_file` drops a directory with no file anywhere beneath it:
+           an empty shape is not software, and there would be nothing for a snippet to
+           reproduce.
 
-        - `find` is driven from a shell loop that SKIPS a scan root that is not there, so
-          the one tolerated error is gone from the exit code rather than hidden behind the
-          `2>/dev/null` this used to carry. What is left — an unreadable root, a missing
-          binary — exits non-zero and reaches `require_answer`. Empty output on a clean exit
-          stays an ordinary answer: a machine with nothing under `/opt` is an ordinary
-          machine. Silence, on the other hand, is not "nothing is installed by hand here":
-          it would drop every finding this job exists to make.
-        - `dpkg --search` exits 1 as soon as ONE queried path is unowned, which is precisely
-          the finding this scan is looking for, so its exit code says nothing about whether
-          it answered. `_DPKG_OWNERSHIP_WITNESS` supplies the answer the exit code cannot: a
-          path dpkg must claim rides along in the same batch, and its absence from the reply
-          means dpkg did not answer. Without it a dead `dpkg --search` prints nothing, every
-          candidate looks unowned, and the user is asked to write an install snippet for
-          every entry under `/opt` and `/usr/local`.
+        `dpkg --search` exits 1 as soon as ONE queried path is unowned, which is precisely
+        the finding this scan is looking for, so its exit code says nothing about whether it
+        answered (ADR-022, `PKG-FR-READ-FAILS-JOB`). `_DPKG_OWNERSHIP_WITNESS` supplies the
+        answer the exit code cannot: a path dpkg must claim rides along in the same batch,
+        and its absence from the reply means dpkg did not answer. Without it a dead
+        `dpkg --search` prints nothing, every candidate looks unowned, and the user is asked
+        to write an install snippet for every entry under `/opt` and `/usr/local`.
 
-        A scan ROOT is dropped from the candidates before ownership is even asked. The scan
-        covers software UNDER its roots (`PKG-FR-MANUAL-SCOPE`), and `/usr/local/bin` and
-        `/usr/local/lib` are roots that `find` also names as entries of `/usr/local`.
-        Ownership cannot settle it either: dpkg owns no `/usr/local` directory on a stock
-        machine (`base-files` ships none), so both would be reported on every machine, in
-        every run, forever — asking every user for an install snippet for a directory the
-        distribution ships and whose interesting contents are already scanned one level
-        deeper. Exact string equality suffices: `find` echoes the root verbatim as the
-        prefix of each entry it prints, and no root carries a trailing slash.
+        Runs on whichever machine it is handed (`PKG-FR-MANUAL-DIFF`): the source's findings
+        are the candidates, the target's are what the diff subtracts.
+        """
+        entries = await self._list_scan_entries(executor, machine)
+        candidates = {path: kind for kind, path in entries if path not in _USR_LOCAL_SKELETON}
+        if not candidates:
+            return []
+
+        quoted_paths = " ".join(shlex.quote(path) for path in [*sorted(candidates), _DPKG_OWNERSHIP_WITNESS])
+        ownership_command = f"dpkg --search {quoted_paths}"
+        ownership = await executor.run_command(ownership_command)
+        owned = _owned_paths_from_dpkg_s(ownership.stdout)
+        if _DPKG_OWNERSHIP_WITNESS not in owned:
+            raise ProbeFailed(
+                f"probe on {machine} did not answer — `{ownership_command}` reported no owner for "
+                f"{_DPKG_OWNERSHIP_WITNESS}, which dpkg owns on every machine, so its silence about the other "
+                f"paths is not an answer about them: {ownership.stderr.strip()}"
+            )
+        unowned = {path: kind for path, kind in candidates.items() if path not in owned}
+
+        shaped = await self._resolve_opt_shapes(executor, machine, unowned, ask_when_ambiguous=ask_when_ambiguous)
+        directories = sorted(path for path, kind in shaped.items() if kind == _DIRECTORY)
+        holds_a_file = await self._directories_holding_a_file(executor, machine, directories)
+        findings = [path for path, kind in shaped.items() if kind != _DIRECTORY or path in holds_a_file]
+
+        return [UnreproducibleItem(origin="unowned-path", identifier=path, label=path) for path in sorted(findings)]
+
+    async def _list_scan_entries(self, executor: Executor, machine: str) -> list[tuple[str, str]]:
+        """Every entry of every scan root, one level deep, as `(type letter, path)`.
+
+        One `find` per root, driven from a shell loop that SKIPS a root that is not there, so
+        the one tolerated error is gone from the exit code rather than hidden behind a
+        `2>/dev/null`. What is left — an unreadable root, a missing binary — exits non-zero
+        and reaches `require_answer`. Empty output on a clean exit stays an ordinary answer:
+        a machine with nothing under `/opt` is an ordinary machine. Silence, on the other
+        hand, is not "nothing is installed by hand here"; it would drop every finding this
+        job exists to make (`PKG-FR-READ-FAILS-JOB`).
         """
         quoted_roots = " ".join(shlex.quote(root) for root in _UNOWNED_SCAN_ROOTS)
         # One line, never a multi-line script: the command is echoed verbatim into the debug
         # trace and the `--confirm-each-command` gate.
-        listing_command = (
+        command = (
             f'for root in {quoted_roots}; do [ -d "$root" ] || continue; '
-            'find "$root" -mindepth 1 -maxdepth 1 || exit 1; done'
+            "find \"$root\" -mindepth 1 -maxdepth 1 -printf '%y\\t%p\\n' || exit 1; done"
         )
-        listing = await self.source.run_command(listing_command)
-        require_answer(listing_command, listing, self.machines.source)
-        candidates = [path for path in _lines(listing.stdout) if path not in _UNOWNED_SCAN_ROOTS]
-        if not candidates:
-            return []
+        listing = await executor.run_command(command)
+        require_answer(command, listing, machine)
+        return _typed_entries(listing.stdout)
 
-        quoted_paths = " ".join(shlex.quote(path) for path in [*candidates, _DPKG_OWNERSHIP_WITNESS])
-        ownership_command = f"dpkg --search {quoted_paths}"
-        ownership = await self.source.run_command(ownership_command)
-        owned = _owned_paths_from_dpkg_s(ownership.stdout)
-        if _DPKG_OWNERSHIP_WITNESS not in owned:
-            raise ProbeFailed(
-                f"probe on {self.machines.source} did not answer — `{ownership_command}` reported no owner for "
-                f"{_DPKG_OWNERSHIP_WITNESS}, which dpkg owns on every machine, so its silence about the other "
-                f"paths is not an answer about them: {ownership.stderr.strip()}"
-            )
+    async def _resolve_opt_shapes(
+        self, executor: Executor, machine: str, unowned: Mapping[str, str], *, ask_when_ambiguous: bool
+    ) -> dict[str, str]:
+        """Replace each unowned `/opt/<name>` directory with the finding its shape makes it
+        (`PKG-FR-MANUAL-OPT-SHAPE`), leaving every other candidate untouched.
 
-        return [
-            UnreproducibleItem(origin="unowned-path", identifier=path, label=path)
-            for path in sorted(set(candidates) - owned)
-        ]
+        `/opt/<application>` and `/opt/<publisher>/<application>` look the same from outside,
+        so what the directory holds decides: a file of its own makes it the application; no
+        file and exactly one directory makes that directory the application; no file and
+        several directories cannot be told apart and is the one question this job asks
+        outside the review.
+
+        `ask_when_ambiguous` is what separates the two machines. On the machine whose
+        findings become items, the user answers. On the other, the shape decides nothing —
+        the reading is only used to subtract what is already there — so BOTH readings are
+        kept as held and nothing is asked: whichever one the answer produced on the other
+        machine is then subtracted, and asking twice for one fact that changes no item is
+        exactly the noise the diff exists to remove.
+
+        One `find` for all the `/opt` directories together, listing each one level deep.
+
+        Known cost: the question comes before the answers that could make it pointless. The
+        finding's identity IS the answer, so neither the source's own machine-specific marks
+        nor what the target already holds can be applied to a shape nobody has read yet — and
+        an ambiguous directory whose every reading is already settled is therefore asked
+        about once per run. Resolving it would mean reading the target before the source's
+        shape step, which costs that read on every machine that has no findings at all.
+        """
+        opt_directories = sorted(
+            path
+            for path, kind in unowned.items()
+            if kind == _DIRECTORY and path.startswith(f"{_OPT_ROOT}/") and "/" not in path[len(_OPT_ROOT) + 1 :]
+        )
+        if not opt_directories:
+            return dict(unowned)
+
+        quoted = " ".join(shlex.quote(path) for path in opt_directories)
+        command = f"find {quoted} -mindepth 1 -maxdepth 1 -printf '%y\\t%p\\n'"
+        listing = await executor.run_command(command)
+        # No `answers=` guard: every one of these directories may legitimately be empty, and
+        # an empty answer is ordinary data (ADR-022).
+        require_answer(command, listing, machine)
+
+        children: dict[str, list[tuple[str, str]]] = {path: [] for path in opt_directories}
+        for kind, path in _typed_entries(listing.stdout):
+            parent = path.rpartition("/")[0]
+            if parent in children:
+                children[parent].append((kind, path))
+
+        shaped = {path: kind for path, kind in unowned.items() if path not in children}
+        for path, entries in children.items():
+            subdirectories = sorted(child for kind, child in entries if kind == _DIRECTORY)
+            if len(subdirectories) != len(entries):
+                shaped[path] = _DIRECTORY  # holds a file of its own: one application
+            elif not subdirectories:
+                continue  # holds nothing at all: not a finding
+            elif len(subdirectories) == 1:
+                shaped[subdirectories[0]] = _DIRECTORY
+            elif not ask_when_ambiguous:
+                shaped[path] = _DIRECTORY
+                shaped.update(dict.fromkeys(subdirectories, _DIRECTORY))
+            elif await self._ask_whether_one_application(path, subdirectories):
+                shaped[path] = _DIRECTORY
+            else:
+                shaped.update(dict.fromkeys(subdirectories, _DIRECTORY))
+        return shaped
+
+    async def _ask_whether_one_application(self, path: str, subdirectories: Sequence[str]) -> bool:
+        """Ask whether `path` is one application or a publisher's directory holding several
+        (`PKG-FR-MANUAL-OPT-SHAPE`). True keeps `path` as the finding; False makes each of
+        `subdirectories` a finding of its own.
+
+        Asked while the run is still planning, because the answer decides what the review
+        lists rather than what happens to any item on it — and asked in a rehearsal too, since
+        a dry run puts the same questions as a real one (`PKG-FR-DRY-RUN`).
+
+        Both answers name the machine the software would land on and say what would be
+        reproduced there rather than how this job would go about it
+        (`PKG-FR-NAME-THE-MACHINES`, `PKG-FR-EFFECT-NOT-MECHANISM`). With nobody to ask, the
+        directory itself is the finding: it is the shallower of the two readings, and this
+        scan reports what it finds where it finds it.
+        """
+        assert self.context.reviewer is not None, (
+            f"{self.manager_id} sync has no reviewer; the orchestrator must inject one "
+            "through JobContext.reviewer before plan()."
+        )
+        source, target = self.machines.source, self.machines.target
+        named = ", ".join(subdirectories)
+        answer = await self.context.reviewer.ask_gate(
+            title=f"What is {path} on {source}?",
+            message=(
+                f"{path} on {source} holds no file of its own — only the directories {named}. "
+                f"Either it is one application whose parts live in those directories, or it is one "
+                f"publisher's directory holding an application per directory. Nothing on {source} says "
+                f"which, and the answer decides what {target} is offered."
+            ),
+            proceed_label=f"One application — {path} is what would be reproduced on {target}",
+            stop_label=f"One per directory — {named} are what would be reproduced on {target}, each on its own",
+        )
+        return answer is None or answer
+
+    async def _directories_holding_a_file(
+        self, executor: Executor, machine: str, directories: Sequence[str]
+    ) -> frozenset[str]:
+        """Of `directories`, those holding a file somewhere beneath them — the ones that are
+        software rather than an empty shape (`PKG-FR-MANUAL-SCOPE`).
+
+        One `find` per directory, stopping at the first non-directory it meets (`-quit`), so
+        the cost is bounded however large the tree is and no tree is ever walked whole.
+
+        A directory whose own `find` FAILED is kept rather than dropped: an unreadable
+        subtree says nothing about whether a file is down there, and the harmless reading is
+        the one that still puts the finding in front of the user. Dropping it would be
+        silence read as data — the failure this scan's other guards exist to prevent.
+        """
+        if not directories:
+            return frozenset()
+
+        quoted = " ".join(shlex.quote(path) for path in directories)
+        # `exit 0` at the end, because the loop's own last status says nothing: every
+        # directory's outcome is on stdout, and a shell that could not run at all still
+        # fails the command itself, which is what `require_answer` reads.
+        command = (
+            f'for dir in {quoted}; do if found=$(find "$dir" ! -type d -print -quit); '
+            'then [ -n "$found" ] && echo "$dir"; else echo "$dir"; fi; done; exit 0'
+        )
+        result = await executor.run_command(command)
+        require_answer(command, result, machine)
+        return frozenset(_lines(result.stdout))
 
     # -- plan() / converge() ------------------------------------------------------------
 
     async def capture_source_items(self) -> Sequence[UnreproducibleItem]:  # pyright: ignore[reportIncompatibleMethodOverride]
-        """The source's unreproducible items: apt-no-candidate packages plus unowned
-        `/usr/local`/`/opt` installs (D-18). One `dpkg-query` names the source's installed
-        set here and its result feeds the no-candidate scan.
+        """The source's unreproducible findings: apt-no-candidate packages plus unowned
+        installs under this scan's roots (D-18). One `dpkg-query` names the source's
+        installed set here and its result feeds the no-candidate scan.
 
         This job overrides `plan()` and never routes through `PackageSyncJob.diff_items`'s
         apt-package-shaped dispatch, so widening this hook's item type is safe (same
         reasoning as `SnapSyncJob.capture_source_items`).
         """
         return [
-            *await self._scan_no_candidate_apt_packages(await self._source_installed_names()),
-            *await self._scan_unowned_installs(),
+            *await self._scan_no_candidate_apt_packages(
+                await self._installed_names(self.source, self.machines.source)
+            ),
+            *await self._scan_unowned_installs(self.source, self.machines.source, ask_when_ambiguous=True),
         ]
 
-    async def _source_installed_names(self) -> list[str]:
-        """Every package name dpkg reports as INSTALLED on the source — the population
-        `PKG-FR-MANUAL-SCOPE` draws the no-candidate scan from.
+    async def _installed_names(self, executor: Executor, machine: str) -> list[str]:
+        """Every package name dpkg reports as INSTALLED on `machine` — the population
+        `PKG-FR-MANUAL-SCOPE` draws the no-candidate scan from on the source, and the whole
+        of what the target holds on the apt side (`PKG-FR-MANUAL-DIFF`).
 
         `${Package}`, not `${binary:Package}`: the arch-qualified form only appears for a
         foreign architecture, and `apt-cache policy` speaks the plain name. Two dpkg entries
@@ -584,38 +797,65 @@ class ManualInstallsSyncJob(PackageSyncJob):
         answer this job exists to be able to contradict.
         """
         command = "dpkg-query --show --showformat='${Package}\\t${db:Status-Status}\\n'"
-        result = await self.source.run_command(command)
+        result = await executor.run_command(command)
         fields = (line.partition("\t") for line in _lines(result.stdout))
         installed = sorted({name for name, _, status in fields if status == "installed"})
-        require_answer(command, result, self.machines.source, answers=len(installed), answer_noun="installed package")
+        require_answer(command, result, machine, answers=len(installed), answer_noun="installed package")
         return installed
 
     async def query_target_items(self) -> Sequence[UnreproducibleItem]:  # pyright: ignore[reportIncompatibleMethodOverride]
-        """No target-side manifest exists for unreproducible items: they are always
-        source-held (they describe what the SOURCE machine has installed), and convergence
-        is driven by the shared snippet registry, not by a diff against target state. The
-        empty result keeps the abstract hook satisfied without a meaningless target query.
+        """What the TARGET already holds, in the source's own identities, so `plan()` can
+        drop a finding that is already there (`PKG-FR-MANUAL-DIFF`).
+
+        Not a manifest and never a source of items: nothing here is ever presented, converged
+        or removed (`PKG-NG-MANUAL-REMOVE`). It exists so that a snippet which has already
+        run stops being asked about — one snippet installs one application and leaves several
+        traces, and each trace is a finding of its own.
+
+        The two halves are not symmetric, deliberately. A path is held when the same scan
+        finds it there unowned. A PACKAGE is held when dpkg reports the name installed at
+        all, whatever origin put it there: software that is on the machine is on the machine,
+        and running the source's whole `apt-cache policy` origin analysis here would cost a
+        second 3-second, 718KB read to answer a question its own installed set already
+        answers.
         """
-        return []
+        installed = await self._installed_names(self.target, self.machines.target)
+        return [
+            *(UnreproducibleItem(origin="apt-no-candidate", identifier=name, label=name) for name in installed),
+            *await self._scan_unowned_installs(self.target, self.machines.target, ask_when_ambiguous=False),
+        ]
 
     @override
     async def plan(self) -> PackagePlan:
-        """Detect -> filter inert -> diff against the SOURCE's snippet registry. Read-only.
+        """Detect on both machines -> filter inert -> drop what the target holds -> diff
+        against the SOURCE's snippet registry. Read-only.
 
         An item already recorded machine-specific on the SOURCE is dropped by
         `filter_inert` before it becomes a diff (D-08/D-19: a finding produces noise
-        exactly once, then never again). Unreproducible items are always source-held, so
-        only the source's decision file is consulted.
+        exactly once, then never again). The marks that matter are the source's alone: a
+        finding is something the source has and the target lacks, so the source is always
+        its holding machine (`PKG-FR-MACHINE-SPECIFIC`).
 
-        Reproducibility is judged from the SOURCE — the machine being replicated (corrected
-        D-23): an item with a source-side registry snippet plans `INSTALL` (a snippet makes
-        it reproducible), one without plans `REPORT_ONLY` and surfaces in its own review
-        group for resolution. `after_review()`'s `send_file()` push places that snippet on
-        the target before `converge()` reads it, so convergence still replays from the
-        target's copy — only the classification authority moved to the source.
+        What the target already holds is then subtracted (`PKG-FR-MANUAL-DIFF`), which is
+        what stops a second path to one application — the symlink that starts what the
+        snippet unpacked — from being asked about on every later run. The target is not
+        queried at all when nothing survives the source's own filtering: there would be
+        nothing to subtract from, and a machine with no findings should cost no reads on the
+        other one.
+
+        Reproducibility is judged from the SOURCE — the machine being replicated
+        (`PKG-FR-MANUAL-SOURCE-DECIDES`): an item with a source-side registry snippet plans
+        `INSTALL` (a snippet makes it reproducible), one without plans `REPORT_ONLY` and
+        surfaces in its own review group for resolution. `after_review()`'s `send_file()`
+        push places that snippet on the target before `converge()` reads it, so convergence
+        still replays from the target's copy — only the classification authority is the
+        source's.
         """
         source_decisions = await DecisionFile(self.manager_id, self.source).load()
         items = await filter_inert(await self.capture_source_items(), source_decisions)
+        if items:
+            held = {item.item_id for item in await self.query_target_items()}
+            items = [item for item in items if item.item_id not in held]
 
         registry = SnippetRegistry(self.source, self.machines.source)
         diffs: list[ItemDiff] = []
@@ -760,11 +1000,13 @@ class ManualInstallsSyncJob(PackageSyncJob):
 
     @override
     async def validate(self) -> list[ValidationError]:
-        """`apt-cache` and `dpkg` availability on the SOURCE — the commands this job's own
-        detection runs (D-18). The source is only ever read, so no sudo is needed for
-        detection. A snippet's own sudo needs are unpredictable (an opaque blob, D-20), so
-        this job does NOT pre-validate target sudo; a snippet that needs it and lacks it
-        fails as a per-item converge failure (D-27), reported like any other.
+        """The commands this job's own detection runs: `apt-cache` and `dpkg` on the source,
+        and `dpkg` on the target, which is read too now that a finding the target already
+        holds is not presented (`PKG-FR-MANUAL-DIFF`). Both machines are only ever read for
+        detection, so no sudo is needed for it. A snippet's own sudo needs are unpredictable
+        (an opaque blob, D-20), so this job does NOT pre-validate target sudo; a snippet that
+        needs it and lacks it fails as a per-item converge failure (D-27), reported like any
+        other.
 
         Sequential checks appending to `errors`, never raising mid-validate (matches
         `AptSyncJob.validate()`'s shape).
@@ -784,6 +1026,14 @@ class ManualInstallsSyncJob(PackageSyncJob):
             errors.append(
                 self._validation_error(
                     Host.SOURCE, "dpkg is not available on source (required to detect unowned installs)"
+                )
+            )
+
+        target_dpkg_check = await self.target.run_command("dpkg --version")
+        if not target_dpkg_check.success:
+            errors.append(
+                self._validation_error(
+                    Host.TARGET, "dpkg is not available on target (required to tell what it already has)"
                 )
             )
 
