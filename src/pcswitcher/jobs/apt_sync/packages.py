@@ -279,18 +279,17 @@ class PackageConverger:
         install guard is (D-30). A collateral removal of an auto-installed package proceeds
         and is logged: removing a package legitimately removes the now-orphaned dependencies
         apt pulled in for it. A collateral change to a package `Collateral.protected` covers
-        is refused unless it was itself an approved removal this run or was let go ahead as
-        collateral. Where the real transaction has DRIFTED onto a protected package nobody
-        saw, the three-way question is put here instead of a refusal (`_settle_drift`).
+        goes through only where it was itself an approved removal this run or was let go ahead
+        as collateral; anything else gets the three-way question here, before the command
+        (`_settle_drift`).
 
-        The two outcomes divide on whether the fact could have been established before this
-        run's first change, which is what `PKG-FR-ASK-AGAIN` licenses a late round for. A
-        casualty that is itself a removal CANDIDATE this run was in the plan-time batch and
-        merely exempt from it (`Collateral.plan_time`), so its question belonged before any
-        change and asking it here would put a round in the middle of the work
-        (`PKG-FR-BATCHED`). That is the removal batch's known gap, refused by name and
-        recorded as an accepted cost; everything else the guard sees is younger than the
-        review and is asked about.
+        Nothing the guard sees at this point is older than the review. A casualty that is
+        itself a removal CANDIDATE was asked about in the second round, over the removals
+        this run approved (`Collateral.after_answers`) — a go-ahead there is in the approved
+        set and never reaches here, and keeping the package withdrew this very removal, so it
+        never converges. What survives to this point is a transaction that has DRIFTED since
+        that round, which is a fact this run's own earlier changes created and exactly what
+        `PKG-FR-ASK-AGAIN` licenses a late question for.
         """
         name = package_name(diff.item_id)
         args = remove_args([name])
@@ -299,20 +298,16 @@ class PackageConverger:
         approved = self._collateral.approved_removals(diffs, decisions)
         refused = await self._collateral.unapproved(preview, exempt=approved | {name}, verb="Removing", subject=name)
         if refused:
-            candidates = {
-                package_name(other.item_id)
-                for other in diffs
-                if other.item_class is ItemClass.APT_PACKAGE and other.action is DiffAction.REMOVE
-            }
-            knowable = [effect for effect in refused if effect.package in candidates]
-            effects = ", ".join(effect.phrase for effect in (knowable or refused))
-            refusal = (
-                f"removal of {name} refused: apt-get --dry-run would also {effects}, "
-                "which was neither an approved removal nor approved as collateral in this run (D-30)"
+            effects = ", ".join(effect.phrase for effect in refused)
+            await self._settle_drift(
+                refused,
+                verb="Removing",
+                name=name,
+                refusal=(
+                    f"removal of {name} refused: apt-get --dry-run would also {effects}, "
+                    "which was neither an approved removal nor approved as collateral in this run (D-30)"
+                ),
             )
-            if knowable:
-                raise ConvergeItemFailed(refusal)
-            await self._settle_drift(refused, verb="Removing", name=name, refusal=refusal)
 
         real_cmd = f"sudo DEBIAN_FRONTEND=noninteractive apt-get {args}"
         return await self._target.run_command(

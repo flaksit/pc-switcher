@@ -40,7 +40,7 @@ from pcswitcher.jobs.packages.review import (
     _is_removal_direction,  # pyright: ignore[reportPrivateUsage]
 )
 from pcswitcher.jobs.packages.sync_core import ConvergeItemFailed, PackageItemFailures, PackagePlan
-from pcswitcher.models import CommandResult, Host, ValidationError
+from pcswitcher.models import CommandResult, Host, SyncAbortedByUser, ValidationError
 from pcswitcher.orchestrator import Orchestrator
 
 # `flatpak list --app --columns=application,version,origin,installation,ref` has NO
@@ -136,7 +136,7 @@ class FakeFlatpakTarget:
         runtimes: dict[tuple[str, str], str] | None = None,
         unverified: set[tuple[str, str]] | None = None,
         filters: dict[tuple[str, str], str] | None = None,
-        filter_blocks: set[str] | None = None,
+        filter_blocks: dict[str, set[str]] | None = None,
         install_records_origin: str | None = None,
         install_lands: bool = True,
         on_install: Callable[[FakeFlatpakTarget], None] | None = None,
@@ -154,10 +154,12 @@ class FakeFlatpakTarget:
         self.unverified: set[tuple[str, str]] = set(unverified or ())
         # (scope, name) -> the path this target reports in the `filter` column.
         self.filters: dict[tuple[str, str], str] = dict(filters or {})
-        # Refs an ACTIVE filter on their origin remote makes `flatpak install` refuse — real
-        # behaviour, measured on Flatpak 1.14.6 (`_apply_remote_filters`). Opted into per test
-        # rather than modelled everywhere, since only the filter tests set a filter at all.
-        self.filter_blocks: set[str] = set(filter_blocks or ())
+        # `{filter path: the refs that filter denies}` — refs `flatpak install` refuses while
+        # that filter is the one in force on their origin remote, which is real behaviour
+        # measured on Flatpak 1.14.6. Keyed by PATH rather than by remote because which filter
+        # is in force is the whole question the ordering rule turns on. Opted into per test,
+        # since only the filter tests set a filter at all.
+        self.filter_blocks: dict[str, set[str]] = dict(filter_blocks or {})
         # What an `install` that exits 0 actually leaves behind. Both default to the honest
         # case; they exist so the post-install read-back has conditions to find, since the
         # whole point of that check is the outcomes an exit code cannot rule out.
@@ -226,7 +228,8 @@ class FakeFlatpakTarget:
             return CommandResult(0, "", "")
         if verb == "install":
             remote, ref = positional
-            if ref in self.filter_blocks and (scope, remote) in self.filters:
+            in_force = self.filters.get((scope, remote))
+            if in_force is not None and ref in self.filter_blocks.get(in_force, set()):
                 return CommandResult(1, "", f"error: Nothing matches {ref} in remote {remote}\n")
             if self.install_lands:
                 self.refs[(scope, ref)] = self.install_records_origin or remote
@@ -1585,11 +1588,14 @@ def trust_responses(
     keyring_dir: str = _USER_KEYRING_DIR,
     scope_flag: str = "--user",
     apps: str = "",
+    repo_config: str = "",
 ) -> dict[str, CommandResult]:
     """One machine's flatpak responses for a single remote in a single scope.
 
     `apps` is what makes a remote travel at all now: nothing derives a remote until a ref
     from it is approved, so a trust test that installs nothing provisions nothing.
+    `repo_config` is the installation's ostree `repo/config`, where a remote's `gpgkeypath`
+    lives; an empty answer is the ordinary machine, on which no remote names one.
     """
     digest_output = keyring_line(key_digest, keyring_dir, remote_line.split("\t", maxsplit=1)[0]) if key_digest else ""
     return {
@@ -1598,6 +1604,7 @@ def trust_responses(
         "--show-runtime": CommandResult(0, "", ""),
         f"flatpak remotes {scope_flag}": CommandResult(0, remote_line, ""),
         f"sha256sum {keyring_dir}": CommandResult(0, digest_output, ""),
+        f"cat {keyring_dir}/config": CommandResult(0, repo_config, ""),
         "echo $HOME": CommandResult(0, "/home/tester\n", ""),
     }
 
@@ -1618,6 +1625,7 @@ def trust_job(
     source_anchor: str | None = None,
     extra_source_anchors: dict[str, str] | None = None,
     target_anchor: str | None = None,
+    gpgkeypath: str | None = None,
     target_remotes: dict[str, dict[str, str]] | None = None,
     target_unverified: set[tuple[str, str]] | None = None,
     target_responses: dict[str, CommandResult] | None = None,
@@ -1630,6 +1638,9 @@ def trust_job(
     Equal digests mean the two machines already trust the same key. `extra_source_anchors`
     maps further file NAMES in that directory to their digests, for the anchor set libostree
     merges into one verifier.
+
+    `gpgkeypath` is the value of that ostree option in the source installation's `repo/config`
+    — the third place the remote's key can be, and the one no flatpak command reports.
     """
     scope_flag = "--user" if scope == "user" else "--system"
     anchor_dir = tmp_path / "ostree-anchors"
@@ -1661,6 +1672,12 @@ def trust_job(
         keyring_dir = f"{installation}/repo"
     if key_digest is not None:
         _ = write_source_keyring(installation, remote_line.split("\t", maxsplit=1)[0])
+    remote_name = remote_line.split("\t", maxsplit=1)[0]
+    repo_config = (
+        f'[core]\nrepo_version=1\n\n[remote "{remote_name}"]\nurl=whatever\ngpgkeypath={gpgkeypath}\n'
+        if gpgkeypath is not None
+        else ""
+    )
     target = FakeFlatpakTarget(
         remotes=target_remotes,
         unverified=target_unverified,
@@ -1678,6 +1695,7 @@ def trust_job(
                 keyring_dir=keyring_dir,
                 scope_flag=scope_flag,
                 apps=_TRUST_APP[scope],
+                repo_config=repo_config,
             ),
             **source_anchor_responses,
         },
@@ -2006,28 +2024,83 @@ class TestRemoteTrustTravelsWithTheDerivedWrite:
         assert any(f"sha256sum {tmp_path / 'ostree-anchors'}/*.gpg" in c for c in all_calls(job.source))
 
     @pytest.mark.asyncio
-    async def test_a_key_held_only_through_gpgkeypath_is_replicated_as_no_key_at_all(
+    async def test_a_key_held_only_through_gpgkeypath_travels_like_any_other(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """F43 — The accepted gap, pinned. A source remote whose key it holds through the ostree
-        per-remote option `gpgkeypath` looks exactly like one holding no key at all: this run
-        reads the remote's own keyring and the anchor directory and nothing else, never the
-        ostree repo config that option lives in. So the remote is provisioned plainly, the
-        warning says installs from it will fail the signature check, and the key does not
-        travel. The day that option is read, this test flips rather than passing silently.
+        """F43 — `PKG-FR-FLATPAK-REMOTE-TRUST` knows no exception, so a key the source holds
+        through the ostree per-remote option `gpgkeypath` travels like the remote's own
+        keyring: the bytes at that path are carried and imported into the target's copy of the
+        remote, and nothing warns that the remote has no key.
         """
-        job, target = trust_job(tmp_path, monkeypatch, remote_line=self._SIGNED, key_digest=None)
+        key = tmp_path / "vendor-keys" / "signing.asc"
+        key.parent.mkdir(parents=True)
+        _ = key.write_bytes(b"fake gpgkeypath key bytes")
+        job, target = trust_job(tmp_path, monkeypatch, remote_line=self._SIGNED, key_digest=None, gpgkeypath=str(key))
 
         with caplog.at_level(logging.WARNING, logger="pcswitcher.jobs.base"):
             await run_job(job)
 
-        assert not any("gpgkeypath" in cmd or "repo/config" in cmd for cmd in all_calls(job.source))
         add_cmd = next(c for c in all_calls(target) if "remote-add" in c)
-        assert "--gpg-import" not in add_cmd
-        target.send_file.assert_not_awaited()
-        warnings = [record.message for record in caplog.records if record.levelno == logging.WARNING]
-        assert len(warnings) == 1
-        assert "flathub" in warnings[0]
+        staged = target.send_file.await_args_list[-1].args[1]
+        assert target.send_file.await_args_list[-1].args[0] == key
+        assert f"--gpg-import={staged}" in add_cmd
+        assert not [record for record in caplog.records if record.levelno == logging.WARNING]
+
+    @pytest.mark.asyncio
+    async def test_gpgkeypath_carries_every_file_of_a_named_directory_and_every_listed_path(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """F152 — The option is a `;`/`,`-separated list, and an entry that is a directory means
+        every regular file one level below it (libostree v2024.5,
+        `_ostree_gpg_verifier_add_keyfile_path`). Carrying less than libostree loads would
+        replicate a remote the target cannot verify with.
+        """
+        directory = tmp_path / "vendor-keys"
+        directory.mkdir()
+        for name in ("a.asc", "b.asc"):
+            _ = (directory / name).write_bytes(f"fake {name}".encode())
+        single = tmp_path / "extra.asc"
+        _ = single.write_bytes(b"fake extra")
+        job, target = trust_job(
+            tmp_path,
+            monkeypatch,
+            remote_line=self._SIGNED,
+            key_digest=None,
+            gpgkeypath=f"{directory};{single}",
+        )
+
+        await run_job(job)
+
+        assert sorted(call.args[0].name for call in target.send_file.await_args_list) == [
+            "a.asc",
+            "b.asc",
+            "extra.asc",
+        ]
+        add_cmd = next(c for c in all_calls(target) if "remote-add" in c)
+        assert len([word for word in shlex.split(add_cmd) if word.startswith("--gpg-import=")]) == 3
+
+    @pytest.mark.asyncio
+    async def test_a_gpgkeypath_key_travels_alongside_the_machine_level_anchors(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """F153 — Both, not one instead of the other: a per-remote keyring suppresses the anchor
+        directory and `gpgkeypath` does not (`_ostree_repo_gpg_prepare_verifier`, libostree
+        v2024.5), so a remote resting on both rests on both once replicated too.
+        """
+        key = tmp_path / "extra.asc"
+        _ = key.write_bytes(b"fake gpgkeypath key bytes")
+        job, target = trust_job(
+            tmp_path,
+            monkeypatch,
+            remote_line=self._SIGNED,
+            key_digest=None,
+            source_anchor=_SOURCE_KEY_DIGEST,
+            gpgkeypath=str(key),
+        )
+
+        await run_job(job)
+
+        assert sorted(call.args[0].name for call in target.send_file.await_args_list) == ["extra.asc", "vendor.gpg"]
 
     @pytest.mark.asyncio
     async def test_a_verified_remote_with_no_key_anywhere_is_added_plainly_and_the_run_says_so(
@@ -2062,6 +2135,26 @@ class TestRemoteTrustTravelsWithTheDerivedWrite:
             tmp_path, monkeypatch, remote_line=self._SIGNED, key_digest=None, source_anchor=_SOURCE_KEY_DIGEST
         )
         (tmp_path / "ostree-anchors" / "vendor.gpg").unlink()
+
+        await run_job(job, expect_failures=True)
+
+        assert not any("remote-add" in c for c in all_calls(target))
+
+    @pytest.mark.asyncio
+    async def test_a_missing_gpgkeypath_file_fails_the_ref_rather_than_provisioning_a_dead_remote(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """F40 — Same rule for the third place a key can be: the option named a path at plan time,
+        so nothing there at write time is a real inconsistency and not a remote to provision
+        with part of its trust missing.
+        """
+        job, target = trust_job(
+            tmp_path,
+            monkeypatch,
+            remote_line=self._SIGNED,
+            key_digest=None,
+            gpgkeypath=str(tmp_path / "gone.asc"),
+        )
 
         await run_job(job, expect_failures=True)
 
@@ -3260,8 +3353,8 @@ class TestMaskSystemScopeGate:
 
 class TestRemoteFilterReplicates:
     """`PKG-FR-FLATPAK-FILTER` — a remote the source restricts with a filter is replicated
-    with it: the file copied byte-for-byte to the same absolute path on the target and
-    re-applied there, derived rather than reviewed.
+    with it: the file copied byte-for-byte to the same absolute path on the target and applied
+    there BEFORE anything installs from that remote, derived rather than reviewed.
 
     Measured in a stock `ubuntu:24.04` container, Flatpak 1.14.6: `flatpak remote-modify
     --filter=<path> <name>` exits 0 and stores the path VERBATIM as `xa.filter` in the
@@ -3280,10 +3373,14 @@ class TestRemoteFilterReplicates:
         )
 
     @staticmethod
-    def _filter_file(tmp_path: Path) -> Path:
+    def _filter_file(tmp_path: Path, content: str = "deny *\nallow org.example.*\n") -> Path:
+        """The source's filter file. Its default content allows the app these tests replicate:
+        a filter that denied it would end the run rather than reach the target
+        (`_abort_on_a_source_filter_that_denies_its_own_apps`).
+        """
         path = tmp_path / "filters" / "custom.filter"
         path.parent.mkdir(parents=True, exist_ok=True)
-        _ = path.write_text("org.example.*\n")
+        _ = path.write_text(content)
         return path
 
     @classmethod
@@ -3292,7 +3389,7 @@ class TestRemoteFilterReplicates:
         responses: dict[str, CommandResult] | None = None,
         *,
         carries: str | None = None,
-        filter_blocks: set[str] | None = None,
+        filter_blocks: dict[str, set[str]] | None = None,
     ) -> FakeFlatpakTarget:
         """`carries` gives the target its OWN filter on the remote this run derives — the
         state the ordering rule is really about, and the one the fake used to model as absent.
@@ -3330,7 +3427,7 @@ class TestRemoteFilterReplicates:
         assert filtered == plain
 
     @pytest.mark.asyncio
-    async def test_the_file_is_copied_to_the_same_absolute_path_and_re_applied(self, tmp_path: Path) -> None:
+    async def test_the_file_is_copied_to_the_same_absolute_path_and_applied(self, tmp_path: Path) -> None:
         """F99 — the filter file lands at the same absolute path and the remote is set to use it there."""
         path = self._filter_file(tmp_path)
         context, _source, target = make_context(source_responses=self._source(str(path)), fake_target=self._target())
@@ -3345,27 +3442,44 @@ class TestRemoteFilterReplicates:
         assert any(f"flatpak remote-modify --user --filter={path} customremote" in cmd for cmd in all_calls(target))
 
     @pytest.mark.asyncio
-    async def test_the_filter_lands_after_the_app_it_could_exclude(self, tmp_path: Path) -> None:
-        """F100 — A filter can be narrower than what the source has installed, so applying it first
-        would exclude the very ref being replicated: flatpak refuses an install its remote's
-        filter denies, measured on 1.14.6, and leaves an already-installed ref alone. The
-        ordering is what turns the first into the second.
+    async def test_a_filter_that_denies_an_app_the_source_itself_has_ends_the_run(self, tmp_path: Path) -> None:
+        """F100 — A filter narrower than the set being replicated is the source contradicting
+        itself: it says both "install this from there" and "nothing from there may be
+        installed". The run ends naming the app, the remote and the filter, before anything is
+        asked or written — no filter is taken off to make such an install possible.
         """
-        path = self._filter_file(tmp_path)
+        path = self._filter_file(tmp_path, content="deny *\n")
+        context, _source, target = make_context(source_responses=self._source(str(path)), fake_target=self._target())
+        job = FlatpakSyncJob(context)
+
+        with pytest.raises(SyncAbortedByUser) as raised:
+            _ = await job.plan()
+
+        message = str(raised.value)
+        assert "org.example.App/x86_64/stable" in message
+        assert "customremote" in message
+        assert str(path) in message
+        assert not any("flatpak install" in cmd for cmd in all_calls(target))
+
+    @pytest.mark.asyncio
+    async def test_a_filter_file_flatpak_would_reject_does_not_end_the_run(self, tmp_path: Path) -> None:
+        """F151 — An abort needs certainty. A file flatpak itself refuses says nothing about what
+        it denies, so the run proceeds and flatpak's own error reaches the user when
+        `remote-modify --filter` is given the same file.
+        """
+        path = self._filter_file(tmp_path, content="deny\n")
         context, _source, target = make_context(source_responses=self._source(str(path)), fake_target=self._target())
         job = FlatpakSyncJob(context)
 
         await run_job(job)
 
-        calls = all_calls(target)
-        install = next(i for i, cmd in enumerate(calls) if "flatpak install" in cmd)
-        applied = next(i for i, cmd in enumerate(calls) if "--filter=" in cmd)
-        assert install < applied
+        assert any(f"--filter={path}" in cmd for cmd in all_calls(target))
 
     @pytest.mark.asyncio
-    async def test_the_filter_the_target_already_carries_comes_off_before_the_install(self, tmp_path: Path) -> None:
-        """F101 — The late pass covers the source's filter; the target's own is in force throughout
-        the installs unless it is taken off first.
+    async def test_the_source_filter_replaces_the_targets_before_the_first_install(self, tmp_path: Path) -> None:
+        """F101 — Remote, filter, install. The target's own filter is not taken off and put back:
+        the source's overwrites it where the run provisions the remote, so the filter in force
+        during the installs is the one both machines are meant to end with.
         """
         path = self._filter_file(tmp_path)
         context, _source, target = make_context(
@@ -3376,21 +3490,24 @@ class TestRemoteFilterReplicates:
         await run_job(job)
 
         calls = all_calls(target)
-        cleared = next(i for i, cmd in enumerate(calls) if "--no-filter" in cmd)
-        install = next(i for i, cmd in enumerate(calls) if "flatpak install" in cmd)
         applied = next(i for i, cmd in enumerate(calls) if "--filter=" in cmd)
-        assert cleared < install < applied
+        install = next(i for i, cmd in enumerate(calls) if "flatpak install" in cmd)
+        assert applied < install
+        assert not any("--no-filter" in cmd for cmd in calls)
         assert target.filters == {("user", "customremote"): str(path)}
 
     @pytest.mark.asyncio
-    async def test_a_filter_the_target_carries_does_not_refuse_the_app_being_replicated(self, tmp_path: Path) -> None:
-        """F102 — The end the ordering exists for, with flatpak's refusal modelled: the app installs
-        because no filter is in force while it does.
+    async def test_the_targets_own_filter_cannot_refuse_the_app_being_replicated(self, tmp_path: Path) -> None:
+        """F102 — With flatpak's refusal modelled: the target's filter would deny the app, and the
+        app installs anyway because the source's filter — which allows it — is what the remote
+        carries by then.
         """
         path = self._filter_file(tmp_path)
         context, _source, target = make_context(
             source_responses=self._source(str(path)),
-            fake_target=self._target(carries="/etc/old.filter", filter_blocks={"org.example.App/x86_64/stable"}),
+            fake_target=self._target(
+                carries="/etc/old.filter", filter_blocks={"/etc/old.filter": {"org.example.App/x86_64/stable"}}
+            ),
         )
         job = FlatpakSyncJob(context)
 
@@ -3441,10 +3558,12 @@ class TestRemoteFilterReplicates:
 
     @pytest.mark.asyncio
     async def test_a_clear_that_fails_fails_the_app_naming_the_remote_and_the_filter(self, tmp_path: Path) -> None:
-        """F108 — no install is attempted once the target's own filter could not be taken off."""
-        path = self._filter_file(tmp_path)
+        """F108 — no install is attempted once the target's own filter could not be taken off the
+        remote the source does not restrict.
+        """
+        _ = self._filter_file(tmp_path)
         context, _source, target = make_context(
-            source_responses=self._source(str(path)),
+            source_responses=self._source("-"),
             fake_target=self._target(
                 {"--no-filter": CommandResult(1, "", "error: no such remote\n")}, carries="/etc/old.filter"
             ),
@@ -3468,10 +3587,12 @@ class TestRemoteFilterReplicates:
     async def test_a_dry_run_previews_the_clear_and_issues_none(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """F115, J54 — the target's own filter would come off, previewed and not issued."""
-        path = self._filter_file(tmp_path)
+        """F115, J54 — the target's own filter on a remote the source does not restrict would come
+        off, previewed and not issued.
+        """
+        _ = self._filter_file(tmp_path)
         context, _source, target = make_context(
-            source_responses=self._source(str(path)),
+            source_responses=self._source("-"),
             fake_target=self._target(carries="/etc/old.filter"),
             dry_run=True,
         )
@@ -3535,8 +3656,12 @@ class TestRemoteFilterReplicates:
         assert not any("--filter=" in cmd for cmd in all_calls(target))
 
     @pytest.mark.asyncio
-    async def test_a_missing_source_file_fails_the_app_naming_the_remote_and_the_path(self, tmp_path: Path) -> None:
-        """F109 — the source's filter file gone at copy time fails every approved application from that remote."""
+    async def test_a_missing_source_file_fails_the_app_naming_the_remote_and_the_path(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """F109 — the source's filter file gone at copy time warns naming the remote and the path,
+        and fails every approved application from that remote.
+        """
         path = tmp_path / "gone.filter"
         context, _source, _target = make_context(source_responses=self._source(str(path)), fake_target=self._target())
         job = FlatpakSyncJob(context)
@@ -3545,13 +3670,18 @@ class TestRemoteFilterReplicates:
             plan, ReviewOutcome(decisions={d.item_id: Decision.APPLY for d in plan.diffs}, was_interactive=True)
         )
 
-        with pytest.raises(PackageItemFailures) as raised:
+        with (
+            caplog.at_level(logging.WARNING, logger="pcswitcher.jobs.base"),
+            pytest.raises(PackageItemFailures) as raised,
+        ):
             await job.apply()
 
         failed = {diff.item_id: reason for diff, reason in raised.value.failures}
         assert list(failed) == [self._APP_ID]
         assert "customremote" in failed[self._APP_ID]
         assert str(path) in failed[self._APP_ID]
+        warnings = [record.message for record in caplog.records if record.levelno == logging.WARNING]
+        assert [message for message in warnings if "customremote" in message and str(path) in message]
 
     @pytest.mark.asyncio
     async def test_a_filter_flatpak_refuses_fails_the_app_and_quotes_the_error(self, tmp_path: Path) -> None:
@@ -3576,15 +3706,10 @@ class TestRemoteFilterReplicates:
         assert str(path) in raised.value.failures[0][1]
 
     @pytest.mark.asyncio
-    async def test_a_re_apply_that_fails_leaves_the_remote_unfiltered_for_the_rest_of_the_run(
-        self, tmp_path: Path
-    ) -> None:
-        """F117 — The accepted cost of clearing first, pinned. The target's own filter came off
-        before the installs, and the source's could not go back on, so the remote ends the run
-        carrying neither — offering more than either machine meant until the next run puts a
-        filter back. The run says so on every approved app from that remote and repairs
-        nothing: re-applying the target's own is exactly what `PKG-FR-FLATPAK-FILTER`'s
-        ordering rule ruled out.
+    async def test_a_filter_that_could_not_be_applied_leaves_the_targets_own_in_force(self, tmp_path: Path) -> None:
+        """F117 — Nothing was taken off first, so a filter write that fails leaves the remote
+        exactly as the run found it: the target keeps its own filter and no app installs from
+        that remote. No run can end with a remote offering more than either machine meant.
         """
         path = self._filter_file(tmp_path)
         target = self._target(
@@ -3601,10 +3726,8 @@ class TestRemoteFilterReplicates:
             await job.apply()
 
         assert [diff.item_id for diff, _reason in raised.value.failures] == [self._APP_ID]
-        # The app landed and its remote carries neither machine's filter — the end state the
-        # criteria accept, and nothing in the run puts one back.
-        assert ("user", "org.example.App/x86_64/stable") in target.refs
-        assert target.filters == {}
+        assert ("user", "org.example.App/x86_64/stable") not in target.refs
+        assert target.filters == {("user", "customremote"): "/etc/old.filter"}
 
     @pytest.mark.asyncio
     async def test_a_filter_directory_that_cannot_be_created_fails_the_app(self, tmp_path: Path) -> None:
@@ -3688,7 +3811,7 @@ class TestRemoteFilterReplicates:
 
     @pytest.mark.asyncio
     async def test_a_system_scope_filter_writes_and_applies_under_sudo(self, tmp_path: Path) -> None:
-        """F116 — both writes and the re-apply reach `/var/lib/flatpak` or a root-owned path, so all
+        """F116 — both writes and the apply reach `/var/lib/flatpak` or a root-owned path, so all
         three escalate; the staging copy still goes into the SSH user's own cache unprivileged.
         """
         path = self._filter_file(tmp_path)
@@ -3763,7 +3886,7 @@ class TestRemoteFilterReplicates:
     async def test_a_dry_run_previews_the_filter_and_issues_none(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """F115 — the copy and re-apply are previewed, no command is issued and no file is transferred."""
+        """F115 — the copy and apply are previewed, no command is issued and no file is transferred."""
         path = self._filter_file(tmp_path)
         context, _source, target = make_context(
             source_responses=self._source(str(path)), fake_target=self._target(), dry_run=True

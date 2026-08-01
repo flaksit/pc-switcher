@@ -36,7 +36,7 @@ Ctrl-C-aborts-the-sync rule; it returns `None` when nobody could be asked, and t
 owns what that means.
 
 D-07's three answers are all on the one screen for an actionable group (install / change /
-remove direction, which includes the block-state items): apply, skip now, or skip for good —
+remove direction): apply, skip now, or skip for good —
 treat the item as specific to one machine, which makes it inert here in both roles (D-08a).
 Those are the decisions; what each screen CALLS them is `_options_for` and the hints beside
 them, which say the act, the machine it happens to, and how long the answer lasts.
@@ -80,6 +80,14 @@ remote for `flatpak_sync` — is printed as both versions, never a unified diff,
 screen that answers overwrite or skip-once for all of them. Nothing is recorded either way,
 and it starts at skip-once: an overwrite moves software the target explicitly marked
 machine-specific, so it is chosen, never defaulted.
+
+A `ReviewGroup` whose `action` is `SNAP_CHANGE_REVIEW_ACTION` (defined in `sync_core`, where
+the snap job builds it) is the ordinary decision screen with the third answer missing: it is
+in neither `_REMOVAL_ACTIONS` — converging a snap onto the source's revision or channel
+overwrites nothing the user authored, so the row starts applied — nor `_PROMOTABLE_ACTIONS`,
+because a revision is not a standing per-machine preference and recording one leaves the two
+machines' records disagreeing about a snap neither would raise again
+(`PKG-FR-NO-MARK-ON-SNAP-REVISION`). Apply or skip-once, and nothing recorded either way.
 
 A `ReviewGroup` whose `action` is `COLLATERAL_REVIEW_ACTION` likewise gets its own
 interaction shape (D-30): each entry is a package the TARGET protects — its own apt has it

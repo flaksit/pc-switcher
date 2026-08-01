@@ -22,7 +22,6 @@ from pcswitcher.jobs.packages.review import (
     ReviewGroup,
     ReviewOutcome,
 )
-from pcswitcher.jobs.packages.sync_core import PackageItemFailures
 from pcswitcher.models import CommandResult, LogLevel, SyncAbortedByUser
 from tests.unit.jobs.apt.helpers import (
     _APPROVE_PKG_A,
@@ -38,6 +37,7 @@ from tests.unit.jobs.apt.helpers import (
     real_installs,
     respond_to,
     respond_with_policy_sequence,
+    review_rounds,
     sha256_line,
     target_offers,
 )
@@ -350,15 +350,14 @@ class TestCollateralFlow:
         assert not any(record.levelno >= LogLevel.ERROR.value for record in caplog.records)
 
 
-class TestASkippedRemovalKeepsItsProtectionAtTheGuard:
-    """The removal batch's known gap (module docstring), pinned rather than fixed: a
-    candidate exempt from its own batch can still be carried off by ANOTHER approved
-    removal's cascade, and the tool refuses that transaction instead of asking.
+class TestASkippedRemovalKeepsItsProtection:
+    """Only a removal the user APPROVED exempts its package (`PKG-FR-COLLATERAL-MANUAL`), so
+    a candidate answered any other way has to be ASKED about before another candidate's
+    approved cascade carries it off.
 
-    The first test asserts that refusal. The day the gap closes — one `apt-get --dry-run` per
-    candidate on every run with removals — it becomes an assertion that a question was put,
-    which is what the two below it already are: a candidate the user MARKED as the target's
-    own is no longer a candidate, and the second round asks about it (`after_marks`).
+    Every test here reads the SECOND round, because the question cannot exist before it: at
+    plan time the removal batch is every candidate's own transaction and no answer yet
+    distinguishes one from another (`Collateral.after_answers`).
     """
 
     @staticmethod
@@ -383,26 +382,54 @@ class TestASkippedRemovalKeepsItsProtectionAtTheGuard:
         )
 
     @pytest.mark.asyncio
-    async def test_a_skipped_candidate_is_refused_by_name_rather_than_asked_about(self) -> None:
-        """D37 — the requirement wants the user asked, because a candidate skipped for this
-        run keeps its protection. Nothing is lost: `pkg-x`'s transaction is refused naming
-        `pkg-y`, and no removal runs. But no question was ever built.
+    async def test_a_skipped_candidate_is_asked_about_rather_than_told_about(self) -> None:
+        """D37 — `pkg-y`'s own removal was skipped for this run, so it keeps its protection and
+        the approved removal of `pkg-x` may not carry it off unasked. The question is absent
+        from the first round and put in the second, and its reason names the ground: being
+        offered for removal is not consent to be removed. Keeping `pkg-y` (the unanswered
+        default) withdraws `pkg-x`'s removal, so neither package goes and nothing fails.
         """
         context, _source, target = self._context()
         job = AptSyncJob(context)
         plan = await job.plan()
         assert not any(diff.item_id.startswith("apt:collateral:") for diff in plan.diffs), (
-            "the accepted gap: the batch exempts both candidates, so no question exists"
+            "the batch is every candidate's own transaction, so no answer distinguishes them yet"
         )
 
-        install_reviewer(job, {"apt:package:pkg-x": Decision.APPLY, "apt:package:pkg-y": Decision.SKIP_ONCE})
-        with pytest.raises(PackageItemFailures) as exc_info:
-            await job.execute()
+        rounds = await review_rounds(
+            job, {"apt:package:pkg-x": Decision.APPLY, "apt:package:pkg-y": Decision.SKIP_ONCE}
+        )
 
-        failures = {diff.item_id: message for diff, message in exc_info.value.failures}
-        assert set(failures) == {"apt:package:pkg-x"}
-        assert "pkg-y" in failures["apt:package:pkg-x"]
+        assert [group.action for group in rounds[1]] == [COLLATERAL_REVIEW_ACTION]
+        entries = [entry for group in rounds[1] for entry in group.entries]
+        assert [entry.label for entry in entries] == ["pkg-y"]
+        assert entries[0].detail == (
+            "Removing pkg-x on target-host would remove pkg-y\n"
+            "apt on target-host has pkg-y marked as manually installed, and its own removal was not "
+            "approved in this review — being offered for removal is not consent to be removed."
+        )
         assert not any("sudo" in cmd and "apt-get remove" in cmd for cmd in all_calls(target))
+
+    @pytest.mark.asyncio
+    async def test_going_ahead_at_that_question_runs_the_approved_removal(self) -> None:
+        """D72 — the answer the old refusal could never offer: letting the cascade go ahead
+        removes `pkg-x`, and the apply-time guard lets `pkg-y` go with it. `pkg-y`'s own
+        removal item stays skipped — it is not what was approved.
+        """
+        context, _source, target = self._context()
+        job = AptSyncJob(context)
+
+        await review_rounds(
+            job,
+            {
+                "apt:package:pkg-x": Decision.APPLY,
+                "apt:package:pkg-y": Decision.SKIP_ONCE,
+                "apt:collateral:remove:remove:pkg-y": Decision.APPLY,
+            },
+        )
+
+        removals = [cmd for cmd in all_calls(target) if "sudo" in cmd and "apt-get remove" in cmd]
+        assert removals == ["sudo DEBIAN_FRONTEND=noninteractive apt-get remove --assume-yes pkg-x"]
 
     @pytest.mark.asyncio
     async def test_a_mark_made_in_this_same_review_protects_its_package_from_the_cascade(self) -> None:

@@ -2373,10 +2373,10 @@ class TestPackageSyncWholeRunContracts:
         A filter is derived like a signing key and is a review entry in no direction, so the
         decision below names the application alone.
 
-        Run 2: pc1's filter is gone and pc2 still carries run 1's, which is the only case
-        `_apply_remote_filters` cannot reach on its own — it iterates the SOURCE's filters.
-        `_clear_target_filters` is what takes it off, before the application installs, and
-        pc2 ends the run unfiltered.
+        Run 2: pc1's filter is gone and pc2 still carries run 1's. `_converge_remote_filters`
+        takes it off — the other direction of the same obligation, and the only thing that
+        converges a filter the source has dropped — before the application installs, and pc2
+        ends the run unfiltered.
 
         What only a real machine can establish is the fact the whole behaviour rests on:
         that `flatpak remote-modify --filter=<file>` puts a `filtered` token in THIS
@@ -2386,8 +2386,10 @@ class TestPackageSyncWholeRunContracts:
         command instead of leaving this test green for the wrong reason.
 
         The filter body allows the fixture app and denies nothing (`_FLATPAK_FILTER_BODY`),
-        so it never stands between the run and the install it is replicated alongside; that
-        a denying filter really does refuse an install is measured in
+        so it never stands between the run and the install it is applied ahead of; a filter
+        denying an app the source itself has installed ends the run instead
+        (`_abort_on_a_source_filter_that_denies_its_own_apps`), and that flatpak really does
+        refuse such an install is measured in
         `docs/adr/considerations/adr-020-flatpak-filter-and-trust-measurements.md`.
         """
         _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
@@ -2463,7 +2465,7 @@ class TestPackageSyncWholeRunContracts:
             _target_url, target_options = await _flatpak_remote_row(pc2_executor, remote_name, scope)
             assert _FLATPAK_FILTERED_OPTION in target_options, (
                 f"pc2's provisioned {remote_name} reports options {target_options!r}: the source's ref filter was not "
-                f"re-applied there.\nstdout: {first_result.stdout}\nstderr: {first_result.stderr}"
+                f"applied there.\nstdout: {first_result.stdout}\nstderr: {first_result.stderr}"
             )
             assert await _flatpak_remote_filter(pc2_executor, remote_name, scope) == recorded_path, (
                 f"pc2's {remote_name} does not name {recorded_path} as its ref filter -- the file must land at the "

@@ -160,10 +160,11 @@ _READ_ONLY_CALLS: dict[str, int] = {
     "jobs/dummy_fail.py::DummyFailJob._run_target_phase::start_process": 1,
     "jobs/dummy_success.py::DummySuccessJob._run_target_phase::start_process": 1,
     # flatpak_sync: `list`/`remotes`/`mask` listings, the per-remote keyring digest
-    # (`sha256sum`, one batched read per scope), the target's $HOME, and capability probes.
+    # (`sha256sum`, one batched read per scope), the source's ostree `repo/config` (the one
+    # place a remote's `gpgkeypath` is recorded), the target's $HOME, and capability probes.
     "jobs/flatpak_sync.py::FlatpakSyncJob.capture_source_items::run_command": 1,
     "jobs/flatpak_sync.py::FlatpakSyncJob.query_target_items::run_command": 1,
-    "jobs/flatpak_sync.py::FlatpakSyncJob._capture_source_remotes::run_command": 2,
+    "jobs/flatpak_sync.py::FlatpakSyncJob._capture_source_remotes::run_command": 3,
     "jobs/flatpak_sync.py::FlatpakSyncJob._query_target_remotes::run_command": 2,
     "jobs/flatpak_sync.py::FlatpakSyncJob._target_home_dir::run_command": 1,
     "jobs/flatpak_sync.py::FlatpakSyncJob._capture_source_masks::run_command": 1,

@@ -11,20 +11,20 @@ Two batched simulations per run, not one per package: a per-package simulation o
 150-package manual set would cost more than the sync itself. Attribution is what costs extra,
 and only on a run that actually found manual collateral.
 
+A candidate is exempt from its OWN transaction, and the removal batch IS every candidate's
+own transaction — so a candidate carried off by another approved removal's cascade is
+invisible there. `after_answers` is where it becomes visible: the second review round, which
+has the answers the first round could not, re-rehearses the removals this run really APPROVED
+and keeps the candidates it did not. Being offered for removal is not consent to be removed,
+so only an approved removal exempts a package (`PKG-FR-COLLATERAL-MANUAL`), and everything
+else the cascade would take gets the same three-way question the batch would have given it.
+
 Two further rounds belong to `LateCollateral`, both licensed by `PKG-FR-ASK-AGAIN`: an
 install whose repository this run writes cannot be simulated while the review is being
 built, so its question is asked once `/etc/apt` has converged; and a real transaction that
 has drifted onto a protected package since plan time is asked about immediately before it
 runs. Neither fact could be established earlier, which is what separates them from a late
 refusal.
-
-Known gap, deliberately left: in the removal batch a candidate is exempt from its own
-transaction, so a removal the user skips can still be carried off by ANOTHER approved
-removal's cascade. That fact WAS available at plan time — the candidate was in the batch,
-merely exempt — so the late round is not licensed for it and the apply-time guard refuses
-the transaction and names the package: nothing is lost, but the user is told rather than
-asked. Closing it needs a per-candidate simulation on every run with removals, which is the
-cost this module exists to avoid.
 """
 
 from __future__ import annotations
@@ -127,6 +127,10 @@ class Collateral:
         # question and the apply-time guard honour a "never offer again" answer given minutes
         # earlier in the same review.
         self._run_marked: frozenset[str] = frozenset()
+        # The removal candidates this run's answers did NOT approve (`note_declined`). They
+        # keep their protection (`PKG-FR-COLLATERAL-MANUAL`), so they are what the second
+        # round asks about — and the ground `_reason` gives for asking.
+        self._run_declined: frozenset[str] = frozenset()
         # The target's `apt-mark showmanual` set: the single source of the auto-versus-manual
         # split (D-30). A collateral package the simulation would remove or downgrade is
         # manual (the user chose it -> a review item) if it is in this set, auto (apt's own
@@ -212,9 +216,11 @@ class Collateral:
         # transaction takes one out has to be asked about, not silently allowed on the
         # strength of a removal the user may yet skip.
         #
-        # Once the answers exist, a candidate the user marked as the target's own is not a
-        # candidate any more, and `after_marks` puts the question this exemption could not
-        # (`PKG-FR-COLLATERAL-MARKED`).
+        # That exemption hides one question the article requires — a candidate carried off by
+        # ANOTHER candidate's approved removal — and hiding it here is what makes it askable
+        # at all: only once the answers exist can the run tell an approved removal, which
+        # exempts its package, from a declined one, which keeps its protection.
+        # `after_answers` puts that question in the second round.
         #
         # The install candidates need no exemption at all: a package this run installs is
         # absent from the target, so it is outside `protected()` and cannot be collateral.
@@ -242,7 +248,7 @@ class Collateral:
         manual collateral — the narrowing that says WHICH candidates cause each item.
 
         `restrict_to` keeps only the named packages, for a pass that is re-reading a
-        transaction an earlier pass already reported on (`after_marks`): everything else it
+        transaction an earlier pass already reported on (`after_answers`): everything else it
         finds was found there. It also silences the auto-collateral log, which that earlier
         pass has already written for the same transaction — `PKG-FR-COLLATERAL-AUTO` wants
         each such change named, not named twice.
@@ -428,6 +434,11 @@ class Collateral:
                 f"{manual}, and it was marked as {target}'s own earlier in this review — "
                 "either ground alone would protect it."
             )
+        if package in self._run_declined:
+            return (
+                f"{manual}, and its own removal was not approved in this review — being offered for "
+                "removal is not consent to be removed."
+            )
         if package not in self._marked:
             return (
                 f"{manual}: something asked for it there directly, rather than it arriving as "
@@ -504,31 +515,50 @@ class Collateral:
         )
         return self._run_marked
 
-    async def after_marks(self, diffs: Sequence[ItemDiff], decisions: Mapping[str, Decision]) -> list[ItemDiff]:
-        """The collateral questions this review's own machine-specific marks bring into
-        being (`PKG-FR-COLLATERAL-MARKED`, `PKG-FR-MACHINE-SPECIFIC`).
+    def note_declined(self, diffs: Sequence[ItemDiff], decisions: Mapping[str, Decision]) -> frozenset[str]:
+        """Record the removal candidates this run's answers did NOT approve, and return them.
 
-        A package the user has just marked as the target's own is protected from every action
-        the tool takes of its own accord, from that moment — but at plan time it was a removal
-        candidate, exempt from the removal batch (`plan_time`), so no item was built for it
-        and nothing could ask. This is where it is asked, over the removals this run really
-        approved, against the transaction that will really run.
+        Every ground the article gives for keeping a protection is one answer short of an
+        approval — skipped for this run, marked as the target's own, or left undecided
+        because nobody was there — so the set is defined by what is missing rather than by
+        enumerating the answers (`PKG-FR-COLLATERAL-MANUAL`, `PKG-FR-NO-TERMINAL`).
 
-        Deliberately narrowed to the newly marked packages. A candidate the user merely
-        skipped for this run also keeps its protection, and the tool still tells rather than
-        asks there (the accepted cost the criteria record under `PKG-FR-COLLATERAL-MANUAL`);
-        widening this pass to it is a separate change with its own answer to give.
-
-        Costs one `apt-get --dry-run` (plus attribution) on a run that marked something and
-        approved a removal, and no command at all on every other run.
+        Idempotent, and called from both rounds that need it: the second round asks about
+        exactly this set, and `resolve` records it again so the apply-time guard's question
+        can name the same ground on a path where no second round ran.
         """
-        marked = self.note_run_marks(diffs, decisions)
-        approved = sorted(self.approved_removals(diffs, decisions))
-        if not marked or not approved:
-            return []
-        return await self.for_direction(
-            approved, frozenset(approved), remove_args, verb="Removing", restrict_to=marked
+        self._run_declined = frozenset(
+            package_name(diff.item_id)
+            for diff in diffs
+            if diff.item_class == ItemClass.APT_PACKAGE
+            and diff.action == DiffAction.REMOVE
+            and decisions.get(diff.item_id) != Decision.APPLY
         )
+        return self._run_declined
+
+    async def after_answers(self, diffs: Sequence[ItemDiff], decisions: Mapping[str, Decision]) -> list[ItemDiff]:
+        """The collateral questions the first round's own answers bring into being
+        (`PKG-FR-COLLATERAL-MANUAL`, `PKG-FR-COLLATERAL-MARKED`, `PKG-FR-MACHINE-SPECIFIC`).
+
+        At plan time every removal candidate is exempt from the removal batch, because the
+        batch IS each of their transactions and no answer exists to tell one apart from
+        another (`plan_time`). Once the answers do exist, they divide: a candidate whose
+        removal the user APPROVED consented to losing it, and every other candidate — skipped
+        for this run, marked as the target's own, or never answered — keeps its protection and
+        has to be asked about before another candidate's cascade carries it off. This is where
+        it is asked, over the removals this run really approved, against the transaction that
+        will really run.
+
+        Costs one `apt-get --dry-run` on a run that approved a removal and left another
+        candidate standing, plus one per approved removal when that rehearsal finds something
+        to attribute, and no command at all on every other run.
+        """
+        self.note_run_marks(diffs, decisions)
+        kept = self.note_declined(diffs, decisions)
+        approved = sorted(self.approved_removals(diffs, decisions))
+        if not kept or not approved:
+            return []
+        return await self.for_direction(approved, frozenset(approved), remove_args, verb="Removing", restrict_to=kept)
 
     def resolve(self, diffs: Sequence[ItemDiff], outcome: ReviewOutcome) -> ReviewOutcome:
         """Translate the manual-collateral group's decisions (D-30) into the guard's
@@ -553,9 +583,10 @@ class Collateral:
         # A "never offer again" answer given in THIS review counts from here on
         # (`PKG-FR-COLLATERAL-MARKED`): the apply-time guard runs after `resolve`, so a mark
         # the user made minutes ago protects the package from the transactions that follow.
-        # `after_marks` has usually recorded the same set already; this covers the paths that
+        # `after_answers` has usually recorded both sets already; this covers the paths that
         # reach `resolve` without a second review round.
         self.note_run_marks(diffs, outcome.decisions)
+        self.note_declined(diffs, outcome.decisions)
 
         approved: set[str] = set()
         overrides: dict[str, Decision] = {}

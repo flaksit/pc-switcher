@@ -91,28 +91,39 @@ holds is left alone, and a verified remote with no key material anywhere on the 
 refused outright — every approved ref from it fails naming the remote, which is the honest
 end of `PKG-FR-FLATPAK-REMOTE-TRUST` when there is nothing to sync.
 
+The third place a remote's trust can live is the ostree per-remote option `gpgkeypath`, read
+off the source installation's own `repo/config` (`_FLATPAK_REPO_CONFIG_CMD_TEMPLATE`) and
+carried like any other key. flatpak never writes that option, so only a hand-edited config
+sets it — but `PKG-FR-FLATPAK-REMOTE-TRUST` knows no exception, and a remote holding its key
+that way is unusable on a target that did not get it. The files it names travel
+alongside the anchor set rather than instead of it, because libostree treats them that way:
+a per-remote `trustedkeys.gpg` suppresses the anchor directory and `gpgkeypath` does not
+(`_ostree_repo_gpg_prepare_verifier`, libostree v2024.5).
+
 A remote's FILTER replicates by the same mechanism as its key. flatpak records only the
 path (`_FLATPAK_REMOTES_CMD_TEMPLATE`'s fourth column), so the file at that path is copied
-byte-for-byte to the same absolute path on the target and `remote-modify --filter` re-applies
-it there (`_apply_remote_filters`), after the approved refs from that remote have landed: a
-filter narrower than what the source has installed would otherwise exclude the very refs
-being replicated. That flatpak refuses such an install is measured, not assumed: on Flatpak
-1.14.6 an install of a ref its remote's filter denies exits 1 with `Nothing matches <id> in
-remote <remote>` and lands nothing, while the same install of an allowed ref succeeds
-(`docs/adr/considerations/adr-020-flatpak-filter-and-trust-measurements.md`). A filter that
-cannot be copied or re-applied fails every approved ref from that remote, naming the remote
-and the path.
+byte-for-byte to the same absolute path on the target and `remote-modify --filter` applies it
+there. It lands with the remote and BEFORE the refs install (`_converge_remote_filters`, run
+between the derived writes and the converge loop): the remote is added or repointed, its
+filter is brought to the source's, and only then does anything install from it — so no run
+can end with the target's remote offering more than either machine meant. A remote the source
+does not filter has the target's own filter taken off in that same pass, which is the other
+half of converging and what makes an unfiltered source remote reach an unfiltered target one.
+A filter that cannot be copied, written or applied warns naming the remote and the path, and
+every approved ref whose OWN origin is that remote fails with the same reason
+(`_failed_remote_filters`, consulted by `_converge_ref` exactly as a failed derived write is).
 
-The rule is about which refs a filter can exclude, not about which machine wrote it, so the
-TARGET's own filter comes off first (`_clear_target_filters`, before the converge loop). A
-filter already on the target is in force during this run's installs exactly as a
-prematurely-applied source one would be, and `_apply_remote_filters` cannot reach it: that
-pass iterates the SOURCE's filters, so a remote the source no longer filters would keep the
-target's for good and the two machines would never converge. Clearing first is what makes the
-invariant "no filter is in force on a remote this run provisions while its approved refs
-install", whoever set it. The cost is accepted rather than unnoticed: a run whose re-apply
-then fails leaves the remote unfiltered until the next run, and every approved ref from it
-fails saying so.
+Nothing is cleared for the installs' benefit. A filter narrower than the set being replicated
+would block them — measured, not assumed: on Flatpak 1.14.6 an install of a ref its remote's
+filter denies exits 1 with `Nothing matches <id> in remote <remote>` and lands nothing, while
+the same install of an allowed ref succeeds
+(`docs/adr/considerations/adr-020-flatpak-filter-and-trust-measurements.md`). But a source
+whose own filter denies an app that source has installed is contradicting itself, and
+`_abort_on_a_source_filter_that_denies_its_own_apps` ends the run at plan time naming the app,
+the remote and the filter rather than carrying logic for a state that should not exist. The
+filter is evaluated exactly as flatpak evaluates it (`_filter_glob_to_regexp`), and a file
+flatpak itself would reject claims nothing: the abort needs certainty, and `remote-modify
+--filter` reports that file's real error later.
 
 The flatpak OSTree store stays authoritative for its own state (D-01): this job never
 WRITES into `/var/lib/flatpak` or `~/.local/share/flatpak`, only shells out to `flatpak`
@@ -156,6 +167,7 @@ uninstalling the app the user has and reinstalling it from the other vendor.
 
 from __future__ import annotations
 
+import re
 import shlex
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -186,7 +198,7 @@ from pcswitcher.jobs.packages.sync_core import (
     PackagePlan,
     PackageSyncJob,
 )
-from pcswitcher.models import CommandResult, FirstSyncScope, Host, LogLevel, ValidationError
+from pcswitcher.models import CommandResult, FirstSyncScope, Host, LogLevel, SyncAbortedByUser, ValidationError
 from pcswitcher.sudoers import passwordless_sudo_hint
 
 __all__ = ["FlatpakSyncJob", "flatpak_sync_exclude_paths"]
@@ -231,7 +243,7 @@ _FLATPAK_RUNTIME_CMD_TEMPLATE = "flatpak info {flag} --show-runtime {ref}"
 # VERBATIM as `xa.filter` in the installation's `repo/config`, without validating it — a
 # relative path and a path that does not exist are both accepted. So the path is the whole of
 # what flatpak knows, and the filter's content is an ordinary file at an arbitrary absolute
-# location outside the ostree store, which is what `_apply_remote_filters` carries.
+# location outside the ostree store, which is what `_converge_remote_filters` carries.
 #
 # An unfiltered remote prints `-` in that column rather than nothing (measured), so with
 # `filter` requested last a line carries four fields even for a remote with no options at all
@@ -241,6 +253,13 @@ _FLATPAK_REMOTES_CMD_TEMPLATE = "flatpak remotes {flag} --columns=name,url,optio
 
 # What that column prints for a remote carrying no filter.
 _NO_FILTER = "-"
+
+# What one segment of a filter glob's partial ref may hold, and how many segments follow the
+# `app/`/`runtime/` kind: id, arch, branch (`flatpak_filter_glob_to_regexp`, flatpak 1.14.6).
+# The class is flatpak's own translation of `*` AND of an omitted segment, so a glob naming
+# only an id matches every arch and branch of it.
+_FILTER_REF_TOKEN = "[.\\-_a-zA-Z0-9]*"
+_FILTER_REF_SEGMENTS = 3
 
 # The token `flatpak remotes --columns=options` prints for a remote with GPG
 # verification turned off.
@@ -254,6 +273,25 @@ _NO_GPG_VERIFY_OPTION = "no-gpg-verify"
 # read: D-01's "flatpak stays authoritative for its own state" bars WRITING there, which
 # convergence still does exclusively through `flatpak remote-add`/`remote-modify`.
 _TRUSTEDKEYS_SUFFIX = ".trustedkeys.gpg"
+
+# The ostree repo config of one installation, where a remote's `gpgkeypath` lives — the third
+# place a remote's key material can be, besides its own keyring and the machine-level anchor
+# directory (`PKG-FR-FLATPAK-REMOTE-TRUST` knows no exception, so neither may this job).
+# `flatpak remotes` cannot report it and no flatpak command writes it: only a hand-edited
+# config sets it, and only this file records it. Unguarded on the exit code for the same
+# reason the keyring digests are: a scope with no flatpak installation has no config file, and
+# that is ordinary rather than a failure.
+_FLATPAK_REPO_CONFIG_CMD_TEMPLATE = "cat {directory}/config 2>/dev/null"
+
+# The per-remote option that names key files or directories outside the ostree store, and the
+# two characters libostree accepts between several of them
+# (`ot_keyfile_get_string_list_with_separator_choice (..., "gpgkeypath", ";,", ...)` in
+# `_ostree_repo_gpg_prepare_verifier`, libostree v2024.5). Each entry is an ASCII-armoured key
+# file, or a directory whose regular files are all read as one
+# (`_ostree_gpg_verifier_add_keyfile_path`), and the same function is what settles that these
+# keys ADD to the anchor directory rather than suppressing it as a per-remote keyring does.
+_GPGKEYPATH_OPTION = "gpgkeypath"
+_GPGKEYPATH_SEPARATORS = ";,"
 
 # One batched `sha256sum` per scope over that glob, mirroring `apt_sync`'s
 # `_capture_dir_digests` — never one command per remote. A scope with no keyring at all
@@ -434,10 +472,18 @@ class FlatpakRemoteItem:
     key_digest: str | None = None
     # The absolute path of the remote's ref filter, or `None` for an unfiltered remote
     # (`_FLATPAK_REMOTES_CMD_TEMPLATE`). `compare=False` because the filter is converged by a
-    # pass of its own AFTER the refs have landed (`_apply_remote_filters`): letting it into
+    # pass of its own ahead of the refs (`_converge_remote_filters`): letting it into
     # `__eq__` would make `_write_derived_remote`'s whole-item equality test miss and issue a
     # `remote-modify --url` that changes nothing, every run.
     filter_path: str | None = field(default=None, compare=False)
+    # The paths the remote's ostree `gpgkeypath` option names on the machine this item was
+    # captured from, in the order the option lists them (`_GPGKEYPATH_OPTION`). Read on the
+    # SOURCE only: what travels is the bytes at those paths, imported into the target's own
+    # per-remote keyring, so the target never reports a `gpgkeypath` of its own and comparing
+    # one side's filesystem paths against the other's would be a permanent inequality by
+    # construction. `key_digest` is where a trust comparison lives; `_write_derived_remote`
+    # asks about these separately, as it already does about the machine-level anchors.
+    key_paths: tuple[str, ...] = field(default=(), compare=False)
 
     ITEM_CLASS: ClassVar[ItemClass] = ItemClass.FLATPAK_REMOTE
 
@@ -556,6 +602,14 @@ def _keyring_digests_cmd(scope: str) -> str:
     )
 
 
+def _repo_config_cmd(scope: str) -> str:
+    """The scope's ostree `repo/config`, read as a whole (`_FLATPAK_REPO_CONFIG_CMD_TEMPLATE`)
+    — the only place a remote's `gpgkeypath` is recorded. Built at call time for the reason
+    `_keyring_digests_cmd` is: `_repo_dir_expression` stays the one place the path is written.
+    """
+    return _FLATPAK_REPO_CONFIG_CMD_TEMPLATE.format(directory=_repo_dir_expression(scope))
+
+
 def _trust_anchor_digests_cmd() -> str:
     """Digests of the anchor files in `_OSTREE_TRUSTED_ANCHOR_DIR`, batched exactly like the
     per-remote keyring read and unguarded for the same reason: a machine with no anchor at all
@@ -611,6 +665,36 @@ def _anchor_digests(output: str) -> dict[str, str]:
         for path, digest in _parse_file_digests(output).items()
         if Path(path).name not in _ANCHOR_FILES_LIBOSTREE_IGNORES
     }
+
+
+def _parse_repo_config_key_paths(output: str) -> dict[str, tuple[str, ...]]:
+    """`{remote name: the paths its `gpgkeypath` names}` from one installation's ostree
+    `repo/config` (`_FLATPAK_REPO_CONFIG_CMD_TEMPLATE`).
+
+    Hand-scanned rather than handed to `configparser`, for the reason every other read in
+    this module is: the file belongs to ostree, a line this job does not understand is not a
+    reason to fail a run, and `configparser` raises on duplicate keys and on a section header
+    it dislikes. Only two line shapes matter — `[remote "<name>"]` and, inside one,
+    `gpgkeypath=<paths>` — and anything else is skipped in silence.
+    """
+    key_paths: dict[str, tuple[str, ...]] = {}
+    remote: str | None = None
+    for raw in output.splitlines():
+        line = raw.strip()
+        if line.startswith("["):
+            section = re.fullmatch(r'\[remote\s+"(?P<name>[^"]+)"\]', line)
+            remote = section.group("name") if section is not None else None
+            continue
+        if remote is None or "=" not in line or line.startswith(("#", ";")):
+            continue
+        option, _, value = line.partition("=")
+        if option.strip() != _GPGKEYPATH_OPTION:
+            continue
+        paths = re.split(f"[{re.escape(_GPGKEYPATH_SEPARATORS)}]", value)
+        stripped = tuple(path.strip() for path in paths if path.strip())
+        if stripped:
+            key_paths[remote] = stripped
+    return key_paths
 
 
 def _parse_keyring_digests(output: str) -> dict[str, str]:
@@ -676,7 +760,10 @@ def _parse_flatpak_list(output: str) -> list[FlatpakItem]:
 
 
 def _parse_flatpak_remotes(
-    output: str, scope: Literal["user", "system"], key_digests: Mapping[str, str]
+    output: str,
+    scope: Literal["user", "system"],
+    key_digests: Mapping[str, str],
+    key_paths: Mapping[str, tuple[str, ...]] | None = None,
 ) -> list[FlatpakRemoteItem]:
     """Parse one scope's `flatpak remotes --columns=name,url,options` output.
 
@@ -691,8 +778,10 @@ def _parse_flatpak_remotes(
     empty column is omitted rather than printed (`_FLATPAK_REMOTES_CMD_TEMPLATE`); `-` in the
     filter column is flatpak's own word for "no filter". A remote absent from `key_digests`
     keeps `key_digest=None`, which is the honest reading of "verification is on but this
-    remote carries no key of its own" — trust then comes from a machine-level anchor this job
-    neither reads nor replicates.
+    remote carries no key of its own" — trust then comes from a machine-level anchor or from
+    `key_paths`, the same scope's `_parse_repo_config_key_paths` map, joined here by remote
+    name for the same reason the digests are. `key_paths` is read on the source alone
+    (`FlatpakRemoteItem.key_paths`), so the target's parse passes none.
     """
     items: list[FlatpakRemoteItem] = []
     for line in _lines(output):
@@ -710,9 +799,106 @@ def _parse_flatpak_remotes(
                 gpg_verify=gpg_verify,
                 key_digest=key_digests.get(name) if gpg_verify else None,
                 filter_path=filter_field if filter_field and filter_field != _NO_FILTER else None,
+                key_paths=(key_paths or {}).get(name, ()) if gpg_verify else (),
             )
         )
     return items
+
+
+def _filter_glob_segment(segment: str) -> str | None:
+    """One `/`-separated piece of a filter glob as a regular expression, or `None` for a
+    character flatpak refuses the whole file for.
+
+    Only `*` is a wildcard, and only within the characters a ref token may hold — flatpak
+    treats anything else as invalid data rather than as a literal
+    (`flatpak_filter_glob_to_regexp`, flatpak 1.14.6, `common/flatpak-utils.c`).
+    """
+    regexp = ""
+    for char in segment:
+        if char == "*":
+            regexp += _FILTER_REF_TOKEN
+        elif char == ".":
+            regexp += r"\."
+        elif (char.isascii() and char.isalnum()) or char in "-_":
+            regexp += char
+        else:
+            return None
+    return regexp
+
+
+def _filter_glob_to_regexp(glob: str) -> str | None:
+    """One filter-file glob as the regular expression flatpak builds from it, or `None` for a
+    glob flatpak itself rejects.
+
+    A transcription of `flatpak_filter_glob_to_regexp` (flatpak 1.14.6), quirks included,
+    because the only useful answer here is flatpak's own: this decides whether a source filter
+    contradicts the source's own installed set, and that answer ends the run
+    (`_abort_on_a_source_filter_that_denies_its_own_apps`). A glob is a partial ref — an
+    optional `app/`/`runtime/` kind, then id, arch and branch — and each segment it omits is
+    padded to the token class. An empty segment is padded the same way, except a trailing one:
+    flatpak fills an empty part when it meets the NEXT `/`, so `org.foo/` ends up with the
+    double slash that matches nothing, and reproducing that is the point of transcribing.
+    """
+    for kind in ("app/", "runtime/"):
+        if glob.startswith(kind):
+            prefix, glob = kind, glob[len(kind) :]
+            break
+    else:
+        prefix = "(app|runtime)/"
+    if not glob:
+        return None
+
+    segments = glob.split("/")
+    if len(segments) > _FILTER_REF_SEGMENTS:
+        return None
+    translated: list[str] = []
+    for index, segment in enumerate(segments):
+        piece = _FILTER_REF_TOKEN if not segment and index < len(segments) - 1 else _filter_glob_segment(segment)
+        if piece is None:
+            return None
+        translated.append(piece)
+    translated.extend([_FILTER_REF_TOKEN] * (_FILTER_REF_SEGMENTS - len(segments)))
+    return prefix + "/".join(translated)
+
+
+def _filter_denies(filter_text: str, ref: str) -> bool | None:
+    """Whether the filter file's content denies `ref` (an `app/<id>/<arch>/<branch>` string),
+    or `None` when flatpak would reject the file and there is no answer to give.
+
+    `flatpak_parse_filters` + `flatpak_filters_allow_ref` (flatpak 1.14.6): a ref is denied
+    when a `deny` glob matches it and no `allow` glob does. An allow-only file therefore
+    narrows nothing — measured as well as read
+    (`docs/adr/considerations/adr-020-flatpak-filter-and-trust-measurements.md`).
+    """
+    globs: dict[str, list[str]] = {"allow": [], "deny": []}
+    for raw in filter_text.splitlines():
+        words = raw.split("#", maxsplit=1)[0].split()
+        if not words:
+            continue
+        if words[0] not in globs or len(words) != 2:
+            return None
+        regexp = _filter_glob_to_regexp(words[1])
+        if regexp is None:
+            return None
+        globs[words[0]].append(regexp)
+
+    if not any(re.fullmatch(regexp, ref) for regexp in globs["deny"]):
+        return False
+    return not any(re.fullmatch(regexp, ref) for regexp in globs["allow"])
+
+
+def _read_source_filter(path: str) -> str | None:
+    """The source's filter file as text, or `None` when it cannot be read at all.
+
+    Read off the local filesystem for the reason `_source_keyring_path` documents: the source
+    executor runs on this machine as this user. Unreadable is not an error here — the only
+    caller uses the content to decide whether to end the run, and a file it could not read
+    says nothing either way.
+    """
+    try:
+        return Path(path).read_text(encoding="utf-8")
+    except OSError, UnicodeDecodeError:
+        return None
 
 
 def _parse_flatpak_masks(output: str, scope: Literal["user", "system"]) -> list[FlatpakMaskItem]:
@@ -1102,9 +1288,9 @@ def _trust_mutation_phrase(item: FlatpakRemoteItem, source_hostname: str, staged
         return f", with gpg verification disabled (as on {source_hostname})"
     if not staged_keys:
         return ""
-    if item.key_digest is not None:
-        return f", importing {source_hostname}'s signing key"
-    return f", importing the machine-level signing key {source_hostname} verifies it against"
+    if item.key_digest is None and not item.key_paths:
+        return f", importing the machine-level signing key {source_hostname} verifies it against"
+    return f", importing {source_hostname}'s signing key"
 
 
 def _target_refs_by_origin_remote(target_refs: Sequence[FlatpakItem]) -> dict[str, list[str]]:
@@ -1245,6 +1431,10 @@ class FlatpakSyncJob(PackageSyncJob):
         self._derived_remotes: tuple[_DerivedRemote, ...] = ()
         self._ref_derived_remote_ids: dict[str, frozenset[str]] = {}
         self._failed_derived_remotes: dict[str, str] = {}
+        # `{remote_id: why}` for the filters `_converge_remote_filters` could not put right
+        # before the installs. A filter has no item of its own either, so the reason is charged
+        # to every approved ref whose own origin is that remote (`_remote_filter_failure`).
+        self._failed_remote_filters: dict[str, str] = {}
         # `{remote_id: _RemoteConflict}` for the repoints that would move a machine-specific
         # target ref's origin (ruling 6). Populated in `plan()`, consumed by the conflict
         # review group and then by `accept_review()`'s write set.
@@ -1287,22 +1477,34 @@ class FlatpakSyncJob(PackageSyncJob):
         return _parse_flatpak_list(result.stdout)
 
     async def _capture_source_remotes(self, scope: Literal["user", "system"]) -> list[FlatpakRemoteItem]:
-        """One scope's remotes plus their per-remote keyring digests (#215): two reads,
-        one listing and one batched `sha256sum`, never a command per remote.
+        """One scope's remotes with the trust each carries (#215): three reads — one listing,
+        one batched `sha256sum` over the per-remote keyrings, and the installation's ostree
+        `repo/config` for the `gpgkeypath` option — never a command per remote.
 
-        Only the listing is guarded. The keyring digest command is the documented
-        counter-example to a blanket exit-code rule (ADR-022): its glob legitimately
-        matches nothing on a scope with no remote keyring, and `sha256sum` then exits 1 —
-        so on that command a non-zero exit is the NORMAL answer, and guarding it would fail
-        every run on a machine with no flatpak remotes.
+        Only the listing is guarded. The other two are the documented counter-examples to a
+        blanket exit-code rule (ADR-022): the digest glob legitimately matches nothing on a
+        scope with no remote keyring and the config file legitimately does not exist on a
+        scope with no flatpak installation, so `sha256sum` and `cat` exit non-zero on an
+        ordinary machine and guarding them would fail every run on one.
         """
         keys = await self.source.run_command(_keyring_digests_cmd(scope))
+        config = await self.source.run_command(_repo_config_cmd(scope))
         command = _FLATPAK_REMOTES_CMD_TEMPLATE.format(flag=_scope_flag(scope))
         result = await self.source.run_command(command)
         require_answer(command, result, self.machines.source)
-        return _parse_flatpak_remotes(result.stdout, scope, _parse_keyring_digests(keys.stdout))
+        return _parse_flatpak_remotes(
+            result.stdout,
+            scope,
+            _parse_keyring_digests(keys.stdout),
+            _parse_repo_config_key_paths(config.stdout),
+        )
 
     async def _query_target_remotes(self, scope: Literal["user", "system"]) -> list[FlatpakRemoteItem]:
+        """The target's own remotes. No `gpgkeypath` read: what the source holds that way is
+        imported into the target's per-remote keyring, so the option is a source-side fact
+        about which bytes to carry rather than one of the item's comparable facets
+        (`FlatpakRemoteItem.key_paths`).
+        """
         keys = await self.target.run_command(_keyring_digests_cmd(scope), login_shell=False)
         command = _FLATPAK_REMOTES_CMD_TEMPLATE.format(flag=_scope_flag(scope))
         result = await self.target.run_command(command, login_shell=False)
@@ -1488,6 +1690,7 @@ class FlatpakSyncJob(PackageSyncJob):
         self._source_ref_origins = await self._capture_source_ref_origins()
         self._source_runtime_by_ref_id = await self._capture_source_runtimes(source_refs)
         await self._capture_trust_anchors()
+        self._abort_on_a_source_filter_that_denies_its_own_apps(source_refs, source_remotes)
 
         ref_diffs = _diff_flatpak_refs(
             source_refs,
@@ -1509,6 +1712,43 @@ class FlatpakSyncJob(PackageSyncJob):
         self._capture_remote_conflicts(diffs, installed_target_refs, target_decisions)
         groups = self._build_review_groups(diffs)
         return PackagePlan(manager=self.manager_id, diffs=diffs, groups=groups)
+
+    def _abort_on_a_source_filter_that_denies_its_own_apps(
+        self, source_refs: Sequence[FlatpakItem], source_remotes: Sequence[FlatpakRemoteItem]
+    ) -> None:
+        """End the run when the source has an application the filter of its own origin remote
+        denies (`PKG-FR-FLATPAK-FILTER`).
+
+        The filter is in force before the installs, so a filter narrower than the set being
+        replicated would block them — but that is the source contradicting itself, not a case
+        to carry logic for: the same machine says "install this from there" and "nothing from
+        there may be installed". Ending the run here, before this job has changed anything and
+        before the user is asked to decide anything, is what puts the repair in front of them
+        (`SyncAbortedByUser`, the same end an unparsable snippet registry gets).
+
+        Read on the source's own filesystem, like the keyring bytes and for the same reason:
+        the source executor runs on this machine as this user. A file that cannot be read, or
+        one flatpak itself would reject, claims nothing — an abort needs certainty, and the
+        real error reaches the user from `remote-modify --filter` later.
+        """
+        filtered = {item.item_id: item for item in source_remotes if item.filter_path is not None}
+        contents: dict[str, str | None] = {}
+        for ref in source_refs:
+            remote = filtered.get(f"{_REMOTE_ITEM_ID_PREFIX}{ref.scope}:{ref.origin}")
+            if remote is None or remote.filter_path is None:
+                continue
+            if remote.item_id not in contents:
+                contents[remote.item_id] = _read_source_filter(remote.filter_path)
+            text = contents[remote.item_id]
+            if text is None or not _filter_denies(text, f"app/{ref.ref}"):
+                continue
+            raise SyncAbortedByUser(
+                f"{self.machines.source} has the {ref.scope}-scope flatpak {ref.ref} installed from the remote "
+                f"{ref.origin}, whose own ref filter {remote.filter_path} denies it. That filter is applied to "
+                f"{self.machines.target} before anything installs from that remote, so replicating the two "
+                f"together is impossible; correct the filter or uninstall {ref.ref} on {self.machines.source} "
+                "before syncing again"
+            )
 
     def _capture_remote_conflicts(
         self,
@@ -1673,20 +1913,20 @@ class FlatpakSyncJob(PackageSyncJob):
 
     @override
     async def apply(self) -> None:
-        """Provision the derived remotes and take their target-side filters off, run the base
-        converge loop, then re-apply the remotes' filters and delete the ones nothing uses.
+        """Provision the derived remotes, bring their filters to the source's, run the base
+        converge loop, then delete the remotes nothing uses.
 
         The ordering `plan()` used to carry in its `diffs` tuple lives here now, and has to:
         no remote is a diff in any direction, so nothing in the base loop would reach one.
-        The first half is the whole of D-14's guarantee — every remote an approved ref needs
-        is written before the loop issues its first `flatpak install` — and the second half is
-        what `_apply_remote_filters` and `_delete_unused_remotes` each need the loop to have
-        finished for. `_clear_target_filters` belongs to the first half for the same reason
-        `_apply_remote_filters` belongs to the second (module docstring).
+        Remote, then filter, then install (`PKG-FR-FLATPAK-FILTER`) — the first two are D-14's
+        guarantee that everything an approved ref depends on is in place before the loop issues
+        its first `flatpak install`, and the filter is one of those things rather than an
+        afterthought put back once the installs are safely past. `_delete_unused_remotes` is
+        the one pass that genuinely needs the loop to have finished: "nothing uses it" is only
+        a measurement once this run's approved removals have actually run.
 
-        The base raises `PackageItemFailures` at the end of its own loop, so its failures are
-        caught and re-raised together with the filter's: a filter that could not land fails
-        refs the loop already recorded as installed, and one exception has to carry both.
+        The base raises `PackageItemFailures` at the end of its own loop; it is caught only so
+        the deletion pass still runs after a failing loop, and re-raised unchanged.
 
         Dry-run (ADR-014): each intended write is logged at FULL with the same `[dry-run] `
         prefix the base loop uses, and no command is issued. Without this a preview of a first
@@ -1706,14 +1946,13 @@ class FlatpakSyncJob(PackageSyncJob):
                 )
                 continue
             await self._write_derived_remote(derived)
-        await self._clear_target_filters()
+        await self._converge_remote_filters()
 
         failures: list[tuple[ItemDiff, str]] = []
         try:
             await super().apply()
         except PackageItemFailures as exc:
             failures = list(exc.failures)
-        failures.extend(await self._apply_remote_filters(frozenset(diff.item_id for diff, _reason in failures)))
         await self._delete_unused_remotes()
         if failures:
             raise PackageItemFailures(self.manager_id, failures)
@@ -1725,8 +1964,9 @@ class FlatpakSyncJob(PackageSyncJob):
         - The SOURCE does not verify it. Replicating it unverified is the correct outcome —
           the alternative is a remote that refuses every install — but the target then trusts
           whatever that URL serves.
-        - The source verifies it and holds no key for it anywhere: no keyring of its own and
-          nothing under `_OSTREE_TRUSTED_ANCHOR_DIR`. Nothing can be synced, because there is
+        - The source verifies it and holds no key for it anywhere: no keyring of its own,
+          nothing under `_OSTREE_TRUSTED_ANCHOR_DIR`, and no `gpgkeypath` naming one. Nothing
+          can be synced, because there is
           nothing there; the source cannot install from that remote either, and the target
           inherits that exactly. Said out loud rather than left to flatpak's signature error
           on each ref.
@@ -1749,14 +1989,14 @@ class FlatpakSyncJob(PackageSyncJob):
                 f"{self.machines.source}, so it is provisioned on {self.machines.target} with gpg verification "
                 f"disabled: nothing checks what {derived.name} serves there either.",
             )
-        elif source_item.key_digest is None and not self._source_trust_anchors:
+        elif source_item.key_digest is None and not source_item.key_paths and not self._source_trust_anchors:
             self._log(
                 Host.TARGET,
                 LogLevel.WARNING,
                 f"The {derived.scope} flatpak remote {derived.name} verifies signatures on {self.machines.source} "
-                f"but has no signing key there — neither its own keyring nor anything under "
-                f"{_OSTREE_TRUSTED_ANCHOR_DIR} — so there is none to sync and installs from it will fail the "
-                f"signature check on {self.machines.target} as they do on {self.machines.source}.",
+                f"but has no signing key there — neither its own keyring, nor a {_GPGKEYPATH_OPTION} of its own, "
+                f"nor anything under {_OSTREE_TRUSTED_ANCHOR_DIR} — so there is none to sync and installs from it "
+                f"will fail the signature check on {self.machines.target} as they do on {self.machines.source}.",
             )
 
     async def _write_derived_remote(self, derived: _DerivedRemote) -> None:
@@ -1781,11 +2021,12 @@ class FlatpakSyncJob(PackageSyncJob):
             )
             return
         target_item = self._target_remotes_by_id.get(derived.remote_id)
-        # Anchor-trusted remotes are the one case whole-item equality cannot settle: two
-        # remotes both carrying no keyring of their own compare equal whether or not the
-        # target holds the machine-level key the source verifies against, so the anchor
-        # question is asked separately rather than read off `==` (`_anchors_to_import`).
-        if target_item == source_item and not self._anchors_to_import(source_item):
+        # Key material held outside the remote's own keyring is what whole-item equality
+        # cannot settle: two remotes both carrying no keyring of their own compare equal
+        # whether or not the target holds the machine-level key the source verifies against,
+        # and a `gpgkeypath` is a source-side path the target never reports at all. Both are
+        # asked separately rather than read off `==` (`_anchors_to_import`, `key_paths`).
+        if target_item == source_item and not self._anchors_to_import(source_item) and not source_item.key_paths:
             return
 
         scope_flag = _scope_flag(derived.scope)
@@ -1844,117 +2085,119 @@ class FlatpakSyncJob(PackageSyncJob):
                 )
         return None
 
-    async def _clear_target_filters(self) -> None:
-        """Take the TARGET's own ref filter off every derived remote, before the converge
-        loop reaches its first install (`PKG-FR-FLATPAK-FILTER`, `PKG-FR-MANAGER-CONVERGES`).
+    async def _converge_remote_filters(self) -> None:
+        """Bring every derived remote's ref filter to the source's, between the derived writes
+        and the converge loop's first install (`PKG-FR-FLATPAK-FILTER`).
 
-        Two things the late `_apply_remote_filters` pass cannot do on its own:
-
-        - The ordering rule protects the refs a filter can exclude, and a filter the target
-          already carries excludes them just as a prematurely-applied source one would. Only
-          the source's filter is late today; the target's would stay in force throughout.
-        - A remote the source no longer filters at all is absent from `_apply_remote_filters`'
-          source-driven loop, so the target's filter would survive every run and the two
-          machines would never converge.
-
-        Filters are cleared rather than left alone when they already match, because a matching
-        filter excludes exactly the same refs — the ordering rule is about what is in force
-        during the installs, not about whose it is. `--no-filter` is `remote-modify`'s own verb
-        for it (Flatpak 1.14.6).
+        Two directions, one pass, because they are the same obligation read from either end: a
+        remote the source filters gets that filter, file and all; a remote the source does not
+        filter loses whatever filter the target had (`--no-filter`, `remote-modify`'s own verb
+        for it on Flatpak 1.14.6), which is the only thing that converges a filter the source
+        has dropped. Nothing is cleared for the installs' benefit — the filter that is in force
+        while they run is the one both machines are meant to end with.
 
         The target's CURRENT filters are read back rather than taken from `plan()`: the derived
         writes have just run, and `_target_remotes_now` is the same "the target's own answer is
-        the only evidence" rule the origin guard uses.
+        the only evidence" rule the origin guard uses. It answers with a path and nothing else,
+        so a filter the source has is copied and applied on every run that provisions its
+        remote: whether the file at that path still holds the source's bytes is not something
+        the target records, and re-copying it is cheaper than a digest read per filtered
+        remote per machine.
 
-        A clear that fails is charged to the refs like a failed derived write (D-39): the
-        filter it could not remove is precisely what may refuse them, so installing in hope
-        would report flatpak's symptom instead of this run's cause.
+        A failure warns and is recorded against the remote (`_failed_remote_filters`), which
+        `_converge_ref` turns into a per-ref failure for every approved ref whose OWN origin is
+        that remote — the app's own origin, never the remote that supplied its runtime. No
+        install is attempted behind a filter this run could not put right, because the filter
+        it could not write is precisely what may refuse them.
         """
         for derived in self._derived_remotes:
             if derived.remote_id in self._failed_derived_remotes:
                 continue
-            target_item = (await self._target_remotes_now()).get(derived.remote_id)
-            if target_item is None or target_item.filter_path is None:
-                continue
-            if self.context.dry_run:
-                self._log(
-                    Host.TARGET,
-                    LogLevel.FULL,
-                    f"[dry-run] Would take the ref filter {target_item.filter_path} off the {derived.scope} "
-                    f"flatpak remote {derived.name} before installing from it",
-                )
-                continue
-            result = await self.target.run_command(
-                f"{_sudo_prefix(derived.scope)}flatpak remote-modify {_scope_flag(derived.scope)} --no-filter "
-                f"{shlex.quote(derived.name)}",
-                login_shell=False,
-                mutates=(
-                    f"take the ref filter {target_item.filter_path} off the {derived.scope} flatpak remote "
-                    f"{derived.name} on {self.machines.target}"
-                ),
-            )
-            self._target_remotes_now_by_id = None
-            if result.success:
-                # A filter has no item of its own, so this is the only line the run leaves
-                # about the removal — the same reason `_apply_remote_filters` logs its own.
-                self._log(
-                    Host.TARGET,
-                    LogLevel.FULL,
-                    f"take the ref filter {target_item.filter_path} off the {derived.scope} flatpak remote "
-                    f"{derived.name}",
-                )
-            else:
-                self._failed_derived_remotes[derived.remote_id] = (
-                    f"its ref filter {target_item.filter_path} could not be taken off first: "
-                    f"{result.stderr.strip() or 'flatpak refused --no-filter'}"
-                )
-
-    async def _apply_remote_filters(self, already_failed: frozenset[str]) -> list[tuple[ItemDiff, str]]:
-        """Replicate each derived remote's ref filter, returning the approved refs it failed
-        (`PKG-FR-FLATPAK-FILTER`).
-
-        Run after the base converge loop, never before it: a filter can be narrower than what
-        the source has installed, so applying it first would exclude the very refs this run is
-        replicating — measured, not assumed (module docstring). A ref already installed when
-        a filter arrives is untouched by it, so this pass costs the target nothing that has
-        landed.
-
-        A remote the source does not filter needs nothing here: `_clear_target_filters` has
-        already taken the target's own off, so skipping it converges rather than strands it.
-        """
-        failures: list[tuple[ItemDiff, str]] = []
-        for derived in self._derived_remotes:
             source_item = self._source_remotes_by_id.get(derived.remote_id)
-            if source_item is None or source_item.filter_path is None:
+            if source_item is None:
                 continue
-            path = source_item.filter_path
-            if self.context.dry_run:
-                self._log(
-                    Host.TARGET,
-                    LogLevel.FULL,
-                    f"[dry-run] Would copy the ref filter {path} and apply it to the {derived.scope} "
-                    f"flatpak remote {derived.name}",
-                )
-                continue
-            reason = await self._replicate_remote_filter(derived, path)
-            if reason is None:
-                # A filter has no item of its own, so this is the only line the run leaves
-                # about it — the same reason `_write_derived_remote` logs its own success.
-                self._log(
-                    Host.TARGET,
-                    LogLevel.FULL,
-                    f"apply the ref filter {path} to the {derived.scope} flatpak remote {derived.name}",
-                )
-                continue
-            failures.extend(
-                (
-                    diff,
-                    f"the ref filter of the {derived.scope} remote {derived.name!r} could not be replicated "
-                    f"to {path}: {reason}",
-                )
-                for diff in self._approved_refs_from_remote(derived.remote_id, already_failed)
+            if source_item.filter_path is not None:
+                await self._apply_source_filter(derived, source_item.filter_path)
+            else:
+                await self._clear_target_filter(derived)
+
+    async def _apply_source_filter(self, derived: _DerivedRemote, path: str) -> None:
+        """Copy the source's filter file to the same absolute path on the target and apply it
+        there, or record why not.
+        """
+        if self.context.dry_run:
+            self._log(
+                Host.TARGET,
+                LogLevel.FULL,
+                f"[dry-run] Would copy the ref filter {path} and apply it to the {derived.scope} "
+                f"flatpak remote {derived.name} before installing from it",
             )
-        return failures
+            return
+        reason = await self._replicate_remote_filter(derived, path)
+        if reason is None:
+            # A filter has no item of its own, so this is the only line the run leaves about
+            # it — the same reason `_write_derived_remote` logs its own success.
+            self._log(
+                Host.TARGET,
+                LogLevel.FULL,
+                f"apply the ref filter {path} to the {derived.scope} flatpak remote {derived.name}",
+            )
+            return
+        self._log(
+            Host.TARGET,
+            LogLevel.WARNING,
+            f"The ref filter {path} of the {derived.scope} flatpak remote {derived.name} could not be replicated "
+            f"to {self.machines.target}: {reason}",
+        )
+        self._failed_remote_filters[derived.remote_id] = (
+            f"the ref filter of the {derived.scope} remote {derived.name!r} could not be replicated to {path}: "
+            f"{reason}"
+        )
+
+    async def _clear_target_filter(self, derived: _DerivedRemote) -> None:
+        """Take the target's own ref filter off a remote the source does not restrict, or
+        record why not (`PKG-FR-MANAGER-CONVERGES`).
+        """
+        target_item = (await self._target_remotes_now()).get(derived.remote_id)
+        if target_item is None or target_item.filter_path is None:
+            return
+        path = target_item.filter_path
+        if self.context.dry_run:
+            self._log(
+                Host.TARGET,
+                LogLevel.FULL,
+                f"[dry-run] Would take the ref filter {path} off the {derived.scope} flatpak remote {derived.name}, "
+                f"which {self.machines.source} does not restrict",
+            )
+            return
+        result = await self.target.run_command(
+            f"{_sudo_prefix(derived.scope)}flatpak remote-modify {_scope_flag(derived.scope)} --no-filter "
+            f"{shlex.quote(derived.name)}",
+            login_shell=False,
+            mutates=(
+                f"take the ref filter {path} off the {derived.scope} flatpak remote {derived.name} on "
+                f"{self.machines.target}"
+            ),
+        )
+        self._target_remotes_now_by_id = None
+        if result.success:
+            self._log(
+                Host.TARGET,
+                LogLevel.FULL,
+                f"take the ref filter {path} off the {derived.scope} flatpak remote {derived.name}",
+            )
+            return
+        reason = result.stderr.strip() or "flatpak refused --no-filter"
+        self._log(
+            Host.TARGET,
+            LogLevel.WARNING,
+            f"The ref filter {path} of the {derived.scope} flatpak remote {derived.name} could not be taken off "
+            f"{self.machines.target}: {reason}",
+        )
+        self._failed_remote_filters[derived.remote_id] = (
+            f"the ref filter {path} of the {derived.scope} remote {derived.name!r} could not be taken off "
+            f"{self.machines.target}: {reason}"
+        )
 
     async def _replicate_remote_filter(self, derived: _DerivedRemote, filter_path: str) -> str | None:
         """`None` once the source's filter file sits at the same absolute path on the target
@@ -2005,28 +2248,16 @@ class FlatpakSyncJob(PackageSyncJob):
             await self._discard_staged_file(staged, "ref filter")
         return None
 
-    def _approved_refs_from_remote(self, remote_id: str, already_failed: frozenset[str]) -> list[ItemDiff]:
-        """The approved ref installs whose own origin is `remote_id` — "every approved
-        application from that remote" (`PKG-FR-FLATPAK-FILTER`).
+    def _remote_filter_failure(self, item: FlatpakItem) -> str | None:
+        """Why an approved ref cannot be installed because the filter of the remote it comes
+        from could not be converged (`PKG-FR-FLATPAK-FILTER`) — a filter has no item of its
+        own, exactly like a derived write.
 
-        The ref's OWN origin, not `_ref_derived_remote_ids`: that map also carries the remote
-        a ref's RUNTIME came from, and an app is not from the remote that supplied its
-        runtime. A ref the converge loop already failed is left out — it has its own failure
-        and does not need a second one.
+        Keyed on the ref's OWN origin, never on `_ref_derived_remote_ids`: that map also
+        carries the remote a ref's RUNTIME came from, and an app is not "from" the remote that
+        supplied its runtime.
         """
-        plan, outcome = self._accepted_plan, self._accepted_outcome
-        if plan is None or outcome is None:
-            return []
-        diffs: list[ItemDiff] = []
-        for diff in plan.diffs:
-            if diff.action is not DiffAction.INSTALL or diff.item_id in already_failed:
-                continue
-            if outcome.decisions.get(diff.item_id) != Decision.APPLY:
-                continue
-            item = self._source_refs_by_id.get(diff.item_id)
-            if item is not None and f"flatpak:remote:{item.scope}:{item.origin}" == remote_id:
-                diffs.append(diff)
-        return diffs
+        return self._failed_remote_filters.get(f"{_REMOTE_ITEM_ID_PREFIX}{item.scope}:{item.origin}")
 
     async def _delete_unused_remotes(self) -> None:
         """Delete every target remote the source does not have that nothing on the target
@@ -2154,7 +2385,7 @@ class FlatpakSyncJob(PackageSyncJob):
                 )
             # D-39 first: a derived write that failed has no item of its own, and its own
             # stderr says far more than the symptom `_origin_refusal` would report.
-            blocked = self._derived_remote_failure(diff.item_id)
+            blocked = self._derived_remote_failure(diff.item_id) or self._remote_filter_failure(source_item)
             if blocked is not None:
                 raise ConvergeItemFailed(f"install of {ref} refused: {blocked}")
             refusal = await self._origin_refusal(scope, source_item.origin)
@@ -2215,11 +2446,15 @@ class FlatpakSyncJob(PackageSyncJob):
         """Copy the key material a verified source remote verifies against onto the target and
         return the staged paths (#215, `PKG-FR-FLATPAK-REMOTE-TRUST`).
 
-        Two cases:
+        Three places the key material can be, and a remote can rest on more than one:
 
-        - The remote has a keyring of its own: that file, byte-for-byte.
+        - The remote has a keyring of its own: that file, byte-for-byte. It suppresses the
+          machine-level anchors on the source (measured), so they do not travel either.
         - Its trust is machine-level: the source's anchor files the target lacks
           (`_anchors_to_import`), imported into this remote's own keyring on the target.
+        - Its ostree `gpgkeypath` names key files or directories (`_gpgkeypath_files`). These
+          travel ALONGSIDE whichever of the two above applies, because libostree adds them to
+          the same verifier without suppressing anything (module docstring).
 
         Nothing is staged when the source's every anchor is already on the target, and
         nothing is staged when the source holds no key material for the remote at all —
@@ -2237,6 +2472,7 @@ class FlatpakSyncJob(PackageSyncJob):
         if not item.gpg_verify:
             return []
 
+        staged: list[str] = []
         if item.key_digest is not None:
             local_path = _source_keyring_path(item)
             if not local_path.is_file():
@@ -2245,24 +2481,57 @@ class FlatpakSyncJob(PackageSyncJob):
                     "(it existed when the plan was captured); refusing to provision a remote whose key cannot "
                     "be synced"
                 )
-            return [
+            staged.append(
                 await self._stage_source_file(local_path, f"{remote_id}.gpg", f"the signing key for {item.label()}")
-            ]
-
-        staged: list[str] = []
-        for index, anchor in enumerate(self._anchors_to_import(item)):
-            if not anchor.is_file():
-                raise ConvergeItemFailed(
-                    f"the machine-level signing key {anchor} that {item.label()} verifies against is missing on "
-                    f"{self.machines.source} (it existed when the plan was captured); refusing to provision a "
-                    "remote whose trust cannot be synced"
+            )
+        else:
+            for index, anchor in enumerate(self._anchors_to_import(item)):
+                if not anchor.is_file():
+                    raise ConvergeItemFailed(
+                        f"the machine-level signing key {anchor} that {item.label()} verifies against is missing on "
+                        f"{self.machines.source} (it existed when the plan was captured); refusing to provision a "
+                        "remote whose trust cannot be synced"
+                    )
+                staged.append(
+                    await self._stage_source_file(
+                        anchor, f"{remote_id}.anchor{index}.gpg", f"the machine-level signing key for {item.label()}"
+                    )
                 )
+
+        for index, key_file in enumerate(self._gpgkeypath_files(item)):
             staged.append(
                 await self._stage_source_file(
-                    anchor, f"{remote_id}.anchor{index}.gpg", f"the machine-level signing key for {item.label()}"
+                    key_file, f"{remote_id}.keypath{index}.gpg", f"the signing key for {item.label()}"
                 )
             )
         return staged
+
+    def _gpgkeypath_files(self, item: FlatpakRemoteItem) -> list[Path]:
+        """Every file the remote's `gpgkeypath` names on the source, directories expanded.
+
+        libostree reads a listed directory's regular files one level down and a listed file as
+        an ASCII key (`_ostree_gpg_verifier_add_keyfile_path`, v2024.5), so this reproduces
+        that set exactly — no name filter, because libostree applies none there.
+
+        A path that is neither fails the refs rather than provisioning a remote missing part
+        of its trust, for the same reason a vanished keyring does: the option was read at plan
+        time, and a key the source's own verifier cannot load is not a state to replicate
+        silently.
+        """
+        files: list[Path] = []
+        for raw in item.key_paths:
+            path = Path(raw)
+            if path.is_dir():
+                files.extend(sorted(child for child in path.iterdir() if child.is_file()))
+            elif path.is_file():
+                files.append(path)
+            else:
+                raise ConvergeItemFailed(
+                    f"the signing key {path} that {item.label()} names through its ostree {_GPGKEYPATH_OPTION} "
+                    f"option is missing on {self.machines.source}; refusing to provision a remote whose trust "
+                    "cannot be synced"
+                )
+        return files
 
     async def _stage_source_file(self, local_path: Path, staged_name: str, what: str) -> str:
         """Copy one of the source's own files into the target's `~/.cache/pc-switcher/` and

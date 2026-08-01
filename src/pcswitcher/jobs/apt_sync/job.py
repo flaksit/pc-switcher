@@ -731,10 +731,11 @@ class AptSyncJob(PackageSyncJob):
         - `PKG-FR-REPO-CONFLICT`: the overwrite question is "raised only for a repository this
           run writes because an approved package comes from it". A file whose only install was
           declined is written by nothing, so there is nothing to ask about.
-        - `PKG-FR-COLLATERAL-MARKED`: a mark recorded earlier in the same run counts, so a
-          package the user has just marked as the target's own gets the collateral question
-          its plan-time exemption as a removal candidate could not produce
-          (`Collateral.after_marks`).
+        - `PKG-FR-COLLATERAL-MANUAL`: only a removal the user APPROVED exempts a package from
+          the collateral protection, so every other removal candidate — skipped, marked as the
+          target's own (`PKG-FR-COLLATERAL-MARKED`), or unanswered — gets the collateral
+          question its plan-time exemption as a candidate could not produce
+          (`Collateral.after_answers`).
 
         The first round's manual-collateral answers are resolved before any of it, because
         one of them can withdraw an approved removal (`Collateral.resolve`): counting a
@@ -766,10 +767,10 @@ class AptSyncJob(PackageSyncJob):
         if self._conflicts:
             groups.append(self._conflict_group())
 
-        newly_protected = await work.collateral.after_marks(plan.diffs, decisions)
-        if newly_protected:
-            diffs.extend(newly_protected)
-            groups.append(self._collateral_group(newly_protected))
+        still_protected = await work.collateral.after_answers(plan.diffs, decisions)
+        if still_protected:
+            diffs.extend(still_protected)
+            groups.append(self._collateral_group(still_protected))
 
         return PackagePlan(manager=plan.manager, diffs=tuple(diffs), groups=tuple(groups))
 

@@ -19,7 +19,6 @@ from rich.console import Console
 
 from pcswitcher.jobs.packages.review import (
     COLLATERAL_REVIEW_ACTION,
-    KEEP_FOR_GOOD_WORD,
     REPO_CONFLICT_REVIEW_ACTION,
     REPO_REMOVAL_REVIEW_ACTION,
     UNREPRODUCIBLE_REVIEW_ACTION,
@@ -76,11 +75,6 @@ def _words(call: Any) -> list[str]:
 
 def _values(call: Any) -> list[str]:
     return [option.value for option in call.kwargs["options"]]
-
-
-def _defaults(call: Any) -> dict[str, str]:
-    """What one built screen would answer if the user pressed Enter without touching it."""
-    return {row.row_id: row.default for row in call.kwargs["rows"]}
 
 
 def _permanent(call: Any) -> str | None:
@@ -168,87 +162,6 @@ class TestThePermanentAnswer:
 
         assert _values(decision_list.call_args) == [Decision.APPLY, Decision.SKIP_ONCE, Decision.SKIP_ALWAYS]
         assert outcome.decisions == {"a": Decision.SKIP_ALWAYS}
-
-
-@pytest.mark.asyncio
-class TestBlockStateItemsArePromotable:
-    """#208: apt holds, snap holds and flatpak masks are ordinary INSTALL/REMOVE-direction
-    items, so `docs/jobs/package-sync.md`'s promise of the full three-way choice for a
-    block must hold in both directions.
-    """
-
-    async def test_hold_add_direction_can_be_made_permanent(self) -> None:
-        """B10, H84 — a hold's add direction reads as a hold, and its permanent answer as never holding."""
-        console = _interactive_console()
-        ui = MagicMock()
-        group = _group(
-            "install",
-            [_entry("apt:hold:firefox", label="firefox", action_label="hold")],
-            title="Hold apt packages",
-        )
-        screen = _fake_prompt(ask_return={"apt:hold:firefox": "skip_always"})
-
-        with (
-            patch.object(sys, "stdin", _mock_isatty(True)),
-            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen) as decision_list,
-        ):
-            outcome = await review_items([group], console=console, ui=ui, **HOSTS)
-
-        assert _permanent(decision_list.call_args) == "never hold"
-        assert outcome.decisions == {"apt:hold:firefox": Decision.SKIP_ALWAYS}
-
-    async def test_mask_removal_direction_can_be_made_permanent(self) -> None:
-        """H82, H84 — an unmask keeps its own verb, and its permanent answer keeps the mask for good."""
-        console = _interactive_console()
-        ui = MagicMock()
-        group = _group(
-            "remove",
-            [_entry("flatpak:mask:user:org.gimp.GIMP", label="org.gimp.GIMP (user)", action_label="unmask")],
-            manager="flatpak",
-            title="Unmask flatpak applications",
-        )
-        screen = _fake_prompt(ask_return={"flatpak:mask:user:org.gimp.GIMP": "skip_always"})
-
-        with (
-            patch.object(sys, "stdin", _mock_isatty(True)),
-            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen) as decision_list,
-        ):
-            outcome = await review_items([group], console=console, ui=ui, **HOSTS)
-
-        assert _words(decision_list.call_args)[0] == "unmask"
-        # A removal-direction screen keeps what the machine already has, so its permanent
-        # answer is the same word whatever the act verb is.
-        assert _permanent(decision_list.call_args) == KEEP_FOR_GOOD_WORD
-        assert outcome.decisions == {"flatpak:mask:user:org.gimp.GIMP": Decision.SKIP_ALWAYS}
-
-    @pytest.mark.parametrize(
-        ("item_id", "label", "action_label", "title"),
-        [
-            ("apt:hold:firefox", "firefox", "unhold", "Unhold apt packages"),
-            ("flatpak:mask:user:org.gimp.GIMP", "org.gimp.GIMP (user)", "unmask", "Unmask flatpak applications"),
-        ],
-    )
-    async def test_an_unhold_or_unmask_screen_opens_on_keeping_the_block(
-        self, item_id: str, label: str, action_label: str, title: str
-    ) -> None:
-        """H101 — `PKG-FR-HARMLESS-DEFAULT`: releasing a block the machine deliberately
-        holds is a removal, so confirming the screen unread must unhold and unmask nothing.
-        Asserted on the unhold/unmask verbs specifically because their group carries a verb
-        no other removal screen uses, and only the group's `action` decides the default.
-        """
-        console = _interactive_console()
-        ui = MagicMock()
-        group = _group("remove", [_entry(item_id, label=label, action_label=action_label)], title=title)
-        screen = _fake_prompt(ask_return={item_id: "skip_once"})
-
-        with (
-            patch.object(sys, "stdin", _mock_isatty(True)),
-            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen) as decision_list,
-        ):
-            outcome = await review_items([group], console=console, ui=ui, **HOSTS)
-
-        assert _defaults(decision_list.call_args) == {item_id: Decision.SKIP_ONCE}
-        assert outcome.decisions == {item_id: Decision.SKIP_ONCE}
 
 
 @pytest.mark.asyncio
