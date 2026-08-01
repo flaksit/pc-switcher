@@ -1660,3 +1660,64 @@ Yes, and named — third bullet under "What has no VM coverage at all": no two-m
 `ruff format --check`, `ruff check`, `codespell`, `basedpyright` (0 errors) all clean on the touched files; unit suite **4431 passed** (includes the scenario-matrix ratchet, which passes for E113 and E115). The integration file collects without import errors and the new class is discovered. **The integration test itself is unrun** — it needs two provisioned VMs, which I did not start.</result>
 <usage><subagent_tokens>90364</subagent_tokens><tool_uses>28</tool_uses><duration_ms>283876</duration_ms></usage>
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>a8b8768b2b7292112</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/81c7a538-876b-47ee-bd10-6f31ec117d7e/tasks/a8b8768b2b7292112.output</output-file>
+<status>completed</status>
+<summary>Agent "Ask flatpak instead of reimplementing it" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The transcription is gone; the check now asks flatpak. Report follows.
+
+## What I measured
+
+Throwaway `ubuntu:24.04` containers, flatpak `1.14.6-1ubuntu0.1` / libostree `2024.5`, against a local `archive-z2` repo over `file://` and `http://`, plus real flathub.
+
+- **`remote-ls &lt;name&gt;` honours the filter** — over `file://` and `http://` alike, and it agrees with the install: `deny *` + `allow app/org.test.One/*/*` listed One only, and `flatpak install r app/org.test.Two/…` exited 1 with `Nothing matches org.test.Two in remote r`. Refs print kinded (`app/&lt;id&gt;/&lt;arch&gt;/&lt;branch&gt;`), i.e. `flatpak list --columns=ref` with `app/` in front.
+- **No unfiltered second opinion exists.** `remote-ls &lt;uri&gt;`, which flatpak's own help documents, works only for `file://`. `http://127.0.0.1:8099/`, `https://dl.flathub.org/repo/`, a `.flatpakrepo` URL and a bare path all exit 1 with `Remote "…" not found in the system installation`. `remote-info` is filtered too; `flatpak search` matched nothing. So the two-listing design (filtered vs unfiltered) is impossible for the remotes that matter.
+- **A missing ref names no cause.** Delisting (`ostree refs --delete` + `build-update-repo`) removes a ref from the listing while the filter still allows it, and `remote-ls` will not list some architectures at all: `--arch='*'` is required (an `aarch64` ref appears only with it) and still incomplete — real flathub answered `--arch='*'` with 10178 refs, none `i386`, while `flatpak --supported-arches` prints both.
+- **flatpak declines rather than answering wrongly**: unparsable filter → exit 1 `Failed to parse filter …`; filter path that never existed or is a directory → exit 1 `Failed to load filter …`; no summary / unreachable → exit 1.
+- **`remote-modify --filter` copies the file** to `&lt;installation&gt;/repo/&lt;remote&gt;.filter` (`# backup copy of &lt;path&gt;, do not edit!`) and re-reads the configured path on every use — an in-place edit changes the next listing with no re-apply, which reading the file could never track.
+- **Cost**: read-only for an unprivileged, TTY-less user even for `--system`; creates only `~/.cache/flatpak`; 7 ms on `file://`, 0.3 s on flathub.
+
+## Design taken
+
+**1, asking the source, with one listing per filtered remote** — `flatpak remote-ls {--user|--system} --arch='*' --columns=ref &lt;name&gt;`, at plan time, before anything is written. I built the two-listing variant first (name = filtered, URL = unfiltered) and had to drop it: the URL form is refused for `http(s)`. Design 2 was not needed — the measurement supports plan-time detection, so the article's "before anything is written" stands.
+
+What the single listing cannot do is attribute: a delisted ref and an unlistable architecture read exactly like a denied one. So the abort states what was measured and names both repairs without blaming either.
+
+## Deleted
+
+`_filter_glob_segment`, `_filter_glob_to_regexp`, `_filter_denies`, `_read_source_filter`, `_FILTER_REF_TOKEN`, `_FILTER_REF_SEGMENTS` (~100 lines transcribed from flatpak 1.14.6). Replaced by `_refs_the_remote_offers` (a listing, unguarded — a non-answer is silence, not a failure).
+
+## Article
+
+Detection point did not move; the condition did. `PKG-FR-FLATPAK-FILTER`'s last clause is now:
+
+&gt; A filtered source remote that does not offer an application the source itself has installed from it MUST end the run, before anything is written; the message MUST name the application, the remote and the filter, and MUST say that either the filter or the application has to be corrected before syncing again. What such a remote offers MUST be flatpak's own answer about that remote, never this tool's own reading of a filter file. A remote that will not answer MUST end no run.
+
+plus a "Why 'does not offer' rather than 'denies'" note recording that the filter's matching rules belong to flatpak and that its listing names no cause.
+
+## Rows touched (F.11)
+
+- **F100** reworded to the observable condition, and to the message naming both repairs.
+- **F151** reworded from "a filter file flatpak would reject" to "flatpak will not say what the remote offers"; test renamed `test_a_listing_flatpak_will_not_produce_does_not_end_the_run`.
+- **F154** (new): the remote offers everything the source installed → run goes on, asked once.
+- **F155** (new): an unfiltered remote is never asked, so it can end no run.
+
+## Other files
+
+`tests/unit/test_mutates_audit.py` — the new read had to be registered in `_READ_ONLY_CALLS` or the suite fails. Docs updated: `docs/system/package-sync.md`, `docs/jobs/package-sync.md`, and the measurements record, which gained a full "Can flatpak itself be asked what a filter denies?" section (and a stale line claiming the article still clears the target's filter was corrected).
+
+## For the agent on the integration test
+
+No expectation changes, but two facts about `test_a_source_filter_replicates_and_a_target_only_filter_comes_off`: plan now issues a real `flatpak remote-ls --arch='*'` on pc1 for the filtered remote (flathub, ~0.3 s), and it stays green only because `_FLATPAK_FILTER_BODY` is allow-only, which narrows nothing — adding a `deny` line to it would abort the run at plan time. If pc1 cannot reach flathub, the check is silently skipped.
+
+## Verification
+
+`uv run pytest -q` 4437 passed · `ruff format .` 164 unchanged · `ruff check .` clean · `basedpyright` 0 errors · `codespell` clean. Integration suite not run; nothing staged or committed.</result>
+<usage><subagent_tokens>232767</subagent_tokens><tool_uses>93</tool_uses><duration_ms>2022474</duration_ms></usage>
+</task-notification>
