@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "d687a622612f",
+  "strategy": "manual-commit",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 13,
+  "files_touched": [
+    ".planning/phases/02-package-management-sync/02-REWORK-decisions.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/d6/87a622612f/0/metadata.json",
+      "transcript": "/d6/87a622612f/0/full.jsonl",
+      "compact_transcript": "/d6/87a622612f/0/transcript.jsonl",
+      "content_hash": "/d6/87a622612f/0/content_hash.txt",
+      "prompt": "/d6/87a622612f/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 285,
+    "cache_creation_tokens": 1382414,
+    "cache_read_tokens": 44416467,
+    "output_tokens": 204776,
+    "api_call_count": 152
+  }
+}
