@@ -11,7 +11,14 @@ jobs:
     outputs:
       should-run: ${{ steps.filter.outputs.code }}
     steps:
+      # Full commit history, no blobs: on push events paths-filter otherwise
+      # walks back to the base commit with repeated `git fetch --deepen`, and
+      # that deepening loop dies with "shallow file has changed since we read
+      # it" once it passes this repo's depth. blob:none keeps the clone cheap.
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          filter: blob:none
       - uses: dorny/paths-filter@v4
         id: filter
         with:
