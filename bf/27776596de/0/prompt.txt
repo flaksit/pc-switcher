@@ -98,3 +98,17 @@ Did that. Then I read in runbook "and then <x>": what is this about? pc-switcher
   <x> never install   do not install on pc2 for good; it is pc1's own, and will not be asked again
   <space> cycles   <shift+key> sets every row   <enter> confirm
  » ◆ /opt/pcsw-uat-app  install
+
+---
+
+I'm running (still dry run) a 2nd time. The question about hello's revision change doesn't come up:
+
+? Install snap packages
+   ● hello-world (latest/stable, revision 29)  install
+
+? Install flatpak applications
+  <y> install         install on pc2
+  <s> skip now        do not install on pc2 for now; will be asked again next sync
+  <x> never install   do not install on pc2 for good; it is pc1's own, and will not be asked again
+  <space> cycles   <shift+key> sets every row   <enter> confirm
+ » ● io.github.fragglet.sdl_sopwith/x86_64/stable (2.9.0, flathub, user)  install
