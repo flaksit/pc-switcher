@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "ba1caacff8f7",
+  "strategy": "manual-commit",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "tests/unit/orchestrator/test_snap_autorefresh_hold.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/ba/1caacff8f7/0/metadata.json",
+      "transcript": "/ba/1caacff8f7/0/full.jsonl",
+      "compact_transcript": "/ba/1caacff8f7/0/transcript.jsonl",
+      "content_hash": "/ba/1caacff8f7/0/content_hash.txt",
+      "prompt": "/ba/1caacff8f7/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 47,
+    "cache_creation_tokens": 364045,
+    "cache_read_tokens": 1601045,
+    "output_tokens": 38647,
+    "api_call_count": 24
+  }
+}
