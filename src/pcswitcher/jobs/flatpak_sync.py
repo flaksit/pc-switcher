@@ -1713,10 +1713,10 @@ class FlatpakSyncJob(PackageSyncJob):
             raise SyncAbortedByUser(
                 f"{self.machines.source} has the {ref.scope}-scope flatpak {ref.ref} installed from the remote "
                 f"{ref.origin}, which does not offer it under the ref filter {remote.filter_path} that "
-                f"{self.machines.source} applies to that remote. That filter is applied to {self.machines.target} "
-                f"before anything installs from that remote, so replicating the two together is impossible; correct "
-                f"the filter — or, if {ref.origin} no longer carries {ref.ref} at all, uninstall it on "
-                f"{self.machines.source} — before syncing again"
+                f"{self.machines.source} applies to that remote. That filter would be applied to "
+                f"{self.machines.target} before anything installs from that remote, so replicating the two together "
+                f"is impossible; correct the filter — or, if {ref.origin} no longer carries {ref.ref} at all, "
+                f"uninstall it from {self.machines.source} — before syncing again"
             )
 
     def _capture_remote_conflicts(
