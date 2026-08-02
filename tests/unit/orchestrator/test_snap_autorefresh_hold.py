@@ -100,6 +100,15 @@ def warnings_of(orchestrator: Orchestrator) -> list[str]:
     ]
 
 
+def infos_of(orchestrator: Orchestrator) -> list[str]:
+    """Every INFO the orchestrator logged, rendered with its args."""
+    logger = cast(MagicMock, orchestrator._logger)  # pyright: ignore[reportPrivateUsage]
+    return [
+        str(call.args[0]) % tuple(call.args[1:]) if len(call.args) > 1 else str(call.args[0])
+        for call in logger.info.call_args_list
+    ]
+
+
 def all_calls(mock: MagicMock) -> list[str]:
     return [call.args[0] for call in mock.run_command.call_args_list]
 
@@ -148,6 +157,22 @@ class TestHoldEngaged:
             # Never the indefinite `snap refresh --hold` verb (snap_sync Pitfall 1).
             assert not any("snap refresh --hold" in c for c in cmds)
         assert orchestrator._snap_hold_engaged is True  # pyright: ignore[reportPrivateUsage]
+
+    @pytest.mark.asyncio
+    async def test_each_pause_is_announced_against_its_own_machine(self) -> None:
+        """#234 — the pause is two writes of one command text, so the log must name each machine.
+
+        A single "on both hosts" summary made the identical pair of DEBUG command lines read
+        like one machine paused twice.
+        """
+        orchestrator, _source, _target = make_orchestrator(snap_sync_enabled=True)
+
+        await orchestrator._hold_snap_autorefresh()  # pyright: ignore[reportPrivateUsage]
+
+        announcements = [line for line in infos_of(orchestrator) if "Pausing snapd auto-refresh" in line]
+        assert len(announcements) == 2
+        assert any(SOURCE_MACHINE in line for line in announcements)
+        assert any(TARGET_MACHINE in line for line in announcements)
 
     @pytest.mark.asyncio
     async def test_capture_is_read_only_and_precedes_the_set(self) -> None:

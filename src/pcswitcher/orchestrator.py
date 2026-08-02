@@ -1514,10 +1514,6 @@ class Orchestrator:
         self._snap_hold_prior_target, self._snap_hold_readable_target = await self._capture_snap_hold(Host.TARGET)
         # Engage BEFORE applying so a partially-applied hold is still restored in _cleanup.
         self._snap_hold_engaged = True
-        self._logger.info(
-            "Pausing snapd auto-refresh on both hosts for the sync window",
-            extra={"job": "orchestrator", "host": "source"},
-        )
         for host, prior, readable in (
             (Host.SOURCE, self._snap_hold_prior_source, self._snap_hold_readable_source),
             (Host.TARGET, self._snap_hold_prior_target, self._snap_hold_readable_target),
@@ -1530,6 +1526,15 @@ class Orchestrator:
                     extra={"job": "orchestrator", "host": host.value},
                 )
                 continue
+            # One line per machine, naming it (#234). The pause is two separate writes of
+            # the SAME command text, one per host, so the DEBUG trace shows the identical
+            # `snap set system refresh.hold` twice; a single "on both hosts" summary left a
+            # reader grepping the log unable to tell that pair from one pause applied twice.
+            self._logger.info(
+                "Pausing snapd auto-refresh on %s for the sync window",
+                self._machine_name(host),
+                extra={"job": "orchestrator", "host": host.value},
+            )
             await self._apply_snap_hold(host, prior)
 
     async def _restore_snap_hold(self, host: Host, prior: str | None, *, readable: bool) -> None:
