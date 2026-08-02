@@ -85,3 +85,16 @@ After hello's revision change, I get other question than "/opt/pcsw-uat-vendor":
 ---
 
 /opt/pcsw-uat-vendor answered "one application": why one app? Is clearly two apps, no?
+
+---
+
+Did that. Then I read in runbook "and then <x>": what is this about? pc-switcher goes immediately to question "/opt/pcsw-uat-app"
+
+? What is /opt/pcsw-uat-vendor on pc1? One application — /opt/pcsw-uat-vendor is what would be reproduced on pc2
+
+? How should pc2 get /opt/pcsw-uat-app?
+  <y> install         write a command snippet that installs it; pc2 runs it
+  <s> skip now        do not install on pc2 for now; will be asked again next sync
+  <x> never install   do not install on pc2 for good; it is pc1's own, and will not be asked again
+  <space> cycles   <shift+key> sets every row   <enter> confirm
+ » ◆ /opt/pcsw-uat-app  install
