@@ -1726,7 +1726,11 @@ class TestValidate:
         errors = await job.validate()
 
         assert errors == []
-        assert "target snap refresh.hold: forever" in caplog.messages
+        # The machine is the record's own `host`, not part of the sentence.
+        assert any(
+            record.message == "snap refresh.hold: forever" and getattr(record, "host", None) == Host.TARGET.value
+            for record in caplog.records
+        )
 
 
 class TestJobDiscovery:
