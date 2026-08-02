@@ -661,7 +661,9 @@ class AptSyncJob(PackageSyncJob):
                 ReviewGroup(
                     manager=self.manager_id,
                     action=REPO_REMOVAL_REVIEW_ACTION,
-                    title=f"Delete {words.plural} {self.machines.source} no longer has ({self.manager_id})",
+                    # The manager belongs INSIDE the sentence — "apt repositories" is what
+                    # the files are, while a trailing "(apt)" reads as a tag on the question.
+                    title=f"Delete {self.manager_id} {words.plural} {self.machines.source} no longer has",
                     entries=tuple(
                         ReviewEntry(
                             item_id=diff.item_id,

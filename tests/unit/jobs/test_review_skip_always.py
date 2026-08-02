@@ -173,7 +173,7 @@ class TestGroupsNeverOfferedPermanence:
     @pytest.mark.parametrize(
         ("action", "title", "action_label"),
         [
-            (REPO_REMOVAL_REVIEW_ACTION, "Delete repositories (apt)", "remove"),
+            (REPO_REMOVAL_REVIEW_ACTION, "Delete apt repositories atlas no longer has", "remove"),
             (REPO_CONFLICT_REVIEW_ACTION, "Resolve apt repository conflicts", "overwrite"),
         ],
     )

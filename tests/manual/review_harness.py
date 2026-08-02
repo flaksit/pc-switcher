@@ -117,7 +117,7 @@ GROUPS = [
     ReviewGroup(
         "apt",
         REPO_REMOVAL_REVIEW_ACTION,
-        f"Delete repositories {SOURCE_HOST} no longer has (apt)",
+        f"Delete apt repositories {SOURCE_HOST} no longer has",
         [
             ReviewEntry(
                 "apt:source:99-pcsw-uat.list",
@@ -141,7 +141,7 @@ GROUPS = [
     ReviewGroup(
         "apt",
         REPO_REMOVAL_REVIEW_ACTION,
-        f"Delete pin files {SOURCE_HOST} no longer has (apt)",
+        f"Delete apt pin files {SOURCE_HOST} no longer has",
         [
             ReviewEntry(
                 "apt:pin:99-pcsw-uat.pref",

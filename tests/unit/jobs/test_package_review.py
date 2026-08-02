@@ -549,7 +549,7 @@ class TestInteractive:
         group = ReviewGroup(
             manager="apt",
             action=REPO_REMOVAL_REVIEW_ACTION,
-            title="Delete repositories the source no longer has (apt)",
+            title="Delete apt repositories atlas no longer has",
             entries=[_entry("apt:source:vendor.list", action_label="delete repository")],
         )
         prompt = _fake_prompt(ask_return={"apt:source:vendor.list": "skip_once"})
@@ -1628,7 +1628,7 @@ class TestAnswerSentencesNameTheMachineAsASet:
         "repo_removal": ReviewGroup(
             manager="apt",
             action=REPO_REMOVAL_REVIEW_ACTION,
-            title="Delete pin files atlas no longer has (apt)",
+            title="Delete apt pin files atlas no longer has",
             entries=(_entry("a", label="99-vendor.pref", action_label="delete"),),
         ),
         "collateral": ReviewGroup(
@@ -1806,7 +1806,7 @@ def _pin_removal_group(entries: Sequence[ReviewEntry]) -> ReviewGroup:
     return ReviewGroup(
         manager="apt",
         action=REPO_REMOVAL_REVIEW_ACTION,
-        title="Delete pin files atlas no longer has (apt)",
+        title="Delete apt pin files atlas no longer has",
         entries=tuple(entries),
     )
 

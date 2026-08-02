@@ -1130,7 +1130,8 @@ class TestTwoAnswerRemovals:
     @pytest.mark.asyncio
     async def test_each_two_answer_screen_is_titled_in_correct_english(self) -> None:
         """C57, C110 — the title names the plural of the OBJECT, not a verb phrase with an `s` glued on
-        the end — "repositorys" is what the latter produces.
+        the end — "repositorys" is what the latter produces — and says which manager's
+        repositories inside the sentence (#228), where a trailing "(apt)" read as a tag.
         """
         context, _source, _target = self._target_only_repo_state()
 
@@ -1138,8 +1139,8 @@ class TestTwoAnswerRemovals:
 
         titles = {group.title for group in groups if group.action == REPO_REMOVAL_REVIEW_ACTION}
         assert titles == {
-            "Delete repositories source-host no longer has (apt)",
-            "Delete pin files source-host no longer has (apt)",
+            "Delete apt repositories source-host no longer has",
+            "Delete apt pin files source-host no longer has",
         }
 
     @pytest.mark.asyncio
