@@ -957,27 +957,26 @@ class TestUnreproducibleGroupResolution:
         """
         assert await self._captured("\n\n  sudo dpkg --install /tmp/x.deb  \n\n") == ("sudo dpkg --install /tmp/x.deb")
 
-    async def test_the_authoring_warning_is_read_before_the_editor_opens(self) -> None:
-        """G61 — the user is warned while they can still act on it. A snippet that asks a
-        question does not fail on nomad, it HANGS there with nobody to answer, so the
-        warning is worth nothing once the body is written: it is captured at the moment
-        `questionary.text` is constructed, which is the moment the editor opens.
+    @staticmethod
+    async def _editor_screen() -> tuple[str, str, str]:
+        """Run one snippet capture and return what the editor's own screen carries.
 
-        The worked shape is asserted too — telling someone their command must not prompt
-        without showing them what that looks like leaves them to discover
-        `DEBIAN_FRONTEND` as a stuck sync.
+        Three things, in the order they matter: the header while the editor is open, the
+        header on prompt_toolkit's final `is_done` render, and everything printed to the
+        console around the editor (its scrollback).
         """
         sink = io.StringIO()
         console = Console(file=sink, force_terminal=True, no_color=True, width=200)
-        ui = MagicMock()
         group = _unreproducible_group([_entry("u1", label="brscan3")])
         screen = _fake_prompt(ask_return={"u1": "add_snippet"})
         text_prompt = _fake_prompt(ask_return="sudo dpkg --install /tmp/x.deb")
-        shown_when_the_editor_opened = ""
+        headers: list[str] = []
 
-        def open_editor(*_args: object, **_kwargs: object) -> MagicMock:
-            nonlocal shown_when_the_editor_opened
-            shown_when_the_editor_opened = sink.getvalue()
+        def open_editor(*_args: object, **kwargs: object) -> MagicMock:
+            instruction = kwargs["instruction"]
+            headers.append(format(instruction))
+            with patch("pcswitcher.jobs.packages.review.is_done", return_value=True):
+                headers.append(format(instruction))
             return text_prompt
 
         with (
@@ -985,13 +984,43 @@ class TestUnreproducibleGroupResolution:
             patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen),
             patch("pcswitcher.jobs.packages.review.questionary.text", side_effect=open_editor),
         ):
-            await review_items([group], console=console, ui=ui, **HOSTS)
+            await review_items([group], console=console, ui=MagicMock(), **HOSTS)
 
-        assert "nomad" in shown_when_the_editor_opened
-        assert "nobody watching" in shown_when_the_editor_opened
-        assert "asks a question" in shown_when_the_editor_opened
-        assert "hangs the" in shown_when_the_editor_opened
-        assert "DEBIAN_FRONTEND=noninteractive" in shown_when_the_editor_opened
+        while_open, once_answered = headers
+        return while_open, once_answered, sink.getvalue()
+
+    async def test_the_authoring_warning_is_on_the_editors_own_screen(self) -> None:
+        """G61 — the user is warned while they can still act on it. A snippet that asks a
+        question does not fail on nomad, it HANGS there with nobody to answer, so the
+        warning is worth nothing once the body is written: it rides on the editor's own
+        prompt, which is on screen from the moment the editor opens.
+
+        The worked shape is asserted too — telling someone their command must not prompt
+        without showing them what that looks like leaves them to discover
+        `DEBIAN_FRONTEND` as a stuck sync.
+        """
+        while_open, _once_answered, _scrollback = await self._editor_screen()
+
+        assert "nomad" in while_open
+        assert "nobody watching" in while_open
+        assert "asks a question" in while_open
+        assert "hangs the" in while_open
+        assert "DEBIAN_FRONTEND=noninteractive" in while_open
+        assert "Ctrl-D to finish" in while_open
+
+    async def test_the_answered_editor_keeps_only_the_question_and_the_body(self) -> None:
+        """#236 — every other review screen collapses to its title and the answer once
+        answered. This one used to keep the whole authoring note plus questionary's
+        `(Ctrl-D to finish)` marker in the scrollback: the note because it was printed
+        above the editor, the marker because `questionary.text` appends `instruction` on
+        every render with no `is_done` check. Neither survives the answer now, and nothing
+        is printed around the editor for the scrollback to hold.
+        """
+        _while_open, once_answered, scrollback = await self._editor_screen()
+
+        assert once_answered == ""
+        assert "nobody watching" not in scrollback
+        assert "Ctrl-D" not in scrollback
 
     async def test_skip_always_choice_yields_skip_always_decision_and_no_snippet(self) -> None:
         """G32."""

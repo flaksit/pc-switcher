@@ -1147,7 +1147,7 @@ Driven by the orchestrator around the whole job window; listed here because the 
 | G58 | A snippet whose command asks a question (a debconf prompt) | It fails as its own item rather than hanging the sync — nothing is ever fed to its input | U | `test_manual_installs_sync:TestPromptingSnippetCannotHang::test_replay_supplies_no_stdin_and_a_prompting_snippet_is_a_plain_item_failure` |
 | G59 | A snippet that exits non-zero while printing nothing recognisable | Its exit code alone decides: failed | U | `test_package_state:TestSnippetRegistry::test_replay_exit_code_alone_decides_success` |
 | G60 | A snippet whose body contains shell metacharacters and square-bracketed text | Stored, displayed and replayed unchanged; nothing tries to interpret it | U | `test_package_state:TestSnippetRegistry::test_a_body_of_shell_metacharacters_is_stored_and_replayed_uninterpreted` |
-| G61 | The user is about to write a snippet | Before the editor opens they are told that Nomad runs it with nobody watching, and shown a worked non-interactive shape | U | `package_review:TestUnreproducibleGroupResolution::test_the_authoring_warning_is_read_before_the_editor_opens` |
+| G61 | The user is about to write a snippet | The editor's own screen tells them Nomad runs it with nobody watching, and shows a worked non-interactive shape; once answered the screen keeps only the question and the body they typed | U | `package_review:TestUnreproducibleGroupResolution::test_the_authoring_warning_is_on_the_editors_own_screen`, `::test_the_answered_editor_keeps_only_the_question_and_the_body` |
 | G62 | A second snippet is written for a different item | The first is preserved; the registry accumulates | U | `test_package_state:TestSnippetRegistry::test_add_preserves_an_unrelated_pre_existing_entry` |
 | G63 | The registry file is being written when the machine dies | The file is never left half written (written aside, then moved into place) | U | `test_package_state:TestSnippetRegistry::test_write_is_atomic_temp_then_move` |
 | G64 | The registry file is absent or empty | Read as "no snippets" — ordinary data, no warning | U | `test_package_state:TestSnippetRegistry::test_absent_file_returns_empty_mapping`, `::test_empty_file_returns_empty_mapping` |
@@ -1601,7 +1601,7 @@ Per machine, per job, for a package-manager query and for a job's own scan.
 | J97 | A dead read in one manager | Fails only that job; the other jobs still run | U | `test_job_failure_isolation:TestProbeFailedFailsOnlyItsOwnJob::test_the_orchestrator_records_it_failed_and_runs_the_next_job` |
 | J98 | A request that is wrong rather than a tool that did not answer (a package the target's apt has never heard of) | Stays a per-item outcome and is never promoted to a job failure | U | `test_apt_probe:TestBareDebPackagesAreNotAptSyncsBusiness::test_a_name_an_answered_policy_printed_no_block_for_is_not_excluded`; `test_package_sync:TestAptSyncEndToEnd::test_a_package_the_targets_apt_cannot_locate_still_reaches_the_review` |
 
-### J.7 What the log records (article: PKG-FR-LOG-DECISIONS)
+### J.7 What the log records (articles: PKG-FR-LOG-DECISIONS, PKG-FR-LOG-ACTIONS)
 
 | # | Scenario | Expected | Cov | Test |
 | --- | --- | --- | --- | --- |
@@ -1613,6 +1613,8 @@ Per machine, per job, for a package-manager query and for a job's own scan.
 | J104 | An approved install makes apt remove a package apt installed automatically | The removal is named in the log although nobody was asked | U | `test_apt_collateral:TestAutoCollateralIsLogged::test_auto_collateral_removal_is_named_in_the_log` |
 | J105 | An approved install makes apt change an automatically-installed package's version | The log names both versions, without a second command to compare them | U | `test_apt_collateral:TestAutoCollateralIsLogged::test_an_auto_version_change_is_logged_without_a_version_comparison` |
 | J106 | The same automatic collateral at apply time, from the transaction that actually happens | Logged there as well as at plan time | U | apt/collateral:`TestAutoCollateralIsLoggedFromTheTransactionThatHappens::test_the_same_casualty_is_logged_at_plan_time_and_again_from_the_real_transaction` |
+| J172 | An item a job applied | A line of its own naming the act, the item, the manager and the machine it happened on — beside the run's counts, not instead of them | U | `test_package_sync_core:TestAppliedItemsReachTheLog::test_every_applied_item_is_named_with_its_manager_and_machine` |
+| J173 | An item whose converge withdrew it after the review | Its own "not applied" line, and no applied line for it | U | `…::test_a_withdrawn_item_is_not_recorded_as_applied` |
 
 ### J.8 Verbatim manager output (article: PKG-FR-LOG-VERBATIM)
 

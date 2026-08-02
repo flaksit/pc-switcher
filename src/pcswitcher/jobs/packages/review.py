@@ -121,6 +121,7 @@ from enum import StrEnum
 from typing import Protocol, runtime_checkable
 
 import questionary
+from prompt_toolkit.filters import is_done
 from prompt_toolkit.key_binding import KeyBindings, KeyPressEvent
 from prompt_toolkit.keys import Keys
 from prompt_toolkit.styles import Style
@@ -562,8 +563,8 @@ def _rows_for(group: ReviewGroup) -> tuple[DecisionRow, ...]:
 
 
 def _snippet_authoring_note(target_hostname: str) -> str:
-    """Printed once before the multi-line capture, so a user does not author a snippet that
-    hangs the sync (T-02-18): the executor supplies no stdin, and a worked shape showing the
+    """Read on the editor's own screen, so a user does not author a snippet that hangs the
+    sync (T-02-18): the executor supplies no stdin, and a worked shape showing the
     DEBIAN_FRONTEND=noninteractive + dependency-fix pattern is cheaper to read here than to
     discover as a stuck sync. Said as what happens on the machine that will run it, rather
     than as a fact about the executor.
@@ -579,7 +580,35 @@ def _snippet_authoring_note(target_hostname: str) -> str:
 
 # Shown in place of questionary's own multiline instruction, which offers "Alt+Enter or Esc
 # then Enter" — two chords for one gesture, neither of which a user guesses.
-_SNIPPET_INSTRUCTION = "(Ctrl-D to finish)\n>"
+_SNIPPET_FINISH_HINT = "(Ctrl-D to finish)\n>"
+
+
+class _SnippetInstruction(str):
+    """The snippet editor's header — the authoring note and the finish key — which is on
+    screen while the editor is open and gone from the scrollback once it is answered.
+
+    Every other review screen collapses to its title and the answer (`decision_list` drops
+    its legend on `answered`). This one could not: `questionary.text` appends `instruction`
+    on EVERY render, the final one included, with no `is_done` check of its own, and the
+    note printed above the editor was ordinary console scrollback nothing could take back
+    (#236).
+
+    A `str` subclass because that is what questionary's signature takes and what its
+    truthiness test reads; the override is on `__format__`, which is what
+    `"{}".format(instruction)` calls once per render — so prompt_toolkit's own final,
+    `is_done` render is where the header drops out. Nothing about the Ctrl-D binding or the
+    multiline buffer changes.
+    """
+
+    __slots__ = ()
+
+    def __format__(self, _spec: str, /) -> str:
+        return "" if is_done() else str(self)
+
+
+def _snippet_instruction(target_hostname: str) -> _SnippetInstruction:
+    """The editor header for a snippet that will run on `target_hostname`."""
+    return _SnippetInstruction(f"\n{_snippet_authoring_note(target_hostname)}\n{_SNIPPET_FINISH_HINT}")
 
 
 def _snippet_submit_bindings() -> KeyBindings:
@@ -811,12 +840,13 @@ async def _review_unreproducible_group(
                 decisions[entry.item_id] = Decision.SKIP_ONCE
                 break
 
-            # selected == _ADD_SNIPPET_VALUE
-            console.print(Text(_snippet_authoring_note(target_hostname), style="dim"))
+            # selected == _ADD_SNIPPET_VALUE. The authoring note rides on the prompt rather
+            # than being printed above it: printed, it stayed in the scrollback beside the
+            # body the user wrote, which no other screen does (#236).
             body_prompt = questionary.text(
                 f"Install snippet for {entry.label}:",
                 multiline=True,
-                instruction=_SNIPPET_INSTRUCTION,
+                instruction=_snippet_instruction(target_hostname),
                 key_bindings=_SNIPPET_SUBMIT_BINDINGS,
                 style=_SNIPPET_STYLE,
             )
