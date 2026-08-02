@@ -415,7 +415,7 @@ Two outcomes, no default — the user types one:
 - **proceed** — run this operation, then continue to the next prompt.
 - **abort sync** — raise `SyncAbortedByUser` and stop the whole run.
 
-There is deliberately no "skip this one". A single approved outcome can span several commands, so skipping one of them leaves it half-applied — worse than either finishing it or stopping. An unanswerable prompt (EOF, Ctrl-C) is an abort, never an approval.
+There is deliberately no "skip this one". A single approved outcome can span several commands, so skipping one of them leaves it half-applied — worse than either finishing it or stopping. An unanswerable prompt (EOF, Ctrl-C) is an abort, never an approval — but a plain `SyncAborted`, since nobody answered it.
 
 The flag requires a TTY on both stdin and stdout and is refused at startup without one: a gate with a non-interactive fallback would have to auto-proceed, which is exactly what it exists to prevent. It has no config-file equivalent — it is a per-run decision.
 
@@ -423,7 +423,7 @@ Coverage is every modification pc-switcher makes to either machine except `folde
 
 One consequence of "no skip" shapes the code beyond the gate itself:
 
-- **Declining the snapd restore is honoured, and stops exactly there.** `_restore_snap_hold` re-raises `SyncAbortedByUser` ahead of its best-effort handler, so an abort is not absorbed the way a failed restore is. `_cleanup` catches it around that one call and continues: everything after it releases resources (target lock, SSH connection, source lock, event bus, UI) rather than modifying a machine, and no confirmation prompt should be able to leak a lock. What was left in place is logged at `WARNING`, so the end-of-run summary resurfaces it. This matters because restoring is not merely lifting — when the machine already had a hold of its own, declining means pc-switcher's timed hold expires and that prior hold is gone with it, which is why the prompt names the value being written back.
+- **Declining the snapd restore is honoured, and stops exactly there.** `_restore_snap_hold` re-raises `SyncAborted` ahead of its best-effort handler, so an abort is not absorbed the way a failed restore is. `_cleanup` catches it around that one call and continues: everything after it releases resources (target lock, SSH connection, source lock, event bus, UI) rather than modifying a machine, and no confirmation prompt should be able to leak a lock. What was left in place is logged at `WARNING`, so the end-of-run summary resurfaces it. This matters because restoring is not merely lifting — when the machine already had a hold of its own, declining means pc-switcher's timed hold expires and that prior hold is gone with it, which is why the prompt names the value being written back.
 
 The mechanism lives in `executor.py`, the one funnel every command, transfer and background process already passes through, so it is caller-agnostic rather than job-specific: any call that passes `mutates="<phrase>"` declares itself a modification and is gated, on either machine. In-process writes that are neither a command nor a transfer go through `declare_modification` so they reach the same funnel. Reads pass no `mutates` and are never gated — that is what keeps the prompts worth reading. The trade-off is that the marker is opt-in, so a forgotten `mutates=` is an unannounced write; `tests/unit/test_mutates_audit.py` enumerates every ungated call site so an omission fails a test instead of shipping.
 

@@ -18,7 +18,7 @@ from typer.testing import CliRunner
 
 from pcswitcher.cli import _async_run_sync, app, update
 from pcswitcher.config import Configuration
-from pcswitcher.models import SessionStatus, SyncAbortedByUser, SyncSession
+from pcswitcher.models import SessionStatus, SyncAborted, SyncAbortedByUser, SyncSession
 from pcswitcher.version import Release, Version
 
 runner = CliRunner()
@@ -109,17 +109,17 @@ class TestSyncCommand:
             mock_load.assert_called_once_with(custom_config_path)
 
 
-class TestSyncAbortedByUserHandling:
-    """_async_run_sync must surface a user abort once, calmly, distinct from a failure.
+class TestSyncAbortedHandling:
+    """_async_run_sync must surface an abort once, calmly, distinct from a failure.
 
     UAT gap 2 / plan 01-16: previously a declined confirmation fell through to
     the generic except Exception handler and printed the same red "Sync
     failed" text the orchestrator's own CRITICAL log already implied.
     """
 
-    @pytest.mark.asyncio
-    async def test_user_abort_prints_single_calm_message_and_nonzero_exit(self) -> None:
-        """Orchestrator.run() raising SyncAbortedByUser -> one calm 'aborted' line."""
+    @staticmethod
+    async def _printed(abort: SyncAborted) -> tuple[int, str]:
+        """What the CLI prints, and its exit code, for a run that ended in `abort`."""
         mock_config = MagicMock(spec=Configuration)
 
         with (
@@ -127,15 +127,31 @@ class TestSyncAbortedByUserHandling:
             patch("pcswitcher.cli.console") as mock_console,
         ):
             mock_orchestrator = MagicMock()
-            mock_orchestrator.run = AsyncMock(side_effect=SyncAbortedByUser("Config sync aborted by user"))
+            mock_orchestrator.run = AsyncMock(side_effect=abort)
             mock_orchestrator_cls.return_value = mock_orchestrator
 
             exit_code = await _async_run_sync("target-host", mock_config)
 
-        assert exit_code != 0
+        return exit_code, " ".join(str(call.args[0]) for call in mock_console.print.call_args_list)
 
-        printed = " ".join(str(call.args[0]) for call in mock_console.print.call_args_list)
+    @pytest.mark.asyncio
+    async def test_user_abort_prints_single_calm_message_and_nonzero_exit(self) -> None:
+        """Orchestrator.run() raising SyncAbortedByUser -> one calm 'aborted' line."""
+        exit_code, printed = await self._printed(SyncAbortedByUser("the config sync was declined at its prompt"))
+
+        assert exit_code != 0
+        assert "aborted by user" in printed.lower()
+        assert "failed" not in printed.lower()
+
+    @pytest.mark.asyncio
+    async def test_a_tool_decided_abort_is_not_reported_as_the_users(self) -> None:
+        """#224 — nobody was asked about an unreadable registry, so the line must not say
+        the user aborted; it stays the neutral label and carries the repair instead."""
+        exit_code, printed = await self._printed(SyncAborted("package-snippets.yaml on nomad cannot be read"))
+
+        assert exit_code != 0
         assert "aborted" in printed.lower()
+        assert "user" not in printed.lower()
         assert "failed" not in printed.lower()
 
 

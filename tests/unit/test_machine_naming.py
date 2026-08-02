@@ -151,6 +151,7 @@ class TestOutcomeMessages:
             "ConvergeItemFailed",
             "JobSkipped",
             "ProbeFailed",
+            "SyncAborted",
             "SyncAbortedByUser",
             "SyncLockedError",
         }

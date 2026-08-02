@@ -35,7 +35,7 @@ from pcswitcher.jobs.packages.review import (
 )
 from pcswitcher.jobs.packages.state import SNIPPET_REGISTRY_RELPATH
 from pcswitcher.jobs.packages.sync_core import PackageItemFailures, PackagePlan
-from pcswitcher.models import CommandResult, Host, JobSkipped, SyncAbortedByUser, ValidationError
+from pcswitcher.models import CommandResult, Host, JobSkipped, SyncAborted, ValidationError
 from pcswitcher.orchestrator import Orchestrator
 
 # -- Real `apt-cache policy` output, verbatim ------------------------------------------
@@ -2447,7 +2447,7 @@ class TestSnippetRegistryOverwriteGuard:
         )
         job = ManualInstallsSyncJob(context)
 
-        with pytest.raises(SyncAbortedByUser):
+        with pytest.raises(SyncAborted):
             await job._push_snippet_registry()  # pyright: ignore[reportPrivateUsage]
 
         assert len(confirmer.calls) == 1
@@ -2644,7 +2644,7 @@ class TestSnippetRegistryOverwriteGuard:
         )
         job = ManualInstallsSyncJob(context)
 
-        with pytest.raises(SyncAbortedByUser, match=re.escape("package-snippets.yaml")):
+        with pytest.raises(SyncAborted, match=re.escape("package-snippets.yaml")):
             await job._push_snippet_registry()  # pyright: ignore[reportPrivateUsage]
 
         assert confirmer.calls == []
@@ -2669,7 +2669,7 @@ class TestSnippetRegistryOverwriteGuard:
         )
         job = ManualInstallsSyncJob(context)
 
-        with pytest.raises(SyncAbortedByUser, match=re.escape("package-snippets.yaml")):
+        with pytest.raises(SyncAborted, match=re.escape("package-snippets.yaml")):
             await job._push_snippet_registry()  # pyright: ignore[reportPrivateUsage]
 
         assert confirmer.calls == []
@@ -2745,7 +2745,7 @@ class TestSnippetRegistryOverwriteGuard:
         )
         job = ManualInstallsSyncJob(context)
 
-        with pytest.raises(SyncAbortedByUser):
+        with pytest.raises(SyncAborted):
             await job._push_snippet_registry()  # pyright: ignore[reportPrivateUsage]
 
         target.send_file.assert_not_called()

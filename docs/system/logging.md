@@ -153,7 +153,7 @@ As a pc-switcher user, I want TUI and file log output to carry timestamps, colou
 - **LOG-FR-EXCEPTION**: When a job raises an exception, the orchestrator MUST log the error at CRITICAL level with the job's name, record a FAILED `JobResult`, request termination of the currently-executing job (queued jobs never execute and do not receive termination requests), and halt sync immediately. These exceptions are excluded from that halt, each reported exactly once:
   - `PackageItemFailures` and `ProbeFailed` — logged CRITICAL and recorded FAILED as above, but NOT re-raised: each package job reviews and applies its own work, so one manager's failed items say nothing about another's already-approved work, and the remaining jobs still run.
   - `JobSkipped` — logged at WARNING, recorded SKIPPED, not re-raised.
-  - `SyncAbortedByUser` and `SyncLockedError` — passed through untouched to `Orchestrator.run()`, which logs each once at WARNING (never CRITICAL) and re-raises for the CLI.
+  - `SyncAborted` (including its `SyncAbortedByUser` subclass) and `SyncLockedError` — passed through untouched to `Orchestrator.run()`, which logs each once at WARNING (never CRITICAL) and re-raises for the CLI. The abort line says "by user" only for the subclass.
 
   Lineage: 001-FR-019
 

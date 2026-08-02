@@ -21,7 +21,7 @@ from rich.text import Text
 from pcswitcher.btrfs_snapshots import parse_older_than, run_snapshot_cleanup
 from pcswitcher.config import Configuration, ConfigurationError
 from pcswitcher.logger import get_latest_log_file, get_logs_directory
-from pcswitcher.models import SessionStatus, SyncAbortedByUser, SyncLockedError, SyncSession
+from pcswitcher.models import SessionStatus, SyncAborted, SyncAbortedByUser, SyncLockedError, SyncSession
 from pcswitcher.orchestrator import Orchestrator
 from pcswitcher.terminal import is_interactive
 from pcswitcher.version import Release, Version, find_one_version, get_highest_release, get_this_version
@@ -433,11 +433,14 @@ async def _async_run_sync(
             console.print("[yellow]Sync interrupted by user[/yellow]")
             return 130
 
-    except SyncAbortedByUser as e:
+    except SyncAborted as e:
         # The orchestrator already logged this once at WARNING; print a single
         # calm summary here instead of falling through to the red "Sync failed"
         # message, which would duplicate what the user just declined.
-        _print_labeled(console, "Sync aborted:", str(e), label_style="yellow")
+        # The label says "by user" only when the exception's own type says a human
+        # answered; pc-switcher's own decision to stop stays unattributed (#224).
+        label = "Sync aborted by user:" if isinstance(e, SyncAbortedByUser) else "Sync aborted:"
+        _print_labeled(console, label, str(e), label_style="yellow")
         return 1
 
     except SyncLockedError as e:

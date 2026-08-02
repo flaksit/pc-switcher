@@ -67,7 +67,7 @@ from pcswitcher.jobs.packages.review import (
 )
 from pcswitcher.jobs.packages.state import DecisionEntry, DecisionFile, filter_inert, marks_on_either
 from pcswitcher.jobs.packages.sync_core import ConvergeItemFailed, PackagePlan, PackageSyncJob
-from pcswitcher.models import CommandResult, FirstSyncScope, Host, LogLevel, SyncAbortedByUser, ValidationError
+from pcswitcher.models import CommandResult, FirstSyncScope, Host, LogLevel, SyncAborted, ValidationError
 from pcswitcher.sudoers import passwordless_sudo_hint
 
 
@@ -421,7 +421,7 @@ class AptSyncJob(PackageSyncJob):
         holds something at all, so an ordinary run pays nothing; the target's is the same
         single read `PKG-FR-REPO-DELETE`'s usage count uses.
 
-        `SyncAbortedByUser` for the same reason an unparsable snippet registry raises it
+        `SyncAborted` for the same reason an unparsable snippet registry raises it
         (`PKG-FR-REGISTRY-CONSENT`): the run must end for the user to repair something by
         hand, which is not this job failing and not the tool breaking.
         """
@@ -434,7 +434,7 @@ class AptSyncJob(PackageSyncJob):
             if not names:
                 continue
             listed = ", ".join(sorted(names))
-            raise SyncAbortedByUser(
+            raise SyncAborted(
                 f"{machine} holds apt package(s) it does not have installed: {listed}. "
                 f"A hold on a package the machine lacks freezes nothing and refuses every later attempt to "
                 f"install it. Clear it on {machine} with `sudo apt-mark unhold {listed}`, then sync again."

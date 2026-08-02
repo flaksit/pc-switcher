@@ -25,7 +25,7 @@ import pytest
 
 from pcswitcher.config import Configuration
 from pcswitcher.logger import generate_log_filename
-from pcswitcher.models import LogLevel, SyncAbortedByUser
+from pcswitcher.models import LogLevel, SyncAborted
 from pcswitcher.orchestrator import Orchestrator
 
 
@@ -134,7 +134,7 @@ class TestOrchestratorCreatesUiBeforeLogging:
         """setup_logging is called with the orchestrator's own ui/console, not None.
 
         Drives the real run() with lock/connection phases stubbed and
-        _check_out_of_order patched to decline, so the fast SyncAbortedByUser
+        _check_out_of_order patched to decline, so the fast SyncAborted
         path is reached right after the UI-before-logging wiring runs,
         without needing SSH, snapshots, or jobs.
         """
@@ -154,7 +154,7 @@ class TestOrchestratorCreatesUiBeforeLogging:
         with (
             patch("pcswitcher.orchestrator.setup_logging", setup_logging_mock),
             patch("pcswitcher.orchestrator.TerminalUI", return_value=no_op_ui),
-            pytest.raises(SyncAbortedByUser),
+            pytest.raises(SyncAborted),
         ):
             await orchestrator.run()
 

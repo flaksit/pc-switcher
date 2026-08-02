@@ -21,6 +21,7 @@ __all__ = [
     "SessionStatus",
     "Snapshot",
     "SnapshotPhase",
+    "SyncAborted",
     "SyncAbortedByUser",
     "SyncSession",
     "ValidationError",
@@ -128,20 +129,35 @@ class DiskSpaceCriticalError(Exception):
         super().__init__(f"{hostname}: Disk space {free_space} below threshold {threshold}")
 
 
-class SyncAbortedByUser(Exception):
-    """Raised when the user declines a confirmation prompt during sync, or when the run
-    must end for the user to repair something by hand before syncing again — an install
-    snippet registry that cannot be parsed (`packages.state`) is the second kind.
+class SyncAborted(Exception):
+    """Raised when the run ends before it finished, deliberately and cleanly.
 
-    Represents expected control flow, not an unrecoverable error: a user
-    answering "no" to a confirmation is not a failure of the tool. Callers
-    MUST NOT log this at CRITICAL (see LogLevel.CRITICAL docstring); it is
-    caught separately from the generic exception path in both
-    Orchestrator.run() and the CLI so it is reported once, at WARNING.
+    Represents expected control flow, not an unrecoverable error: callers MUST NOT log
+    this at CRITICAL (see LogLevel.CRITICAL docstring); it is caught separately from the
+    generic exception path in both Orchestrator.run() and the CLI so it is reported once,
+    at WARNING.
+
+    This class is the TOOL's own decision to stop — a snippet registry that cannot be
+    parsed, an apt hold naming a package the machine does not have, a flatpak remote
+    filter that excludes an installed ref, a prompt nobody could answer. Nothing rendered
+    from it may say the user stopped the sync, because nobody was asked. Also the honest
+    choice where the site cannot tell: a `Confirmer` returns False both for a human
+    typing "n" and for a non-interactive run refused without anyone being asked.
+
+    Raise `SyncAbortedByUser` instead wherever a human actually answered something.
     """
 
     def __init__(self, message: str) -> None:
         super().__init__(message)
+
+
+class SyncAbortedByUser(SyncAborted):
+    """The user chose to stop: a declined confirmation, a "stop the sync" answer at a
+    review screen, or Ctrl-C at one.
+
+    A subclass rather than a sibling so every `except SyncAborted` catches both — the two
+    end the run identically and differ only in what may be SAID about them (#224).
+    """
 
 
 class JobSkipped(Exception):
@@ -168,7 +184,7 @@ class SyncLockedError(Exception):
 
     Represents an expected, retryable condition (another sync is in progress, or
     an orphaned holder left a stuck lock), not an unrecoverable crash. Like
-    SyncAbortedByUser, callers MUST NOT log this at CRITICAL; it is caught
+    SyncAborted, callers MUST NOT log this at CRITICAL; it is caught
     separately from the generic exception path in both Orchestrator.run() and the
     CLI so it is reported once, at WARNING, with its how-to-unblock guidance.
     """

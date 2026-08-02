@@ -26,7 +26,7 @@ from pcswitcher.jobs.packages.review import (
     _is_removal_direction,
 )
 from pcswitcher.jobs.packages.sync_core import PackageItemFailures
-from pcswitcher.models import CommandResult, Host, SyncAbortedByUser
+from pcswitcher.models import CommandResult, Host, SyncAborted
 from pcswitcher.orchestrator import Orchestrator
 from tests.unit.jobs.apt.helpers import (
     _CHANGED_VENDOR,
@@ -249,7 +249,7 @@ class TestAHoldWithoutItsPackageEndsTheRun:
         """
         context, _source, target = self._context(target_holds="ghost\n")
 
-        with pytest.raises(SyncAbortedByUser) as caught:
+        with pytest.raises(SyncAborted) as caught:
             await AptSyncJob(context).plan()
 
         assert "ghost" in str(caught.value)
@@ -262,7 +262,7 @@ class TestAHoldWithoutItsPackageEndsTheRun:
         """B17 — the same on Atlas, which the run would otherwise replicate onto Nomad."""
         context, _source, _target = self._context(source_holds="ghost\n")
 
-        with pytest.raises(SyncAbortedByUser) as caught:
+        with pytest.raises(SyncAborted) as caught:
             await AptSyncJob(context).plan()
 
         assert "ghost" in str(caught.value)
@@ -273,7 +273,7 @@ class TestAHoldWithoutItsPackageEndsTheRun:
         """B18 — pure bookkeeping on one machine is still bookkeeping: the run ends."""
         context, _source, _target = self._context(target_holds="ghost\n", target_installed="pkg-a")
 
-        with pytest.raises(SyncAbortedByUser):
+        with pytest.raises(SyncAborted):
             await AptSyncJob(context).plan()
 
     @pytest.mark.asyncio

@@ -85,7 +85,7 @@ from pcswitcher.models import (
     CommandResult,
     FirstSyncScope,
     Host,
-    SyncAbortedByUser,
+    SyncAborted,
     ValidationError,
 )
 from pcswitcher.redaction import redact_credentials
@@ -387,7 +387,9 @@ class ManualInstallsSyncJob(PackageSyncJob):
         as before. Otherwise the target holds an entry that a wholesale overwrite would LOSE
         (absent from the source) or CHANGE; the user is shown exactly which entries and must
         confirm. Declining, or a non-interactive run that cannot confirm, aborts the whole
-        sync (`SyncAbortedByUser`) so the user can consolidate the two registries by hand and
+        sync (`SyncAborted` — the confirmer answers False for both, so this site cannot tell
+        a decline from a refusal nobody was asked about) so the user can consolidate the two
+        registries by hand and
         re-run — the tool never silently discards a snippet only the target has.
 
         The comparison is the whole `Snippet`, not its body alone: `PKG-FR-REGISTRY-CONSENT`
@@ -430,8 +432,8 @@ class ManualInstallsSyncJob(PackageSyncJob):
             log_extra={"job": self.name, "host": "source"},
         )
         if not approved:
-            raise SyncAbortedByUser(
-                f"snippet registry overwrite declined: {self.machines.target} holds snippet entries "
+            raise SyncAborted(
+                f"snippet registry overwrite not approved: {self.machines.target} holds snippet entries "
                 f"absent from or differing in {self.machines.source}'s that a wholesale push would lose "
                 "or change; consolidate the two registries by hand and re-run"
             )

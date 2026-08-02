@@ -199,7 +199,8 @@ class SyncSession:
 | `ValidationError` | dataclass (`job`, `host`, `message`) | System-state validation failure on one machine. |
 | `FirstSyncScope` | dataclass (`job_name`, `scope_items`, `mechanism`) | A `SyncJob`'s self-described first-sync overwrite scope (ADR-015). |
 | `DiskSpaceCriticalError` | exception | Free space fell below the critical threshold during the run. |
-| `SyncAbortedByUser` | exception | The user declined a confirmation. Reported once at WARNING, never CRITICAL. |
+| `SyncAborted` | exception | pc-switcher ended the run on its own, or the site cannot tell whether a human answered. Reported once at WARNING, never CRITICAL. |
+| `SyncAbortedByUser` | exception (`SyncAborted`) | A human chose to stop. The only kind anything may report as the user's doing. |
 | `SyncLockedError` | exception | This or the target machine is already in a sync. Reported at WARNING with unblock guidance. |
 | `JobSkipped` | exception | The job did nothing and said so before its first mutating command. |
 

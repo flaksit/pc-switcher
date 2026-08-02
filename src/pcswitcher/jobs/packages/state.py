@@ -50,7 +50,7 @@ import yaml
 
 from pcswitcher.config_sync import CONFIG_REMOTE_DIR
 from pcswitcher.jobs.packages.items import ItemClass
-from pcswitcher.models import CommandResult, SyncAbortedByUser
+from pcswitcher.models import CommandResult, SyncAborted
 
 if TYPE_CHECKING:
     from pcswitcher.executor import Executor, RemoteExecutor
@@ -341,7 +341,7 @@ def _serialize_snippets(entries: Mapping[str, Snippet]) -> str:
 _UNREADABLE = (yaml.YAMLError, KeyError, TypeError, ValueError, AttributeError)
 
 
-def _unreadable_registry(display_path: str, machine: str | None, exc: Exception) -> SyncAbortedByUser:
+def _unreadable_registry(display_path: str, machine: str | None, exc: Exception) -> SyncAborted:
     """The abort a registry that cannot be parsed raises (`PKG-FR-REGISTRY-CONSENT`).
 
     An absent or empty registry means "no snippets"; a file that is there and cannot be read
@@ -349,9 +349,12 @@ def _unreadable_registry(display_path: str, machine: str | None, exc: Exception)
     silently discard every entry the other machine holds. The run ends instead of the job
     failing, because the repair is a hand edit on one machine and the next sync is what
     should see the result — the same reason declining the overwrite question ends the run.
+
+    Plain `SyncAborted`, not the ByUser subclass: nobody was asked anything here, so
+    nothing rendered from it may report the user as having stopped the sync (#224).
     """
     where = f" on {machine}" if machine else ""
-    return SyncAbortedByUser(
+    return SyncAborted(
         f"the install-snippet registry {display_path}{where} cannot be read as a registry ({exc}); "
         "repair or delete that file, then start a new sync"
     )

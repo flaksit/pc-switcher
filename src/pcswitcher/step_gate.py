@@ -41,7 +41,7 @@ from rich.prompt import Prompt
 from rich.text import Text
 
 from pcswitcher.confirmer import PausableUI
-from pcswitcher.models import Host, SyncAbortedByUser
+from pcswitcher.models import Host, SyncAborted, SyncAbortedByUser
 
 __all__ = ["StepGate", "TerminalUIStepGate"]
 
@@ -67,8 +67,9 @@ class StepGate(Protocol):
             None when the user chose to proceed.
 
         Raises:
-            SyncAbortedByUser: The user aborted, or the prompt could not be answered
-                (EOF / Ctrl-C). Never swallowed into a silent "proceed".
+            SyncAbortedByUser: The user typed "abort".
+            SyncAborted: The prompt could not be answered (EOF / Ctrl-C), so nobody
+                decided anything. Never swallowed into a silent "proceed".
         """
         ...
 
@@ -127,8 +128,10 @@ class TerminalUIStepGate:
             )
         except (EOFError, KeyboardInterrupt) as exc:
             # Unanswerable is not approval: the same rule the review applies to Ctrl-C.
+            # Plain `SyncAborted` — an EOF means nobody was there to answer at all, so
+            # this end of the run is not one to put on the user (#224).
             self._logger.warning("Confirmation prompt interrupted; aborting sync", extra=extra)
-            raise SyncAbortedByUser(f"{job}: confirmation prompt interrupted before {description}") from exc
+            raise SyncAborted(f"{job}: confirmation prompt interrupted before {description}") from exc
         finally:
             self._ui.resume()
 

@@ -40,7 +40,7 @@ from pcswitcher.jobs.packages.review import (
     _is_removal_direction,  # pyright: ignore[reportPrivateUsage]
 )
 from pcswitcher.jobs.packages.sync_core import ConvergeItemFailed, PackageItemFailures, PackagePlan
-from pcswitcher.models import CommandResult, Host, SyncAbortedByUser, ValidationError
+from pcswitcher.models import CommandResult, Host, SyncAborted, ValidationError
 from pcswitcher.orchestrator import Orchestrator
 
 # `flatpak list --app --columns=application,version,origin,installation,ref` has NO
@@ -3492,7 +3492,7 @@ class TestRemoteFilterReplicates:
         )
         job = FlatpakSyncJob(context)
 
-        with pytest.raises(SyncAbortedByUser) as raised:
+        with pytest.raises(SyncAborted) as raised:
             _ = await job.plan()
 
         message = str(raised.value)

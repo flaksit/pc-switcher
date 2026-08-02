@@ -222,7 +222,7 @@ from pcswitcher.models import (
     Host,
     LogLevel,
     ProgressUpdate,
-    SyncAbortedByUser,
+    SyncAborted,
     ValidationError,
 )
 from pcswitcher.sudoers import passwordless_sudo_hint
@@ -1693,7 +1693,7 @@ class FlatpakSyncJob(PackageSyncJob):
         to carry logic for: the same machine says "install this from there" and "nothing from
         there may be installed". Ending the run here, before this job has changed anything and
         before the user is asked to decide anything, is what puts the repair in front of them
-        (`SyncAbortedByUser`, the same end an unparsable snippet registry gets).
+        (`SyncAborted`, the same end an unparsable snippet registry gets).
 
         What a remote offers under its filter is flatpak's own business, so flatpak is asked
         rather than imitated: one listing per filtered remote, whatever the source's apps from
@@ -1718,7 +1718,7 @@ class FlatpakSyncJob(PackageSyncJob):
             offered = offered_by[remote.item_id]
             if offered is None or f"{_APP_REF_PREFIX}{ref.ref}" in offered:
                 continue
-            raise SyncAbortedByUser(
+            raise SyncAborted(
                 f"{self.machines.source} has the {ref.scope}-scope flatpak {ref.ref} installed from the remote "
                 f"{ref.origin}, which does not offer it under the ref filter {remote.filter_path} that "
                 f"{self.machines.source} applies to that remote. That filter would be applied to "

@@ -55,6 +55,7 @@ from pcswitcher.models import (
     JobStatus,
     SessionStatus,
     SnapshotPhase,
+    SyncAborted,
     SyncAbortedByUser,
     SyncLockedError,
     SyncSession,
@@ -156,7 +157,7 @@ def _unwrap_taskgroup_error(exc: BaseException) -> BaseException:
     sub-exceptions)" — is meaningless to users and developers alike. Jobs run
     sequentially, so a failed sync normally has a single underlying cause; this
     returns it so callers can report the real reason. Expected control-flow
-    exceptions (an aborted-by-user or lock conflict raised from within a job)
+    exceptions (an abort or a lock conflict raised from within a job)
     are preferred over other leaves so they still reach their dedicated WARNING
     handlers instead of the generic CRITICAL "Sync failed" path. A non-group
     exception is returned unchanged.
@@ -174,7 +175,7 @@ def _unwrap_taskgroup_error(exc: BaseException) -> BaseException:
             leaves.append(current)
 
     for leaf in leaves:
-        if isinstance(leaf, (SyncAbortedByUser, SyncLockedError)):
+        if isinstance(leaf, (SyncAborted, SyncLockedError)):
             return leaf
     return leaves[0] if leaves else exc
 
@@ -505,7 +506,10 @@ class Orchestrator:
             # so we can read the target's sync-history over SSH. Always executes;
             # --allow-out-of-order only bypasses the W2/W3 confirmation, not the read.
             if not await self._check_out_of_order():
-                raise SyncAbortedByUser(f"Sync aborted at the sync-order check on {self._target_hostname}")
+                # Not `SyncAbortedByUser`: the confirmer returns False both for a user
+                # typing "n" and for a non-interactive run it refused without asking
+                # anyone, and this site cannot tell the two apart (#224).
+                raise SyncAborted(f"Sync aborted at the sync-order check on {self._target_hostname}")
             self._ui.set_current_step(SyncStep.OUT_OF_ORDER_CHECK, "Out-of-order check")
 
             # SyncStep 5: Discover and validate jobs
@@ -571,14 +575,18 @@ class Orchestrator:
             self._logger.warning("Sync interrupted by user", extra={"job": "orchestrator", "host": "source"})
             raise
 
-        except SyncAbortedByUser as e:
-            # A declined confirmation is expected control flow, not a failure:
-            # log once at WARNING (never CRITICAL) and re-raise so the CLI can
-            # set a non-zero exit code without re-printing a "failed" message.
+        except SyncAborted as e:
+            # A deliberate stop is expected control flow, not a failure: log once at
+            # WARNING (never CRITICAL) and re-raise so the CLI can set a non-zero exit
+            # code without re-printing a "failed" message. Only the ByUser subclass may
+            # say the user did it — pc-switcher stopping on its own (an unreadable
+            # registry, a prompt nobody could answer) must not be reported as their
+            # decision (#224).
             session.status = SessionStatus.ABORTED
             session.ended_at = datetime.now(UTC)
             session.error_message = str(e)
-            self._logger.warning("Sync aborted by user: %s", e, extra={"job": "orchestrator", "host": "source"})
+            what = "Sync aborted by user" if isinstance(e, SyncAbortedByUser) else "Sync aborted"
+            self._logger.warning("%s: %s", what, e, extra={"job": "orchestrator", "host": "source"})
             raise
 
         except SyncLockedError as e:
@@ -709,7 +717,9 @@ class Orchestrator:
         3. Target config matches: Skip silently
 
         Raises:
-            SyncAbortedByUser: If the user declines the config sync confirmation.
+            SyncAbortedByUser: If the user declines the config sync confirmation. Only
+                a human's answer reaches that branch, so it is never the plain
+                `SyncAborted`.
             RuntimeError: If config sync fails for a reason other than user decline.
         """
         assert self._remote_executor is not None
@@ -729,7 +739,10 @@ class Orchestrator:
         )
 
         if not should_continue:
-            raise SyncAbortedByUser("Config sync aborted by user")
+            # Every path to False here is a prompt a human answered (`--yes` and
+            # `--dry-run` both return True without asking), so this one IS the user's.
+            # The sentence does not repeat that: the renderer prefixes "by user".
+            raise SyncAbortedByUser("the config sync was declined at its prompt")
 
         self._logger.info("Configuration sync completed", extra={"job": "orchestrator", "host": "target"})
 
@@ -1256,7 +1269,7 @@ class Orchestrator:
             # own message ("unhandled errors in a TaskGroup (N sub-exceptions)")
             # is useless. Re-raise the underlying cause so run()'s handlers and
             # the CLI report the real reason — and so a job-raised
-            # SyncAbortedByUser/SyncLockedError still reaches its WARNING handler.
+            # SyncAborted/SyncLockedError still reaches its WARNING handler.
             raise _unwrap_taskgroup_error(eg) from None
 
         return results
@@ -1318,7 +1331,7 @@ class Orchestrator:
                             extra={"job": "orchestrator", "host": "source"},
                         )
 
-                    except SyncAbortedByUser:
+                    except SyncAborted:
                         # A job-level declined confirmation (e.g. FolderSyncJob's
                         # first-sync overwrite gate via the shared confirmer) is
                         # expected control flow, not a job failure. Let it pass
@@ -1555,7 +1568,7 @@ class Orchestrator:
         the gate description names the value being written back.
 
         Swallows a FAILED restore (teardown must complete every step regardless — the timed
-        hold self-expires) but never a DECLINED one: `SyncAbortedByUser` is re-raised ahead
+        hold self-expires) but never a DECLINED one: `SyncAborted` is re-raised ahead
         of the broad handler, because a user answering "abort" is a decision to honor, not
         an error to absorb. `_cleanup` decides how far that abort travels.
         """
@@ -1582,7 +1595,7 @@ class Orchestrator:
                     result.stderr.strip(),
                     extra={"job": "orchestrator", "host": host.value},
                 )
-        except SyncAbortedByUser:
+        except SyncAborted:
             raise
         except Exception as e:
             # Teardown must not be derailed by a failed restore (e.g. the connection is
@@ -1619,7 +1632,7 @@ class Orchestrator:
         # still up (decision 4). Best-effort and idempotent — a no-op when no hold was set.
         try:
             await self._restore_snap_autorefresh()
-        except SyncAbortedByUser as e:
+        except SyncAborted as e:
             # Declining the restore at the --confirm-each-command gate is honored: the write
             # does not happen. It stops there and nowhere else — everything below this point
             # RELEASES resources (target lock, SSH connection, source lock, event bus, UI)

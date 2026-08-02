@@ -20,7 +20,7 @@ from rich.console import Console
 from pcswitcher.executor import Executor, LocalExecutor, RemoteExecutor, active_job
 from pcswitcher.jobs.packages.items import ItemClass
 from pcswitcher.jobs.packages.state import DecisionEntry, DecisionFile, Snippet, SnippetRegistry
-from pcswitcher.models import Host, SyncAbortedByUser
+from pcswitcher.models import Host, SyncAborted, SyncAbortedByUser
 from pcswitcher.step_gate import StepGate, TerminalUIStepGate
 
 
@@ -84,8 +84,10 @@ class TestTerminalUIStepGate:
         """J165, H155 — an interrupted prompt is an abort, not an approval — the one thing that must
         never silently succeed."""
         gate, ui = _make_gate()
-        with patch("rich.prompt.Prompt.ask", side_effect=interrupt), pytest.raises(SyncAbortedByUser):
+        # The base class, never `SyncAbortedByUser`: nobody answered this prompt (#224).
+        with patch("rich.prompt.Prompt.ask", side_effect=interrupt), pytest.raises(SyncAborted) as caught:
             await gate.confirm_action(job="snap_sync", host=Host.SOURCE, description="d", command="c")
+        assert not isinstance(caught.value, SyncAbortedByUser)
         ui.resume.assert_called_once()
 
     async def test_the_panel_names_the_machine_by_hostname(self) -> None:

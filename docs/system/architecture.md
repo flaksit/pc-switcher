@@ -389,7 +389,7 @@ The two `DiskSpaceMonitorJob`s run concurrently in the same `TaskGroup` and are 
 
 ### Failure Isolation
 
-A job raising `PackageItemFailures` or `ProbeFailed` records a FAILED result and the loop continues; `JobSkipped` records SKIPPED and continues; `SyncAbortedByUser` and `SyncLockedError` propagate as WARNING-level control flow; every other exception aborts the run. See [Job outcomes](core.md#job-outcomes).
+A job raising `PackageItemFailures` or `ProbeFailed` records a FAILED result and the loop continues; `JobSkipped` records SKIPPED and continues; `SyncAborted` (and its `SyncAbortedByUser` subclass) and `SyncLockedError` propagate as WARNING-level control flow; every other exception aborts the run. See [Job outcomes](core.md#job-outcomes).
 
 ## Validation Phases
 

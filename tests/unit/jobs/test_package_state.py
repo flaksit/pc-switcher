@@ -42,7 +42,7 @@ from pcswitcher.jobs.packages.state import (
     filter_inert,
 )
 from pcswitcher.jobs.packages.sync_core import PackagePlan
-from pcswitcher.models import CommandResult, Host, SyncAbortedByUser
+from pcswitcher.models import CommandResult, Host, SyncAborted
 from tests.unit.jobs.test_package_sync_core import FakeItem, FakeSyncJob
 
 # ---------------------------------------------------------------------------
@@ -880,7 +880,7 @@ class TestSnippetRegistry:
         executor.run_command = AsyncMock(return_value=CommandResult(0, "snippets: [\n  - broken\n", ""))
         registry = SnippetRegistry(executor, "nomad")
 
-        with pytest.raises(SyncAbortedByUser) as exc_info:
+        with pytest.raises(SyncAborted) as exc_info:
             await registry.load()
 
         message = str(exc_info.value)
