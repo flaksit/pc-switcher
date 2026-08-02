@@ -426,6 +426,43 @@ async def test_resume_forces_redraw_of_state_mutated_while_paused() -> None:
         ui.stop()
 
 
+async def test_pause_leaves_the_last_frame_on_screen() -> None:
+    """pause() must stop non-transiently so the frame stays above the question (#225).
+
+    A transient stop erased the whole display before the caller printed its
+    prompt, so the user answered on a blank screen with no idea where the run
+    was. The frozen frame is the run's context; keeping it costs one stale
+    duplicate per prompt, which resume() then draws below rather than over.
+    """
+    output = StringIO()
+    console = Console(file=output, force_terminal=True, width=120)
+
+    ui = TerminalUI(console=console, max_log_lines=5, total_steps=5)
+
+    ui.start()
+    try:
+        ui.set_current_step(4, "Package sync")
+        ui.add_log_message("12:00:00 [INFO] [apt] resolving packages")
+        await _wait_for_render(output, "Step 4/5")
+
+        # Capture only what pause() itself emits.
+        output.truncate(0)
+        output.seek(0)
+        ui.pause()
+        frozen = output.getvalue()
+
+        assert "Step 4/5" in frozen and "Package sync" in frozen, "status bar must survive the pause"
+        assert "Recent Logs" in frozen and "resolving packages" in frozen, "log panel must survive the pause"
+
+        # Rich's transient teardown emits show-cursor followed by a run of
+        # cursor-up/erase-line controls that wipe the frame just drawn. Nothing
+        # may follow the show-cursor, or the frame the assertions above found in
+        # the buffer would not actually be on the user's screen.
+        assert frozen.rsplit("\x1b[?25h", 1)[-1].strip() == "", "pause() must not erase the frame it just drew"
+    finally:
+        ui.stop()
+
+
 async def test_core_us_tui_as3_progress_and_connection_events() -> None:
     """Test progress and connection event handling via EventBus.
 

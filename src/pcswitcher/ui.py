@@ -204,6 +204,8 @@ class TerminalUI:
             self._render(),
             console=self._console,
             refresh_per_second=10,  # 10 Hz refresh rate
+            # Load-bearing for pause(): a non-transient stop leaves the last frame
+            # on screen as context above a prompt.
             transient=False,
         )
 
@@ -215,17 +217,27 @@ class TerminalUI:
         self._live.start()
 
     def pause(self) -> None:
-        """Stop and erase the live region around a blocking prompt, discarding the instance.
+        """Stop the live region around a blocking prompt, leaving its last frame on screen.
 
         Used around confirmation prompts: the live region is handed back to a
-        blocking `Prompt.ask()` call, then reclaimed by resume(). The stop is
-        transient so the pre-pause frame is erased (not left behind as a stale
-        duplicate panel) before the prompt's warning is printed into the freed
-        space. The instance is then discarded so resume() rebuilds a fresh one —
-        see _build_live for why reuse corrupts the post-resume cursor position.
+        blocking prompt, then reclaimed by resume(). The stop is deliberately
+        NOT transient — the final frame (status bar, progress bars, Recent Logs)
+        stays in the scrollback directly above the question, so the user can see
+        where the run is while answering. Erasing it, as this used to, left them
+        answering on a blank screen with no context at all; the cost is one
+        stale frame per prompt, which resume() draws a fresh live region below
+        rather than over.
+
+        Keeping the display *live* through the prompt is not an option: Rich's
+        Live anchors its region at the cursor and rewrites upward on every
+        refresh tick, so it erases the prompt line and the characters the user
+        types into it (verified against a pty). questionary/prompt_toolkit
+        prompts, which seize the terminal outright, fare worse.
+
+        The instance is discarded so resume() rebuilds a fresh one — see
+        _build_live for why reuse corrupts the post-resume cursor position.
         """
         if self._live is not None:
-            self._live.transient = True
             self._live.stop()
             self._live = None
             self._paused = True
