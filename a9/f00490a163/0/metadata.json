@@ -1,0 +1,66 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "a9f00490a163",
+  "session_id": "a6fdf859-1f12-4daf-94eb-8369ba71837c",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-02T15:17:18.772398344Z",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "src/pcswitcher/ui.py",
+    "tests/unit/ui/test_terminal_ui.py"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "6b8a4418d8b0",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 37,
+    "cache_creation_tokens": 145017,
+    "cache_read_tokens": 1238010,
+    "output_tokens": 27191,
+    "api_call_count": 19
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-02T15:17:18.740196861Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 7,
+    "total_committed": 0,
+    "total_lines_changed": 7,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 190,
+      "user_lines_removed": 28,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9,
+        "src/pcswitcher/jobs/apt_sync/messages.py": 12,
+        "src/pcswitcher/jobs/packages/decision_list.py": 24,
+        "src/pcswitcher/jobs/packages/review.py": 28,
+        "src/pcswitcher/ui.py": 19,
+        "tests/manual/review_harness.py": 8,
+        "tests/unit/jobs/apt/test_apt_collateral.py": 4,
+        "tests/unit/jobs/test_decision_list.py": 38,
+        "tests/unit/jobs/test_package_review.py": 11,
+        "tests/unit/ui/test_terminal_ui.py": 37
+      },
+      "user_removed_per_file": {
+        "src/pcswitcher/jobs/apt_sync/messages.py": 7,
+        "src/pcswitcher/jobs/packages/decision_list.py": 1,
+        "src/pcswitcher/jobs/packages/review.py": 4,
+        "src/pcswitcher/ui.py": 7,
+        "tests/manual/review_harness.py": 4,
+        "tests/unit/jobs/apt/test_apt_collateral.py": 3,
+        "tests/unit/jobs/test_package_review.py": 2
+      }
+    }
+  ]
+}
