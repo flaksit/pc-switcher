@@ -1543,8 +1543,12 @@ class Orchestrator:
             # the SAME command text, one per host, so the DEBUG trace shows the identical
             # `snap set system refresh.hold` twice; a single "on both hosts" summary left a
             # reader grepping the log unable to tell that pair from one pause applied twice.
+            # The line also states its owner and its span (#233): the pause happens before
+            # the first job, which read as an unexplained stop with no component behind it.
             self._logger.info(
-                "Pausing snapd auto-refresh on %s for the sync window",
+                "Pausing snapd auto-refresh on %s for the whole run — held by the orchestrator, not by "
+                "snap_sync alone, because snap_sync converges each snap's revision and folder_sync then "
+                "mirrors that revision's data directory; a refresh between the two drops it from the mirror",
                 self._machine_name(host),
                 extra={"job": "orchestrator", "host": host.value},
             )

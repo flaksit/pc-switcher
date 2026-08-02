@@ -175,6 +175,25 @@ class TestHoldEngaged:
         assert any(TARGET_MACHINE in line for line in announcements)
 
     @pytest.mark.asyncio
+    async def test_the_announcement_names_its_owner_and_why_it_spans_the_run(self) -> None:
+        """#233 — the pause fires before the first job, so the line that announces it has to
+        say who is holding it and why it is not scoped to the snap job: folder_sync mirrors
+        each snap's data directory by the revision snap_sync converged, so a refresh between
+        the two silently drops that directory from the mirror.
+        """
+        orchestrator, _source, _target = make_orchestrator(snap_sync_enabled=True)
+
+        await orchestrator._hold_snap_autorefresh()  # pyright: ignore[reportPrivateUsage]
+
+        announcements = [line for line in infos_of(orchestrator) if "Pausing snapd auto-refresh" in line]
+        assert announcements
+        for line in announcements:
+            assert "whole run" in line
+            assert "orchestrator" in line
+            assert "snap_sync" in line
+            assert "folder_sync" in line
+
+    @pytest.mark.asyncio
     async def test_capture_is_read_only_and_precedes_the_set(self) -> None:
         """E73 — the existing policy is read, read-only, before anything is written."""
         orchestrator, source, _target = make_orchestrator(snap_sync_enabled=True)
