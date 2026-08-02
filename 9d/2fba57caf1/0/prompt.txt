@@ -1,0 +1,1 @@
+update intro comment of @tests/integration/scripts/internal/vm-test-fixtures.sh so it tells explicitly what is installed/configured, in situation without and with "--with-app"
