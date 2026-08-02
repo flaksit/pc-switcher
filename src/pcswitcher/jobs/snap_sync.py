@@ -301,10 +301,12 @@ def _change_diff(item_id: str, source_item: SnapItem, target_item: SnapItem, mac
     (`PKG-FR-NO-MARK-ON-SNAP-REVISION`): what the user is deciding is whether their machine's
     revision is overwritten, and "atlas has 20, nomad has 15" leaves them to work out which
     of the two survives. Naming each facet is still required — "20" says nothing on its own
-    about whether it is a revision or a channel.
+    about whether it is a revision or a channel — and so is naming where the new value comes
+    from, since the line otherwise stated a revision the target is moved to without saying
+    whose it is.
     """
     detail = "; ".join(
-        f"overwrites {facet} {target_value} on {machines.target} with {facet} {source_value}"
+        f"overwrites {facet} {target_value} on {machines.target} with {facet} {source_value} from {machines.source}"
         for facet, source_value, target_value in (
             ("revision", source_item.revision, target_item.revision),
             ("channel", source_item.channel, target_item.channel),

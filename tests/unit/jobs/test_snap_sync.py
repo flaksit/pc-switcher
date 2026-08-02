@@ -264,8 +264,8 @@ class TestDiff:
 
         beta = next(d for d in plan.diffs if d.item_id == "snap:beta")
         assert beta.detail == (
-            "overwrites revision 15 on target-host with revision 20; "
-            "overwrites channel latest/stable on target-host with channel latest/edge"
+            "overwrites revision 15 on target-host with revision 20 from source-host; "
+            "overwrites channel latest/stable on target-host with channel latest/edge from source-host"
         )
 
     @pytest.mark.asyncio
@@ -786,8 +786,8 @@ class TestAFullSnapReview:
 
         change_group = next(g for g in plan.groups if any(e.item_id == "snap:beta" for e in g.entries))
 
-        assert change_group.title == "Change snap packages"
-        assert [e.action_label for e in change_group.entries] == ["change"]
+        assert change_group.title == "Align snap package versions"
+        assert [e.action_label for e in change_group.entries] == ["align"]
         assert {e.item_id for e in change_group.entries} == {"snap:beta"}
         assert not _is_removal_direction(change_group.action)
 
@@ -806,6 +806,9 @@ class TestAFullSnapReview:
         assert not _is_removal_direction(change_group.action)
         options = _options_for(change_group, source_hostname="source-host", target_hostname="target-host")
         assert [option.value for option in options] == [Decision.APPLY, Decision.SKIP_ONCE]
+        # #229: the act names what the run does to the snap. "change" said only that
+        # something moved.
+        assert options[0].word == "align"
 
     @pytest.mark.asyncio
     async def test_a_forced_permanent_answer_on_a_revision_change_records_nothing(self) -> None:

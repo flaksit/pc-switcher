@@ -167,6 +167,18 @@ _ACTION_VOCABULARY: dict[tuple[ItemClass, DiffAction], str] = {
     (ItemClass.APT_CONFIG, DiffAction.CHANGE): "update",
     (ItemClass.APT_CONFIG, DiffAction.REMOVE): "delete",
     (ItemClass.SNAP_CHANNEL, DiffAction.CHANGE): "retrack",
+    # Without this the verb fell through to the bare `DiffAction` value, and the one snap
+    # question in a run read "Change snap packages" / "<y> change" — which says nothing
+    # about what is changed. What the run does is put the target's copy on the source's
+    # revision and channel, and "align" is that.
+    (ItemClass.SNAP, DiffAction.CHANGE): "align",
+}
+
+# What a group's title calls the things it lists, when the ACTION changes the noun too.
+# `_ITEM_CLASS_NOUN` cannot say this: the same class's install and removal groups ARE about
+# the packages, and only the change group is about their versions.
+_ACTION_CLASS_NOUN: dict[tuple[ItemClass, DiffAction], str] = {
+    (ItemClass.SNAP, DiffAction.CHANGE): "snap package versions",
 }
 
 # What a group's title calls the things it lists, when they are not packages. A verb alone
@@ -399,7 +411,9 @@ class PackageSyncJob(SyncJob):
         never share a group with installs. The title's verb and every entry's
         `action_label` come from `_ACTION_VOCABULARY`, keyed by the group's own item class.
         `_ITEM_CLASS_NOUN` does the same for the title's OBJECT, so the one reviewed class
-        that is not a package — `/etc/apt/apt.conf.d` — is not announced as one. Grouping by
+        that is not a package — `/etc/apt/apt.conf.d` — is not announced as one, and
+        `_ACTION_CLASS_NOUN` overrides it where one action's group is about something
+        narrower than the class itself (a snap CHANGE moves versions, not packages). Grouping by
         item class as well as action is what keeps that verb correct when one action mixes
         item classes; the group's `action` value is normally the raw `DiffAction`, so
         add-direction stays default-checked and remove-direction lands in its own unticked
@@ -445,7 +459,7 @@ class PackageSyncJob(SyncJob):
                 default_verb = "report" if action == DiffAction.REPORT_ONLY else action.value
                 verb = _ACTION_VOCABULARY.get((item_class, action), default_verb)
                 default_noun = f"{self.manager_id} {_MANAGER_NOUN.get(self.manager_id, 'packages')}"
-                noun = _ITEM_CLASS_NOUN.get(item_class, default_noun)
+                noun = _ACTION_CLASS_NOUN.get((item_class, action)) or _ITEM_CLASS_NOUN.get(item_class, default_noun)
                 title = f"{verb.capitalize()} {noun}"
                 note = None
                 if cause is not None:
