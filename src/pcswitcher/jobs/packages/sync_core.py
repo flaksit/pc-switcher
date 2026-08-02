@@ -789,6 +789,18 @@ class PackageSyncJob(SyncJob):
     async def _converge_one(
         self, diff: ItemDiff, failures: list[tuple[ItemDiff, str]], declined: list[tuple[ItemDiff, str]]
     ) -> None:
+        """Converge one diff and record what became of it (`PKG-FR-LOG-ACTIONS`).
+
+        An applied item's line names the act, the item, the manager and the machine the act
+        happened on, because none of those is recoverable from the rest of the log: the
+        counts say how many changes landed and not which, the decision line says what was
+        answered rather than what was done, and the verbatim command trace is the package
+        manager's words rather than the tool's. A reader looking for one package should find
+        it by its own name, not by recognising a manager's command line.
+
+        The machine is always the target: every converge in every manager acts there, which
+        is why the host on all three of these records is `Host.TARGET`.
+        """
         try:
             result = await self.converge(diff)
         except ConvergeItemDeclined as exc:
@@ -805,7 +817,11 @@ class PackageSyncJob(SyncJob):
             return
 
         if result.success:
-            self._log(Host.TARGET, LogLevel.FULL, f"{diff.action.value} {diff.label}")
+            self._log(
+                Host.TARGET,
+                LogLevel.FULL,
+                f"{self.manager_id}: {diff.action.value} {diff.label} on {self.machines.target}",
+            )
         else:
             failures.append((diff, result.stderr))
             self._log(

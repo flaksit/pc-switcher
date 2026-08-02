@@ -31,6 +31,7 @@ from pcswitcher.jobs.packages.state import DecisionFile, filter_inert, marks_on_
 from pcswitcher.jobs.packages.sync_core import (  # pyright: ignore[reportPrivateUsage]
     _ACTION_VOCABULARY,
     BLOCK_ITEM_CLASSES,
+    ConvergeItemDeclined,
     PackageItemFailures,
     PackagePlan,
     PackageSyncJob,
@@ -602,6 +603,53 @@ class TestDecisionsReachTheLog:
 
         assert job.converge_calls == []
         assert "reviewed r1 (remove): skipped this run" in caplog.messages
+
+
+class _DecliningJob(FakeSyncJob):
+    """`FakeSyncJob` whose converge withdraws the item instead of applying it, the shape a
+    late collateral question produces (`PKG-FR-ASK-AGAIN`).
+    """
+
+    async def converge(self, diff: ItemDiff) -> CommandResult:
+        raise ConvergeItemDeclined(f"{diff.label} kept on this machine")
+
+
+class TestAppliedItemsReachTheLog:
+    """`PKG-FR-LOG-ACTIONS`: the counts say how many changes landed, the decision lines say
+    what was answered, and the command trace is the package manager's own words. None of
+    them says that a given item was converged, so each applied item says it itself.
+    """
+
+    @pytest.mark.asyncio
+    async def test_every_applied_item_is_named_with_its_manager_and_machine(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """J172 — one line per applied item, carrying all four of act, item, manager and machine."""
+        caplog.set_level(LogLevel.FULL.value, logger="pcswitcher.jobs.base")
+        job = FakeSyncJob(make_context())
+        diffs = (
+            _diff("i1", DiffAction.INSTALL),
+            _diff("r1", DiffAction.REMOVE, DiffClass.EXTRA_ON_TARGET),
+        )
+        _accept(job, diffs, {"i1": Decision.APPLY, "r1": Decision.APPLY})
+
+        await job.apply()
+
+        assert "fake: install i1 on target-host" in caplog.messages
+        assert "fake: remove r1 on target-host" in caplog.messages
+
+    @pytest.mark.asyncio
+    async def test_a_withdrawn_item_is_not_recorded_as_applied(self, caplog: pytest.LogCaptureFixture) -> None:
+        """J173 — an item whose converge withdrew it keeps its own line and gains no applied one."""
+        caplog.set_level(LogLevel.FULL.value, logger="pcswitcher.jobs.base")
+        job = _DecliningJob(make_context())
+        diffs = (_diff("i1", DiffAction.INSTALL),)
+        _accept(job, diffs, {"i1": Decision.APPLY})
+
+        await job.apply()
+
+        assert "i1 not applied: i1 kept on this machine" in caplog.messages
+        assert not any(message.startswith("fake: install") for message in caplog.messages)
 
 
 class TestEveryLogRecordCarriesItsMachine:

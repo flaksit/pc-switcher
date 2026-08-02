@@ -92,7 +92,7 @@ The user can abort the whole sync at any question, and aborting is never read as
 
 **Report** gives the job's outcome: success, skipped with the reason, or failed naming each failed item.
 
-The log holds more than the report. It names every item the job presented and the decision each one got, and every change the package manager made on its own behalf — the collateral the review never showed. The package manager's own output is kept verbatim in the debug log.
+The log holds more than the report. It names every item the job presented and the decision each one got; every change a job applied, a line each saying what was done, to what, by which manager and on which machine; and every change the package manager made on its own behalf — the collateral the review never showed. The package manager's own output is kept verbatim in the debug log.
 
 A credential embedded in a URL is withheld wherever the user or the log would otherwise see it — in a command, in a package manager's output, in a configuration file shown whole for a decision. A repository can carry its password in its own address, and a log file is readable by anyone with an account on the machine that wrote it.
 

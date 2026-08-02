@@ -191,6 +191,7 @@ Everything under `/etc/apt` that a run writes or deletes is backed up first, app
 The report tells you what a job did. The log is where you reconstruct why, months later, so it keeps more than the report does:
 
 - Every item a review offered you, with the answer you gave — including the ones you skipped, which change nothing and would otherwise leave no trace at all.
+- Every change that was applied, a line each: `apt: install sl (6.03-1) on nomad` — what was done, to what, by which manager and on which machine. The counts in the report say how many changes landed; this is where you find out which.
 - Every change a package manager made on its own behalf. Dependencies apt resolves for itself are never a question, but each one is named.
 - At `log.file: DEBUG`, every command pc-switcher ran and everything that command printed, verbatim. That is what makes a post-mortem read the tool's own words rather than a paraphrase. It is also why debug runs produce log files of several hundred megabytes.
 
