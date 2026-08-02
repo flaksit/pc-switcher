@@ -7,17 +7,29 @@
 # which every other snap depends on, so none is a safe subject) and flatpak is not
 # installed at all. This script creates those subjects.
 #
+# WITHOUT --with-app (the sync TARGET, pc2), the machine ends up with:
+#   - apt: snapd and flatpak installed;
+#   - snaps: `hello` and `hello-world`, from the stable channel, system scope;
+#   - flatpak remote `flathub`, user scope, added from Flathub's own `.flatpakrepo`;
+#   - flatpak runtime org.freedesktop.Platform/x86_64/25.08 plus its related refs, user
+#     scope;
+#   - NO `flathub-beta` remote and NO subject application — both are actively REMOVED if
+#     present, not merely skipped, so a crashed test run cannot leave them behind.
+#
+# WITH --with-app (the sync SOURCE, pc1), the machine ends up with everything above, and
+# additionally:
+#   - flatpak remote `flathub-beta`, user scope, from which nothing is ever installed;
+#   - the subject application io.github.fragglet.sdl_sopwith, user scope, from `flathub`.
+#
+# The asymmetry IS the fixture: it hands the suite a genuine source->target ref
+# divergence, and a genuine source-only remote that feeds no ref, without any test having
+# to manufacture them.
+#
 # Runs ON a test VM as the test user (passwordless sudo assumed), from two callers:
 #   - provision-test-infra.sh, before the baseline btrfs snapshot is taken, so the
 #     fixtures live in the baseline and cost nothing per test run;
 #   - tests/integration/conftest.py, which re-runs it before the package-sync module so
 #     the suite works against a VM whose baseline predates this script.
-#
-# The two machines get DIFFERENT flatpak fixtures: `--with-app` installs the test
-# application AND the second, deliberately unused remote, and is passed for pc1 (the
-# source) only — so a genuine source->target ref divergence, and a genuine source-only
-# remote that feeds no ref, both exist without any test having to manufacture them. Both
-# machines get the Flathub remote and the runtime.
 #
 # Idempotent and cheap on the satisfied path: every step is guarded by a presence check,
 # so a re-run over a baseline that already has everything is a handful of local queries.
