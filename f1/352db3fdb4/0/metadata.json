@@ -1,0 +1,42 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "f1352db3fdb4",
+  "session_id": "a6fdf859-1f12-4daf-94eb-8369ba71837c",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-02T15:18:10.850005911Z",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    "src/pcswitcher/jobs/packages/review.py",
+    "tests/unit/jobs/test_package_review.py",
+    "docs/jobs/package-sync.md",
+    "src/pcswitcher/jobs/packages/decision_list.py",
+    "src/pcswitcher/jobs/apt_sync/messages.py",
+    "tests/unit/jobs/apt/test_apt_collateral.py",
+    "tests/unit/jobs/test_decision_list.py"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "6b8a4418d8b0",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 37,
+    "cache_creation_tokens": 145017,
+    "cache_read_tokens": 1238010,
+    "output_tokens": 27191,
+    "api_call_count": 19
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-02T15:18:10.81671262Z",
+    "agent_lines": 118,
+    "agent_removed": 18,
+    "human_added": 12,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 130,
+    "total_lines_changed": 156,
+    "agent_percentage": 87.17948717948718,
+    "metric_version": 2
+  }
+}
