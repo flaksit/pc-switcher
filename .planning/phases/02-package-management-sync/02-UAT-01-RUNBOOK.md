@@ -67,7 +67,7 @@ sudo sed -i 's/^Types:/Enabled: no\nTypes:/' /etc/apt/sources.list.d/99-pcsw-inu
 sudo snap remove hello-world
 sudo snap refresh --revision=<that second revision> hello
 flatpak remote-add --user --if-not-exists pcsw-uat https://dl.flathub.org/beta-repo/flathub-beta.flatpakrepo
-printf 'allow org.freedesktop.*\n' > /home/testuser/pc2.filter && flatpak remote-modify --user --filter=/home/testuser/pc2.filter flathub
+printf 'deny *\nallow org.freedesktop.*\n' > /home/testuser/pc2.filter && flatpak remote-modify --user --filter=/home/testuser/pc2.filter flathub
 sudo ln -s /opt/pcsw-uat-app/README /usr/local/bin/pcsw-uat   # a dangling symlink: the path is what pc2 holds
 apt-cache policy tree                               # note the two versions
 sudo apt-get install -y --allow-downgrades tree=<the older version from that table>
@@ -96,7 +96,7 @@ ssh testuser@"$PC2" 'sudo apt-mark unhold sl'
 
 # 2. A source filter that hides what the source itself installed
 ssh -t testuser@"$PC1"
-printf 'allow org.freedesktop.*\n' > /home/testuser/uat.filter     # narrows pc1's own flathub
+printf 'deny *\nallow org.freedesktop.*\n' > /home/testuser/uat.filter   # narrows pc1's own flathub; an allow-only file denies nothing
 printf 'logging:\n  file: DEBUG\nsync_jobs:\n  apt_sync: false\n  snap_sync: false\n  flatpak_sync: true\n  manual_installs_sync: false\n' > ~/.config/pc-switcher/config.yaml
 pc-switcher sync pc2 --dry-run --yes --allow-first-sync
 ```
