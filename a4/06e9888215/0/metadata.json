@@ -1,0 +1,71 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "a406e9888215",
+  "session_id": "a6fdf859-1f12-4daf-94eb-8369ba71837c",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-02T18:05:44.838212433Z",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 1,
+  "save_step_count": 2,
+  "files_touched": [
+    "docs/dev/package-sync-scenario-coverage.md",
+    "docs/jobs/package-sync.md",
+    "docs/planning/package-sync-conformance-criteria.md",
+    "docs/planning/package-sync-user-requirements.md",
+    "docs/system/package-sync.md",
+    "src/pcswitcher/jobs/packages/sync_core.py",
+    "tests/unit/jobs/test_package_sync_core.py"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "e1cabef0e7c2",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 53,
+    "cache_creation_tokens": 368229,
+    "cache_read_tokens": 1974131,
+    "output_tokens": 40036,
+    "api_call_count": 27
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-02T18:05:44.794993737Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 69,
+    "human_modified": 8,
+    "human_removed": 0,
+    "total_committed": 69,
+    "total_lines_changed": 77,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 86,
+      "user_lines_removed": 8,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9,
+        "docs/dev/package-sync-scenario-coverage.md": 5,
+        "docs/jobs/package-sync.md": 1,
+        "docs/planning/package-sync-conformance-criteria.md": 4,
+        "docs/planning/package-sync-user-requirements.md": 1,
+        "docs/system/package-sync.md": 1,
+        "src/pcswitcher/jobs/packages/sync_core.py": 17,
+        "tests/unit/jobs/test_package_sync_core.py": 48
+      },
+      "user_removed_per_file": {
+        "docs/dev/package-sync-scenario-coverage.md": 3,
+        "docs/planning/package-sync-conformance-criteria.md": 2,
+        "docs/planning/package-sync-user-requirements.md": 1,
+        "docs/system/package-sync.md": 1,
+        "src/pcswitcher/jobs/packages/sync_core.py": 1
+      }
+    }
+  ]
+}
