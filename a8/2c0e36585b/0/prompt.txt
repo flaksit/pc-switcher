@@ -13,3 +13,15 @@ testuser@pc1:~/snap/hello$ pc-switcher sync pc2 --dry-run --yes --allow-first-sy
   <x> never install   do not install on pc2 for good; it is pc1's own, and will not be asked again
   <space> cycles   <shift+key> sets every row   <enter> confirm
  » ● io.github.fragglet.sdl_sopwith/x86_64/stable (2.9.0, flathub, user)  install
+
+---
+
+verify yourself
+
+---
+
+just "ssh pc1/pc2"
+
+---
+
+verify yourself ("ssh pc1/pc2")
