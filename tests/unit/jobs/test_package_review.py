@@ -925,13 +925,11 @@ class TestUnreproducibleGroupResolution:
     checkbox tick.
     """
 
-    async def test_add_snippet_choice_captures_body_verbatim_including_whitespace(self) -> None:
-        """G31."""
-        console = _interactive_console()
-        ui = MagicMock()
+    @staticmethod
+    async def _captured(body: str) -> str:
+        """The snippet `review_items` hands back for a body the user submitted."""
         group = _unreproducible_group([_entry("u1", label="brscan3")])
         screen = _fake_prompt(ask_return={"u1": "add_snippet"})
-        body = "  sudo dpkg --install /tmp/x.deb\n\nsudo apt-get install --fix-broken --assume-yes\n"
         text_prompt = _fake_prompt(ask_return=body)
 
         with (
@@ -939,10 +937,25 @@ class TestUnreproducibleGroupResolution:
             patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen),
             patch("pcswitcher.jobs.packages.review.questionary.text", return_value=text_prompt),
         ):
-            outcome = await review_items([group], console=console, ui=ui, **HOSTS)
+            outcome = await review_items([group], console=_interactive_console(), ui=MagicMock(), **HOSTS)
 
-        assert outcome.snippets == {"u1": body}
         assert "u1" not in outcome.unresolved
+        return outcome.snippets["u1"]
+
+    async def test_add_snippet_choice_captures_the_body_the_user_wrote(self) -> None:
+        """G31 — everything between the first and last thing typed is kept: blank lines,
+        indentation, and the order of the commands.
+        """
+        body = "sudo dpkg --install /tmp/x.deb\n\n  sudo apt-get install --fix-broken --assume-yes"
+
+        assert await self._captured(body) == body
+
+    async def test_the_whitespace_around_the_body_is_dropped_at_capture(self) -> None:
+        """#237 — the editor's own trailing newlines are not part of the command, and a body
+        carrying them lands in the registry YAML as a block padded with empty lines. Stripped
+        here, so the stored bytes and the replayed bytes are one string.
+        """
+        assert await self._captured("\n\n  sudo dpkg --install /tmp/x.deb  \n\n") == ("sudo dpkg --install /tmp/x.deb")
 
     async def test_the_authoring_warning_is_read_before_the_editor_opens(self) -> None:
         """G61 — the user is warned while they can still act on it. A snippet that asks a

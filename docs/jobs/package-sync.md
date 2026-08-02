@@ -226,7 +226,7 @@ Each finding then gets a decision screen of its own — one item per screen, bec
 - `<s>` `skip now` — `do not install on nomad for now; will be asked again next sync`.
 - `<x>` `never install` — `do not install on nomad for good; it is atlas's own, and will not be asked again`.
 
-An install snippet is a shell command that reproduces the item — the tool never parses, interprets, or reasons about it. It is **stored and replayed verbatim**, and it runs **non-interactively**: no stdin is supplied during replay, so a command that prompts (for example a debconf question) fails rather than hanging the sync. A typical shape:
+An install snippet is a shell command that reproduces the item — the tool never parses, interprets, or reasons about it. It is **stored and replayed verbatim**, with the one exception that the blank lines around what you typed are dropped when you submit it, so the registry file stays readable and what you read there is what runs. It runs **non-interactively**: no stdin is supplied during replay, so a command that prompts (for example a debconf question) fails rather than hanging the sync. A typical shape:
 
 ```bash
 sudo DEBIAN_FRONTEND=noninteractive dpkg --install /path/to/package.deb || \

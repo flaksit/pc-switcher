@@ -306,7 +306,10 @@ class Snippet:
 
     `label` mirrors the unreproducible item's own label at authoring time (a snapshot,
     not a live reference) so the registry file reads meaningfully on its own. `body` is
-    NEVER inspected by this dataclass or its callers beyond being replayed byte-for-byte.
+    NEVER inspected by this dataclass or its callers beyond being replayed byte-for-byte:
+    it arrives already stripped of surrounding whitespace from the one place a snippet is
+    captured (`packages.review`), which is what keeps the YAML a person can read and the
+    string `replay` quotes identical.
     """
 
     item_id: str

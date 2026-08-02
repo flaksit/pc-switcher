@@ -775,11 +775,16 @@ async def _review_unreproducible_group(
       the editor) is NOT accepted and does NOT fall through: the three-way choice is
       re-prompted so the user must supply a real snippet or pick an explicit skip.
 
-    The body is STORED verbatim, never stripped — D-20 forbids reasoning about it, and
-    leading whitespace/newlines are the user's own formatting choice. Emptiness is decided
-    on the stripped body, though: a body of only spaces and newlines replays as nothing at
-    all, so accepting it would record a snippet that resolves the item without installing
-    anything.
+    The body is stripped of surrounding whitespace at capture and stored as it is from then
+    on. That is not reasoning about it (D-20): the editor's own trailing newlines and the
+    blank lines a paste leaves behind are not something the user typed as part of the
+    command, they change nothing about what `bash -c` runs, and the registry is a YAML file
+    a person reads and edits — a body carrying them lands there as a block padded with empty
+    lines. Stripping HERE rather than at the registry is what makes the stored bytes and the
+    replayed bytes the same string (`SnippetRegistry.replay` quotes what it is given).
+    Emptiness falls out of the same strip: a body of only spaces and newlines replays as
+    nothing at all, so accepting it would record a snippet that resolves the item without
+    installing anything.
     """
     options = _unreproducible_options(source_hostname, target_hostname)
     for entry in group.entries:
@@ -815,8 +820,12 @@ async def _review_unreproducible_group(
                 key_bindings=_SNIPPET_SUBMIT_BINDINGS,
                 style=_SNIPPET_STYLE,
             )
-            body = await asyncio.to_thread(body_prompt.ask)
-            if body and body.strip():
+            captured: str | None = await asyncio.to_thread(body_prompt.ask)
+            # Stripped once, here, before anything else sees it: the registry, the plan and
+            # the replay all get the same string, so what the user reads in the YAML file is
+            # exactly what runs.
+            body = captured.strip() if captured else ""
+            if body:
                 snippets[entry.item_id] = body
                 break
 
