@@ -4487,3 +4487,34 @@ class TestAProbeThatDidNotAnswer:
 
         installs = {diff.item_id for diff in plan.diffs if diff.action == DiffAction.INSTALL}
         assert "flatpak:ref:user:org.gimp.GIMP/x86_64/stable" in installs
+
+
+class TestProgressWhileApplying:
+    """#235: the bar exists, and says what it is waiting for, from the first thing `apply()`
+    does — not from the moment the base loop finishes its first item.
+
+    Flatpak is where the gap showed: everything before the loop (remote provisioning, then
+    the filters) is several remote commands long, and a run installing one application spent
+    all of it with no bar on screen at all.
+    """
+
+    @staticmethod
+    def _progress_items(context: JobContext) -> list[str]:
+        return [
+            call.args[0].update.item
+            for call in context.event_bus.publish.call_args_list  # pyright: ignore[reportAttributeAccessIssue]
+            if call.args[0].update.item is not None
+        ]
+
+    @pytest.mark.asyncio
+    async def test_the_remote_provisioning_window_reports_before_the_first_ref(self) -> None:
+        context, _source, _target = make_context(source_responses=derivation_source(), fake_target=FakeFlatpakTarget())
+
+        await run_job(FlatpakSyncJob(context))
+
+        items = self._progress_items(context)
+        assert items[0] == "preparing remotes"
+        assert "remote flathub (user)" in items
+        assert "remote filters" in items
+        ref_at = next(index for index, item in enumerate(items) if item.startswith("org.example.App/"))
+        assert items.index("remote filters") < ref_at

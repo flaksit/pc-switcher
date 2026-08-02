@@ -21,6 +21,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from rich.console import Console
 
+from pcswitcher.events import ProgressEvent
 from pcswitcher.jobs.base import SyncJob
 from pcswitcher.jobs.context import JobContext
 from pcswitcher.jobs.manual_installs_sync import ManualInstallsSyncJob
@@ -505,6 +506,58 @@ class TestConvergeDispatchByAction:
 
         assert "[dry-run] Would install i1 — signing key copied with it: vendor.gpg" in caplog.messages
         assert "[dry-run] Would install i2" in caplog.messages
+
+
+class _TimelineJob(FakeSyncJob):
+    """`FakeSyncJob` that records progress reports and converge calls in one ordered list,
+    so a test can assert which of the two came first.
+    """
+
+    def __init__(self, context: JobContext, **kwargs: Any) -> None:
+        super().__init__(context, **kwargs)
+        self.timeline: list[str] = []
+
+        def record(event: ProgressEvent) -> None:
+            self.timeline.append(f"progress {event.update.percent} {event.update.item}")
+
+        context.event_bus.publish.side_effect = record  # pyright: ignore[reportAttributeAccessIssue]
+
+    async def converge(self, diff: ItemDiff) -> CommandResult:
+        self.timeline.append(f"converge {diff.item_id}")
+        return await super().converge(diff)
+
+
+class TestProgressWhileApplying:
+    """#235: the UI creates a job's bar on the first update it gets, so a job that reported
+    only completed items showed no bar at all while its single item installed — the whole
+    point at which a user wants one.
+    """
+
+    @pytest.mark.asyncio
+    async def test_the_first_report_precedes_the_first_converge_and_names_its_item(self) -> None:
+        job = _TimelineJob(make_context())
+        diffs = (_diff("i1", DiffAction.INSTALL), _diff("i2", DiffAction.INSTALL))
+        _accept(job, diffs, {"i1": Decision.APPLY, "i2": Decision.APPLY})
+
+        await job.apply()
+
+        assert job.timeline == [
+            "progress 0 i1",
+            "converge i1",
+            "progress 50 i2",
+            "converge i2",
+            "progress 100 None",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_a_run_with_nothing_to_apply_still_completes_its_bar(self) -> None:
+        job = _TimelineJob(make_context())
+        diffs = (_diff("r1", DiffAction.REMOVE, DiffClass.EXTRA_ON_TARGET),)
+        _accept(job, diffs, {"r1": Decision.SKIP_ONCE})
+
+        await job.apply()
+
+        assert job.timeline == ["progress 100 None"]
 
 
 class TestDecisionsReachTheLog:

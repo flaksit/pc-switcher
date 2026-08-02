@@ -216,7 +216,15 @@ from pcswitcher.jobs.packages.sync_core import (
     PackagePlan,
     PackageSyncJob,
 )
-from pcswitcher.models import CommandResult, FirstSyncScope, Host, LogLevel, SyncAbortedByUser, ValidationError
+from pcswitcher.models import (
+    CommandResult,
+    FirstSyncScope,
+    Host,
+    LogLevel,
+    ProgressUpdate,
+    SyncAbortedByUser,
+    ValidationError,
+)
 from pcswitcher.sudoers import passwordless_sudo_hint
 
 __all__ = ["FlatpakSyncJob", "flatpak_sync_exclude_paths"]
@@ -1903,8 +1911,15 @@ class FlatpakSyncJob(PackageSyncJob):
 
         The trust warning precedes the dry-run branch: it qualifies what provisioning this
         remote achieves, so a preview that hid it would overstate the real run.
+
+        Everything before `super().apply()` is reported as progress in its own right (#235):
+        the base loop's first report arrives with its first item, which on this job is a
+        remote write and a filter convergence away — the longest stretch any package job
+        spends between "Applying N changes" and its first sign of movement.
         """
+        self._report_progress(ProgressUpdate(percent=0, item="preparing remotes"))
         for derived in self._derived_remotes:
+            self._report_progress(ProgressUpdate(percent=0, item=f"remote {derived.name} ({derived.scope})"))
             self._warn_about_trust(derived)
             if self.context.dry_run:
                 self._log(
@@ -1915,6 +1930,7 @@ class FlatpakSyncJob(PackageSyncJob):
                 )
                 continue
             await self._write_derived_remote(derived)
+        self._report_progress(ProgressUpdate(percent=0, item="remote filters"))
         await self._converge_remote_filters()
 
         failures: list[tuple[ItemDiff, str]] = []

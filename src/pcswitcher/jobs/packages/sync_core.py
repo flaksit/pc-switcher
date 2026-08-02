@@ -576,7 +576,13 @@ class PackageSyncJob(SyncJob):
         """Converge every APPLY-decided diff from the accepted plan, one item at a time.
 
         Per-item detail at `LogLevel.FULL`, one `LogLevel.INFO` summary line per job
-        (ADR-010). A per-item failure (`ConvergeItemFailed`, or a converge command that
+        (ADR-010). Progress is reported BEFORE each item rather than after it, and carries
+        that item's label: the UI creates a job's bar lazily on its first update, so a job
+        applying a single long item used to show no bar at all while it ran (#235), and an
+        anonymous bar could not say which item it was waiting on. The completed bar is the
+        one report the loop makes after its last item.
+
+        A per-item failure (`ConvergeItemFailed`, or a converge command that
         exits non-zero) is caught, logged with its stderr as structured context, and
         collected — the loop always completes (D-27) — then `PackageItemFailures` is
         raised once, after the loop, if anything failed OR anything is left unresolved
@@ -636,6 +642,7 @@ class PackageSyncJob(SyncJob):
             self._log(Host.TARGET, LogLevel.INFO, f"{prefix}Applying {total} {self.manager_id} change(s)")
 
             for index, diff in enumerate(apply_diffs):
+                self._report_progress(ProgressUpdate(percent=int(index / total * 100), item=diff.label))
                 if self.context.dry_run:
                     # The detail belongs on the line, not only in the review panel: a
                     # dry run never renders that panel, and ADR-014 makes the preview
@@ -645,7 +652,7 @@ class PackageSyncJob(SyncJob):
                     self._log(Host.TARGET, LogLevel.FULL, f"{prefix}Would {diff.action.value} {diff.label}{detail}")
                 else:
                     await self._converge_one(diff, failures, declined)
-                self._report_progress(ProgressUpdate(percent=int((index + 1) / total * 100)))
+            self._report_progress(ProgressUpdate(percent=100))
 
             succeeded = total - len(failures) - len(declined)
             self._log(
