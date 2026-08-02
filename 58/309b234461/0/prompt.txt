@@ -46,3 +46,23 @@ $ pc-switcher sync pc2 --dry-run --yes --allow-first-sync
 
 §4 says: the collateral question "go ahead"
 "go ahead" is not used anymore anywhere. I don't know which option to pick. Update the runbook.
+
+---
+
+"the repository deletion <s> in the second round": I don't understand "in the second round". Make clear.
+
+After the repository deletion <s>, I don't get "hello's revision", but the following:
+99-pcsw-uat.sources (deb822)
+? Delete repositories pc1 no longer has (apt)
+   ○ 99-pcsw-uat.sources (deb822)  skip now
+     pc2 would stop getting software from https://***@packages.example.com/apt
+
+? Install snap packages
+  <y> install         install on pc2
+  <s> skip now        do not install on pc2 for now; will be asked again next sync
+  <x> never install   do not install on pc2 for good; it is pc1's own, and will not be asked again
+  <space> cycles   <shift+key> sets every row   <enter> confirm
+ » ● hello-world (latest/stable, revision 29)  install
+
+
+Is this missing from the runbook?
