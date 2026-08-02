@@ -76,7 +76,7 @@ exit
 
 ## 3. Three bookkeeping failures that end the run
 
-Each of these ends the run while planning, before any question and before anything is written, and each names the repair. They are checked one job at a time because a job's own review comes before the next job plans: enabling only the job under test is what keeps the run short. Every one of them is a `--dry-run`, so a check that does NOT abort changes nothing — walk out of the review with `<ctrl-c>` and record it as a finding.
+Each of these ends the run while planning, before anything is written, and each names the repair. The first two end it before any question; the third scans `/opt` first, so it asks the shape question below and aborts once you have answered it — that answer is not recorded and nothing follows it. They are checked one job at a time because a job's own review comes before the next job plans: enabling only the job under test is what keeps the run short. Every one of them is a `--dry-run`, so a check that does NOT abort changes nothing — walk out of the review with `<ctrl-c>` and record it as a finding.
 
 Each run must end with `Sync aborted: <message>` and exit code 1, and neither machine may change.
 
