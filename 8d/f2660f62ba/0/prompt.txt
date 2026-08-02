@@ -81,3 +81,7 @@ After hello's revision change, I get other question than "/opt/pcsw-uat-vendor":
   <x> never install   do not install on pc2 for good; it is pc1's own, and will not be asked again
   <space> cycles   <shift+key> sets every row   <enter> confirm
  » ● io.github.fragglet.sdl_sopwith/x86_64/stable (2.9.0, flathub, user)  install
+
+---
+
+/opt/pcsw-uat-vendor answered "one application": why one app? Is clearly two apps, no?
