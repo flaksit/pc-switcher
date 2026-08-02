@@ -220,7 +220,7 @@ You are asked about only what the OTHER machine does not already have. Both mach
 
 One directory under `/opt` cannot be judged by looking at it, and you are asked about it while the sync is still planning, before the review. If `/opt/something` holds files of its own it is one application. If it holds a single directory and no file, that directory is the application. If it holds several directories and no file, it is either one application or one publisher's directory holding several, and only you know which — so the question names what is inside and offers the two answers as what each would mean for the other machine.
 
-Each finding then gets a decision screen of its own — one item per screen, because answering `<y>` opens an editor for that item — with the review's usual three answers in the usual order:
+Each finding then gets a decision screen of its own — one item per screen, because answering `<y>` opens an editor for that item — titled with the decision it asks for (`Install /opt/pcsw-uat-app on nomad?`), with the review's usual three answers in the usual order:
 
 - `<y>` `install` — `write a command snippet that installs it; nomad runs it`, now and on every future sync.
 - `<s>` `skip now` — `do not install on nomad for now; will be asked again next sync`.

@@ -1140,7 +1140,9 @@ class TestUnreproducibleGroupResolution:
         assert options[0].hint == "write a command snippet that installs it; nomad runs it"
         assert options[1].hint == "do not install on nomad for now; will be asked again next sync"
         assert options[2].hint == "do not install on nomad for good; it is atlas's own, and will not be asked again"
-        assert decision_list.call_args.args[0] == "How should nomad get brscan3?"
+        # #230: the title is the decision the three answers offer. "How should nomad get
+        # brscan3?" matched only the first of them.
+        assert decision_list.call_args.args[0] == "Install brscan3 on nomad?"
 
     async def test_ui_resumed_when_snippet_capture_raises(self) -> None:
         console = _interactive_console()

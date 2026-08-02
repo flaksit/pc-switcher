@@ -789,7 +789,9 @@ async def _review_unreproducible_group(
         while True:
             selected = await _ask_about_one_item(
                 entry,
-                title=f"How should {target_hostname} get {entry.label}?",
+                # The decision the three answers actually offer, not the open question that
+                # preceded them: two of them do not answer "how" at all.
+                title=f"Install {entry.label} on {target_hostname}?",
                 options=options,
                 default=_ADD_SNIPPET_VALUE,
             )
