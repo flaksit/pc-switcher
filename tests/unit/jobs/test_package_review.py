@@ -2080,8 +2080,17 @@ class TestCollateralPromptWording:
         """
         decision_list, _printed = await self._titles()
 
-        rows = decision_list.call_args.kwargs["rows"]
-        assert [row.detail for row in rows] == [_COLLATERAL_DETAIL]
+        assert decision_list.call_args.kwargs["explanation"] == _COLLATERAL_DETAIL.split("\n")[1]
+
+    async def test_the_screen_asks_this_package_own_case_above_the_legend(self) -> None:
+        """#227 — the question is one package, so its title is that package's own case and the
+        ground for it sits between the title and the keys, never as an annotation on a row
+        the user has not answered yet.
+        """
+        decision_list, _printed = await self._titles()
+
+        assert decision_list.call_args.args[0] == "Installing sl on nomad would remove fortunes"
+        assert [row.detail for row in decision_list.call_args.kwargs["rows"]] == [""]
 
     async def test_stopping_names_the_package_and_the_machine_in_the_abort(self) -> None:
         """D26, H68 — the abort message names the package and the machine, never a role."""

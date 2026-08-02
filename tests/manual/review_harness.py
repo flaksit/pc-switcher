@@ -178,14 +178,16 @@ GROUPS = [
     ReviewGroup(
         "apt",
         COLLATERAL_REVIEW_ACTION,
-        f"Packages you installed on {TARGET_HOST} or marked as its own that this sync would remove, downgrade "
-        "or upgrade (apt)",
+        f"Packages you installed on {TARGET_HOST} or marked as {TARGET_HOST}'s own that this sync would remove, "
+        "downgrade or upgrade (apt)",
         [
             ReviewEntry(
                 "apt:collateral:fortunes",
                 "fortunes",
                 "remove",
-                f"Removing fortunes-min on {TARGET_HOST} would remove fortunes",
+                f"Removing fortunes-min on {TARGET_HOST} would remove fortunes\n"
+                f"apt on {TARGET_HOST} has fortunes marked as manually installed, and it is marked as "
+                f"{TARGET_HOST}'s own — either ground alone would protect it.",
                 answer_hints=(
                     f"remove fortunes-min from {TARGET_HOST}, so fortunes is removed as well",
                     f"keep fortunes on {TARGET_HOST}; fortunes-min will not be removed; will be asked again next sync",
@@ -195,7 +197,9 @@ GROUPS = [
                 "apt:collateral:libgimp2",
                 "libgimp2",
                 "downgrade",
-                f"Installing gimp on {TARGET_HOST} would downgrade libgimp2 from 2.10.38 to 2.10.36",
+                f"Installing gimp on {TARGET_HOST} would downgrade libgimp2 from 2.10.38 to 2.10.36\n"
+                f"apt on {TARGET_HOST} has libgimp2 marked as manually installed: something asked for it there "
+                "directly, rather than it arriving as another package's dependency.",
                 answer_hints=(
                     f"install gimp on {TARGET_HOST}, so libgimp2 is downgraded from 2.10.38 to 2.10.36 as well",
                     f"keep libgimp2 on {TARGET_HOST}; gimp will not be installed; will be asked again next sync",

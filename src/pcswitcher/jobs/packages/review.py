@@ -712,6 +712,7 @@ async def _ask_about_one_item(
     title: str,
     options: Sequence[DecisionOption],
     default: str,
+    explanation: str | None = None,
     detail: str | None = None,
 ) -> str:
     """Put ONE item on a decision screen and return the answer's value.
@@ -722,13 +723,26 @@ async def _ask_about_one_item(
     that looked nothing like the rest of it. The shape is what is shared here, not the
     batching — one row, the same glyphs, colours, keys and hint column.
 
+    `explanation` sits between the title and the key legend, for a screen whose title states
+    the concrete case and whose ground is a sentence rather than a row annotation. `detail`
+    overrides the row's own line; the empty string suppresses it, which is what a screen
+    whose title and explanation already carry `entry.detail` passes.
+
     Ctrl-C (`ask` returns `None`) is the caller's to interpret: what stopping means differs
     between an item that can be left undecided and one that cannot.
     """
     prompt = decision_list(
         title,
-        rows=[DecisionRow(row_id=entry.item_id, label=entry.label, default=default, detail=detail or entry.detail)],
+        rows=[
+            DecisionRow(
+                row_id=entry.item_id,
+                label=entry.label,
+                default=default,
+                detail=entry.detail if detail is None else detail,
+            )
+        ],
         options=options,
+        explanation=explanation,
     )
     answered: Mapping[str, str] | None = await asyncio.to_thread(prompt.ask)
     if answered is None:
@@ -920,8 +934,9 @@ async def _review_collateral_group(
     What is protected is a fact about the TARGET (`Collateral.protected`): its own
     `apt-mark showmanual` set, plus the packages that machine marked machine-specific.
     Either the user asked for the package on the machine being changed, or they told this
-    tool to leave it alone there. Which of the two applies to THIS package is stated in
-    `entry.detail`, composed by `Collateral` — the only layer that knows the ground.
+    tool to leave it alone there. Which of the two applies to THIS package is the second
+    half of `entry.detail`, composed by `Collateral` — the only layer that knows the ground
+    — and is printed as the screen's explanation, under the case it is the ground for.
 
     The decision is recorded against `entry.item_id`: proceed records `Decision.APPLY`,
     protect records `Decision.SKIP_ONCE`. `Collateral.resolve` maps that onto the changes
@@ -939,9 +954,18 @@ async def _review_collateral_group(
     phase already guards against (T-02-02).
     """
     for entry in group.entries:
+        # The question IS this one package, so its title is this one case — "Removing
+        # fortunes-min on nomad would remove fortunes" — and `group.title`, which has to be
+        # true of every entry at once, stays the heading of the report a run with no
+        # terminal prints. `Collateral._item` composes the detail as the finding, a newline,
+        # then the ground; the finding is the question and the ground is why it is being
+        # asked, so they land above the legend rather than under the row.
+        finding, _, ground = (entry.detail or "").partition("\n")
         selected = await _ask_about_one_item(
             entry,
-            title=group.title,
+            title=finding or group.title,
+            explanation=ground or None,
+            detail="",
             options=_collateral_options(entry, target_hostname),
             default=Decision.SKIP_ONCE,
         )

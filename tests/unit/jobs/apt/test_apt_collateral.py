@@ -967,8 +967,9 @@ class TestTheReasonNamesTheGroundThatApplies:
 
     @pytest.mark.asyncio
     async def test_the_group_title_names_both_grounds(self) -> None:
-        """D17 — one group can hold packages protected on either ground, so the title cannot name
-        one of them.
+        """D17 — one group can hold packages protected on either ground, so the title cannot
+        name one of them, and it names the machine the mark is on (#227): "its own" reads
+        equally as either machine's.
         """
         context, _source, _target = self._marked_context("")
 
@@ -976,7 +977,7 @@ class TestTheReasonNamesTheGroundThatApplies:
 
         group = next(g for g in plan.groups if g.action == COLLATERAL_REVIEW_ACTION)
         assert group.title == (
-            "Packages you installed on target-host or marked as its own that this sync would remove, "
+            "Packages you installed on target-host or marked as target-host's own that this sync would remove, "
             "downgrade or upgrade (apt)"
         )
 

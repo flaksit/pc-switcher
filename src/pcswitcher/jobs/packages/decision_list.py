@@ -365,17 +365,35 @@ def _validate(rows: Sequence[DecisionRow], options: Sequence[DecisionOption]) ->
         raise ValueError(f"decision keys must be single lowercase letters, got {keys}")
 
 
+def _hang(text: str, width: int) -> str:
+    """Wrap `text` and indent every line to the legend's own hanging indent.
+
+    Newlines are paragraph breaks, wrapped independently, so a block that states a finding
+    and then its ground does not run the two sentences together.
+    """
+    lines = [line for paragraph in text.split("\n") for line in (textwrap.wrap(paragraph, max(width, 1)) or [""])]
+    return "\n".join(f"{_LEGEND_INDENT}{line}" for line in lines)
+
+
 def decision_list(
     message: str,
     *,
     rows: Sequence[DecisionRow],
     options: Sequence[DecisionOption],
+    explanation: str | None = None,
     style: Style | None = None,
 ) -> questionary.Question:
     """Build the one-screen-per-group decision prompt.
 
     `.ask()` returns `{row_id: option value}`, or `None` when the user pressed Ctrl-C —
     the same contract every other review screen is written against.
+
+    `explanation` is why this screen is being shown, printed between the question and the
+    key legend: a screen asking about ONE item states the concrete case in its title, and
+    the ground for it belongs with the question rather than under the single row, where it
+    read as an annotation on an answer the user had not made yet. It survives the answer,
+    unlike the legend — the ground the decision was taken on is part of what the scrollback
+    records.
     """
     _validate(rows, options)
     control = _DecisionListControl(rows, options, _screen_width)
@@ -383,8 +401,13 @@ def decision_list(
 
     def header_tokens() -> list[tuple[str, str]]:
         tokens = [("class:qmark", "?"), ("class:question", f" {message}")]
+        width = _screen_width() - len(_LEGEND_INDENT)
+        if explanation:
+            tokens.append(("class:detail", f"\n{_hang(explanation, width)}"))
         if not answered:
-            packed = legend(options, width=_screen_width() - len(_LEGEND_INDENT))
+            # Already wrapped by `legend`, whose continuation lines carry their own hanging
+            # indent — so this only prepends the block indent, never re-wraps.
+            packed = legend(options, width=width)
             hung = "\n".join(f"{_LEGEND_INDENT}{line}" for line in packed.split("\n"))
             tokens.append(("class:instruction", f"\n{hung}"))
         return tokens

@@ -219,18 +219,23 @@ def build_esm_gate_message(esm_files: Sequence[str], machines: Machines, job_nam
 
 
 def build_collateral_group_title(machines: Machines, manager_id: str) -> str:
-    """The heading over every manual-collateral question, whenever it is asked.
+    """The heading over a manual-collateral GROUP: the report a run with no terminal prints,
+    and the line naming each item nobody could be asked about.
 
     Names both of `Collateral.protected`'s grounds, because one group can hold both: a
-    package a mark alone protects is not one the user installed there. Which ground holds
-    for a given entry is its own detail line (`Collateral._reason`).
+    package a mark alone protects is not one the user installed there. It names the machine
+    the mark is on, because "marked as its own" is equally readable as either machine's, and
+    only the target's mark protects anything here. Which ground holds for a given entry is
+    its own detail line (`Collateral._reason`); an interactive run asks one package at a
+    time and titles each screen with that package's own case, so this heading is not what a
+    user answering the question reads.
 
-    One builder because the question is asked from two places — the plan-time group and the
-    one `LateCollateral` raises mid-apply — and a heading that differed between them would
-    read as two different questions.
+    One builder because the group is built in two places — the plan-time one and the one
+    `LateCollateral` raises mid-apply — and a heading that differed between them would read
+    as two different questions.
     """
     return (
-        f"Packages you installed on {machines.target} or marked as its own that this sync "
+        f"Packages you installed on {machines.target} or marked as {machines.target}'s own that this sync "
         f"would remove, downgrade or upgrade ({manager_id})"
     )
 

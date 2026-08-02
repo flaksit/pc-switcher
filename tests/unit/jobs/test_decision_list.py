@@ -435,3 +435,41 @@ class TestTheAnsweredFrame:
 
         assert "up/down move" not in frame
         assert "<enter> confirm" not in frame
+
+
+class TestTheExplanation:
+    """#227 — why a one-item screen is being shown, between its question and the keys."""
+
+    _TITLE = "Removing fortunes-min on nomad would remove fortunes"
+    _GROUND = "apt on nomad has fortunes marked as manually installed."
+
+    @classmethod
+    def _frames(cls, explanation: str | None) -> list[str]:
+        """Every frame the control painted, title-first, so the screen as ASKED and the one
+        left behind after `<enter>` can both be asserted on."""
+        buffer = io.StringIO()
+        with create_pipe_input() as pipe:
+            pipe.send_text(f"s{_ENTER}")
+            with create_app_session(input=pipe, output=PlainTextOutput(buffer)):
+                decision_list(
+                    cls._TITLE, rows=[_row("a", "fortunes")], options=TWO_ANSWERS, explanation=explanation
+                ).ask()
+        return buffer.getvalue().split(f"? {cls._TITLE}")[1:]
+
+    def test_it_sits_above_the_key_legend(self) -> None:
+        lines = [line.strip() for line in self._frames(self._GROUND)[0].split("\n") if line.strip()]
+
+        assert lines[0] == self._GROUND
+        assert lines[1].startswith(f"<{_ACT.key}>")
+
+    def test_it_survives_the_answer(self) -> None:
+        """Unlike the legend: the ground the decision was taken on is part of the record."""
+        answered = self._frames(self._GROUND)[-1]
+
+        assert self._GROUND in answered
+        assert "<enter> confirm" not in answered
+
+    def test_no_explanation_leaves_the_header_as_it_was(self) -> None:
+        lines = [line.strip() for line in self._frames(None)[0].split("\n") if line.strip()]
+
+        assert lines[0].startswith(f"<{_ACT.key}>")
