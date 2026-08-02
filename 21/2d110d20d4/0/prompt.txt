@@ -1,0 +1,87 @@
+in .planning/phases/02-package-management-sync/02-UAT-01-RUNBOOK.md , §2, why is the folder "~/snap/hello/<that second revision>" created on pc1?
+
+---
+
+At §3 of UAT runbook. I did the pc-switcher sync of the 2nd code block. Run is not aborted: I get questions instead. Expected or bug?
+
+testuser@pc1:~/snap/hello$ pc-switcher sync pc2 --dry-run --yes --allow-first-sync
+ pc2 has no config; pc1's would be applied (no changes made).
+
+? Install flatpak applications
+  <y> install         install on pc2
+  <s> skip now        do not install on pc2 for now; will be asked again next sync
+  <x> never install   do not install on pc2 for good; it is pc1's own, and will not be asked again
+  <space> cycles   <shift+key> sets every row   <enter> confirm
+ » ● io.github.fragglet.sdl_sopwith/x86_64/stable (2.9.0, flathub, user)  install
+
+---
+
+verify yourself
+
+---
+
+just "ssh pc1/pc2"
+
+---
+
+verify yourself ("ssh pc1/pc2")
+
+---
+
+At §3 of UAT runbook. I did the pc-switcher sync of the 3nd code block. Run is not aborted: I get questions instead. Expected or bug?
+
+$ pc-switcher sync pc2 --dry-run --yes --allow-first-sync
+ pc2 has no config; pc1's would be applied (no changes made).
+
+╭──────────────────────────────────────────────────── What is /opt/pcsw-uat-vendor on pc1? ─────────────────────────────────────────────────────╮
+│ /opt/pcsw-uat-vendor on pc1 holds no file of its own — only the directories /opt/pcsw-uat-vendor/alpha, /opt/pcsw-uat-vendor/beta. Either it  │
+│ is one application whose parts live in those directories, or it is one publisher's directory holding an application per directory. Nothing on │
+│ pc1 says which, and the answer decides what pc2 is offered.                                                                                   │
+╰───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+? What is /opt/pcsw-uat-vendor on pc1? (Use arrow keys)
+ » One application — /opt/pcsw-uat-vendor is what would be reproduced on pc2
+   One per directory — /opt/pcsw-uat-vendor/alpha, /opt/pcsw-uat-vendor/beta are what would be reproduced on pc2, each on its own
+
+---
+
+§4 says: the collateral question "go ahead"
+"go ahead" is not used anymore anywhere. I don't know which option to pick. Update the runbook.
+
+---
+
+"the repository deletion <s> in the second round": I don't understand "in the second round". Make clear.
+
+After the repository deletion <s>, I don't get "hello's revision", but the following:
+99-pcsw-uat.sources (deb822)
+? Delete repositories pc1 no longer has (apt)
+   ○ 99-pcsw-uat.sources (deb822)  skip now
+     pc2 would stop getting software from https://***@packages.example.com/apt
+
+? Install snap packages
+  <y> install         install on pc2
+  <s> skip now        do not install on pc2 for now; will be asked again next sync
+  <x> never install   do not install on pc2 for good; it is pc1's own, and will not be asked again
+  <space> cycles   <shift+key> sets every row   <enter> confirm
+ » ● hello-world (latest/stable, revision 29)  install
+
+
+Is this missing from the runbook?
+
+---
+
+After hello's revision change, I get other question than "/opt/pcsw-uat-vendor":
+
+? Change snap packages
+   ● hello (latest/stable, revision 52)  change
+     overwrites revision 52 on pc2 with revision 42
+
+? Install flatpak applications
+  <y> install         install on pc2
+  <s> skip now        do not install on pc2 for now; will be asked again next sync
+  <x> never install   do not install on pc2 for good; it is pc1's own, and will not be asked again
+  <space> cycles   <shift+key> sets every row   <enter> confirm
+ » ● io.github.fragglet.sdl_sopwith/x86_64/stable (2.9.0, flathub, user)  install
+
+---
+
+/opt/pcsw-uat-vendor answered "one application": why one app? Is clearly two apps, no?
