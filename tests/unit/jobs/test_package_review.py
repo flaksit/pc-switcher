@@ -178,6 +178,49 @@ class TestNonInteractive:
         last_item = max(index for index, line in enumerate(lines) if "pkg" in line)
         assert lines[last_item + 1].startswith("\u2570"), lines[last_item : last_item + 3]
 
+    async def test_a_report_line_is_the_bare_item_and_its_finding(self) -> None:
+        """#226 — nothing acts on a reported condition, so the line carries no verb, and the
+        version its label repeats is the one the finding attributes to each machine.
+        """
+        out = io.StringIO()
+        console = Console(file=out, no_color=True, width=100)
+        group = ReviewGroup(
+            manager="apt",
+            action="report_only",
+            title="Version differences (apt packages)",
+            entries=[
+                ReviewEntry(
+                    item_id="apt:package:tree",
+                    label="tree (2.1.1-2ubuntu3)",
+                    action_label="report",
+                    detail="atlas has 2.1.1-2ubuntu3.24.04.2, nomad has 2.1.1-2ubuntu3",
+                )
+            ],
+        )
+        with patch.object(sys, "stdin", _mock_isatty(False)):
+            await review_items([group], console=console, ui=MagicMock(), **HOSTS)
+
+        printed = out.getvalue()
+        assert "tree: atlas has 2.1.1-2ubuntu3.24.04.2, nomad has 2.1.1-2ubuntu3" in printed
+        assert "report tree" not in printed
+
+    async def test_an_actionable_group_keeps_its_verb_and_version(self) -> None:
+        """#226 changed the REPORT lines only: the report path a non-interactive run prints
+        for a group that WOULD have acted still names the verb and the whole label.
+        """
+        out = io.StringIO()
+        console = Console(file=out, no_color=True, width=100)
+        group = ReviewGroup(
+            manager="apt",
+            action="install",
+            title="Install apt packages",
+            entries=[ReviewEntry(item_id="apt:package:sl", label="sl (5.02-1)", action_label="install")],
+        )
+        with patch.object(sys, "stdin", _mock_isatty(False)):
+            await review_items([group], console=console, ui=MagicMock(), **HOSTS)
+
+        assert "install sl (5.02-1)" in out.getvalue()
+
 
 @pytest.mark.asyncio
 class TestInteractive:

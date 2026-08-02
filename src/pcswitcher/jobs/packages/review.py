@@ -113,6 +113,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -191,6 +192,11 @@ _PROMOTABLE_ACTIONS = frozenset({"install", "add", "enable", "change", "remove",
 # module, not the other way round.
 _CHANGE_ACTION = "change"
 _REPORT_ACTION = "report_only"
+
+# The version (or scope, or arch) an item label carries after its name: `tree (2.1.1)`,
+# `sopwith/x86_64/stable (2.9.0, flathub, user)`. Anchored at the end and forbidding nested
+# parentheses so a name that merely CONTAINS one keeps it.
+_TRAILING_PARENTHETICAL = re.compile(r"\s*\([^()]*\)$")
 
 # Sentinel `ReviewGroup.action` a caller (today, only `AptSyncJob`) uses to mark a group
 # of unreproducible items (D-18/D-21) as needing the three-way per-entry resolution flow
@@ -601,6 +607,17 @@ _SNIPPET_SUBMIT_BINDINGS = _snippet_submit_bindings()
 _SNIPPET_STYLE = Style([("answer", "noinherit")])
 
 
+def _bare_item_name(label: str) -> str:
+    """A review label with its trailing `(...)` parenthetical dropped.
+
+    Item labels carry the version the machine holds — `tree (2.1.1-2ubuntu3)` — which a
+    report line then states per machine anyway. Stripping the suffix rather than asking every
+    manager for a second, version-free label: the parenthetical is the one shape every
+    `label()` in the codebase shares, and a label that has none is returned untouched.
+    """
+    return _TRAILING_PARENTHETICAL.sub("", label)
+
+
 def _render_group_panel(group: ReviewGroup) -> Panel:
     """Build the REPORT panel for one group — the non-interactive path only, where there is
     nothing to answer and this is all the user gets (D-26).
@@ -608,16 +625,27 @@ def _render_group_panel(group: ReviewGroup) -> Panel:
     An interactive run never prints it: the decision screen lists the same items, and a
     panel above it made every group appear twice.
 
+    A report group's lines are `name: finding`, with no verb: nothing acts on a reported
+    condition, so the leading "report" named an action that does not exist, and the label's
+    own version was the same number the finding then attributes to each machine.
+
     Package names, versions and stderr fragments come from package-manager output and
     must never reach a `Panel` as a bare `str` — Rich would parse `[...]`-shaped
     substrings as console markup and raise `MarkupError` (T-02-02).
     """
     body = Text()
+    reported = group.action == _REPORT_ACTION
     for index, entry in enumerate(group.entries):
         if index:
             # Separator, not terminator: a newline after the last entry renders as an empty
             # final line inside the panel border.
             body.append("\n")
+        if reported:
+            body.append(_bare_item_name(entry.label), style="bold")
+            if entry.detail:
+                body.append(": ")
+                body.append(entry.detail, style="dim")
+            continue
         body.append(entry.action_label, style="bold")
         body.append(" ")
         body.append(entry.label)
