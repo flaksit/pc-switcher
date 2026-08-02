@@ -122,6 +122,12 @@ exit
 
 ## 4. The run
 
+Re-pin `hello` before every run, this one and any repeat. pc2 tracks `latest/stable` and holds a revision from another channel, so snapd's own auto-refresh — four times a day — puts it back on pc1's revision and the change question disappears with the divergence:
+
+```bash
+ssh testuser@"$PC2" 'snap list hello; sudo snap refresh --revision=<that second revision> hello'
+```
+
 ```bash
 ssh -t testuser@"$PC1"
 env | grep PCSWITCHER_PACKAGE_REVIEW_AUTOMATION   # must print nothing
@@ -129,12 +135,13 @@ pc-switcher sync pc2 --dry-run --yes --allow-first-sync
 pc-switcher sync pc2 --yes --allow-first-sync
 ```
 
-Add `--allow-out-of-order` if the topology check asks. The dry run shows every question and converges nothing; walk it first, then answer the real run so every outcome is provable: `cmatrix` `<x>` and `sl` left at install; the `cowsay` removal `<x>` and the `fortunes-min` removal `<y>`; the collateral question `<y>`, which is what takes `fortunes` with it; the repository deletion `<s>`; `hello-world` left at install and `hello`'s revision change left applied; `io.github.fragglet.sdl_sopwith` left at install; the shape question answered "one application" — the fixture cannot settle which reading is right and neither answer is wrong, so pick this one to keep `/opt/pcsw-uat-vendor` a single item and a single recorded entry for §6. The review that follows asks the two findings in sorted order, one screen each: `<y>` on `/opt/pcsw-uat-app`, writing `sudo mkdir -p /opt/pcsw-uat-app && echo hi | sudo tee /opt/pcsw-uat-app/README` in the snippet editor, then `<x>` on `/opt/pcsw-uat-vendor`. Use a shifted key on one multi-item group first, to confirm it sets every line, then correct the lines you did not mean.
+Add `--allow-out-of-order` if the topology check asks. The dry run shows every question and converges nothing; walk it first, then answer the real run so every outcome is provable: `cmatrix` `<x>` and `sl` left at install; the `cowsay` removal `<x>` and the `fortunes-min` removal `<y>`; the collateral question `<y>`, which is what takes `fortunes` with it; the repository deletion `<s>`; `hello-world` left at install and `hello`'s revision change left applied; `io.github.fragglet.sdl_sopwith` left at install; the shape question answered "one application" — the fixture cannot settle which reading is right and neither answer is wrong, so pick this one to keep `/opt/pcsw-uat-vendor` a single item and a single recorded entry for §6. The review that follows asks the two findings in sorted order, one screen each: `<y>` on `/opt/pcsw-uat-app`, write `sudo mkdir -p /opt/pcsw-uat-app && echo hi | sudo tee /opt/pcsw-uat-app/README` in the snippet editor, then `<x>` on `/opt/pcsw-uat-vendor`.
 
 ## 5. What to check while answering
 
 The jobs run in order — apt, snap, flatpak, manual, then the folder mirror — and each one's questions come before the next one plans. The mirror asks nothing and runs last, which is what lets it read from pc2 what the package jobs left there.
 
+- Use a shifted key on one multi-item group first, to confirm it sets every line, then correct the lines you did not mean.
 - Each group is one question: every item on a line, the answer it carries in a column to the right, arrows moving between lines, `<space>` cycling the focused line, `<enter>` confirming. Nothing is asked a second time.
 - The legend's permanent answer reads `keep on pc2 for good; it is pc2's own, and will not be asked again` on a removal and `do not install on pc2 for good; it is pc1's own, and will not be asked again` on an install; a question that records nothing is the same widget with `<x>` missing.
 - `sl` is offered for install and nothing anywhere asks about its hold: a hold travels with its package, so no group, line or legend mentions one.
