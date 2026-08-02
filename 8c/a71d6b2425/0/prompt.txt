@@ -25,3 +25,19 @@ just "ssh pc1/pc2"
 ---
 
 verify yourself ("ssh pc1/pc2")
+
+---
+
+At §3 of UAT runbook. I did the pc-switcher sync of the 3nd code block. Run is not aborted: I get questions instead. Expected or bug?
+
+$ pc-switcher sync pc2 --dry-run --yes --allow-first-sync
+ pc2 has no config; pc1's would be applied (no changes made).
+
+╭──────────────────────────────────────────────────── What is /opt/pcsw-uat-vendor on pc1? ─────────────────────────────────────────────────────╮
+│ /opt/pcsw-uat-vendor on pc1 holds no file of its own — only the directories /opt/pcsw-uat-vendor/alpha, /opt/pcsw-uat-vendor/beta. Either it  │
+│ is one application whose parts live in those directories, or it is one publisher's directory holding an application per directory. Nothing on │
+│ pc1 says which, and the answer decides what pc2 is offered.                                                                                   │
+╰───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+? What is /opt/pcsw-uat-vendor on pc1? (Use arrow keys)
+ » One application — /opt/pcsw-uat-vendor is what would be reproduced on pc2
+   One per directory — /opt/pcsw-uat-vendor/alpha, /opt/pcsw-uat-vendor/beta are what would be reproduced on pc2, each on its own
