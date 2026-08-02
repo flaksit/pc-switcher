@@ -1,8 +1,9 @@
 """Unit tests for the reusable TerminalUIConfirmer (ADR-015 refinement).
 
-Covers the two decision modes:
-- interactive (TTY): pause the TUI, prompt, resume; return y/n outcome
-- non-interactive (no TTY): fall back to the caller's --allow-* flag
+Covers the decision modes:
+- `allow` set: auto-approved without prompting, TTY or not (#231)
+- interactive (TTY), no flag: pause the TUI, prompt, resume; return y/n outcome
+- non-interactive (no TTY), no flag: refuse, printing the flag hint
 """
 
 from __future__ import annotations
@@ -27,6 +28,34 @@ def _make_confirmer() -> tuple[TerminalUIConfirmer, MagicMock, MagicMock]:
     console = MagicMock()
     ui = MagicMock()
     return TerminalUIConfirmer(console, ui), console, ui
+
+
+@pytest.mark.asyncio
+class TestAllowFlagAnswersTheGate:
+    """`allow` short-circuits before interactivity is consulted (#231)."""
+
+    @pytest.mark.parametrize("interactive", [True, False])
+    async def test_allow_true_never_prompts(self, interactive: bool) -> None:
+        confirmer, console, ui = _make_confirmer()
+        with (
+            patch("rich.prompt.Prompt.ask", side_effect=AssertionError("must not prompt")),
+            patch.object(sys, "stdin", _mock_isatty(interactive)),
+        ):
+            result = await confirmer.confirm(title="T", message="m", allow=True, allow_flag="--allow-x")
+        assert result is True
+        ui.pause.assert_not_called()
+        console.print.assert_not_called()
+
+    async def test_auto_approval_is_logged_with_the_flag(self) -> None:
+        """The run record must still show the gate was passed and why."""
+        logger = MagicMock()
+        console, ui = MagicMock(), MagicMock()
+        confirmer = TerminalUIConfirmer(console, ui, logger=logger)
+        with patch.object(sys, "stdin", _mock_isatty(True)):
+            await confirmer.confirm(title="T", message="m", allow=True, allow_flag="--allow-x")
+        logged = " ".join(str(a) for a in logger.warning.call_args.args)
+        assert "T" in logged
+        assert "--allow-x" in logged
 
 
 @pytest.mark.asyncio

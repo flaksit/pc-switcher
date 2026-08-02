@@ -97,7 +97,7 @@ graph TD
 | **Connection** (`connection.py`) | The asyncssh connection: connect, disconnect, run, create_process, SFTP, and remote process cleanup. |
 | **LocalExecutor / RemoteExecutor** (`executor.py`) | The only route to either machine. Also the seam for the verbatim DEBUG trace and the `mutates=` confirmation gate. |
 | **StepGate** (`step_gate.py`) | The `--confirm-each-command` prompt; `None` unless the flag was passed. |
-| **Confirmer** (`confirmer.py`) | The coarse one-per-run confirmations (first sync, out-of-order topology), with `--allow-*` fallbacks. |
+| **Confirmer** (`confirmer.py`) | The coarse one-per-run confirmations (first sync, out-of-order topology); the matching `--allow-*` flag answers the gate instead of prompting. |
 | **Logging** (`logger.py`) | stdlib logging through a `QueueHandler`/`QueueListener` pair onto a JSON file handler and a Rich UI handler. |
 | **TerminalUI** (`ui.py`) | Rich `Live` display: step counter, per-job progress bars, recent logs, connection status, warning summary. |
 | **Jobs** (`jobs/`) | Encapsulated sync operations. |

@@ -472,6 +472,34 @@ class TestCheckFirstSync:
         cast(MagicMock, orchestrator._ui).pause.assert_not_called()  # pyright: ignore[reportPrivateUsage]
 
     @pytest.mark.asyncio
+    async def test_first_sync_interactive_with_flag_does_not_prompt(
+        self,
+        mock_config: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """First sync ON A TTY with --allow-first-sync → no prompt (#231): the flag is the answer."""
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        orchestrator = _make_orchestrator(
+            mock_config,
+            target="target-host",
+            allow_first_sync=True,
+            remote_stdout="",
+            remote_exit_code=1,
+        )
+        orchestrator._source_hostname = "source-host"  # pyright: ignore[reportPrivateUsage]
+
+        with (
+            patch("rich.prompt.Prompt.ask", side_effect=AssertionError("must not prompt")),
+            patch.object(sys, "stdin", _mock_isatty(True)),
+        ):
+            result = await orchestrator._check_out_of_order()  # pyright: ignore[reportPrivateUsage]
+
+        assert result is True
+        cast(MagicMock, orchestrator._ui).pause.assert_not_called()  # pyright: ignore[reportPrivateUsage]
+
+    @pytest.mark.asyncio
     async def test_first_sync_not_gated_by_allow_out_of_order(
         self,
         mock_config: MagicMock,
@@ -554,6 +582,39 @@ class TestCheckOutOfOrderBypass:
         # History IS read (needed to distinguish first-sync from out-of-order),
         # but no prompt is shown for the bypassed W2/W3 case.
         cast(MagicMock, orchestrator._remote_executor).run_command.assert_called()  # pyright: ignore[reportPrivateUsage]
+        cast(MagicMock, orchestrator._ui).pause.assert_not_called()  # pyright: ignore[reportPrivateUsage]
+
+    @pytest.mark.parametrize("interactive", [True, False])
+    @pytest.mark.asyncio
+    async def test_allow_out_of_order_never_prompts(
+        self,
+        interactive: bool,
+        mock_config: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """W3 (consecutive push) with the flag proceeds unprompted on a TTY as well as off one (#231)."""
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        # Local history: this machine was SOURCE to this same target → consecutive push (W3).
+        history_path = tmp_path / ".local/share/pc-switcher/sync-history.json"
+        history_path.parent.mkdir(parents=True, exist_ok=True)
+        history_path.write_text(_history_json("source", "target-host"))
+
+        orchestrator = _make_orchestrator(
+            mock_config,
+            target="target-host",
+            allow_out_of_order=True,
+            remote_stdout=_history_json("target", "source-host"),
+        )
+        orchestrator._source_hostname = "source-host"  # pyright: ignore[reportPrivateUsage]
+
+        with (
+            patch("rich.prompt.Prompt.ask", side_effect=AssertionError("must not prompt")),
+            patch.object(sys, "stdin", _mock_isatty(interactive)),
+        ):
+            result = await orchestrator._check_out_of_order()  # pyright: ignore[reportPrivateUsage]
+
+        assert result is True
         cast(MagicMock, orchestrator._ui).pause.assert_not_called()  # pyright: ignore[reportPrivateUsage]
 
     def test_orchestrator_accepts_allow_out_of_order(self, mock_config: MagicMock) -> None:
