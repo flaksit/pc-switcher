@@ -41,3 +41,8 @@ $ pc-switcher sync pc2 --dry-run --yes --allow-first-sync
 ? What is /opt/pcsw-uat-vendor on pc1? (Use arrow keys)
  » One application — /opt/pcsw-uat-vendor is what would be reproduced on pc2
    One per directory — /opt/pcsw-uat-vendor/alpha, /opt/pcsw-uat-vendor/beta are what would be reproduced on pc2, each on its own
+
+---
+
+§4 says: the collateral question "go ahead"
+"go ahead" is not used anymore anywhere. I don't know which option to pick. Update the runbook.
