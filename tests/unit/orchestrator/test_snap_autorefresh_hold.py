@@ -159,22 +159,6 @@ class TestHoldEngaged:
         assert orchestrator._snap_hold_engaged is True  # pyright: ignore[reportPrivateUsage]
 
     @pytest.mark.asyncio
-    async def test_each_pause_is_announced_against_its_own_machine(self) -> None:
-        """#234 — the pause is two writes of one command text, so the log must name each machine.
-
-        A single "on both hosts" summary made the identical pair of DEBUG command lines read
-        like one machine paused twice.
-        """
-        orchestrator, _source, _target = make_orchestrator(snap_sync_enabled=True)
-
-        await orchestrator._hold_snap_autorefresh()  # pyright: ignore[reportPrivateUsage]
-
-        announcements = [line for line in infos_of(orchestrator) if "Pausing snapd auto-refresh" in line]
-        assert len(announcements) == 2
-        assert any(SOURCE_MACHINE in line for line in announcements)
-        assert any(TARGET_MACHINE in line for line in announcements)
-
-    @pytest.mark.asyncio
     async def test_the_announcement_names_its_owner_and_why_it_spans_the_run(self) -> None:
         """#233 — the pause fires before the first job, so the line that announces it has to
         say who is holding it and why it is not scoped to the snap job: folder_sync mirrors

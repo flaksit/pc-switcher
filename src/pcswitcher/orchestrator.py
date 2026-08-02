@@ -1527,6 +1527,15 @@ class Orchestrator:
         self._snap_hold_prior_target, self._snap_hold_readable_target = await self._capture_snap_hold(Host.TARGET)
         # Engage BEFORE applying so a partially-applied hold is still restored in _cleanup.
         self._snap_hold_engaged = True
+        # Announced once, not per host: every log line already carries the machine it
+        # happened on. The line states its owner and its span (#233), because the pause
+        # fires before the first job and otherwise reads as an unexplained stop.
+        self._logger.info(
+            "Pausing snapd auto-refresh on both hosts for the whole run — held by the orchestrator, not by "
+            "snap_sync alone, because snap_sync converges each snap's revision and folder_sync then mirrors "
+            "that revision's data directory; a refresh between the two drops it from the mirror",
+            extra={"job": "orchestrator", "host": "source"},
+        )
         for host, prior, readable in (
             (Host.SOURCE, self._snap_hold_prior_source, self._snap_hold_readable_source),
             (Host.TARGET, self._snap_hold_prior_target, self._snap_hold_readable_target),
@@ -1539,19 +1548,6 @@ class Orchestrator:
                     extra={"job": "orchestrator", "host": host.value},
                 )
                 continue
-            # One line per machine, naming it (#234). The pause is two separate writes of
-            # the SAME command text, one per host, so the DEBUG trace shows the identical
-            # `snap set system refresh.hold` twice; a single "on both hosts" summary left a
-            # reader grepping the log unable to tell that pair from one pause applied twice.
-            # The line also states its owner and its span (#233): the pause happens before
-            # the first job, which read as an unexplained stop with no component behind it.
-            self._logger.info(
-                "Pausing snapd auto-refresh on %s for the whole run — held by the orchestrator, not by "
-                "snap_sync alone, because snap_sync converges each snap's revision and folder_sync then "
-                "mirrors that revision's data directory; a refresh between the two drops it from the mirror",
-                self._machine_name(host),
-                extra={"job": "orchestrator", "host": host.value},
-            )
             await self._apply_snap_hold(host, prior)
 
     async def _restore_snap_hold(self, host: Host, prior: str | None, *, readable: bool) -> None:
