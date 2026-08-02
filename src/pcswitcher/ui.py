@@ -18,6 +18,11 @@ from pcswitcher.models import ProgressUpdate
 
 __all__ = ["TerminalUI"]
 
+# Columns the Recent Logs box itself consumes: one border column plus one
+# padding column on each side (Rich's Panel default padding is (0, 1)). Log text
+# wraps at `console.width - this`, which is what the row budget is measured against.
+_LOG_PANEL_CHROME_WIDTH = 4
+
 
 class TerminalUI:
     """Rich terminal UI with progress bars, log panel, and status display.
@@ -89,6 +94,37 @@ class TerminalUI:
         # "UI never started, stay silent" now that pause() discards the instance.
         self._paused = False
 
+    def _fit_log_messages(self) -> tuple[list[str], int]:
+        """Pick the newest log messages that fit the panel's row budget, oldest dropped first.
+
+        The panel's height is fixed in *rows*, but a long message wraps over
+        several rows, so budgeting by message count overflows the box and Rich
+        crops the overflow off the bottom — silently eating the tail of the
+        newest line, the one the user is actually waiting on (#223). Measuring
+        the wrapped height of each message instead keeps the box the same size
+        while showing fewer, longer messages.
+
+        The newest message is always kept, even when it alone exceeds the
+        budget: the panel grows to fit it rather than truncating it. That is the
+        only case where the box height moves, so the Live display stays steady.
+
+        Returns:
+            The messages to render (oldest first) and the rows they occupy.
+        """
+        width = max(self._console.width - _LOG_PANEL_CHROME_WIDTH, 1)
+        kept: list[str] = []
+        rows = 0
+        for message in reversed(self._log_panel):
+            # Same wrapping Text applies when the panel renders it, so this height
+            # is exact rather than an estimate.
+            height = len(Text(message).wrap(self._console, width))
+            if kept and rows + height > self._max_log_lines:
+                break
+            kept.append(message)
+            rows += height
+        kept.reverse()
+        return kept, rows
+
     def _render(self) -> RenderableType:
         """Render the complete UI layout.
 
@@ -139,14 +175,16 @@ class TerminalUI:
         # MarkupError on `[/...]`. That crash fires on the Live auto-refresh
         # thread and again during Live.stop() teardown. The "No logs yet"
         # placeholder is trusted literal markup, so it is parsed via from_markup.
+        visible_logs, log_rows = self._fit_log_messages()
         log_body: RenderableType = (
-            Text("\n".join(self._log_panel)) if self._log_panel else Text.from_markup("[dim]No logs yet[/dim]")
+            Text("\n".join(visible_logs)) if visible_logs else Text.from_markup("[dim]No logs yet[/dim]")
         )
         log_panel = Panel(
             log_body,
             title="Recent Logs",
             border_style="blue",
-            height=self._max_log_lines + 2,  # +2 for borders
+            # Budgeted in rendered rows, not messages — see _fit_log_messages.
+            height=max(self._max_log_lines, log_rows) + 2,  # +2 for borders
         )
 
         return Group(status, self._progress, log_panel)
