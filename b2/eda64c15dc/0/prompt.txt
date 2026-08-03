@@ -1,0 +1,7 @@
+Do I understand well that you are trying to do clever things and complicate the main code to accomodate the checker test_mutates_audit.py?
+
+---
+
+Keep changes=Host.TARGET.
+Remove all other difficult logic. Keep code dead simple.
+If needed, make the test smarter. Or just add a deliberate exception.
