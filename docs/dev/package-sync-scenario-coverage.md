@@ -1753,6 +1753,7 @@ Five exits, then the `userinfo` grammar boundary.
 | J185 | A `folder_sync` rsync pass | Gated like any other write, headed by the target — the machine it writes to, not the source it runs on | U | `test_folder_sync:TestEveryPassIsAnnounced::test_the_lone_mirror_pass_says_it_deletes_and_names_the_target`; `test_step_gate:TestExecutorGate::test_starting_a_background_process_is_gated`, `::test_a_local_process_can_declare_that_it_changes_the_target` |
 | J186 | A folder whose work splits into a copy pass and a deleting mirror | Two prompts, each saying what its own half does; only the second names deletions | U | `test_folder_sync:TestEveryPassIsAnnounced::test_a_split_folder_asks_twice_and_only_the_second_can_delete` |
 | J187 | The `--dry-run` preview pass | Not gated: it writes nothing and is waited out, and a preview that asks permission reads as one that might change something | U | `…::test_the_dry_run_preview_is_not_gated_at_all` |
+| J188 | A `mutates=` whose value is computed rather than written out | Named in the audit with when it is `None` and why that path changes nothing; an undeclared one fails | U | `test_mutates_audit:TestMutatesCoverage::test_every_computed_mutates_says_when_it_is_none` |
 
 
 ## K. Opting in, job independence and order, validation preconditions, the `folder_sync` boundary

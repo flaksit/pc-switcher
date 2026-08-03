@@ -383,11 +383,10 @@ class LocalExecutor(_GatedExecutorMixin):
             mutates: Short phrase describing what starting this process changes. Starting
                 one is itself process state, so a background process is gated on that alone
                 even when its command only reads.
-            changes: The machine the process changes, when that is not the one it runs on.
-                `folder_sync`'s rsync is the case: it runs here and every byte it writes
-                lands on the target, so the prompt must name the target — it is the machine
-                that loses files, and naming the machine being changed is the whole point of
-                the heading. Defaults to this executor's own host.
+            changes: The machine the process changes, when that is not the one it runs on —
+                `folder_sync`'s rsync runs here and writes on the target. Defaults to this
+                executor's own host. The prompt names the machine being changed, not the one
+                running the command.
 
         Returns:
             LocalProcess wrapper for the subprocess

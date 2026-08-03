@@ -273,6 +273,51 @@ _TOLERATED_SIDE_EFFECTS: dict[str, _ToleratedSideEffect] = {
 }
 
 
+def _computed_mutates() -> dict[str, str]:
+    """Call sites whose `mutates=` is neither written out nor handed on, keyed as above.
+
+    Everything else in this module reads the KEYWORD, which is all a static audit can see —
+    and a keyword whose value is a literal or an f-string is a phrase on every path, so the
+    call is announced. A computed value is not: it may be `None` on some path, which
+    announces nothing while still reading here as covered. Those sites are named in
+    `_CONDITIONAL_MUTATES` instead, each saying when it is `None` and why that path changes
+    nothing.
+
+    A bare name (`mutates=mutates`) is not computed for this purpose: it is a wrapper
+    handing on what its caller passed, and that caller's own call site is audited in its
+    place. The value is what each site maps to, for a failure message that shows the code.
+    """
+    computed: dict[str, str] = {}
+
+    def visit(node: ast.AST, qualname: str, relpath: str) -> None:
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+                visit(child, f"{qualname}.{child.name}" if qualname else child.name, relpath)
+                continue
+            if isinstance(child, ast.Call) and isinstance(child.func, ast.Attribute):
+                for keyword in child.keywords:
+                    written_out = isinstance(keyword.value, ast.Constant | ast.JoinedStr | ast.Name)
+                    if keyword.arg == "mutates" and not written_out:
+                        computed[f"{relpath}::{qualname}::{child.func.attr}"] = ast.unparse(keyword)
+            visit(child, qualname, relpath)
+
+    for path in sorted(_SRC.rglob("*.py")):
+        visit(ast.parse(path.read_text(encoding="utf-8")), "", path.relative_to(_SRC).as_posix())
+    return computed
+
+
+# The one call site whose marker is computed, with when it is `None` and why that path is a
+# read. An entry here is a deliberate exception, not a defect: what it buys is that the
+# source stays a plain conditional instead of contorting itself to keep this audit literal.
+_CONDITIONAL_MUTATES: dict[str, str] = {
+    "jobs/folder_sync.py::FolderSyncJob._run_rsync_pass::start_process": (
+        "None on a dry run, where the command carries `--dry-run`: it writes on neither machine and the "
+        "call waits the process out, so nothing is left running either. Pinned by "
+        "`test_folder_sync:TestEveryPassIsAnnounced::test_the_dry_run_preview_is_not_gated_at_all`"
+    ),
+}
+
+
 def _describe(sites: list[_CallSite]) -> str:
     return "\n".join(f"    {site.relpath}:{site.lineno}  {site.source}" for site in sites)
 
@@ -334,16 +379,34 @@ class TestMutatesCoverage:
         """J179 — a process left running is process state, whatever its command reads.
 
         Stated over the method rather than per call site because a process usually outlives
-        the call that starts it, and something has to terminate it.
-
-        What this can see is the keyword, not its value, so `folder_sync`'s rsync pass counts
-        as covered here while passing `None` on a dry run — where it starts a process that
-        writes nothing and is awaited to completion inside the same call, changing no state on
-        either machine. That value is not this audit's to check; the behaviour is pinned by
-        `test_folder_sync:TestEveryPassIsAnnounced`, which is where a regression would show.
+        the call that starts it, and something has to terminate it. A site whose marker is
+        computed rather than written out satisfies this and is held by the test below, which
+        is where the `None` path has to say what it is.
         """
         offenders = sorted(key for key in _collect_ungated() if key.endswith("::start_process"))
         assert not offenders, "a background process is started without `mutates=`:\n" + "\n".join(offenders)
+
+    def test_every_computed_mutates_says_when_it_is_none(self) -> None:
+        """J188 — the keyword proves the call is announced only when its value is written out.
+
+        The blind spot this closes is the one a reviewer would have to spot by reading: a call
+        passing `mutates=<expression>` reads as covered everywhere above while announcing
+        nothing on the path where that expression is `None`. Naming the site is what turns an
+        invisible omission into a declared exception with a reason attached — and it is why
+        the source of such a call may stay a plain conditional rather than be written into a
+        shape this audit could read literally.
+        """
+        computed = _computed_mutates()
+        problems = [
+            f"{key}: computed `{value}`, and nothing says when it is None"
+            for key, value in sorted(computed.items())
+            if key not in _CONDITIONAL_MUTATES
+        ]
+        problems += [
+            f"{key}: declared as computed but its `mutates=` is written out — remove the entry."
+            for key in sorted(set(_CONDITIONAL_MUTATES) - set(computed))
+        ]
+        assert not problems, "`mutates=` values the audit cannot read:\n" + "\n".join(problems)
 
     def test_the_sudo_precondition_probe_is_a_read_not_a_modification(self) -> None:
         """J178 — `sudo --non-interactive true` runs `true`, and `true` changes nothing.

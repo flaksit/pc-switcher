@@ -31,12 +31,11 @@ state at all. Elevation is not a change: `sudo <read-only command>` stays a read
 Generic on purpose, and invoked from exactly one place: `pcswitcher.executor`. Any caller
 — job, orchestrator, helper — reaches this gate by passing `mutates="..."` to the executor
 method it already uses, so there is no second API to remember and no per-job wiring. The
-executor supplies `job` (from its `active_job` context variable) and `host` (from which
-executor it is, or from the `changes` a caller declares when the two differ — `folder_sync`'s
-rsync runs on the source and writes on the target, and this prompt names the machine being
-changed). Everything that is not a pure read passes `mutates`, with no exception;
-`tests/unit/test_mutates_audit.py` holds that line, and names the few reads whose incidental
-side effects are deliberately tolerated.
+executor supplies `job` (from its `active_job` context variable) and `host` — from which
+executor it is, or from the `changes` a caller declares when a process runs on one machine
+and writes on the other, since this prompt names the machine being changed. Everything that
+is not a pure read passes `mutates`; `tests/unit/test_mutates_audit.py` holds that line, and
+names the few reads whose incidental side effects are deliberately tolerated.
 """
 
 from __future__ import annotations
