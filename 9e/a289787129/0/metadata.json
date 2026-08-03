@@ -1,0 +1,79 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "9ea289787129",
+  "session_id": "a6fdf859-1f12-4daf-94eb-8369ba71837c",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-03T13:14:17.307081993Z",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    "CLAUDE.md",
+    "docs/dev/development-guide.md",
+    "docs/jobs/package-sync.md",
+    "docs/planning/package-sync-conformance-criteria.md",
+    "docs/system/architecture.md",
+    "docs/system/core.md",
+    "src/pcswitcher/executor.py",
+    "src/pcswitcher/step_gate.py",
+    "tests/unit/test_mutates_audit.py"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "18b3a7b8089f",
+  "checkpoint_transcript_start": 926,
+  "transcript_lines_at_start": 926,
+  "compact_transcript_start": 211,
+  "token_usage": {
+    "input_tokens": 11,
+    "cache_creation_tokens": 12274,
+    "cache_read_tokens": 1485550,
+    "output_tokens": 3750,
+    "api_call_count": 6
+  },
+  "session_metrics": {
+    "turn_count": 17
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-03T13:14:17.195480748Z",
+    "agent_lines": 4,
+    "agent_removed": 23,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 30,
+    "total_committed": 4,
+    "total_lines_changed": 57,
+    "agent_percentage": 47.368421052631575,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 62,
+      "user_lines_removed": 31,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9,
+        ".planning/phases/02-package-management-sync/02-UAT-01-RUNBOOK.md": 1,
+        "CLAUDE.md": 2,
+        "docs/dev/development-guide.md": 1,
+        "docs/planning/package-sync-conformance-criteria.md": 2,
+        "docs/system/architecture.md": 1,
+        "docs/system/core.md": 4,
+        "src/pcswitcher/executor.py": 32,
+        "src/pcswitcher/step_gate.py": 10
+      },
+      "user_removed_per_file": {
+        ".planning/phases/02-package-management-sync/02-UAT-01-RUNBOOK.md": 1,
+        "CLAUDE.md": 2,
+        "docs/dev/development-guide.md": 1,
+        "docs/planning/package-sync-conformance-criteria.md": 2,
+        "docs/system/architecture.md": 1,
+        "docs/system/core.md": 2,
+        "src/pcswitcher/executor.py": 19,
+        "src/pcswitcher/step_gate.py": 3
+      }
+    }
+  ]
+}
