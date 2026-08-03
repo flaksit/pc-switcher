@@ -1,0 +1,6 @@
+Dry-run preview pass should not be gated. This will make user feel unsafe.
+remove _UNGATED_WRITES.
+
+---
+
+Did you just make a general exception for any command dry-run might run?
