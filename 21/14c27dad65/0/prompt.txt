@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>btjo4kin5</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/37267337-fd90-4537-a51a-f2b2f2edb408/tasks/btjo4kin5.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for CI after final push" completed (exit code 0)</summary>
+</task-notification>
