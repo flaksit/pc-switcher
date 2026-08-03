@@ -40,3 +40,13 @@
 
 Fix runbook for the "3 things that differ".
 For 2nd run: Is solution not simply: update runbook to install snap and flatpak on pc2?
+
+---
+
+<task-notification>
+<task-id>blsplwc3x</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/6a5e2bb0-86cb-4153-93fd-93b3dbb7033b/tasks/blsplwc3x.output</output-file>
+<status>completed</status>
+<summary>Background command "Run /opt-only failure variant" completed (exit code 0)</summary>
+</task-notification>
