@@ -201,7 +201,7 @@ The mirror ran over `/home` after all four package jobs, and what it left is the
 
 ## 7. Unattended runs: what goes undecided, and what a failure reports
 
-The tool run from a script or a timer, nobody at the keyboard. Under test: an unanswered question is declined and its job says so; the snippet registry moves by no route at all; one broken command fails one job, named. The sideloaded snap is checked here for convenience — a sideload is out of scope with a terminal or without one.
+The tool run from a script or a timer, nobody at the keyboard. Under test: an unanswered question is declined and its job says so; pc1's snippet registry never reaches pc2, neither pushed by the job nor carried by the folder mirror; one broken command fails one job, named. The sideloaded snap is checked here for convenience — a sideload is out of scope with a terminal or without one.
 
 `ssh` without `-t` is what leaves the run no terminal. Spell the tool by path: a non-interactive shell never reads `.bashrc`, so `~/.local/bin` is not on `PATH`.
 
