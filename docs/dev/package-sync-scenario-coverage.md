@@ -1181,6 +1181,8 @@ Driven by the orchestrator around the whole job window; listed here because the 
 | G93 | Nomad holds two entries Atlas does not have and a third whose body differs from Atlas's | One question naming all three — every entry the transfer would lose and every entry it would change | U | `test_manual_installs_sync:TestSnippetRegistryOverwriteGuard::test_one_question_names_every_entry_the_push_would_lose_or_change` |
 | G94 | Atlas has never had a snippet written on it and Nomad's registry holds two entries | No transfer happens, so no entry of Nomad's is lost or changed and no question is asked; Nomad keeps both entries | U | `test_manual_installs_sync:TestSnippetRegistryOverwriteGuard::test_an_absent_source_registry_leaves_the_targets_entries_alone` |
 | G95 | Any read of a registry file that is there and cannot be parsed, on either machine | The run ends, naming the file, the machine holding it, and that it must be repaired before the next sync | U | `test_package_state:TestSnippetRegistry::test_a_registry_that_cannot_be_parsed_ends_the_run_naming_the_file` |
+| G115 | One registry file whose entries are malformed in two different ways, alongside one that parses | The ending names both malformed entries and neither the parsing one — one hand edit covers the whole file | U | `test_package_state:TestSnippetRegistry::test_every_malformed_entry_in_one_registry_is_named_at_once` |
+| G116 | Both machines' registry files are unparsable at transfer time | One ending names both files and both machines; nothing is asked and nothing is sent | U | `test_manual_installs_sync:TestSnippetRegistryOverwriteGuard::test_both_registries_corrupt_ends_the_run_naming_both_machines` |
 
 ### G.6 When a snippet does not work (article: PKG-FR-MANUAL-FAIL-ITEM)
 

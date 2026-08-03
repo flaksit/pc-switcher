@@ -889,6 +889,36 @@ class TestSnippetRegistry:
         assert "start a new sync" in message
 
     @pytest.mark.asyncio
+    async def test_every_malformed_entry_in_one_registry_is_named_at_once(self) -> None:
+        """G115 — the repair is a hand edit of one file, so the ending names every entry that
+        edit has to cover: stopping at the first would have the user fix it, start a new
+        sync, and only then be shown the next.
+        """
+        raw = (
+            "snippets:\n"
+            "  apt:package:one:\n"
+            "    label: One\n"
+            "  apt:package:two: not-a-mapping\n"
+            "  apt:package:three:\n"
+            "    label: Three\n"
+            "    body: |\n"
+            "      echo three\n"
+            "    authored_at: '2026-01-01T00:00:00+00:00'\n"
+            "    authored_on: atlas\n"
+        )
+        executor = MagicMock()
+        executor.run_command = AsyncMock(return_value=CommandResult(0, raw, ""))
+
+        with pytest.raises(SyncAborted) as exc_info:
+            await SnippetRegistry(executor, "nomad").load()
+
+        message = str(exc_info.value)
+        assert "apt:package:one (missing field 'body')" in message
+        assert "apt:package:two (" in message
+        # The one entry that parses is never named as a problem.
+        assert "apt:package:three" not in message
+
+    @pytest.mark.asyncio
     async def test_add_then_get_round_trips_body_verbatim_including_whitespace(self) -> None:
         """G56 — a body written with leading indentation and blank lines between commands
         is stored and read back byte for byte."""

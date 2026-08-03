@@ -365,6 +365,10 @@ def _deserialize_snippets(raw: str) -> dict[str, Snippet]:
 
     Raises anything in `_UNREADABLE` for content that is not a snippet registry; both
     callers turn that into `_unreadable_registry`'s abort.
+
+    Every entry is tried before that is raised, and the failure names all of them: the repair
+    is a hand edit of this one file, and stopping at the first malformed entry would have the
+    user fix it, start a new sync, and only then be shown the next.
     """
     data = yaml.safe_load(raw)
     snippets = data.get("snippets") if isinstance(data, dict) else None
@@ -372,14 +376,23 @@ def _deserialize_snippets(raw: str) -> dict[str, Snippet]:
         raise ValueError("snippet registry has no 'snippets' mapping")
 
     entries: dict[str, Snippet] = {}
+    malformed: list[str] = []
     for item_id, fields in snippets.items():
-        entries[str(item_id)] = Snippet(
-            item_id=str(item_id),
-            label=fields["label"],
-            body=fields["body"],
-            authored_at=fields["authored_at"],
-            authored_on=fields["authored_on"],
-        )
+        try:
+            entries[str(item_id)] = Snippet(
+                item_id=str(item_id),
+                label=fields["label"],
+                body=fields["body"],
+                authored_at=fields["authored_at"],
+                authored_on=fields["authored_on"],
+            )
+        except KeyError as exc:
+            malformed.append(f"{item_id} (missing field {exc})")
+        except TypeError as exc:
+            # The entry is not a mapping at all: a bare scalar, a list, or nothing.
+            malformed.append(f"{item_id} ({exc})")
+    if malformed:
+        raise ValueError(f"unreadable snippet entries: {'; '.join(malformed)}")
     return entries
 
 

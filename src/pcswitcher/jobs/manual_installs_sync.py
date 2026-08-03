@@ -398,16 +398,29 @@ class ManualInstallsSyncJob(PackageSyncJob):
         push that replaces them changes what the target holds even where the body it replays
         stays byte-identical.
 
-        Either registry being unparsable aborts the same way, inside the two reads below
-        (`state._unreadable_registry`): a file nobody can read says nothing about which
-        entries exist, so the comparison this method rests on cannot be made at all.
+        Either registry being unparsable aborts the same way (`state._unreadable_registry`):
+        a file nobody can read says nothing about which entries exist, so the comparison this
+        method rests on cannot be made at all. Both are read before either abort is raised, so
+        a user whose two copies are both broken repairs them in one go rather than learning of
+        the target's only once the source's is fixed.
         """
-        source_snippets = load_snippets_from_text(
-            source_path.read_text(encoding="utf-8"),
-            display_path=str(source_path),
-            machine=self.machines.source,
-        )
-        target_snippets = await SnippetRegistry(self.target, self.machines.target).load()
+        unreadable: list[SyncAborted] = []
+        source_snippets: dict[str, Snippet] = {}
+        target_snippets: dict[str, Snippet] = {}
+        try:
+            source_snippets = load_snippets_from_text(
+                source_path.read_text(encoding="utf-8"),
+                display_path=str(source_path),
+                machine=self.machines.source,
+            )
+        except SyncAborted as exc:
+            unreadable.append(exc)
+        try:
+            target_snippets = await SnippetRegistry(self.target, self.machines.target).load()
+        except SyncAborted as exc:
+            unreadable.append(exc)
+        if unreadable:
+            raise SyncAborted("\n".join(str(exc) for exc in unreadable))
 
         lost = [snippet for item_id, snippet in target_snippets.items() if item_id not in source_snippets]
         changed = [

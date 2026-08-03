@@ -2676,6 +2676,36 @@ class TestSnippetRegistryOverwriteGuard:
         target.send_file.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_both_registries_corrupt_ends_the_run_naming_both_machines(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """G116 — the two copies are two hand edits, so one ending names both: reading the
+        source's first and stopping there would hide the target's until the source is
+        repaired.
+        """
+        corrupt = "snippets: [\n  - broken\n"
+        _ = self._write_source_registry(tmp_path, corrupt)
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        confirmer = FakeConfirmer(approve=True)
+        context, _source, target = make_context(
+            target_responses={
+                "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, corrupt, ""),
+                "echo $HOME": CommandResult(0, "/home/user\n", ""),
+            },
+            confirmer=confirmer,
+        )
+        job = ManualInstallsSyncJob(context)
+
+        with pytest.raises(SyncAborted) as caught:
+            await job._push_snippet_registry()  # pyright: ignore[reportPrivateUsage]
+
+        message = str(caught.value)
+        assert "on source-host" in message
+        assert "on target-host" in message
+        assert confirmer.calls == []
+        target.send_file.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_an_absent_source_registry_leaves_the_targets_entries_alone(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
