@@ -1326,6 +1326,14 @@ class Orchestrator:
                     self._ui.set_current_step(SyncStep.RUN_JOBS, job.name, substep=substep)
                     started_at = datetime.now(UTC)
                     try:
+                        # Tagged with the job's own name, not "orchestrator": this line opens
+                        # the run of log lines the job itself emits, so it reads as the first
+                        # of them rather than as a separate orchestrator remark.
+                        self._logger.info(
+                            "Job %s started",
+                            job.name,
+                            extra={"job": job.name, "host": "source"},
+                        )
                         # Labels this job's executor traffic in the debug trace (#210) and
                         # in the --confirm-each-command prompt. Set per job rather than per
                         # executor because the executors are shared by every job.
