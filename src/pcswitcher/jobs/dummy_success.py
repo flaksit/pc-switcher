@@ -109,7 +109,9 @@ class DummySuccessJob(SyncJob):
         # Output format: "tick N" where N is 1-based iteration count
         cmd = f'for i in $(seq 1 {iterations}); do echo "tick $i"; sleep 2; done'
 
-        process = await self.target.start_process(cmd)
+        process = await self.target.start_process(
+            cmd, mutates="start the demo job's tick loop, which runs until the job ends"
+        )
         tick = 0
 
         async for raw_line in process.stdout():

@@ -183,9 +183,6 @@ _READ_ONLY_CALLS: dict[str, int] = {
     # the dpkg-lock `fuser` is in `_TOLERATED_SIDE_EFFECTS`.
     "jobs/apt_sync/job.py::AptSyncJob.validate::run_command": 2,
     "jobs/disk_space_monitor.py::DiskSpaceMonitorJob.validate::run_command": 1,
-    # Demo jobs: a `seq`/`echo`/`sleep` loop used to exercise the progress UI.
-    "jobs/dummy_fail.py::DummyFailJob._run_target_phase::start_process": 1,
-    "jobs/dummy_success.py::DummySuccessJob._run_target_phase::start_process": 1,
     # flatpak_sync: `list`/`remotes`/`mask` listings, the per-remote keyring digest
     # (`sha256sum`, one batched read per scope), the source's ostree `repo/config` (the one
     # place a remote's `gpgkeypath` is recorded), the target's $HOME, and capability probes.
@@ -378,6 +375,18 @@ class TestMutatesCoverage:
         """
         unexplained = sorted(key for key, entry in _TOLERATED_SIDE_EFFECTS.items() if not entry.why.strip())
         assert not unexplained, "tolerated ungated calls with no stated reason:\n" + "\n".join(unexplained)
+
+    def test_starting_a_background_process_is_never_ungated(self) -> None:
+        """J179 — a process left running is process state, whatever its command reads.
+
+        Stated over the method rather than per call site because there is no read-only
+        `start_process`: the handle outlives the call, and something has to terminate it.
+        The one exception is the rsync pass tracked by #209, which the tables already hold.
+        """
+        offenders = sorted(
+            key for key in _collect_ungated() if key.endswith("::start_process") and key not in _UNGATED_WRITES
+        )
+        assert not offenders, "a background process is started without `mutates=`:\n" + "\n".join(offenders)
 
     def test_a_sudo_probe_whose_whole_effect_is_exercising_sudo_is_gated(self) -> None:
         """J178 — `sudo --non-interactive true` reads nothing; running it IS the change.
