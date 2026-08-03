@@ -277,6 +277,20 @@ class TestAHoldWithoutItsPackageEndsTheRun:
             await AptSyncJob(context).plan()
 
     @pytest.mark.asyncio
+    async def test_stray_holds_on_both_machines_are_all_named_once(self) -> None:
+        """B55 — one ending covers both machines: naming only the first would have the user
+        clear it, sync again, and only then learn of the second.
+        """
+        context, _source, _target = self._context(source_holds="phantom\n", target_holds="ghost\nwraith\n")
+
+        with pytest.raises(SyncAborted) as caught:
+            await AptSyncJob(context).plan()
+
+        message = str(caught.value)
+        assert "source-host: phantom — clear with `sudo apt-mark unhold phantom`" in message
+        assert "target-host: ghost, wraith — clear with `sudo apt-mark unhold ghost wraith`" in message
+
+    @pytest.mark.asyncio
     async def test_holds_that_name_installed_packages_let_the_run_proceed(self) -> None:
         """B19 — the ordinary case: both machines hold only packages they have, and planning
         finishes normally.

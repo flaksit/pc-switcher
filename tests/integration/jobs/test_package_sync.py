@@ -5373,12 +5373,13 @@ class TestAptHoldsThroughARealRun:
             )
 
             collapsed = _collapse_run_output(sync_result.stdout + sync_result.stderr)
-            assert f"pc2 holds apt package(s) it does not have installed: {ghost}" in collapsed, (
-                f"the run did not name {ghost} and the machine holding it.\n"
+            assert "apt holds naming packages the machine does not have installed:" in collapsed, (
+                f"the run did not end over the stray hold on {ghost}.\n"
                 f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
             )
-            assert f"sudo apt-mark unhold {ghost}" in collapsed, (
-                f"the run did not say how to clear the hold on {ghost}.\n{collapsed}"
+            assert f"pc2: {ghost} — clear with `sudo apt-mark unhold {ghost}`" in collapsed, (
+                f"the run did not name {ghost}, the machine holding it and the command that clears it.\n"
+                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
             )
 
             after = await _capture_machine_package_state(pc2_executor)

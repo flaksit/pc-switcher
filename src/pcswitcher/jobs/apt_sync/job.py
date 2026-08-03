@@ -424,21 +424,30 @@ class AptSyncJob(PackageSyncJob):
         `SyncAborted` for the same reason an unparsable snippet registry raises it
         (`PKG-FR-REGISTRY-CONSENT`): the run must end for the user to repair something by
         hand, which is not this job failing and not the tool breaking.
+
+        Both machines are scanned before anything is raised, and the one abort names every
+        stray hold on each of them: a user told about one machine would clear it, sync again,
+        and only then be told about the other. The two remediations stay separate lines
+        because each `apt-mark unhold` runs on its own machine.
         """
         stray: list[tuple[str, frozenset[str]]] = []
         if source_hold_names:
             stray.append((self.machines.source, source_hold_names - await self._probe.capture_source_installed()))
         if target_hold_names:
             stray.append((self.machines.target, target_hold_names - await self._installed_on_target()))
-        for machine, names in stray:
-            if not names:
-                continue
-            listed = ", ".join(sorted(names))
-            raise SyncAborted(
-                f"{machine} holds apt package(s) it does not have installed: {listed}. "
-                f"A hold on a package the machine lacks freezes nothing and refuses every later attempt to "
-                f"install it. Clear it on {machine} with `sudo apt-mark unhold {listed}`, then sync again."
-            )
+        found = [(machine, sorted(names)) for machine, names in stray if names]
+        if not found:
+            return
+        remediation = "\n".join(
+            f"  {machine}: {', '.join(names)} — clear with `sudo apt-mark unhold {' '.join(names)}`"
+            for machine, names in found
+        )
+        raise SyncAborted(
+            "apt holds naming packages the machine does not have installed:\n"
+            f"{remediation}\n"
+            "A hold on a package the machine lacks freezes nothing and refuses every later attempt to "
+            "install it. Clear every hold listed above, then sync again."
+        )
 
     @staticmethod
     def _marked_packages(decisions: Mapping[str, DecisionEntry]) -> frozenset[str]:

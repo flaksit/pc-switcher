@@ -218,6 +218,7 @@ Flowchart edges are named in the Scenario column as `A→B`, `B→C`, etc.
 | B19 | Both machines hold only packages they have installed | Planning finishes normally; nothing ends the run | U | `test_apt_job:TestAHoldWithoutItsPackageEndsTheRun::test_holds_that_name_installed_packages_let_the_run_proceed` |
 | B20 | The apt-get arguments a run builds for an install | `--allow-change-held-packages` is unreachable: no parameter can reintroduce it, for the rehearsal or for anything else | U | `test_apt_collateral:TestNoRehearsalEverAsksToMoveHeldPackages::test_the_install_arguments_cannot_express_it` |
 | B21 | A run carrying an install and a real hold | No command it issues asks apt to move held packages | U | `test_apt_collateral:TestNoRehearsalEverAsksToMoveHeldPackages::test_an_ordinary_run_never_asks_for_it` |
+| B55 | Atlas holds `phantom`, Nomad holds `ghost` and `wraith`; no machine has any of them | One ending names all three, attributes each to its machine, and gives each machine its own `apt-mark unhold` — the user repairs both machines in one go | U | `test_apt_job:TestAHoldWithoutItsPackageEndsTheRun::test_stray_holds_on_both_machines_are_all_named_once` |
 
 ### B.4 The exact-version obligation (article: PKG-FR-APT-HOLD-VERSION)
 
