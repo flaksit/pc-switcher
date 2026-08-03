@@ -199,13 +199,15 @@ ls ~/snap/hello                                  # pc1's revision and current, a
 
 The mirror ran over `/home` after all four package jobs, and what it left is the boundary: `uat-converged` is on pc2 because pc2's own snapd ends the run on that revision, and `uat-stray` is not, because the revision it holds data for is the one this run moved pc2 off. The two `apt.decisions.yaml` checks above are the same boundary read from the other side — each machine still holds its own record, so the mirror carried neither machine's decision file to the other.
 
-## 7. Two runs with no terminal
+## 7. Unattended runs: what goes undecided, and what a failure reports
+
+This is the tool run from a script or a timer, with nobody at the keyboard. Three things are under test. A question nobody answers is declined rather than guessed, and the job says so instead of reporting success over it. A file that only an answer would move stays where it is on both machines — by every route, including the folder mirror it happens to live inside. And a command that fails mid-run fails its own job alone, naming the command that did not answer.
 
 `ssh` without `-t` leaves the run no terminal, which is the only way to reach these paths. The tool is spelled by path in every line below: a non-interactive shell never reads `.bashrc`, so `~/.local/bin` is not on `PATH` and the bare name is not found. Sideload `hello-world` on pc2 first: a sideloaded snap is out of scope on both machines, so the run must neither move it nor act on it — the verbatim command output still names it, because `snap list --all` prints every snap the machine has.
 
 The first run must report apt_sync SKIPPED — `tree` still differs in version, and even that report, which applies nothing and converges on its own, is an item nobody was there to answer — snap_sync, flatpak_sync and manual_installs_sync successful with nothing left to decide, folder_sync successful, and a count of 0: no snippet registry is transferred without an answer, on the success outcome as much as the skipped one.
 
-Give pc2 a registry of its own first, holding one entry pc1 has never heard of and none of pc1's. With nobody to ask there is no push, so the mirror is the only thing left that could move that file — and it must not: pc2 ends the run holding its own entry and none of pc1's. The marker on pc1 is what says the mirror reached that directory at all in this run.
+Give pc2 a registry of its own first, holding one entry pc1 has never heard of and none of pc1's. The registry is a shared file the job pushes once an answer authorizes it, and it sits in `~/.config/pc-switcher` — inside the `/home` the mirror copies. With nobody to ask there is no push, so the mirror is the only thing left that could move it, and it must not: pc2 ends the run holding its own entry and none of pc1's. The marker on pc1 is what says the mirror reached that directory at all in this run, so a file left alone is a boundary the mirror respected and not a mirror that never arrived.
 
 ```bash
 ssh testuser@"$PC2" 'cd /tmp && sudo snap download hello-world --basename=uat-hello-world && sudo snap remove hello-world && sudo snap install --dangerous /tmp/uat-hello-world.snap'
