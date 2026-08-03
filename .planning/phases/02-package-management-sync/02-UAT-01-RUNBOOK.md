@@ -201,9 +201,9 @@ The mirror ran over `/home` after all four package jobs, and what it left is the
 
 ## 7. Two runs with no terminal
 
-`ssh` without `-t` leaves the run no terminal, which is the only way to reach these paths. Sideload `hello-world` on pc2 first: a sideloaded snap is out of scope on both machines, so the run must neither move it nor mention it.
+`ssh` without `-t` leaves the run no terminal, which is the only way to reach these paths. The tool is spelled by path in every line below: a non-interactive shell never reads `.bashrc`, so `~/.local/bin` is not on `PATH` and the bare name is not found. Sideload `hello-world` on pc2 first: a sideloaded snap is out of scope on both machines, so the run must neither move it nor act on it — the verbatim command output still names it, because `snap list --all` prints every snap the machine has.
 
-The first run must report apt_sync SKIPPED — the repository deletion you left for now is still to be answered and nobody was there — snap_sync, flatpak_sync and manual_installs_sync successful with nothing left to decide, folder_sync successful, and a count of 0: no snippet registry is transferred without an answer, on the success outcome as much as the skipped one.
+The first run must report apt_sync SKIPPED — `tree` still differs in version, and even that report, which applies nothing and converges on its own, is an item nobody was there to answer — snap_sync, flatpak_sync and manual_installs_sync successful with nothing left to decide, folder_sync successful, and a count of 0: no snippet registry is transferred without an answer, on the success outcome as much as the skipped one.
 
 Give pc2 a registry of its own first, holding one entry pc1 has never heard of and none of pc1's. With nobody to ask there is no push, so the mirror is the only thing left that could move that file — and it must not: pc2 ends the run holding its own entry and none of pc1's. The marker on pc1 is what says the mirror reached that directory at all in this run.
 
@@ -211,20 +211,21 @@ Give pc2 a registry of its own first, holding one entry pc1 has never heard of a
 ssh testuser@"$PC2" 'cd /tmp && sudo snap download hello-world --basename=uat-hello-world && sudo snap remove hello-world && sudo snap install --dangerous /tmp/uat-hello-world.snap'
 ssh testuser@"$PC2" 'printf "snippets:\n  \"unreproducible:unowned-path:/opt/pcsw-uat-pc2\":\n    label: /opt/pcsw-uat-pc2\n    body: \"true\"\n    authored_at: \"2026-07-30T00:00:00+00:00\"\n    authored_on: pc2\n" > ~/.config/pc-switcher/package-snippets.yaml'
 ssh testuser@"$PC1" 'touch ~/.config/pc-switcher/pcsw-uat-mirrored'
-ssh testuser@"$PC1" 'pc-switcher sync pc2 --yes --allow-first-sync --allow-out-of-order'
+ssh testuser@"$PC1" '~/.local/bin/pc-switcher sync pc2 --yes --allow-first-sync --allow-out-of-order'
 ssh testuser@"$PC1" 'grep -c "send_file.*package-snippets.yaml" "$(ls -t ~/.local/share/pc-switcher/logs/sync-*.log | head -1)"'
-ssh testuser@"$PC2" 'snap list hello-world'      # still the sideloaded x-revision, and the log names it nowhere
+ssh testuser@"$PC2" 'snap list hello-world'      # still the sideloaded x-revision
+ssh testuser@"$PC1" 'grep hello-world "$(ls -t ~/.local/share/pc-switcher/logs/sync-*.log | head -1)" | grep -vc "\"event\": \"stdout: "'   # 0 — no event of the tool's own names it
 ssh testuser@"$PC2" 'ls ~/.config/pc-switcher'   # pcsw-uat-mirrored arrived
 ssh testuser@"$PC2" 'grep -c "label: /opt/pcsw-uat-pc2" ~/.config/pc-switcher/package-snippets.yaml'   # 1
 ssh testuser@"$PC2" 'grep -c "label: /opt/pcsw-uat-app" ~/.config/pc-switcher/package-snippets.yaml'   # 0
-ssh testuser@"$PC2" 'sudo chmod -x /usr/bin/flatpak /usr/bin/snap'
 ssh testuser@"$PC1" 'sudo chmod 000 /opt'
-ssh testuser@"$PC1" 'pc-switcher sync pc2 --yes --allow-first-sync --allow-out-of-order'
-ssh testuser@"$PC2" 'sudo chmod +x /usr/bin/flatpak /usr/bin/snap'
+ssh testuser@"$PC1" '~/.local/bin/pc-switcher sync pc2 --yes --allow-first-sync --allow-out-of-order'
 ssh testuser@"$PC1" 'sudo chmod 755 /opt'
 ```
 
-The second ends `Sync finished with failures:` with one line per failed job — flatpak_sync, snap_sync and manual_installs_sync — each naming the command that did not answer rather than the job alone, while apt_sync and folder_sync still reach their own outcome. `manual_installs_sync` fails on the scan of pc1's own `/opt`, which is half of a diff it now runs on both machines. The log also warns that snapd auto-refresh was not paused on the machine whose `refresh.hold` could not be read.
+The second ends `Sync finished with failures:` and exit code 1, with one line per failed job — `manual_installs_sync` alone — naming the command that did not answer rather than the job: the scan of pc1's own `/opt`, which is half of a diff it now runs on both machines, quoted whole and ending `find: '/opt': Permission denied`. apt_sync, snap_sync, flatpak_sync and folder_sync each still reach their own outcome.
+
+Only a break `validate()` cannot see reaches this path, and an unreadable directory is one. Taking `snap` or `flatpak` away instead reaches nothing: a missing manager is a validation error naming the machine and the `apt install` that repairs it, so the run is refused before any job starts and no job reports anything.
 
 ## 8. Cleanup
 
@@ -236,7 +237,7 @@ tests/integration/scripts/internal/lock.sh release "janfr-uat-02-01"
 
 ## 9. Not exercised here
 
-Pin deletion; the repository-conflict and flatpak remote-conflict questions; the Ubuntu Pro gate; the snippet-registry overwrite confirmation and the credentials it withholds; an `/etc/apt/apt.conf.d` file differing on both machines, the only group whose permanent answer reads `do not update on pc2 for good`; a repository whose only remaining users are packages apt installed automatically; a repository kept because the removal that would have freed it was declined; the "one application per directory" answer to the `/opt` shape question; a hold whose package's install you declined, which is reported as declined rather than failed; a filter that cannot be copied or applied, which warns and fails the applications from that remote; and `--confirm-each-command` (test 3 of `02-UAT.md`).
+Pin deletion; the repository-conflict and flatpak remote-conflict questions; the Ubuntu Pro gate; the snippet-registry overwrite confirmation and the credentials it withholds; an `/etc/apt/apt.conf.d` file differing on both machines, the only group whose permanent answer reads `do not update on pc2 for good`; a repository whose only remaining users are packages apt installed automatically; a repository kept because the removal that would have freed it was declined; the "one application per directory" answer to the `/opt` shape question; a hold whose package's install you declined, which is reported as declined rather than failed; a filter that cannot be copied or applied, which warns and fails the applications from that remote; a snap or flatpak command that does not answer mid-run, and the warning that snapd auto-refresh was not paused on the machine whose `refresh.hold` could not be read, both of which need a break `validate()` does not already refuse the run over; and `--confirm-each-command` (test 3 of `02-UAT.md`).
 
 Of the folder boundary, only what the mirror must not carry is checked. What it does carry is a Phase 1 concern and no count, byte figure or deletion of the mirror's own is read here.
 
