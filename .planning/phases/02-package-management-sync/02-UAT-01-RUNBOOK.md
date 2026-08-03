@@ -216,7 +216,8 @@ ssh testuser@"$PC2" 'cd /tmp && sudo snap download hello-world --basename=uat-he
 ssh testuser@"$PC2" 'printf "snippets:\n  \"unreproducible:unowned-path:/opt/pcsw-uat-pc2\":\n    label: /opt/pcsw-uat-pc2\n    body: \"true\"\n    authored_at: \"2026-07-30T00:00:00+00:00\"\n    authored_on: pc2\n" > ~/.config/pc-switcher/package-snippets.yaml'
 ssh testuser@"$PC1" 'touch ~/.config/pc-switcher/pcsw-uat-mirrored'
 
-ssh testuser@"$PC1" '~/.local/bin/pc-switcher sync pc2 --yes --allow-first-sync --allow-out-of-order'   # first run
+# first run
+ssh testuser@"$PC1" '~/.local/bin/pc-switcher sync pc2 --yes --allow-first-sync --allow-out-of-order'
 ssh testuser@"$PC1" 'grep -c "send_file.*package-snippets.yaml" "$(ls -t ~/.local/share/pc-switcher/logs/sync-*.log | head -1)"'
 ssh testuser@"$PC2" 'snap list hello-world'      # still the sideloaded x-revision
 ssh testuser@"$PC1" 'grep hello-world "$(ls -t ~/.local/share/pc-switcher/logs/sync-*.log | head -1)" | grep -vc "\"event\": \"stdout: "'   # 0 — no event of the tool's own names it
@@ -224,7 +225,9 @@ ssh testuser@"$PC2" 'ls ~/.config/pc-switcher'   # pcsw-uat-mirrored arrived
 ssh testuser@"$PC2" 'grep -c "label: /opt/pcsw-uat-pc2" ~/.config/pc-switcher/package-snippets.yaml'   # 1
 ssh testuser@"$PC2" 'grep -c "label: /opt/pcsw-uat-app" ~/.config/pc-switcher/package-snippets.yaml'   # 0
 ssh testuser@"$PC1" 'sudo chmod 000 /opt'
-ssh testuser@"$PC1" '~/.local/bin/pc-switcher sync pc2 --yes --allow-first-sync --allow-out-of-order'   # second run
+
+# second run
+ssh testuser@"$PC1" '~/.local/bin/pc-switcher sync pc2 --yes --allow-first-sync --allow-out-of-order'
 ssh testuser@"$PC1" 'sudo chmod 755 /opt'
 ```
 
