@@ -1,0 +1,79 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "a67f5c4ea64e",
+  "session_id": "a6fdf859-1f12-4daf-94eb-8369ba71837c",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-03T13:17:49.444245691Z",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 2,
+  "save_step_count": 3,
+  "files_touched": [
+    "docs/dev/package-sync-scenario-coverage.md",
+    "src/pcswitcher/jobs/apt_sync/job.py",
+    "src/pcswitcher/jobs/flatpak_sync.py",
+    "src/pcswitcher/jobs/snap_sync.py",
+    "tests/unit/test_mutates_audit.py"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "a042aabacd1c",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 292,
+    "cache_creation_tokens": 683653,
+    "cache_read_tokens": 26040400,
+    "output_tokens": 105505,
+    "api_call_count": 154
+  },
+  "session_metrics": {
+    "turn_count": 19
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-03T13:17:49.336189983Z",
+    "agent_lines": 43,
+    "agent_removed": 11,
+    "human_added": 85,
+    "human_modified": 16,
+    "human_removed": 0,
+    "total_committed": 144,
+    "total_lines_changed": 155,
+    "agent_percentage": 34.83870967741935,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 52,
+      "user_lines_removed": 9,
+      "agent_lines_added": 1,
+      "agent_lines_removed": 1,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9,
+        "src/pcswitcher/jobs/apt_sync/job.py": 9,
+        "src/pcswitcher/jobs/flatpak_sync.py": 5,
+        "src/pcswitcher/jobs/snap_sync.py": 9,
+        "tests/unit/test_mutates_audit.py": 20
+      },
+      "user_removed_per_file": {
+        "src/pcswitcher/jobs/apt_sync/job.py": 2,
+        "src/pcswitcher/jobs/flatpak_sync.py": 1,
+        "src/pcswitcher/jobs/snap_sync.py": 2,
+        "tests/unit/test_mutates_audit.py": 4
+      }
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 67,
+      "user_lines_removed": 7,
+      "agent_lines_added": 52,
+      "agent_lines_removed": 18,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9,
+        "tests/unit/test_mutates_audit.py": 58
+      },
+      "user_removed_per_file": {
+        "tests/unit/test_mutates_audit.py": 7
+      }
+    }
+  ]
+}
