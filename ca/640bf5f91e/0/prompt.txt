@@ -1,0 +1,2 @@
+Ok. Issue looks good. Go.
+Ensure full scenario coverage by tests.
