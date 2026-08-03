@@ -1,0 +1,63 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "d1726aff66a7",
+  "session_id": "703f5118-113f-4162-baca-7050150f4770",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-03T13:19:30.120035368Z",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 1,
+  "save_step_count": 2,
+  "files_touched": [
+    "docs/dev/package-sync-scenario-coverage.md",
+    "src/pcswitcher/jobs/dummy_fail.py",
+    "src/pcswitcher/jobs/dummy_success.py",
+    "tests/unit/test_mutates_audit.py"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-5[1m]",
+  "turn_id": "100bd66f06f7",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 20,
+    "cache_creation_tokens": 75444,
+    "cache_read_tokens": 617154,
+    "output_tokens": 10807,
+    "api_call_count": 11
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-03T13:19:30.105099494Z",
+    "agent_lines": 5,
+    "agent_removed": 22,
+    "human_added": 130,
+    "human_modified": 27,
+    "human_removed": 0,
+    "total_committed": 162,
+    "total_lines_changed": 184,
+    "agent_percentage": 14.673913043478262,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 166,
+      "user_lines_removed": 27,
+      "agent_lines_added": 34,
+      "agent_lines_removed": 23,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9,
+        "docs/dev/package-sync-scenario-coverage.md": 3,
+        "src/pcswitcher/jobs/dummy_fail.py": 3,
+        "src/pcswitcher/jobs/dummy_success.py": 3,
+        "tests/unit/test_mutates_audit.py": 148
+      },
+      "user_removed_per_file": {
+        "src/pcswitcher/jobs/dummy_fail.py": 1,
+        "src/pcswitcher/jobs/dummy_success.py": 1,
+        "tests/unit/test_mutates_audit.py": 25
+      }
+    }
+  ]
+}

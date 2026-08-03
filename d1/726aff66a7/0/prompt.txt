@@ -1,0 +1,5 @@
+I want to run §4 of .planning/phases/02-package-management-sync/02-UAT-01-RUNBOOK.md again. Do all the preparation of pc1 and pc2  (in the previous sections) so I don't need to go through that manually.
+
+---
+
+"sudo mkdir --parents /.snapshots/pc-switcher/20260803T131220-74966233" is run once for each btrfs snapshot separately. Useful?
