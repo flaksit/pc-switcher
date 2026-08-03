@@ -1,0 +1,80 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "9ef130a6dbc3",
+  "session_id": "d2e7aa83-33f4-4468-8156-3c8fe962396f",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-03T15:03:54.388394529Z",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 3,
+  "save_step_count": 3,
+  "files_touched": [
+    ".planning/phases/02-package-management-sync/02-UAT-01-RUNBOOK.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "08daedf1e74e",
+  "checkpoint_transcript_start": 558,
+  "transcript_lines_at_start": 558,
+  "compact_transcript_start": 135,
+  "token_usage": {
+    "input_tokens": 9,
+    "cache_creation_tokens": 8776,
+    "cache_read_tokens": 884458,
+    "output_tokens": 1867,
+    "api_call_count": 5
+  },
+  "session_metrics": {
+    "turn_count": 17
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-03T15:03:54.339492342Z",
+    "agent_lines": 5,
+    "agent_removed": 2,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 5,
+    "total_lines_changed": 7,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 9,
+      "user_lines_removed": 0,
+      "agent_lines_added": 5,
+      "agent_lines_removed": 2,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9
+      }
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 9,
+      "user_lines_removed": 0,
+      "agent_lines_added": 5,
+      "agent_lines_removed": 2,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9
+      }
+    },
+    {
+      "checkpoint_number": 4,
+      "user_lines_added": 9,
+      "user_lines_removed": 0,
+      "agent_lines_added": 5,
+      "agent_lines_removed": 2,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9
+      }
+    }
+  ]
+}
