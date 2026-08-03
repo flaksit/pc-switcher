@@ -201,13 +201,13 @@ The mirror ran over `/home` after all four package jobs, and what it left is the
 
 ## 7. Unattended runs: what goes undecided, and what a failure reports
 
-This is the tool run from a script or a timer, with nobody at the keyboard. Three things are under test. A question nobody answers is declined rather than guessed, and the job says so instead of reporting success over it. A file that only an answer would move stays where it is on both machines — by every route, including the folder mirror it happens to live inside. And a command that fails mid-run fails its own job alone, naming the command that did not answer.
+The tool run from a script or a timer, nobody at the keyboard. Under test: an unanswered question is declined and its job says so; the snippet registry moves by no route at all; one broken command fails one job, named. The sideloaded snap is checked here for convenience — a sideload is out of scope with a terminal or without one.
 
-`ssh` without `-t` leaves the run no terminal, which is the only way to reach these paths. The tool is spelled by path in every line below: a non-interactive shell never reads `.bashrc`, so `~/.local/bin` is not on `PATH` and the bare name is not found. Sideload `hello-world` on pc2 first: a sideloaded snap is out of scope on both machines, so the run must neither move it nor act on it — the verbatim command output still names it, because `snap list --all` prints every snap the machine has.
+`ssh` without `-t` is what leaves the run no terminal. Spell the tool by path: a non-interactive shell never reads `.bashrc`, so `~/.local/bin` is not on `PATH`.
 
-The first run must report apt_sync SKIPPED — `tree` still differs in version, and even that report, which applies nothing and converges on its own, is an item nobody was there to answer — snap_sync, flatpak_sync and manual_installs_sync successful with nothing left to decide, folder_sync successful, and a count of 0: no snippet registry is transferred without an answer, on the success outcome as much as the skipped one.
+The first run must report apt_sync SKIPPED — `tree`'s version difference is an item nobody answered, and a report that applies nothing still counts as one — snap_sync, flatpak_sync and manual_installs_sync successful with nothing left to decide, folder_sync successful, and a `send_file` count of 0.
 
-Give pc2 a registry of its own first, holding one entry pc1 has never heard of and none of pc1's. The registry is a shared file the job pushes once an answer authorizes it, and it sits in `~/.config/pc-switcher` — inside the `/home` the mirror copies. With nobody to ask there is no push, so the mirror is the only thing left that could move it, and it must not: pc2 ends the run holding its own entry and none of pc1's. The marker on pc1 is what says the mirror reached that directory at all in this run, so a file left alone is a boundary the mirror respected and not a mirror that never arrived.
+The registry is shared config: pc1 pushes it once an answer authorizes it, and it lives in `~/.config/pc-switcher`, inside the mirrored `/home`. So give pc2 a registry holding one entry pc1 has never heard of. With nobody to ask there is no push, and the mirror must not carry it either: pc2 ends holding its own entry and none of pc1's. The marker on pc1 rules out the false pass, proving the mirror reached that directory. The sideload check reads the tool's own events, because `snap list --all` prints every snap and the verbatim output names it either way.
 
 ```bash
 ssh testuser@"$PC2" 'cd /tmp && sudo snap download hello-world --basename=uat-hello-world && sudo snap remove hello-world && sudo snap install --dangerous /tmp/uat-hello-world.snap'
@@ -225,9 +225,9 @@ ssh testuser@"$PC1" '~/.local/bin/pc-switcher sync pc2 --yes --allow-first-sync 
 ssh testuser@"$PC1" 'sudo chmod 755 /opt'
 ```
 
-The second ends `Sync finished with failures:` and exit code 1, with one line per failed job — `manual_installs_sync` alone — naming the command that did not answer rather than the job: the scan of pc1's own `/opt`, which is half of a diff it now runs on both machines, quoted whole and ending `find: '/opt': Permission denied`. apt_sync, snap_sync, flatpak_sync and folder_sync each still reach their own outcome.
+The second must end `Sync finished with failures:` and exit 1, naming one job and the command that failed: `manual_installs_sync`, on the scan of pc1's own `/opt`, quoted whole and ending `find: '/opt': Permission denied`. The other four jobs each reach their own outcome.
 
-Only a break `validate()` cannot see reaches this path, and an unreadable directory is one. Taking `snap` or `flatpak` away instead reaches nothing: a missing manager is a validation error naming the machine and the `apt install` that repairs it, so the run is refused before any job starts and no job reports anything.
+Only a break `validate()` cannot see gets that far. Taking `snap` or `flatpak` away instead is a validation error, and the run is refused before any job starts.
 
 ## 8. Cleanup
 
