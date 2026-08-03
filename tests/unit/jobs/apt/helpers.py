@@ -6,6 +6,7 @@ Split out of the former single `test_apt_sync.py`.
 from __future__ import annotations
 
 import dataclasses
+import re
 import shlex
 from collections.abc import Callable, Sequence
 from unittest.mock import AsyncMock, MagicMock
@@ -34,6 +35,9 @@ def sha256_line(digest: str, filename: str) -> str:
 
 _STATUS_QUERY = "db:Status-Status"
 
+#: A package id inside a decision file's YAML, for the installed-set derivation below.
+_MARKED_PACKAGE = re.compile(r"apt:package:([^\"'\s:]+)")
+
 
 def installed_on_target(*names: str) -> CommandResult:
     """What `AptProbe.capture_target_installed` / `capture_source_installed` reads on a
@@ -48,12 +52,15 @@ def respond_to(
     """Build a run_command side_effect matching by substring (first match wins).
 
     `capture_target_installed`'s status query is DERIVED unless the mapping states it: a
-    fixture saying the machine has `pkg-a` at 1.0, or that `pkg-a` is in its manual set, has
-    said `pkg-a` is installed there. A fixture with no opinion answers a placeholder, since
-    a machine with nothing installed does not exist and the probe refuses that silence. A
-    test that needs the installed set to DISAGREE with the hold set — which is the
-    bookkeeping hold `PKG-FR-HOLD-WITHOUT-PACKAGE` ends the run over — states its own
-    `db:Status-Status` key.
+    fixture saying the machine has `pkg-a` at 1.0, that `pkg-a` is in its manual set, or
+    that it marked `pkg-a` machine-specific has said `pkg-a` is installed there. The
+    decision file counts because a mark keeps THIS machine's copy of a package, so a
+    fixture with a mark and no matching installed entry describes a machine that cannot
+    exist — and the mark reconciliation would rightly drop it. A fixture with no opinion
+    answers a placeholder, since a machine with nothing installed does not exist and the
+    probe refuses that silence. A test that needs the installed set to DISAGREE with the
+    hold set — which is the bookkeeping hold `PKG-FR-HOLD-WITHOUT-PACKAGE` ends the run
+    over — states its own `db:Status-Status` key.
     """
     fallback = default if default is not None else CommandResult(exit_code=0, stdout="", stderr="")
 
@@ -65,6 +72,11 @@ def respond_to(
                 if pattern in ("dpkg-query", "apt-mark showmanual")
                 for line in result.stdout.splitlines()
                 if line
+            } | {
+                name
+                for pattern, result in mapping.items()
+                if "decisions.yaml" in pattern
+                for name in _MARKED_PACKAGE.findall(result.stdout)
             }
             return installed_on_target(*sorted(names or {"placeholder-installed"}))
         for pattern, result in mapping.items():

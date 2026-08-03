@@ -2164,7 +2164,9 @@ class TestSnippetPush:
         await job.execute()
 
         assert len([cmd for cmd in all_calls(target) if cmd.startswith("bash -c")]) == 2
-        assert not [cmd for cmd in all_calls(target) if "decisions.yaml" in cmd]
+        # A WRITE, not any mention: every apply ends by READING both decision files to
+        # reconcile them with what the machines hold (`_prune_dead_marks`).
+        assert not [cmd for cmd in all_calls(target) if "decisions.yaml" in cmd and "mv --force" in cmd]
         assert decision_file_writes(target) == []
         assert registry_writes(target) == []
         assert [call.args[1] for call in target.send_file.call_args_list] == [
@@ -2815,3 +2817,136 @@ class TestUnreproducibleItem:
         item = UnreproducibleItem(origin="unowned-path", identifier="/opt/flux", label="flux (unowned in /opt)")
 
         assert item.label == "flux (unowned in /opt)"
+
+
+def _manual_decisions(*item_ids: str) -> str:
+    """A manual decision file recording each id skip-always."""
+    body = "".join(
+        f'  "{item_id}":\n    item_class: unreproducible\n    label: "{item_id}"\n'
+        f"    reason: null\n    recorded_at: '2026-07-30T00:00:00+00:00'\n"
+        for item_id in item_ids
+    )
+    return f"machine_specific:\n{body}"
+
+
+def _exists(*paths: str) -> Callable[[str], CommandResult]:
+    """The `test -e` loop's answer on a machine holding exactly `paths` of those asked."""
+
+    def _answer(command: str) -> CommandResult:
+        asked = shlex.split(command.partition("for p in ")[2].partition(";")[0])
+        return CommandResult(0, "".join(f"{path}\n" for path in asked if path in paths), "")
+
+    return _answer
+
+
+class TestMarksFollowWhatTheMachineHolds:
+    """An unreproducible mark lives as long as the item it names is on the machine holding
+    it — asked of the filesystem and of dpkg, never of the bounded scan.
+    """
+
+    @staticmethod
+    async def _run(*, source_responses: dict[str, _Answer]) -> MagicMock:
+        context, source, _target = make_context(
+            source_responses={
+                _STATUS_QUERY: installed_on("coreutils"),
+                "find /opt": scan_finds(),
+                **source_responses,
+            }
+        )
+        job = ManualInstallsSyncJob(context)
+        job.accept_review(
+            PackagePlan(manager="manual", diffs=(), groups=()),
+            ReviewOutcome(decisions={}, was_interactive=True),
+        )
+        await job.apply()
+        return source
+
+    @pytest.mark.asyncio
+    async def test_a_marked_path_that_is_gone_is_dropped(self) -> None:
+        """H213 — the directory was deleted by hand; the entry keeping it goes too."""
+        source = await self._run(
+            source_responses={
+                "manual.decisions.yaml": CommandResult(
+                    0, _manual_decisions("unreproducible:unowned-path:/opt/vendor-app"), ""
+                ),
+                "for p in": _exists(),
+            }
+        )
+
+        rewrites = [cmd for cmd in all_calls(source) if "mv --force" in cmd]
+        assert len(rewrites) == 1
+        assert "vendor-app" not in rewrites[0]
+
+    @pytest.mark.asyncio
+    async def test_a_marked_path_the_scan_never_looks_at_keeps_its_mark(self) -> None:
+        """H214 — the check is `test -e`, not the scan: `PKG-FR-MANUAL-SCOPE` bounds the scan
+        to `/opt` and `/usr/local`, so a marked path elsewhere is absent from every scan while
+        sitting on disk, and reading the scan as the answer would drop it."""
+        source = await self._run(
+            source_responses={
+                "manual.decisions.yaml": CommandResult(
+                    0, _manual_decisions("unreproducible:unowned-path:/srv/vendor-app"), ""
+                ),
+                "for p in": _exists("/srv/vendor-app"),
+            }
+        )
+
+        assert not [cmd for cmd in all_calls(source) if "mv --force" in cmd]
+
+    @pytest.mark.asyncio
+    async def test_a_marked_package_still_installed_keeps_its_mark(self) -> None:
+        """H215 — dpkg's installed set answers the package half, whatever a repository can
+        now supply: a marked package that became reproducible is still installed, and the
+        mark still keeps it."""
+        source = await self._run(
+            source_responses={
+                _STATUS_QUERY: installed_on("coreutils", "brscan3"),
+                "manual.decisions.yaml": CommandResult(
+                    0, _manual_decisions("unreproducible:apt-no-candidate:brscan3"), ""
+                ),
+            }
+        )
+
+        assert not [cmd for cmd in all_calls(source) if "mv --force" in cmd]
+
+    @pytest.mark.asyncio
+    async def test_a_marked_package_dpkg_no_longer_reports_is_dropped(self) -> None:
+        """H216 — the package half's other answer."""
+        source = await self._run(
+            source_responses={
+                _STATUS_QUERY: installed_on("coreutils"),
+                "manual.decisions.yaml": CommandResult(
+                    0, _manual_decisions("unreproducible:apt-no-candidate:brscan3"), ""
+                ),
+            }
+        )
+
+        rewrites = [cmd for cmd in all_calls(source) if "mv --force" in cmd]
+        assert len(rewrites) == 1
+        assert "brscan3" not in rewrites[0]
+
+    @pytest.mark.asyncio
+    async def test_the_machine_being_synced_to_has_its_own_file_reconciled(self) -> None:
+        """H217 — a mark is reconciled against the machine holding it, which is a different
+        question from whose marks silence a finding: a machine only ever synced TO would
+        otherwise carry its dead marks for good."""
+        context, _source, target = make_context(
+            source_responses={_STATUS_QUERY: installed_on("coreutils"), "find /opt": scan_finds()},
+            target_responses={
+                _STATUS_QUERY: installed_on("coreutils"),
+                "manual.decisions.yaml": CommandResult(
+                    0, _manual_decisions("unreproducible:apt-no-candidate:brscan3"), ""
+                ),
+            },
+        )
+        job = ManualInstallsSyncJob(context)
+        job.accept_review(
+            PackagePlan(manager="manual", diffs=(), groups=()),
+            ReviewOutcome(decisions={}, was_interactive=True),
+        )
+
+        await job.apply()
+
+        rewrites = [cmd for cmd in all_calls(target) if "mv --force" in cmd]
+        assert len(rewrites) == 1
+        assert "brscan3" not in rewrites[0]

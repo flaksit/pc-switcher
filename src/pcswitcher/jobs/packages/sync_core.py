@@ -30,7 +30,8 @@ review-before-any-change ordering checkable and testable per job:
 - `apply()` converges the `APPLY`-decided diffs, one item at a time, catching and
   collecting per-item failures (D-27) so one bad item never stops the rest. It also
   persists a permanent decision (D-08a) for every `SKIP_ALWAYS`-decided item, on
-  whichever machine holds it.
+  whichever machine holds it, and — after the loop, so this run's own removals count —
+  drops the marks whose item has left the machine holding them (`_prune_dead_marks`).
 - `execute()` — the `SyncJob` entry point the orchestrator's sequential loop calls — is
   self-contained: it plans, reviews through the injected `JobContext.reviewer`, accepts the
   outcome, then applies. A `plan()` failure propagates naturally out of `execute()` and
@@ -52,6 +53,7 @@ from typing import ClassVar
 from pcswitcher.jobs.base import SyncJob
 from pcswitcher.jobs.context import JobContext
 from pcswitcher.jobs.packages.items import DiffAction, DiffClass, ItemClass, ItemDiff, Machines
+from pcswitcher.jobs.packages.probes import ProbeFailed
 from pcswitcher.jobs.packages.review import Decision, ReviewEntry, ReviewGroup, ReviewOutcome, asks_for_a_decision
 from pcswitcher.jobs.packages.state import DecisionEntry, DecisionFile
 from pcswitcher.models import CommandResult, Host, JobSkipped, LogLevel, ProgressUpdate
@@ -302,9 +304,11 @@ class PackageSyncJob(SyncJob):
         `_build_review_groups` at the end.
 
         Nothing here may mutate either machine: a job plans and reviews before it
-        converges, so `plan()` runs before the user has approved anything. An
-        implementation MUST load both machines' decision files and filter each side's
-        items through its OWN file (D-08), then run the resulting diffs through
+        converges, so `plan()` runs before the user has approved anything — including the
+        decision files, which `_load_live_decisions` only reads and filters in memory.
+        An implementation MUST take both machines' decision files from
+        `_load_live_decisions` and filter each side's items through its OWN file (D-08),
+        then run the resulting diffs through
         `_drop_inert_diffs` to catch the recorded items no input-side filter can see —
         the block-state membership items (`apt:hold:`, `snap:hold:`) and anything else
         whose identity is derived rather than carried on an input item.
@@ -323,6 +327,118 @@ class PackageSyncJob(SyncJob):
         `CHANGE` — `REPORT_ONLY` diffs never reach this hook (see `apply()`).
         """
         ...
+
+    async def observe_absent_marks(self, entries: Mapping[str, DecisionEntry], *, on_source: bool) -> frozenset[str]:
+        """Hook: which of `entries` name something ONE machine — the one holding this file —
+        no longer has. Read-only, and asked of that machine alone.
+
+        A mark keeps the holding machine's own copy of an item (D-08a), so the item is on
+        that machine when the mark is written; an answer of "absent" therefore means the
+        mark has outlived what it was given to protect and `_prune_dead_marks` takes it out.
+        `entries` is that machine's whole file, so an implementation picks out the item
+        classes it can actually check and says nothing about the rest — an id it does not
+        recognise, or one of a class no answer can produce (`apt:hold:`, `flatpak:remote:`,
+        reachable only by a hand edit), stays exactly where it is.
+
+        Two rules bind every implementation, because both failure directions delete a mark
+        the user still wants:
+
+        - Answer from a POSITIVE check that the machine does not have the item — dpkg's
+          installed set, the manager's own listing, the path itself. Never from the
+          inventory the diff was built out of, which is narrower on purpose: apt's manifest
+          is `apt-mark showmanual`, and a package that flips to automatically-installed
+          leaves that set while staying installed.
+        - Say nothing when the check did not answer. `ProbeFailed` is caught for you
+          (`_absent_marks`) and prunes nothing; an implementation that degrades on its own
+          must degrade to the empty set rather than to "absent".
+
+        No-op on the base, so a manager that has not implemented a presence check keeps
+        every mark rather than guessing at one.
+        """
+        return frozenset()
+
+    async def _absent_marks(self, entries: Mapping[str, DecisionEntry], *, on_source: bool) -> frozenset[str]:
+        """`observe_absent_marks` narrowed to ids the file actually holds, and never
+        raising: a read that went dark leaves every mark in place.
+
+        A dead read must not fail the job here, unlike everywhere else ADR-022 applies.
+        This one answers a bookkeeping question — is a mark still about anything — and at
+        the `apply()` call site it is asked AFTER the run's changes have landed, where
+        failing would report a run that did its work as a failed one. Nothing downstream
+        depends on the answer either: the marks simply stay, which is what they did before.
+        """
+        if not entries:
+            return frozenset()
+        try:
+            absent = await self.observe_absent_marks(entries, on_source=on_source)
+        except ProbeFailed as exc:
+            self._log(
+                Host.SOURCE if on_source else Host.TARGET,
+                LogLevel.FULL,
+                f"could not check whether the {self.manager_id} marked items are still here ({exc}); "
+                "every mark is left as it is",
+            )
+            return frozenset()
+        return absent & frozenset(entries)
+
+    async def _load_live_decisions_on(self, *, on_source: bool) -> dict[str, DecisionEntry]:
+        """One machine's decision file with the entries that machine no longer has anything
+        to say about left out. Read-only — the file itself is rewritten by
+        `_prune_dead_marks` at `apply()` time, never here.
+
+        Filtering in memory at plan time is what makes a dead mark stop acting in the SAME
+        run that notices it: the id is gone from the mapping every `filter_inert` and
+        `_drop_inert_diffs` call consults, so the item it named is diffed and reviewed
+        normally instead of being silenced by an entry nothing stands behind.
+        """
+        entries = await DecisionFile(self.manager_id, self.source if on_source else self.target).load()
+        absent = await self._absent_marks(entries, on_source=on_source)
+        return {item_id: entry for item_id, entry in entries.items() if item_id not in absent}
+
+    async def _load_live_decisions(self) -> tuple[dict[str, DecisionEntry], dict[str, DecisionEntry]]:
+        """Both machines' live decisions, stored in `_plan_decisions` for the subclasses
+        that diff further after `plan()` returns. What every `plan()` opens with.
+        """
+        source_decisions = await self._load_live_decisions_on(on_source=True)
+        target_decisions = await self._load_live_decisions_on(on_source=False)
+        self._plan_decisions = (source_decisions, target_decisions)
+        return source_decisions, target_decisions
+
+    async def _prune_dead_marks(self) -> None:
+        """Take every mark whose item is gone out of both machines' files, and say so.
+
+        Runs at the END of `apply()`, after the converge loop, which is what makes the
+        run's own removals count: an approved apt transaction that takes a marked package
+        with it as collateral (`PKG-FR-COLLATERAL-MARKED` — the user is asked, and may say
+        yes) leaves a mark about software the machine no longer has, and by the time this
+        runs the machine itself says so. The same pass covers every other way an item
+        disappears, none of which pc-switcher is involved in: a hand `apt remove`, a
+        deleted file, a reinstall.
+
+        Never during a dry run (ADR-014 — a rehearsal leaves no trace), and nothing is
+        written for a file with nothing dead in it, so the ordinary run issues no command
+        here at all.
+
+        One INFO line per dropped mark (`PKG-FR-LOG-DECISIONS`'s reason applies to it: a
+        mark is the user's own answer, so it does not evaporate silently). The write itself
+        is `mutates=`-gated inside `DecisionFile`, so `--confirm-each-command` shows it like
+        every other change.
+        """
+        if self.context.dry_run:
+            return
+
+        for on_source in (True, False):
+            decision_file = DecisionFile(self.manager_id, self.source if on_source else self.target)
+            entries = await decision_file.load()
+            absent = await self._absent_marks(entries, on_source=on_source)
+            for item_id in sorted(absent):
+                self._log(
+                    Host.SOURCE if on_source else Host.TARGET,
+                    LogLevel.INFO,
+                    f"dropped the machine-specific mark on {entries[item_id].label}: "
+                    "the item is no longer on this machine",
+                )
+            await decision_file.drop(absent)
 
     @property
     def machines(self) -> Machines:
@@ -613,6 +729,10 @@ class PackageSyncJob(SyncJob):
         `_unresolved_as_failures` hook (also no-op on the base, overridden only by
         `manual_installs_sync`) supplies the genuinely-undecided items that fail an
         interactive run — which is why `total == 0` can still raise `PackageItemFailures`.
+
+        After the loop, `_prune_dead_marks` reconciles both machines' decision files with
+        what those machines actually hold. It runs whatever this job applied, `total == 0`
+        included: the ways a marked item disappears are mostly nothing to do with a sync.
         """
         assert self._accepted_plan is not None
         assert self._accepted_outcome is not None
@@ -669,6 +789,11 @@ class PackageSyncJob(SyncJob):
                 LogLevel.INFO,
                 f"{len(declined)} {self.manager_id} change(s) not applied, by the user's answer: {summary}",
             )
+
+        # After the converge loop, so a mark this run's own changes emptied out is gone by
+        # the time the run ends — and before the failure raise, because a mark whose item
+        # left the machine is dead whether or not some other item failed to converge.
+        await self._prune_dead_marks()
 
         all_failures = [*failures, *self._unresolved_as_failures(plan, outcome)]
         if all_failures:

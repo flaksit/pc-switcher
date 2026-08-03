@@ -106,6 +106,8 @@ Example: two machines Atlas and Vega, sync launched from Atlas. Vega has `steam`
 
 A machine-specific item is filtered out before the difference is computed, so it never appears in a later review. Because of that, the repository-conflict question below has to disclose it explicitly.
 
+A mark lasts as long as the software it protects. Once the holding machine no longer has that software — removed by hand, or taken by a removal the user approved elsewhere in the review — the mark is dropped and the run says so. Leaving it would not be the cautious choice: a mark works in both directions, so one left behind quietly refuses to install that software on that machine ever again, which is not what "keep my copy" meant. If the software comes back, it is reviewed again like anything else.
+
 Marks never sync between machines. Snippets do, because how to install something is knowledge about the software rather than the machine.
 
 Repositories and pins cannot be marked machine-specific, whether they are being added, changed or deleted; a flatpak remote is never asked about at all, so there is nothing to mark. Where the two machines disagree about where software comes from, that disagreement keeps surfacing every run instead of being silenced once, and the remedy is to align the two machines. apt's own configuration files *can* be marked, because they say how apt behaves rather than where software comes from.

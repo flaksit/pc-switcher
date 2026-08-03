@@ -17,7 +17,7 @@ Some A–K rows span more than one run, still in that direction, and each says s
 ## Navigation
 
 - [Package sync — user requirements](../planning/package-sync-user-requirements.md) — the intent every scenario here comes from
-- [Package sync conformance criteria](../planning/package-sync-conformance-criteria.md) — the 136 articles each section decomposes
+- [Package sync conformance criteria](../planning/package-sync-conformance-criteria.md) — the 137 articles each section decomposes
 - [Package sync specification](../system/package-sync.md) — how the behaviour is built
 - [Package sync job behaviour](../jobs/package-sync.md) — what the user sees
 - [Testing guide](testing-guide.md) — how to write the tests named here
@@ -1396,7 +1396,7 @@ Rows H49–H52 assert an absence: the machinery derived from an approved package
 | H116 | A repository conflict is declined for this run. | Nothing is recorded either way. | U | `package_review:TestRepoConflictGroupResolution::test_only_two_answers_are_offered_and_the_row_starts_skipped`; `block_state_decisions:TestAptRepoItemDecisions::test_no_repository_or_pin_id_can_reach_a_decision_file` |
 | H117 | A collateral question is answered "keep the package". | Nothing about the collateral package is recorded. | U | `review_skip_always:TestGroupsNeverOfferedPermanence::test_collateral_group_is_never_offered_permanence` |
 
-### H.10 The machine-specific mark (articles: PKG-FR-MACHINE-SPECIFIC, PKG-FR-NO-MARK-ON-ORIGIN, PKG-FR-NO-MARK-ON-REPORT, PKG-NG-MARK-ORIGIN, PKG-NG-MARK-PORTABILITY)
+### H.10 The machine-specific mark (articles: PKG-FR-MACHINE-SPECIFIC, PKG-FR-MARK-LIFETIME, PKG-FR-NO-MARK-ON-ORIGIN, PKG-FR-NO-MARK-ON-REPORT, PKG-NG-MARK-ORIGIN, PKG-NG-MARK-PORTABILITY)
 
 | # | Scenario | Expected | Cov | Test |
 | --- | --- | --- | --- | --- |
@@ -1432,6 +1432,43 @@ Rows H49–H52 assert an absence: the machinery derived from an approved package
 | H147 | A decision file is malformed or absent. | It degrades to "no permanent decisions"; only the malformed case warns, naming the path. | U | `test_package_state:TestDecisionFileLoad::test_absent_file_returns_empty_mapping`, `::test_empty_file_returns_empty_mapping`, `::test_malformed_yaml_returns_empty_mapping_and_warns_naming_the_path` |
 | H178 | A marked item both machines have is read back on a later run. | It counts whichever machine's file holds it: for an item neither machine's role identifies as the holder, both files are read before the item is called unmarked. | U | `package_state:TestPipelineWiring::test_a_marked_change_is_inert_whichever_machine_the_next_run_reads` |
 | H179 | A marked item both machines have reaches the manifest filter. | It is taken out of BOTH manifests, so it produces no item at all — not the install or the removal one surviving copy would otherwise become. | U | `package_state:TestPipelineWiring::test_an_item_both_machines_have_is_filtered_off_both_manifests` |
+| H181 | A decision file holds one mark whose item the machine still has and one whose item it does not. | The file is rewritten with the live entry and without the dead one. | U | `package_state:TestDeadMarksAreDropped::test_a_mark_whose_item_left_the_machine_is_dropped_and_the_others_kept` |
+| H182 | Every mark in a file still has its item. | Nothing is written: reconciliation costs the ordinary run no change. | U | `package_state:TestDeadMarksAreDropped::test_a_file_with_nothing_dead_in_it_is_not_written_at_all` |
+| H183 | The check of what the machine still has does not answer. | Every mark stays. Silence is not absence. | U | `package_state:TestDeadMarksAreDropped::test_a_presence_check_that_does_not_answer_keeps_every_mark` |
+| H184 | A dry run finds a mark whose item is gone. | Nothing is dropped and nothing is written. | U | `package_state:TestDeadMarksAreDropped::test_a_dry_run_drops_nothing` |
+| H185 | Atlas and Nomad each hold a mark whose item that machine no longer has. | Both files are reconciled: either machine can be a holder, so both are asked. | U | `package_state:TestDeadMarksAreDropped::test_both_machines_files_are_reconciled` |
+| H186 | A run converges changes and then reconciles. | The machine is asked what it holds AFTER the converge loop, so this run's own removals count. | U | `package_state:TestDeadMarksAreDropped::test_the_presence_check_runs_after_the_converge_loop` |
+| H187 | A run plans while Atlas holds a mark on something Atlas no longer has. | That item is diffed and reviewed in this run, not silenced until the next one. | U | `package_state:TestDeadMarksAreDropped::test_a_dead_mark_stops_silencing_its_item_in_the_same_run` |
+| H188 | The same run, at plan time. | No decision file is written while planning; the rewrite happens at apply time. | U | `package_state:TestDeadMarksAreDropped::test_planning_writes_no_decision_file_however_dead_the_marks_are` |
+| H189 | A mark is dropped. | The run says so, naming the item — a mark is the user's own answer and does not vanish silently. | U | `package_state:TestDeadMarksAreDropped::test_the_drop_is_logged_naming_the_item` |
+| H190 | A mark is dropped with `--confirm-each-command` in force. | The write is gated like every other change. | U | `package_state:TestDeadMarksAreDropped::test_the_write_that_drops_a_mark_is_gated` |
+| H191 | A manager with no way to check what its items are is reconciled. | It drops nothing rather than guessing. | U | `package_state:TestDeadMarksAreDropped::test_the_base_job_prunes_nothing` |
+| H192 | Two entries are recorded and one is dropped. | The file keeps the other. | U | `package_state:TestDecisionFileDrop::test_drop_rewrites_the_file_without_the_named_entries` |
+| H193 | The last entry in a file is dropped. | The emptied file still reads as "nothing recorded", not as a malformed one. | U | `package_state:TestDecisionFileDrop::test_dropping_the_last_entry_leaves_a_readable_empty_file` |
+| H194 | A drop names ids the file does not hold. | Nothing is written. | U | `package_state:TestDecisionFileDrop::test_dropping_ids_the_file_does_not_hold_writes_nothing` |
+| H195 | A drop names nothing at all. | No command is issued, the read included. | U | `package_state:TestDecisionFileDrop::test_dropping_nothing_reads_nothing` |
+| H196 | The rewrite that drops a mark fails. | It raises, naming the file, rather than reporting a drop that did not happen. | U | `package_state:TestDecisionFileDrop::test_a_failed_write_raises_naming_the_file` |
+| H197 | An approved collateral answer removes a package Nomad marked as its own. | Nomad's mark on it is gone when the run ends. | U | `apt/test_apt_collateral:TestAMarkDiesWithItsPackage::test_the_mark_on_a_package_the_collateral_answer_removed_is_dropped` |
+| H198 | The same question answered "keep the package". | The package stays and so does its mark; the file is not rewritten. | U | `apt/test_apt_collateral:TestAMarkDiesWithItsPackage::test_a_mark_whose_package_the_run_left_alone_is_untouched` |
+| H199 | A marked apt package is installed but apt considers it automatically installed. | The mark stays: the check is dpkg's installed set, not the `apt-mark showmanual` manifest the diff is built from. | U | `apt/test_apt_job:TestMarkReconciliationReadsTheRightSet::test_a_marked_package_apt_calls_automatic_keeps_its_mark` |
+| H200 | dpkg no longer reports a marked package as installed. | The mark is dropped. | U | `apt/test_apt_job:TestMarkReconciliationReadsTheRightSet::test_a_marked_package_dpkg_no_longer_reports_is_dropped` |
+| H201 | A marked `/etc/apt/apt.conf.d` file is no longer in the directory. | The mark is dropped. | U | `apt/test_apt_job:TestMarkReconciliationReadsTheRightSet::test_a_marked_apt_config_file_that_is_gone_is_dropped` |
+| H202 | A marked `/etc/apt/apt.conf.d` file is still there. | The mark stays. | U | `apt/test_apt_job:TestMarkReconciliationReadsTheRightSet::test_a_marked_apt_config_file_still_there_keeps_its_mark` |
+| H203 | A decision file holds an entry naming an apt hold. | It is never dropped: no answer can record one, so this pass has no opinion about a hand edit. | U | `apt/test_apt_job:TestMarkReconciliationReadsTheRightSet::test_an_entry_naming_a_hold_is_never_dropped` |
+| H204 | A machine has no marks recorded at all. | No presence read is issued on their account. | U | `apt/test_apt_job:TestMarkReconciliationReadsTheRightSet::test_a_machine_with_no_marks_pays_no_presence_read` |
+| H205 | snapd no longer lists a marked snap. | The mark is dropped. | U | `snap_sync:TestMarksFollowWhatSnapdReports::test_a_marked_snap_snapd_no_longer_lists_is_dropped` |
+| H206 | A marked snap is still installed. | The mark stays. | U | `snap_sync:TestMarksFollowWhatSnapdReports::test_a_marked_snap_still_installed_keeps_its_mark` |
+| H207 | A marked snap is sideloaded. | The mark stays: out of scope for the run says nothing about whether the machine has it. | U | `snap_sync:TestMarksFollowWhatSnapdReports::test_a_marked_sideloaded_snap_keeps_its_mark` |
+| H208 | A snap decision file holds an entry naming a refresh hold. | It is never dropped. | U | `snap_sync:TestMarksFollowWhatSnapdReports::test_an_entry_naming_a_refresh_hold_is_never_dropped` |
+| H209 | flatpak no longer lists a marked application. | The mark is dropped. | U | `flatpak_sync:TestMarksFollowWhatFlatpakReports::test_a_marked_ref_flatpak_no_longer_lists_is_dropped` |
+| H210 | A marked application is still installed. | The mark stays. | U | `flatpak_sync:TestMarksFollowWhatFlatpakReports::test_a_marked_ref_still_installed_keeps_its_mark` |
+| H211 | A marked `user` application is now installed `system`-wide instead. | The mark is dropped: scope is part of a ref's identity, so the machine holds nothing under the marked id. | U | `flatpak_sync:TestMarksFollowWhatFlatpakReports::test_a_marked_ref_in_the_other_scope_is_dropped` |
+| H212 | A flatpak decision file holds an entry naming a remote. | It is never dropped. | U | `flatpak_sync:TestMarksFollowWhatFlatpakReports::test_an_entry_naming_a_remote_is_never_dropped` |
+| H213 | A marked unowned path no longer exists. | The mark is dropped. | U | `manual_installs_sync:TestMarksFollowWhatTheMachineHolds::test_a_marked_path_that_is_gone_is_dropped` |
+| H214 | A marked path sits outside the bounded scan and is still on disk. | The mark stays: the check asks the filesystem, not the scan, which would call every such path absent. | U | `manual_installs_sync:TestMarksFollowWhatTheMachineHolds::test_a_marked_path_the_scan_never_looks_at_keeps_its_mark` |
+| H215 | A marked hand-installed package is still installed, and a repository can now supply it. | The mark stays: the check is whether the machine has it, not whether it is still unreproducible. | U | `manual_installs_sync:TestMarksFollowWhatTheMachineHolds::test_a_marked_package_still_installed_keeps_its_mark` |
+| H216 | dpkg no longer reports a marked hand-installed package. | The mark is dropped. | U | `manual_installs_sync:TestMarksFollowWhatTheMachineHolds::test_a_marked_package_dpkg_no_longer_reports_is_dropped` |
+| H217 | Nomad holds an unreproducible mark whose item it no longer has, and every sync runs Atlas to Nomad. | Nomad's own file is reconciled: whose marks silence a finding is a different question from which machine still holds a marked item. | U | `manual_installs_sync:TestMarksFollowWhatTheMachineHolds::test_the_machine_being_synced_to_has_its_own_file_reconciled` |
 
 ### H.11 Abort (articles: PKG-FR-ABORT)
 

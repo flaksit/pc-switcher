@@ -196,10 +196,18 @@ class UnreproducibleItem:
 
     ITEM_CLASS: ClassVar[ItemClass] = ItemClass.UNREPRODUCIBLE
 
+    @staticmethod
+    def id_prefix(origin: Literal["apt-no-candidate", "unowned-path"]) -> str:
+        """What every `item_id` of one origin starts with, so a caller matching on origin
+        (`observe_absent_marks`, which checks a path and a package name differently) builds
+        the prefix from the same expression `item_id` does.
+        """
+        return f"unreproducible:{origin}:"
+
     @property
     def item_id(self) -> str:
         """Stable identity string: `unreproducible:<origin>:<identifier>`."""
-        return f"unreproducible:{self.origin}:{self.identifier}"
+        return f"{self.id_prefix(self.origin)}{self.identifier}"
 
 
 def _lines(output: str) -> list[str]:
@@ -818,6 +826,66 @@ class ManualInstallsSyncJob(PackageSyncJob):
         require_answer(command, result, machine, answers=len(installed), answer_noun="installed package")
         return installed
 
+    @override
+    async def observe_absent_marks(self, entries: Mapping[str, DecisionEntry], *, on_source: bool) -> frozenset[str]:
+        """The marked unreproducible items one machine no longer has: a path that is not
+        there, a package dpkg no longer reports as installed.
+
+        Asked of BOTH machines, unlike `plan()`, which reads the source's file alone. The
+        two questions are different: which marks silence a FINDING is the source's business,
+        because a finding is something the source has and the target lacks, but whether a
+        marked item is still on the machine holding the mark is a question about that machine
+        and nothing else. Reconciling the source's file alone would leave a machine that is
+        only ever synced TO carrying its dead marks for good.
+
+        Neither check is the SCAN's answer, and that is the point. `PKG-FR-MANUAL-SCOPE`
+        bounds the scan to `/opt` and `/usr/local`, so a marked path outside those roots is
+        absent from every scan while sitting on disk; `test -e` asks the filesystem instead.
+        The package half asks dpkg's installed set directly rather than re-running the
+        no-candidate analysis: a marked package that has since become reproducible from a
+        repository is still installed, and dropping its mark on those grounds would re-offer
+        software the user asked to be left alone.
+        """
+        executor = self.source if on_source else self.target
+        machine = self.machines.source if on_source else self.machines.target
+
+        paths = {
+            item_id: item_id.removeprefix(UnreproducibleItem.id_prefix("unowned-path"))
+            for item_id in entries
+            if item_id.startswith(UnreproducibleItem.id_prefix("unowned-path"))
+        }
+        packages = {
+            item_id: item_id.removeprefix(UnreproducibleItem.id_prefix("apt-no-candidate"))
+            for item_id in entries
+            if item_id.startswith(UnreproducibleItem.id_prefix("apt-no-candidate"))
+        }
+
+        absent: set[str] = set()
+        if paths:
+            present = await self._paths_that_exist(frozenset(paths.values()), executor, machine)
+            absent |= {item_id for item_id, path in paths.items() if path not in present}
+        if packages:
+            installed = frozenset(await self._installed_names(executor, machine))
+            absent |= {item_id for item_id, name in packages.items() if name not in installed}
+        return frozenset(absent)
+
+    @staticmethod
+    async def _paths_that_exist(paths: frozenset[str], executor: Executor, machine: str) -> frozenset[str]:
+        """Which of `paths` are on `machine`, in ONE command — a `test -e` per path inside a
+        single loop, never a command per path.
+
+        The loop prints the paths that exist and exits 0 whatever the individual tests said
+        (a `for` over `if`s ends on the `if`'s own 0), so the exit code stays a statement
+        about the shell rather than about the paths, and `require_answer` can guard it. That
+        matters here: silence read as data would say every marked path is gone and drop every
+        mark this job holds.
+        """
+        listing = " ".join(shlex.quote(path) for path in sorted(paths))
+        command = f'for p in {listing}; do if test -e "$p"; then printf "%s\\n" "$p"; fi; done'
+        result = await executor.run_command(command)
+        require_answer(command, result, machine)
+        return frozenset(_lines(result.stdout))
+
     async def query_target_items(self) -> Sequence[UnreproducibleItem]:  # pyright: ignore[reportIncompatibleMethodOverride]
         """What the TARGET already holds, in the source's own identities, so `plan()` can
         drop a finding that is already there (`PKG-FR-MANUAL-DIFF`).
@@ -847,9 +915,11 @@ class ManualInstallsSyncJob(PackageSyncJob):
 
         An item already recorded machine-specific on the SOURCE is dropped by
         `filter_inert` before it becomes a diff (D-08/D-19: a finding produces noise
-        exactly once, then never again). The marks that matter are the source's alone: a
-        finding is something the source has and the target lacks, so the source is always
-        its holding machine (`PKG-FR-MACHINE-SPECIFIC`).
+        exactly once, then never again) — unless the source no longer has it, in which case
+        `_load_live_decisions_on` has already left that mark out and the item is a finding
+        again like any other. The marks that matter are the source's alone: a finding is
+        something the source has and the target lacks, so the source is always its holding
+        machine (`PKG-FR-MACHINE-SPECIFIC`).
 
         What the target already holds is then subtracted (`PKG-FR-MANUAL-DIFF`), which is
         what stops a second path to one application — the symlink that starts what the
@@ -866,7 +936,7 @@ class ManualInstallsSyncJob(PackageSyncJob):
         still replays from the target's copy — only the classification authority is the
         source's.
         """
-        source_decisions = await DecisionFile(self.manager_id, self.source).load()
+        source_decisions = await self._load_live_decisions_on(on_source=True)
         items = await filter_inert(await self.capture_source_items(), source_decisions)
         if items:
             held = {item.item_id for item in await self.query_target_items()}

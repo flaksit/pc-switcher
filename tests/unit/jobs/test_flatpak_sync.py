@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import shlex
+from collections import Counter
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, ClassVar
@@ -20,6 +21,7 @@ import pytest
 from pcswitcher.config import Configuration
 from pcswitcher.jobs import JobContext, flatpak_sync
 from pcswitcher.jobs.flatpak_sync import (
+    _FLATPAK_ALL_REFS_CMD,  # pyright: ignore[reportPrivateUsage]
     FlatpakItem,
     FlatpakRemoteItem,
     FlatpakSyncJob,
@@ -1279,6 +1281,11 @@ class TestARepointThatMovesAMachineSpecificRefIsAsked:
     async def test_finding_the_conflict_costs_no_command_of_its_own(self) -> None:
         """F59 — Unlike apt's file-level screen, which pays two `cat`s per entry: a remote's whole
         record is already on the item the diff was built from.
+
+        The one command a recorded ref does add is the listing that says whether the target
+        still HAS it (`observe_absent_marks`), which is what the difference below pins: it
+        belongs to the mark, not to the conflict, and it is asked once however many refs are
+        recorded.
         """
         context, source, target = make_context(source_responses=derivation_source(), fake_target=conflict_target())
         quiet_context, quiet_source, quiet_target = make_context(
@@ -1289,7 +1296,8 @@ class TestARepointThatMovesAMachineSpecificRefIsAsked:
         _ = await FlatpakSyncJob(quiet_context).plan()
 
         assert all_calls(source) == all_calls(quiet_source)
-        assert all_calls(target) == all_calls(quiet_target)
+        extra = Counter(all_calls(target)) - Counter(all_calls(quiet_target))
+        assert list(extra.elements()) == [_FLATPAK_ALL_REFS_CMD]
 
     @pytest.mark.asyncio
     async def test_a_remote_the_target_lacks_is_an_add_and_never_a_conflict(self) -> None:
@@ -4557,3 +4565,72 @@ class TestProgressWhileApplying:
         assert "remote filters" in items
         ref_at = next(index for index, item in enumerate(items) if item.startswith("org.example.App/"))
         assert items.index("remote filters") < ref_at
+
+
+class TestMarksFollowWhatFlatpakReports:
+    """A ref mark lives as long as flatpak says the machine has the application."""
+
+    @staticmethod
+    async def _run(*, listing: str, decisions: str) -> MagicMock:
+        context, _source, target = make_context(
+            source_responses={"flatpak list": CommandResult(0, "", "")},
+            target_responses={
+                "flatpak list": CommandResult(0, listing, ""),
+                "flatpak.decisions.yaml": CommandResult(0, decisions, ""),
+            },
+        )
+        job = FlatpakSyncJob(context)
+        job.accept_review(
+            PackagePlan(manager="flatpak", diffs=(), groups=()),
+            ReviewOutcome(decisions={}, was_interactive=True),
+        )
+        await job.apply()
+        return target
+
+    @pytest.mark.asyncio
+    async def test_a_marked_ref_flatpak_no_longer_lists_is_dropped(self) -> None:
+        """H209 — the application went; the entry keeping it goes with it."""
+        target = await self._run(
+            listing=FLATPAK_LIST_TARGET,
+            decisions=target_decision_file("flatpak:ref:user:org.example.Uninstalled/x86_64/stable"),
+        )
+
+        rewrites = [cmd for cmd in all_calls(target) if "mv --force" in cmd]
+        assert len(rewrites) == 1
+        assert "org.example.Uninstalled" not in rewrites[0]
+
+    @pytest.mark.asyncio
+    async def test_a_marked_ref_still_installed_keeps_its_mark(self) -> None:
+        """H210 — the same listing, the other answer."""
+        target = await self._run(
+            listing=FLATPAK_LIST_TARGET,
+            decisions=target_decision_file("flatpak:ref:user:com.spotify.Client/x86_64/stable"),
+        )
+
+        assert not [cmd for cmd in all_calls(target) if "mv --force" in cmd]
+
+    @pytest.mark.asyncio
+    async def test_a_marked_ref_in_the_other_scope_is_dropped(self) -> None:
+        """H211 — scope is part of a ref's identity: the same application installed system-wide
+        is not the user installation's copy, so a `user` mark whose ref is only in `system`
+        names nothing the machine has under that id."""
+        target = await self._run(
+            listing=FLATPAK_LIST_TARGET,
+            decisions=target_decision_file("flatpak:ref:user:org.example.SplitScope/x86_64/stable"),
+        )
+
+        rewrites = [cmd for cmd in all_calls(target) if "mv --force" in cmd]
+        assert len(rewrites) == 1
+        assert "SplitScope" not in rewrites[0]
+
+    @pytest.mark.asyncio
+    async def test_an_entry_naming_a_remote_is_never_dropped(self) -> None:
+        """H212 — a remote is never offered, so an entry naming one is a hand edit this pass
+        has no opinion about."""
+        decisions = (
+            'machine_specific:\n  "flatpak:remote:user:flathub":\n    item_class: flatpak_remote\n'
+            "    label: \"flathub remote (user)\"\n    reason: null\n    recorded_at: '2026-07-25T00:00:00Z'\n"
+        )
+        target = await self._run(listing=FLATPAK_LIST_TARGET, decisions=decisions)
+
+        assert not [cmd for cmd in all_calls(target) if "mv --force" in cmd]

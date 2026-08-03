@@ -166,6 +166,7 @@ grep -c pcsw-uat-vendor ~/.config/pc-switcher/manual.decisions.yaml  # 1 — pc1
 grep -c pcsw-uat-app ~/.config/pc-switcher/package-snippets.yaml     # 1 — the snippet you wrote
 LOG=$(ls -t ~/.local/share/pc-switcher/logs/sync-*.log | head -1)
 grep -E 'reviewed cowsay|reviewed fortunes \(report_only\)' "$LOG"   # "marked as this machine's own", then "applied"
+grep -E 'dropped the machine-specific mark on fortunes' "$LOG"       # the run says which mark it dropped
 grep -n -E 'apt-get.*sl=|apt-mark hold sl' "$LOG"              # pc1's exact version, then the hold, in that order
 grep -E 'keeping repository 99-pcsw-inuse.sources' "$LOG"
 grep -n -E 'apply the ref filter /home/testuser/uat.filter|sdl_sopwith' "$LOG" | head
@@ -182,6 +183,7 @@ On pc2:
 ```bash
 grep -c cowsay ~/.config/pc-switcher/apt.decisions.yaml    # 1 — a removal is recorded here
 grep -c cmatrix ~/.config/pc-switcher/apt.decisions.yaml   # 0
+grep -c fortunes ~/.config/pc-switcher/apt.decisions.yaml  # 0 — the mark went with the package
 dpkg-query -W -f='${Package} ${Version} ${Status}\n' sl cmatrix fortunes fortunes-min
 apt-mark showhold                                # sl, registered after its install landed
 snap list hello hello-world                      # hello at pc1's revision, hello-world arrived
@@ -191,7 +193,7 @@ ls /etc/apt/sources.list.d/ /opt /opt/pcsw-uat-app
 ls ~/snap/hello                                  # pc1's revision and current, and no second revision directory
 ```
 
-`sl` is installed at pc1's version and `cmatrix` is absent; `fortunes` and `fortunes-min` are both gone, the collateral answer having taken them; both `.sources` files are still there; `/opt/pcsw-uat-app` exists with its `README`, the snippet having replayed in the run that authored it, and `/opt/pcsw-uat-vendor` does not — it is pc1's own.
+`sl` is installed at pc1's version and `cmatrix` is absent; `fortunes` and `fortunes-min` are both gone, the collateral answer having taken them, and pc2's mark on `fortunes` is gone with it — a mark keeps pc2's own copy, and pc2 has no copy left; both `.sources` files are still there; `/opt/pcsw-uat-app` exists with its `README`, the snippet having replayed in the run that authored it, and `/opt/pcsw-uat-vendor` does not — it is pc1's own.
 
 The mirror ran over `/home` after all four package jobs, and what it left is the boundary: `uat-converged` is on pc2 because pc2's own snapd ends the run on that revision, and `uat-stray` is not, because the revision it holds data for is the one this run moved pc2 off. The two `apt.decisions.yaml` checks above are the same boundary read from the other side — each machine still holds its own record, so the mirror carried neither machine's decision file to the other.
 

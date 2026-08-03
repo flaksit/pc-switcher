@@ -27,7 +27,7 @@ from pcswitcher.jobs.context import JobContext
 from pcswitcher.jobs.manual_installs_sync import ManualInstallsSyncJob
 from pcswitcher.jobs.packages.items import DiffAction, DiffClass, ItemClass, ItemDiff
 from pcswitcher.jobs.packages.review import Decision, ReviewGroup, ReviewOutcome, TerminalUIReviewer
-from pcswitcher.jobs.packages.state import DecisionFile, filter_inert, marks_on_either
+from pcswitcher.jobs.packages.state import filter_inert, marks_on_either
 from pcswitcher.jobs.packages.sync_core import (  # pyright: ignore[reportPrivateUsage]
     _ACTION_VOCABULARY,
     BLOCK_ITEM_CLASSES,
@@ -159,13 +159,12 @@ class FakeSyncJob(PackageSyncJob):
         return []
 
     async def plan(self) -> PackagePlan:
-        """The skeleton every real `plan()` follows -- load both decision files, filter
-        both sides through both of them (`marks_on_either`), diff, drop what is inert,
-        build groups -- with the simplest diff that exists: present on one side only.
+        """The skeleton every real `plan()` follows -- load both decision files (minus the
+        marks whose item their machine no longer has), filter both sides through both of
+        them (`marks_on_either`), diff, drop what is inert, build groups -- with the
+        simplest diff that exists: present on one side only.
         """
-        source_decisions = await DecisionFile(self.manager_id, self.source).load()
-        target_decisions = await DecisionFile(self.manager_id, self.target).load()
-        self._plan_decisions = (source_decisions, target_decisions)
+        source_decisions, target_decisions = await self._load_live_decisions()
 
         marked = marks_on_either(source_decisions, target_decisions)
         source_items = await filter_inert(self._source_items, marked)
@@ -1000,7 +999,9 @@ class TestFinalizeUnreproducible:
         source_cmds = [c.args[0] for c in context.source.run_command.call_args_list]  # pyright: ignore[reportAttributeAccessIssue]
         target_cmds = [c.args[0] for c in context.target.run_command.call_args_list]  # pyright: ignore[reportAttributeAccessIssue]
         assert any("mv --force" in cmd and "fake.decisions" in cmd for cmd in source_cmds)
-        assert not any("fake.decisions" in cmd for cmd in target_cmds)
+        # A WRITE, not any mention: `_prune_dead_marks` reads both machines' files at the
+        # end of every apply, and reading the target's is not recording anything there.
+        assert not any("mv --force" in cmd and "fake.decisions" in cmd for cmd in target_cmds)
 
     @pytest.mark.asyncio
     async def test_no_finalize_writes_during_dry_run(self) -> None:
@@ -1078,9 +1079,11 @@ class TestBaseHooksAreNoOps:
 
         await job.apply()
 
+        # A WRITE, not any mention: every apply ends by READING both decision files to
+        # reconcile them with what the machines hold (`_prune_dead_marks`).
         for cmd in [c.args[0] for c in context.source.run_command.call_args_list]:  # pyright: ignore[reportAttributeAccessIssue]
             assert "package-snippets" not in cmd
-            assert "fake.decisions" not in cmd
+            assert not ("mv --force" in cmd and "fake.decisions" in cmd)
 
 
 class _OrderRecordingJob(FakeSyncJob):

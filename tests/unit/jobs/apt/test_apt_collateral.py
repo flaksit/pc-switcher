@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import dataclasses
 import inspect
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -25,6 +25,7 @@ from pcswitcher.jobs.packages.review import (
 from pcswitcher.models import CommandResult, LogLevel, SyncAbortedByUser
 from tests.unit.jobs.apt.helpers import (
     _APPROVE_PKG_A,
+    _STATUS_QUERY,
     CountingReviewer,
     _policy_block,
     _repo_context,
@@ -33,6 +34,7 @@ from tests.unit.jobs.apt.helpers import (
     foo_source_responses,
     foo_target_side_effect,
     install_reviewer,
+    installed_on_target,
     make_context,
     real_installs,
     respond_to,
@@ -1881,3 +1883,91 @@ class TestAConsequenceAlreadyAnsweredAtPlanTime:
             {"apt:collateral:install:remove:other-manual"},
         ]
         assert real_installs(target) == []
+
+
+def _target_that_forgets_what_it_removes(
+    mapping: dict[str, CommandResult], *, installed: tuple[str, ...], taken_by_the_removal: tuple[str, ...]
+) -> Callable[..., CommandResult]:
+    """A target whose dpkg status answers what it actually holds, and stops naming
+    `taken_by_the_removal` once the real `apt-get remove` has run.
+
+    A fixed answer cannot exercise the mark reconciliation at all: the whole question is what
+    the machine says AFTER the transaction, so the fake has to change with it.
+    """
+    state = set(installed)
+    inner = respond_to(mapping)
+
+    def _side_effect(cmd: str, **kwargs: object) -> CommandResult:
+        if _STATUS_QUERY in cmd:
+            return installed_on_target(*sorted(state))
+        if cmd.startswith("sudo") and "apt-get remove" in cmd:
+            state.difference_update(taken_by_the_removal)
+        return inner(cmd, **kwargs)
+
+    return _side_effect
+
+
+class TestAMarkDiesWithItsPackage:
+    """`PKG-FR-COLLATERAL-MARKED` lets an approved removal take a marked package with it. The
+    mark it leaves behind names software the machine no longer has, and an entry like that
+    goes on silencing the item in both roles — so the run that empties it out drops it.
+    """
+
+    @staticmethod
+    def _context(taken: tuple[str, ...]) -> tuple[JobContext, MagicMock, MagicMock]:
+        """`pkg-x` is a removal candidate on the target; removing it also removes
+        `vendor-tool`, which the target marked as its own."""
+        return make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "keeper\n", ""),
+                "dpkg-query": CommandResult(0, "keeper\t1.0\n", ""),
+            },
+            target_side_effect=_target_that_forgets_what_it_removes(
+                {
+                    "apt-mark showmanual": CommandResult(0, "pkg-x\nvendor-tool\nkeeper\n", ""),
+                    "apt.decisions.yaml": CommandResult(0, decision_file("apt:package:vendor-tool"), ""),
+                    "apt-get --dry-run remove --assume-yes pkg-x": CommandResult(
+                        0, "Remv pkg-x [1.0]\nRemv vendor-tool [1.0]\n", ""
+                    ),
+                },
+                installed=("pkg-x", "vendor-tool", "keeper"),
+                taken_by_the_removal=taken,
+            ),
+        )
+
+    @pytest.mark.asyncio
+    async def test_the_mark_on_a_package_the_collateral_answer_removed_is_dropped(self) -> None:
+        """H197 — the answer took the package; the entry that kept it goes with it."""
+        context, _source, target = self._context(taken=("pkg-x", "vendor-tool"))
+        job = AptSyncJob(context)
+        install_reviewer(
+            job,
+            {
+                "apt:package:pkg-x": Decision.APPLY,
+                "apt:collateral:remove:remove:vendor-tool": Decision.APPLY,
+            },
+        )
+
+        await job.execute()
+
+        rewrites = [cmd for cmd in all_calls(target) if "mv --force" in cmd and "apt.decisions.yaml" in cmd]
+        assert len(rewrites) == 1
+        assert "vendor-tool" not in rewrites[0]
+
+    @pytest.mark.asyncio
+    async def test_a_mark_whose_package_the_run_left_alone_is_untouched(self) -> None:
+        """H198 — the other half of the same run: keeping the package keeps its mark, and the
+        file is not rewritten at all."""
+        context, _source, target = self._context(taken=())
+        job = AptSyncJob(context)
+        install_reviewer(
+            job,
+            {
+                "apt:package:pkg-x": Decision.APPLY,
+                "apt:collateral:remove:remove:vendor-tool": Decision.SKIP_ONCE,
+            },
+        )
+
+        await job.execute()
+
+        assert not [cmd for cmd in all_calls(target) if "mv --force" in cmd and "apt.decisions.yaml" in cmd]

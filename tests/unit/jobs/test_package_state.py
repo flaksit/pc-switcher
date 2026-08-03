@@ -11,8 +11,9 @@ and confirmation that `config_sync` never transfers a decision file.
 from __future__ import annotations
 
 import logging
+import re
 import shlex
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import ClassVar
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -30,6 +31,7 @@ from pcswitcher.jobs.packages.items import (
     ItemClass,
     ItemDiff,
 )
+from pcswitcher.jobs.packages.probes import ProbeFailed
 from pcswitcher.jobs.packages.review import COLLATERAL_REVIEW_ACTION, Decision, ReviewOutcome
 from pcswitcher.jobs.packages.state import (
     DECISION_FILE_GLOB_RELPATH,
@@ -1044,3 +1046,323 @@ class TestSnippetRegistry:
 
         assert result.success is False
         assert result.stderr == "boom"
+
+
+# ---------------------------------------------------------------------------
+# A mark lives exactly as long as its item
+# ---------------------------------------------------------------------------
+
+
+class _PruningJob(FakeSyncJob):
+    """A `FakeSyncJob` whose presence check is whatever the test says it is.
+
+    Every real implementation answers by reading its own manager (`snap list`, dpkg, a
+    `test -e`); what the shared pipeline does with that answer is the same either way, so
+    these tests state the answer directly and assert the pipeline around it.
+    """
+
+    def __init__(
+        self,
+        context: JobContext,
+        *,
+        absent_on_source: tuple[str, ...] = (),
+        absent_on_target: tuple[str, ...] = (),
+        probe_fails: bool = False,
+        **kwargs: object,
+    ) -> None:
+        super().__init__(context, **kwargs)  # pyright: ignore[reportArgumentType]
+        self._absent_on_source = frozenset(absent_on_source)
+        self._absent_on_target = frozenset(absent_on_target)
+        self._probe_fails = probe_fails
+        self.events: list[str] = []
+
+    async def observe_absent_marks(self, entries: Mapping[str, DecisionEntry], *, on_source: bool) -> frozenset[str]:
+        self.events.append(f"observe:{'source' if on_source else 'target'}")
+        if self._probe_fails:
+            raise ProbeFailed("dpkg-query did not answer")
+        return self._absent_on_source if on_source else self._absent_on_target
+
+    async def converge(self, diff: ItemDiff) -> CommandResult:
+        self.events.append(f"converge:{diff.item_id}")
+        return await super().converge(diff)
+
+
+def _two_entry_file(*item_ids: str) -> str:
+    """A decision file holding one entry per id, so a test can assert which SURVIVED a
+    rewrite rather than only that a write happened."""
+    entries = "".join(
+        f"  {item_id}:\n    item_class: apt_package\n    label: {item_id}\n"
+        f"    reason: null\n    recorded_at: '2026-07-22T09:14:03+00:00'\n"
+        for item_id in item_ids
+    )
+    return f"machine_specific:\n{entries}"
+
+
+def _written_decision_files(mock: MagicMock) -> list[str]:
+    """The content of every decision-file rewrite issued through `mock`, in order."""
+    written: list[str] = []
+    for call in mock.run_command.call_args_list:
+        cmd = call.args[0]
+        if "mv --force" not in cmd or "decisions.yaml" not in cmd:
+            continue
+        tokens = shlex.split(cmd)
+        written.append(tokens[tokens.index("printf") + 2])
+    return written
+
+
+def _apply_ready(job: FakeSyncJob, diffs: tuple[ItemDiff, ...] = ()) -> None:
+    """Put `job` in the state `apply()` expects, with nothing to decide."""
+    job.accept_review(
+        PackagePlan(manager=job.manager_id, diffs=diffs, groups=()),
+        ReviewOutcome(decisions={}, was_interactive=True),
+    )
+
+
+class TestDeadMarksAreDropped:
+    """A mark keeps the holding machine's own copy of an item; once that machine has no
+    copy, the mark is taken out rather than left to silence the item for good.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_mark_whose_item_left_the_machine_is_dropped_and_the_others_kept(self) -> None:
+        """H181 — the file is rewritten without the dead entry, and with every live one."""
+        context = make_context()
+        context.target.run_command = AsyncMock(  # pyright: ignore[reportAttributeAccessIssue]
+            side_effect=_respond_cat_with(_two_entry_file("fake:gone", "fake:still-here"))
+        )
+        job = _PruningJob(context, absent_on_target=("fake:gone",))
+        _apply_ready(job)
+
+        await job.apply()
+
+        written = _written_decision_files(context.target)  # pyright: ignore[reportArgumentType]
+        assert len(written) == 1
+        assert "fake:gone" not in written[0]
+        assert "fake:still-here" in written[0]
+
+    @pytest.mark.asyncio
+    async def test_a_file_with_nothing_dead_in_it_is_not_written_at_all(self) -> None:
+        """H182 — reconciliation costs no write on the ordinary run."""
+        context = make_context()
+        context.target.run_command = AsyncMock(  # pyright: ignore[reportAttributeAccessIssue]
+            side_effect=_respond_cat_with(_two_entry_file("fake:still-here"))
+        )
+        job = _PruningJob(context)
+        _apply_ready(job)
+
+        await job.apply()
+
+        assert _written_decision_files(context.target) == []  # pyright: ignore[reportArgumentType]
+
+    @pytest.mark.asyncio
+    async def test_a_presence_check_that_does_not_answer_keeps_every_mark(self) -> None:
+        """H183 — silence is not absence: a probe that went dark drops nothing."""
+        context = make_context()
+        context.target.run_command = AsyncMock(  # pyright: ignore[reportAttributeAccessIssue]
+            side_effect=_respond_cat_with(_two_entry_file("fake:gone"))
+        )
+        job = _PruningJob(context, absent_on_target=("fake:gone",), probe_fails=True)
+        _apply_ready(job)
+
+        await job.apply()
+
+        assert _written_decision_files(context.target) == []  # pyright: ignore[reportArgumentType]
+
+    @pytest.mark.asyncio
+    async def test_a_dry_run_drops_nothing(self) -> None:
+        """H184 — a rehearsal leaves no trace, this write included."""
+        context = make_context(dry_run=True)
+        context.target.run_command = AsyncMock(  # pyright: ignore[reportAttributeAccessIssue]
+            side_effect=_respond_cat_with(_two_entry_file("fake:gone"))
+        )
+        job = _PruningJob(context, absent_on_target=("fake:gone",))
+        _apply_ready(job)
+
+        await job.apply()
+
+        assert _written_decision_files(context.target) == []  # pyright: ignore[reportArgumentType]
+
+    @pytest.mark.asyncio
+    async def test_both_machines_files_are_reconciled(self) -> None:
+        """H185 — either machine can be the holder, so both are asked and both rewritten."""
+        context = make_context()
+        context.source.run_command = AsyncMock(  # pyright: ignore[reportAttributeAccessIssue]
+            side_effect=_respond_cat_with(_two_entry_file("fake:source-gone"))
+        )
+        context.target.run_command = AsyncMock(  # pyright: ignore[reportAttributeAccessIssue]
+            side_effect=_respond_cat_with(_two_entry_file("fake:target-gone"))
+        )
+        job = _PruningJob(context, absent_on_source=("fake:source-gone",), absent_on_target=("fake:target-gone",))
+        _apply_ready(job)
+
+        await job.apply()
+
+        assert "fake:source-gone" not in _written_decision_files(context.source)[0]  # pyright: ignore[reportArgumentType]
+        assert "fake:target-gone" not in _written_decision_files(context.target)[0]  # pyright: ignore[reportArgumentType]
+
+    @pytest.mark.asyncio
+    async def test_the_presence_check_runs_after_the_converge_loop(self) -> None:
+        """H186 — what this run's own changes removed counts, so the machine is asked once
+        those changes have landed and not before."""
+        context = make_context()
+        context.target.run_command = AsyncMock(  # pyright: ignore[reportAttributeAccessIssue]
+            side_effect=_respond_cat_with(_two_entry_file("fake:gone"))
+        )
+        diff = ItemDiff(
+            item_class=ItemClass.APT_PACKAGE,
+            diff_class=DiffClass.EXTRA_ON_TARGET,
+            action=DiffAction.REMOVE,
+            item_id="fake:doomed",
+            label="doomed",
+            detail=None,
+        )
+        job = _PruningJob(context, absent_on_target=("fake:gone",))
+        job.accept_review(
+            PackagePlan(manager=job.manager_id, diffs=(diff,), groups=()),
+            ReviewOutcome(decisions={diff.item_id: Decision.APPLY}, was_interactive=True),
+        )
+
+        await job.apply()
+
+        assert job.events.index("converge:fake:doomed") < job.events.index("observe:target")
+
+    @pytest.mark.asyncio
+    async def test_a_dead_mark_stops_silencing_its_item_in_the_same_run(self) -> None:
+        """H187 — the run that notices a mark is dead already plans the item it named: the
+        mark is left out of the mapping every filter consults, so the item is diffed."""
+        context = make_context()
+        context.source.run_command = AsyncMock(  # pyright: ignore[reportAttributeAccessIssue]
+            side_effect=_respond_cat_with(_two_entry_file("fake:brscan3"))
+        )
+        job = _PruningJob(context, absent_on_source=("fake:brscan3",), source_items=[FakeItem(name="brscan3")])
+
+        plan = await job.plan()
+
+        assert {diff.item_id for diff in plan.diffs} == {"fake:brscan3"}
+
+    @pytest.mark.asyncio
+    async def test_planning_writes_no_decision_file_however_dead_the_marks_are(self) -> None:
+        """H188 — the plan is read-only; the file itself is rewritten at apply time."""
+        context = make_context()
+        context.source.run_command = AsyncMock(  # pyright: ignore[reportAttributeAccessIssue]
+            side_effect=_respond_cat_with(_two_entry_file("fake:brscan3"))
+        )
+        job = _PruningJob(context, absent_on_source=("fake:brscan3",))
+
+        await job.plan()
+
+        assert _written_decision_files(context.source) == []  # pyright: ignore[reportArgumentType]
+
+    @pytest.mark.asyncio
+    async def test_the_drop_is_logged_naming_the_item(self, caplog: pytest.LogCaptureFixture) -> None:
+        """H189 — a mark is the user's own answer; it does not evaporate silently."""
+        context = make_context()
+        context.target.run_command = AsyncMock(  # pyright: ignore[reportAttributeAccessIssue]
+            side_effect=_respond_cat_with(_two_entry_file("fake:gone"))
+        )
+        job = _PruningJob(context, absent_on_target=("fake:gone",))
+        _apply_ready(job)
+
+        with caplog.at_level(logging.INFO):
+            await job.apply()
+
+        assert any("fake:gone" in record.message and "mark" in record.message for record in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_the_write_that_drops_a_mark_is_gated(self) -> None:
+        """H190 — the drop is a change on a machine, so `--confirm-each-command` shows it."""
+        context = make_context()
+        context.target.run_command = AsyncMock(  # pyright: ignore[reportAttributeAccessIssue]
+            side_effect=_respond_cat_with(_two_entry_file("fake:gone"))
+        )
+        job = _PruningJob(context, absent_on_target=("fake:gone",))
+        _apply_ready(job)
+
+        await job.apply()
+
+        gated = [
+            call.kwargs.get("mutates")
+            for call in context.target.run_command.call_args_list  # pyright: ignore[reportAttributeAccessIssue]
+            if "mv --force" in call.args[0]
+        ]
+        assert gated and all(phrase for phrase in gated)
+
+    @pytest.mark.asyncio
+    async def test_the_base_job_prunes_nothing(self) -> None:
+        """H191 — a manager with no presence check of its own keeps every mark rather than
+        guessing at one."""
+        context = make_context()
+        context.target.run_command = AsyncMock(  # pyright: ignore[reportAttributeAccessIssue]
+            side_effect=_respond_cat_with(_two_entry_file("fake:gone"))
+        )
+        job = FakeSyncJob(context)
+        _apply_ready(job)
+
+        await job.apply()
+
+        assert _written_decision_files(context.target) == []  # pyright: ignore[reportArgumentType]
+
+
+class TestDecisionFileDrop:
+    @pytest.mark.asyncio
+    async def test_drop_rewrites_the_file_without_the_named_entries(self) -> None:
+        """H192 — the store's own half of the reconciliation."""
+        shell = FakeShellExecutor()
+        decisions = DecisionFile("fake", shell)  # pyright: ignore[reportArgumentType]
+        await decisions.record(_entry(item_id="fake:a"))
+        await decisions.record(_entry(item_id="fake:b"))
+
+        removed = await decisions.drop(["fake:a"])
+
+        assert removed == frozenset({"fake:a"})
+        assert set(await decisions.load()) == {"fake:b"}
+
+    @pytest.mark.asyncio
+    async def test_dropping_the_last_entry_leaves_a_readable_empty_file(self) -> None:
+        """H193 — an emptied file still parses, so the next run reads "nothing recorded"
+        rather than warning about a malformed one."""
+        shell = FakeShellExecutor()
+        decisions = DecisionFile("fake", shell)  # pyright: ignore[reportArgumentType]
+        await decisions.record(_entry(item_id="fake:a"))
+
+        await decisions.drop(["fake:a"])
+
+        assert await decisions.load() == {}
+
+    @pytest.mark.asyncio
+    async def test_dropping_ids_the_file_does_not_hold_writes_nothing(self) -> None:
+        """H194 — nothing to remove is not a rewrite."""
+        shell = FakeShellExecutor()
+        decisions = DecisionFile("fake", shell)  # pyright: ignore[reportArgumentType]
+        await decisions.record(_entry(item_id="fake:a"))
+        shell.commands.clear()
+
+        removed = await decisions.drop(["fake:absent"])
+
+        assert removed == frozenset()
+        assert not [cmd for cmd in shell.commands if "mv --force" in cmd]
+
+    @pytest.mark.asyncio
+    async def test_dropping_nothing_reads_nothing(self) -> None:
+        """H195 — the empty case, which every run with no dead mark takes, issues no command."""
+        shell = FakeShellExecutor()
+        decisions = DecisionFile("fake", shell)  # pyright: ignore[reportArgumentType]
+
+        removed = await decisions.drop([])
+
+        assert removed == frozenset()
+        assert shell.commands == []
+
+    @pytest.mark.asyncio
+    async def test_a_failed_write_raises_naming_the_file(self) -> None:
+        """H196 — a drop that could not be written is not reported as a drop."""
+        executor = MagicMock()
+        executor.run_command = AsyncMock(
+            side_effect=[
+                CommandResult(0, _decision_file_contents("fake:a"), ""),
+                CommandResult(1, "", "read-only file system"),
+            ]
+        )
+
+        with pytest.raises(RuntimeError, match=re.escape("fake.decisions.yaml")):
+            await DecisionFile("fake", executor).drop(["fake:a"])

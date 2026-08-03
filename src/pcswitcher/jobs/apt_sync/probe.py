@@ -864,6 +864,20 @@ class AptProbe:
             RepoFacts(pin_digests=target_pins, conf_digests=target_configs),
         )
 
+    async def capture_conf_filenames(self, *, on_source: bool) -> frozenset[str]:
+        """The `/etc/apt/apt.conf.d` filenames ONE machine has, for the question
+        `capture_repo_state`'s digests answer for both at once.
+
+        Asked on its own because its one caller — the machine-specific mark reconciliation
+        (`AptSyncJob.observe_absent_marks`) — runs at a different moment in the run than the
+        diff does, on one machine at a time, and only when that machine's decision file
+        actually names an `apt:config:` item.
+        """
+        run, machine = (
+            (self.source_run, self._machines.source) if on_source else (self.target_run, self._machines.target)
+        )
+        return frozenset(await capture_dir_digests(run, APT_CONF_DIR, machine))
+
     async def capture_distribution_owned_keys(
         self, target_keys: KeyDigests, source_keys: KeyDigests, distribution_origins: frozenset[str]
     ) -> frozenset[str]:

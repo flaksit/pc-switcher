@@ -209,7 +209,7 @@ from pcswitcher.jobs.packages.review import (
     ReviewGroup,
     ReviewOutcome,
 )
-from pcswitcher.jobs.packages.state import DecisionEntry, DecisionFile, filter_inert, marks_on_either
+from pcswitcher.jobs.packages.state import DecisionEntry, filter_inert, marks_on_either
 from pcswitcher.jobs.packages.sync_core import (
     ConvergeItemFailed,
     PackageItemFailures,
@@ -387,6 +387,11 @@ _SCOPES: tuple[Literal["user", "system"], ...] = ("user", "system")
 # screen that no longer offers the promotion.
 _REMOTE_ITEM_ID_PREFIX = "flatpak:remote:"
 
+# Identity of an installed application. Named because `observe_absent_marks` has to tell a
+# decision file's ref entries from its remote and mask ones, and the file is hand-editable —
+# so the ID is what says which is which, not the `item_class` recorded beside it.
+_REF_ITEM_ID_PREFIX = "flatpak:ref:"
+
 # Identity of a remote-CONFLICT review entry (ADR-020 D-41). Deliberately not a
 # `flatpak:remote:` id, because it is not the same question: that one asks whether to DELETE
 # a remote the source no longer has, this one asks which of two configurations of a remote
@@ -472,7 +477,7 @@ class FlatpakItem:
     @property
     def item_id(self) -> str:
         """Stable identity string: `flatpak:ref:<scope>:<application>/<arch>/<branch>`."""
-        return f"flatpak:ref:{self.scope}:{self.ref}"
+        return f"{_REF_ITEM_ID_PREFIX}{self.scope}:{self.ref}"
 
     def label(self) -> str:
         """Human-readable text for the review UI and logs."""
@@ -1580,6 +1585,35 @@ class FlatpakSyncJob(PackageSyncJob):
         ]
 
     @override
+    async def observe_absent_marks(self, entries: Mapping[str, DecisionEntry], *, on_source: bool) -> frozenset[str]:
+        """The marked refs one machine no longer has, read off that machine's own
+        `flatpak list`.
+
+        The listing is `_FLATPAK_ALL_REFS_CMD` rather than the `--app` one the diff is built
+        from. Only an app can be marked, so the two answer this question identically today;
+        the wider listing is used anyway because it is a statement about what the machine
+        HAS, and narrowing a presence check to a subset is how a mark on something still
+        installed gets dropped.
+
+        Neither a remote nor a mask answers anything here. Neither can be recorded at all
+        (`PKG-FR-BLOCKS-DERIVED`, and a remote is never offered), so an entry naming one is
+        a hand edit and stays where it is — recognised by its ID rather than its recorded
+        `item_class`, since a hand-edited file can have the two disagree.
+        """
+        ref_ids = {item_id for item_id in entries if item_id.startswith(_REF_ITEM_ID_PREFIX)}
+        if not ref_ids:
+            return frozenset()
+
+        result = (
+            await self.source.run_command(_FLATPAK_ALL_REFS_CMD)
+            if on_source
+            else await self.target.run_command(_FLATPAK_ALL_REFS_CMD, login_shell=False)
+        )
+        require_answer(_FLATPAK_ALL_REFS_CMD, result, self.machines.source if on_source else self.machines.target)
+        installed = {item.item_id for item in _parse_flatpak_list(result.stdout)}
+        return frozenset(ref_ids - installed)
+
+    @override
     async def plan(self) -> PackagePlan:
         """Load decision files -> capture -> query -> diff -> build review groups.
 
@@ -1604,8 +1638,7 @@ class FlatpakSyncJob(PackageSyncJob):
         they need — both machines' remote records, the target's own ref listing and its
         decision file — was already read for the diff.
         """
-        source_decisions = await DecisionFile(self.manager_id, self.source).load()
-        target_decisions = await DecisionFile(self.manager_id, self.target).load()
+        source_decisions, target_decisions = await self._load_live_decisions()
 
         # Both files against BOTH listings (`marks_on_either`): a ref or a mask the two
         # machines share must vanish from the diff entirely once either machine records it,

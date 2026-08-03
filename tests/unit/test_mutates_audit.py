@@ -221,6 +221,9 @@ _READ_ONLY_CALLS: dict[str, int] = {
     # What the target holds once the converge loop is done, which decides whether a remote
     # the source lacks is still in use (`PKG-FR-FLATPAK-REMOTE-DELETE`).
     "jobs/flatpak_sync.py::FlatpakSyncJob._target_refs_now::run_command": 1,
+    # One `flatpak list` per machine, asked only when that machine's decision file names a
+    # ref, to find the marks whose application is no longer installed there.
+    "jobs/flatpak_sync.py::FlatpakSyncJob.observe_absent_marks::run_command": 2,
     # `flatpak --version` on each machine, plus the target's sudo precondition when a
     # system-scope ref, remote or mask is in play.
     "jobs/flatpak_sync.py::FlatpakSyncJob.validate::run_command": 3,
@@ -243,6 +246,8 @@ _READ_ONLY_CALLS: dict[str, int] = {
     "jobs/manual_installs_sync.py::ManualInstallsSyncJob._resolve_opt_shapes::run_command": 1,
     "jobs/manual_installs_sync.py::ManualInstallsSyncJob._directories_holding_a_file::run_command": 1,
     "jobs/manual_installs_sync.py::ManualInstallsSyncJob._installed_names::run_command": 1,
+    # One batched `test -e` loop, for the marked paths a machine may no longer have.
+    "jobs/manual_installs_sync.py::ManualInstallsSyncJob._paths_that_exist::run_command": 1,
     "jobs/manual_installs_sync.py::ManualInstallsSyncJob.validate::run_command": 3,
     # The decision file and snippet registry are read with `cat`; their writes are gated.
     "jobs/packages/state.py::DecisionFile.load::run_command": 1,
@@ -281,14 +286,8 @@ _TOLERATED_SIDE_EFFECTS: dict[str, _ToleratedSideEffect] = {
 
 # Modifications that reach a machine today without passing through the gate. Every entry
 # is a defect: with `--confirm-each-command` the user is not shown these and is not asked.
-_UNGATED_WRITES: dict[str, tuple[_UngatedWrite, ...]] = {
-    "jobs/folder_sync.py::FolderSyncJob._run_rsync_pass::start_process": (
-        _UngatedWrite(
-            "runs the rsync pass that mirrors (and with --delete removes) the synced folders",
-            tracked_by="#209",
-        ),
-    ),
-}
+# Empty, and meant to stay so: the table exists to make the next omission declare itself.
+_UNGATED_WRITES: dict[str, tuple[_UngatedWrite, ...]] = {}
 
 
 def _describe(sites: list[_CallSite]) -> str:
@@ -347,8 +346,8 @@ class TestMutatesCoverage:
 
         Kept separate from the count check above so the two failures read differently — that one
         says "you added something unaccounted for", this one says "the codebase still has
-        ungated writes". It holds today: the only ungated write left is the rsync pass under
-        #209, so adding a `_UNGATED_WRITES` entry without an issue fails here.
+        ungated writes". It holds trivially today, with `_UNGATED_WRITES` empty, and keeps
+        holding the moment someone adds an entry to it without an issue to point at.
         """
         untracked = sorted(
             f"{key}: {write.what}"
@@ -373,7 +372,9 @@ class TestMutatesCoverage:
 
         Stated over the method rather than per call site because there is no read-only
         `start_process`: the handle outlives the call, and something has to terminate it.
-        The one exception is the rsync pass tracked by #209, which the tables already hold.
+        No exceptions — `folder_sync`'s rsync pass announces itself in dry-run too, where it
+        writes nothing, rather than make the marker conditional at a call site this audit
+        can only read as covered or absent.
         """
         offenders = sorted(
             key for key in _collect_ungated() if key.endswith("::start_process") and key not in _UNGATED_WRITES
@@ -424,7 +425,9 @@ _PACKAGE_SYNC_MODULES = frozenset({"jobs/snap_sync.py", "jobs/flatpak_sync.py", 
 _SOURCE_WRITES: dict[str, str] = {
     # Written through whichever machine holds the item, which is the source whenever the
     # source is the one that has the software (D-08a) — hence source-capable, not target-only.
-    "jobs/packages/state.py::DecisionFile.record::run_command": (
+    # One call site for both directions of the same write: `record` puts a mark in the
+    # file and `drop` takes one out once the holding machine no longer has its item.
+    "jobs/packages/state.py::DecisionFile._write::run_command": (
         "PKG-FR-MACHINE-SPECIFIC — the machine-specific mark, on the holding machine"
     ),
     "jobs/packages/state.py::SnippetRegistry.add::run_command": (
@@ -446,6 +449,11 @@ _OUTSIDE_PACKAGE_SYNC: dict[str, str] = {
     "btrfs_snapshots.py::cleanup_snapshots::run_command": "expires old snapshots on either machine",
     "btrfs_snapshots.py::delete_all_snapshots::run_command": "the `cleanup-snapshots` command, not a sync",
     "jobs/btrfs.py::BtrfsSnapshotJob.execute::run_command": "the snapshot job's own session folder, per machine",
+    # Through the source's handle because rsync runs there; what it changes is the target,
+    # which is what the call declares with `changes=Host.TARGET` and what the prompt names.
+    "jobs/folder_sync.py::FolderSyncJob._run_rsync_pass::start_process": (
+        "the rsync pass that mirrors the synced folders onto the target, deletions included"
+    ),
     "orchestrator.py::Orchestrator._update_sync_history::declare_modification": (
         "the tool's record of this machine's role in the run — not software, and not this article's subject"
     ),
@@ -581,7 +589,7 @@ class TestSourceWrites:
         can be changed alone: the mark, the snippet, the refresh pause.
         """
         assert set(_SOURCE_WRITES) == {
-            "jobs/packages/state.py::DecisionFile.record::run_command",
+            "jobs/packages/state.py::DecisionFile._write::run_command",
             "jobs/packages/state.py::SnippetRegistry.add::run_command",
             "orchestrator.py::Orchestrator._run_snap_hold_command::run_command",
         }

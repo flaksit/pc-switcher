@@ -69,7 +69,7 @@ from pcswitcher.jobs.packages.items import (
 )
 from pcswitcher.jobs.packages.probes import require_answer
 from pcswitcher.jobs.packages.review import Decision
-from pcswitcher.jobs.packages.state import DecisionFile, filter_inert, marks_on_either
+from pcswitcher.jobs.packages.state import DecisionEntry, filter_inert, marks_on_either
 from pcswitcher.jobs.packages.sync_core import (
     ConvergeItemDeclined,
     ConvergeItemFailed,
@@ -546,6 +546,33 @@ class SnapSyncJob(PackageSyncJob):
         return _parse_snap_list(result.stdout)
 
     @override
+    async def observe_absent_marks(self, entries: Mapping[str, DecisionEntry], *, on_source: bool) -> frozenset[str]:
+        """The marked snaps one machine no longer has, read off that machine's own
+        `snap list --all` — the same listing the diff is built from, and the whole of what
+        snapd says is installed there.
+
+        A sideloaded snap is in that listing like any other, so a mark on one survives:
+        `PKG-FR-SNAP-SIDELOAD` puts a sideload out of scope for the run, which says nothing
+        about whether the machine has it.
+
+        `snap:hold:` entries answer nothing — a hold is derived and can never be recorded
+        (`PKG-FR-BLOCKS-DERIVED`) — so they are left alone. Which entries those are is read
+        off the ID rather than the recorded `item_class`: the file is hand-editable, so the
+        two can disagree, and a snap cannot be named `hold:…` for the prefixes to collide.
+        """
+        snap_ids = {
+            item_id
+            for item_id in entries
+            if item_id.startswith(_SNAP_ID_PREFIX) and not item_id.startswith(_SNAP_HOLD_ID_PREFIX)
+        }
+        if not snap_ids:
+            return frozenset()
+
+        items = await self.capture_source_items() if on_source else await self.query_target_items()
+        installed = {item.name for item in items}
+        return frozenset(item_id for item_id in snap_ids if item_id.removeprefix(_SNAP_ID_PREFIX) not in installed)
+
+    @override
     async def plan(self) -> PackagePlan:
         """Load decision files -> capture -> query -> diff -> build review groups.
 
@@ -562,8 +589,7 @@ class SnapSyncJob(PackageSyncJob):
         about them: `PKG-FR-SNAP-SIDELOAD` puts them out of scope entirely, so there is
         neither an action to take nor anything to report.
         """
-        source_decisions = await DecisionFile(self.manager_id, self.source).load()
-        target_decisions = await DecisionFile(self.manager_id, self.target).load()
+        source_decisions, target_decisions = await self._load_live_decisions()
 
         # Sideloads are partitioned off the RAW listing, before the machine-specific filter:
         # filtering first would drop a marked sideload before `withheld` below could see it,

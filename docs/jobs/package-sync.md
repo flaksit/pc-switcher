@@ -207,6 +207,8 @@ The mark is recorded in that machine's own decision file at `~/.config/pc-switch
 
 To un-mark something, delete its entry from the decision file (or delete the whole file to clear every machine-specific decision for that manager). The next sync treats the item as live again and re-offers it in the review.
 
+A mark also goes on its own once the machine no longer has what it names — you removed the package by hand, or a collateral question you answered took it. The run says which marks it dropped. That is not the tool forgetting your answer: a mark works in both directions, so one left standing over software you no longer have would quietly refuse to install that software here ever again, which is not what keeping your copy meant. Put the software back and it is reviewed again like anything else.
+
 A machine-specific package never appears in a review again, which is why the run protects it where it would otherwise be lost without a word: an apt repository it still installs from is not offered for deletion, a collateral removal that would take it is a question, and a flatpak remote it takes as its origin cannot be repointed silently.
 
 ## Install snippets

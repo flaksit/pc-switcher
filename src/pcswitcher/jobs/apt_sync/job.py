@@ -33,6 +33,7 @@ from pcswitcher.jobs.apt_sync.esm_gate import EsmGate
 from pcswitcher.jobs.apt_sync.etc_apt import EtcApt
 from pcswitcher.jobs.apt_sync.files import TargetFiles
 from pcswitcher.jobs.apt_sync.items import (
+    APT_CONFIG_ID_PREFIX,
     APT_HOLD_ID_PREFIX,
     APT_PACKAGE_ID_PREFIX,
     APT_SOURCE_ID_PREFIX,
@@ -65,7 +66,7 @@ from pcswitcher.jobs.packages.review import (
     ReviewGroup,
     ReviewOutcome,
 )
-from pcswitcher.jobs.packages.state import DecisionEntry, DecisionFile, filter_inert, marks_on_either
+from pcswitcher.jobs.packages.state import DecisionEntry, filter_inert, marks_on_either
 from pcswitcher.jobs.packages.sync_core import ConvergeItemFailed, PackagePlan, PackageSyncJob
 from pcswitcher.models import CommandResult, FirstSyncScope, Host, LogLevel, SyncAborted, ValidationError
 from pcswitcher.sudoers import passwordless_sudo_hint
@@ -327,8 +328,10 @@ class AptSyncJob(PackageSyncJob):
         """The package half: load decision files -> capture -> query -> diff -> build review
         groups. Read-only.
 
-        Both machines' decision files are loaded first (a read, like everything else here)
-        and each side's captured/queried items are filtered through its OWN file before
+        Both machines' decision files are loaded first (a read, like everything else here),
+        with any mark whose package or config file that machine no longer has left out
+        (`_load_live_decisions`), and each side's captured/queried items are filtered
+        through its OWN file before
         diffing (D-08): an item recorded on the source is dropped from the source
         manifest so it is never pushed to a peer again; an item recorded on the target
         is dropped from the target query so it is never proposed for
@@ -344,9 +347,7 @@ class AptSyncJob(PackageSyncJob):
         diffs it appends.
         """
         self._target_installed = None
-        source_decisions = await DecisionFile(self.manager_id, self.source).load()
-        target_decisions = await DecisionFile(self.manager_id, self.target).load()
-        self._plan_decisions = (source_decisions, target_decisions)
+        source_decisions, target_decisions = await self._load_live_decisions()
 
         # Both files against BOTH manifests (`marks_on_either`): a package both machines
         # have must vanish from the diff entirely once either machine records it, and
@@ -469,6 +470,48 @@ class AptSyncJob(PackageSyncJob):
         """
         _source_decisions, target_decisions = self._plan_decisions
         return self._marked_packages(target_decisions)
+
+    @override
+    async def observe_absent_marks(self, entries: Mapping[str, DecisionEntry], *, on_source: bool) -> frozenset[str]:
+        """The marked apt items one machine no longer has: a package dpkg does not report as
+        installed, an `/etc/apt/apt.conf.d` file that is not there.
+
+        The installed set comes from `capture_*_installed` (dpkg's whole status listing) and
+        NOT from this job's own manifest, which is `apt-mark showmanual`. The two differ for
+        a package that is installed but automatically so, and reading the narrower one as
+        "not installed" would drop the mark on any marked package apt has since reclassified
+        — a package the user still has, and still asked to be left alone.
+
+        The other three markable-looking apt classes answer nothing here. `apt:hold:` cannot
+        be recorded at all (`PKG-FR-BLOCKS-DERIVED`), and `apt:source:`/`apt:pin:` cannot
+        either (`PKG-FR-NO-MARK-ON-ORIGIN`), so an entry naming one is a hand edit this pass
+        leaves exactly where it found it.
+
+        Which class an entry belongs to is read off its ID and not off its recorded
+        `item_class`, the same way `_marked_packages` reads it: the file is hand-editable, so
+        the two can disagree, and the id is the half every consumer keys on.
+
+        Each read is issued only when the file names an item of that class, so the ordinary
+        run — decision files holding packages, or holding nothing — costs one command per
+        machine at most.
+        """
+        package_ids = {item_id for item_id in entries if item_id.startswith(APT_PACKAGE_ID_PREFIX)}
+        config_ids = {item_id for item_id in entries if item_id.startswith(APT_CONFIG_ID_PREFIX)}
+
+        absent: set[str] = set()
+        if package_ids:
+            installed = (
+                await self._probe.capture_source_installed()
+                if on_source
+                else await self._probe.capture_target_installed()
+            )
+            absent |= {item_id for item_id in package_ids if package_name(item_id) not in installed}
+        if config_ids:
+            filenames = await self._probe.capture_conf_filenames(on_source=on_source)
+            absent |= {
+                item_id for item_id in config_ids if item_id.removeprefix(APT_CONFIG_ID_PREFIX) not in filenames
+            }
+        return frozenset(absent)
 
     @staticmethod
     def _files_an_approval_would_write(package_diffs: Sequence[ItemDiff], origins: OriginClassifier) -> frozenset[str]:

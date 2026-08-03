@@ -1827,3 +1827,70 @@ class TestAProbeThatDidNotAnswer:
 
         removals = {diff.item_id for diff in plan.diffs if diff.action == DiffAction.REMOVE}
         assert removals == {"snap:beta", "snap:gamma", "snap:delta"}
+
+
+def _snap_decisions(*item_ids: str) -> str:
+    """A snap decision file recording each id skip-always."""
+    body = "".join(
+        f'  "{item_id}":\n    item_class: snap\n    label: "{item_id}"\n'
+        f"    reason: null\n    recorded_at: '2026-07-30T00:00:00+00:00'\n"
+        for item_id in item_ids
+    )
+    return f"machine_specific:\n{body}"
+
+
+class TestMarksFollowWhatSnapdReports:
+    """A snap mark lives as long as snapd says the machine has the snap."""
+
+    @staticmethod
+    async def _run(*, listing: str, decisions: str) -> MagicMock:
+        context, _source, target = make_context(
+            source_responses={"snap list --all": CommandResult(0, "No snaps are installed yet.\n", "")},
+            target_responses={
+                "snap list --all": CommandResult(0, listing, ""),
+                "snap.decisions.yaml": CommandResult(0, decisions, ""),
+            },
+        )
+        job = SnapSyncJob(context)
+        job.accept_review(
+            PackagePlan(manager="snap", diffs=(), groups=()),
+            ReviewOutcome(decisions={}, was_interactive=True),
+        )
+        await job.apply()
+        return target
+
+    @pytest.mark.asyncio
+    async def test_a_marked_snap_snapd_no_longer_lists_is_dropped(self) -> None:
+        """H205 — the snap went; the entry keeping it goes with it."""
+        target = await self._run(listing=SNAP_LIST_TARGET, decisions=_snap_decisions("snap:removed-by-hand"))
+
+        rewrites = [cmd for cmd in all_calls(target) if "mv --force" in cmd]
+        assert len(rewrites) == 1
+        assert "removed-by-hand" not in rewrites[0]
+
+    @pytest.mark.asyncio
+    async def test_a_marked_snap_still_installed_keeps_its_mark(self) -> None:
+        """H206 — the same listing, the other answer."""
+        target = await self._run(listing=SNAP_LIST_TARGET, decisions=_snap_decisions("snap:delta"))
+
+        assert not [cmd for cmd in all_calls(target) if "mv --force" in cmd]
+
+    @pytest.mark.asyncio
+    async def test_a_marked_sideloaded_snap_keeps_its_mark(self) -> None:
+        """H207 — a sideload is out of scope for the run, which says nothing about whether
+        the machine has it: `snap list --all` names it, so the mark stands."""
+        target = await self._run(listing=SNAP_LIST_SOURCE_SIDELOADED, decisions=_snap_decisions("snap:homemade"))
+
+        assert not [cmd for cmd in all_calls(target) if "mv --force" in cmd]
+
+    @pytest.mark.asyncio
+    async def test_an_entry_naming_a_refresh_hold_is_never_dropped(self) -> None:
+        """H208 — a hold can never be recorded, so an entry naming one is a hand edit this
+        pass has no opinion about."""
+        decisions = (
+            'machine_specific:\n  "snap:hold:delta":\n    item_class: snap_hold\n'
+            "    label: \"delta\"\n    reason: null\n    recorded_at: '2026-07-30T00:00:00+00:00'\n"
+        )
+        target = await self._run(listing=SNAP_LIST_TARGET, decisions=decisions)
+
+        assert not [cmd for cmd in all_calls(target) if "mv --force" in cmd]

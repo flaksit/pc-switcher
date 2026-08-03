@@ -17,6 +17,13 @@
 # Remove an entry (or delete the whole file) to make that item eligible again on
 # the next sync.
 #
+# An entry is also removed automatically once this machine no longer has the item
+# it names — uninstalled by hand, or taken by a removal approved elsewhere in a
+# review (D-43). The mark keeps THIS machine's copy, so with no copy left it is
+# keeping nothing, and leaving it would go on refusing to install that item here.
+# The run says which entries it removed. If the item comes back, it is reviewed
+# again as a new item.
+#
 # Illustrative entries (commented out — copying this file produces an empty,
 # but documented, `machine_specific:` mapping):
 #

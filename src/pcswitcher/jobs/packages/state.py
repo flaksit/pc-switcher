@@ -6,6 +6,13 @@ this machine is the source, not installed or removed when this machine is the ta
 D-19's whole argument for scanning aggressively — a finding produces noise exactly
 once, then never again — only holds if this durability is real.
 
+Durable for as long as the item is, and no longer: an entry keeps THIS machine's copy of
+something, so once this machine no longer has that something the entry has nothing left to
+keep, and `DecisionFile.drop` takes it out (`PackageSyncJob.observe_absent_marks` decides
+which entries those are). Leaving it in place is not the conservative option — an entry
+suppresses its item in both roles, so a dead one silently blocks a later install of that
+same software here, which is not what the answer that wrote it chose.
+
 Which machine's file gets an entry follows which machine HOLDS the item (D-08a): an
 install declined for good is recorded on the source, the only machine that has it; a
 removal and an overwrite are both recorded on the target, which is the machine whose
@@ -42,7 +49,7 @@ from __future__ import annotations
 
 import logging
 import shlex
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
@@ -98,6 +105,10 @@ _FILE_HEADER = (
     "# This file is machine-local and is never synced to any peer. Remove\n"
     "# an entry (or delete the whole file) to make that item eligible again on the\n"
     "# next sync.\n"
+    "#\n"
+    "# An entry is dropped automatically once this machine no longer has the item it\n"
+    "# names: the mark keeps THIS machine's copy, so it has nothing left to keep. If\n"
+    "# the item comes back, it is reviewed again as a new item.\n"
 )
 
 
@@ -249,11 +260,7 @@ class DecisionFile:
             return {}
 
     async def record(self, entry: DecisionEntry) -> None:
-        """Merge `entry` into this file by `item_id` (last write wins) and write
-        atomically: `mkdir --parents` the directory, write the new content to a sibling
-        `.pcswitcher-tmp` path, then `mv --force` it into place — the same
-        atomic-replace-within-the-same-directory shape `vscode_state_sync._sync_editor`
-        uses, so an interrupted write can never leave a truncated file.
+        """Merge `entry` into this file by `item_id` (last write wins) and write it back.
 
         The serialised bytes travel as one shlex-quoted `printf` argument through
         `self._executor` — never a local filesystem write — so this identical method
@@ -262,8 +269,53 @@ class DecisionFile:
         """
         entries = await self.load()
         entries[entry.item_id] = entry
-        content = _serialize(entries)
+        await self._write(
+            _serialize(entries),
+            mutates=f"record permanent skip for {entry.label} in {self._display_path}",
+            failure=f"failed to record decision for {entry.item_id!r}",
+        )
 
+    async def drop(self, item_ids: Collection[str]) -> frozenset[str]:
+        """Remove `item_ids` from this file and write it back; returns what was actually
+        removed, which is `item_ids` minus anything the file did not hold.
+
+        The counterpart to `record`, and the reason a mark is not simply written once and
+        left: an entry says "this machine's own copy of X stays as it is", and once this
+        machine has no copy of X there is nothing left for it to say. Kept as durable as
+        `record` makes it while its item is there (D-08's whole argument for scanning
+        aggressively), and no longer: an entry naming software the machine no longer has
+        goes on suppressing that item in BOTH roles, so it silently blocks a later install
+        of it here — an outcome the answer that wrote the entry never chose. Which entries
+        those are is `PackageSyncJob.observe_absent_marks`'s business; this method only
+        writes the result.
+
+        Writes nothing at all when the file holds none of `item_ids`, so a run over a file
+        with nothing dead in it issues no command and needs no confirmation — and reads
+        nothing either when `item_ids` is empty, which is every run that found no dead mark.
+        """
+        if not item_ids:
+            return frozenset()
+
+        entries = await self.load()
+        removed = frozenset(item_id for item_id in item_ids if item_id in entries)
+        if not removed:
+            return frozenset()
+
+        remaining = {item_id: entry for item_id, entry in entries.items() if item_id not in removed}
+        labels = ", ".join(sorted(entries[item_id].label for item_id in removed))
+        await self._write(
+            _serialize(remaining),
+            mutates=f"drop the machine-specific mark on {labels} from {self._display_path}",
+            failure=f"failed to drop {sorted(removed)} from",
+        )
+        return removed
+
+    async def _write(self, content: str, *, mutates: str, failure: str) -> None:
+        """Replace this file's content atomically: `mkdir --parents` the directory, write
+        to a sibling `.pcswitcher-tmp` path, then `mv --force` it into place — the same
+        atomic-replace-within-the-same-directory shape `vscode_state_sync._sync_editor`
+        uses, so an interrupted write can never leave a truncated file.
+        """
         dir_relpath = shlex.quote(_DECISION_DIR_RELPATH)
         tmp_expr = f"{self._path_expr}.pcswitcher-tmp"
         cmd = (
@@ -271,13 +323,9 @@ class DecisionFile:
             f"printf '%s' {shlex.quote(content)} > {tmp_expr} && "
             f"mv --force {tmp_expr} {self._path_expr}"
         )
-        result = await self._executor.run_command(
-            cmd, mutates=f"record permanent skip for {entry.label} in {self._display_path}"
-        )
+        result = await self._executor.run_command(cmd, mutates=mutates)
         if not result.success:
-            raise RuntimeError(
-                f"failed to record decision for {entry.item_id!r} in {self._display_path}: {result.stderr.strip()}"
-            )
+            raise RuntimeError(f"{failure} {self._display_path}: {result.stderr.strip()}")
 
 
 # ---------------------------------------------------------------------------------

@@ -36,6 +36,7 @@ from tests.unit.jobs.apt.helpers import (
     _POLICY_NO_CANDIDATE,
     _RIVAL_LIST,
     _SOURCE_SCAN_CMD,
+    _STATUS_QUERY,
     _VENDOR_LIST,
     DPKG_QUERY_3,
     SHOWMANUAL_3,
@@ -1659,3 +1660,136 @@ class TestOneReviewPerRun:
         assert any(c.startswith("sudo rm --force") and "curl-pin" in c for c in commands)
         assert any(c.startswith("sudo apt-get update") for c in commands)
         assert len(reviewer.calls) == 1
+
+
+class TestMarkReconciliationReadsTheRightSet:
+    """Which apt items a machine still HAS, for the marks whose item may have left it. Both
+    halves matter: a check that is too narrow drops a mark on software the user still has,
+    and one that is too wide never drops anything.
+    """
+
+    @staticmethod
+    def _context(*, decisions: str, target_extra: dict[str, CommandResult]) -> JobContext:
+        context, _source, _target = make_context(
+            source_responses=_NO_PACKAGES,
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "", ""),
+                "apt.decisions.yaml": CommandResult(0, decisions, ""),
+                **target_extra,
+            },
+        )
+        return context
+
+    @pytest.mark.asyncio
+    async def test_a_marked_package_apt_calls_automatic_keeps_its_mark(self) -> None:
+        """H199 — the check is dpkg's installed set, not this job's `apt-mark showmanual`
+        manifest: a marked package apt has reclassified as automatically installed is still
+        on the machine, and the mark still keeps it."""
+        context = self._context(
+            decisions=decision_file("apt:package:vendor-tool"),
+            target_extra={_STATUS_QUERY: installed_on_target("vendor-tool", "keeper")},
+        )
+        job = AptSyncJob(context)
+        install_reviewer(job, {})
+
+        await job.execute()
+
+        assert not [cmd for cmd in all_calls(context.target) if "mv --force" in cmd]  # pyright: ignore[reportArgumentType]
+
+    @pytest.mark.asyncio
+    async def test_a_marked_package_dpkg_no_longer_reports_is_dropped(self) -> None:
+        """H200 — the package went, by whatever route; the entry keeping it goes too."""
+        context = self._context(
+            decisions=decision_file("apt:package:vendor-tool"),
+            target_extra={_STATUS_QUERY: installed_on_target("keeper")},
+        )
+        job = AptSyncJob(context)
+        install_reviewer(job, {})
+
+        await job.execute()
+
+        rewrites = [cmd for cmd in all_calls(context.target) if "mv --force" in cmd]  # pyright: ignore[reportArgumentType]
+        assert len(rewrites) == 1
+        assert "vendor-tool" not in rewrites[0]
+
+    @pytest.mark.asyncio
+    async def test_a_marked_apt_config_file_that_is_gone_is_dropped(self) -> None:
+        """H201 — `/etc/apt/apt.conf.d` is the one non-package class a mark can name, and the
+        directory listing is what says whether the file is still there."""
+        context = self._context(
+            decisions=(
+                'machine_specific:\n  "apt:config:99conf":\n    item_class: apt_config\n'
+                "    label: \"99conf\"\n    reason: null\n    recorded_at: '2026-07-26T00:00:00Z'\n"
+            ),
+            target_extra={
+                _STATUS_QUERY: installed_on_target("keeper"),
+                "find /etc/apt/apt.conf.d": CommandResult(0, "", ""),
+            },
+        )
+        job = AptSyncJob(context)
+        install_reviewer(job, {})
+
+        await job.execute()
+
+        rewrites = [cmd for cmd in all_calls(context.target) if "mv --force" in cmd]  # pyright: ignore[reportArgumentType]
+        assert len(rewrites) == 1
+        assert "99conf" not in rewrites[0]
+
+    @pytest.mark.asyncio
+    async def test_a_marked_apt_config_file_still_there_keeps_its_mark(self) -> None:
+        """H202 — the same listing, the other answer."""
+        context = self._context(
+            decisions=(
+                'machine_specific:\n  "apt:config:99conf":\n    item_class: apt_config\n'
+                "    label: \"99conf\"\n    reason: null\n    recorded_at: '2026-07-26T00:00:00Z'\n"
+            ),
+            target_extra={
+                _STATUS_QUERY: installed_on_target("keeper"),
+                "find /etc/apt/apt.conf.d": CommandResult(0, sha256_line("c1", "99conf"), ""),
+            },
+        )
+        job = AptSyncJob(context)
+        install_reviewer(job, {})
+
+        await job.execute()
+
+        assert not [cmd for cmd in all_calls(context.target) if "mv --force" in cmd]  # pyright: ignore[reportArgumentType]
+
+    @pytest.mark.asyncio
+    async def test_an_entry_naming_a_hold_is_never_dropped(self) -> None:
+        """H203 — a hold can never be recorded at all, so an entry naming one is a hand edit;
+        this pass has no opinion about it and leaves it alone."""
+        context = self._context(
+            decisions=(
+                'machine_specific:\n  "apt:hold:pkg-a":\n    item_class: apt_package\n'
+                "    label: \"pkg-a\"\n    reason: null\n    recorded_at: '2026-07-26T00:00:00Z'\n"
+            ),
+            target_extra={_STATUS_QUERY: installed_on_target("keeper")},
+        )
+        job = AptSyncJob(context)
+        install_reviewer(job, {})
+
+        await job.execute()
+
+        assert not [cmd for cmd in all_calls(context.target) if "mv --force" in cmd]  # pyright: ignore[reportArgumentType]
+
+    @pytest.mark.asyncio
+    async def test_a_machine_with_no_marks_pays_no_presence_read(self) -> None:
+        """H204 — the ordinary run costs nothing: with no decision file there is nothing to
+        reconcile, so no installed-set read is issued on its account."""
+        quiet = self._context(decisions="machine_specific: {}\n", target_extra={})
+        marked = self._context(
+            decisions=decision_file("apt:package:vendor-tool"),
+            target_extra={_STATUS_QUERY: installed_on_target("vendor-tool", "keeper")},
+        )
+        for context in (quiet, marked):
+            job = AptSyncJob(context)
+            install_reviewer(job, {})
+            await job.execute()
+
+        status_reads = [
+            len([cmd for cmd in all_calls(context.target) if _STATUS_QUERY in cmd])  # pyright: ignore[reportArgumentType]
+            for context in (quiet, marked)
+        ]
+        assert status_reads[0] == 0
+        assert status_reads[1] > 0
