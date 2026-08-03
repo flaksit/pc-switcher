@@ -112,7 +112,7 @@ printf 'logging:\n  file: DEBUG\nsync_jobs:\n  apt_sync: false\n  snap_sync: fal
 pc-switcher sync pc2 --dry-run --yes --allow-first-sync
 ```
 
-The message must name the file and the machine — `the install-snippet registry ~/.config/pc-switcher/package-snippets.yaml on pc1 cannot be read as a registry` — and say to repair or delete it before starting a new sync. An absent registry is ordinary data, so deleting it is the repair here.
+First, choose "One application" for "/opt/pcsw-uat-vendor". Then abort should follow and the message must name the file and the machine — `the install-snippet registry ~/.config/pc-switcher/package-snippets.yaml on pc1 cannot be read as a registry` — and say to repair or delete it before starting a new sync. An absent registry is ordinary data, so deleting it is the repair here.
 
 ```bash
 rm ~/.config/pc-switcher/package-snippets.yaml
