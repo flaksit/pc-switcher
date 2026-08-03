@@ -421,7 +421,9 @@ There is deliberately no "skip this one". A single approved outcome can span sev
 
 The flag requires a TTY on both stdin and stdout and is refused at startup without one: a gate with a non-interactive fallback would have to auto-proceed, which is exactly what it exists to prevent. It has no config-file equivalent — it is a per-run decision.
 
-Coverage is every modification pc-switcher makes to either machine except `folder_sync`'s rsync mirror pass (#209): every job's converge commands and file writes, the state files a job records on either machine, the orchestrator's snapd auto-refresh pause and its restoration, btrfs snapshot creation and deletion, the config push to the target, the target's lock claim, the installer run on the target, and the VS Code state DB replacement.
+Coverage is every modification pc-switcher makes to either machine except `folder_sync`'s rsync mirror pass (#209): every job's converge commands and file writes, the state files a job records on either machine, the orchestrator's snapd auto-refresh pause and its restoration, btrfs snapshot creation and deletion, the config push to the target, both machines' sync locks, the installer run on the target, and the VS Code state DB replacement. Plus what changes a machine without writing to it: every background process started, and each job's `sudo --non-interactive true` precondition check, whose whole effect is exercising sudo.
+
+Two exceptions are deliberate rather than pending. The `sudo` reads a run makes — `fuser` on the dpkg lock, `btrfs subvolume show`, `rsync --version`, the filter-file digest `find`, `snap get system refresh.hold` — print an answer the run needs and leave behind nothing but sudo's own credential timestamp, whose window this run's gated `sudo` writes extend anyway; prompting for each would bury the writes the gate exists for. And releasing a lock is not announced: releases run in `_cleanup`, where an abort has nowhere to go and would leak the very lock it was declining to free. `tests/unit/test_mutates_audit.py` holds the full list with each reason.
 
 One consequence of "no skip" shapes the code beyond the gate itself:
 

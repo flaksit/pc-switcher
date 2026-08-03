@@ -31,6 +31,16 @@ today: a call reached through a callable passed by reference
 is a plain name, and only reads are routed that way today; and `declare_modification` is
 not audited because `mutates` is a required argument there, so it cannot be forgotten.
 
+A third is out of reach by construction: a change that touches no executor at all. The one
+that exists is the source's own sync lock, taken with `fcntl.flock` in-process
+(`lock.SyncLock`), and it is announced by its caller —
+`Orchestrator._acquire_source_lock` calls `declare_modification` before acquiring, which
+is why `_OUTSIDE_PACKAGE_SYNC` lists it. Its RELEASE is deliberately not announced, and
+neither is the target's: both run in `_cleanup`, where an abort has nowhere left to go and
+would leak the very lock it was declining to free. That is the one asymmetry between the
+two halves, and it is the right way round — taking exclusive control of a machine is what
+a user might refuse; giving it back is not.
+
 The tests divide the work: the first binds the tables to the real source, so they cannot
 rot into a rubber stamp; the second states the requirement the tables are measured against
 — everything that is not a pure read is gated unless a stated reason or an issue says
@@ -470,6 +480,10 @@ _OUTSIDE_PACKAGE_SYNC: dict[str, str] = {
     "jobs/btrfs.py::BtrfsSnapshotJob.execute::run_command": "the snapshot job's own session folder, per machine",
     "orchestrator.py::Orchestrator._update_sync_history::declare_modification": (
         "the tool's record of this machine's role in the run — not software, and not this article's subject"
+    ),
+    "orchestrator.py::Orchestrator._acquire_source_lock::declare_modification": (
+        "the source's own sync lock, taken in-process with `fcntl.flock`; the target's counterpart travels as "
+        "a command and is gated where it is issued"
     ),
 }
 

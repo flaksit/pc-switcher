@@ -1708,6 +1708,7 @@ Five exits, then the `userinfo` grammar boundary.
 | J177 | A read left ungated despite not being provably state-free | Named in the audit with what its side effect is and why it stays unasked; a blank reason fails | U | `test_mutates_audit:TestMutatesCoverage::test_every_tolerated_side_effect_states_its_reason` |
 | J178 | The `sudo --non-interactive true` precondition probe | Gated in every job that runs it: it reads nothing, so exercising sudo is the whole of what it does | U | `test_mutates_audit:TestMutatesCoverage::test_a_sudo_probe_whose_whole_effect_is_exercising_sudo_is_gated` |
 | J179 | Starting a background process anywhere in the codebase | Always gated — a process left running is state — except `folder_sync`'s rsync pass (#209) | U | `test_mutates_audit:TestMutatesCoverage::test_starting_a_background_process_is_never_ungated` |
+| J180 | Taking the source's own sync lock, which never becomes a command | Announced through the executor before it is taken; declining leaves the lock file untouched | U | `test_step_gate:TestTakingTheSourceLockIsGated::test_locking_the_source_reaches_the_gate`, `::test_declining_the_source_lock_stops_before_the_lock_is_taken` |
 
 
 ## K. Opting in, job independence and order, validation preconditions, the `folder_sync` boundary

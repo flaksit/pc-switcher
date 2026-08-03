@@ -22,6 +22,7 @@ from pcswitcher.jobs.packages.items import ItemClass
 from pcswitcher.jobs.packages.state import DecisionEntry, DecisionFile, Snippet, SnippetRegistry
 from pcswitcher.lock import start_persistent_remote_lock
 from pcswitcher.models import Host, SyncAborted, SyncAbortedByUser
+from pcswitcher.orchestrator import Orchestrator
 from pcswitcher.step_gate import StepGate, TerminalUIStepGate
 
 
@@ -409,6 +410,44 @@ class TestStateWritesReachTheGate:
             await DecisionFile("apt", executor).load()
             await SnippetRegistry(executor).load()
         gate.confirm_action.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+class TestTakingTheSourceLockIsGated:
+    """The source's lock never becomes a command, so it needs announcing.
+
+    `SyncLock` takes it with `fcntl.flock` in-process, which reaches no executor and would
+    otherwise be the one lock of the two the user is never asked about — the same
+    modification as the target's, on the other machine.
+    """
+
+    async def test_locking_the_source_reaches_the_gate(self, tmp_path: Path) -> None:
+        """J180 — the source lock prompts before the lock is taken, naming the lock file."""
+        gate = _stub_gate()
+        orchestrator = Orchestrator(target="nomad", config=MagicMock())
+        orchestrator._local_executor = LocalExecutor(gate)  # pyright: ignore[reportPrivateUsage]
+
+        lock_path = tmp_path / "pc-switcher.lock"
+        with patch("pcswitcher.orchestrator.get_lock_path", return_value=lock_path):
+            await orchestrator._acquire_source_lock()  # pyright: ignore[reportPrivateUsage]
+
+        kwargs = gate.confirm_action.await_args.kwargs
+        assert kwargs["host"] is Host.SOURCE
+        assert str(lock_path) in kwargs["command"]
+
+    async def test_declining_the_source_lock_stops_before_the_lock_is_taken(self, tmp_path: Path) -> None:
+        """J180 — an abort leaves the lock file untouched, as it does for any other write."""
+        gate = _stub_gate(SyncAbortedByUser("declined"))
+        orchestrator = Orchestrator(target="nomad", config=MagicMock())
+        orchestrator._local_executor = LocalExecutor(gate)  # pyright: ignore[reportPrivateUsage]
+
+        lock_path = tmp_path / "pc-switcher.lock"
+        with (
+            patch("pcswitcher.orchestrator.get_lock_path", return_value=lock_path),
+            pytest.raises(SyncAbortedByUser),
+        ):
+            await orchestrator._acquire_source_lock()  # pyright: ignore[reportPrivateUsage]
+        assert not lock_path.exists()
 
 
 @pytest.mark.asyncio

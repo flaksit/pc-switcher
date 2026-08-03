@@ -448,6 +448,11 @@ class Orchestrator:
                 logger=self._logger,
             )
 
+        # Built here rather than beside its remote counterpart in `_establish_connection`,
+        # because it needs no connection and the very first thing the run does — taking the
+        # source lock (SyncStep 1) — is a modification that has to reach the gate.
+        self._local_executor = LocalExecutor(self._step_gate)
+
         # Create log file path and set up stdlib logging infrastructure.
         # Passing ui + console lets setup_logging pick the UI-routed TUI
         # handler when the console is a real terminal, falling back to plain
@@ -620,10 +625,21 @@ class Orchestrator:
 
         Uses unified lock file that prevents this machine from participating
         in any other sync (as source or target) while this sync is running.
+
+        Announced through the executor rather than gated inside `SyncLock`, which stays a
+        plain synchronous primitive: the orchestrator owns the gate, and this is the
+        counterpart of the target's lock, which travels as a command and is gated where it
+        is issued. The RELEASE is deliberately not announced — it runs in `_cleanup`, where
+        an abort has nowhere to go and would leak the very lock it was declining to free.
         """
         self._source_lock = SyncLock(get_lock_path())
 
         holder_info = f"source:{self._source_hostname}:{self._session_id}:pid={os.getpid()}"
+        assert self._local_executor is not None
+        await self._local_executor.declare_modification(
+            f"flock {get_lock_path()}  (held for the whole run, holder record: {holder_info})",
+            mutates="take the exclusive sync lock, so no other sync can run on this machine",
+        )
         if not self._source_lock.acquire(holder_info):
             existing_holder = self._source_lock.get_holder_info()
             raise SyncLockedError(
@@ -636,10 +652,9 @@ class Orchestrator:
         self._connection = Connection(self._target_hostname, event_bus=self._event_bus)
         await self._connection.connect()
 
-        # Create executors
         # The step gate rides on the executors (`executor.py`), which is what makes every
-        # mutating call site — job, orchestrator or helper — gate through one funnel.
-        self._local_executor = LocalExecutor(self._step_gate)
+        # mutating call site — job, orchestrator or helper — gate through one funnel. The
+        # local one already exists; this is the half that needed the connection.
         self._remote_executor = RemoteExecutor(self._connection.ssh_connection, self._step_gate)
 
         self._logger.info("Connected to target", extra={"job": "orchestrator", "host": "target"})
