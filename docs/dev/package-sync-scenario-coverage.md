@@ -1703,6 +1703,8 @@ Five exits, then the `userinfo` grammar boundary.
 | J167 | A command containing Rich markup characters (a snippet body, a bracketed filename) | Renders literally rather than raising mid-prompt | U | `test_step_gate:TestTerminalUIStepGate::test_command_with_markup_characters_does_not_raise` |
 | J168 | The prompt's label | Names the job issuing the command | U | `test_step_gate:TestExecutorGate::test_active_job_labels_the_prompt` |
 | J174 | The prompt's key legend | Reaches the terminal with both keys shown, not eaten as Rich markup | U | `test_step_gate:TestTerminalUIStepGate::test_the_prompt_shows_both_keys` |
+| J175 | Taking the target's sync lock | The `flock` that seizes it is gated, not just the holder record written beside it | U | `test_step_gate:TestTakingTheTargetLockIsGated::test_the_flock_that_seizes_the_lock_is_gated` |
+| J176 | Declining at the target lock's prompt | Aborts the sync; never reported as "the target is already involved in a sync" | U | `test_step_gate:TestTakingTheTargetLockIsGated::test_declining_the_lock_is_an_abort_not_a_busy_target` |
 
 
 ## K. Opting in, job independence and order, validation preconditions, the `folder_sync` boundary

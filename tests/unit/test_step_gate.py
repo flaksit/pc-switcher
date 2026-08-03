@@ -20,6 +20,7 @@ from rich.console import Console
 from pcswitcher.executor import Executor, LocalExecutor, RemoteExecutor, active_job
 from pcswitcher.jobs.packages.items import ItemClass
 from pcswitcher.jobs.packages.state import DecisionEntry, DecisionFile, Snippet, SnippetRegistry
+from pcswitcher.lock import start_persistent_remote_lock
 from pcswitcher.models import Host, SyncAborted, SyncAbortedByUser
 from pcswitcher.step_gate import StepGate, TerminalUIStepGate
 
@@ -408,3 +409,44 @@ class TestStateWritesReachTheGate:
             await DecisionFile("apt", executor).load()
             await SnippetRegistry(executor).load()
         gate.confirm_action.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+class TestTakingTheTargetLockIsGated:
+    """Seizing the target's sync lock is a modification, not a diagnostic.
+
+    Two commands take that lock: an `echo` that records who holds it, and the `flock` that
+    actually seizes it. Only the second decides whether any other sync may run on that
+    machine, so it is the one a user must be able to refuse — and it is the one a
+    content-only reading of "modification" leaves ungated.
+    """
+
+    async def test_the_flock_that_seizes_the_lock_is_gated(self) -> None:
+        """J175 — the prompt shows the `flock` verbatim, not just the holder record above it."""
+        gate = _stub_gate()
+        executor, conn = _remote(gate)
+        held = MagicMock()
+        held.exit_status = None  # still running: flock got the lock and is blocked on `read`
+        conn.create_process = AsyncMock(return_value=held)
+
+        with patch("pcswitcher.lock.asyncio.sleep", AsyncMock()):
+            assert await start_persistent_remote_lock(executor, "atlas", "sess1") is not None
+
+        prompted = [call.kwargs["command"] for call in gate.confirm_action.await_args_list]
+        assert any(command.startswith("flock --nonblock ") for command in prompted), prompted
+
+    async def test_declining_the_lock_is_an_abort_not_a_busy_target(self) -> None:
+        """J176 — refusing the prompt stops the sync; it must not be reported as a held lock.
+
+        `start_persistent_remote_lock` returns `None` for every failure it meets, and the
+        orchestrator turns that into "the target is already involved in a sync". An abort
+        absorbed into that path would send the user hunting a stuck lock that never existed.
+        """
+        # Proceed at the holder record, decline at the flock — the one that seizes the lock.
+        gate = _stub_gate([None, SyncAbortedByUser("declined")])
+        executor, conn = _remote(gate)
+        conn.create_process = AsyncMock()
+
+        with pytest.raises(SyncAbortedByUser):
+            await start_persistent_remote_lock(executor, "atlas", "sess1")
+        conn.create_process.assert_not_called()

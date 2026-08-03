@@ -17,6 +17,7 @@ import socket
 from pathlib import Path
 
 from pcswitcher.executor import RemoteExecutor, RemoteProcess
+from pcswitcher.models import SyncAborted
 
 __all__ = [
     "LOCK_FILE_NAME",
@@ -150,7 +151,10 @@ async def start_persistent_remote_lock(
     cmd = f'flock --nonblock "{lock_path}" --command "read"'
 
     try:
-        process = await executor.start_process(cmd)
+        process = await executor.start_process(
+            cmd,
+            mutates="take the exclusive sync lock, so no other sync can run on this machine",
+        )
         # Give flock time to either acquire the lock (and block on read) or
         # fail-fast. A process that has already exited means flock could NOT
         # acquire the lock — the target is already involved in another sync.
@@ -159,6 +163,11 @@ async def start_persistent_remote_lock(
             await process.wait()  # reap the exited process
             return None
         return process
+    except SyncAborted:
+        # Declining the lock's confirmation is not "the target is busy": swallowing it here
+        # would surface a deliberate abort as `SyncLockedError`, sending the user to look
+        # for a stuck lock that does not exist.
+        raise
     except Exception:
         return None
 
