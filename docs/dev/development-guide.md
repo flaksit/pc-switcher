@@ -92,7 +92,7 @@ This means:
 - Handle errors explicitly
 - Use btrfs snapshots for safety
 - Test edge cases
-- Pass `mutates="<short phrase>"` on every executor call that CHANGES a machine — `run_command`, `start_process`, `send_file`. It is what `--confirm-each-command` gates on and what labels the command in the debug trace, so a write without it is a change the user was never shown. Reads take no `mutates`. For a modification that is neither a command nor a transfer (an in-process file rewrite), announce it with `executor.declare_modification(...)`.
+- Pass `mutates="<short phrase>"` on every executor call — `run_command`, `start_process`, `send_file` — unless it is PURELY read-only. It is what `--confirm-each-command` gates on and what labels the command in the debug trace, so a call without it is a change the user was never shown. Omit it only when the call can change no state at all: no file content, no process state, no lock or advisory state, no package-manager database, no credential cache. "Changes no file content" is not enough — starting a background process, taking a lock and priming a `sudo` credential cache all need `mutates=`. For a change that is neither a command nor a transfer (an in-process file rewrite), announce it with `executor.declare_modification(...)`.
 
 ### Keep It Simple
 

@@ -12,15 +12,19 @@ every call site:
 - **Credential privacy (`PKG-FR-CREDENTIAL-PRIVACY`).** A URL's embedded credential is
   withheld from the confirmation prompt here, and from every log line by
   `logger.CredentialRedactionFilter`.
-- **Per-action confirmation (`--confirm-each-command`).** A call that passes `mutates=`
-  declares itself a modification and is gated: the user sees the same verbatim operation
-  and must proceed or abort. Reads pass `mutates=None` (the default) and are never gated.
+- **Per-action confirmation (`--confirm-each-command`).** Every operation that is not
+  purely read-only is gated: the user sees the same verbatim operation and must proceed or
+  abort. A call may omit `mutates=` only when it cannot change ANY state on the machine —
+  no file content, no process state, no lock or other advisory state, no package-manager
+  database, no credential cache. "It changes no file content" is not on its own grounds to
+  leave a call ungated: taking a lock, starting a background process and priming a
+  credential cache all change the machine without writing a byte of anyone's data.
 
 `mutates` is therefore both the gate trigger and the human phrase describing the intent
 ("install firefox"). Callers keep one method for reads and writes — the kwarg is the only
 difference — so nothing about a mutating call site is structurally special beyond saying
-so. The flip side is that a forgotten `mutates=` is an unannounced modification; that is
-the invariant to preserve when adding a write.
+so. The flip side is that a forgotten `mutates=` is an unannounced change; that is the
+invariant to preserve when adding anything that is not a pure read.
 
 The job a command belongs to comes from the `active_job` context variable rather than a
 constructor argument, because executors are created once per run and shared by every job.
@@ -110,9 +114,9 @@ class Executor(Protocol):
         Args:
             cmd: Shell command to execute.
             timeout: Optional timeout in seconds.
-            mutates: Set to a short phrase ("install firefox") when this command CHANGES
-                the machine. Gates the command behind `--confirm-each-command` and labels
-                it in the debug trace. Leave as None for read-only commands.
+            mutates: Set to a short phrase ("install firefox") unless this command is
+                purely read-only (see the module docstring). Gates the command behind
+                `--confirm-each-command` and labels it in the debug trace.
             withhold_output: Set to a short phrase naming what the output carries and the
                 article that forbids keeping it, when this command's own output may not be
                 logged. The trace then records that phrase in place of the streams.
@@ -149,6 +153,10 @@ class _GatedExecutorMixin:
 
         `operation` must describe the change concretely enough to audit it — the path, and
         what about it changes — since there is no command text to fall back on.
+
+        The same rule decides whether an in-process step needs announcing at all: anything
+        that is not purely read-only does, `mutates` being required here rather than
+        optional.
         """
         await self._announce(operation, mutates, host=host)
 
@@ -333,8 +341,8 @@ class LocalExecutor(_GatedExecutorMixin):
         Args:
             cmd: Shell command to execute
             timeout: Optional timeout in seconds
-            mutates: Short phrase describing the change when this command MODIFIES the
-                source (see the module docstring); None for a read.
+            mutates: Short phrase describing what this command changes on the source; None
+                only when it is purely read-only (see the module docstring).
             withhold_output: Short phrase naming what the output carries, when it may not
                 be logged (`_trace_output`); None keeps the verbatim trace.
 
@@ -369,8 +377,9 @@ class LocalExecutor(_GatedExecutorMixin):
 
         Args:
             cmd: Shell command to execute
-            mutates: Short phrase describing the change when this process MODIFIES the
-                source; None for a read.
+            mutates: Short phrase describing what starting this process changes on the
+                source. Starting one is itself process state, so a background process is
+                gated on that alone even when its command only reads.
 
         Returns:
             LocalProcess wrapper for the subprocess
@@ -487,8 +496,8 @@ class RemoteExecutor(_GatedExecutorMixin):
             login_shell: If True, wrap command in 'bash --login -c' to source ~/.profile
                 and ensure proper PATH. If None, uses the executor's default.
                 Useful for commands requiring user-installed tools (e.g., uv, pc-switcher).
-            mutates: Short phrase describing the change when this command MODIFIES the
-                target (see the module docstring); None for a read.
+            mutates: Short phrase describing what this command changes on the target; None
+                only when it is purely read-only (see the module docstring).
             withhold_output: Short phrase naming what the output carries, when it may not
                 be logged (`_trace_output`); None keeps the verbatim trace.
 
@@ -532,8 +541,10 @@ class RemoteExecutor(_GatedExecutorMixin):
             login_shell: If True, wrap command in 'bash --login -c' to source ~/.profile
                 and ensure proper PATH. If None, uses the executor's default.
                 Useful for background processes requiring user-installed tools.
-            mutates: Short phrase describing the change when this process MODIFIES the
-                target; None for a read.
+            mutates: Short phrase describing what starting this process changes on the
+                target. Starting one is itself process state, so a background process is
+                gated on that alone even when its command only reads — a `flock` that holds
+                a lock open changes no file and is a modification all the same.
 
         Returns:
             RemoteProcess wrapper for the SSH process
@@ -568,8 +579,9 @@ class RemoteExecutor(_GatedExecutorMixin):
         Args:
             local: Local file path
             remote: Remote destination path
-            mutates: Short phrase describing the change; None only when the destination is
-                scratch space nobody would need to audit.
+            mutates: Short phrase describing the change. A transfer is never purely
+                read-only at the destination; None only when that destination is scratch
+                space nobody would need to audit.
         """
         await self._announce(f"send_file {local} -> {remote}", mutates)
         async with self._conn.start_sftp_client() as sftp:
@@ -581,7 +593,8 @@ class RemoteExecutor(_GatedExecutorMixin):
         Args:
             remote: Remote file path
             local: Local destination path
-            mutates: Short phrase describing the change; None for a read into scratch space.
+            mutates: Short phrase describing the change this makes on the SOURCE, whose
+                filesystem it writes; None only for a fetch into scratch space.
         """
         # Announced against the SOURCE: this direction writes to the local filesystem, so
         # tracing it under the executor's own target host would name the wrong machine.

@@ -1,21 +1,29 @@
-"""Static audit of the `mutates=` rule: no executor call may CHANGE a machine silently.
+"""Static audit of the `mutates=` rule: no executor call that is not purely read-only may
+reach a machine silently.
 
-`mutates=` is opt-in. Nothing about a write is structurally different from a read — same
-method, same arguments, one extra keyword — so a forgotten `mutates=` produces no error,
-no warning and no diff in behaviour except the one that matters: with
-`--confirm-each-command` the user is never shown that modification and never asked about
-it, and the debug trace does not label it as a change. That is exactly the class of
-omission a review cannot catch by reading a diff, which is why it is pinned mechanically
-here rather than left to `docs/dev/development-guide.md`'s prose rule.
+The rule is not "gate what changes content". A call may stay ungated only if it can change
+NO state on the machine — no file content, no process state, no lock or other advisory
+state, no package-manager database, no credential cache. Reading it as "changes content" is
+what let the `flock` seizing the target's sync lock through: it writes nothing, and it
+decides whether any other sync may run on that machine at all.
 
-How the audit decides read from write: it does not. Inferring intent from a command string
-("does `install` mean apt-get install or /usr/bin/install?", "is `>` a redirect or a
+`mutates=` is opt-in. Nothing about a modification is structurally different from a read —
+same method, same arguments, one extra keyword — so a forgotten `mutates=` produces no
+error, no warning and no diff in behaviour except the one that matters: with
+`--confirm-each-command` the user is never shown that operation and never asked about it,
+and the debug trace does not label it as a change. That is exactly the class of omission a
+review cannot catch by reading a diff, which is why it is pinned mechanically here rather
+than left to `docs/dev/development-guide.md`'s prose rule.
+
+How the audit decides read from modification: it does not. Inferring intent from a command
+string ("does `install` mean apt-get install or /usr/bin/install?", "is `>` a redirect or a
 comparison?") would be a guess that silently drifts. Instead every ungated call site in
-`src/pcswitcher/` is enumerated below by enclosing function, and each is accounted for as
-either a deliberate read (`_READ_ONLY_CALLS`) or a known ungated write (`_UNGATED_WRITES`,
-with what it changes and the issue tracking it). A new call that lands anywhere else fails
-`test_no_ungated_call_site_is_unaccounted_for` until its author either passes `mutates=` or
-states, in the table, why it changes nothing.
+`src/pcswitcher/` is enumerated below by enclosing function, and each is accounted for in
+one of three tables: a pure read (`_READ_ONLY_CALLS`), a read whose incidental side effect
+is deliberately tolerated (`_TOLERATED_SIDE_EFFECTS`, each with its reason stated), or a
+known ungated write (`_UNGATED_WRITES`, with what it changes and the issue tracking it). A
+new call that lands anywhere else fails `test_no_ungated_call_site_is_unaccounted_for`
+until its author either passes `mutates=` or states, in a table, why it is left ungated.
 
 Two known blind spots, neither of which the audit can close and both of which are safe
 today: a call reached through a callable passed by reference
@@ -23,9 +31,10 @@ today: a call reached through a callable passed by reference
 is a plain name, and only reads are routed that way today; and `declare_modification` is
 not audited because `mutates` is a required argument there, so it cannot be forgotten.
 
-The two tests divide the work: the first binds the tables to the real source, so they
-cannot rot into a rubber stamp; the second states the requirement the tables are measured
-against — every write is gated unless an issue says otherwise.
+The tests divide the work: the first binds the tables to the real source, so they cannot
+rot into a rubber stamp; the second states the requirement the tables are measured against
+— everything that is not a pure read is gated unless a stated reason or an issue says
+otherwise; the third refuses a tolerated side effect that names no reason.
 
 `TestSourceWrites` and `TestFileTransfers` below audit the same call sites from the other
 side, for `PKG-FR-SOURCE-INTENT` / `PKG-FR-MANAGER-CONVERGES`: which MACHINE a gated write
@@ -61,7 +70,7 @@ _GATED_METHODS = frozenset({"run_command", "start_process", "send_file", "get_fi
 
 @dataclass(frozen=True)
 class _CallSite:
-    """One `<method>` call that did NOT pass `mutates=`."""
+    """One `<method>` call that did NOT pass `mutates=`, and so is never gated."""
 
     key: str
     relpath: str
@@ -112,9 +121,11 @@ def _collect_ungated() -> dict[str, list[_CallSite]]:
     return sites
 
 
-# Call sites that change nothing on either machine, as a count per enclosing function.
-# A count rather than a per-call entry because within one function the calls are of one
-# kind; the moment a write joins them the total stops matching and the audit fails.
+# Call sites that change nothing at all on either machine, as a count per enclosing
+# function. A count rather than a per-call entry because within one function the calls are
+# of one kind; the moment something that is not a pure read joins them the total stops
+# matching and the audit fails. A function whose calls are of two kinds splits its count
+# across this table and `_TOLERATED_SIDE_EFFECTS`, which is summed with it.
 _READ_ONLY_CALLS: dict[str, int] = {
     # btrfs_snapshots: subvolume and directory listings.
     "btrfs_snapshots.py::validate_snapshots_directory::run_command": 1,

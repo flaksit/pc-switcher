@@ -99,7 +99,7 @@ The batched review approves *items*, not commands. One approved line can expand 
 
 `pc-switcher sync <hostname> --confirm-each-command` inserts one question before every one of them, headed by the job and the hostname of the machine about to change, then what the change does, then the exact command (or, for a file transfer, the source and destination paths). It waits for **p** to proceed or **a** to abort the whole sync. There is no "skip this one": a single reviewed item can span several commands, so skipping one would leave that item half-applied. An unanswerable prompt (Ctrl-C, EOF) aborts.
 
-It covers every write the four jobs make, plus the machine-local decision files on both machines, the snippet registry and its push, the snapd auto-refresh pause and restore, and the sync-history update on both ends. Read-only commands are never gated. The flag needs a real terminal and is refused without one. It is meant for auditing or debugging a run you do not trust yet, not for everyday syncs.
+It covers every write the four jobs make, plus the machine-local decision files on both machines, the snippet registry and its push, the snapd auto-refresh pause and restore, and the sync-history update on both ends. It also covers what changes a machine without writing anything to it: taking each machine's sync lock, starting a background process, and the `sudo` check each job runs before it starts. Only genuinely read-only commands go unasked. The flag needs a real terminal and is refused without one. It is meant for auditing or debugging a run you do not trust yet, not for everyday syncs.
 
 ### apt collateral
 

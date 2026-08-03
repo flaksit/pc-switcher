@@ -22,12 +22,19 @@ several commands (apt source stage-then-promote, snap install-then-switch-channe
 skipping one of them leaves that item half-applied, which is a worse state than either
 finishing it or stopping.
 
+What is gated is everything that is not purely read-only, which is wider than "changes a
+file": a `flock` that seizes the target's sync lock, a background process started and left
+running, a `sudo` probe that primes the credential cache — each changes the machine while
+writing nothing, and each is something a user stepping through a run must be able to
+refuse. A call is ungated only when it can change no state at all.
+
 Generic on purpose, and invoked from exactly one place: `pcswitcher.executor`. Any caller
-— job, orchestrator, helper — gates a write by passing `mutates="..."` to the executor
+— job, orchestrator, helper — reaches this gate by passing `mutates="..."` to the executor
 method it already uses, so there is no second API to remember and no per-job wiring. The
 executor supplies `job` (from its `active_job` context variable) and `host` (from which
-executor it is). Every write passes `mutates` except `folder_sync`'s rsync pass (#209);
-`tests/unit/test_mutates_audit.py` holds that line.
+executor it is). Everything that is not a pure read passes `mutates` except `folder_sync`'s
+rsync pass (#209); `tests/unit/test_mutates_audit.py` holds that line, and names the few
+reads whose incidental side effects are deliberately tolerated.
 """
 
 from __future__ import annotations
