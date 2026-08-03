@@ -379,7 +379,7 @@ Each job owns its config schema, validates its own system prerequisites, manages
 
 ### One Executor Funnel
 
-Every executor call that is not purely read-only passes `mutates="<phrase>"`, which is what makes the verbatim DEBUG trace, credential redaction and the `--confirm-each-command` gate uniform without per-job wiring. Omitting it is allowed only when the call can change no state on the machine — content, process, lock, package database or credential cache. `tests/unit/test_mutates_audit.py` fails when anything else is added without it.
+Every executor call that is not purely read-only passes `mutates="<phrase>"`, which is what makes the verbatim DEBUG trace, credential redaction and the `--confirm-each-command` gate uniform without per-job wiring. Omitting it is allowed only when the call can change no state on the machine — content, process, lock or package database; running a read under `sudo` does not make it a write. `tests/unit/test_mutates_audit.py` fails when anything else is added without it.
 
 ### Sequential Execution
 

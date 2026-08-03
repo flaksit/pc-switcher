@@ -48,7 +48,7 @@ tests/run-integration-tests.sh tests/integration/test_end_to_end_sync.py::TestIn
 
 ## Executor calls: `mutates=` unless purely read-only
 
-Everything reaching source/target goes through `Executor` (`executor.py`), which drives `--confirm-each-command` and the verbatim DEBUG trace. `run_command`/`start_process`/`send_file`/`get_file` MUST pass `mutates="<phrase>"` unless the call is PURELY read-only — it may be omitted only when the call can change no state at all: no file content, no process state, no lock or advisory state, no package-manager database, no credential cache. "Changes no file content" is NOT sufficient grounds to leave a call ungated. In-process changes (no shell command): `executor.declare_modification(...)`. Omitting it ships a change the user is never shown; `tests/unit/test_mutates_audit.py` enforces this.
+Everything reaching source/target goes through `Executor` (`executor.py`), which drives `--confirm-each-command` and the verbatim DEBUG trace. `run_command`/`start_process`/`send_file`/`get_file` MUST pass `mutates="<phrase>"` unless the call is PURELY read-only — it may be omitted only when the call can change no state at all: no file content, no process state, no lock or advisory state, no package-manager database. "Changes no file content" is NOT sufficient grounds to leave a call ungated. Running a read under `sudo` does NOT make it a write: `sudo <read-only command>` is read-only. In-process changes (no shell command): `executor.declare_modification(...)`. Omitting it ships a change the user is never shown; `tests/unit/test_mutates_audit.py` enforces this.
 
 ## REMEMBER
 - When creating a PR on GitHub, ALWAYS set it as draft so that the integration tests don't run prematurely.

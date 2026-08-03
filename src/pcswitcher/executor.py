@@ -16,9 +16,10 @@ every call site:
   purely read-only is gated: the user sees the same verbatim operation and must proceed or
   abort. A call may omit `mutates=` only when it cannot change ANY state on the machine —
   no file content, no process state, no lock or other advisory state, no package-manager
-  database, no credential cache. "It changes no file content" is not on its own grounds to
-  leave a call ungated: taking a lock, starting a background process and priming a
-  credential cache all change the machine without writing a byte of anyone's data.
+  database. "It changes no file content" is not on its own grounds to leave a call ungated:
+  taking a lock and starting a background process both change the machine without writing a
+  byte of anyone's data. Elevation is not a change: running a read under `sudo` does not
+  make it a write, so `sudo <read-only command>` is read-only and passes no `mutates=`.
 
 `mutates` is therefore both the gate trigger and the human phrase describing the intent
 ("install firefox"). Callers keep one method for reads and writes — the kwarg is the only
