@@ -205,6 +205,8 @@ The tool run from a script or a timer, nobody at the keyboard. Under test: an un
 
 `ssh` without `-t` is what leaves the run no terminal. Spell the tool by path: a non-interactive shell never reads `.bashrc`, so `~/.local/bin` is not on `PATH`.
 
+Run the block below once, top to bottom. It calls `sync` twice with the same options: the first on the machines as §4 left them, the second after `/opt` on pc1 is made unreadable. Everything else in the block is fixture or check.
+
 The first run must report apt_sync SKIPPED — `tree`'s version difference is an item nobody answered, and a report that applies nothing still counts as one — snap_sync, flatpak_sync and manual_installs_sync successful with nothing left to decide, folder_sync successful, and a `send_file` count of 0.
 
 The registry is shared config: pc1 pushes it once an answer authorizes it, and it lives in `~/.config/pc-switcher`, inside the mirrored `/home`. So give pc2 a registry holding one entry pc1 has never heard of. With nobody to ask there is no push, and the mirror must not carry it either: pc2 ends holding its own entry and none of pc1's. The marker on pc1 rules out the false pass, proving the mirror reached that directory. The sideload check reads the tool's own events, because `snap list --all` prints every snap and the verbatim output names it either way.
@@ -213,7 +215,7 @@ The registry is shared config: pc1 pushes it once an answer authorizes it, and i
 ssh testuser@"$PC2" 'cd /tmp && sudo snap download hello-world --basename=uat-hello-world && sudo snap remove hello-world && sudo snap install --dangerous /tmp/uat-hello-world.snap'
 ssh testuser@"$PC2" 'printf "snippets:\n  \"unreproducible:unowned-path:/opt/pcsw-uat-pc2\":\n    label: /opt/pcsw-uat-pc2\n    body: \"true\"\n    authored_at: \"2026-07-30T00:00:00+00:00\"\n    authored_on: pc2\n" > ~/.config/pc-switcher/package-snippets.yaml'
 ssh testuser@"$PC1" 'touch ~/.config/pc-switcher/pcsw-uat-mirrored'
-ssh testuser@"$PC1" '~/.local/bin/pc-switcher sync pc2 --yes --allow-first-sync --allow-out-of-order'
+ssh testuser@"$PC1" '~/.local/bin/pc-switcher sync pc2 --yes --allow-first-sync --allow-out-of-order'   # first run
 ssh testuser@"$PC1" 'grep -c "send_file.*package-snippets.yaml" "$(ls -t ~/.local/share/pc-switcher/logs/sync-*.log | head -1)"'
 ssh testuser@"$PC2" 'snap list hello-world'      # still the sideloaded x-revision
 ssh testuser@"$PC1" 'grep hello-world "$(ls -t ~/.local/share/pc-switcher/logs/sync-*.log | head -1)" | grep -vc "\"event\": \"stdout: "'   # 0 — no event of the tool's own names it
@@ -221,7 +223,7 @@ ssh testuser@"$PC2" 'ls ~/.config/pc-switcher'   # pcsw-uat-mirrored arrived
 ssh testuser@"$PC2" 'grep -c "label: /opt/pcsw-uat-pc2" ~/.config/pc-switcher/package-snippets.yaml'   # 1
 ssh testuser@"$PC2" 'grep -c "label: /opt/pcsw-uat-app" ~/.config/pc-switcher/package-snippets.yaml'   # 0
 ssh testuser@"$PC1" 'sudo chmod 000 /opt'
-ssh testuser@"$PC1" '~/.local/bin/pc-switcher sync pc2 --yes --allow-first-sync --allow-out-of-order'
+ssh testuser@"$PC1" '~/.local/bin/pc-switcher sync pc2 --yes --allow-first-sync --allow-out-of-order'   # second run
 ssh testuser@"$PC1" 'sudo chmod 755 /opt'
 ```
 
