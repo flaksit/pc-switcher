@@ -1075,10 +1075,7 @@ class AptSyncJob(PackageSyncJob):
         # capture degrades to empty digest maps rather than failing. The sync would then
         # report success having replicated no repository configuration at all — a silent
         # wrong-result, which is worse than refusing to start.
-        source_sudo_check = await self.source.run_command(
-            "sudo --non-interactive true",
-            mutates="exercise sudo to check it is passwordless, which can refresh its credential timestamp",
-        )
+        source_sudo_check = await self.source.run_command("sudo --non-interactive true")
         if not source_sudo_check.success:
             errors.append(
                 self._validation_error(
@@ -1089,11 +1086,7 @@ class AptSyncJob(PackageSyncJob):
                 )
             )
 
-        sudo_check = await self.target.run_command(
-            "sudo --non-interactive true",
-            login_shell=False,
-            mutates="exercise sudo to check it is passwordless, which can refresh its credential timestamp",
-        )
+        sudo_check = await self.target.run_command("sudo --non-interactive true", login_shell=False)
         if not sudo_check.success:
             errors.append(
                 self._validation_error(

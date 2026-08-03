@@ -2763,11 +2763,7 @@ class FlatpakSyncJob(PackageSyncJob):
             )
 
         if source_check.success and target_check.success and await self._system_scope_in_play():
-            sudo_check = await self.target.run_command(
-                "sudo --non-interactive true",
-                login_shell=False,
-                mutates="exercise sudo to check it is passwordless, which can refresh its credential timestamp",
-            )
+            sudo_check = await self.target.run_command("sudo --non-interactive true", login_shell=False)
             if not sudo_check.success:
                 errors.append(
                     self._validation_error(
