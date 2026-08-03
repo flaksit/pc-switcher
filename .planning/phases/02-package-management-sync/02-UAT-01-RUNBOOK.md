@@ -160,10 +160,10 @@ The jobs run in order — apt, snap, flatpak, manual, then the folder mirror —
 On pc1:
 
 ```bash
-grep -c cmatrix ~/.config/pc-switcher/apt.decisions.yaml       # 1 — an install is recorded here
-grep -c cowsay ~/.config/pc-switcher/apt.decisions.yaml        # 0
-grep -c pcsw-uat-vendor ~/.config/pc-switcher/manual.decisions.yaml  # 1 — pc1 holds it, so pc1 records it
-grep -c pcsw-uat-app ~/.config/pc-switcher/package-snippets.yaml     # 1 — the snippet you wrote
+grep -c 'label: cmatrix' ~/.config/pc-switcher/apt.decisions.yaml       # 1 — an install is recorded here
+grep -c 'label: cowsay' ~/.config/pc-switcher/apt.decisions.yaml        # 0
+grep -c 'label: /opt/pcsw-uat-vendor' ~/.config/pc-switcher/manual.decisions.yaml  # 1 — pc1 holds it, so pc1 records it
+grep -c 'label: /opt/pcsw-uat-app' ~/.config/pc-switcher/package-snippets.yaml     # 1 — the snippet you wrote
 LOG=$(ls -t ~/.local/share/pc-switcher/logs/sync-*.log | head -1)
 grep -E 'reviewed cowsay|reviewed fortunes \(report_only\)' "$LOG"   # "marked as this machine's own", then "applied"
 grep -E 'dropped the machine-specific mark on fortunes' "$LOG"       # the run says which mark it dropped
@@ -178,12 +178,14 @@ grep -c 'send_file.*package-snippets.yaml' "$LOG"              # 1 — the job's
 
 The filter line must come before any `sdl_sopwith` install: the filter is in force before anything installs from that remote, and pc2's own filter is never taken off for the install's benefit.
 
+Every count above reads `label:` lines, here and on pc2: an entry writes its label once, while its name repeats down the entry and would count twice or three times.
+
 On pc2:
 
 ```bash
-grep -c cowsay ~/.config/pc-switcher/apt.decisions.yaml    # 1 — a removal is recorded here
-grep -c cmatrix ~/.config/pc-switcher/apt.decisions.yaml   # 0
-grep -c fortunes ~/.config/pc-switcher/apt.decisions.yaml  # 0 — the mark went with the package
+grep -c 'label: cowsay' ~/.config/pc-switcher/apt.decisions.yaml    # 1 — a removal is recorded here
+grep -c 'label: cmatrix' ~/.config/pc-switcher/apt.decisions.yaml   # 0
+grep -c 'label: fortunes' ~/.config/pc-switcher/apt.decisions.yaml  # 0 — the mark went with the package
 dpkg-query -W -f='${Package} ${Version} ${Status}\n' sl cmatrix fortunes fortunes-min
 apt-mark showhold                                # sl, registered after its install landed
 snap list hello hello-world                      # hello at pc1's revision, hello-world arrived
@@ -213,8 +215,8 @@ ssh testuser@"$PC1" 'pc-switcher sync pc2 --yes --allow-first-sync --allow-out-o
 ssh testuser@"$PC1" 'grep -c "send_file.*package-snippets.yaml" "$(ls -t ~/.local/share/pc-switcher/logs/sync-*.log | head -1)"'
 ssh testuser@"$PC2" 'snap list hello-world'      # still the sideloaded x-revision, and the log names it nowhere
 ssh testuser@"$PC2" 'ls ~/.config/pc-switcher'   # pcsw-uat-mirrored arrived
-ssh testuser@"$PC2" 'grep -c pcsw-uat-pc2 ~/.config/pc-switcher/package-snippets.yaml'   # 1
-ssh testuser@"$PC2" 'grep -c pcsw-uat-app ~/.config/pc-switcher/package-snippets.yaml'   # 0
+ssh testuser@"$PC2" 'grep -c "label: /opt/pcsw-uat-pc2" ~/.config/pc-switcher/package-snippets.yaml'   # 1
+ssh testuser@"$PC2" 'grep -c "label: /opt/pcsw-uat-app" ~/.config/pc-switcher/package-snippets.yaml'   # 0
 ssh testuser@"$PC2" 'sudo chmod -x /usr/bin/flatpak /usr/bin/snap'
 ssh testuser@"$PC1" 'sudo chmod 000 /opt'
 ssh testuser@"$PC1" 'pc-switcher sync pc2 --yes --allow-first-sync --allow-out-of-order'
