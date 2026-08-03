@@ -1,0 +1,5 @@
+Running "pc-switcher sync pc2 --confirm-each-command". folder_sync ran rsync without asking for any confirmation! Running code from commit a2ca623. Check if that is resolved.
+
+---
+
+Running "pc-switcher sync pc2 --confirm-each-command". folder_sync ran rsync without asking for any confirmation! Running code from commit a2ca623. Check if that has been resolved.

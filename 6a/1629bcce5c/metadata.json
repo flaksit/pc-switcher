@@ -3,7 +3,7 @@
   "checkpoint_id": "6a1629bcce5c",
   "strategy": "manual-commit",
   "branch": "gsd/phase-02-package-management-sync",
-  "checkpoints_count": 2,
+  "checkpoints_count": 3,
   "files_touched": [
     "src/pcswitcher/jobs/apt_sync/job.py",
     "src/pcswitcher/jobs/apt_sync/probe.py",
@@ -13,8 +13,11 @@
     "src/pcswitcher/jobs/packages/sync_core.py",
     "src/pcswitcher/jobs/snap_sync.py",
     "tests/unit/jobs/apt/helpers.py",
+    "tests/unit/jobs/test_flatpak_sync.py",
+    "tests/unit/jobs/test_manual_installs_sync.py",
     "tests/unit/jobs/test_package_sync_core.py",
-    "tests/unit/jobs/test_snap_sync.py"
+    "tests/unit/jobs/test_snap_sync.py",
+    "tests/unit/test_mutates_audit.py"
   ],
   "sessions": [
     {
@@ -30,13 +33,20 @@
       "compact_transcript": "/6a/1629bcce5c/1/transcript.jsonl",
       "content_hash": "/6a/1629bcce5c/1/content_hash.txt",
       "prompt": "/6a/1629bcce5c/1/prompt.txt"
+    },
+    {
+      "metadata": "/6a/1629bcce5c/2/metadata.json",
+      "transcript": "/6a/1629bcce5c/2/full.jsonl",
+      "compact_transcript": "/6a/1629bcce5c/2/transcript.jsonl",
+      "content_hash": "/6a/1629bcce5c/2/content_hash.txt",
+      "prompt": "/6a/1629bcce5c/2/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 321,
-    "cache_creation_tokens": 310393,
-    "cache_read_tokens": 36364057,
-    "output_tokens": 111878,
-    "api_call_count": 170
+    "input_tokens": 412,
+    "cache_creation_tokens": 408733,
+    "cache_read_tokens": 40471143,
+    "output_tokens": 138567,
+    "api_call_count": 219
   }
 }
