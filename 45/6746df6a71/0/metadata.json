@@ -1,0 +1,69 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "456746df6a71",
+  "session_id": "37267337-fd90-4537-a51a-f2b2f2edb408",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-03T13:39:24.791422381Z",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "CLAUDE.md",
+    "docs/dev/development-guide.md",
+    "docs/jobs/package-sync.md",
+    "docs/planning/package-sync-conformance-criteria.md",
+    "docs/system/architecture.md",
+    "docs/system/core.md",
+    "src/pcswitcher/executor.py"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-5[1m]",
+  "turn_id": "17d4e0fb3664",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 4,
+    "cache_creation_tokens": 18855,
+    "cache_read_tokens": 63323,
+    "output_tokens": 632,
+    "api_call_count": 2
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-03T13:39:24.779644023Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 12,
+    "human_removed": 10,
+    "total_committed": 0,
+    "total_lines_changed": 22,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 21,
+      "user_lines_removed": 11,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9,
+        "CLAUDE.md": 1,
+        "docs/dev/development-guide.md": 1,
+        "docs/jobs/package-sync.md": 1,
+        "docs/planning/package-sync-conformance-criteria.md": 1,
+        "docs/system/architecture.md": 1,
+        "docs/system/core.md": 3,
+        "src/pcswitcher/executor.py": 4
+      },
+      "user_removed_per_file": {
+        "CLAUDE.md": 1,
+        "docs/dev/development-guide.md": 1,
+        "docs/jobs/package-sync.md": 1,
+        "docs/planning/package-sync-conformance-criteria.md": 1,
+        "docs/system/architecture.md": 1,
+        "docs/system/core.md": 3,
+        "src/pcswitcher/executor.py": 3
+      }
+    }
+  ]
+}

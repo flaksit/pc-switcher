@@ -1,0 +1,8 @@
+during §4 of .planning/phases/02-package-management-sync/02-UAT-01-RUNBOOK.md , I see "fortunes" is kept as "machine specific" on pc2, even though we just deciced to remove it as collateral. That is not consistent. We shouldn't keep "machine specific" entries for items that don't exist.
+Propose solution. Not only for this case, but for other scenarios where we might keep a machine-specific mark for an item that does not exist anymore.
+
+---
+
+during §4 of .planning/phases/02-package-management-sync/02-UAT-01-RUNBOOK.md , I see "fortunes" is kept as "machine specific" on pc2, even though we just deciced to remove it as collateral. That is not consistent. We shouldn't keep "machine specific" entries for items that don't exist.
+Propose solution. Not only for this case, but for other scenarios where we might keep a machine-specific mark for an item that does not exist anymore.
+Create gh issue for this so we have a trace.
