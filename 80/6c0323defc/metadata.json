@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "806c0323defc",
+  "strategy": "manual-commit",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "tests/unit/test_mutates_audit.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/80/6c0323defc/0/metadata.json",
+      "transcript": "/80/6c0323defc/0/full.jsonl",
+      "compact_transcript": "/80/6c0323defc/0/transcript.jsonl",
+      "content_hash": "/80/6c0323defc/0/content_hash.txt",
+      "prompt": "/80/6c0323defc/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 4,
+    "cache_creation_tokens": 44444,
+    "cache_read_tokens": 43812,
+    "output_tokens": 355,
+    "api_call_count": 2
+  }
+}
