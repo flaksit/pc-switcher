@@ -3,7 +3,7 @@
   "checkpoint_id": "ca640bf5f91e",
   "strategy": "manual-commit",
   "branch": "gsd/phase-02-package-management-sync",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
     "src/pcswitcher/jobs/btrfs.py"
   ],
@@ -14,13 +14,20 @@
       "compact_transcript": "/ca/640bf5f91e/0/transcript.jsonl",
       "content_hash": "/ca/640bf5f91e/0/content_hash.txt",
       "prompt": "/ca/640bf5f91e/0/prompt.txt"
+    },
+    {
+      "metadata": "/ca/640bf5f91e/1/metadata.json",
+      "transcript": "/ca/640bf5f91e/1/full.jsonl",
+      "compact_transcript": "/ca/640bf5f91e/1/transcript.jsonl",
+      "content_hash": "/ca/640bf5f91e/1/content_hash.txt",
+      "prompt": "/ca/640bf5f91e/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 27,
-    "cache_creation_tokens": 69170,
-    "cache_read_tokens": 1853964,
-    "output_tokens": 13634,
-    "api_call_count": 15
+    "input_tokens": 40,
+    "cache_creation_tokens": 73943,
+    "cache_read_tokens": 2408267,
+    "output_tokens": 16939,
+    "api_call_count": 22
   }
 }
