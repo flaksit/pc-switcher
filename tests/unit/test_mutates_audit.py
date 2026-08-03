@@ -79,6 +79,21 @@ class _CallSite:
 
 
 @dataclass(frozen=True)
+class _ToleratedSideEffect:
+    """Ungated calls whose command is a read but which are not PROVABLY state-free.
+
+    The rule's escape hatch, and the only one that is not a defect: `why` has to say what
+    the side effect is and why leaving it unasked is the right call, so nothing sits in this
+    table by omission. `test_every_tolerated_side_effect_states_its_reason` refuses an empty
+    one, and a call that belongs here rather than in `_READ_ONLY_CALLS` is a deliberate
+    judgement its author writes down.
+    """
+
+    count: int
+    why: str
+
+
+@dataclass(frozen=True)
 class _UngatedWrite:
     """A modification that reaches a machine without going through the gate.
 
@@ -127,9 +142,8 @@ def _collect_ungated() -> dict[str, list[_CallSite]]:
 # matching and the audit fails. A function whose calls are of two kinds splits its count
 # across this table and `_TOLERATED_SIDE_EFFECTS`, which is summed with it.
 _READ_ONLY_CALLS: dict[str, int] = {
-    # btrfs_snapshots: subvolume and directory listings.
-    "btrfs_snapshots.py::validate_snapshots_directory::run_command": 1,
-    "btrfs_snapshots.py::validate_subvolume_exists::run_command": 1,
+    # btrfs_snapshots: the directory listing. The two `sudo btrfs subvolume show` probes
+    # beside it are in `_TOLERATED_SIDE_EFFECTS`.
     "btrfs_snapshots.py::list_snapshots::run_command": 1,
     # config_sync: reads the target's config and resolves its $HOME.
     "config_sync.py::_get_target_config::run_command": 1,
@@ -165,7 +179,9 @@ _READ_ONLY_CALLS: dict[str, int] = {
     "jobs/apt_sync/origins.py::OriginClassifier._verify::run_command": 1,
     "jobs/apt_sync/files.py::TargetFiles.backup::run_command": 1,
     "jobs/apt_sync/files.py::TargetFiles.home::run_command": 1,
-    "jobs/apt_sync/job.py::AptSyncJob.validate::run_command": 5,
+    # `apt-mark --version` on each machine. The sudo probes beside them are gated now, and
+    # the dpkg-lock `fuser` is in `_TOLERATED_SIDE_EFFECTS`.
+    "jobs/apt_sync/job.py::AptSyncJob.validate::run_command": 2,
     "jobs/disk_space_monitor.py::DiskSpaceMonitorJob.validate::run_command": 1,
     # Demo jobs: a `seq`/`echo`/`sleep` loop used to exercise the progress UI.
     "jobs/dummy_fail.py::DummyFailJob._run_target_phase::start_process": 1,
@@ -188,19 +204,17 @@ _READ_ONLY_CALLS: dict[str, int] = {
     "jobs/flatpak_sync.py::FlatpakSyncJob._capture_source_ref_origins::run_command": 1,
     "jobs/flatpak_sync.py::FlatpakSyncJob._capture_source_runtimes::run_command": 1,
     # What a filtered source remote offers under its own filter (`PKG-FR-FLATPAK-FILTER`).
-    # `flatpak remote-ls` is a query: it needs no elevation even for a `--system` remote and
-    # caches under the invoking user's own `~/.cache/flatpak` (measured).
-    "jobs/flatpak_sync.py::FlatpakSyncJob._refs_the_remote_offers::run_command": 1,
     # The post-install origin read-back: the same `flatpak list` the capture uses, re-run on
     # the target so a ref's real provenance is checked rather than inferred (ADR-020 D-35).
     "jobs/flatpak_sync.py::FlatpakSyncJob._installed_origin_refusal::run_command": 1,
     # What the target holds once the converge loop is done, which decides whether a remote
     # the source lacks is still in use (`PKG-FR-FLATPAK-REMOTE-DELETE`).
     "jobs/flatpak_sync.py::FlatpakSyncJob._target_refs_now::run_command": 1,
-    "jobs/flatpak_sync.py::FlatpakSyncJob.validate::run_command": 3,
-    # folder_sync: capability probes, and the per-directory filter-file digest manifest.
-    "jobs/folder_sync.py::FolderSyncJob.validate::run_command": 8,
-    "jobs/folder_sync.py::FolderSyncJob._needs_copy_pass::run_command": 2,
+    # `flatpak --version` on each machine; the target's sudo probe is gated now.
+    "jobs/flatpak_sync.py::FlatpakSyncJob.validate::run_command": 2,
+    # folder_sync: `uname`, the `acl` package check and the two path existence tests. The
+    # `sudo rsync --version` pair, and the filter-file digest manifest, are tolerated below.
+    "jobs/folder_sync.py::FolderSyncJob.validate::run_command": 6,
     "jobs/install_on_target.py::InstallOnTargetJob.validate::run_command": 1,
     "jobs/install_on_target.py::InstallOnTargetJob.execute::run_command": 1,
     # manual_installs_sync: the unowned-file scan's four steps, the apt queries, and the
@@ -223,11 +237,57 @@ _READ_ONLY_CALLS: dict[str, int] = {
     "jobs/snap_sync.py::target_snap_revisions::run_command": 1,
     "jobs/snap_sync.py::SnapSyncJob.capture_source_items::run_command": 1,
     "jobs/snap_sync.py::SnapSyncJob.query_target_items::run_command": 1,
-    "jobs/snap_sync.py::SnapSyncJob.validate::run_command": 6,
+    # `snap version` on each machine; the sudo probes are gated and the two
+    # `sudo snap get system refresh.hold` reads are tolerated below.
+    "jobs/snap_sync.py::SnapSyncJob.validate::run_command": 2,
     "jobs/vscode_state_sync.py::VscodeStateSyncJob.validate::run_command": 1,
     "jobs/vscode_state_sync.py::VscodeStateSyncJob.execute::run_command": 1,
     "orchestrator.py::Orchestrator._resolve_target_canonical_hostname::run_command": 1,
     "orchestrator.py::Orchestrator._check_out_of_order::run_command": 1,
+}
+
+# Reads left ungated even though something about them is not provably state-free. Each
+# states what the side effect is and why it stays unasked; none is a defect, and each is a
+# judgement rather than an omission.
+#
+# The recurring one is `sudo`: a successful `sudo` can refresh the invoking user's
+# credential timestamp, so no `sudo <read>` is provably state-free. The line drawn here is
+# between a command whose PURPOSE is the privileged operation and one whose purpose is the
+# answer it prints. `sudo --non-interactive true` reads nothing at all — exercising sudo is
+# the whole of what it does — so it is gated. The reads below print an answer the run needs
+# and touch nothing but that timestamp, whose window this run's own gated `sudo` writes
+# would extend anyway; prompting for each would bury the writes the gate exists for.
+_TOLERATED_SIDE_EFFECTS: dict[str, _ToleratedSideEffect] = {
+    "btrfs_snapshots.py::validate_snapshots_directory::run_command": _ToleratedSideEffect(
+        1, "`sudo btrfs subvolume show /.snapshots` — reads whether the subvolume exists; sudo timestamp only"
+    ),
+    "btrfs_snapshots.py::validate_subvolume_exists::run_command": _ToleratedSideEffect(
+        1, "`sudo btrfs subvolume show <mount>` — reads whether the mount point is a subvolume; sudo timestamp only"
+    ),
+    "jobs/apt_sync/job.py::AptSyncJob.validate::run_command": _ToleratedSideEffect(
+        1,
+        "`sudo fuser /var/lib/dpkg/lock-frontend` — asks who holds the dpkg lock and opens nothing "
+        "(`PKG-FR-APT-DPKG-LOCK`); sudo timestamp only",
+    ),
+    "jobs/folder_sync.py::FolderSyncJob.validate::run_command": _ToleratedSideEffect(
+        2, "`sudo rsync --version` on each machine — a capability probe that prints and exits; sudo timestamp only"
+    ),
+    "jobs/folder_sync.py::FolderSyncJob._needs_copy_pass::run_command": _ToleratedSideEffect(
+        2,
+        "`sudo find … -exec sha256sum` on each machine — hashes the per-directory filter files, as root so "
+        "unreadable directories are still seen; sudo timestamp only",
+    ),
+    "jobs/snap_sync.py::SnapSyncJob.validate::run_command": _ToleratedSideEffect(
+        2,
+        "`sudo snap get system refresh.hold` on each machine — captures the prior auto-refresh policy so the "
+        "restore can write it back; sudo timestamp only",
+    ),
+    "jobs/flatpak_sync.py::FlatpakSyncJob._refs_the_remote_offers::run_command": _ToleratedSideEffect(
+        1,
+        "`flatpak remote-ls` — needs no elevation even for a `--system` remote, but populates the invoking "
+        "user's own `~/.cache/flatpak` metadata cache (measured). flatpak's own cache, which it expires itself "
+        "and which no part of pc-switcher reads; gating a repository query as a modification would misdescribe it",
+    ),
 }
 
 # Modifications that reach a machine today without passing through the gate. Every entry
@@ -254,24 +314,31 @@ class TestMutatesCoverage:
         assert len(ungated) > 40, f"only {len(ungated)} ungated call sites found — the AST walk is not finding them"
 
     def test_no_ungated_call_site_is_unaccounted_for(self) -> None:
-        """J162 — every executor call without `mutates=` is listed above as a read or a known gap.
+        """J162 — every executor call without `mutates=` is listed above as a pure read, a
+        tolerated side effect or a known gap.
 
-        A newly added write that forgets `mutates=` lands in a function whose expected
-        count no longer matches, and fails here until it is either gated or justified.
+        A newly added call that forgets `mutates=` lands in a function whose expected count
+        no longer matches, and fails here until it is either gated or justified.
         """
         ungated = _collect_ungated()
         problems: list[str] = []
 
         for key, sites in sorted(ungated.items()):
-            expected = _READ_ONLY_CALLS.get(key, 0) + len(_UNGATED_WRITES.get(key, ()))
+            tolerated = _TOLERATED_SIDE_EFFECTS.get(key)
+            expected = (
+                _READ_ONLY_CALLS.get(key, 0)
+                + (tolerated.count if tolerated is not None else 0)
+                + len(_UNGATED_WRITES.get(key, ()))
+            )
             if len(sites) == expected:
                 continue
             if expected == 0:
                 problems.append(
                     f"{key}: {len(sites)} executor call(s) with no `mutates=`, not accounted for in "
                     f"tests/unit/test_mutates_audit.py.\n{_describe(sites)}\n"
-                    '    Pass `mutates="<what changes>"` if this modifies the machine, '
-                    "or add it to _READ_ONLY_CALLS if it does not."
+                    '    Pass `mutates="<what changes>"` unless this call is PURELY read-only; '
+                    "add it to _READ_ONLY_CALLS if it changes nothing at all, or to "
+                    "_TOLERATED_SIDE_EFFECTS with its reason if it is a read that is not provably state-free."
                 )
             else:
                 problems.append(
@@ -279,7 +346,7 @@ class TestMutatesCoverage:
                     '    Pass `mutates="<what changes>"` on the new write, or update the tables.'
                 )
 
-        stale = sorted((set(_READ_ONLY_CALLS) | set(_UNGATED_WRITES)) - set(ungated))
+        stale = sorted((set(_READ_ONLY_CALLS) | set(_TOLERATED_SIDE_EFFECTS) | set(_UNGATED_WRITES)) - set(ungated))
         problems.extend(
             f"{key}: listed in the audit tables but has no ungated call — remove the entry." for key in stale
         )
@@ -301,6 +368,32 @@ class TestMutatesCoverage:
             if write.tracked_by is None
         )
         assert not untracked, "modifications reaching a machine without the gate:\n" + "\n".join(untracked)
+
+    def test_every_tolerated_side_effect_states_its_reason(self) -> None:
+        """J177 — the escape hatch cannot be used silently.
+
+        `_TOLERATED_SIDE_EFFECTS` is where a call that is not provably state-free stays
+        ungated, so an entry whose reason is blank would be exactly the silent
+        classification the rule forbids — an ungated non-read with nothing said about it.
+        """
+        unexplained = sorted(key for key, entry in _TOLERATED_SIDE_EFFECTS.items() if not entry.why.strip())
+        assert not unexplained, "tolerated ungated calls with no stated reason:\n" + "\n".join(unexplained)
+
+    def test_a_sudo_probe_whose_whole_effect_is_exercising_sudo_is_gated(self) -> None:
+        """J178 — `sudo --non-interactive true` reads nothing; running it IS the change.
+
+        It is the case the old "changes content" reading got wrong in the same way the
+        target lock did, so it is asserted against the source rather than described: every
+        job that establishes the sudo precondition must gate that probe.
+        """
+        probes = [
+            f"{site.relpath}:{site.lineno}"
+            for site in _argument_call_sites(frozenset({"run_command"}))
+            if site.node.args
+            and "sudo --non-interactive" in " ".join(_resolve_literals(site.node.args[0], site.scope)[0])
+            and not any(keyword.arg == "mutates" for keyword in site.node.keywords)
+        ]
+        assert not probes, "a sudo probe reaches a machine ungated:\n" + "\n".join(probes)
 
 
 # ---------------------------------------------------------------------------------
@@ -338,6 +431,22 @@ _SOURCE_WRITES: dict[str, str] = {
     # branch the target's. Both are the same write, applied on both machines.
     "orchestrator.py::Orchestrator._run_snap_hold_command::run_command": (
         "PKG-FR-SNAP-REFRESH-PAUSE — the auto-refresh pause and its restore, which both machines take"
+    ),
+}
+
+# Gated calls that can reach the source but write nothing this article is about. The gate's
+# rule is wider than `PKG-FR-SOURCE-INTENT`'s: it covers everything that is not purely
+# read-only, while the article is about what a sync CHANGES on the source — its software,
+# where it gets it from, and the three records a sync is allowed to leave. A call listed
+# here carries `mutates=` for the gate's reason and is not a fourth source write.
+_SOURCE_NON_READS: dict[str, str] = {
+    "jobs/apt_sync/job.py::AptSyncJob.validate::run_command": (
+        "`sudo --non-interactive true` — the sudo precondition (`PKG-FR-SUDO-PRECONDITION`), gated because "
+        "exercising sudo is its whole effect; it leaves nothing behind but sudo's own credential timestamp"
+    ),
+    "jobs/snap_sync.py::SnapSyncJob.validate::run_command": (
+        "`sudo --non-interactive true` — the same precondition, needed on the source because the auto-refresh "
+        "pause is taken there too (`PKG-FR-SNAP-REFRESH-PAUSE`)"
     ),
 }
 
@@ -454,10 +563,10 @@ class TestSourceWrites:
         test below refuses.
         """
         gated = _collect_gated()
-        accounted = set(_SOURCE_WRITES) | set(_OUTSIDE_PACKAGE_SYNC)
+        accounted = set(_SOURCE_WRITES) | set(_OUTSIDE_PACKAGE_SYNC) | set(_SOURCE_NON_READS)
         problems = [
-            f"{call.key}: writes through `{call.receiver}`, which is not the target's handle, and is "
-            f"listed in neither _SOURCE_WRITES nor _OUTSIDE_PACKAGE_SYNC.\n"
+            f"{call.key}: writes through `{call.receiver}`, which is not the target's handle, and is listed in "
+            f"none of _SOURCE_WRITES, _OUTSIDE_PACKAGE_SYNC or _SOURCE_NON_READS.\n"
             f"    {call.relpath}:{call.lineno}  {call.source}"
             for call in gated
             if not call.reaches_target_only and call.key not in accounted
@@ -472,6 +581,10 @@ class TestSourceWrites:
             f"{key}: listed as outside package sync, but it is a package-sync module."
             for key in sorted(_OUTSIDE_PACKAGE_SYNC)
             if _is_package_sync(key.split("::")[0])
+        )
+        problems.extend(
+            f"{key}: listed both as a source write and as a source-capable non-read — it can only be one."
+            for key in sorted(set(_SOURCE_NON_READS) & set(_SOURCE_WRITES))
         )
 
         assert not problems, "source-write audit failed:\n\n" + "\n\n".join(problems)
