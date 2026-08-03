@@ -105,11 +105,14 @@ async def _package_sync_subjects(vm_test_fixtures: None) -> None:  # pyright: ig
 
 
 # How many shared packages to probe for reverse dependencies when looking for one safe
-# to remove. Each probe is a separate `apt-cache rdepends` process on the target, so the
-# cost is linear and the whole probe runs under a single command timeout — bounding it
-# keeps the search well inside that budget while still offering far more candidates than
-# any test asks for.
-_RDEPENDS_PROBE_LIMIT = 40
+# to remove, per round and in total. Each probe is a separate `apt-cache rdepends` process
+# on the target reloading the apt cache, so the cost is linear and the whole probe runs
+# under a single command timeout: the total bounds the search inside that budget, and
+# probing a ROUND at a time means a search that succeeds immediately — which is every
+# search here so far — pays for one round instead of all of them (measured in a stock
+# `ubuntu:24.04`: 8.2s for 12 probes against 26.7s for 40).
+_RDEPENDS_PROBE_ROUND = 12
+_RDEPENDS_PROBE_LIMIT = 48
 
 # How many candidates beyond the requested count to rehearse, so apt refusing a few still
 # leaves enough. Every one costs an `apt-get --dry-run remove` on the target, and no test in
@@ -307,30 +310,40 @@ async def _find_removable_candidates(
     if not initial_candidates:
         return []
 
-    # Probe only a bounded slice, not every shared package. Each loop iteration is its
-    # own `apt-cache rdepends` process reloading the apt cache, so probing the whole
-    # `apt-mark showmanual` intersection (~100-150 packages on these VMs) costs more
-    # wall-clock than the timeout allows — which is exactly how this helper timed out
-    # and took all six tests in this module with it. We only ever need `count` safe
-    # candidates, so a slice comfortably larger than `count` is sufficient; the
-    # docstring already allows returning fewer than requested.
-    probe_set = initial_candidates[:_RDEPENDS_PROBE_LIMIT]
+    reverse_deps_by_candidate: dict[str, set[str]] = {}
+    probed: set[str] = set()
+    rehearsed: set[str] = set()
+    confirmed: list[str] = []
+    for start in range(0, min(len(initial_candidates), _RDEPENDS_PROBE_LIMIT), _RDEPENDS_PROBE_ROUND):
+        this_round = initial_candidates[start : start + _RDEPENDS_PROBE_ROUND]
+        quoted = " ".join(shlex.quote(name) for name in this_round)
+        rdepends_result = await pc2_executor.run_command(
+            f'for p in {quoted}; do echo "{RDEPENDS_MARKER}$p"; apt-cache rdepends --installed "$p"; done',
+            login_shell=False,
+            timeout=120.0,
+        )
+        reverse_deps_by_candidate |= parse_batched_rdepends(rdepends_result.stdout)
+        probed |= set(this_round)
 
-    quoted = " ".join(shlex.quote(name) for name in probe_set)
-    rdepends_result = await pc2_executor.run_command(
-        f'for p in {quoted}; do echo "{RDEPENDS_MARKER}$p"; apt-cache rdepends --installed "$p"; done',
-        login_shell=False,
-        timeout=120.0,
-    )
-    reverse_deps_by_candidate = parse_batched_rdepends(rdepends_result.stdout)
+        # `pick_safe_removal_candidates` walks the WHOLE intersection and reads an unprobed
+        # name as having no reverse dependency at all, so only probed names may be kept.
+        shortlist = [
+            name
+            for name in pick_safe_removal_candidates(
+                pc1_manual, pc2_installed, pc2_manual, reverse_deps_by_candidate, len(probed)
+            )
+            if name in probed and name not in rehearsed
+        ][: count - len(confirmed) + _REMOVAL_REHEARSAL_HEADROOM]
 
-    # A wider pool than asked for, then apt's own verdict on each: the rdepends check above
-    # cannot see a candidate that takes an essential package with it (`_apt_would_remove_these`).
-    picked = pick_safe_removal_candidates(
-        pc1_manual, pc2_installed, pc2_manual, reverse_deps_by_candidate, count + _REMOVAL_REHEARSAL_HEADROOM
-    )
-    removable = await _apt_would_remove_these(pc2_executor, picked)
-    return [name for name in picked if name in removable][:count]
+        # apt's own verdict on each, because the rdepends check cannot see a candidate that
+        # takes an essential package with it (`_apt_would_remove_these`).
+        removable = await _apt_would_remove_these(pc2_executor, shortlist)
+        rehearsed |= set(shortlist)
+        confirmed += [name for name in shortlist if name in removable]
+        if len(confirmed) >= count:
+            break
+
+    return confirmed[:count]
 
 
 async def _removable_candidate(pc1_executor: BashLoginRemoteExecutor, pc2_executor: BashLoginRemoteExecutor) -> str:
@@ -1267,7 +1280,7 @@ async def _install_from_a_repo_the_target_lacks(executor: BashLoginRemoteExecuto
     built = await executor.run_command(build, login_shell=False, timeout=60.0)
     assert built.success, f"Failed to build the synthetic repository on the source: {built.stderr}"
 
-    updated = await _apt_get_update(executor)
+    updated = await _apt_get_update_for(executor, f"{_APT_SOURCES_DIR}/{list_filename}")
     assert updated.success, f"apt-get update failed on the source after adding {repo_dir}: {updated.stderr}"
 
     installed = await executor.run_command(
@@ -1413,6 +1426,32 @@ async def _apt_get_update(executor: BashLoginRemoteExecutor) -> CommandResult:
     """
     return await executor.run_command(
         "sudo LC_ALL=C DEBIAN_FRONTEND=noninteractive apt-get update", login_shell=False, timeout=180.0
+    )
+
+
+async def _apt_get_update_for(executor: BashLoginRemoteExecutor, source_path: str) -> CommandResult:
+    """Refresh the index of the repository `source_path` declares, and of nothing else.
+
+    A test that has just written one repository file needs apt to notice THAT repository;
+    a plain `apt-get update` also refetches every Ubuntu archive index over the network,
+    which several setups here were paying for a purely local `file:` repository (#216).
+    Measured in a stock `ubuntu:24.04`: 0.02s against 0.78s with warm archives, in both the
+    one-line and the deb822 file format, after which the repository's package installs.
+
+    `sourceparts` rather than `sourcelist` because it is the one that reads both formats;
+    `List-Cleanup=0` because without it apt prunes the cached lists of every repository this
+    run did not visit, and the next operation would have to fetch them all back.
+    """
+    quoted = shlex.quote(source_path)
+    return await executor.run_command(
+        "narrow=$(mktemp --directory) && "
+        f'sudo cp {quoted} "$narrow/" && '
+        "sudo LC_ALL=C DEBIAN_FRONTEND=noninteractive apt-get update"
+        ' -o Dir::Etc::sourcelist=/dev/null -o Dir::Etc::sourceparts="$narrow"'
+        " -o APT::Get::List-Cleanup=0; "
+        'status=$?; rm --recursive --force "$narrow"; exit $status',
+        login_shell=False,
+        timeout=180.0,
     )
 
 
@@ -1735,7 +1774,7 @@ async def _publish_a_cascading_pair(executor: BashLoginRemoteExecutor) -> tuple[
     built = await executor.run_command(build, login_shell=False, timeout=60.0)
     assert built.success, f"Failed to build the cascading pair's repository: {built.stderr}"
 
-    updated = await _apt_get_update(executor)
+    updated = await _apt_get_update_for(executor, f"{_APT_SOURCES_DIR}/{list_filename}")
     assert updated.success, f"apt-get update failed after adding {repo_dir}: {updated.stderr}"
 
     installed = await executor.run_command(
@@ -1836,7 +1875,7 @@ async def _install_from_the_vendor_repository(executor: BashLoginRemoteExecutor)
         f"unreachable host or a missing curl reports itself here.\n{declared.stderr}"
     )
 
-    updated = await _apt_get_update(executor)
+    updated = await _apt_get_update_for(executor, source_dest)
     assert updated.success, f"apt-get update failed after adding {_VENDOR_REPO_URI}: {updated.stderr}"
 
     installed = await executor.run_command(
@@ -1912,7 +1951,7 @@ async def _publish_a_rival_candidate(executor: BashLoginRemoteExecutor) -> tuple
     built = await executor.run_command(build, login_shell=False, timeout=60.0)
     assert built.success, f"Failed to publish the rival candidate on the target: {built.stderr}"
 
-    updated = await _apt_get_update(executor)
+    updated = await _apt_get_update_for(executor, f"{_APT_SOURCES_DIR}/{list_filename}")
     assert updated.success, f"apt-get update failed after adding {repo_dir}: {updated.stderr}"
 
     # The rival is what the target would install today, before the vendor's repository has
