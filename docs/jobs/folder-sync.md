@@ -12,7 +12,9 @@ Disabling *every* configured folder leaves the job with nothing to mirror; it th
 
 `pc-switcher sync <hostname> --confirm-each-command` asks before each rsync pass, showing the exact command and the target's hostname — rsync runs on the source, but the target is the machine that receives the files and loses the ones the source does not have. Answer **p** to run that pass or **a** to abort the whole sync.
 
-Most folders take one pass, which transfers and deletes together. A folder whose per-directory `.pcswitcher-filter` files are not yet on the target takes two, and each is asked separately: a copy pass that deletes nothing, then the deleting mirror. A `--dry-run` run asks too, and its prompt says the pass writes nothing.
+Most folders take one pass, which transfers and deletes together. A folder whose per-directory `.pcswitcher-filter` files are not yet on the target takes two, and each is asked separately: a copy pass that deletes nothing, then the deleting mirror.
+
+A `--dry-run` run is never interrupted, even with the flag: the preview writes nothing on either machine, so there is nothing to confirm.
 
 ## Filter rules
 

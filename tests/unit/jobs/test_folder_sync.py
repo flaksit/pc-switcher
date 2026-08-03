@@ -1572,11 +1572,11 @@ class TestEveryPassIsAnnounced:
         assert copy["mutates"] == "copy /home across, deleting nothing"
         assert delete["mutates"] == "mirror /home, deleting files the source does not have"
 
-    async def test_the_dry_run_preview_announces_itself_as_writing_nothing(self) -> None:
-        """J187 — a dry-run pass is announced too (starting it is process state), and its phrase
-        says outright that nothing is written, so the prompt cannot read like the real mirror."""
+    async def test_the_dry_run_preview_is_not_gated_at_all(self) -> None:
+        """J187 — a preview writes nothing, so it asks nothing: a run that stops to request
+        permission reads as one that might change something, which is what --dry-run rules out."""
         ctx = make_context(dry_run=True)
 
         (preview,) = await self._passes(ctx)
 
-        assert preview["mutates"] == "nothing — a --dry-run pass previews the mirror of /home without writing"
+        assert preview["mutates"] is None

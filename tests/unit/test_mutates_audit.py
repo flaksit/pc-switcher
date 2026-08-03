@@ -20,11 +20,11 @@ How the audit decides read from modification: it does not. Inferring intent from
 string ("does `install` mean apt-get install or /usr/bin/install?", "is `>` a redirect or a
 comparison?") would be a guess that silently drifts. Instead every ungated call site in
 `src/pcswitcher/` is enumerated below by enclosing function, and each is accounted for in
-one of three tables: a pure read (`_READ_ONLY_CALLS`), a read whose incidental side effect
-is deliberately tolerated (`_TOLERATED_SIDE_EFFECTS`, each with its reason stated), or a
-known ungated write (`_UNGATED_WRITES`, with what it changes and the issue tracking it). A
-new call that lands anywhere else fails `test_no_ungated_call_site_is_unaccounted_for`
-until its author either passes `mutates=` or states, in a table, why it is left ungated.
+one of two tables: a pure read (`_READ_ONLY_CALLS`), or a read whose incidental side effect
+is deliberately tolerated (`_TOLERATED_SIDE_EFFECTS`, each with its reason stated). There is
+no third table for a write that is knowingly left ungated, because no such write exists — a
+new call that lands anywhere else fails `test_no_ungated_call_site_is_unaccounted_for` until
+its author either passes `mutates=` or states, in a table, why it is left ungated.
 
 Two known blind spots, neither of which the audit can close and both of which are safe
 today: a call reached through a callable passed by reference
@@ -42,10 +42,10 @@ would leak the very lock it was declining to free. That is the one asymmetry bet
 two halves, and it is the right way round — taking exclusive control of a machine is what
 a user might refuse; giving it back is not.
 
-The tests divide the work: the first binds the tables to the real source, so they cannot
-rot into a rubber stamp; the second states the requirement the tables are measured against
-— everything that is not a pure read is gated unless a stated reason or an issue says
-otherwise; the third refuses a tolerated side effect that names no reason.
+The tests divide the work: the first binds the tables to the real source, so they cannot rot
+into a rubber stamp; the second holds the requirement itself — everything that is not a pure
+read is gated, unless a stated reason says otherwise; the third refuses a tolerated side
+effect that names no reason.
 
 `TestSourceWrites` and `TestFileTransfers` below audit the same call sites from the other
 side, for `PKG-FR-SOURCE-INTENT` / `PKG-FR-MANAGER-CONVERGES`: which MACHINE a gated write
@@ -102,18 +102,6 @@ class _ToleratedSideEffect:
 
     count: int
     why: str
-
-
-@dataclass(frozen=True)
-class _UngatedWrite:
-    """A modification that reaches a machine without going through the gate.
-
-    `tracked_by` is the issue that will fix it; `None` means the omission is unaccounted
-    for, which is what `test_every_ungated_write_is_tracked` refuses.
-    """
-
-    what: str
-    tracked_by: str | None = None
 
 
 def _collect_ungated() -> dict[str, list[_CallSite]]:
@@ -284,11 +272,6 @@ _TOLERATED_SIDE_EFFECTS: dict[str, _ToleratedSideEffect] = {
     ),
 }
 
-# Modifications that reach a machine today without passing through the gate. Every entry
-# is a defect: with `--confirm-each-command` the user is not shown these and is not asked.
-# Empty, and meant to stay so: the table exists to make the next omission declare itself.
-_UNGATED_WRITES: dict[str, tuple[_UngatedWrite, ...]] = {}
-
 
 def _describe(sites: list[_CallSite]) -> str:
     return "\n".join(f"    {site.relpath}:{site.lineno}  {site.source}" for site in sites)
@@ -302,8 +285,8 @@ class TestMutatesCoverage:
         assert len(ungated) > 40, f"only {len(ungated)} ungated call sites found — the AST walk is not finding them"
 
     def test_no_ungated_call_site_is_unaccounted_for(self) -> None:
-        """J162 — every executor call without `mutates=` is listed above as a pure read, a
-        tolerated side effect or a known gap.
+        """J162 — every executor call without `mutates=` is listed above as a pure read or a
+        tolerated side effect.
 
         A newly added call that forgets `mutates=` lands in a function whose expected count
         no longer matches, and fails here until it is either gated or justified.
@@ -313,11 +296,7 @@ class TestMutatesCoverage:
 
         for key, sites in sorted(ungated.items()):
             tolerated = _TOLERATED_SIDE_EFFECTS.get(key)
-            expected = (
-                _READ_ONLY_CALLS.get(key, 0)
-                + (tolerated.count if tolerated is not None else 0)
-                + len(_UNGATED_WRITES.get(key, ()))
-            )
+            expected = _READ_ONLY_CALLS.get(key, 0) + (tolerated.count if tolerated is not None else 0)
             if len(sites) == expected:
                 continue
             if expected == 0:
@@ -334,28 +313,12 @@ class TestMutatesCoverage:
                     '    Pass `mutates="<what changes>"` on the new write, or update the tables.'
                 )
 
-        stale = sorted((set(_READ_ONLY_CALLS) | set(_TOLERATED_SIDE_EFFECTS) | set(_UNGATED_WRITES)) - set(ungated))
+        stale = sorted((set(_READ_ONLY_CALLS) | set(_TOLERATED_SIDE_EFFECTS)) - set(ungated))
         problems.extend(
             f"{key}: listed in the audit tables but has no ungated call — remove the entry." for key in stale
         )
 
         assert not problems, "`mutates=` audit failed:\n\n" + "\n\n".join(problems)
-
-    def test_every_ungated_write_is_tracked(self) -> None:
-        """J162 — the requirement: a write either carries `mutates=` or has an issue saying why not.
-
-        Kept separate from the count check above so the two failures read differently — that one
-        says "you added something unaccounted for", this one says "the codebase still has
-        ungated writes". It holds trivially today, with `_UNGATED_WRITES` empty, and keeps
-        holding the moment someone adds an entry to it without an issue to point at.
-        """
-        untracked = sorted(
-            f"{key}: {write.what}"
-            for key, writes in _UNGATED_WRITES.items()
-            for write in writes
-            if write.tracked_by is None
-        )
-        assert not untracked, "modifications reaching a machine without the gate:\n" + "\n".join(untracked)
 
     def test_every_tolerated_side_effect_states_its_reason(self) -> None:
         """J177 — the escape hatch cannot be used silently.
@@ -370,15 +333,16 @@ class TestMutatesCoverage:
     def test_starting_a_background_process_is_never_ungated(self) -> None:
         """J179 — a process left running is process state, whatever its command reads.
 
-        Stated over the method rather than per call site because there is no read-only
-        `start_process`: the handle outlives the call, and something has to terminate it.
-        No exceptions — `folder_sync`'s rsync pass announces itself in dry-run too, where it
-        writes nothing, rather than make the marker conditional at a call site this audit
-        can only read as covered or absent.
+        Stated over the method rather than per call site because a process usually outlives
+        the call that starts it, and something has to terminate it.
+
+        What this can see is the keyword, not its value, so `folder_sync`'s rsync pass counts
+        as covered here while passing `None` on a dry run — where it starts a process that
+        writes nothing and is awaited to completion inside the same call, changing no state on
+        either machine. That value is not this audit's to check; the behaviour is pinned by
+        `test_folder_sync:TestEveryPassIsAnnounced`, which is where a regression would show.
         """
-        offenders = sorted(
-            key for key in _collect_ungated() if key.endswith("::start_process") and key not in _UNGATED_WRITES
-        )
+        offenders = sorted(key for key in _collect_ungated() if key.endswith("::start_process"))
         assert not offenders, "a background process is started without `mutates=`:\n" + "\n".join(offenders)
 
     def test_the_sudo_precondition_probe_is_a_read_not_a_modification(self) -> None:

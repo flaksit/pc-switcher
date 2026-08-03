@@ -881,7 +881,7 @@ class FolderSyncJob(SyncJob):
 
         return files_xfr, bytes_xfr, files_deleted
 
-    def _pass_mutates(self, folder: FolderEntry, label: str) -> str:
+    def _pass_mutates(self, folder: FolderEntry, label: str) -> str | None:
         """What one rsync pass changes on the target, for `--confirm-each-command` (#209).
 
         One phrase per pass, so a split folder asks twice and each question says which half
@@ -890,14 +890,15 @@ class FolderSyncJob(SyncJob):
         carries the filters and the destination verbatim, so the phrase says only what the
         pass DOES.
 
-        A dry-run pass writes nothing and is announced all the same: the gate's rule is
-        mechanical (`tests/unit/test_mutates_audit.py`), and making the marker conditional
-        would leave a call site the audit reads as covered while it silently passes `None`.
-        Saying so in the phrase costs one honest prompt per folder in a run that was already
-        asking to be shown everything.
+        `None` in dry-run, which is a read like any other: `--dry-run` writes nothing on
+        either machine, and the process this starts is awaited to completion inside the call
+        that starts it, so nothing is left running either.  It is also the answer a user
+        needs to be able to trust — a preview run that stops to ask permission reads as one
+        that might change something, and the whole point of asking for a preview is to find
+        out what WOULD happen without risking any of it.
         """
         if self.context.dry_run:
-            return f"nothing — a --dry-run pass previews the mirror of {folder.path} without writing"
+            return None
         if label == PASS_COPY:
             return f"copy {folder.path} across, deleting nothing"
         return f"mirror {folder.path}, deleting files the source does not have"
@@ -911,10 +912,11 @@ class FolderSyncJob(SyncJob):
         (files_transferred, bytes_transferred, files_deleted).  Shared by every pass
         `execute` runs, which name themselves via `label` (`copy` / `delete` / `mirror`).
 
-        The spawn is gated on the TARGET although the process is the source's: rsync reads
-        here and writes there, so the target is the machine the user is being asked about
-        (and the one the DEBUG trace attributes the pass to, since the command text names
-        both ends anyway).
+        A pass that writes is gated on the TARGET although the process is the source's:
+        rsync reads here and writes there, so the target is the machine the user is being
+        asked about (and the one the DEBUG trace attributes the pass to, since the command
+        text names both ends anyway).  `changes` is passed either way; with no `mutates`
+        phrase it only labels the trace, and nothing is asked.
         """
         proc = await self.source.start_process(cmd, mutates=self._pass_mutates(folder, label), changes=Host.TARGET)
         files_transferred, bytes_transferred, files_deleted = await self._stream_rsync(
