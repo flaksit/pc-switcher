@@ -1,0 +1,281 @@
+You orchestrator. Delegate to subagents!
+
+Resolve issues #223 to #238. Ask your questions first, so that you can further work in autonomy
+
+---
+
+<task-notification>
+<task-id>a7c0cf32c7dab7851</task-id>
+<tool-use-id>toolu_01WqQ5rpMGazKssF3Q9ZNsqs</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/a6fdf859-1f12-4daf-94eb-8369ba71837c/tasks/a7c0cf32c7dab7851.output</output-file>
+<status>completed</status>
+<summary>Agent "Scout VM/UAT driving" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Findings below. All paths absolute.
+
+**1. Test environments**
+Two real Hetzner Cloud VMs named `pc1` (source) and `pc2` (target), Ubuntu + btrfs, SSH user `testuser`. No docker/local VMs.
+- Provisioning: `/home/janfr/dev/pc-switcher/tests/integration/scripts/provision-test-infra.sh` (refuses to create VMs unless `CI` is set — VM creation is CI-only, via GitHub workflow "Integration Tests"; internals in `/home/janfr/dev/pc-switcher/tests/integration/scripts/internal/{create-vm.sh,configure-vm.sh,create-baseline-snapshots.sh,vm-test-fixtures.sh}`).
+- Reset to baseline btrfs snapshot: `/home/janfr/dev/pc-switcher/tests/integration/scripts/reset-vm.sh` (25-60 s per VM, run in parallel).
+- Architecture doc: `/home/janfr/dev/pc-switcher/docs/ops/testing-architecture.md`; ops runbooks: `/home/janfr/dev/pc-switcher/docs/ops/testing-ops.md`.
+
+**2. Getting a shell on pc1 and running a dry-run sync**
+Code reaches the VMs by installing from a *pushed git ref* (`install.sh --ref &lt;branch&gt;`), not from your working tree.
+```bash
+cd /home/janfr/dev/pc-switcher
+export HCLOUD_TOKEN="$(pass show dev/pc-switcher/testing/hcloud_token_rw)"
+tests/integration/scripts/internal/lock.sh status
+tests/integration/scripts/internal/lock.sh acquire "agent-&lt;task&gt;"     # never `clear`
+export PC1="$(hcloud server ip pc1)"; export PC2="$(hcloud server ip pc2)"
+ssh testuser@"$PC1" 'curl -sSL https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh | bash -s -- --ref &lt;your-branch&gt;'
+ssh testuser@"$PC2" '... same ...'
+ssh testuser@"$PC1" '~/.local/bin/pc-switcher init --force'   # then write config.yaml (see runbook §1)
+ssh -t testuser@"$PC1"                                        # -t is required for a real TUI
+pc-switcher sync pc2 --dry-run --yes --allow-first-sync
+tests/integration/scripts/internal/lock.sh release "agent-&lt;task&gt;"   # from your machine, after
+```
+Interactive TUI review needs `ssh -t`; `--yes` skips prompts, drop it to exercise the review UI. Config must set `target_machine.hostname` to `pc2`. Flags confirmed in `/home/janfr/dev/pc-switcher/src/pcswitcher/cli.py:234` (`--dry-run`).
+
+**3. Lock / lease**
+Hetzner *server labels* on `pc1` (`lock_holder`, `lock_acquired`) act as the global mutex; `LOCK_SERVER="pc1"` in `/home/janfr/dev/pc-switcher/tests/integration/scripts/internal/common.sh:49`. Implementation: `/home/janfr/dev/pc-switcher/tests/integration/scripts/internal/lock.sh` (`status|acquire &lt;holder&gt;|release &lt;holder&gt;|clear`). `acquire` never waits — it fails immediately naming the holder. `acquire_lock()` in `common.sh:111` registers an EXIT/INT/TERM trap to release; if `PCSWITCHER_LOCK_HOLDER` is already exported, children reuse the parent's lock instead of acquiring. Runbook: `/home/janfr/dev/pc-switcher/docs/ops/testing-ops.md` "Lock Management" (~line 199) and "Runbook: Stuck Lock Cleanup" (~line 269). Do not run `lock.sh clear` or remove the labels — the UAT runbook says so explicitly.
+
+**4. Phase 02 UAT**
+- Scenario list: `/home/janfr/dev/pc-switcher/.planning/phases/02-package-management-sync/02-UAT.md` (7+ numbered tests with expected-observation text; test 1 currently `awaiting: user response`).
+- Hand procedure with exact commands for tests 1 and 2: `/home/janfr/dev/pc-switcher/.planning/phases/02-package-management-sync/02-UAT-01-RUNBOOK.md` (machine setup, divergence fixtures, §3 abort checks, §6/§7 post-run checks).
+- Related: `02-UAT-REVIEW-FIXES.md`, `02-VERIFICATION.md` in the same directory.
+- Generic TUI/visual checklist (colors, progress bars, resize, Ctrl+C): `/home/janfr/dev/pc-switcher/tests/manual-playbook.md`. Also `/home/janfr/dev/pc-switcher/tests/manual/review_harness.py` and `/home/janfr/dev/pc-switcher/tests/self-update-test-playbook.md`.
+
+**5. Local dev checks**
+From `/home/janfr/dev/pc-switcher/CLAUDE.md:41-46` and `/home/janfr/dev/pc-switcher/docs/dev/development-guide.md:20-29`:
+```bash
+uv run ruff check . &amp;&amp; uv run ruff format .   # lint + format
+uv run basedpyright                            # typecheck
+uv run pytest                                  # unit + contract; integration excluded by pytest config; no VMs needed
+tests/run-integration-tests.sh                 # full integration: needs VMs up + HCLOUD_TOKEN, takes the lock, resets both VMs
+tests/run-integration-tests.sh --skip-reset -k "test_ssh"   # iterate without re-resetting
+```
+Integration suite: ~30 minutes for the full run (`docs/ops/testing-architecture.md:50`), plus ~25-60 s VM reset; VMs must already be provisioned with current fixtures or the runner aborts and tells you to run `provision-test-infra.sh`. `GITHUB_TOKEN`/`HCLOUD_TOKEN` are auto-pulled from `pass` (`dev/pc-switcher/github_token_public_ro`, `dev/pc-switcher/testing/hcloud_token_rw`).</result>
+<usage><subagent_tokens>36934</subagent_tokens><tool_uses>15</tool_uses><duration_ms>85401</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ae3d52b282d2fb992</task-id>
+<tool-use-id>toolu_01BFHCGKH6yeb7t8yEzC8X8U</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/a6fdf859-1f12-4daf-94eb-8369ba71837c/tasks/ae3d52b282d2fb992.output</output-file>
+<status>completed</status>
+<summary>Agent "Scout package-sync question copy" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Findings (all paths absolute).
+
+**Shared framework** — `/home/janfr/dev/pc-switcher/src/pcswitcher/jobs/packages/review.py`
+- Option keys: `:387-389` (`y`/`s`/`x`); words `SKIP_NOW_WORD`/`KEEP_FOR_GOOD_WORD` `:396-398`; act word from commonest `action_label` `_group_act_word:413-420`; skip-always word `:439-449`; hint sentences `_hints:451-495`; option assembly `_options_for:497-533`; per-item rows `_rows_for:535-556`.
+- One-item screen `_ask_about_one_item:681-708`; batched screen `_review_decision_group:800-826`; dispatch `review_items:1040-1100`.
+- Group/entry dataclasses: `ReviewEntry:252-280`, `ReviewGroup:291-345`.
+
+**1. #226 "report tree (…)" panel** — `/home/janfr/dev/pc-switcher/src/pcswitcher/jobs/packages/review.py:604-628`; the literal prefix is `body.append(entry.action_label, style="bold")` at `:621`, and the `(…)` wrapper around detail at `:624-627`. Printed by `_print_report_group:786-797` (interactive) and `:1074` (non-TTY). The word "report" is the entry's `action_label`, set in `/home/janfr/dev/pc-switcher/src/pcswitcher/jobs/packages/sync_core.py:479` from `verb`, resolved at `:445-446` (`_ACTION_VOCABULARY` entry `(APT_PACKAGE, REPORT_ONLY): "report"` at `:161`, plus the `"report"` fallback for any REPORT_ONLY). Group title `Version differences (apt packages)` composed at `sync_core.py:447-457` from `_REPORT_TITLES:208-212` + noun; the note at `_REPORT_NOTES:216-218`. Detail text `pc1 has X, pc2 has Y` built in `/home/janfr/dev/pc-switcher/src/pcswitcher/jobs/packages/items.py:166-173`.
+Tests: `/home/janfr/dev/pc-switcher/tests/unit/jobs/test_package_sync_core.py:261`, `/home/janfr/dev/pc-switcher/tests/unit/jobs/test_package_review.py:536` (and panel test ~`:1928`), `/home/janfr/dev/pc-switcher/tests/manual/review_harness.py:66`, `/home/janfr/dev/pc-switcher/tests/unit/jobs/apt/test_apt_diffing.py`, `/home/janfr/dev/pc-switcher/tests/unit/jobs/apt/test_apt_origins.py`.
+
+**2. #227 collateral question** — title built once in `/home/janfr/dev/pc-switcher/src/pcswitcher/jobs/apt_sync/messages.py:221-238`; used at `/home/janfr/dev/pc-switcher/src/pcswitcher/jobs/apt_sync/job.py:686` (plan-time group) and `/home/janfr/dev/pc-switcher/src/pcswitcher/jobs/apt_sync/collateral.py:809` (late/mid-apply round). Detail lines: `Collateral._item` at `collateral.py:451-477` builds `"{verb} {trigger} on {target} would {effect.phrase}\n{reason}"`; the second line (`apt on pc2 has fortunes marked as manually installed…`) is `Collateral._reason:420-449`. Per-item answer sentences also come from `_item` (`answer_hints`, `:471-476`), rendered by `_collateral_options` in `review.py:839-873`.
+**Raised once per item**: `_review_collateral_group` (`review.py:879-931`) loops `for entry in group.entries` and calls `_ask_about_one_item(entry, title=group.title, …)` at `:914-919`. The batch title is merely reused per screen, so a per-case title is entirely possible — change the `title=` argument at `review.py:916` (and the builder in `messages.py:221`).
+Tests: `/home/janfr/dev/pc-switcher/tests/unit/jobs/apt/test_apt_collateral.py:408,467,950,979,994`, `/home/janfr/dev/pc-switcher/tests/unit/jobs/test_package_review.py:1972-1975`, `/home/janfr/dev/pc-switcher/tests/manual/review_harness.py:181-190`.
+
+**3. #228 "Delete repositories pc1 no longer has (apt)"** — composed at `/home/janfr/dev/pc-switcher/src/pcswitcher/jobs/apt_sync/job.py:664`; noun/verb pair from `REPO_REMOVAL_VERBS` in `/home/janfr/dev/pc-switcher/src/pcswitcher/jobs/apt_sync/items.py:337-340` (`RemovalVocabulary` at `:315-326`). Entry `action_label="remove"` at `job.py:669`. Screen is the batched `_review_removal_group` (`review.py:934-967`).
+Tests: `/home/janfr/dev/pc-switcher/tests/unit/jobs/apt/test_apt_job.py:1141`, `/home/janfr/dev/pc-switcher/tests/unit/jobs/test_package_review.py:509`, `/home/janfr/dev/pc-switcher/tests/unit/jobs/test_review_skip_always.py:176`, `/home/janfr/dev/pc-switcher/tests/manual/review_harness.py:120`.
+
+**4. #229 snap change** — title `Change snap packages` composed in `/home/janfr/dev/pc-switcher/src/pcswitcher/jobs/packages/sync_core.py:445-449` (`(ItemClass.SNAP, DiffAction.CHANGE)` is absent from `_ACTION_VOCABULARY:157-170`, so `verb = action.value = "change"`; noun `snap packages` from `_MANAGER_NOUN:183`). Option word "change" is the same verb via `_group_act_word` (`review.py:413-420`) feeding `_options_for:504-512`; group gets two answers only because its action is `SNAP_CHANGE_REVIEW_ACTION` (`sync_core.py:78`, mapped `:191-193`), excluded from the promotable set (`review.py:378-...`). Detail `overwrites revision 52 on pc2 with revision 42` built in `/home/janfr/dev/pc-switcher/src/pcswitcher/jobs/snap_sync.py:305-312`.
+Tests: `/home/janfr/dev/pc-switcher/tests/unit/jobs/test_snap_sync.py:267,789`, `/home/janfr/dev/pc-switcher/tests/manual/review_harness.py`.
+
+**5. #230 "How should pc2 get /opt/pcsw-uat-app?"** — `/home/janfr/dev/pc-switcher/src/pcswitcher/jobs/packages/review.py:750` inside `_review_unreproducible_group:711-784` (per item). The group's own (unused-for-this-screen) title is at `/home/janfr/dev/pc-switcher/src/pcswitcher/jobs/manual_installs_sync.py:900-903`, entries `action_label="resolve"` at `:907`. Options `_unreproducible_options` `review.py:646-677`.
+Tests: `/home/janfr/dev/pc-switcher/tests/unit/jobs/test_package_review.py:1100` (and surrounding block ~`:880-930`), `/home/janfr/dev/pc-switcher/tests/unit/jobs/test_manual_installs_sync.py`.
+
+**6. #237 snippet body capture and registry write** — capture: `review.py:766-773` (`questionary.text(...)` prompt built `:766-772`, `body = await asyncio.to_thread(body_prompt.ask)` `:773`, stored `snippets[entry.item_id] = body` `:775`). The docstring at `review.py:735-740` explicitly says the body is stored verbatim, never stripped (the trailing newline survives here). Instruction/keybindings: `review.py:558-601`. Registry write: `/home/janfr/dev/pc-switcher/src/pcswitcher/jobs/manual_installs_sync.py:958-973` (`registry.add(Snippet(..., body=body, ...))`), through `SnippetRegistry.add` `/home/janfr/dev/pc-switcher/src/pcswitcher/jobs/packages/state.py:452-479` and YAML serialization `_serialize_snippets:319-331` (a trailing `\n` in `body` forces a YAML block/quoted form). Replay `state.py:481-504`.
+Tests: `/home/janfr/dev/pc-switcher/tests/unit/jobs/test_package_review.py:880-930` (patches `review.questionary.text` at `:897`), `/home/janfr/dev/pc-switcher/tests/unit/jobs/test_manual_installs_sync.py:136,1098,1547,1784-1832,2106`, `/home/janfr/dev/pc-switcher/tests/unit/jobs/test_package_state.py`, `/home/janfr/dev/pc-switcher/tests/integration/jobs/test_package_sync.py`.
+
+Docs that restate this copy (may need matching edits): `/home/janfr/dev/pc-switcher/docs/jobs/package-sync.md:52,86` and `/home/janfr/dev/pc-switcher/.planning/phases/02-package-management-sync/02-UAT-01-RUNBOOK.md:148`.</result>
+<usage><subagent_tokens>56085</subagent_tokens><tool_uses>33</tool_uses><duration_ms>136138</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a3ca8f4a0cc16592b</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/a6fdf859-1f12-4daf-94eb-8369ba71837c/tasks/a3ca8f4a0cc16592b.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix allow-first-sync and snapd hold" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done. Two of three shipped; #233 is blocked on a design conflict.
+
+**#231 — fixed, `d3b91686`.** `Confirmer.confirm` now short-circuits on `allow` *before* consulting interactivity, logging `"&lt;title&gt; — auto-approved by &lt;flag&gt;"` at WARNING (matching the dry-run short-circuit, so the end-of-run summary resurfaces it). Rewrote the module docstring and the `allow` param doc; updated ADR-015 (the "non-interactive runs fall back to the flag" sentence) and `docs/system/architecture.md:100`. CLI help text needed no change. Tests: `tests/unit/test_confirmer.py` (new `TestAllowFlagAnswersTheGate`, both TTY states + log assertion) and `tests/unit/orchestrator/test_consecutive_sync.py` (first-sync on a TTY with the flag; out-of-order W3 with the flag, parametrized over TTY). Note: `--allow-out-of-order` was *not* actually broken — `_check_out_of_order` (orchestrator.py:912-917) already short-circuits it before reaching the confirmer. Only `--allow-first-sync` reached the prompt. I left that early return in place; the confirmer fix covers both paths regardless.
+
+**#234 — verdict: NOT a bug; log made unambiguous, `f0421afc`.** `_hold_snap_autorefresh` is called from exactly one site (orchestrator.py:542) and loops `(SOURCE, TARGET)` once. Both hosts get the *identical* command text, and `Executor._announce` (executor.py:168) emits it at DEBUG with `extra={"host": ...}` — so the pair is source + target, not one machine twice. `snap_sync.validate` (jobs/snap_sync.py:825-828) adds two more `refresh.hold` lines, but those are `snap get` reads. Fix is legibility only: replaced the single "on both hosts" INFO with one line per machine, by hostname, emitted next to its own write. No behaviour change.
+
+**#233 — NOT implemented; needs your decision.** Narrowing the hold to the snap_sync job contradicts the documented design and reopens a live race:
+- `PKG-FR-SNAP-REFRESH-PAUSE` (`docs/planning/package-sync-conformance-criteria.md:250`) requires the suspension "for the duration of a run"; ADR-020:80 and `docs/jobs/package-sync.md:288` say the same to the user.
+- The race is real, not theoretical: `folder_sync._snap_sync_exclude_filters` (`src/pcswitcher/jobs/folder_sync.py:515-535`) mirrors `~/snap/&lt;app&gt;/&lt;rev&gt;` **only** where the source's `current` symlink (`snap_sync.py:402-412`) resolves to a revision the target's `snap list` reports. An auto-refresh on either host between snap_sync finishing and folder_sync's rsync moves `current`, and the data dir silently drops out of the mirror — exactly what the wide window exists to prevent.
+- Narrowing to snap_sync→folder_sync inclusive would preserve the guard but, given the shipped order (apt, snap, flatpak, manual, folder), barely narrows anything.
+
+Options: close #233 as working-as-designed; or implement as asked and amend the criterion, ADR-020 and the user doc, accepting the desync. Tell me which and I'll finish it.
+
+Verification: `ruff check`, `ruff format`, `codespell`, `basedpyright` all clean; `pytest` 4449 passed. Other agents committed into this branch mid-run (`c38be4de`, ui.py); their in-flight files are untouched by me.</result>
+<usage><subagent_tokens>118516</subagent_tokens><tool_uses>62</tool_uses><duration_ms>398957</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a127565b319759032</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/a6fdf859-1f12-4daf-94eb-8369ba71837c/tasks/a127565b319759032.output</output-file>
+<status>completed</status>
+<summary>Agent "Split abort exception, snippet prompt, hold reporting" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Three commits, all green (`ruff`, `codespell`, `basedpyright`, 4468 tests).
+
+**#224 — `5ddf12f6`** `fix(abort): say who stopped the sync`. New `SyncAborted` base with `SyncAbortedByUser` as subclass; every `except`/`isinstance` widened to the base; orchestrator WARNING and CLI summary say "by user" only for the subclass. Docs updated: ADR-022 D-06a, data-model, logging, architecture, core, package-sync, scenario-coverage.
+
+| Site | Kind |
+| --- | --- |
+| `step_gate.py:137` (typed "abort") | user |
+| `step_gate.py:131` (EOF/Ctrl-C) | tool |
+| `review.py:749,878,1265` (Ctrl-C) | user |
+| `review.py:987` ("stop the sync") | user |
+| `orchestrator.py:732` (config sync) | **user** — differs from your scouting |
+| `orchestrator.py:508` (out-of-order) | tool (ambiguous) |
+| `packages/state.py:344` (unparsable registry) | tool |
+| `apt_sync/job.py:437` (stray hold) | tool |
+| `flatpak_sync.py:1713` (remote filter) | tool |
+| `manual_installs_sync.py:433` (registry overwrite) | tool (ambiguous) |
+
+Two deviations, both verified rather than assumed:
+- `orchestrator.py:732` does **not** go through `Confirmer` — `config_sync` prompts directly, and `--yes`/`--dry-run` both return True without asking, so the only path to False is a human answering. Kept `SyncAbortedByUser`; message changed to `"the config sync was declined at its prompt"` (the renderer supplies "by user").
+- The two genuinely ambiguous sites (`:508`, `manual_installs_sync.py:433`) raise the base so the rendering claims neither — a "tool decided" phrasing would lie when a human did answer. That is why the base renders neutrally ("Sync aborted:") rather than naming pc-switcher.
+
+In the three restricted files I also changed the `models` import line (required for the raise) and the single class name inside the same method's docstring; nothing else.
+
+**#233 — `37997988`**. Reporting only. The per-machine INFO now names the orchestrator as holder and states why the window is not scoped to `snap_sync` (folder_sync mirrors `~/snap/&lt;app&gt;/&lt;rev&gt;` by the revision snap_sync converged). Still one line per machine, no behaviour or `mutates=` change.
+
+**#236 — `b04edaef`**. The authoring note moved off the console into the prompt's own `instruction`, which is now a `str` subclass whose `__format__` returns empty on prompt_toolkit's `is_done` render — so both the note and `(Ctrl-D to finish)\n&gt;` vanish from the answered line while staying visible the whole time the editor is open. Ctrl-D binding and multiline behaviour untouched. The existing G61 test was rewritten to assert on the editor's screen instead of scrollback, plus a new test for the post-answer collapse.
+
+Nothing blocked. One note: `docs/planning/package-sync-*.md`, `docs/jobs/package-sync.md`, `sync_core.py` and `test_package_sync_core.py` are dirty from the other agent — left untouched, never staged.</result>
+<usage><subagent_tokens>194810</subagent_tokens><tool_uses>127</tool_uses><duration_ms>989811</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a36586e64e73c4ff2</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/a6fdf859-1f12-4daf-94eb-8369ba71837c/tasks/a36586e64e73c4ff2.output</output-file>
+<status>completed</status>
+<summary>Agent "Per-item action logging and apply progress" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Both issues done; full gate green (ruff, format, codespell, basedpyright, 4468 tests).
+
+**#235 — progress (commit `fea12f9c`)**
+- `sync_core.apply()` now reports progress *before* each item, carrying `diff.label`, and reports 100% once after the loop. The UI creates a job's bar on its first update, so reporting only completed items left a single-item job with no bar at all for the whole install.
+- `flatpak_sync.apply()` reports its pre-loop phases ("preparing remotes", one per derived remote, "remote filters") — the silent window the issue's screenshot showed.
+- No `ui.py` change needed: `update_job_progress` already renders `update.item`; the gap was job-side. Tests: `test_package_sync_core:TestProgressWhileApplying` (report/converge interleaving) and `test_flatpak_sync:TestProgressWhileApplying`.
+
+**#238 — per-item log line (commit `971ec936`)**
+- What actually suppressed the `sl` line: **nothing did.** Verified by reproduction (`FakeSyncJob.apply()` with one APPLY install emits `FULL … install sl`), and apt is *not* batched — `packages.install` issues one `apt-get` per diff. What was missing is that the line read exactly `install sl (6.03-1)`: no manager, no machine, and indistinguishable from the thousands of DEBUG `apt-get install …` traces around it (the UAT runbook's own greps, `apt-get.*sl=`, surface only those). It also had **zero test coverage** before this change — no test asserted the applied-item line at all.
+- New format: `apt: install sl (6.03-1) on nomad` — `{manager_id}: {action} {label} on {target}`, from `PackageSyncJob._converge_one`, so all four managers get it. Existing substring assertions (`install {ref} (`) still hold.
+- Docs: `PKG-FR-LOG-ACTIONS` added to the conformance criteria (traceability row 13→14, count recounted 135→136, plus the nav line in the coverage matrix), the user-requirements "What happens during a sync" narrative, `docs/system/package-sync.md`, `docs/jobs/package-sync.md`. Matrix rows J172/J173 with tests `TestAppliedItemsReachTheLog::*`.
+
+**Notes**
+- The other agent's commit `b04edaef` swept my J172/J173 matrix rows and J.7 heading into their commit (shared working tree, they staged that file). The rows are in `main`-line history, just under their message.
+- To avoid committing their in-flight work, the #235 commit staged only my hunks of `flatpak_sync.py` / `test_flatpak_sync.py` via a filtered patch; their `SyncAbortedByUser`→`SyncAborted` rename stayed uncommitted for them (they have since landed it).
+- Nothing blocked. Not verified on real machines — no August logs exist on this box, so the "absence" could not be reproduced from the reporter's own run.</result>
+<usage><subagent_tokens>192812</subagent_tokens><tool_uses>138</tool_uses><duration_ms>1041870</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bli61peet</task-id>
+<tool-use-id>toolu_01KxnuDoHXtF9j321xR5EQEm</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/a6fdf859-1f12-4daf-94eb-8369ba71837c/tasks/bli61peet.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for PR 206 CI to finish" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a8dde2cb209903ae3</task-id>
+<tool-use-id>toolu_01ChXB2U2VmKuuGASxRHWKch</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/a6fdf859-1f12-4daf-94eb-8369ba71837c/tasks/a8dde2cb209903ae3.output</output-file>
+<status>completed</status>
+<summary>Agent "Drive VM sync and capture TUI" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All 14 checks PASS, each against a real capture. VMs reset to baseline, lock released, no repo changes.
+
+Captures in `/tmp/claude-1000/-home-janfr-dev-pc-switcher/a6fdf859-1f12-4daf-94eb-8369ba71837c/scratchpad/uat/` (raw `.raw` keeps ANSI; `.txt` is the plain rendering). Ran on pc1→pc2 at branch tip `971ec93` (`pc-switcher 0.5.1+post.437.dev.0.971ec93`), 100-column pty, driven by a stdlib-pty keystroke driver.
+
+| # | Check | Result | Capture |
+|---|---|---|---|
+| 1 | #223 long Recent Logs line wrapped, newest never cut | PASS | `B-223-longline-wrapped.txt` (195 frames whose newest line is a wrapped continuation) |
+| 2 | #225 statusline/progress/Recent Logs stay above the question | PASS | `A-225-context-above-question.txt` |
+| 3 | #226 apt version-difference lines | PASS | `A-226-version-differences.txt` — `tree: pc1 has 2.1.1-2ubuntu3.24.04.2, pc2 has 2.1.1-2ubuntu3` |
+| 4 | #227 collateral title/explanation/machine naming | PASS | `A-227-collateral.txt` — title `Removing fortunes-min on pc2 would remove fortunes`, explanation between title and legend, `marked as pc2's own` |
+| 5 | #228 repo deletion title | PASS | `A-228-repo-deletion.txt` — `Delete apt repositories pc1 no longer has` |
+| 6 | #229 snap align wording | PASS | `A-229-snap-align.txt` — title `Align snap package versions`, `&lt;y&gt; align`, detail `overwrites revision 29 on pc2 with revision 42 from pc1` |
+| 7 | #230 /opt install title | PASS | `A-230-opt-install.txt` — `Install /opt/pcsw-uat-app on pc2?` |
+| 8 | #235 named bar during flatpak pre-loop | PASS | `B-flatpak-progress.txt` — `flatpak_sync: remote filters ━━━ 0%` before any item completes; also `apt_sync: sl (5.02-1) 0%`, `snap_sync: hello ... 0%` |
+| 9 | #236 snippet editor collapses to title + body | PASS | `B-236-snippet.txt` — note and `(Ctrl-D to finish)` gone from scrollback |
+| 10 | #237 no trailing blank line in `body:` | PASS | `B-237-snippets.txt` (`cat -A`) — single-line scalar although a trailing Enter was typed |
+| 11 | #238 per-item FULL action lines | PASS | `B-238-fulllog.txt` — `"level": "FULL" … "apt: install sl (5.02-1) on pc2"`, plus snap/flatpak/manual equivalents |
+| 12 | #224 tool abort vs user abort | PASS | `C-abort-tool.txt` — `Sync aborted: pc2 holds apt package(s) it does not have installed: cmatrix…`, 0 hits for "aborted by user"; `D-abort-user.txt` — `Sync aborted by user: fortunes on pc2 would have been removed or downgraded; the whole sync was stopped in the package review` |
+| 13 | #231 no first-sync confirmation on a TTY with `--allow-first-sync` | PASS | `B-apply.txt:151` — WARNING `First Sync — pc2 Will Be Overwritten — auto-approved by --allow-first-sync`, no `Continue anyway?` anywhere |
+| 14 | #233/#234 snapd pause lines | PASS | `B-snapd-pause.txt` — one line per machine (`on pc1`, `on pc2`): `Pausing snapd auto-refresh on pc1 for the whole run — held by the orchestrator, not by snap_sync alone, because snap_sync converges each snap's revision and folder_sync then mirrors that revision's data directory; a refresh between the two drops it from the mirror` |
+
+Notes worth passing on:
+- The apply run (`B`) completed successfully and converged as the runbook expects: pc2 ended with `sl` installed+held, `cmatrix` absent, `fortunes`/`fortunes-min` removed via the collateral answer, `cowsay` kept for good, `/opt/pcsw-uat-app` created from the snippet, `/opt/pcsw-uat-vendor` absent.
+- `preparing remotes` (the very first `_report_progress` in flatpak `apply()`) never appeared in a rendered frame — it was superseded within one refresh tick because pc2 already had `flathub`, so `_derived_remotes` was empty. `remote filters` covers the same pre-loop window, so #235 still holds.
+- Non-blocking cosmetic observation, not on the check list: `snap_sync` writes FULL log lines `source snap refresh.hold: (none)` / `target snap refresh.hold: (none)` using the words "source"/"target" rather than hostnames (`src/pcswitcher/jobs/snap_sync.py:829,831`), which the runbook's own rule calls a finding.</result>
+<usage><subagent_tokens>144246</subagent_tokens><tool_uses>67</tool_uses><duration_ms>999806</duration_ms></usage>
+</task-notification>
+
+---
+
+#234 right, I didn't look well. the host is always indicated on each log line. So no need to do anything. Revert what you did for it. No need to duplicate the host in the log message itself.
+
+---
+
+<task-notification>
+<task-id>bu718bhjd</task-id>
+<tool-use-id>toolu_01BsBJ4Szs8wBT4YpFiVhntv</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/a6fdf859-1f12-4daf-94eb-8369ba71837c/tasks/bu718bhjd.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for CI after revert push" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+drop role prefix entirely
+
+---
+
+<task-notification>
+<task-id>bfz35r3i8</task-id>
+<tool-use-id>toolu_01D5UzDJZP1iFFHPW2poEQL2</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/a6fdf859-1f12-4daf-94eb-8369ba71837c/tasks/bfz35r3i8.output</output-file>
+<status>killed</status>
+<summary>Background command "Wait for CI on the role-prefix commit" was stopped</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b0b77a7i5</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/a6fdf859-1f12-4daf-94eb-8369ba71837c/tasks/b0b77a7i5.output</output-file>
+<status>killed</status>
+<summary>Background command "Resume waiting for integration tests" was stopped</summary>
+</task-notification>
+
+---
+
+Resolve #239 and #240
