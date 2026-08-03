@@ -24,9 +24,9 @@ finishing it or stopping.
 
 What is gated is everything that is not purely read-only, which is wider than "changes a
 file": a `flock` that seizes the target's sync lock, a background process started and left
-running, a `sudo` probe that primes the credential cache — each changes the machine while
-writing nothing, and each is something a user stepping through a run must be able to
-refuse. A call is ungated only when it can change no state at all.
+running — each changes the machine while writing nothing, and each is something a user
+stepping through a run must be able to refuse. A call is ungated only when it can change no
+state at all. Elevation is not a change: `sudo <read-only command>` stays a read.
 
 Generic on purpose, and invoked from exactly one place: `pcswitcher.executor`. Any caller
 — job, orchestrator, helper — reaches this gate by passing `mutates="..."` to the executor
