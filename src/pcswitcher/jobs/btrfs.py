@@ -125,6 +125,8 @@ class BtrfsSnapshotJob(SystemJob):
         subvolumes: list[str] = self.context.config["subvolumes"]
         session_folder: str = self.context.config["session_folder"]
 
+        session_dir = f"/.snapshots/pc-switcher/{session_folder}"
+
         self._log(
             Host.SOURCE,
             LogLevel.INFO,
@@ -132,11 +134,20 @@ class BtrfsSnapshotJob(SystemJob):
             session_id=self.context.session_id,
         )
 
+        # The session folder holds every subvolume's snapshot, so it is created once per host
+        # instead of once per snapshot: the repeats can only be no-ops, and each one is another
+        # stop under --confirm-each-command.
+        if not self.context.dry_run:
+            await self.source.run_command(
+                f"sudo mkdir --parents {session_dir}",
+                mutates=f"create the snapshot session folder {session_dir}",
+            )
+
         # Create snapshots on source
         for subvol_name in subvolumes:
             mount_point = subvolume_to_mount_point(subvol_name)
             snap_name = snapshot_name(subvol_name, phase)
-            snap_path = f"/.snapshots/pc-switcher/{session_folder}/{snap_name}"
+            snap_path = f"{session_dir}/{snap_name}"
 
             self._log(
                 Host.SOURCE,
@@ -147,12 +158,6 @@ class BtrfsSnapshotJob(SystemJob):
             )
 
             if not self.context.dry_run:
-                # Create session folder if it doesn't exist
-                await self.source.run_command(
-                    f"sudo mkdir --parents /.snapshots/pc-switcher/{session_folder}",
-                    mutates=f"create the snapshot session folder /.snapshots/pc-switcher/{session_folder}",
-                )
-
                 result = await create_snapshot(self.source, mount_point, snap_path)
 
                 if result.exit_code != 0:
@@ -170,11 +175,17 @@ class BtrfsSnapshotJob(SystemJob):
                 f"Successfully created snapshot {snap_name}",
             )
 
+        if not self.context.dry_run:
+            await self.target.run_command(
+                f"sudo mkdir --parents {session_dir}",
+                mutates=f"create the snapshot session folder {session_dir}",
+            )
+
         # Create snapshots on target
         for subvol_name in subvolumes:
             mount_point = subvolume_to_mount_point(subvol_name)
             snap_name = snapshot_name(subvol_name, phase)
-            snap_path = f"/.snapshots/pc-switcher/{session_folder}/{snap_name}"
+            snap_path = f"{session_dir}/{snap_name}"
 
             self._log(
                 Host.TARGET,
@@ -185,12 +196,6 @@ class BtrfsSnapshotJob(SystemJob):
             )
 
             if not self.context.dry_run:
-                # Create session folder if it doesn't exist
-                await self.target.run_command(
-                    f"sudo mkdir --parents /.snapshots/pc-switcher/{session_folder}",
-                    mutates=f"create the snapshot session folder /.snapshots/pc-switcher/{session_folder}",
-                )
-
                 result = await create_snapshot(self.target, mount_point, snap_path)
 
                 if result.exit_code != 0:
