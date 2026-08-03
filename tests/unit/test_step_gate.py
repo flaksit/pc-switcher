@@ -24,6 +24,7 @@ from pcswitcher.lock import start_persistent_remote_lock
 from pcswitcher.models import Host, SyncAborted, SyncAbortedByUser
 from pcswitcher.orchestrator import Orchestrator
 from pcswitcher.step_gate import StepGate, TerminalUIStepGate
+from pcswitcher.terminal import read_single_key
 
 
 def _make_gate() -> tuple[TerminalUIStepGate, MagicMock]:
@@ -69,7 +70,7 @@ class TestTerminalUIStepGate:
     async def test_proceed_returns_and_toggles_ui(self) -> None:
         """J151 — proceeding runs the command and hands the display back."""
         gate, ui = _make_gate()
-        with patch("rich.prompt.Prompt.ask", return_value="p"):
+        with patch("pcswitcher.step_gate.read_single_key", return_value="p"):
             await gate.confirm_action(job="apt_sync", host=Host.TARGET, description="install x", command="apt-get x")
         ui.pause.assert_called_once()
         ui.resume.assert_called_once()
@@ -77,7 +78,7 @@ class TestTerminalUIStepGate:
     async def test_abort_raises_and_resumes_ui(self) -> None:
         """H155 — aborting at the prompt stops the sync and hands the display back."""
         gate, ui = _make_gate()
-        with patch("rich.prompt.Prompt.ask", return_value="a"), pytest.raises(SyncAbortedByUser):
+        with patch("pcswitcher.step_gate.read_single_key", return_value="a"), pytest.raises(SyncAbortedByUser):
             await gate.confirm_action(job="apt_sync", host=Host.TARGET, description="install x", command="apt-get x")
         ui.resume.assert_called_once()
 
@@ -87,7 +88,10 @@ class TestTerminalUIStepGate:
         never silently succeed."""
         gate, ui = _make_gate()
         # The base class, never `SyncAbortedByUser`: nobody answered this prompt (#224).
-        with patch("rich.prompt.Prompt.ask", side_effect=interrupt), pytest.raises(SyncAborted) as caught:
+        with (
+            patch("pcswitcher.step_gate.read_single_key", side_effect=interrupt),
+            pytest.raises(SyncAborted) as caught,
+        ):
             await gate.confirm_action(job="snap_sync", host=Host.SOURCE, description="d", command="c")
         assert not isinstance(caught.value, SyncAbortedByUser)
         ui.resume.assert_called_once()
@@ -98,7 +102,7 @@ class TestTerminalUIStepGate:
         ui = MagicMock()
         console = Console(record=True, width=100)
         gate = TerminalUIStepGate(console, ui, source_hostname="atlas", target_hostname="nomad")
-        with patch("rich.prompt.Prompt.ask", return_value="p"):
+        with patch("pcswitcher.step_gate.read_single_key", return_value="p"):
             await gate.confirm_action(job="apt_sync", host=Host.TARGET, description="install x", command="apt-get x")
 
         rendered = console.export_text()
@@ -108,50 +112,144 @@ class TestTerminalUIStepGate:
     async def test_the_abort_message_names_the_machine_by_hostname(self) -> None:
         """J163, H71 — the abort names the hostname, not the role."""
         gate, _ui = _make_gate()
-        with patch("rich.prompt.Prompt.ask", return_value="a"), pytest.raises(SyncAbortedByUser) as excinfo:
+        with (
+            patch("pcswitcher.step_gate.read_single_key", return_value="a"),
+            pytest.raises(SyncAbortedByUser) as excinfo,
+        ):
             await gate.confirm_action(job="snap_sync", host=Host.SOURCE, description="pause refreshes", command="c")
         assert "on atlas" in str(excinfo.value)
         assert "source" not in str(excinfo.value)
 
-    async def test_the_prompt_offers_no_default(self) -> None:
+    async def test_the_prompt_accepts_only_the_two_keys(self) -> None:
         """J164 — `PKG-FR-HARMLESS-DEFAULT` has no answer to give here: proceeding and
-        aborting are both consequential, so an accidental Enter must re-prompt rather than
-        pick one. Asserted on the call, since a `default=` would be invisible in the
-        rendered panel.
+        aborting are both consequential, so no third key may resolve the prompt. Asserted
+        on the call, since the accepted set is invisible in the rendered panel; that an
+        unaccepted key keeps waiting is `TestReadSingleKey`.
         """
         gate, _ui = _make_gate()
-        with patch("rich.prompt.Prompt.ask", return_value="p") as ask:
+        with patch("pcswitcher.step_gate.read_single_key", return_value="p") as read:
             await gate.confirm_action(job="apt_sync", host=Host.TARGET, description="install x", command="apt-get x")
 
-        assert "default" not in ask.call_args.kwargs
+        assert list(read.call_args.args[0]) == ["p", "a"]
 
     async def test_the_prompt_shows_both_keys(self) -> None:
         """J174 — the legend has to survive Rich's markup parser before the user sees it.
 
-        Asserted on the RENDERED prompt, not the string handed to `Prompt.ask`: square
-        brackets read as style tags, so a `[p] proceed` legend passes any check on the raw
-        text and still reaches the terminal as a bare word with no key to press.
+        Asserted on the RENDERED prompt: square brackets read as style tags, so a
+        `[p] proceed` legend passes any check on the raw text and still reaches the terminal
+        as a bare word with no key to press.
         """
-        gate, _ui = _make_gate()
-        with patch("rich.prompt.Prompt.ask", return_value="p") as ask:
+        ui = MagicMock()
+        console = Console(record=True, width=100)
+        gate = TerminalUIStepGate(console, ui, source_hostname="atlas", target_hostname="nomad")
+        with patch("pcswitcher.step_gate.read_single_key", return_value="p"):
             await gate.confirm_action(job="apt_sync", host=Host.TARGET, description="install x", command="apt-get x")
 
-        console = Console(record=True, width=100)
-        console.print(ask.call_args.args[0])
         rendered = console.export_text()
         assert "<p> proceed" in rendered
         assert "<a> abort sync" in rendered
 
+    async def test_the_answered_key_is_echoed(self) -> None:
+        """J181 — nothing echoes in cbreak mode, so the gate prints the key that registered.
+
+        The prompt commits on the keypress itself, so a user who sees no answer cannot tell
+        a key that landed from one the terminal dropped — least acceptably for the abort.
+        """
+        ui = MagicMock()
+        console = Console(record=True, width=100)
+        gate = TerminalUIStepGate(console, ui, source_hostname="atlas", target_hostname="nomad")
+        with patch("pcswitcher.step_gate.read_single_key", return_value="a"), pytest.raises(SyncAbortedByUser):
+            await gate.confirm_action(job="apt_sync", host=Host.TARGET, description="install x", command="apt-get x")
+
+        assert console.export_text().rstrip().endswith("abort sync a")
+
     async def test_command_with_markup_characters_does_not_raise(self) -> None:
         """J167 — a command containing Rich markup syntax renders as literal text."""
         gate, _ui = _make_gate()
-        with patch("rich.prompt.Prompt.ask", return_value="p"):
+        with patch("pcswitcher.step_gate.read_single_key", return_value="p"):
             await gate.confirm_action(
                 job="manual_installs_sync",
                 host=Host.TARGET,
                 description="replay snippet",
                 command="bash -c 'echo [not-a-tag] [/bold]'",
             )
+
+
+@contextmanager
+def _keys(*pressed: str) -> Generator[tuple[MagicMock, MagicMock]]:
+    """A fake TTY stdin delivering `pressed` one read at a time; yields it and termios.
+
+    `termios`/`tty` are stubbed rather than driven against a real pty: what is under test is
+    which key resolves the read and what is discarded around it, not the ioctls.
+    """
+    stdin = MagicMock()
+    stdin.isatty.return_value = True
+    stdin.fileno.return_value = 0
+    stdin.read.side_effect = list(pressed)
+    with (
+        patch("pcswitcher.terminal.sys.stdin", stdin),
+        patch("pcswitcher.terminal.termios") as termios,
+        patch("pcswitcher.terminal.tty"),
+    ):
+        yield stdin, termios
+
+
+class TestReadSingleKey:
+    """One keypress answers the gate, and nothing else may answer it for the user (#241)."""
+
+    def test_the_key_alone_answers_with_no_enter(self) -> None:
+        """J182 — the read returns on the keypress; a run under the flag asks dozens of times."""
+        with _keys("p") as (stdin, _termios):
+            assert read_single_key(["p", "a"]) == "p"
+        assert stdin.read.call_count == 1
+
+    def test_an_unaccepted_key_keeps_the_read_waiting(self) -> None:
+        """J164, J182 — Enter included: with no default, neither outcome may be picked for the user."""
+        with _keys("\r", "\n", "x", "a"):
+            assert read_single_key(["p", "a"]) == "a"
+
+    def test_the_key_is_matched_case_insensitively(self) -> None:
+        """J182 — a held Shift or Caps Lock is not a different answer."""
+        with _keys("A"):
+            assert read_single_key(["p", "a"]) == "a"
+
+    def test_input_queued_before_the_prompt_is_discarded(self) -> None:
+        """J183 — a key pressed while the previous command ran must not answer the next prompt.
+
+        The hazard a single-key prompt adds: with no line to review, typeahead commits an
+        operation the user has not seen. Asserted on the ORDER — a flush after the first read
+        discards nothing.
+        """
+        with _keys("p") as (stdin, termios):
+            calls = MagicMock()
+            calls.attach_mock(termios.tcflush, "flush")
+            calls.attach_mock(stdin.read, "read")
+            read_single_key(["p", "a"])
+
+        assert [call[0] for call in calls.mock_calls][:2] == ["flush", "read"]
+        assert termios.tcflush.call_args.args == (0, termios.TCIFLUSH)
+
+    @pytest.mark.parametrize(
+        ("key", "expected"),
+        [("\x03", KeyboardInterrupt), ("\x04", EOFError), ("", EOFError)],
+    )
+    def test_interrupt_and_eof_are_raised_not_returned(self, key: str, expected: type[BaseException]) -> None:
+        """J165 — cbreak delivers Ctrl-C as a byte, so it is re-raised: unanswerable is not approval."""
+        with _keys(key), pytest.raises(expected):
+            read_single_key(["p", "a"])
+
+    def test_the_terminal_is_restored_even_when_the_read_raises(self) -> None:
+        """J184 — a cbreak terminal left behind would outlive the process and the abort message."""
+        with _keys("\x03") as (_stdin, termios), pytest.raises(KeyboardInterrupt):
+            read_single_key(["p", "a"])
+        termios.tcsetattr.assert_called_once()
+
+    def test_without_a_tty_the_prompt_falls_back_to_a_line(self) -> None:
+        """J184 — no terminal to put in cbreak mode; the prompt stays answerable rather than raising."""
+        stdin = MagicMock()
+        stdin.isatty.return_value = False
+        with patch("pcswitcher.terminal.sys.stdin", stdin), patch("builtins.input", side_effect=["", "a"]):
+            assert read_single_key(["p", "a"]) == "a"
 
 
 @pytest.mark.asyncio

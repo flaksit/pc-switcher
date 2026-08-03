@@ -16,8 +16,8 @@ nobody is there to answer. This gate has no such fallback and never auto-proceed
 opt-in per run and refused outright without a TTY (`cli.sync`), because a gate that
 auto-proceeds when unanswerable is precisely the failure it exists to prevent.
 
-Two outcomes only, with no default (the user must type one): proceed, or abort the whole
-sync. There is deliberately no "skip this command" — a single reviewed item can span
+Two outcomes only, decided by a single keypress with no default and no Enter: proceed, or
+abort the whole sync. There is deliberately no "skip this command" — a single reviewed item can span
 several commands (apt source stage-then-promote, snap install-then-switch-channel), so
 skipping one of them leaves that item half-applied, which is a worse state than either
 finishing it or stopping.
@@ -44,11 +44,11 @@ from typing import Protocol, runtime_checkable
 
 from rich.console import Console
 from rich.panel import Panel
-from rich.prompt import Prompt
 from rich.text import Text
 
 from pcswitcher.confirmer import PausableUI
 from pcswitcher.models import Host, SyncAborted, SyncAbortedByUser
+from pcswitcher.terminal import read_single_key
 
 __all__ = ["StepGate", "TerminalUIStepGate"]
 
@@ -74,7 +74,7 @@ class StepGate(Protocol):
             None when the user chose to proceed.
 
         Raises:
-            SyncAbortedByUser: The user typed "abort".
+            SyncAbortedByUser: The user pressed the abort key.
             SyncAborted: The prompt could not be answered (EOF / Ctrl-C), so nobody
                 decided anything. Never swallowed into a silent "proceed".
         """
@@ -126,18 +126,24 @@ class TerminalUIStepGate:
             self._console.print()
             self._console.print(Panel(body, title="Confirm modification", border_style="yellow"))
             self._console.print()
-            # No `default=`: the user must type a choice. An accidental Enter re-prompts
-            # rather than picking either outcome for them.
+            # One keypress decides, with no Enter to follow it (#241) — a run under this
+            # flag answers this question dozens of times, and the second key is friction on
+            # every one of them. No default and no other accepted key: an accidental Enter
+            # is discarded and the read continues rather than picking an outcome.
             #
             # `<p>`, not `[p]`: Rich reads square brackets as markup and silently swallows
             # `[p]`/`[a]`, leaving the legend as bare words with no keys. Angle brackets are
             # also what the package-review screens use, so both prompts read alike.
-            response = Prompt.ask(
-                f"[bold]Run this?[/bold] <{_PROCEED}> proceed  <{_ABORT}> abort sync",
-                choices=[_PROCEED, _ABORT],
-                show_choices=False,
+            self._console.print(
+                f"[bold]Run this?[/bold] <{_PROCEED}> proceed  <{_ABORT}> abort sync ",
+                end="",
             )
+            response = read_single_key([_PROCEED, _ABORT])
+            # Nothing echoes in cbreak mode, so the answer is printed back: the user must
+            # see which key registered, especially the one that aborts the run.
+            self._console.print(response)
         except (EOFError, KeyboardInterrupt) as exc:
+            self._console.print()  # close the unanswered prompt line
             # Unanswerable is not approval: the same rule the review applies to Ctrl-C.
             # Plain `SyncAborted` — an EOF means nobody was there to answer at all, so
             # this end of the run is not one to put on the user (#224).

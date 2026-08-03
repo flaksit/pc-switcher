@@ -412,12 +412,12 @@ Field-level definitions live in the [Data Model](data-model.md); this is the voc
 
 What the prompt shows is the job and the hostname of the machine about to be changed, then what the change does, then the operation itself: the literal string handed to the shell, or `send_file <local> -> <remote>` for a transfer. Naming the machine once in the heading is why the `mutates=` phrase below it does not repeat it (`PKG-FR-NAME-THE-MACHINES`). Nothing is paraphrased, because a display string that can differ from what executes is worse than no display. The one thing withheld is the userinfo of any URL in it (`LOG-FR-CREDENTIAL-REDACTION`), since this is the one route out of the executor that never becomes a log record for the logging filter to catch.
 
-Two outcomes, no default — the user types one:
+Two outcomes, no default — one keypress decides, with no Enter after it (a run under this flag asks the question dozens of times):
 
 - **proceed** — run this operation, then continue to the next prompt.
 - **abort sync** — raise `SyncAbortedByUser` and stop the whole run.
 
-There is deliberately no "skip this one". A single approved outcome can span several commands, so skipping one of them leaves it half-applied — worse than either finishing it or stopping. An unanswerable prompt (EOF, Ctrl-C) is an abort, never an approval — but a plain `SyncAborted`, since nobody answered it.
+Any other key is discarded and the prompt keeps waiting, so an accidental Enter picks neither outcome; so is anything typed before the prompt appeared, which stops a key pressed during the previous command from answering a question the user has not seen. There is deliberately no "skip this one". A single approved outcome can span several commands, so skipping one of them leaves it half-applied — worse than either finishing it or stopping. An unanswerable prompt (EOF, Ctrl-C) is an abort, never an approval — but a plain `SyncAborted`, since nobody answered it.
 
 The flag requires a TTY on both stdin and stdout and is refused at startup without one: a gate with a non-interactive fallback would have to auto-proceed, which is exactly what it exists to prevent. It has no config-file equivalent — it is a per-run decision.
 
