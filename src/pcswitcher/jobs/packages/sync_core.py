@@ -415,9 +415,9 @@ class PackageSyncJob(SyncJob):
         disappears, none of which pc-switcher is involved in: a hand `apt remove`, a
         deleted file, a reinstall.
 
-        Never during a dry run (ADR-014 — a rehearsal leaves no trace), and nothing is
-        written for a file with nothing dead in it, so the ordinary run issues no command
-        here at all.
+        Never during a dry run (ADR-014 — a rehearsal leaves no trace). The cost on an
+        ordinary run is the two `cat`s that read the files; a file with nothing dead in it
+        is not rewritten, and a machine with no marks at all is not asked what it holds.
 
         One INFO line per dropped mark (`PKG-FR-LOG-DECISIONS`'s reason applies to it: a
         mark is the user's own answer, so it does not evaporate silently). The write itself
