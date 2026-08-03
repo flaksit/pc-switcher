@@ -3,7 +3,7 @@
   "checkpoint_id": "92a97bd36fa7",
   "strategy": "manual-commit",
   "branch": "gsd/phase-02-package-management-sync",
-  "checkpoints_count": 3,
+  "checkpoints_count": 9,
   "files_touched": [
     ".planning/phases/02-package-management-sync/02-UAT-01-RUNBOOK.md"
   ],
@@ -14,13 +14,20 @@
       "compact_transcript": "/92/a97bd36fa7/0/transcript.jsonl",
       "content_hash": "/92/a97bd36fa7/0/content_hash.txt",
       "prompt": "/92/a97bd36fa7/0/prompt.txt"
+    },
+    {
+      "metadata": "/92/a97bd36fa7/1/metadata.json",
+      "transcript": "/92/a97bd36fa7/1/full.jsonl",
+      "compact_transcript": "/92/a97bd36fa7/1/transcript.jsonl",
+      "content_hash": "/92/a97bd36fa7/1/content_hash.txt",
+      "prompt": "/92/a97bd36fa7/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 47,
-    "cache_creation_tokens": 27839,
-    "cache_read_tokens": 4461554,
-    "output_tokens": 13771,
-    "api_call_count": 25
+    "input_tokens": 112,
+    "cache_creation_tokens": 61073,
+    "cache_read_tokens": 9260090,
+    "output_tokens": 35041,
+    "api_call_count": 60
   }
 }
