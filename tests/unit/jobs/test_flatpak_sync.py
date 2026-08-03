@@ -3502,6 +3502,45 @@ class TestRemoteFilterReplicates:
         assert not any("flatpak install" in cmd for cmd in all_calls(target))
 
     @pytest.mark.asyncio
+    async def test_every_denied_app_on_every_filtered_remote_is_named_at_once(self, tmp_path: Path) -> None:
+        """F156 — the abort covers both scopes and every filtered remote in them, grouped by
+        remote because one filter file is one repair.
+
+        Ending on the first denied application would have the user correct that filter, sync
+        again, and only then learn of the second application and the second remote.
+        """
+        user_filter = self._filter_file(tmp_path, content="deny *\n")
+        system_filter = tmp_path / "filters" / "other.filter"
+        _ = system_filter.write_text("deny *\n")
+        apps = (
+            "org.example.App\t1.0\tcustomremote\tuser\torg.example.App/x86_64/stable\n"
+            "org.example.Two\t1.0\tcustomremote\tuser\torg.example.Two/x86_64/stable\n"
+            "org.other.App\t1.0\totherremote\tsystem\torg.other.App/x86_64/stable\n"
+        )
+        context, _source, target = make_context(
+            source_responses=derivation_source(
+                remotes=remote_row("customremote", self._URL, ref_filter=str(user_filter)),
+                system_remotes=remote_row("otherremote", self._URL, ref_filter=str(system_filter)),
+                apps=apps,
+            )
+            | self._listing(CommandResult(0, "", "")),
+            fake_target=self._target(),
+        )
+
+        with pytest.raises(SyncAborted) as raised:
+            _ = await FlatpakSyncJob(context).plan()
+
+        message = str(raised.value)
+        assert (
+            f"  user-scope remote customremote, ref filter {user_filter}: "
+            f"org.example.App/x86_64/stable, org.example.Two/x86_64/stable"
+        ) in message
+        assert (
+            f"  system-scope remote otherremote, ref filter {system_filter}: org.other.App/x86_64/stable"
+        ) in message
+        assert not any("flatpak install" in cmd for cmd in all_calls(target))
+
+    @pytest.mark.asyncio
     async def test_a_listing_flatpak_will_not_produce_does_not_end_the_run(self, tmp_path: Path) -> None:
         """F151 — An abort needs certainty, and flatpak declines to answer at all for a filter
         file it cannot parse (`error: Failed to parse filter <path>`, exit 1, measured) as for a

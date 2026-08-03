@@ -1013,6 +1013,7 @@ Driven by the orchestrator around the whole job window; listed here because the 
 | F151 | flatpak will not say what the remote offers — the filter file is one it refuses to parse, or the remote is unreachable | The run does not end: nothing can be said about what such a filter denies, so the applications proceed and flatpak's own error reaches the user when the filter is applied | U | `test_flatpak_sync:TestRemoteFilterReplicates::test_a_listing_flatpak_will_not_produce_does_not_end_the_run` |
 | F154 | The remote offers, under Atlas's filter, every application Atlas installed from it | The run goes on, and the remote was asked once | U | `test_flatpak_sync:TestRemoteFilterReplicates::test_a_filter_that_denies_nothing_asks_the_remote_once` |
 | F155 | Applications come from a remote Atlas does not filter | That remote is never asked what it offers, so an unfiltered remote can end no run whatever it carries | U | `test_flatpak_sync:TestRemoteFilterReplicates::test_an_unfiltered_remote_is_never_asked_what_it_offers` |
+| F156 | Two applications denied by one user-scope remote's filter and a third denied by a system-scope remote's | One ending names all three, grouped by remote with each remote's own filter — one filter file is one repair, and the user makes them all before syncing again | U | `test_flatpak_sync:TestRemoteFilterReplicates::test_every_denied_app_on_every_filtered_remote_is_named_at_once` |
 
 ### F.12 The third installation scope (article: PKG-FR-FLATPAK-THIRD-SCOPE)
 

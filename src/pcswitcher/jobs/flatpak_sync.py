@@ -1706,9 +1706,16 @@ class FlatpakSyncJob(PackageSyncJob):
         under this filter, does not offer this app — with both repairs named and neither
         blamed. Nothing is measured at all when flatpak declines to answer, and nothing is
         claimed then either.
+
+        Every filtered remote in both scopes is asked before anything is raised, and the one
+        abort lists every application each of them denies: aborting on the first would have
+        the user correct one filter, sync again, and only then be told about the next. The
+        listing is grouped by remote because the repair is per remote — one filter file to
+        correct, whatever number of its own applications it withholds.
         """
         filtered = {item.item_id: item for item in source_remotes if item.filter_path is not None}
         offered_by: dict[str, frozenset[str] | None] = {}
+        denied: dict[tuple[str, str, str], list[str]] = {}
         for ref in source_refs:
             remote = filtered.get(f"{_REMOTE_ITEM_ID_PREFIX}{ref.scope}:{ref.origin}")
             if remote is None or remote.filter_path is None:
@@ -1718,14 +1725,22 @@ class FlatpakSyncJob(PackageSyncJob):
             offered = offered_by[remote.item_id]
             if offered is None or f"{_APP_REF_PREFIX}{ref.ref}" in offered:
                 continue
-            raise SyncAborted(
-                f"{self.machines.source} has the {ref.scope}-scope flatpak {ref.ref} installed from the remote "
-                f"{ref.origin}, which does not offer it under the ref filter {remote.filter_path} that "
-                f"{self.machines.source} applies to that remote. That filter would be applied to "
-                f"{self.machines.target} before anything installs from that remote, so replicating the two together "
-                f"is impossible; correct the filter — or, if {ref.origin} no longer carries {ref.ref} at all, "
-                f"uninstall it from {self.machines.source} — before syncing again"
-            )
+            denied.setdefault((ref.scope, ref.origin, remote.filter_path), []).append(ref.ref)
+        if not denied:
+            return
+        listing = "\n".join(
+            f"  {scope}-scope remote {origin}, ref filter {filter_path}: {', '.join(sorted(refs))}"
+            for (scope, origin, filter_path), refs in sorted(denied.items())
+        )
+        raise SyncAborted(
+            f"{self.machines.source} has flatpaks installed from remotes that do not offer them under the ref "
+            f"filter {self.machines.source} applies to those remotes:\n"
+            f"{listing}\n"
+            f"Those filters would be applied to {self.machines.target} before anything installs from those "
+            f"remotes, so replicating each remote and its own applications together is impossible; correct the "
+            f"filter — or, where the remote no longer carries the application at all, uninstall it from "
+            f"{self.machines.source} — before syncing again"
+        )
 
     def _capture_remote_conflicts(
         self,
