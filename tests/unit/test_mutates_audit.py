@@ -166,14 +166,6 @@ _READ_ONLY_CALLS: dict[str, int] = {
     # The version a held package's failed install names alongside the source's
     # (`PKG-FR-APT-HOLD-VERSION`): one `apt-cache policy`, on the refusal path only.
     "jobs/apt_sync/packages.py::PackageConverger._held_version_refusal::run_command": 1,
-    # `AptProbe` holds every read this job issues, so the two per-host wrappers below carry
-    # all of them that go through a `run` callable: the five `/etc/apt` directory digest
-    # listings, `/etc/apt/sources.list`, the two source-file reference scans (including the
-    # post-write re-scan keyring collection counts against), the `cat` of a file a diff
-    # implicates, `dpkg --search` over the key files, the `dpkg-query` version resolution and
-    # each machine's installed-package set (`capture_source_installed`/`_target_installed`).
-    "jobs/apt_sync/probe.py::AptProbe.source_run::run_command": 1,
-    "jobs/apt_sync/probe.py::AptProbe.target_run::run_command": 1,
     "jobs/apt_sync/probe.py::AptProbe.source_manual_names::run_command": 1,
     "jobs/apt_sync/probe.py::AptProbe.source_policy::run_command": 1,
     "jobs/apt_sync/probe.py::AptProbe.query_target_items::run_command": 1,
@@ -270,6 +262,20 @@ _TOLERATED_SIDE_EFFECTS: dict[str, _ToleratedSideEffect] = {
     ),
     "btrfs_snapshots.py::validate_subvolume_exists::run_command": _ToleratedSideEffect(
         1, "`sudo btrfs subvolume show <mount>` — reads whether the mount point is a subvolume; sudo timestamp only"
+    ),
+    # `AptProbe` holds every read this job issues, so these two per-host wrappers carry all
+    # of them that go through a `run` callable: the five `/etc/apt` directory digest
+    # listings, `/etc/apt/sources.list`, the two source-file reference scans (including the
+    # post-write re-scan keyring collection counts against), the `cat` of a file a diff
+    # implicates, `dpkg --search` over the key files, the `dpkg-query` version resolution and
+    # each machine's installed-package set (`capture_source_installed`/`_target_installed`).
+    "jobs/apt_sync/probe.py::AptProbe.source_run::run_command": _ToleratedSideEffect(
+        1,
+        "the /etc/apt reads are `sudo`-qualified (`sudo test -d`, `sudo find … sha256sum`, `sudo cat`) because "
+        "keyrings and some fragments are root-only; each prints and exits, leaving sudo's timestamp only",
+    ),
+    "jobs/apt_sync/probe.py::AptProbe.target_run::run_command": _ToleratedSideEffect(
+        1, "the same reads on the target, through the same command builders"
     ),
     "jobs/apt_sync/job.py::AptSyncJob.validate::run_command": _ToleratedSideEffect(
         1,
