@@ -215,6 +215,7 @@ The registry is shared config: pc1 pushes it once an answer authorizes it, and i
 ssh testuser@"$PC2" 'cd /tmp && sudo snap download hello-world --basename=uat-hello-world && sudo snap remove hello-world && sudo snap install --dangerous /tmp/uat-hello-world.snap'
 ssh testuser@"$PC2" 'printf "snippets:\n  \"unreproducible:unowned-path:/opt/pcsw-uat-pc2\":\n    label: /opt/pcsw-uat-pc2\n    body: \"true\"\n    authored_at: \"2026-07-30T00:00:00+00:00\"\n    authored_on: pc2\n" > ~/.config/pc-switcher/package-snippets.yaml'
 ssh testuser@"$PC1" 'touch ~/.config/pc-switcher/pcsw-uat-mirrored'
+
 ssh testuser@"$PC1" '~/.local/bin/pc-switcher sync pc2 --yes --allow-first-sync --allow-out-of-order'   # first run
 ssh testuser@"$PC1" 'grep -c "send_file.*package-snippets.yaml" "$(ls -t ~/.local/share/pc-switcher/logs/sync-*.log | head -1)"'
 ssh testuser@"$PC2" 'snap list hello-world'      # still the sideloaded x-revision
@@ -228,8 +229,6 @@ ssh testuser@"$PC1" 'sudo chmod 755 /opt'
 ```
 
 The second must end `Sync finished with failures:` and exit 1, naming one job and the command that failed: `manual_installs_sync`, on the scan of pc1's own `/opt`, quoted whole and ending `find: '/opt': Permission denied`. The other four jobs each reach their own outcome.
-
-Only a break `validate()` cannot see gets that far. Taking `snap` or `flatpak` away instead is a validation error, and the run is refused before any job starts.
 
 ## 8. Cleanup
 
