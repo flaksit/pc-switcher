@@ -111,6 +111,11 @@ async def _package_sync_subjects(vm_test_fixtures: None) -> None:  # pyright: ig
 # any test asks for.
 _RDEPENDS_PROBE_LIMIT = 40
 
+# How many candidates beyond the requested count to rehearse, so apt refusing a few still
+# leaves enough. Every one costs an `apt-get --dry-run remove` on the target, and no test in
+# this module asks for more than three subjects.
+_REMOVAL_REHEARSAL_HEADROOM = 4
+
 
 def nonblank_lines(text: str) -> list[str]:
     """Split command output into stripped, non-empty lines."""
@@ -247,12 +252,46 @@ def _no_apt_candidate_message() -> str:
     )
 
 
+async def _apt_would_remove_these(executor: BashLoginRemoteExecutor, names: Sequence[str]) -> set[str]:
+    """Of `names`, the ones `executor`'s own apt would actually carry out a removal for --
+    one `apt-get --dry-run remove` each, batched into a single command
+    (testing-guide.md's command-grouping rule).
+
+    `pick_safe_removal_candidates` reads `apt-cache rdepends --installed` and rejects a
+    candidate whose reverse dependencies include a MANUALLY-installed package. That misses
+    the packages nothing marks manual and apt still refuses to let go: an essential one
+    (`bash` was the case that failed here) is a reverse dependency like any other, so a
+    candidate that takes one with it passes the rdepends check and then fails the real
+    removal. Only apt can settle that, so it is asked.
+
+    Individually safe implies safe together: a batch's removal closure is the union of the
+    single ones, so nothing here needs to rehearse the combination.
+    """
+    if not names:
+        return set()
+    quoted = " ".join(shlex.quote(name) for name in names)
+    result = await executor.run_command(
+        f'for p in {quoted}; do echo "{RDEPENDS_MARKER}$p"; '
+        'if apt-get --dry-run remove --assume-yes "$p" > /dev/null 2>&1; then echo SAFE; fi; done',
+        login_shell=False,
+        timeout=120.0,
+    )
+    safe: set[str] = set()
+    current = ""
+    for line in result.stdout.splitlines():
+        if line.startswith(RDEPENDS_MARKER):
+            current = line.removeprefix(RDEPENDS_MARKER)
+        elif line.strip() == "SAFE" and current:
+            safe.add(current)
+    return safe
+
+
 async def _find_removable_candidates(
     pc1_executor: BashLoginRemoteExecutor, pc2_executor: BashLoginRemoteExecutor, count: int = 1
 ) -> list[str]:
     """Query both VMs and pick up to `count` packages safe to remove from pc2 for a test
-    (see `pick_safe_removal_candidates`). Returns fewer than `count` -- possibly none --
-    when not enough candidates qualify.
+    (see `pick_safe_removal_candidates`, then `_apt_would_remove_these`). Returns fewer than
+    `count` -- possibly none -- when not enough candidates qualify.
     """
     pc1_manual_result = await pc1_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0)
     pc2_manual_result = await pc2_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0)
@@ -285,7 +324,13 @@ async def _find_removable_candidates(
     )
     reverse_deps_by_candidate = parse_batched_rdepends(rdepends_result.stdout)
 
-    return pick_safe_removal_candidates(pc1_manual, pc2_installed, pc2_manual, reverse_deps_by_candidate, count)
+    # A wider pool than asked for, then apt's own verdict on each: the rdepends check above
+    # cannot see a candidate that takes an essential package with it (`_apt_would_remove_these`).
+    picked = pick_safe_removal_candidates(
+        pc1_manual, pc2_installed, pc2_manual, reverse_deps_by_candidate, count + _REMOVAL_REHEARSAL_HEADROOM
+    )
+    removable = await _apt_would_remove_these(pc2_executor, picked)
+    return [name for name in picked if name in removable][:count]
 
 
 async def _removable_candidate(pc1_executor: BashLoginRemoteExecutor, pc2_executor: BashLoginRemoteExecutor) -> str:
@@ -374,11 +419,15 @@ def _package_sync_test_config(*, extra_sections: str = "", **enabled_jobs: bool)
     )
 
 
-def _folder_sync_section(folder_path: str) -> str:
-    """A `folder_sync` config section mirroring exactly `folder_path`, with no central
+def _folder_sync_section(*folder_paths: str) -> str:
+    """A `folder_sync` config section mirroring exactly `folder_paths`, with no central
     filter file (the schema makes `filter_file` optional).
+
+    Every path in ONE section: `folder_sync` is a mapping key, so two sections would make
+    the config a YAML document with a duplicate key and the run would end before any job.
     """
-    return f"folder_sync:\n  folders:\n    - path: {folder_path}\n      enabled: true\n"
+    folders = "".join(f"    - path: {path}\n      enabled: true\n" for path in folder_paths)
+    return f"folder_sync:\n  folders:\n{folders}"
 
 
 async def _write_package_sync_config(
@@ -2402,6 +2451,15 @@ class TestOneRunConvergesEveryManager:
             assert await _flatpak_remote_filter(pc1_executor, remote_name, scope) is None, (
                 f"pc1's {remote_name} still carries a ref filter, so run 4 cannot show a target-only one coming off"
             )
+            # The app comes off pc2 again, and only the app: a filter is converged as part of
+            # writing the remote an approved ref DERIVES, so a run 4 over a converged pair
+            # would have no ref item, derive no remote, and leave the filter alone for a
+            # reason that has nothing to do with what this asserts.
+            await pc2_executor.run_command(
+                f"{sudo}flatpak uninstall {scope_flag} --assumeyes {shlex.quote(application)}",
+                login_shell=False,
+                timeout=120.0,
+            )
             assert await _flatpak_remote_filter(pc2_executor, remote_name, scope) == recorded_filter_path, (
                 f"pc2's {remote_name} lost its ref filter before run 4 started; there is no target-only filter to "
                 "take off"
@@ -3029,7 +3087,7 @@ class TestWhatFolderSyncMayAndMayNotCarry:
 
             await _write_package_sync_config(
                 pc1_executor,
-                extra_sections=_folder_sync_section(snap_root) + _folder_sync_section(registry_dir),
+                extra_sections=_folder_sync_section(snap_root, registry_dir),
                 snap_sync=True,
                 manual_installs_sync=True,
                 folder_sync=True,
