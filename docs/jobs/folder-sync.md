@@ -8,6 +8,12 @@ Each folder is mirrored to the target, minus the paths its filter rules exclude.
 
 Disabling *every* configured folder leaves the job with nothing to mirror; it then reports **SKIPPED** rather than a successful mirror of nothing, and the run continues with the remaining jobs. A pass that transfers no files because the filters excluded everything is a different case — the mirror is correct, so that is SUCCESS.
 
+## Confirming each pass
+
+`pc-switcher sync <hostname> --confirm-each-command` asks before each rsync pass, showing the exact command and the target's hostname — rsync runs on the source, but the target is the machine that receives the files and loses the ones the source does not have. Answer **p** to run that pass or **a** to abort the whole sync.
+
+Most folders take one pass, which transfers and deletes together. A folder whose per-directory `.pcswitcher-filter` files are not yet on the target takes two, and each is asked separately: a copy pass that deletes nothing, then the deleting mirror. A `--dry-run` run asks too, and its prompt says the pass writes nothing.
+
 ## Filter rules
 
 Filter rules decide what is and isn't synced. They live in two kinds of file:

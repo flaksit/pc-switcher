@@ -881,6 +881,27 @@ class FolderSyncJob(SyncJob):
 
         return files_xfr, bytes_xfr, files_deleted
 
+    def _pass_mutates(self, folder: FolderEntry, label: str) -> str:
+        """What one rsync pass changes on the target, for `--confirm-each-command` (#209).
+
+        One phrase per pass, so a split folder asks twice and each question says which half
+        of the work it is about — the copy pass cannot delete anything, and the pass that
+        can is the one a user needs the chance to refuse.  The command shown beneath it
+        carries the filters and the destination verbatim, so the phrase says only what the
+        pass DOES.
+
+        A dry-run pass writes nothing and is announced all the same: the gate's rule is
+        mechanical (`tests/unit/test_mutates_audit.py`), and making the marker conditional
+        would leave a call site the audit reads as covered while it silently passes `None`.
+        Saying so in the phrase costs one honest prompt per folder in a run that was already
+        asking to be shown everything.
+        """
+        if self.context.dry_run:
+            return f"nothing — a --dry-run pass previews the mirror of {folder.path} without writing"
+        if label == PASS_COPY:
+            return f"copy {folder.path} across, deleting nothing"
+        return f"mirror {folder.path}, deleting files the source does not have"
+
     async def _run_rsync_pass(self, cmd: str, folder: FolderEntry, label: str) -> tuple[int, int, int]:
         """Run one rsync pass: spawn, stream progress/logs, and raise on non-zero exit.
 
@@ -889,8 +910,13 @@ class FolderSyncJob(SyncJob):
         (D-16), then checks the exit code.  Returns the pass's
         (files_transferred, bytes_transferred, files_deleted).  Shared by every pass
         `execute` runs, which name themselves via `label` (`copy` / `delete` / `mirror`).
+
+        The spawn is gated on the TARGET although the process is the source's: rsync reads
+        here and writes there, so the target is the machine the user is being asked about
+        (and the one the DEBUG trace attributes the pass to, since the command text names
+        both ends anyway).
         """
-        proc = await self.source.start_process(cmd)
+        proc = await self.source.start_process(cmd, mutates=self._pass_mutates(folder, label), changes=Host.TARGET)
         files_transferred, bytes_transferred, files_deleted = await self._stream_rsync(
             proc.read_stdout_chunks(), folder, label
         )

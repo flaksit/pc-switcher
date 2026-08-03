@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 import shlex
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -1535,3 +1535,48 @@ class TestExecuteNormalMode:
         with pytest.raises(RuntimeError):
             await job.execute()
         assert ctx.source.start_process.call_count == 1, "mirror must not run after a failed copy pass"
+
+
+@pytest.mark.asyncio
+class TestEveryPassIsAnnounced:
+    """#209 — the mirror is a modification like any other, so a run under
+    `--confirm-each-command` is asked about each pass, on the machine the pass changes.
+    """
+
+    async def _passes(self, ctx: JobContext) -> list[Mapping[str, Any]]:
+        """Run `execute` and return the keyword arguments each rsync pass was spawned with."""
+        ctx.source.start_process = AsyncMock(return_value=make_fake_process())  # pyright: ignore[reportAttributeAccessIssue]
+        await FolderSyncJob(ctx).execute()
+        return [call.kwargs for call in ctx.source.start_process.call_args_list]  # pyright: ignore[reportAttributeAccessIssue]
+
+    async def test_the_lone_mirror_pass_says_it_deletes_and_names_the_target(self) -> None:
+        """J185 — the steady-state pass transfers and deletes, and the deletions land on the target."""
+        ctx = make_context()
+        ctx.source.run_command = AsyncMock(return_value=CommandResult(exit_code=0, stdout="", stderr=""))
+
+        (mirror,) = await self._passes(ctx)
+
+        assert mirror["mutates"] == "mirror /home, deleting files the source does not have"
+        assert mirror["changes"] is Host.TARGET
+
+    async def test_a_split_folder_asks_twice_and_only_the_second_can_delete(self) -> None:
+        """J186 — each half of a split run is its own question, and the copy pass says it deletes
+        nothing: approving the transfer is not approving the deletions."""
+        ctx = make_context()
+        ctx.source.run_command = AsyncMock(
+            return_value=CommandResult(exit_code=0, stdout="hash  /home/alice/.pcswitcher-filter\n", stderr="")
+        )
+
+        copy, delete = await self._passes(ctx)
+
+        assert copy["mutates"] == "copy /home across, deleting nothing"
+        assert delete["mutates"] == "mirror /home, deleting files the source does not have"
+
+    async def test_the_dry_run_preview_announces_itself_as_writing_nothing(self) -> None:
+        """J187 — a dry-run pass is announced too (starting it is process state), and its phrase
+        says outright that nothing is written, so the prompt cannot read like the real mirror."""
+        ctx = make_context(dry_run=True)
+
+        (preview,) = await self._passes(ctx)
+
+        assert preview["mutates"] == "nothing — a --dry-run pass previews the mirror of /home without writing"

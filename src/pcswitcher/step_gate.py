@@ -32,9 +32,11 @@ Generic on purpose, and invoked from exactly one place: `pcswitcher.executor`. A
 — job, orchestrator, helper — reaches this gate by passing `mutates="..."` to the executor
 method it already uses, so there is no second API to remember and no per-job wiring. The
 executor supplies `job` (from its `active_job` context variable) and `host` (from which
-executor it is). Everything that is not a pure read passes `mutates` except `folder_sync`'s
-rsync pass (#209); `tests/unit/test_mutates_audit.py` holds that line, and names the few
-reads whose incidental side effects are deliberately tolerated.
+executor it is, or from the `changes` a caller declares when the two differ — `folder_sync`'s
+rsync runs on the source and writes on the target, and this prompt names the machine being
+changed). Everything that is not a pure read passes `mutates`, with no exception;
+`tests/unit/test_mutates_audit.py` holds that line, and names the few reads whose incidental
+side effects are deliberately tolerated.
 """
 
 from __future__ import annotations

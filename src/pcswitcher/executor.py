@@ -373,19 +373,26 @@ class LocalExecutor(_GatedExecutorMixin):
             await proc.wait()
             raise
 
-    async def start_process(self, cmd: str, *, mutates: str | None = None) -> LocalProcess:
+    async def start_process(
+        self, cmd: str, *, mutates: str | None = None, changes: Host | None = None
+    ) -> LocalProcess:
         """Start a long-running process with streaming output.
 
         Args:
             cmd: Shell command to execute
-            mutates: Short phrase describing what starting this process changes on the
-                source. Starting one is itself process state, so a background process is
-                gated on that alone even when its command only reads.
+            mutates: Short phrase describing what starting this process changes. Starting
+                one is itself process state, so a background process is gated on that alone
+                even when its command only reads.
+            changes: The machine the process changes, when that is not the one it runs on.
+                `folder_sync`'s rsync is the case: it runs here and every byte it writes
+                lands on the target, so the prompt must name the target — it is the machine
+                that loses files, and naming the machine being changed is the whole point of
+                the heading. Defaults to this executor's own host.
 
         Returns:
             LocalProcess wrapper for the subprocess
         """
-        await self._announce(f"{cmd}  (background)", mutates)
+        await self._announce(f"{cmd}  (background)", mutates, host=changes)
         proc = await asyncio.create_subprocess_shell(
             cmd,
             stdout=asyncio.subprocess.PIPE,

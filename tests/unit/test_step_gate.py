@@ -47,6 +47,14 @@ def _remote(gate: object | None = None) -> tuple[RemoteExecutor, MagicMock]:
 
 
 @contextmanager
+def _local_spawn() -> Generator[AsyncMock]:
+    """Patch out subprocess creation; yield the mock so a test can assert on the spawn itself."""
+    spawn = AsyncMock(return_value=MagicMock(returncode=0))
+    with patch.object(asyncio, "create_subprocess_shell", spawn):
+        yield spawn
+
+
+@contextmanager
 def _executor_on(host: Host, gate: StepGate | None) -> Generator[Executor]:
     """The REAL executor for `host`, gated, with nothing actually reaching a machine.
 
@@ -304,6 +312,31 @@ class TestExecutorGate:
             await executor.send_file(Path("/local/f"), "/remote/f", mutates="push f")
         assert gate.confirm_action.await_args.kwargs["command"] == "send_file /local/f -> /remote/f"
         conn.start_sftp_client.assert_not_called()
+
+    async def test_starting_a_background_process_is_gated(self) -> None:
+        """J179, J185 — starting one is itself the change, and the prompt says it runs detached."""
+        gate = _stub_gate()
+        with _local_spawn() as spawn:
+            await LocalExecutor(gate).start_process("rsync --archive /home/ nomad:/home/", mutates="mirror /home")
+        assert gate.confirm_action.await_args.kwargs["command"] == "rsync --archive /home/ nomad:/home/  (background)"
+        spawn.assert_awaited_once()
+
+    async def test_aborting_a_background_process_never_spawns_it(self) -> None:
+        """J160 — nothing is started when the answer is no, the spawn path's half of the rule."""
+        gate = _stub_gate(SyncAbortedByUser("declined"))
+        with _local_spawn() as spawn, pytest.raises(SyncAbortedByUser):
+            await LocalExecutor(gate).start_process("rsync --archive --delete /home/ nomad:/home/", mutates="mirror")
+        spawn.assert_not_awaited()
+
+    async def test_a_local_process_can_declare_that_it_changes_the_target(self) -> None:
+        """J185 — `folder_sync`'s rsync runs on the source and writes on the target, so the
+        prompt names the machine that loses files rather than the one running the command."""
+        gate = _stub_gate()
+        with _local_spawn():
+            await LocalExecutor(gate).start_process(
+                "rsync --archive --delete /home/ nomad:/home/", mutates="mirror /home", changes=Host.TARGET
+            )
+        assert gate.confirm_action.await_args.kwargs["host"] is Host.TARGET
 
     async def test_local_executor_reports_the_source_host(self) -> None:
         gate = _stub_gate()
