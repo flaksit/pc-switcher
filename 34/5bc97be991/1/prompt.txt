@@ -1,0 +1,1 @@
+What is meant by first run and second run? Do we need to run the entire set of commands twice and is the outcome different the second time?
