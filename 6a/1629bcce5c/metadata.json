@@ -3,8 +3,15 @@
   "checkpoint_id": "6a1629bcce5c",
   "strategy": "manual-commit",
   "branch": "gsd/phase-02-package-management-sync",
-  "checkpoints_count": 3,
+  "checkpoints_count": 4,
   "files_touched": [
+    ".planning/phases/02-package-management-sync/02-UAT-01-RUNBOOK.md",
+    "docs/adr/adr-020-declarative-package-convergence.md",
+    "docs/dev/package-sync-scenario-coverage.md",
+    "docs/jobs/package-sync.md",
+    "docs/planning/package-sync-conformance-criteria.md",
+    "docs/planning/package-sync-user-requirements.md",
+    "docs/system/package-sync.md",
     "src/pcswitcher/jobs/apt_sync/job.py",
     "src/pcswitcher/jobs/apt_sync/probe.py",
     "src/pcswitcher/jobs/flatpak_sync.py",
@@ -12,9 +19,13 @@
     "src/pcswitcher/jobs/packages/state.py",
     "src/pcswitcher/jobs/packages/sync_core.py",
     "src/pcswitcher/jobs/snap_sync.py",
+    "src/pcswitcher/machine-packages.example.yaml",
     "tests/unit/jobs/apt/helpers.py",
+    "tests/unit/jobs/apt/test_apt_collateral.py",
+    "tests/unit/jobs/apt/test_apt_job.py",
     "tests/unit/jobs/test_flatpak_sync.py",
     "tests/unit/jobs/test_manual_installs_sync.py",
+    "tests/unit/jobs/test_package_state.py",
     "tests/unit/jobs/test_package_sync_core.py",
     "tests/unit/jobs/test_snap_sync.py",
     "tests/unit/test_mutates_audit.py"
@@ -40,13 +51,20 @@
       "compact_transcript": "/6a/1629bcce5c/2/transcript.jsonl",
       "content_hash": "/6a/1629bcce5c/2/content_hash.txt",
       "prompt": "/6a/1629bcce5c/2/prompt.txt"
+    },
+    {
+      "metadata": "/6a/1629bcce5c/3/metadata.json",
+      "transcript": "/6a/1629bcce5c/3/full.jsonl",
+      "compact_transcript": "/6a/1629bcce5c/3/transcript.jsonl",
+      "content_hash": "/6a/1629bcce5c/3/content_hash.txt",
+      "prompt": "/6a/1629bcce5c/3/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 412,
-    "cache_creation_tokens": 408733,
-    "cache_read_tokens": 40471143,
-    "output_tokens": 138567,
-    "api_call_count": 219
+    "input_tokens": 471,
+    "cache_creation_tokens": 590515,
+    "cache_read_tokens": 42828666,
+    "output_tokens": 163463,
+    "api_call_count": 253
   }
 }

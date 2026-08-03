@@ -1,0 +1,120 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "6a1629bcce5c",
+  "session_id": "d2e7aa83-33f4-4468-8156-3c8fe962396f",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-03T14:16:35.479905713Z",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    ".planning/phases/02-package-management-sync/02-UAT-01-RUNBOOK.md",
+    "docs/adr/adr-020-declarative-package-convergence.md",
+    "docs/dev/package-sync-scenario-coverage.md",
+    "docs/jobs/package-sync.md",
+    "docs/planning/package-sync-conformance-criteria.md",
+    "docs/planning/package-sync-user-requirements.md",
+    "docs/system/package-sync.md",
+    "src/pcswitcher/jobs/apt_sync/job.py",
+    "src/pcswitcher/jobs/apt_sync/probe.py",
+    "src/pcswitcher/jobs/flatpak_sync.py",
+    "src/pcswitcher/jobs/manual_installs_sync.py",
+    "src/pcswitcher/jobs/packages/state.py",
+    "src/pcswitcher/jobs/packages/sync_core.py",
+    "src/pcswitcher/jobs/snap_sync.py",
+    "src/pcswitcher/machine-packages.example.yaml",
+    "tests/unit/jobs/apt/helpers.py",
+    "tests/unit/jobs/apt/test_apt_collateral.py",
+    "tests/unit/jobs/apt/test_apt_job.py",
+    "tests/unit/jobs/test_flatpak_sync.py",
+    "tests/unit/jobs/test_manual_installs_sync.py",
+    "tests/unit/jobs/test_package_state.py",
+    "tests/unit/jobs/test_package_sync_core.py",
+    "tests/unit/jobs/test_snap_sync.py",
+    "tests/unit/test_mutates_audit.py"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "a75f1c9ab035",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 59,
+    "cache_creation_tokens": 181782,
+    "cache_read_tokens": 2357523,
+    "output_tokens": 24896,
+    "api_call_count": 34
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-03T14:16:35.454807198Z",
+    "agent_lines": 0,
+    "agent_removed": 13,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 61,
+    "total_committed": 29,
+    "total_lines_changed": 74,
+    "agent_percentage": 17.56756756756757,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 1318,
+      "user_lines_removed": 61,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9,
+        "docs/dev/package-sync-scenario-coverage.md": 39,
+        "docs/planning/package-sync-conformance-criteria.md": 6,
+        "docs/planning/package-sync-user-requirements.md": 2,
+        "src/pcswitcher/jobs/apt_sync/job.py": 49,
+        "src/pcswitcher/jobs/apt_sync/probe.py": 14,
+        "src/pcswitcher/jobs/flatpak_sync.py": 37,
+        "src/pcswitcher/jobs/manual_installs_sync.py": 75,
+        "src/pcswitcher/jobs/packages/state.py": 61,
+        "src/pcswitcher/jobs/packages/sync_core.py": 129,
+        "src/pcswitcher/jobs/snap_sync.py": 29,
+        "tests/unit/jobs/apt/helpers.py": 18,
+        "tests/unit/jobs/apt/test_apt_collateral.py": 91,
+        "tests/unit/jobs/apt/test_apt_job.py": 134,
+        "tests/unit/jobs/test_flatpak_sync.py": 78,
+        "tests/unit/jobs/test_manual_installs_sync.py": 136,
+        "tests/unit/jobs/test_package_state.py": 323,
+        "tests/unit/jobs/test_package_sync_core.py": 12,
+        "tests/unit/jobs/test_snap_sync.py": 67,
+        "tests/unit/test_mutates_audit.py": 9
+      },
+      "user_removed_per_file": {
+        "docs/dev/package-sync-scenario-coverage.md": 2,
+        "docs/planning/package-sync-conformance-criteria.md": 3,
+        "src/pcswitcher/jobs/apt_sync/job.py": 6,
+        "src/pcswitcher/jobs/flatpak_sync.py": 4,
+        "src/pcswitcher/jobs/manual_installs_sync.py": 5,
+        "src/pcswitcher/jobs/packages/state.py": 13,
+        "src/pcswitcher/jobs/packages/sync_core.py": 4,
+        "src/pcswitcher/jobs/snap_sync.py": 3,
+        "tests/unit/jobs/apt/helpers.py": 6,
+        "tests/unit/jobs/apt/test_apt_collateral.py": 1,
+        "tests/unit/jobs/test_flatpak_sync.py": 1,
+        "tests/unit/jobs/test_manual_installs_sync.py": 1,
+        "tests/unit/jobs/test_package_state.py": 1,
+        "tests/unit/jobs/test_package_sync_core.py": 9,
+        "tests/unit/test_mutates_audit.py": 2
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 9,
+      "user_lines_removed": 0,
+      "agent_lines_added": 1377,
+      "agent_lines_removed": 80,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9
+      }
+    }
+  ]
+}
