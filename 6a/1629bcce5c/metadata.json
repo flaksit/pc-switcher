@@ -1,0 +1,34 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "6a1629bcce5c",
+  "strategy": "manual-commit",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "src/pcswitcher/jobs/apt_sync/job.py",
+    "src/pcswitcher/jobs/apt_sync/probe.py",
+    "src/pcswitcher/jobs/flatpak_sync.py",
+    "src/pcswitcher/jobs/manual_installs_sync.py",
+    "src/pcswitcher/jobs/packages/state.py",
+    "src/pcswitcher/jobs/packages/sync_core.py",
+    "src/pcswitcher/jobs/snap_sync.py",
+    "tests/unit/jobs/apt/helpers.py",
+    "tests/unit/jobs/test_package_sync_core.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/6a/1629bcce5c/0/metadata.json",
+      "transcript": "/6a/1629bcce5c/0/full.jsonl",
+      "compact_transcript": "/6a/1629bcce5c/0/transcript.jsonl",
+      "content_hash": "/6a/1629bcce5c/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 321,
+    "cache_creation_tokens": 310393,
+    "cache_read_tokens": 36364057,
+    "output_tokens": 111878,
+    "api_call_count": 170
+  }
+}
