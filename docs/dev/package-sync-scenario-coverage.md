@@ -1698,6 +1698,7 @@ Five exits, then the `userinfo` grammar boundary.
 | J166 | `--confirm-each-command` on a run with no terminal | Refused before config is loaded or anything is connected, naming the flag | U | `test_commands:TestConfirmEachCommandFlag::test_refused_without_a_tty`, `::test_accepted_and_forwarded_on_a_tty`, `::test_a_non_interactive_run_without_the_flag_is_not_refused` |
 | J167 | A command containing Rich markup characters (a snippet body, a bracketed filename) | Renders literally rather than raising mid-prompt | U | `test_step_gate:TestTerminalUIStepGate::test_command_with_markup_characters_does_not_raise` |
 | J168 | The prompt's label | Names the job issuing the command | U | `test_step_gate:TestExecutorGate::test_active_job_labels_the_prompt` |
+| J174 | The prompt's key legend | Reaches the terminal with both keys shown, not eaten as Rich markup | U | `test_step_gate:TestTerminalUIStepGate::test_the_prompt_shows_both_keys` |
 
 
 ## K. Opting in, job independence and order, validation preconditions, the `folder_sync` boundary

@@ -123,6 +123,23 @@ class TestTerminalUIStepGate:
 
         assert "default" not in ask.call_args.kwargs
 
+    async def test_the_prompt_shows_both_keys(self) -> None:
+        """J174 — the legend has to survive Rich's markup parser before the user sees it.
+
+        Asserted on the RENDERED prompt, not the string handed to `Prompt.ask`: square
+        brackets read as style tags, so a `[p] proceed` legend passes any check on the raw
+        text and still reaches the terminal as a bare word with no key to press.
+        """
+        gate, _ui = _make_gate()
+        with patch("rich.prompt.Prompt.ask", return_value="p") as ask:
+            await gate.confirm_action(job="apt_sync", host=Host.TARGET, description="install x", command="apt-get x")
+
+        console = Console(record=True, width=100)
+        console.print(ask.call_args.args[0])
+        rendered = console.export_text()
+        assert "<p> proceed" in rendered
+        assert "<a> abort sync" in rendered
+
     async def test_command_with_markup_characters_does_not_raise(self) -> None:
         """J167 — a command containing Rich markup syntax renders as literal text."""
         gate, _ui = _make_gate()

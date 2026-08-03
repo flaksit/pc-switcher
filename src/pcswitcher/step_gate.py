@@ -121,8 +121,12 @@ class TerminalUIStepGate:
             self._console.print()
             # No `default=`: the user must type a choice. An accidental Enter re-prompts
             # rather than picking either outcome for them.
+            #
+            # `<p>`, not `[p]`: Rich reads square brackets as markup and silently swallows
+            # `[p]`/`[a]`, leaving the legend as bare words with no keys. Angle brackets are
+            # also what the package-review screens use, so both prompts read alike.
             response = Prompt.ask(
-                f"[bold]Run this?[/bold] [{_PROCEED}] proceed  [{_ABORT}] abort sync",
+                f"[bold]Run this?[/bold] <{_PROCEED}> proceed  <{_ABORT}> abort sync",
                 choices=[_PROCEED, _ABORT],
                 show_choices=False,
             )
