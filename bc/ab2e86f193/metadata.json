@@ -1,0 +1,40 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "bcab2e86f193",
+  "strategy": "manual-commit",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "docs/adr/adr-020-declarative-package-convergence.md",
+    "docs/jobs/package-sync.md",
+    "docs/system/package-sync.md",
+    "src/pcswitcher/jobs/apt_sync/__init__.py",
+    "src/pcswitcher/jobs/apt_sync/collateral.py",
+    "src/pcswitcher/jobs/apt_sync/diffing.py",
+    "src/pcswitcher/jobs/apt_sync/job.py",
+    "src/pcswitcher/jobs/apt_sync/origins.py",
+    "src/pcswitcher/jobs/apt_sync/packages.py",
+    "src/pcswitcher/jobs/packages/review.py",
+    "tests/integration/jobs/test_package_sync.py",
+    "tests/unit/jobs/apt/test_apt_collateral.py",
+    "tests/unit/jobs/apt/test_apt_packages.py",
+    "tests/unit/jobs/test_decision_list.py",
+    "tests/unit/jobs/test_package_review.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/bc/ab2e86f193/0/metadata.json",
+      "transcript": "/bc/ab2e86f193/0/full.jsonl",
+      "compact_transcript": "/bc/ab2e86f193/0/transcript.jsonl",
+      "content_hash": "/bc/ab2e86f193/0/content_hash.txt",
+      "prompt": "/bc/ab2e86f193/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 78,
+    "cache_creation_tokens": 208403,
+    "cache_read_tokens": 3246813,
+    "output_tokens": 32784,
+    "api_call_count": 42
+  }
+}

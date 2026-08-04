@@ -1,0 +1,23 @@
+What does folder_sync do when "--yes" given?
+
+---
+
+package-sync asks a lot of questions but doesn't respect "--yes" yet. I consider making package-sync adhere to --yes. Or would it be better to have a separate flag "--package-syncs-yes"?
+
+---
+
+Nice "--apply-installs" and "--apply-removals", but must be specific for pacakge-sync jobs, so that must be in the name of the flag.
+Update #245 with this.
+
+---
+
+Your "why two flags" section is nonsense: we are free to define the behavior we want to flags.
+- If we define "single --yes flag that fully replicates source to target", than this does applies and removes and does NOT follow the defaults. There is no reason anywhere to NOT do that. There is no law and no police that will stop us.
+- "three answers" has nothing to do with that
+- snippets, ubuntu pro, one app vs one per directory, have nothing to do with the choice of the meaning of the flag: the only thing that we can do, is leaving them out of scope.
+
+Sounds like you were giving a history lesson again. WHICH YOU ARE FORBIDDEN TO DO
+
+---
+
+"go ahead" is not language we use because it is not precise and could mean anything. Use precise wording for the concrete action at hand. Or, if general wording needed, it is "apply". I already told you in another session, but it keeps creeping in. Strip it from EVERYWHERE in this codebase. Delegate to subagent.
