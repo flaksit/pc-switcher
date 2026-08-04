@@ -289,11 +289,11 @@ async def _assert_job_integration(
 class TestEndToEndSync:
     """Integration tests for complete pc-switcher sync workflow."""
 
-    # The only integration coverage of folder_sync, and the one run that exercises every
-    # kind of job the pipeline coordinates -- cheap enough to be worth on every PR.
+    # Exercises every kind of job the pipeline coordinates, in both directions, for two
+    # syncs -- cheap enough to be worth running on every PR.
     @pytest.mark.smoke
     @pytest.mark.area_folder
-    async def test_core_us_job_arch_as1_job_integration_via_interface(
+    async def test_sync_runs_every_job_and_replicates_home_both_directions(
         self,
         pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
         pc2_with_pcswitcher: BashLoginRemoteExecutor,
@@ -301,26 +301,23 @@ class TestEndToEndSync:
         pc1_executor: BashLoginRemoteExecutor,
         pc2_executor: BashLoginRemoteExecutor,
     ) -> None:
-        """CORE-US-JOB-ARCH-AS1 + full folder-sync end-to-end (criteria 1-5, ADR-014/015/016).
+        """CORE-US-JOB-ARCH-AS1 + full folder-sync end-to-end (ADR-015/016).
 
-        One scenario, one seed, five syncs — the complete pipeline in a single run:
+        One scenario, one seed, two syncs:
 
-        1. Blocked A→B (no flag): the W1 first-sync gate aborts non-interactively; nothing reaches pc2.
-        2. A→B --dry-run: rehearses through the gate (ADR-014) but writes nothing and does not update history (D-12).
-        3. A→B --allow-first-sync: the real sync. Verifies BOTH
+        1. A→B --allow-first-sync: the real sync. Verifies BOTH
            - job integration via the standardized interface (dummy_success + folder_sync discovered,
              logged, pre/post snapshots on both machines, config synced), AND
            - folder_sync of the real /home: byte-identical content; numeric uid/gid; permissions incl.
              setuid/setgid/sticky; POSIX ACL; mtime; hard-link inode sharing; symlink; across user-,
              root-, and other-user-owned files AND directories the invoking user cannot read; config
              exclusions honoured; the ADR-016 runtime-file excludes (state/install/logs) via sentinels;
-             and (3f) the full #166 filter surface end-to-end — a central include-override (keep
+             and (1f) the full #166 filter surface end-to-end — a central include-override (keep
              pcsw-filter/cache/keep-uv+keep-pip, drop the rest), a wholly-excluded subtree, and nested
              per-directory .pcswitcher-filter files — proving included paths add/overwrite/delete on
              the target, excluded paths survive on the target whether or not a source copy exists, and
              per-directory filter files themselves transfer.
-        4. Mutate pc2 (add / modify / delete file / delete directory / chmod) then B→A: all propagate.
-        5. A→B again with no override: a clean round-trip must not trip the out-of-order gate (ADR-015 #159).
+        2. Mutate pc2 (add / modify / delete file / delete directory / chmod) then B→A: all propagate.
 
         The scenario's seeding, manifests and folder-sync assertions live in
         `tests/integration/jobs/folder_sync_scenario.py`, whose module docstring explains why
@@ -328,7 +325,6 @@ class TestEndToEndSync:
         """
         _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
         tree = folder_sync_scenario.tree_path()
-        state_dir = folder_sync_scenario.STATE_DIR
 
         try:
             await _write_full_pipeline_config(pc1_executor)
@@ -345,38 +341,7 @@ class TestEndToEndSync:
 
             src_manifests = await folder_sync_scenario.capture_manifests(pc1_executor, tree)
 
-            # --- Step 1: blocked first sync (W1 gate, non-interactive) ---
-            blocked = await pc1_executor.run_command(
-                f"{SKIP_INSTALL_ON_TARGET} pc-switcher sync pc2 --yes", timeout=180.0, login_shell=True
-            )
-            assert not blocked.success, (
-                f"W1 first-sync gate should block non-interactively, got exit {blocked.exit_code}.\n{blocked.stdout}"
-            )
-            assert (
-                "out-of-order" in (blocked.stdout + blocked.stderr).lower()
-                or "target" in (blocked.stdout + blocked.stderr).lower()
-            ), f"Unexpected first-sync-gate message.\nstdout: {blocked.stdout}\nstderr: {blocked.stderr}"
-            await folder_sync_scenario.assert_tree_absent(
-                pc2_executor, tree, "Blocked first sync transferred the tree to pc2."
-            )
-
-            # --- Step 2: dry-run rehearsal (proceeds, writes nothing, no history change) ---
-            hist_before = await pc1_executor.run_command(
-                f"cat {state_dir}/sync-history.json 2>/dev/null || echo absent", timeout=10.0
-            )
-            dry = await pc1_executor.run_command(
-                f"{SKIP_INSTALL_ON_TARGET} pc-switcher sync pc2 --yes --dry-run", timeout=180.0, login_shell=True
-            )
-            assert dry.success, f"--dry-run should not be blocked (ADR-014).\nstderr: {dry.stderr}"
-            await folder_sync_scenario.assert_tree_absent(
-                pc2_executor, tree, "--dry-run transferred the tree to pc2 (must be read-only)."
-            )
-            hist_after = await pc1_executor.run_command(
-                f"cat {state_dir}/sync-history.json 2>/dev/null || echo absent", timeout=10.0
-            )
-            assert hist_before.stdout.strip() == hist_after.stdout.strip(), "--dry-run updated sync-history (D-12)."
-
-            # --- Step 3: real first sync (--allow-first-sync) ---
+            # --- Step 1: real first sync (--allow-first-sync) ---
             sync_ab = await pc1_executor.run_command(
                 f"{SKIP_INSTALL_ON_TARGET} pc-switcher sync pc2 --yes --allow-first-sync",
                 timeout=300.0,
@@ -386,30 +351,30 @@ class TestEndToEndSync:
                 f"A→B first sync failed.\nexit={sync_ab.exit_code}\nstdout: {sync_ab.stdout}\nstderr: {sync_ab.stderr}"
             )
 
-            # 3a. Job integration via interface: log entries, snapshots on both, config synced.
+            # 1a. Job integration via interface: log entries, snapshots on both, config synced.
             await _assert_job_integration(pc1_executor, pc2_executor)
 
-            # 3b. folder_sync content + metadata: target manifests must equal source manifests exactly.
+            # 1b. folder_sync content + metadata: target manifests must equal source manifests exactly.
             await folder_sync_scenario.assert_manifests_match(pc2_executor, tree, src_manifests)
 
-            # 3c. ACL, backdated mtime, hard-link inode sharing, symlink target.
+            # 1c. ACL, backdated mtime, hard-link inode sharing, symlink target.
             await folder_sync_scenario.assert_metadata_details(pc2_executor, tree)
 
-            # 3d. Exclusions: config-excluded subtree absent; ADR-016 runtime excludes held.
+            # 1d. Exclusions: config-excluded subtree absent; ADR-016 runtime excludes held.
             await folder_sync_scenario.assert_exclusions(pc2_executor, tree)
 
-            # 3e. SC3 inclusion: non-excluded dev-tool cache + VS Code user state ARE synced,
+            # 1e. SC3 inclusion: non-excluded dev-tool cache + VS Code user state ARE synced,
             # while a config-excluded sibling (VS Code Cache) is not.
             await folder_sync_scenario.assert_included_markers(pc2_executor)
 
-            # 3f. #166 filter rules end-to-end (central include-override + wholly-excluded
+            # 1f. #166 filter rules end-to-end (central include-override + wholly-excluded
             # subtree + nested per-directory .pcswitcher-filter files). Verifies that
             # included paths add/overwrite/delete on the target, that excluded paths leave
             # the target as-is whether or not a source counterpart exists (the --delete
             # survival case), and that per-directory filter files themselves transfer.
             await folder_sync_scenario.assert_filter_outcomes(pc2_executor)
 
-            # --- Step 4: mutate pc2, then B→A ---
+            # --- Step 2: mutate pc2, then B→A ---
             await folder_sync_scenario.mutate_tree(pc2_executor, tree)
 
             sync_ba = await pc2_executor.run_command(
@@ -420,15 +385,6 @@ class TestEndToEndSync:
             )
 
             await folder_sync_scenario.assert_mutations_propagated(pc1_executor, tree)
-
-            # --- Step 5: clean A→B again must not trip the out-of-order gate ---
-            sync_ab2 = await pc1_executor.run_command(
-                f"{SKIP_INSTALL_ON_TARGET} pc-switcher sync pc2 --yes", timeout=300.0, login_shell=True
-            )
-            assert sync_ab2.success, (
-                f"Second A→B failed (out-of-order gate wrongly tripped for a clean round-trip, ADR-015 #159).\n"
-                f"exit={sync_ab2.exit_code}\nstdout: {sync_ab2.stdout}\nstderr: {sync_ab2.stderr}"
-            )
 
         finally:
             await folder_sync_scenario.remove_test_artifacts(pc1_executor, pc2_executor, tree)

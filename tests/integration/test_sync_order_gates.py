@@ -87,25 +87,53 @@ class TestConsecutiveSyncWarning:
         TODO change name of test to something that covers everything done here.
 
         Consolidated test covering:
-        - First sync to a fresh target (W1): gated by --allow-first-sync; sync history
-          updated on both machines after success.
+        - First sync to a fresh target (W1): blocked without --allow-first-sync in
+          non-interactive mode, and nothing on the target changes; passes with the flag,
+          after which sync history is updated on both machines.
         - Consecutive push (W3): second A→B without a back-sync is blocked in non-interactive
           mode (no flag, defaults to abort).
         - --allow-out-of-order bypasses the W3 consecutive-push gate.
 
         Workflow:
-        1. First sync with --allow-first-sync → verifies W1 gate passed, history updated
-        2. Second sync (no flag) → verifies blocked by W3 gate (consecutive push)
-        3. Third sync with --allow-out-of-order → verifies W3 gate bypassed
+        1. First sync, no flag → verifies W1 gate blocks and pc2 stays untouched
+        2. Same sync with --allow-first-sync → verifies W1 gate passed, history updated
+        3. Second sync (no flag) → verifies blocked by W3 gate (consecutive push)
+        4. Third sync with --allow-out-of-order → verifies W3 gate bypassed
 
-        This consolidation saves ~2 sync operations (~16 seconds) compared
-        to running these as separate tests.
+        Each step depends on the state the previous one left, so they share one sync sequence
+        rather than each paying for its own.
         """
         pc1_executor = sync_ready_source
 
         # History cleanup done by reset_pcswitcher_state fixture (via sync_ready_source)
 
-        # Step 1: First sync (W1 gate) — pc2 has no history; --allow-first-sync is required
+        # Step 1: sync without --allow-first-sync — pc2 has no history, so the W1 gate fires
+        # and non-interactive mode cannot confirm it.
+        blocked_sync = await pc1_executor.run_command(
+            f"{SKIP_INSTALL_ON_TARGET} pc-switcher sync pc2 --yes",
+            timeout=180.0,
+            login_shell=True,
+        )
+        assert not blocked_sync.success, (
+            f"Sync without --allow-first-sync should fail (W1 gate, defaults to abort).\n"
+            f"Exit code: {blocked_sync.exit_code}\nStdout: {blocked_sync.stdout}"
+        )
+        blocked_output = blocked_sync.stdout + blocked_sync.stderr
+        # "--allow-first-sync" from the confirmer's non-interactive refusal; "abort" from
+        # "Sync aborted at the sync-order check" (SyncAborted).
+        assert "--allow-first-sync" in blocked_output and "abort" in blocked_output.lower(), (
+            f"Output should name the first-sync flag and the abort.\nOutput: {blocked_output}"
+        )
+        # The gate runs before any job, so the target must still have no history at all.
+        blocked_history = await pc2_executor.run_command(
+            "cat ~/.local/share/pc-switcher/sync-history.json 2>/dev/null || echo absent",
+            timeout=10.0,
+        )
+        assert blocked_history.stdout.strip() == "absent", (
+            f"Blocked first sync wrote state to pc2.\nContent: {blocked_history.stdout}"
+        )
+
+        # Step 2: First sync (W1 gate) — pc2 has no history; --allow-first-sync is required
         # in non-interactive CI to bypass the first-sync overwrite confirmation.
         first_sync = await pc1_executor.run_command(
             f"{SKIP_INSTALL_ON_TARGET} pc-switcher sync pc2 --yes --allow-first-sync",
@@ -137,7 +165,7 @@ class TestConsecutiveSyncWarning:
             f"pc2 should have last_role=target.\nContent: {pc2_history.stdout}"
         )
 
-        # Step 2: Second sync WITHOUT --allow-out-of-order — W3 (consecutive push) gate fires
+        # Step 3: Second sync WITHOUT --allow-out-of-order — W3 (consecutive push) gate fires
         # because pc1 is pushing to pc2 again without a back-sync.  Non-interactive mode
         # cannot confirm, so it aborts (title: "Consecutive Sync — No Back-Sync Received").
         second_sync = await pc1_executor.run_command(
@@ -156,7 +184,7 @@ class TestConsecutiveSyncWarning:
             f"Output should mention consecutive-push warning and abort.\nOutput: {output}"
         )
 
-        # Step 3: Third sync WITH --allow-out-of-order bypasses the W3 gate.
+        # Step 4: Third sync WITH --allow-out-of-order bypasses the W3 gate.
         third_sync = await pc1_executor.run_command(
             f"{SKIP_INSTALL_ON_TARGET} pc-switcher sync pc2 --yes --allow-out-of-order",
             timeout=180.0,
