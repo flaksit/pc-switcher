@@ -6,18 +6,16 @@ Markers, one per area the single run actually reaches:
   leave the target payload byte-for-byte where it was;
 - `area_btrfs`: the pre- and post-snapshot steps both run, and neither may leave a snapshot;
 - `area_core`: the spine the rehearsal exercises around the job — source and target locks,
-  the first-sync gate, config sync, and the sync-history write the orchestrator must skip.
+  the first-sync gate, config sync, and the sync-history write the orchestrator must skip;
+- `area_install`: the run reaches a target with no pc-switcher, so install-on-target has an
+  install to preview and must not perform it.
 
 Not `smoke`: a full sync run is too expensive for every PR, but the contract it guards is
-cross-cutting, so it runs whenever any of the three areas is selected.
+cross-cutting, so it runs whenever any of the four areas is selected.
 
 Deliberately NOT `area_package`: the package managers' own rehearsal is asserted, with the
 subjects it needs, in `jobs/test_package_sync.py`; enabling those jobs here would cost VM
 fixtures and minutes for a claim already covered.
-
-Install-on-target is skipped (`SKIP_INSTALL_ON_TARGET`) rather than asserted: proving a
-rehearsal does not install would need a target that lacks pc-switcher or carries an older
-build, i.e. a second fixture that mutates pc2 — outside this test's one-run budget.
 
 Scope choice: the seeded tree is the small filter tree, not the rich ownership/permission
 matrix. Its value here is that a REAL sync would add files, overwrite one, and delete
@@ -33,11 +31,15 @@ from dataclasses import dataclass
 import pytest
 
 from pcswitcher.executor import BashLoginRemoteExecutor
-from tests.integration import SKIP_INSTALL_ON_TARGET
 from tests.integration.conftest import write_pcswitcher_config
 from tests.integration.jobs import folder_sync_scenario
 
-pytestmark = [pytest.mark.area_folder, pytest.mark.area_btrfs, pytest.mark.area_core]
+pytestmark = [
+    pytest.mark.area_folder,
+    pytest.mark.area_btrfs,
+    pytest.mark.area_core,
+    pytest.mark.area_install,
+]
 
 
 def _dry_run_config(scope: str) -> str:
@@ -93,12 +95,14 @@ _STATE_PROBE = (
 _PREVIEW_SUMMARY = re.compile(r"\[dry-run\] Completed sync of [^:]+: (\d+) files transferred, [^,]+, (\d+) deletions")
 
 # Log lines proving the read-only half of the contract ran: the run knew it was a rehearsal,
-# took both locks, and reached the first-sync gate without aborting on it.
+# took both locks, reached the first-sync gate without aborting on it, and reached the point
+# where it would have installed itself on a target that has no pc-switcher.
 _SPINE_MARKERS = (
     "[DRY-RUN] Preview mode",
     "Acquiring source lock",
     "Acquiring target lock",
     "skipping confirmation in dry-run mode",
+    "Installing pc-switcher",
 )
 
 
@@ -127,19 +131,23 @@ class TestDryRunContract:
     async def test_dry_run_previews_the_whole_pipeline_and_writes_nothing(
         self,
         pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
-        pc2_executor: BashLoginRemoteExecutor,
+        pc2_without_pcswitcher_fn: BashLoginRemoteExecutor,
         reset_pcswitcher_state: None,
     ) -> None:
         """ADR-014 / D-12: one rehearsal, every forbidden write asserted absent.
 
         pc2 is seeded so a real sync would add files, overwrite one and delete several
-        inside the synced scope, and has no sync history — so the run also passes the W1
-        first-sync gate, which a rehearsal logs and proceeds through instead of aborting.
+        inside the synced scope, has no sync history — so the run also passes the W1
+        first-sync gate, which a rehearsal logs and proceeds through instead of aborting —
+        and carries no pc-switcher, so install-on-target has a real install to withhold.
+        The run therefore does NOT set the install-on-target skip that every other sync test
+        carries: the step it would skip is one of this test's subjects.
 
         Forbidden and asserted absent, on BOTH machines: any change to the target payload,
-        any btrfs snapshot, any sync-history update, and any config written to the target.
-        Required and asserted present: exit 0, the locks and the gate in the log, and a
-        folder_sync preview reporting a non-zero number of would-be transfers AND deletions.
+        any btrfs snapshot, any sync-history update, any config written to the target, and
+        any pc-switcher installed on the target. Required and asserted present: exit 0, the
+        locks, the gate and the withheld install in the log, and a folder_sync preview
+        reporting a non-zero number of would-be transfers AND deletions.
 
         Run without `--yes`: a rehearsal must reach the end without a single prompt, so
         every gate it passes is one the dry-run path itself waved through, not one the
@@ -147,19 +155,20 @@ class TestDryRunContract:
         """
         _ = reset_pcswitcher_state  # Wipes config, history and snapshots on both VMs
         pc1 = pc1_with_pcswitcher_mod
+        pc2 = pc2_without_pcswitcher_fn  # Same VM as pc2_executor, with pc-switcher removed
         scope = folder_sync_scenario.filter_tree_path()
 
         try:
             await write_pcswitcher_config(pc1, _dry_run_config(scope))
             await folder_sync_scenario.seed_filter_source(pc1)
-            await folder_sync_scenario.seed_filter_target(pc2_executor)
+            await folder_sync_scenario.seed_filter_target(pc2)
 
-            payload_before = await folder_sync_scenario.capture_manifests(pc2_executor, scope)
+            payload_before = await folder_sync_scenario.capture_manifests(pc2, scope)
             source_before = await _capture_machine_state(pc1)
-            target_before = await _capture_machine_state(pc2_executor)
+            target_before = await _capture_machine_state(pc2)
 
             rehearsal = await pc1.run_command(
-                f"{SKIP_INSTALL_ON_TARGET} pc-switcher sync pc2 --dry-run",
+                "pc-switcher sync pc2 --dry-run",
                 timeout=300.0,
                 login_shell=True,
             )
@@ -170,12 +179,12 @@ class TestDryRunContract:
 
             # 1. The target payload a real sync would have rewritten.
             await folder_sync_scenario.assert_manifests_unchanged(
-                pc2_executor, scope, payload_before, "--dry-run wrote to the target payload (ADR-014)."
+                pc2, scope, payload_before, "--dry-run wrote to the target payload (ADR-014)."
             )
 
-            # 2-4. Snapshots, sync history and config, on both machines at once.
+            # 2-5. Snapshots, sync history, target config, and the install withheld.
             source_after = await _capture_machine_state(pc1)
-            target_after = await _capture_machine_state(pc2_executor)
+            target_after = await _capture_machine_state(pc2)
             assert source_after == source_before, (
                 f"--dry-run changed source state (ADR-014).\nbefore: {source_before}\nafter: {source_after}"
             )
@@ -195,6 +204,10 @@ class TestDryRunContract:
             assert target_after.config == "__ABSENT__", (
                 f"--dry-run copied the config to the target.\n{target_after.config!r}"
             )
+            # Not part of the probe: presence is only meaningful through a login shell,
+            # which is how the uninstall in `pc2_without_pcswitcher_fn` checks it too.
+            installed = await pc2.run_command("command -v pc-switcher", timeout=10.0)
+            assert not installed.success, f"--dry-run installed pc-switcher on the target.\n{installed.stdout}"
 
             # 5. The rehearsal actually rehearsed: spine steps ran, and the preview has value.
             log = await pc1.run_command(
@@ -213,4 +226,4 @@ class TestDryRunContract:
             )
 
         finally:
-            await folder_sync_scenario.remove_test_artifacts(pc1, pc2_executor, scope)
+            await folder_sync_scenario.remove_test_artifacts(pc1, pc2, scope)
