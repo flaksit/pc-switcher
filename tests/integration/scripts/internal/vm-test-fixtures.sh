@@ -145,7 +145,10 @@ remove_automatic_updates() {
     # for it to finish rather than tearing down a dpkg transaction half-applied.
     sudo systemctl stop unattended-upgrades.service >/dev/null 2>&1 || true
 
-    if dpkg-query --show unattended-upgrades >/dev/null 2>&1; then
+    # Matched on the install status, not on the package being known: `dpkg-query --show`
+    # succeeds for a package that is merely available, so it would report every already
+    # purged machine as needing the purge again and make this step lie on every run.
+    if dpkg-query -W -f='${Status}' unattended-upgrades 2>/dev/null | grep --quiet '^install ok installed'; then
         log "purging unattended-upgrades"
         sudo DEBIAN_FRONTEND=noninteractive apt-get purge --assume-yes unattended-upgrades
     fi
