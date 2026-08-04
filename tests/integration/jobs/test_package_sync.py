@@ -52,8 +52,18 @@ none at all for flatpak (which is not installed). Those subjects are therefore C
 by provisioning and re-applied by the module-scoped `vm_test_fixtures` fixture. No test in
 this module declines to run for want of a subject: a missing subject is a broken machine
 and fails naming what is missing and which script creates it. apt subjects are still
-selected by querying the machines (any Debian system has hundreds), but an empty selection
-is likewise an assertion failure, never a skip.
+selected by querying the machines (any Debian system has hundreds), but once for the whole
+module rather than per test (`apt_subjects`, `_AptSubjects`), and an empty selection is
+likewise an assertion failure, never a skip.
+
+Preconditions, not teardown: a test states the package state it needs and converges to it
+(`_ensure_absent`, `_ensure_installed_and_manual`) instead of putting the machines back
+afterwards. What one scenario leaves behind is usually what the next one wanted anyway, so
+the converger reads and returns; the module's own fixture is what owes the machines their
+baseline. Cleanup that costs nothing -- `/etc/apt` files, markers, holds, `refresh.hold`,
+paths taken aside -- stays in each test's `finally`, and the `/etc/apt` half has to: a
+synthetic repository left configured makes every later `apt-get update` on that machine
+slower and noisier.
 
 The flatpak subject is the REAL Flathub, and its app is provisioned on pc1 only, so the
 source->target divergence the convergence test needs is part of the baseline rather than
@@ -68,7 +78,7 @@ import asyncio
 import json
 import re
 import shlex
-from collections.abc import Mapping, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Literal
@@ -346,13 +356,125 @@ async def _find_removable_candidates(
     return confirmed[:count]
 
 
-async def _removable_candidate(pc1_executor: BashLoginRemoteExecutor, pc2_executor: BashLoginRemoteExecutor) -> str:
-    """Query both VMs and pick a package safe to remove from pc2 for this test (see
-    `pick_safe_removal_candidate`).
+@dataclass(frozen=True)
+class _AptSubjects:
+    """The apt packages every test in this module operates on, selected ONCE for the whole
+    module by the `apt_subjects` fixture.
+
+    Pinned rather than rediscovered per test, for two reasons that both cost real wall
+    clock (#216). Selecting one costs a round of `apt-cache rdepends` plus an
+    `apt-get --dry-run remove` for each survivor, and six tests were each paying it. And a
+    pinned name is what lets a test converge to its precondition instead of restoring
+    afterwards: with a fresh selection each time, a package left removed simply drops out of
+    the `apt-mark showmanual` intersection and the next test picks the NEXT one down the
+    alphabet, so nothing is reused and the pool drains.
+
+    Snap and flatpak subjects have always been pinned this way (`_FIXTURE_SNAPS`,
+    `_FIXTURE_FLATPAK_APP`); apt's were discovered only because any Debian system offers
+    hundreds, never because a test needed them to vary.
     """
-    found = await _find_removable_candidates(pc1_executor, pc2_executor, count=1)
-    assert found, _no_apt_candidate_message()
-    return found[0]
+
+    #: Packages a test may remove from the TARGET so the run has an install to converge.
+    #: Three, because the one run proving a failing item does not stop the job needs three
+    #: independent apt items.
+    install_direction: tuple[str, str, str]
+    #: A package a test may remove from the SOURCE, so the run has a removal to converge.
+    #: Vetted against pc2 like the others: the two VMs come from one baseline, so a package
+    #: safe to remove there is safe to remove here.
+    removal_direction: str
+    #: Installed at the same version on both machines and held on neither, so holding it on
+    #: the source is a run's only apt work for it.
+    hold: str
+
+    @property
+    def every_package(self) -> tuple[str, ...]:
+        """Every subject whose presence a test may change, for the module's own teardown."""
+        return (*self.install_direction, self.removal_direction)
+
+
+@pytest.fixture(scope="module")
+async def apt_subjects(
+    pc1_executor: BashLoginRemoteExecutor, pc2_executor: BashLoginRemoteExecutor
+) -> AsyncIterator[_AptSubjects]:
+    """Select this module's apt subjects once, and put them back once.
+
+    Runs before any test has touched a package, so the selection sees the machines as
+    provisioning left them.
+
+    The teardown is the module's, not each test's: within a run the tests leave these
+    packages wherever their scenario ended and the next test converges to what IT needs
+    (`_ensure_absent`, `_ensure_installed_and_manual`), which is a read when the state
+    already matches instead of an `apt-get install` that the next removal would undo. What
+    the module owes the machines is that they end as they started, and that is four
+    restores rather than twelve.
+    """
+    picked = await _find_removable_candidates(pc1_executor, pc2_executor, count=4)
+    assert len(picked) == 4, f"{_no_apt_candidate_message()} Needed 4 subjects, found {len(picked)}."
+    subjects = _AptSubjects(
+        install_direction=(picked[0], picked[1], picked[2]),
+        removal_direction=picked[3],
+        hold=await _a_package_both_machines_have_unheld(pc1_executor, pc2_executor, exclude=frozenset(picked)),
+    )
+    yield subjects
+    for executor in (pc1_executor, pc2_executor):
+        for name in subjects.every_package:
+            await _ensure_installed_and_manual(executor, name)
+
+
+# Splits the two reads `_ensure_installed_and_manual` issues as one command.
+_SUBJECT_STATE_MARKER = "@@PCSWITCHER_IT_SUBJECT@@"
+
+
+async def _subject_state(executor: BashLoginRemoteExecutor, name: str) -> tuple[bool, bool]:
+    """`(fully installed, marked manual)` for `name` on `executor`'s machine, in one command.
+
+    `apt-mark showmanual <name>` rather than the whole manual set: it answers about the one
+    package, which is all a converger needs and a fraction of the cost.
+    """
+    quoted = shlex.quote(name)
+    result = await executor.run_command(
+        f"dpkg-query --show --showformat='${{Status}}' {quoted}; echo; echo {_SUBJECT_STATE_MARKER}; "
+        f"apt-mark showmanual {quoted}",
+        login_shell=False,
+        timeout=20.0,
+    )
+    status_block, _, manual_block = result.stdout.partition(_SUBJECT_STATE_MARKER)
+    return status_block.strip() == "install ok installed", name in nonblank_lines(manual_block)
+
+
+async def _ensure_absent(executor: BashLoginRemoteExecutor, name: str) -> None:
+    """Make `name` absent from `executor`'s machine, doing nothing when it already is.
+
+    The read is what makes a scenario that inherits the state it wanted pay nothing
+    (measured on a test VM: the read is hundredths of a second against 6.5s for the
+    removal).
+    """
+    installed, _manual = await _subject_state(executor, name)
+    if not installed:
+        return
+    result = await executor.run_command(
+        f"sudo DEBIAN_FRONTEND=noninteractive apt-get remove --assume-yes {shlex.quote(name)}",
+        login_shell=False,
+        timeout=120.0,
+    )
+    assert result.success, f"Failed to remove {name}: {result.stderr}"
+
+
+async def _ensure_installed_and_manual(executor: BashLoginRemoteExecutor, name: str) -> None:
+    """Make `name` installed and marked manual on `executor`'s machine, doing nothing when
+    it already is (the counterpart of `_ensure_absent`, 8.2s when it has to act).
+    """
+    installed, manual = await _subject_state(executor, name)
+    if installed and manual:
+        return
+    quoted = shlex.quote(name)
+    result = await executor.run_command(
+        f"sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes {quoted} && sudo apt-mark manual {quoted}",
+        login_shell=False,
+        timeout=120.0,
+    )
+    if not result.success:
+        print(f"[converge] failed to restore {name}: {result.stderr}")
 
 
 async def _create_extra_on_target_apt_package(
@@ -470,20 +592,6 @@ async def _decision_file_exists(executor: BashLoginRemoteExecutor, manager: str)
     relpath = shlex.quote(DECISION_FILE_RELPATH_TEMPLATE.format(manager=manager))
     result = await executor.run_command(f"test -f ~/{relpath}", login_shell=False, timeout=10.0)
     return result.success
-
-
-async def _restore_package(executor: BashLoginRemoteExecutor, name: str) -> None:
-    """Idempotently ensure `name` is installed and marked manual on pc2, regardless of
-    test outcome -- the test must not leave pc2's package state changed.
-    """
-    quoted = shlex.quote(name)
-    result = await executor.run_command(
-        f"sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes {quoted} && sudo apt-mark manual {quoted}",
-        login_shell=False,
-        timeout=120.0,
-    )
-    if not result.success:
-        print(f"[cleanup] failed to restore {name} on pc2: {result.stderr}")
 
 
 def _automation_env_assignment_multi(decisions_by_item_id: Mapping[str, Decision]) -> str:
@@ -2054,6 +2162,7 @@ class TestOneRunConvergesEveryManager:
         self,
         pc1_executor: BashLoginRemoteExecutor,
         pc2_executor: BashLoginRemoteExecutor,
+        apt_subjects: _AptSubjects,
         pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
         pc2_with_pcswitcher: BashLoginRemoteExecutor,
         reset_pcswitcher_state: None,
@@ -2109,14 +2218,9 @@ class TestOneRunConvergesEveryManager:
         await _assert_flatpak_available(pc2_executor)
 
         # -- subjects, all selected before either machine is touched ---------------------
-        candidates = await _find_removable_candidates(pc1_executor, pc2_executor, count=2)
-        assert len(candidates) == 2, (
-            f"{_no_apt_candidate_message()} Needed 2 independent candidates, found {len(candidates)}."
-        )
-        install_candidate, removal_candidate = candidates
-        hold_subject = await _a_package_both_machines_have_unheld(
-            pc1_executor, pc2_executor, exclude=frozenset(candidates)
-        )
+        install_candidate = apt_subjects.install_direction[0]
+        removal_candidate = apt_subjects.removal_direction
+        hold_subject = apt_subjects.hold
 
         revision_snap, hold_snap = await _snap_subjects(pc1_executor, pc2_executor, count=2)
         source_snap_revision = await _snap_revision(pc1_executor, revision_snap)
@@ -2154,16 +2258,12 @@ class TestOneRunConvergesEveryManager:
             await _engage_system_refresh_hold(pc2_executor)
 
             # -- seed apt ----------------------------------------------------------------
-            for executor, package, machine in (
-                (pc2_executor, install_candidate, "pc2"),
-                (pc1_executor, removal_candidate, "pc1"),
-            ):
-                removed = await executor.run_command(
-                    f"sudo DEBIAN_FRONTEND=noninteractive apt-get remove --assume-yes {shlex.quote(package)}",
-                    login_shell=False,
-                    timeout=120.0,
-                )
-                assert removed.success, f"Failed to remove {package} from {machine}: {removed.stderr}"
+            await _ensure_installed_and_manual(pc1_executor, install_candidate)
+            await _ensure_absent(pc2_executor, install_candidate)
+            await _ensure_installed_and_manual(pc2_executor, removal_candidate)
+            await _ensure_absent(pc1_executor, removal_candidate)
+            for executor in (pc1_executor, pc2_executor):
+                await _ensure_installed_and_manual(executor, hold_subject)
 
             held = await pc1_executor.run_command(
                 f"sudo apt-mark hold {shlex.quote(hold_subject)}", login_shell=False, timeout=30.0
@@ -2542,9 +2642,6 @@ class TestOneRunConvergesEveryManager:
                     f"sudo snap refresh --unhold {shlex.quote(hold_snap)}", login_shell=False, timeout=60.0
                 )
 
-            await _restore_package(pc2_executor, install_candidate)
-            await _restore_package(pc1_executor, removal_candidate)
-            await _restore_package(pc2_executor, removal_candidate)
             for executor in (pc1_executor, pc2_executor):
                 await executor.run_command(
                     f"sudo apt-mark unhold {shlex.quote(hold_subject)}", login_shell=False, timeout=30.0
@@ -2593,6 +2690,7 @@ class TestTheAptOriginModelOnRealRepositories:
         self,
         pc1_executor: BashLoginRemoteExecutor,
         pc2_executor: BashLoginRemoteExecutor,
+        apt_subjects: _AptSubjects,
         pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
         pc2_with_pcswitcher: BashLoginRemoteExecutor,
         reset_pcswitcher_state: None,
@@ -2617,7 +2715,7 @@ class TestTheAptOriginModelOnRealRepositories:
         """
         _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
 
-        other_candidate = await _removable_candidate(pc1_executor, pc2_executor)
+        other_candidate = apt_subjects.install_direction[0]
         vendor_item_id = AptPackageItem(name=_VENDOR_PACKAGE, version="").item_id
         source_filename = key_filename = ""
         repo_dir = list_filename = pin_filename = ""
@@ -2675,12 +2773,8 @@ class TestTheAptOriginModelOnRealRepositories:
             assert purged.success, f"Failed to purge {_VENDOR_PACKAGE} from pc2 between the runs: {purged.stderr}"
             repo_dir, list_filename, pin_filename = await _publish_a_rival_candidate(pc2_executor)
 
-            removed = await pc2_executor.run_command(
-                f"sudo DEBIAN_FRONTEND=noninteractive apt-get remove --assume-yes {shlex.quote(other_candidate)}",
-                login_shell=False,
-                timeout=120.0,
-            )
-            assert removed.success, f"Failed to remove {other_candidate} from pc2: {removed.stderr}"
+            await _ensure_installed_and_manual(pc1_executor, other_candidate)
+            await _ensure_absent(pc2_executor, other_candidate)
 
             # -- run 2: the target's own arithmetic refuses the vendor's build -----------
             decisions = {
@@ -2732,7 +2826,6 @@ class TestTheAptOriginModelOnRealRepositories:
             if source_filename:
                 await _remove_the_vendor_repository(pc2_executor, source_filename, key_filename)
                 await _remove_the_vendor_repository(pc1_executor, source_filename, key_filename)
-            await _restore_package(pc2_executor, other_candidate)
 
 
 class TestARunWithNobodyToAsk:
@@ -2757,6 +2850,7 @@ class TestARunWithNobodyToAsk:
         self,
         pc1_executor: BashLoginRemoteExecutor,
         pc2_executor: BashLoginRemoteExecutor,
+        apt_subjects: _AptSubjects,
         pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
         pc2_with_pcswitcher: BashLoginRemoteExecutor,
         reset_pcswitcher_state: None,
@@ -2790,7 +2884,7 @@ class TestARunWithNobodyToAsk:
         """
         _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
 
-        install_candidate = await _removable_candidate(pc1_executor, pc2_executor)
+        install_candidate = apt_subjects.install_direction[0]
         removal_candidate = await _create_extra_on_target_apt_package(pc1_executor, pc2_executor)
         application, _version, scope, remote_name, source_url, ref = await _flatpak_subject(pc1_executor)
         scope_flag = "--user" if scope == "user" else "--system"
@@ -2810,12 +2904,8 @@ class TestARunWithNobodyToAsk:
 
         unlocatable = repo_dir = list_filename = ""
         try:
-            removed = await pc2_executor.run_command(
-                f"sudo DEBIAN_FRONTEND=noninteractive apt-get remove --assume-yes {shlex.quote(install_candidate)}",
-                login_shell=False,
-                timeout=120.0,
-            )
-            assert removed.success, f"Failed to remove {install_candidate} from pc2: {removed.stderr}"
+            await _ensure_installed_and_manual(pc1_executor, install_candidate)
+            await _ensure_absent(pc2_executor, install_candidate)
 
             unlocatable, repo_dir, list_filename = await _install_from_a_repo_the_target_lacks(pc1_executor)
             # The precondition, asserted rather than assumed: without it the run below proves
@@ -2965,7 +3055,6 @@ class TestARunWithNobodyToAsk:
                 timeout=120.0,
             )
             await _restore_flatpak_target_baseline(pc2_executor)
-            await _restore_package(pc2_executor, install_candidate)
             await _restore_auto_marked_package(pc2_executor, removal_candidate)
 
 
@@ -3245,6 +3334,7 @@ class TestSkipAlwaysIsInertInBothRoles:
         self,
         pc1_executor: BashLoginRemoteExecutor,
         pc2_executor: BashLoginRemoteExecutor,
+        apt_subjects: _AptSubjects,
         pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
         pc2_with_pcswitcher: BashLoginRemoteExecutor,
         reset_pcswitcher_state: None,
@@ -3279,17 +3369,13 @@ class TestSkipAlwaysIsInertInBothRoles:
         """
         _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
 
-        candidate = await _removable_candidate(pc1_executor, pc2_executor)
+        candidate = apt_subjects.install_direction[0]
         apt_item_id = AptPackageItem(name=candidate, version="").item_id
 
         hand_deb = ""
         try:
-            removed = await pc2_executor.run_command(
-                f"sudo DEBIAN_FRONTEND=noninteractive apt-get remove --assume-yes {shlex.quote(candidate)}",
-                login_shell=False,
-                timeout=120.0,
-            )
-            assert removed.success, f"Failed to remove {candidate} from pc2: {removed.stderr}"
+            await _ensure_installed_and_manual(pc1_executor, candidate)
+            await _ensure_absent(pc2_executor, candidate)
 
             hand_deb = await _install_a_hand_downloaded_deb(pc1_executor)
             deb_item_id = _no_candidate_item_id(hand_deb)
@@ -3381,7 +3467,6 @@ class TestSkipAlwaysIsInertInBothRoles:
                     login_shell=False,
                     timeout=120.0,
                 )
-            await _restore_package(pc2_executor, candidate)
 
 
 class TestCrossDirectionRoundTrips:
@@ -3402,6 +3487,7 @@ class TestCrossDirectionRoundTrips:
         self,
         pc1_executor: BashLoginRemoteExecutor,
         pc2_executor: BashLoginRemoteExecutor,
+        apt_subjects: _AptSubjects,
         pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
         pc2_with_pcswitcher: BashLoginRemoteExecutor,
         reset_pcswitcher_state: None,
@@ -3458,7 +3544,7 @@ class TestCrossDirectionRoundTrips:
         """
         _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
 
-        candidate = await _removable_candidate(pc1_executor, pc2_executor)
+        candidate = apt_subjects.install_direction[0]
         item_id = AptPackageItem(name=candidate, version="").item_id
         snap_name = (await _snap_subjects(pc1_executor, pc2_executor, count=2))[1]
         snap_source_revision = await _snap_revision(pc1_executor, snap_name)
@@ -3473,12 +3559,8 @@ class TestCrossDirectionRoundTrips:
         target_pair: tuple[str, str, str, str] | None = None
         source_pair: tuple[str, str, str, str] | None = None
         try:
-            removed = await pc2_executor.run_command(
-                f"sudo DEBIAN_FRONTEND=noninteractive apt-get remove --assume-yes {shlex.quote(candidate)}",
-                login_shell=False,
-                timeout=120.0,
-            )
-            assert removed.success, f"Failed to remove {candidate} from pc2: {removed.stderr}"
+            await _ensure_installed_and_manual(pc1_executor, candidate)
+            await _ensure_absent(pc2_executor, candidate)
 
             source_filename, key_filename = await _create_synthetic_repo_and_key(pc2_executor)
             source_dest = f"{_APT_SOURCES_DIR}/{source_filename}"
@@ -3702,8 +3784,6 @@ class TestCrossDirectionRoundTrips:
             if cleanup_paths:
                 for executor in (pc1_executor, pc2_executor):
                     await executor.run_command(f"sudo rm --force {cleanup_paths}", login_shell=False, timeout=15.0)
-            await _restore_package(pc1_executor, candidate)
-            await _restore_package(pc2_executor, candidate)
 
 
 class TestAFailureCostsItsOwnItemAndNothingElse:
@@ -3731,6 +3811,7 @@ class TestAFailureCostsItsOwnItemAndNothingElse:
         self,
         pc1_executor: BashLoginRemoteExecutor,
         pc2_executor: BashLoginRemoteExecutor,
+        apt_subjects: _AptSubjects,
         pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
         pc2_with_pcswitcher: BashLoginRemoteExecutor,
         reset_pcswitcher_state: None,
@@ -3759,23 +3840,15 @@ class TestAFailureCostsItsOwnItemAndNothingElse:
         """
         _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
 
-        candidates = await _find_removable_candidates(pc1_executor, pc2_executor, count=3)
-        assert len(candidates) == 3, (
-            f"{_no_apt_candidate_message()} Needed 3 independent candidates, found {len(candidates)}."
-        )
-        snippet_first, snippet_second, apt_candidate = candidates
+        snippet_first, snippet_second, apt_candidate = apt_subjects.install_direction
         snap_candidate = await _snap_subject(pc1_executor, pc2_executor)
         original_snap_revision = await _snap_revision(pc2_executor, snap_candidate)
         assert original_snap_revision, f"{snap_candidate} is not installed on pc2"
 
         try:
-            removed = await pc2_executor.run_command(
-                "sudo DEBIAN_FRONTEND=noninteractive apt-get remove --assume-yes "
-                f"{shlex.quote(snippet_first)} {shlex.quote(snippet_second)} {shlex.quote(apt_candidate)}",
-                login_shell=False,
-                timeout=180.0,
-            )
-            assert removed.success, f"Failed to remove the three apt subjects from pc2: {removed.stderr}"
+            for subject in apt_subjects.install_direction:
+                await _ensure_installed_and_manual(pc1_executor, subject)
+                await _ensure_absent(pc2_executor, subject)
             removed_snap = await pc2_executor.run_command(
                 f"sudo snap remove {shlex.quote(snap_candidate)}", login_shell=False, timeout=60.0
             )
@@ -3861,9 +3934,6 @@ class TestAFailureCostsItsOwnItemAndNothingElse:
             for executor in (pc1_executor, pc2_executor):
                 for path in _CONTINUE_TEST_MARKERS:
                     await _remove_unowned_marker(executor, path)
-            await _restore_package(pc2_executor, snippet_first)
-            await _restore_package(pc2_executor, snippet_second)
-            await _restore_package(pc2_executor, apt_candidate)
             await _restore_snap(pc2_executor, snap_candidate, original_snap_revision)
 
 
@@ -4088,6 +4158,7 @@ class TestAStrayAptHoldEndsTheRun:
         self,
         pc1_executor: BashLoginRemoteExecutor,
         pc2_executor: BashLoginRemoteExecutor,
+        apt_subjects: _AptSubjects,
         pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
         pc2_with_pcswitcher: BashLoginRemoteExecutor,
         reset_pcswitcher_state: None,
@@ -4103,14 +4174,10 @@ class TestAStrayAptHoldEndsTheRun:
         _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
 
         ghost = await _a_name_apt_knows_the_machine_does_not_have(pc2_executor)
-        install_candidate = await _removable_candidate(pc1_executor, pc2_executor)
+        install_candidate = apt_subjects.install_direction[0]
         try:
-            removed = await pc2_executor.run_command(
-                f"sudo DEBIAN_FRONTEND=noninteractive apt-get remove --assume-yes {shlex.quote(install_candidate)}",
-                login_shell=False,
-                timeout=120.0,
-            )
-            assert removed.success, f"Failed to remove {install_candidate} from pc2: {removed.stderr}"
+            await _ensure_installed_and_manual(pc1_executor, install_candidate)
+            await _ensure_absent(pc2_executor, install_candidate)
 
             held = await pc2_executor.run_command(
                 f"sudo apt-mark hold {shlex.quote(ghost)}", login_shell=False, timeout=30.0
@@ -4152,7 +4219,6 @@ class TestAStrayAptHoldEndsTheRun:
             await pc2_executor.run_command(
                 f"sudo apt-mark unhold {shlex.quote(ghost)}", login_shell=False, timeout=30.0
             )
-            await _restore_package(pc2_executor, install_candidate)
 
 
 class TestTheSyncWindowHoldIsTimed:
