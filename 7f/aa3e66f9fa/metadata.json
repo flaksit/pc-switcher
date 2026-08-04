@@ -1,0 +1,29 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "7faa3e66f9fa",
+  "strategy": "manual-commit",
+  "branch": "pc-216",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".planning/codebase/STACK.md",
+    ".planning/codebase/STRUCTURE.md",
+    "docs/jobs/package-sync.md",
+    "tests/integration/scripts/select-ci-tests.sh"
+  ],
+  "sessions": [
+    {
+      "metadata": "/7f/aa3e66f9fa/0/metadata.json",
+      "transcript": "/7f/aa3e66f9fa/0/full.jsonl",
+      "compact_transcript": "/7f/aa3e66f9fa/0/transcript.jsonl",
+      "content_hash": "/7f/aa3e66f9fa/0/content_hash.txt",
+      "prompt": "/7f/aa3e66f9fa/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 2,
+    "cache_creation_tokens": 114051,
+    "cache_read_tokens": 25299,
+    "output_tokens": 360,
+    "api_call_count": 1
+  }
+}
