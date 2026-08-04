@@ -1,0 +1,15 @@
+can we move test_core_edge_target_unreachable_mid_sync() and test_core_us_job_arch_as7_interrupt_terminates_job() from test_end_to_end_sync.py to test_interrupt_integration.py?
+
+---
+
+fix
+
+---
+
+Set mark "smoke" mark on entire file test_end_to_end_sync.py.
+Rename test_sync_runs_every_job_and_replicates_home_both_directions() to be more general. We can't describe everything it does (and we will add package-sync to it) in its name.
+Is dummy_success used in TestEndToEndSync?
+
+---
+
+duration of 2+2s not needed? --> make smaller. Again some cheap seconds won :-)
