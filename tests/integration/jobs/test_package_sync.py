@@ -57,9 +57,10 @@ module rather than per test (`apt_subjects`, `_AptSubjects`), and an empty selec
 likewise an assertion failure, never a skip.
 
 Preconditions, not teardown: a test states the package state it needs and converges to it
-(`_ensure_absent`, `_ensure_installed_and_manual`) instead of putting the machines back
-afterwards. What one scenario leaves behind is usually what the next one wanted anyway, so
-the converger reads and returns. Nobody restores the packages at the end either:
+(`_ensure_absent`, `_ensure_installed_and_manual` for apt, `_ensure_snaps_installed` behind
+`_snap_subjects`/`_holdable_snaps` for snap) instead of putting the machines back afterwards.
+What one scenario leaves behind is usually what the next one wanted anyway, so the converger
+reads and returns. Nobody restores the packages at the end either:
 `run-integration-tests.sh` replaces both VMs' subvolumes with their baseline btrfs
 snapshots and reboots before every run, which is what makes the machines identical run to
 run -- so a package left removed costs nothing and undoing it would.
@@ -812,28 +813,58 @@ def parse_snap_info_revisions(output: str) -> set[str]:
     return set(_SNAP_INFO_REVISION_RE.findall(output))
 
 
+def _fixture_snap_names(count: int) -> list[str]:
+    """The first `count` fixture snaps outside `_SNAP_REMOVAL_DENYLIST` (T-02-28: never a
+    base/snapd runtime everything else depends on).
+    """
+    subjects = [name for name in _FIXTURE_SNAPS if name not in _SNAP_REMOVAL_DENYLIST][:count]
+    assert len(subjects) == count, (
+        f"Need {count} subjects out of the fixture snaps {_FIXTURE_SNAPS}, of which "
+        f"{sorted(set(_FIXTURE_SNAPS) & _SNAP_REMOVAL_DENYLIST)} may never be one."
+    )
+    return subjects
+
+
+async def _ensure_snaps_installed(executor: BashLoginRemoteExecutor, names: Sequence[str]) -> None:
+    """Make every one of `names` installed on `executor`'s machine, doing nothing about the
+    ones that already are -- the snap counterpart of `_ensure_installed_and_manual`.
+
+    One `snap list --all` decides for all of them, so a machine that has them pays a single
+    read (measured: hundredths of a second against seconds for an install).
+
+    At whatever revision the store offers, exactly as the fixture script installs them: the
+    tests that need a particular revision read it off the machines and diverge to it
+    themselves.
+    """
+    result = await executor.run_command("snap list --all", login_shell=False, timeout=20.0)
+    installed = set(parse_snap_list_names_revisions(result.stdout))
+    for name in names:
+        if name in installed:
+            continue
+        created = await executor.run_command(
+            f"sudo snap install {shlex.quote(name)}", login_shell=False, timeout=300.0
+        )
+        assert created.success, (
+            f"Failed to install the fixture snap {name}, so this scenario has no subject to work on. The fixture "
+            f"snaps are created by tests/integration/scripts/internal/vm-test-fixtures.sh.\n{created.stderr}"
+        )
+
+
 async def _snap_subjects(
     pc1_executor: BashLoginRemoteExecutor, pc2_executor: BashLoginRemoteExecutor, count: int = 1
 ) -> list[str]:
-    """The first `count` fixture snaps (`_FIXTURE_SNAPS`) confirmed installed on BOTH
-    machines and outside `_SNAP_REMOVAL_DENYLIST` (T-02-28: never a base/snapd runtime
-    everything else depends on).
+    """The first `count` fixture snaps (`_FIXTURE_SNAPS`), converged to installed on BOTH
+    machines.
 
-    Confirmed rather than assumed: the fixture script guarantees they are there, and
-    this reads both machines' `snap list --all` so a machine that somehow lacks one
-    fails naming it instead of failing later inside the sync under test.
+    Converged rather than asserted, for the reason the module docstring gives for the apt
+    subjects: a scenario here removes a snap when its claim needs one removed and puts nothing
+    back, so getting the machines to "installed on both" belongs to whoever needs it next
+    rather than to whoever last touched it. The read `_ensure_snaps_installed` makes is what
+    keeps that free whenever the previous scenario already left them installed.
     """
-    pc1_list = await pc1_executor.run_command("snap list --all", login_shell=False, timeout=20.0)
-    pc2_list = await pc2_executor.run_command("snap list --all", login_shell=False, timeout=20.0)
-    installed_on_both = (
-        set(parse_snap_list_names_revisions(pc1_list.stdout)) & set(parse_snap_list_names_revisions(pc2_list.stdout))
-    ) - _SNAP_REMOVAL_DENYLIST
-    subjects = [name for name in _FIXTURE_SNAPS if name in installed_on_both][:count]
-    assert len(subjects) == count, (
-        f"Need {count} of the fixture snaps {_FIXTURE_SNAPS} installed on both machines, "
-        f"found {sorted(installed_on_both)}. They are created by "
-        "tests/integration/scripts/internal/vm-test-fixtures.sh."
-    )
+    subjects = _fixture_snap_names(count)
+    await _ensure_snaps_installed(pc1_executor, subjects)
+    await _ensure_snaps_installed(pc2_executor, subjects)
     return subjects
 
 
@@ -937,24 +968,6 @@ async def _snap_revision(executor: BashLoginRemoteExecutor, name: str) -> str | 
     """The revision `name` is active at on `executor`'s machine, or None when it is absent."""
     result = await executor.run_command("snap list --all", login_shell=False, timeout=20.0)
     return parse_snap_list_names_revisions(result.stdout).get(name)
-
-
-async def _restore_snap(executor: BashLoginRemoteExecutor, name: str, revision: str) -> None:
-    """Idempotently put `name` back at `revision` on `executor`'s machine, whether the test
-    removed it or moved it: install when absent, refresh when present at another revision.
-
-    Same shape as the snap restore the whole-run tests already use, in one command so the
-    two cases cost one SSH round trip rather than a read plus a write.
-    """
-    quoted = shlex.quote(name)
-    rev = shlex.quote(revision)
-    result = await executor.run_command(
-        f"sudo snap install --revision={rev} {quoted} || sudo snap refresh --revision={rev} {quoted}",
-        login_shell=False,
-        timeout=300.0,
-    )
-    if not result.success:
-        print(f"[cleanup] failed to restore snap {name} at revision {revision}: {result.stderr}")
 
 
 # A sideloaded snap needs a base its machine already has, or snapd downloads one. Read off
@@ -1111,19 +1124,16 @@ async def _restore_system_refresh_hold(executor: BashLoginRemoteExecutor, prior:
 
 
 async def _holdable_snaps(executor: BashLoginRemoteExecutor, count: int = 1) -> list[str]:
-    """The first `count` fixture snaps confirmed on `executor`'s machine and outside
-    `_SNAP_REMOVAL_DENYLIST` -- safe subjects for a per-snap `--hold`/`--unhold` round
-    trip (which, unlike a removal, leaves the snap itself untouched).
+    """The first `count` fixture snaps, converged to installed on `executor`'s machine --
+    safe subjects for a per-snap `--hold`/`--unhold` round trip (which, unlike a removal,
+    leaves the snap itself untouched).
 
-    One-machine variant of `_snap_subjects`, for the tests that never run a sync.
+    One-machine variant of `_snap_subjects`, for the tests that never run a sync. It converges
+    for the same reason: the scenarios before this one leave the fixture snaps wherever their
+    own claims needed them.
     """
-    result = await executor.run_command("snap list --all", login_shell=False, timeout=20.0)
-    installed = set(parse_snap_list_names_revisions(result.stdout)) - _SNAP_REMOVAL_DENYLIST
-    subjects = [name for name in _FIXTURE_SNAPS if name in installed][:count]
-    assert len(subjects) == count, (
-        f"Need {count} of the fixture snaps {_FIXTURE_SNAPS} installed, found {sorted(installed)}. "
-        "They are created by tests/integration/scripts/internal/vm-test-fixtures.sh."
-    )
+    subjects = _fixture_snap_names(count)
+    await _ensure_snaps_installed(executor, subjects)
     return subjects
 
 
@@ -2181,7 +2191,9 @@ class TestOneRunConvergesEveryManager:
     share a premise: one pair of machines, one seeded divergence per manager, one set of
     decisions. What each of them needs from the run is an assertion, not a run of its own.
 
-    The seeds, one per manager and each reverted in the `finally`:
+    The seeds, one per manager. The `finally` takes back the ones a later scenario would
+    otherwise inherit -- holds, `/etc/apt` files, remotes, markers -- and leaves the package
+    state where the run put it (module docstring):
 
     - apt: a package removed from pc2 (install direction), a package removed from pc1
       (removal direction), a hold set on pc1 for a package both machines already have at the
@@ -2675,7 +2687,9 @@ class TestOneRunConvergesEveryManager:
             )
             await _restore_flatpak_target_baseline(pc2_executor)
 
-            await _restore_snap(pc2_executor, revision_snap, target_snap_revision)
+            # The holds come off and the revisions do not: a per-snap hold is state every
+            # later scenario reads, while which revision pc2 ends on is nobody's precondition
+            # (`_snap_subjects`).
             for executor in (pc1_executor, pc2_executor):
                 await executor.run_command(
                     f"sudo snap refresh --unhold {shlex.quote(hold_snap)}", login_shell=False, timeout=60.0
@@ -3194,18 +3208,16 @@ class TestWhatFolderSyncMayAndMayNotCarry:
         pc1_prior_hold = await _capture_system_refresh_hold(pc1_executor)
         pc2_prior_hold = await _capture_system_refresh_hold(pc2_executor)
         source_aside = target_aside = ""
-        purged_absent_app = False
         try:
             await _engage_system_refresh_hold(pc1_executor)
             await _engage_system_refresh_hold(pc2_executor)
 
-            # `--purge` leaves snapd no snapshot behind, so the machine ends this test as it
-            # started it once the snap is put back.
+            # `--purge` leaves snapd no snapshot behind, so removing it here costs the next
+            # scenario an install (`_snap_subjects`) and nothing more.
             purged = await pc2_executor.run_command(
                 f"sudo snap remove --purge {shlex.quote(absent_app)}", login_shell=False, timeout=180.0
             )
             assert purged.success, f"could not remove {absent_app} from pc2: {purged.stderr}"
-            purged_absent_app = True
             assert await _snap_revision(pc2_executor, absent_app) is None, (
                 f"{absent_app} is still installed on pc2 after `snap remove --purge`, so pc2 holds a revision of it "
                 "and this run cannot exercise the branch"
@@ -3345,8 +3357,6 @@ class TestWhatFolderSyncMayAndMayNotCarry:
             if target_aside:
                 await _put_paths_back(pc2_executor, target_aside, [snap_root])
             await _remove_sideloaded_snap(pc1_executor, sideload_dir, sideload_name)
-            if purged_absent_app:
-                await _restore_snap(pc2_executor, absent_app, absent_target_revision)
             await _restore_system_refresh_hold(pc1_executor, pc1_prior_hold)
             await _restore_system_refresh_hold(pc2_executor, pc2_prior_hold)
 
@@ -3809,8 +3819,6 @@ class TestCrossDirectionRoundTrips:
                     await pc2_executor.run_command(
                         f"sudo snap forget {shlex.quote(set_id)}", login_shell=False, timeout=60.0
                     )
-            await _restore_snap(pc1_executor, snap_name, snap_source_revision)
-            await _restore_snap(pc2_executor, snap_name, snap_target_revision)
             await pc2_executor.run_command(
                 f"sudo rm --force {shlex.quote(snap_data_file)}", login_shell=False, timeout=15.0
             )
@@ -3975,7 +3983,6 @@ class TestAFailureCostsItsOwnItemAndNothingElse:
             for executor in (pc1_executor, pc2_executor):
                 for path in _CONTINUE_TEST_MARKERS:
                     await _remove_unowned_marker(executor, path)
-            await _restore_snap(pc2_executor, snap_candidate, original_snap_revision)
 
 
 class TestSnapPerItemFailureOnVMs:
@@ -4005,8 +4012,9 @@ class TestSnapPerItemFailureOnVMs:
         install is converged before the removal. The install is the item that fails.
 
         Both subjects are fixture snaps, made divergent by removing one from each machine
-        with `--purge` (no snapshot to clean up afterwards), and both are put back at their
-        original revisions in the `finally`.
+        with `--purge` (no snapshot to clean up afterwards). Neither is put back: every
+        scenario that wants a fixture snap converges to it itself (`_snap_subjects`), so what
+        this one leaves removed costs the next one an install only if it needs one.
         """
         _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
 
@@ -4084,9 +4092,6 @@ class TestSnapPerItemFailureOnVMs:
                 restored = await pc2_executor.run_command(_SNAP_STORE_ONLINE_CMD, login_shell=False, timeout=60.0)
                 if not restored.success:
                     print(f"[cleanup] failed to put pc2's snapd back online: {restored.stderr}")
-            await _restore_snap(pc1_executor, removal_subject, source_removal_revision)
-            await _restore_snap(pc2_executor, removal_subject, removal_revision)
-            await _restore_snap(pc2_executor, install_subject, target_install_revision)
 
 
 class TestTheESMAttachmentGateOnVMs:
