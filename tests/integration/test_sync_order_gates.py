@@ -25,6 +25,7 @@ import pytest
 
 from pcswitcher.executor import BashLoginRemoteExecutor
 from tests.integration import SKIP_INSTALL_ON_TARGET
+from tests.integration.conftest import write_pcswitcher_config
 
 pytestmark = pytest.mark.area_core
 
@@ -53,16 +54,9 @@ async def sync_ready_source(
     _ = reset_pcswitcher_state  # Ensures cleanup runs before test
     executor = pc1_with_pcswitcher_mod
 
-    await executor.run_command("mkdir --parents ~/.config/pc-switcher", timeout=10.0)
-    write_result = await executor.run_command(
-        f"cat > ~/.config/pc-switcher/config.yaml << 'EOF'\n{_GATE_TEST_CONFIG}EOF",
-        timeout=10.0,
-    )
-    assert write_result.success, f"Failed to write test config: {write_result.stderr}"
+    await write_pcswitcher_config(executor, _GATE_TEST_CONFIG)
 
     yield executor
-
-    await executor.run_command("rm --force ~/.config/pc-switcher/config.yaml", timeout=10.0)
 
 
 class TestConsecutiveSyncWarning:

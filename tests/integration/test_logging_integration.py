@@ -19,6 +19,7 @@ import pytest_asyncio
 
 from pcswitcher.executor import BashLoginRemoteExecutor
 from tests.integration import SKIP_INSTALL_ON_TARGET
+from tests.integration.conftest import write_pcswitcher_config
 
 pytestmark = pytest.mark.area_core
 
@@ -58,36 +59,14 @@ async def logging_test_source(
     """Provide pc1 configured for logging tests.
 
     Sets up a minimal config with short-duration dummy job for fast tests.
+    `reset_pcswitcher_state` removes the config before and after the test.
     """
     _ = reset_pcswitcher_state
     executor = pc1_with_pcswitcher_mod
 
-    # Backup existing config if any
-    await executor.run_command(
-        "if [ -f ~/.config/pc-switcher/config.yaml ]; then "
-        "cp ~/.config/pc-switcher/config.yaml ~/.config/pc-switcher/config.yaml.log-backup; "
-        "fi",
-        timeout=10.0,
-    )
-
-    # Create test config
-    await executor.run_command("mkdir --parents ~/.config/pc-switcher", timeout=10.0)
-    write_result = await executor.run_command(
-        f"cat > ~/.config/pc-switcher/config.yaml << 'EOF'\n{_TEST_CONFIG}EOF",
-        timeout=10.0,
-    )
-    assert write_result.success, f"Failed to write test config: {write_result.stderr}"
+    await write_pcswitcher_config(executor, _TEST_CONFIG)
 
     yield executor
-
-    # Cleanup: restore original config
-    await executor.run_command("rm --force ~/.config/pc-switcher/config.yaml", timeout=10.0)
-    await executor.run_command(
-        "if [ -f ~/.config/pc-switcher/config.yaml.log-backup ]; then "
-        "mv ~/.config/pc-switcher/config.yaml.log-backup ~/.config/pc-switcher/config.yaml; "
-        "fi",
-        timeout=10.0,
-    )
 
 
 async def test_log_fr_aggregate(

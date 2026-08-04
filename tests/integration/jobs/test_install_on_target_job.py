@@ -33,7 +33,7 @@ from pcswitcher.jobs.context import JobContext
 from pcswitcher.jobs.install_on_target import InstallOnTargetJob
 from pcswitcher.version import Release, find_one_version, get_this_version
 
-from ..conftest import get_installed_version
+from ..conftest import get_installed_version, write_pcswitcher_config
 
 pytestmark = pytest.mark.area_install
 
@@ -191,12 +191,7 @@ class TestInstallOnTargetIntegration:
         _ = reset_pcswitcher_state  # Ensures test isolation
         pc1_executor = pc1_with_pcswitcher_mod
 
-        test_config = _SYNC_CONFIG
-        await pc1_executor.run_command("mkdir --parents ~/.config/pc-switcher", timeout=10.0)
-        await pc1_executor.run_command(
-            f"cat > ~/.config/pc-switcher/config.yaml << 'EOF'\n{test_config}EOF",
-            timeout=10.0,
-        )
+        await write_pcswitcher_config(pc1_executor, _SYNC_CONFIG)
 
         try:
             # Run sync - this should install pc-switcher on target.
@@ -255,12 +250,7 @@ class TestInstallOnTargetIntegration:
         """
         _ = reset_pcswitcher_state  # Ensures test isolation
 
-        test_config = _SYNC_CONFIG
-        await pc1_with_pcswitcher_mod.run_command("mkdir --parents ~/.config/pc-switcher", timeout=10.0)
-        await pc1_with_pcswitcher_mod.run_command(
-            f"cat > ~/.config/pc-switcher/config.yaml << 'EOF'\n{test_config}EOF",
-            timeout=10.0,
-        )
+        await write_pcswitcher_config(pc1_with_pcswitcher_mod, _SYNC_CONFIG)
 
         try:
             # Run sync - this should upgrade pc-switcher on target.

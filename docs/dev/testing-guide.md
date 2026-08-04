@@ -159,6 +159,8 @@ vm_test_fixtures            # Both VMs carry the current package-manager subject
 
 The SSH connections themselves (`_pc1_connection`, `_pc2_connection`) are private; go through the executors.
 
+`conftest.py` also exports plain helpers, imported directly (`from tests.integration.conftest import ...`). Use `write_pcswitcher_config(executor, config)` to place a config on a VM — never hand-roll the heredoc. Keep the config *string* in your own test module: it states what that test needs of a run. A test that also takes `reset_pcswitcher_state` needs no config teardown; that fixture wipes `~/.config/pc-switcher` before and after.
+
 Anything named `*_pcswitcher*` mutates a VM. A test using one MUST NOT also use `pc2_executor` directly — both drive the same machine.
 
 Install fixtures build from the **current branch as pushed to origin**. Push before running, or they install stale code.

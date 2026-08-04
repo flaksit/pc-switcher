@@ -112,6 +112,7 @@ from pcswitcher.jobs.packages.state import (
 )
 from pcswitcher.models import CommandResult
 from tests.integration import SKIP_INSTALL_ON_TARGET
+from tests.integration.conftest import write_pcswitcher_config
 
 pytestmark = pytest.mark.area_package
 
@@ -676,13 +677,7 @@ async def _write_package_sync_config(
     """Write a package-sync test config enabling exactly `enabled_jobs` to `executor`
     (always the machine acting as source for the sync under test).
     """
-    config = _package_sync_test_config(extra_sections=extra_sections, **enabled_jobs)
-    result = await executor.run_command(
-        f"mkdir --parents ~/.config/pc-switcher"
-        f" && cat > ~/.config/pc-switcher/config.yaml << 'CONF_EOF'\n{config}CONF_EOF",
-        timeout=10.0,
-    )
-    assert result.success, f"Failed to write package-sync test config: {result.stderr}"
+    await write_pcswitcher_config(executor, _package_sync_test_config(extra_sections=extra_sections, **enabled_jobs))
 
 
 async def _write_apt_sync_config(executor: BashLoginRemoteExecutor) -> None:

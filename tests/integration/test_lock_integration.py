@@ -20,6 +20,7 @@ import contextlib
 import pytest
 
 from pcswitcher.executor import BashLoginRemoteExecutor
+from tests.integration.conftest import write_pcswitcher_config
 
 pytestmark = pytest.mark.area_core
 
@@ -65,7 +66,7 @@ class TestTargetLockConflict:
 
         holder: asyncio.Task[object] | None = None
         try:
-            await _write_config(pc1_executor, _MIN_CONFIG)
+            await write_pcswitcher_config(pc1_executor, _MIN_CONFIG)
             await pc2_executor.run_command(f'mkdir --parents "$(dirname "{_LOCK}")"', timeout=10.0)
 
             # Hold pc2's unified lock for the duration of the sync via a CONCURRENT,
@@ -116,13 +117,3 @@ class TestTargetLockConflict:
                 timeout=15.0,
             )
             await pc1_executor.run_command("rm --force ~/.config/pc-switcher/config.yaml", timeout=10.0)
-
-
-async def _write_config(executor: BashLoginRemoteExecutor, config: str) -> None:
-    """Write the pc-switcher config to the remote VM."""
-    result = await executor.run_command(
-        f"mkdir --parents ~/.config/pc-switcher"
-        f" && cat > ~/.config/pc-switcher/config.yaml << 'CONF_EOF'\n{config}CONF_EOF",
-        timeout=10.0,
-    )
-    assert result.success, f"Failed to write config: {result.stderr}"

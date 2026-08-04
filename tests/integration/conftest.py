@@ -35,7 +35,7 @@ import asyncssh
 import pytest
 
 from pcswitcher.btrfs_snapshots import delete_all_snapshots
-from pcswitcher.executor import BashLoginRemoteExecutor
+from pcswitcher.executor import BashLoginRemoteExecutor, RemoteExecutor
 from pcswitcher.install import get_install_with_script_command_line
 from pcswitcher.models import CommandResult
 from pcswitcher.version import Release, Version, find_one_version, get_releases, get_this_version
@@ -512,6 +512,21 @@ async def _remove_config_and_data(executor: BashLoginRemoteExecutor) -> None:
         "rm --recursive --force ~/.config/pc-switcher ~/.local/share/pc-switcher",
         timeout=10.0,
     )
+
+
+async def write_pcswitcher_config(executor: RemoteExecutor, config: str) -> None:
+    """Write `config` to a machine's `~/.config/pc-switcher/config.yaml`.
+
+    The config *content* stays with the test that needs it — each one states what that
+    test requires of a run — so this only owns the mechanics: create the directory,
+    write via a quoted heredoc (no shell expansion of the YAML), fail loudly on error.
+    """
+    result = await executor.run_command(
+        "mkdir --parents ~/.config/pc-switcher"
+        f" && cat > ~/.config/pc-switcher/config.yaml << 'CONF_EOF'\n{config}CONF_EOF",
+        timeout=10.0,
+    )
+    assert result.success, f"Failed to write pc-switcher config: {result.stderr}"
 
 
 async def uninstall_pcswitcher_and_config(executor: BashLoginRemoteExecutor) -> None:

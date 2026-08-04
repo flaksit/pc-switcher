@@ -34,6 +34,7 @@ import pytest
 
 from pcswitcher.executor import BashLoginRemoteExecutor
 from tests.integration import SKIP_INSTALL_ON_TARGET
+from tests.integration.conftest import write_pcswitcher_config
 from tests.integration.jobs import folder_sync_scenario
 
 pytestmark = [pytest.mark.area_folder, pytest.mark.area_btrfs, pytest.mark.area_core]
@@ -120,16 +121,6 @@ async def _capture_machine_state(executor: BashLoginRemoteExecutor) -> _MachineS
     return _MachineState(sync_history=history.strip(), snapshots=snapshots.strip(), config=config.strip())
 
 
-async def _write_source_config(executor: BashLoginRemoteExecutor, scope: str) -> None:
-    """Write the rehearsal's config on the source machine."""
-    result = await executor.run_command(
-        "mkdir --parents ~/.config/pc-switcher"
-        f" && cat > ~/.config/pc-switcher/config.yaml << 'CONF_EOF'\n{_dry_run_config(scope)}CONF_EOF",
-        timeout=10.0,
-    )
-    assert result.success, f"Failed to write dry-run test config: {result.stderr}"
-
-
 class TestDryRunContract:
     """The tool-wide `--dry-run` contract, on a real sync (ADR-014, D-12)."""
 
@@ -159,7 +150,7 @@ class TestDryRunContract:
         scope = folder_sync_scenario.filter_tree_path()
 
         try:
-            await _write_source_config(pc1, scope)
+            await write_pcswitcher_config(pc1, _dry_run_config(scope))
             await folder_sync_scenario.seed_filter_source(pc1)
             await folder_sync_scenario.seed_filter_target(pc2_executor)
 

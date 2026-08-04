@@ -15,6 +15,7 @@ from pcswitcher.config_sync import (
     sync_config_to_target,
 )
 from pcswitcher.executor import RemoteExecutor
+from tests.integration.conftest import write_pcswitcher_config
 
 # The two machines are named by hostname in everything config sync prints
 # (`PKG-FR-NAME-THE-MACHINES`), so every call has to supply them.
@@ -41,8 +42,7 @@ class TestConfigSyncIntegration:
         config_content = "# Test config\nlog_level: DEBUG\n"
 
         # Create config file on target
-        await pc1_executor.run_command("mkdir --parents ~/.config/pc-switcher")
-        await pc1_executor.run_command(f"cat > ~/.config/pc-switcher/config.yaml << 'EOF'\n{config_content}EOF")
+        await write_pcswitcher_config(pc1_executor, config_content)
 
         try:
             result = await _get_target_config(pc1_executor)
@@ -99,8 +99,7 @@ class TestConfigSyncIntegration:
         config_content = "log_level: INFO\n"
 
         # Create matching configs on source and target
-        await pc1_executor.run_command("mkdir --parents ~/.config/pc-switcher")
-        await pc1_executor.run_command(f"cat > ~/.config/pc-switcher/config.yaml << 'EOF'\n{config_content}EOF")
+        await write_pcswitcher_config(pc1_executor, config_content)
 
         console = MagicMock()
 
@@ -177,8 +176,7 @@ class TestConfigSyncIntegration:
     async def test_sync_config_differs_accepts_source(self, pc1_executor: RemoteExecutor) -> None:
         """Should overwrite target config when user accepts source."""
         # Create different config on target
-        await pc1_executor.run_command("mkdir --parents ~/.config/pc-switcher")
-        await pc1_executor.run_command("cat > ~/.config/pc-switcher/config.yaml << 'EOF'\nlog_level: WARNING\nEOF")
+        await write_pcswitcher_config(pc1_executor, "log_level: WARNING\n")
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             f.write("log_level: DEBUG\n")
@@ -207,8 +205,7 @@ class TestConfigSyncIntegration:
     async def test_sync_config_differs_keeps_target(self, pc1_executor: RemoteExecutor) -> None:
         """Should keep target config when user chooses to keep."""
         # Create different config on target
-        await pc1_executor.run_command("mkdir --parents ~/.config/pc-switcher")
-        await pc1_executor.run_command("cat > ~/.config/pc-switcher/config.yaml << 'EOF'\nlog_level: WARNING\nEOF")
+        await write_pcswitcher_config(pc1_executor, "log_level: WARNING\n")
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             f.write("log_level: DEBUG\n")
@@ -237,8 +234,7 @@ class TestConfigSyncIntegration:
     async def test_sync_config_differs_aborts(self, pc1_executor: RemoteExecutor) -> None:
         """Should abort sync when user chooses abort."""
         # Create different config on target
-        await pc1_executor.run_command("mkdir --parents ~/.config/pc-switcher")
-        await pc1_executor.run_command("cat > ~/.config/pc-switcher/config.yaml << 'EOF'\nlog_level: WARNING\nEOF")
+        await write_pcswitcher_config(pc1_executor, "log_level: WARNING\n")
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             f.write("log_level: DEBUG\n")
