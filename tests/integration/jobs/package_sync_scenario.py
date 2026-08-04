@@ -57,6 +57,26 @@ RDEPENDS_PROBE_LIMIT = 48
 # asks for more than three subjects.
 REMOVAL_REHEARSAL_HEADROOM = 4
 
+# Packages a run of pc-switcher needs on the machine it is running against, so no scenario
+# may borrow one as a subject to remove: apt's own reverse-dependency check has no idea this
+# tool exists, and the removal succeeds cleanly right up until the next sync fails in a step
+# that has nothing to do with the test that took the package away (`btrfs-progs` gone, and
+# the snapshot step reports `btrfs: command not found`). The snap counterpart is
+# `SNAP_REMOVAL_DENYLIST`.
+APT_SUBJECT_DENYLIST = frozenset(
+    {
+        "acl",  # folder_sync validates it and passes rsync --acls
+        "btrfs-progs",  # every pre- and post-sync snapshot
+        "flatpak",  # flatpak_sync
+        "openssh-client",  # the connection to the target
+        "openssh-server",  # the connection from the source
+        "rsync",  # folder_sync's whole transfer
+        "snapd",  # snap_sync
+        "sudo",  # every escalated command on either machine
+        "ubuntu-pro-client",  # the ESM attachment gate reads its state
+    }
+)
+
 
 def nonblank_lines(text: str) -> list[str]:
     """Split command output into stripped, non-empty lines."""
@@ -190,13 +210,14 @@ def pick_safe_removal_candidates(
     count: int = 1,
 ) -> list[str]:
     """Pick up to `count` packages (alphabetically, for determinism) that are manually
-    installed on pc1, present on pc2, and whose installed reverse dependencies on pc2
-    include no manually-installed package there (T-02-28's safety check before removing
-    anything from a real VM). Returns fewer than `count` entries -- possibly none -- when
-    not enough candidates satisfy all three conditions.
+    installed on pc1, present on pc2, whose installed reverse dependencies on pc2 include no
+    manually-installed package there (T-02-28's safety check before removing anything from a
+    real VM), and that pc-switcher itself does not need (`APT_SUBJECT_DENYLIST`). Returns
+    fewer than `count` entries -- possibly none -- when not enough candidates satisfy all
+    four conditions.
     """
     picked: list[str] = []
-    for name in sorted(set(pc1_manual) & pc2_installed):
+    for name in sorted((set(pc1_manual) & pc2_installed) - APT_SUBJECT_DENYLIST):
         if not (reverse_deps_by_candidate.get(name, set()) & pc2_manual):
             picked.append(name)
             if len(picked) == count:
@@ -1677,6 +1698,10 @@ async def a_package_both_machines_have_unheld(
     `exclude` keeps a scenario's other apt subjects out of the answer: a run that diverges
     one package and holds another needs the two to be different packages, and every
     selection in this module is alphabetical for determinism, so without this they collide.
+
+    `APT_SUBJECT_DENYLIST` is out too. A hold is not a removal, so nothing here would break
+    today — but a package this tool needs has no business being any scenario's subject, and
+    the next scenario to reach for the hold subject may not be holding it.
     """
     # One read-only snapshot per machine, taken at once.
     (
@@ -1685,7 +1710,7 @@ async def a_package_both_machines_have_unheld(
     ) = await asyncio.gather(apt_selection_snapshot(pc1_executor), apt_selection_snapshot(pc2_executor))
     shared = sorted(
         name
-        for name in source_manual & target_manual
+        for name in (source_manual & target_manual) - APT_SUBJECT_DENYLIST
         if name not in exclude
         and name not in source_held
         and name not in target_held

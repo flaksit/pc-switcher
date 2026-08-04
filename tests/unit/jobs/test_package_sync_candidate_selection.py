@@ -10,6 +10,7 @@ itself is ordinary Python and gets fast, VM-independent coverage here.
 from __future__ import annotations
 
 from tests.integration.jobs.package_sync_scenario import (
+    APT_SUBJECT_DENYLIST,
     nonblank_lines,
     parse_batched_rdepends,
     parse_dpkg_installed,
@@ -94,6 +95,23 @@ class TestPickSafeRemovalCandidate:
             reverse_deps_by_candidate={},
         )
         assert result is None
+
+    def test_never_picks_a_package_pc_switcher_itself_needs(self) -> None:
+        """A package this tool runs on is never a subject, however safe apt thinks it is.
+
+        apt's reverse-dependency check has no idea pc-switcher exists, so removing
+        `btrfs-progs` succeeds cleanly and the NEXT sync fails creating a snapshot — in a
+        different test from the one that took the package away. Only a VM run would ever
+        show that, which is why the denylist is asserted here instead.
+        """
+        for denied in sorted(APT_SUBJECT_DENYLIST):
+            result = pick_safe_removal_candidate(
+                pc1_manual=[denied, "zzz-safe"],
+                pc2_installed={denied, "zzz-safe"},
+                pc2_manual={denied, "zzz-safe"},
+                reverse_deps_by_candidate={},
+            )
+            assert result == "zzz-safe", f"{denied} was offered as a removal subject"
 
     def test_all_candidates_unsafe_yields_none(self) -> None:
         result = pick_safe_removal_candidate(
