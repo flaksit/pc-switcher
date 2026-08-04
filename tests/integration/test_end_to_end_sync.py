@@ -664,6 +664,10 @@ class TestEndToEndSync:
 class TestInstallOnTargetIntegration:
     """Integration tests verifying InstallOnTargetJob effects through full sync."""
 
+    # Install behavior, reached through a full sync: joins the install area on top of
+    # the module's area_folder, so a change to the install code selects these too.
+    pytestmark = pytest.mark.area_install
+
     async def test_install_on_target_fresh_machine(
         self,
         pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
