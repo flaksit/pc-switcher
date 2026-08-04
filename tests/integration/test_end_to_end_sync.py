@@ -27,11 +27,8 @@ Test VM Requirements:
 from __future__ import annotations
 
 import asyncio
-import os
-import shlex
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
-from pathlib import PurePosixPath
 
 import pytest
 import pytest_asyncio
@@ -39,6 +36,7 @@ import pytest_asyncio
 from pcswitcher.executor import BashLoginRemoteExecutor
 from pcswitcher.version import get_this_version
 from tests.integration import SKIP_INSTALL_ON_TARGET
+from tests.integration.jobs import folder_sync_scenario
 
 pytestmark = pytest.mark.area_folder
 
@@ -239,416 +237,31 @@ async def sync_ready_source_long_duration(
     )
 
 
-# ---------------------------------------------------------------------------
-# Folder-sync scenario helpers (real /home): seeding, manifests, config.
-#
-# The end-to-end test below syncs the real /home (the production default scope).
-# It is safe on the VMs because both boot from an identical btrfs baseline (so the
-# --delete mirror only moves the seeded subtree), pc-switcher's own runtime files
-# are protected by the hardcoded excludes (ADR-016), heavy regenerable trees are
-# excluded in the test config for speed, and .ssh/known_hosts is excluded because
-# reset-vm.sh gives each VM the other's host key. Each test cleans up its subtree.
-# ---------------------------------------------------------------------------
-
-# Seeded rich test subtree, relative to the user's home.
-_TESTTREE = "pcsw-itest"
-
-# uid/gid 1 = daemon on Ubuntu — a non-root system user, used numerically to prove
-# uid/gid preservation for files the invoking user cannot access.
-_OTHER_UID = 1
-_OTHER_GID = 1
-
-# Known mtimes (Unix epoch seconds) for backdated-mtime assertions.
-_BACKDATED_MTIME = 1705312800  # 2024-01-15 10:00:00 UTC
-_ADDITION_MTIME = 1710000000  # 2024-03-09 16:00:00 UTC
-
-# pc-switcher runtime state dir (ADR-016 hardcoded exclude target).
-_STATE_DIR = "~/.local/share/pc-switcher"
-
-# SC3 INCLUSION markers (home-relative). The default config deliberately SYNCS
-# dev-tool caches and VS Code user state while excluding regenerable VS Code caches.
-# These live outside the pcsw-itest tree (so they don't affect the tree manifest);
-# each holds a distinctive content string so we can assert it transferred.
-_INCLUDED_MARKERS = {
-    ".cargo/pcsw-cache-marker.txt": "cargo-included",  # dev-tool cache — synced
-    ".config/Code/User/pcsw-user-marker.json": "vscode-user-included",  # VS Code user state — synced
-}
-# Sibling of Code/User that IS excluded by config — proves inclusion is selective.
-_EXCLUDED_MARKER = ".config/Code/Cache/pcsw-cache-marker.bin"
-
-
-# ---------------------------------------------------------------------------
-# #166 filter-rule scenario (separate from the strict-manifest _TESTTREE).
-#
-# Rides on the same first A→B sync. Exercises, through the REAL rsync command
-# built by _build_rsync_cmd, every filter surface:
-#   - central include-override (keep pcsw-filter/cache/keep-uv + keep-pip, drop the rest);
-#   - a wholly-excluded central subtree (pcsw-filter/excluded);
-#   - nested per-directory .pcswitcher-filter files (pcsw-filter/nest and .../nest/deep);
-# and verifies BOTH directions of correctness:
-#   - included paths ADD / OVERWRITE / DELETE on the target (rsync --delete within);
-#   - excluded paths leave the target AS-IS, both when a conflicting copy exists on the
-#     source AND when the path exists ONLY on the target (the --delete survival case —
-#     the important difference: no --delete-excluded, so excluded target files are never
-#     removed even with no source counterpart);
-#   - per-directory filter files themselves transfer to the target (no `e` modifier).
-#
-# This tree lives outside _TESTTREE so its intentional source/target divergences do not
-# perturb the strict ownership/content manifest equality asserted for _TESTTREE.
-# ---------------------------------------------------------------------------
-
-_FILTER_TREE = "pcsw-filter"
-
-# Files present on the SOURCE (pc1), home-relative → exact content.
-_FILTER_SRC: dict[str, str] = {
-    f"{_FILTER_TREE}/synced/add_me.txt": "src-add",  # source-only, included → added on target
-    f"{_FILTER_TREE}/synced/overwrite_me.txt": "src-new",  # differs on target → overwrites it
-    f"{_FILTER_TREE}/synced/keep_me.txt": "same",  # identical on target → unchanged
-    f"{_FILTER_TREE}/cache/keep-uv/tool.txt": "uv-src",  # include-override kept subfolder
-    f"{_FILTER_TREE}/cache/keep-pip/tool.txt": "pip-src",  # include-override kept subfolder
-    f"{_FILTER_TREE}/cache/junk/blob.txt": "junk-src",  # dropped sibling → must not transfer
-    f"{_FILTER_TREE}/excluded/on_both.txt": "src-version",  # excluded → must not overwrite target
-    f"{_FILTER_TREE}/nest/keep.txt": "nest-keep-src",  # per-dir subtree, not excluded → synced
-    f"{_FILTER_TREE}/nest/nested_secret.txt": "src-secret",  # per-dir excluded → must not transfer
-    f"{_FILTER_TREE}/nest/deep/keep.txt": "deep-keep-src",  # nested, not excluded → synced
-    f"{_FILTER_TREE}/nest/deep/nested_secret.txt": "src-deep-secret",  # inherited exclude → no transfer
-    f"{_FILTER_TREE}/nest/deep/deep_only.txt": "src-deep-only",  # deep per-dir exclude → no transfer
-}
-
-# Per-directory filter files on the SOURCE (transfer to target; govern their subtree).
-_FILTER_SRC_PERDIR: dict[str, str] = {
-    f"{_FILTER_TREE}/nest/.pcswitcher-filter": "- nested_secret.txt",
-    f"{_FILTER_TREE}/nest/deep/.pcswitcher-filter": "- deep_only.txt",
-}
-
-# Files PRE-EXISTING on the TARGET (pc2) before the first sync (drive the --delete cases).
-# The `overwrite_me` target copy differs in SIZE from the source's, not just content, so
-# rsync's default (size, mtime) quick-check always transfers it regardless of seed timing.
-# The target deliberately does NOT hold the .pcswitcher-filter files: this models a genuine
-# first sync. A dir-merge rule is read per-side, so a per-directory exclude protects a
-# pre-existing target file from --delete only once the filter file is on the receiver
-# (verified against rsync 3.2.7). folder_sync closes that gap: because the source filter
-# files are not yet on the target (_needs_copy_pass detects the mismatch), execute()
-# runs the mirror WITHOUT --delete first to place them, then the deleting mirror — so the
-# per-dir survivors below are protected on this first sync. That copy pass is exactly
-# what this scenario exercises end-to-end.
-_FILTER_TGT: dict[str, str] = {
-    f"{_FILTER_TREE}/synced/overwrite_me.txt": "old",  # included, differing size → overwritten by source
-    f"{_FILTER_TREE}/synced/keep_me.txt": "same",  # identical → untouched
-    f"{_FILTER_TREE}/synced/delete_me.txt": "tgt-doomed",  # included, source-absent → deleted
-    f"{_FILTER_TREE}/cache/junk/tgt_junk.txt": "tgt-junk",  # central-excluded, source-absent → survives
-    f"{_FILTER_TREE}/excluded/on_both.txt": "tgt-version",  # central-excluded, source-present → not overwritten
-    f"{_FILTER_TREE}/excluded/tgt_only.txt": "tgt-survivor",  # central-excluded, source-absent → survives
-    f"{_FILTER_TREE}/nest/nested_secret.txt": "tgt-secret",  # per-dir excluded (pre-seeded rule) → survives
-    f"{_FILTER_TREE}/nest/deep/nested_secret.txt": "tgt-deep-secret",  # inherited exclude → survives
-    f"{_FILTER_TREE}/nest/deep/deep_only.txt": "tgt-deep",  # deep per-dir exclude → survives
-}
-
-# Expected TARGET state after the first A→B sync (None ⇒ must be absent).
-_FILTER_EXPECT: dict[str, str | None] = {
-    # Included subtree: add / overwrite / keep / delete.
-    f"{_FILTER_TREE}/synced/add_me.txt": "src-add",
-    f"{_FILTER_TREE}/synced/overwrite_me.txt": "src-new",
-    f"{_FILTER_TREE}/synced/keep_me.txt": "same",
-    f"{_FILTER_TREE}/synced/delete_me.txt": None,
-    # Include-override (#166): kept dev caches sync; the dropped sibling never arrives.
-    f"{_FILTER_TREE}/cache/keep-uv/tool.txt": "uv-src",
-    f"{_FILTER_TREE}/cache/keep-pip/tool.txt": "pip-src",
-    f"{_FILTER_TREE}/cache/junk/blob.txt": None,
-    f"{_FILTER_TREE}/cache/junk/tgt_junk.txt": "tgt-junk",
-    # Central exclusion protects the target both ways (conflicting copy, and target-only).
-    f"{_FILTER_TREE}/excluded/on_both.txt": "tgt-version",
-    f"{_FILTER_TREE}/excluded/tgt_only.txt": "tgt-survivor",
-    # Nested per-directory filters: the files transfer; their rules protect the target subtree.
-    f"{_FILTER_TREE}/nest/.pcswitcher-filter": "- nested_secret.txt",
-    f"{_FILTER_TREE}/nest/deep/.pcswitcher-filter": "- deep_only.txt",
-    f"{_FILTER_TREE}/nest/keep.txt": "nest-keep-src",
-    f"{_FILTER_TREE}/nest/deep/keep.txt": "deep-keep-src",
-    f"{_FILTER_TREE}/nest/nested_secret.txt": "tgt-secret",
-    f"{_FILTER_TREE}/nest/deep/nested_secret.txt": "tgt-deep-secret",
-    f"{_FILTER_TREE}/nest/deep/deep_only.txt": "tgt-deep",
-}
-
-
-def _tree(user: str) -> str:
-    """Absolute path of the seeded rich test subtree within the real home."""
-    return f"/home/{user}/{_TESTTREE}"
-
-
-def _make_e2e_home_filter() -> str:
-    """Central `merge` filter for the /home folder_sync entry (#166).
-
-    `- .local/share/flatpak` is here purely for cost. The shipped `home.filter` ships no
-    such rule on purpose (D-29: enabling `sync_jobs.flatpak_sync` excludes that store
-    non-overridably, and a user who does not enable it legitimately wants it mirrored), but
-    this config does NOT enable flatpak_sync, and the test VMs carry a ~2.8 GB Flathub
-    runtime under it (`vm-test-fixtures.sh`). Mirroring it would add gigabytes to a test
-    whose subject is filter mechanics on a small seeded tree, and would prove nothing —
-    the strict manifests below cover only that tree.
-
-    Exercises, end-to-end through the real rsync command, every central filter surface:
-    the machine-identity/regenerable excludes (as before); the #166 include-override idiom
-    (keep the dev caches under pcsw-filter/cache while dropping the rest, via `+` re-includes
-    ordered before a `-` on the parent's children — the exact ancestor-descent shape the
-    shipped home.filter uses); and a wholly-excluded subtree (pcsw-filter/excluded). The
-    per-directory .pcswitcher-filter files seeded under pcsw-filter/nest are activated by the
-    job's own always-emitted `dir-merge /.pcswitcher-filter` rule, not by this file. Patterns
-    are floating (no leading /), matching the shipped home.filter, because /home syncs with
-    each user's directory one level below the transfer root.
-    """
-    return f"""\
-- .ssh/id_*
-- .ssh/known_hosts
-- .ssh/authorized_keys
-- .config/tailscale
-- .config/Code/Cache
-- .config/Code/CachedData
-- .config/Code/GPUCache
-- .cache
-- .local/share/uv/python
-- .local/share/flatpak
-+ {_FILTER_TREE}/cache/
-+ {_FILTER_TREE}/cache/keep-uv/***
-+ {_FILTER_TREE}/cache/keep-pip/***
-- {_FILTER_TREE}/cache/*
-- {_FILTER_TREE}/excluded
-- {_TESTTREE}/secret
-"""
-
-
-def _make_e2e_config() -> str:
-    """Config exercising both a generic job (dummy_success) and folder_sync of /home."""
-    return """\
-logging:
-  file: DEBUG
-  tui: INFO
-  external: WARNING
-sync_jobs:
-  dummy_success: true
-  folder_sync: true
-disk_space_monitor:
-  preflight_minimum: "5%"
-  runtime_minimum: "3%"
-  warning_threshold: "10%"
-  check_interval: 5
-btrfs_snapshots:
-  subvolumes:
-    - "@"
-    - "@home"
-  keep_recent: 2
-dummy_success:
-  source_duration: 2
-  target_duration: 2
-folder_sync:
-  folders:
-    - path: /home
-      enabled: true
-      filter_file: ~/.config/pc-switcher/home.filter
-"""
-
-
-async def _write_config(executor: BashLoginRemoteExecutor, config: str) -> None:
-    """Write the pc-switcher config to a VM."""
-    result = await executor.run_command(
-        f"mkdir --parents ~/.config/pc-switcher"
-        f" && cat > ~/.config/pc-switcher/config.yaml << 'CONF_EOF'\n{config}CONF_EOF",
-        timeout=10.0,
-    )
-    assert result.success, f"Failed to write config: {result.stderr}"
-
-
-async def _write_filter_file(executor: BashLoginRemoteExecutor, contents: str) -> None:
-    """Write the folder_sync filter_file referenced by the e2e config to a VM (#166)."""
-    cmd = (
-        "mkdir --parents ~/.config/pc-switcher && "
-        f"cat > ~/.config/pc-switcher/home.filter << 'FILTER_EOF'\n{contents}FILTER_EOF"
-    )
-    result = await executor.run_command(cmd, timeout=10.0)
-    assert result.success, f"Failed to write filter file: {result.stderr}"
-
-
-def _seed_files_script(files: dict[str, str]) -> str:
-    """Build a `set -e` shell script writing each home-relative path with its exact content.
-
-    `.pcswitcher-filter` files get a trailing newline (rsync merge-file convention); every
-    other file is written with `printf %s` (no trailing newline) so an exact content
-    comparison on the target is unambiguous.
-    """
-    lines = ["set -e"]
-    for rel, content in files.items():
-        rel_path = PurePosixPath(rel)
-        fmt = r"'%s\n'" if rel_path.name == ".pcswitcher-filter" else "%s"
-        lines.append(f"mkdir --parents ~/{rel_path.parent}")
-        lines.append(f"printf {fmt} {shlex.quote(content)} > ~/{rel}")
-    return "\n".join(lines)
-
-
-async def _seed_filter_source(executor: BashLoginRemoteExecutor) -> None:
-    """Seed the #166 filter-scenario files (incl. per-directory filter files) on the source."""
-    script = _seed_files_script({**_FILTER_SRC, **_FILTER_SRC_PERDIR})
-    result = await executor.run_command(script, timeout=30.0, login_shell=False)
-    assert result.success, f"Failed to seed filter-scenario source files: {result.stderr}"
-
-
-async def _seed_filter_target(executor: BashLoginRemoteExecutor) -> None:
-    """Seed the pre-existing target-side files that the #166 filter assertions check against."""
-    result = await executor.run_command(_seed_files_script(_FILTER_TGT), timeout=30.0, login_shell=False)
-    assert result.success, f"Failed to seed filter-scenario target files: {result.stderr}"
-
-
-async def _assert_filter_outcomes(executor: BashLoginRemoteExecutor) -> None:
-    """Assert the target's #166 filter tree matches `_FILTER_EXPECT` after the first sync.
-
-    One command probes every expected path, emitting `<path>@@F@@<content-or-__ABSENT__>@@R@@`
-    records (printable separators, robust to any file content); the parsed results are then
-    compared here so a single assertion reports all discrepancies at once.
-    """
-    probe = "\n".join(
-        f"printf %s {shlex.quote(rel)}; printf '@@F@@'; "
-        f"if [ -e ~/{rel} ]; then cat ~/{rel}; else printf %s __ABSENT__; fi; printf '@@R@@'"
-        for rel in _FILTER_EXPECT
-    )
-    result = await executor.run_command(probe, timeout=30.0, login_shell=False)
-    assert result.success, f"filter-outcome probe failed on target: {result.stderr}"
-
-    got: dict[str, str] = {}
-    for record in result.stdout.split("@@R@@"):
-        if not record:
-            continue
-        path, _, content = record.partition("@@F@@")
-        got[path] = content
-
-    errors: list[str] = []
-    for rel, expected in _FILTER_EXPECT.items():
-        actual = got.get(rel)
-        if expected is None:
-            if actual != "__ABSENT__":
-                errors.append(f"{rel}: expected ABSENT on target, got {actual!r}")
-        elif actual is None or actual == "__ABSENT__":
-            errors.append(f"{rel}: expected {expected!r}, but the file is ABSENT on target")
-        elif actual.strip() != expected.strip():
-            errors.append(f"{rel}: expected {expected!r}, got {actual!r}")
-    assert not errors, "Filter-rule outcomes on target are wrong:\n" + "\n".join(errors)
-
-
-async def _seed_rich_tree(executor: BashLoginRemoteExecutor, tree: str) -> None:
-    """Create the rich metadata/ownership test tree inside `tree` on a VM.
-
-    Covers the full ownership x permission matrix (user/root/other-user files AND
-    directories), special permission bits (setuid/setgid/sticky), a POSIX ACL, a
-    backdated mtime, a hard-link pair, a relative symlink, and a config-excluded
-    subtree. Root-/other-user-owned entries are created then chowned, so rsync-as-root
-    must read and preserve entries the invoking user cannot access.
-    """
-    result = await executor.run_command(
-        f"""set -e
-T={tree}
-rm --recursive --force "$T"
-mkdir --parents "$T"/d700 "$T"/d755 "$T"/setgid_dir "$T"/sticky_dir "$T"/secret
-
-# User-owned files with varied permission bits
-printf 'content-600' > "$T/f600.txt"; chmod 600 "$T/f600.txt"
-printf 'content-640' > "$T/f640.txt"; chmod 640 "$T/f640.txt"
-printf 'content-644' > "$T/f644.txt"; chmod 644 "$T/f644.txt"
-printf 'content-755' > "$T/f755.txt"; chmod 755 "$T/f755.txt"
-printf 'content-777' > "$T/f777.txt"; chmod 777 "$T/f777.txt"
-printf 'content-suid' > "$T/setuid.bin"; chmod 4755 "$T/setuid.bin"
-printf 'content-sgid' > "$T/setgid.bin"; chmod 2755 "$T/setgid.bin"
-
-# User-owned directories with varied permission bits (each non-empty)
-printf 'in-d700'   > "$T/d700/inside.txt";       chmod 700  "$T/d700"
-printf 'in-d755'   > "$T/d755/inside.txt";       chmod 755  "$T/d755"
-printf 'in-sgid'   > "$T/setgid_dir/inside.txt"; chmod 2775 "$T/setgid_dir"
-printf 'in-sticky' > "$T/sticky_dir/inside.txt"; chmod 1777 "$T/sticky_dir"
-
-# POSIX ACL (numeric uid, need not exist on either machine)
-printf 'content-acl' > "$T/acl.txt"; setfacl --modify u:2001:r "$T/acl.txt"
-
-# Backdated mtime
-printf 'content-backdated' > "$T/backdated.txt"
-touch --date="@{_BACKDATED_MTIME}" "$T/backdated.txt"
-
-# Hard-link pair and relative symlink
-printf 'content-hardlink' > "$T/hl_a.txt"
-ln "$T/hl_a.txt" "$T/hl_b.txt"
-ln --symbolic f644.txt "$T/sym.txt"
-
-# Root-owned file and directory (created as the user, then chowned; the user
-# ends up with no access, and rsync-as-root must still read and preserve them).
-printf 'content-root-file' > "$T/root_file.txt"
-sudo chown 0:0 "$T/root_file.txt"; sudo chmod 600 "$T/root_file.txt"
-mkdir --parents "$T/root_dir"; printf 'content-root-dir' > "$T/root_dir/inside.txt"
-sudo chown --recursive 0:0 "$T/root_dir"
-sudo chmod 700 "$T/root_dir"; sudo chmod 600 "$T/root_dir/inside.txt"
-
-# Other-(system-)user-owned file and directory (invoking user has no access)
-printf 'content-other-file' > "$T/other_file.txt"
-sudo chown {_OTHER_UID}:{_OTHER_GID} "$T/other_file.txt"; sudo chmod 600 "$T/other_file.txt"
-mkdir --parents "$T/other_dir"; printf 'content-other-dir' > "$T/other_dir/inside.txt"
-sudo chown --recursive {_OTHER_UID}:{_OTHER_GID} "$T/other_dir"
-sudo chmod 700 "$T/other_dir"; sudo chmod 600 "$T/other_dir/inside.txt"
-
-# Excluded subtree (must never reach the target)
-printf 'top-secret' > "$T/secret/token.txt"
-""",
-        timeout=60.0,
-        login_shell=False,
-    )
-    assert result.success, f"Failed to seed rich test tree: {result.stderr}"
-
-
-def _manifest_cmd(tree: str) -> str:
-    """Command emitting a deterministic `<type> <mode> <uid> <gid> <path>` manifest of `tree`.
-
-    Runs under sudo (root-/other-user-owned entries readable); the excluded
-    `secret/` subtree is pruned so source and target manifests match on success.
-    """
-    return (
-        f"cd {tree} && sudo find . -path ./secret -prune -o "
-        r"\( -type f -o -type d -o -type l \) -printf '%y %m %U %G %p\n' | LC_ALL=C sort"
-    )
-
-
-def _md5_manifest_cmd(tree: str) -> str:
-    """Command emitting C-sorted md5sums of every regular file in `tree` (symlinks/secret skipped)."""
-    return (
-        f"cd {tree} && sudo find . -path ./secret -prune -o -type f ! -type l "
-        r"-exec md5sum {} + | LC_ALL=C sort"
-    )
-
-
-async def _seed_included_markers(executor: BashLoginRemoteExecutor) -> None:
-    """Seed the SC3 inclusion/exclusion marker files in the real home dotdirs."""
-    parts = ["set -e"]
-    for rel, content in _INCLUDED_MARKERS.items():
-        parts.append(f'mkdir --parents ~/"$(dirname {rel})" && printf %s {content!r} > ~/{rel}')
-    parts.append(f'mkdir --parents ~/"$(dirname {_EXCLUDED_MARKER})" && printf excluded > ~/{_EXCLUDED_MARKER}')
-    result = await executor.run_command("\n".join(parts), timeout=15.0, login_shell=False)
-    assert result.success, f"Failed to seed inclusion markers: {result.stderr}"
-
-
-async def _remove_test_artifacts(
-    pc1_exec: BashLoginRemoteExecutor,
-    pc2_exec: BashLoginRemoteExecutor,
-    tree: str,
+async def _assert_job_integration(
+    source_executor: BashLoginRemoteExecutor,
+    target_executor: BashLoginRemoteExecutor,
 ) -> None:
-    """Remove the seeded test subtree, filter tree, inclusion markers, and config from both VMs."""
-    markers = " ".join(f"~/{rel}" for rel in (*_INCLUDED_MARKERS, _EXCLUDED_MARKER))
-    for name, exec_ in (("pc1", pc1_exec), ("pc2", pc2_exec)):
-        res = await exec_.run_command(
-            f"sudo rm --recursive --force {tree} {markers} ~/{_FILTER_TREE} && "
-            "rm --force ~/.config/pc-switcher/config.yaml ~/.config/pc-switcher/home.filter",
-            timeout=30.0,
-            login_shell=False,
+    """Assert the standardized job interface ran: both jobs logged, snapshots taken, config synced."""
+    log_content = await source_executor.run_command(
+        "cat $(ls --sort=time ~/.local/share/pc-switcher/logs/sync-*.log | head --lines=1)", timeout=10.0
+    )
+    assert log_content.success, f"Failed to read log file: {log_content.stderr}"
+    log_text = log_content.stdout.lower()
+    assert "dummy_success" in log_text or "source phase" in log_text, "Generic job (dummy_success) not logged."
+    assert "folder_sync" in log_text, "folder_sync job not logged."
+    for role, executor in (("source", source_executor), ("target", target_executor)):
+        snaps = await executor.run_command(
+            "sudo ls /.snapshots/pc-switcher/ 2>/dev/null | head --lines=1", timeout=10.0, login_shell=False
         )
-        if not res.success:
-            print(f"[cleanup] {name} removal warning: {res.stderr}")
+        assert snaps.stdout.strip(), f"Pre/post-sync snapshots missing on {role}."
+    tgt_config = await target_executor.run_command("cat ~/.config/pc-switcher/config.yaml", timeout=10.0)
+    assert tgt_config.success and "dummy_success: true" in tgt_config.stdout, "Config not synced to target."
 
 
 class TestEndToEndSync:
     """Integration tests for complete pc-switcher sync workflow."""
 
-    async def test_core_us_job_arch_as1_job_integration_via_interface(  # noqa: PLR0915
+    async def test_core_us_job_arch_as1_job_integration_via_interface(
         self,
         pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
         pc2_with_pcswitcher: BashLoginRemoteExecutor,
@@ -677,37 +290,28 @@ class TestEndToEndSync:
         4. Mutate pc2 (add / modify / delete file / delete directory / chmod) then B→A: all propagate.
         5. A→B again with no override: a clean round-trip must not trip the out-of-order gate (ADR-015 #159).
 
-        See the module-level "Folder-sync scenario helpers" for why syncing the real /home is safe here.
+        The scenario's seeding, manifests and folder-sync assertions live in
+        `tests/integration/jobs/folder_sync_scenario.py`, whose module docstring explains why
+        syncing the real /home is safe here.
         """
         _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
-        user = os.environ["PC_SWITCHER_TEST_USER"]
-        tree = _tree(user)
+        tree = folder_sync_scenario.tree_path()
+        state_dir = folder_sync_scenario.STATE_DIR
 
         try:
-            await _write_config(pc1_executor, _make_e2e_config())
-            await _write_filter_file(pc1_executor, _make_e2e_home_filter())
-            await _seed_rich_tree(pc1_executor, tree)
-            await _seed_included_markers(pc1_executor)
-            await _seed_filter_source(pc1_executor)
-            await pc2_executor.run_command(f"sudo rm --recursive --force {tree}", timeout=15.0, login_shell=False)
+            await folder_sync_scenario.write_config(pc1_executor)
+            await folder_sync_scenario.write_filter_file(pc1_executor)
+            await folder_sync_scenario.seed_rich_tree(pc1_executor, tree)
+            await folder_sync_scenario.seed_included_markers(pc1_executor)
+            await folder_sync_scenario.seed_filter_source(pc1_executor)
+            await folder_sync_scenario.clear_target_tree(pc2_executor, tree)
             # Pre-seed the target-side files that drive the #166 --delete filter cases
             # (overwrite / delete-within-included / excluded-survivor). NOT under `tree`,
             # so the pc2 tree removal above leaves them in place for the first sync.
-            await _seed_filter_target(pc2_executor)
+            await folder_sync_scenario.seed_filter_target(pc2_executor)
+            await folder_sync_scenario.seed_state_sentinels(pc1_executor, pc2_executor)
 
-            # ADR-016 runtime-exclude sentinels: a marker inside each machine's own state dir
-            # (reset_pcswitcher_state wiped the dir, so create it fresh here).
-            await pc1_executor.run_command(
-                f"mkdir --parents {_STATE_DIR} && printf pc1 > {_STATE_DIR}/SENTINEL_SOURCE", timeout=10.0
-            )
-            await pc2_executor.run_command(
-                f"mkdir --parents {_STATE_DIR} && printf pc2 > {_STATE_DIR}/SENTINEL_TARGET", timeout=10.0
-            )
-
-            src_manifest = await pc1_executor.run_command(_manifest_cmd(tree), timeout=30.0, login_shell=False)
-            assert src_manifest.success, f"source manifest failed: {src_manifest.stderr}"
-            src_md5 = await pc1_executor.run_command(_md5_manifest_cmd(tree), timeout=30.0, login_shell=False)
-            assert src_md5.success, f"source md5 manifest failed: {src_md5.stderr}"
+            src_manifests = await folder_sync_scenario.capture_manifests(pc1_executor, tree)
 
             # --- Step 1: blocked first sync (W1 gate, non-interactive) ---
             blocked = await pc1_executor.run_command(
@@ -720,21 +324,23 @@ class TestEndToEndSync:
                 "out-of-order" in (blocked.stdout + blocked.stderr).lower()
                 or "target" in (blocked.stdout + blocked.stderr).lower()
             ), f"Unexpected first-sync-gate message.\nstdout: {blocked.stdout}\nstderr: {blocked.stderr}"
-            no_tree = await pc2_executor.run_command(f"test ! -e {tree}", timeout=10.0, login_shell=False)
-            assert no_tree.success, "Blocked first sync transferred the tree to pc2."
+            await folder_sync_scenario.assert_tree_absent(
+                pc2_executor, tree, "Blocked first sync transferred the tree to pc2."
+            )
 
             # --- Step 2: dry-run rehearsal (proceeds, writes nothing, no history change) ---
             hist_before = await pc1_executor.run_command(
-                f"cat {_STATE_DIR}/sync-history.json 2>/dev/null || echo absent", timeout=10.0
+                f"cat {state_dir}/sync-history.json 2>/dev/null || echo absent", timeout=10.0
             )
             dry = await pc1_executor.run_command(
                 f"{SKIP_INSTALL_ON_TARGET} pc-switcher sync pc2 --yes --dry-run", timeout=180.0, login_shell=True
             )
             assert dry.success, f"--dry-run should not be blocked (ADR-014).\nstderr: {dry.stderr}"
-            still_no_tree = await pc2_executor.run_command(f"test ! -e {tree}", timeout=10.0, login_shell=False)
-            assert still_no_tree.success, "--dry-run transferred the tree to pc2 (must be read-only)."
+            await folder_sync_scenario.assert_tree_absent(
+                pc2_executor, tree, "--dry-run transferred the tree to pc2 (must be read-only)."
+            )
             hist_after = await pc1_executor.run_command(
-                f"cat {_STATE_DIR}/sync-history.json 2>/dev/null || echo absent", timeout=10.0
+                f"cat {state_dir}/sync-history.json 2>/dev/null || echo absent", timeout=10.0
             )
             assert hist_before.stdout.strip() == hist_after.stdout.strip(), "--dry-run updated sync-history (D-12)."
 
@@ -749,111 +355,30 @@ class TestEndToEndSync:
             )
 
             # 3a. Job integration via interface: log entries, snapshots on both, config synced.
-            log_content = await pc1_executor.run_command(
-                "cat $(ls --sort=time ~/.local/share/pc-switcher/logs/sync-*.log | head --lines=1)", timeout=10.0
-            )
-            assert log_content.success, f"Failed to read log file: {log_content.stderr}"
-            log_text = log_content.stdout.lower()
-            assert "dummy_success" in log_text or "source phase" in log_text, "Generic job (dummy_success) not logged."
-            assert "folder_sync" in log_text, "folder_sync job not logged."
-            src_snaps = await pc1_executor.run_command(
-                "sudo ls /.snapshots/pc-switcher/ 2>/dev/null | head --lines=1", timeout=10.0, login_shell=False
-            )
-            assert src_snaps.stdout.strip(), "Pre/post-sync snapshots missing on source."
-            tgt_snaps = await pc2_executor.run_command(
-                "sudo ls /.snapshots/pc-switcher/ 2>/dev/null | head --lines=1", timeout=10.0, login_shell=False
-            )
-            assert tgt_snaps.stdout.strip(), "Pre/post-sync snapshots missing on target."
-            tgt_config = await pc2_executor.run_command("cat ~/.config/pc-switcher/config.yaml", timeout=10.0)
-            assert tgt_config.success and "dummy_success: true" in tgt_config.stdout, "Config not synced to target."
+            await _assert_job_integration(pc1_executor, pc2_executor)
 
             # 3b. folder_sync content + metadata: target manifests must equal source manifests exactly.
-            tgt_manifest = await pc2_executor.run_command(_manifest_cmd(tree), timeout=30.0, login_shell=False)
-            assert tgt_manifest.success, f"target manifest failed: {tgt_manifest.stderr}"
-            assert tgt_manifest.stdout == src_manifest.stdout, (
-                "Ownership/permission manifest differs after A→B (numeric uid/gid, mode, or special bits).\n"
-                f"--- pc1 ---\n{src_manifest.stdout}\n--- pc2 ---\n{tgt_manifest.stdout}"
-            )
-            tgt_md5 = await pc2_executor.run_command(_md5_manifest_cmd(tree), timeout=30.0, login_shell=False)
-            assert tgt_md5.success, f"target md5 manifest failed: {tgt_md5.stderr}"
-            assert tgt_md5.stdout == src_md5.stdout, (
-                "Content md5 manifest differs after A→B.\n"
-                f"--- pc1 ---\n{src_md5.stdout}\n--- pc2 ---\n{tgt_md5.stdout}"
-            )
+            await folder_sync_scenario.assert_manifests_match(pc2_executor, tree, src_manifests)
 
             # 3c. ACL, backdated mtime, hard-link inode sharing, symlink target.
-            details = await pc2_executor.run_command(
-                f"getfacl --absolute-names {tree}/acl.txt && echo '---' && "
-                f"stat --format='%Y' {tree}/backdated.txt && "
-                f"stat --format='%i' {tree}/hl_a.txt && stat --format='%i' {tree}/hl_b.txt && "
-                f"readlink {tree}/sym.txt",
-                timeout=15.0,
-                login_shell=False,
-            )
-            assert details.success, f"metadata detail checks failed on pc2: {details.stderr}"
-            acl_part, rest = details.stdout.split("---\n", 1)
-            lines = rest.strip().splitlines()
-            assert "user:2001:r--" in acl_part, f"ACL entry not preserved on pc2:\n{acl_part}"
-            assert int(lines[0]) == _BACKDATED_MTIME, f"backdated mtime not preserved: {lines[0]}"
-            assert lines[1] == lines[2], f"hard-link pair not sharing an inode on pc2 ({lines[1]} != {lines[2]})"
-            assert lines[3] == "f644.txt", f"symlink target wrong on pc2: {lines[3]!r}"
+            await folder_sync_scenario.assert_metadata_details(pc2_executor, tree)
 
             # 3d. Exclusions: config-excluded subtree absent; ADR-016 runtime excludes held.
-            excl = await pc2_executor.run_command(
-                f"test ! -e {tree}/secret/token.txt", timeout=10.0, login_shell=False
-            )
-            assert excl.success, "Config-excluded secret/token.txt reached pc2 (exclusion failed)."
-            runtime = await pc2_executor.run_command(
-                f"test ! -e {_STATE_DIR}/SENTINEL_SOURCE && "
-                f"test -e {_STATE_DIR}/SENTINEL_TARGET && "
-                f"test -e ~/.local/bin/pc-switcher",
-                timeout=10.0,
-            )
-            assert runtime.success, (
-                "ADR-016 runtime exclusion failed: pc1's state reached pc2, or pc2's own state/install was "
-                "clobbered by the --delete mirror of /home."
-            )
+            await folder_sync_scenario.assert_exclusions(pc2_executor, tree)
 
             # 3e. SC3 inclusion: non-excluded dev-tool cache + VS Code user state ARE synced,
             # while a config-excluded sibling (VS Code Cache) is not.
-            marker_rels = list(_INCLUDED_MARKERS)
-            inc = await pc2_executor.run_command(
-                " && echo '|' && ".join(f"cat ~/{rel}" for rel in marker_rels)
-                + f" && echo '|' && ( test ! -e ~/{_EXCLUDED_MARKER} && echo EXCLUDED_ABSENT )",
-                timeout=10.0,
-                login_shell=False,
-            )
-            assert inc.success, f"SC3 inclusion checks failed on pc2: {inc.stderr}"
-            inc_parts = [p.strip() for p in inc.stdout.split("|")]
-            for rel, part in zip(marker_rels, inc_parts, strict=False):
-                assert part == _INCLUDED_MARKERS[rel], (
-                    f"Included path {rel} not synced to pc2 (SC3): got {part!r}, want {_INCLUDED_MARKERS[rel]!r}"
-                )
-            assert "EXCLUDED_ABSENT" in inc_parts[-1], (
-                f"Config-excluded {_EXCLUDED_MARKER} reached pc2 (SC3 exclusion failed)."
-            )
+            await folder_sync_scenario.assert_included_markers(pc2_executor)
 
             # 3f. #166 filter rules end-to-end (central include-override + wholly-excluded
             # subtree + nested per-directory .pcswitcher-filter files). Verifies that
             # included paths add/overwrite/delete on the target, that excluded paths leave
             # the target as-is whether or not a source counterpart exists (the --delete
             # survival case), and that per-directory filter files themselves transfer.
-            await _assert_filter_outcomes(pc2_executor)
+            await folder_sync_scenario.assert_filter_outcomes(pc2_executor)
 
             # --- Step 4: mutate pc2, then B→A ---
-            mutate = await pc2_executor.run_command(
-                f"""set -e
-T={tree}
-printf 'added-on-pc2' > "$T/added.txt"; chmod 750 "$T/added.txt"; touch --date="@{_ADDITION_MTIME}" "$T/added.txt"
-printf 'MODIFIED-644' > "$T/f644.txt"
-rm --force "$T/f600.txt"
-rm --recursive --force "$T/d700"
-chmod 700 "$T/f755.txt"
-""",
-                timeout=15.0,
-                login_shell=False,
-            )
-            assert mutate.success, f"Mutation on pc2 failed: {mutate.stderr}"
+            await folder_sync_scenario.mutate_tree(pc2_executor, tree)
 
             sync_ba = await pc2_executor.run_command(
                 f"{SKIP_INSTALL_ON_TARGET} pc-switcher sync pc1 --yes", timeout=300.0, login_shell=True
@@ -862,26 +387,7 @@ chmod 700 "$T/f755.txt"
                 f"B→A sync failed.\nexit={sync_ba.exit_code}\nstdout: {sync_ba.stdout}\nstderr: {sync_ba.stderr}"
             )
 
-            roundtrip = await pc1_executor.run_command(
-                f"cat {tree}/added.txt && echo '|' && "
-                f"stat --format='%a %Y' {tree}/added.txt && echo '|' && "
-                f"cat {tree}/f644.txt && echo '|' && "
-                f"stat --format='%a' {tree}/f755.txt && echo '|' && "
-                f"( test ! -e {tree}/f600.txt && echo GONE_FILE ) && "
-                f"( test ! -e {tree}/d700 && echo GONE_DIR )",
-                timeout=15.0,
-                login_shell=False,
-            )
-            assert roundtrip.success, f"pc1 checks after B→A failed: {roundtrip.stderr}"
-            added_content, added_meta, f644_content, f755_mode, gone = [p.strip() for p in roundtrip.stdout.split("|")]
-            assert added_content == "added-on-pc2", f"addition content wrong on pc1: {added_content!r}"
-            added_mode, added_mtime = added_meta.split()
-            assert added_mode == "750", f"addition perms not preserved on B→A: {added_mode}"
-            assert int(added_mtime) == _ADDITION_MTIME, f"addition mtime not preserved: {added_mtime}"
-            assert f644_content == "MODIFIED-644", f"modification not propagated on B→A: {f644_content!r}"
-            assert f755_mode == "700", f"permission change not propagated on B→A: {f755_mode}"
-            assert "GONE_FILE" in gone, "file deletion (f600.txt) not propagated on B→A"
-            assert "GONE_DIR" in gone, "directory deletion (d700) not propagated on B→A"
+            await folder_sync_scenario.assert_mutations_propagated(pc1_executor, tree)
 
             # --- Step 5: clean A→B again must not trip the out-of-order gate ---
             sync_ab2 = await pc1_executor.run_command(
@@ -893,7 +399,7 @@ chmod 700 "$T/f755.txt"
             )
 
         finally:
-            await _remove_test_artifacts(pc1_executor, pc2_executor, tree)
+            await folder_sync_scenario.remove_test_artifacts(pc1_executor, pc2_executor, tree)
 
     async def test_core_us_job_arch_as7_interrupt_terminates_job(
         self,

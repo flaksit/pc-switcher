@@ -88,7 +88,10 @@ while IFS= read -r f; do
         src/pcswitcher/btrfs_snapshots.py | src/pcswitcher/jobs/btrfs.py)
             add_area area_btrfs
             ;;
-        src/pcswitcher/jobs/folder_sync.py | src/pcswitcher/home.filter | src/pcswitcher/root.filter)
+        # folder_sync_scenario.py is a helper, not a test file: it carries no markers of
+        # its own, so it is mapped here like a source file.
+        src/pcswitcher/jobs/folder_sync.py | src/pcswitcher/home.filter | src/pcswitcher/root.filter | \
+        tests/integration/jobs/folder_sync_scenario.py)
             add_area area_folder
             ;;
         *)
