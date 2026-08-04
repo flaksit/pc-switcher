@@ -2609,14 +2609,20 @@ async def assert_the_back_direction_converged(
     seed: ConvergenceSeed,
     before: MachinePackageState,
 ) -> None:
-    """The reverse direction over the same pair: what the user undid comes back, a ref filter
-    the source dropped comes off the target, and NOTHING else on the target moves.
+    """The reverse direction over the same pair: what the user undid comes back, the remote
+    table converges on the new source's, and NOTHING else on the target moves.
 
-    `before` is the new target's state as the forward run left it, so the expected state is
-    that one minus the round-trip package: the app this scenario uninstalls between the runs
-    is reinstalled by the run itself, and every other field must survive the round trip
-    untouched. A run that rewrote `/etc/apt`, re-revisioned a snap or dropped a hold on the
-    way past would be visible here and in nothing else.
+    Three things the run is meant to move, each asserted by name: the round-trip package is
+    gone, the new target's copy of the shared remote has lost the ref filter the new source
+    dropped, and the remote only the new target had is deleted -- the forward run left that
+    one on this machine alone, so the reverse direction is where the source not having it
+    finally means something.
+
+    Everything else is compared whole. `before` is the new target's state as the forward run
+    left it, so the expected state is that one minus the round-trip package: the app this
+    scenario uninstalls between the runs is reinstalled by the run itself, and every other
+    field must survive the round trip untouched. A run that rewrote `/etc/apt`, re-revisioned
+    a snap or dropped a hold on the way past would be visible here and in nothing else.
 
     The snap the FORWARD run converged is the fixed-point witness: mapped SKIP_ALWAYS and yet
     absent from both machines' decision files, which is state-based proof it was never
@@ -2639,6 +2645,20 @@ async def assert_the_back_direction_converged(
     assert seed.application in [row[0] for row in await flatpak_app_rows(new_target)], (
         f"{seed.application} was not reinstalled on the new target by the reverse run"
     )
+    remaining_remotes = nonblank_lines(
+        (
+            await new_target.run_command(
+                f"flatpak remotes {seed.scope_flag} --columns=name", login_shell=False, timeout=15.0
+            )
+        ).stdout
+    )
+    assert FIXTURE_UNUSED_FLATPAK_REMOTE not in remaining_remotes, (
+        f"{FIXTURE_UNUSED_FLATPAK_REMOTE} survived on the new target although the new source does not have it"
+    )
+    assert seed.remote_name in remaining_remotes, (
+        f"the reverse run deleted {seed.remote_name} from the new target, although the new source has it and an "
+        "approved ref comes from it"
+    )
 
     converged_item = f"snap:{seed.revision_snap}"
     source_entries, target_entries = await asyncio.gather(
@@ -2649,12 +2669,15 @@ async def assert_the_back_direction_converged(
         "-- an item the forward run converged must produce no diff at all"
     )
 
-    # Each installed flatpak reduced to its application id: the reverse run REINSTALLS the app
-    # this scenario uninstalled between the two syncs, and a real remote may have moved on in
-    # between, so the version and ref columns are the one part of this comparison that can
-    # differ with nothing wrong. That the app is there at all is asserted above.
-    def by_application(state: MachinePackageState) -> MachinePackageState:
-        return replace(state, flatpak_refs=tuple((row[0], "", "", "", "") for row in state.flatpak_refs))
+    # The two flatpak fields are dropped from the whole-state comparison and asserted by name
+    # above, because the reverse run is SUPPOSED to move both: it reinstalls the app this
+    # scenario uninstalled between the syncs (and a real remote may have moved its version on
+    # in between), and it converges the remote table onto the new source's, which is a filter
+    # off one remote and another remote deleted. What is left compared whole -- apt's manual,
+    # held and installed sets, every `/etc/apt` digest, every snap revision -- is what the run
+    # had no business touching.
+    def apart_from_flatpak(state: MachinePackageState) -> MachinePackageState:
+        return replace(state, flatpak_refs=(), flatpak_remotes=())
 
     after = await capture_machine_package_state(new_target)
     expected = replace(
@@ -2662,7 +2685,7 @@ async def assert_the_back_direction_converged(
         apt_manual=tuple(name for name in before.apt_manual if name != seed.install_candidate),
         apt_installed=tuple(name for name in before.apt_installed if name != seed.install_candidate),
     )
-    assert by_application(after) == by_application(expected), (
+    assert apart_from_flatpak(after) == apart_from_flatpak(expected), (
         "the reverse run moved something on the new target beyond the removal it was given.\n"
         f"expected: {expected}\nactual: {after}"
     )
