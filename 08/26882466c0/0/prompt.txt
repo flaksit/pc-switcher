@@ -1,1 +1,5 @@
 move src/pcswitcher/machine-packages.example.yaml into jobs/packages if possible, and update all places where it's used/ref'd
+
+---
+
+not written/copied on first run with an enabled package-sync job?
