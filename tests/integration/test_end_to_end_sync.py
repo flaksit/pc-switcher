@@ -38,8 +38,6 @@ from pcswitcher.version import get_this_version
 from tests.integration import SKIP_INSTALL_ON_TARGET
 from tests.integration.jobs import folder_sync_scenario
 
-pytestmark = pytest.mark.area_folder
-
 
 # Dataclass for pc1_to_pc2_traffic_blocker fixture
 @dataclass
@@ -293,6 +291,10 @@ async def _assert_job_integration(
 class TestEndToEndSync:
     """Integration tests for complete pc-switcher sync workflow."""
 
+    # The only integration coverage of folder_sync, and the one run that exercises every
+    # kind of job the pipeline coordinates -- cheap enough to be worth on every PR.
+    @pytest.mark.smoke
+    @pytest.mark.area_folder
     async def test_core_us_job_arch_as1_job_integration_via_interface(
         self,
         pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
@@ -433,6 +435,7 @@ class TestEndToEndSync:
         finally:
             await folder_sync_scenario.remove_test_artifacts(pc1_executor, pc2_executor, tree)
 
+    @pytest.mark.area_core
     async def test_core_us_job_arch_as7_interrupt_terminates_job(
         self,
         sync_ready_source_long_duration: BashLoginRemoteExecutor,
@@ -540,6 +543,7 @@ class TestEndToEndSync:
         # Clean up temp files
         await pc1_executor.run_command(f"rm --force {output_file} {pid_file}", timeout=10.0)
 
+    @pytest.mark.area_core
     async def test_core_edge_target_unreachable_mid_sync(
         self,
         pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
@@ -696,8 +700,8 @@ class TestEndToEndSync:
 class TestInstallOnTargetIntegration:
     """Integration tests verifying InstallOnTargetJob effects through full sync."""
 
-    # Install behavior, reached through a full sync: joins the install area on top of
-    # the module's area_folder, so a change to the install code selects these too.
+    # Install behavior, reached through a full sync: no sync job of its own beyond the
+    # dummy one, so the install area is all these belong to.
     pytestmark = pytest.mark.area_install
 
     async def test_install_on_target_fresh_machine(
