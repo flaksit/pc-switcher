@@ -108,8 +108,11 @@ class TestARunOfPureDeclines:
 
     @pytest.mark.asyncio
     async def test_a_run_whose_every_answer_is_a_decline_writes_no_decision_file(self) -> None:
-        """H113 — every item the run puts to the user, across three directions and two
-        machines, declined for this run.
+        """H113, N7 — every item the run puts to the user, across three directions and two
+        machines, declined for this run: nothing of it is recorded.
+
+        N7's other half — that the next run offers the same item again, unchanged — has no
+        test at either tier.
         """
         source_responses = {
             "apt-mark showhold": CommandResult(0, "pkg-a\n", ""),

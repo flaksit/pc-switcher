@@ -2748,12 +2748,36 @@ class RehearsalSeed:
     install_candidate: str
     hold_snap: str
     application: str
+    version: str
     scope: Literal["user", "system"]
+    remote_name: str
+    ref: str
     unowned_path: str
     manual_item_id: str
     source_filename: str
     key_filename: str
     pin_filename: str
+
+    def approve_everything(self) -> dict[str, Decision]:
+        """APPLY for each of the four pending writes.
+
+        A rehearsal still has to be ANSWERED: a review nobody attends leaves every decidable
+        item SKIP_ONCE and `PackageSyncJob` raises `JobSkipped` before `apply()`
+        (`PKG-FR-NO-TERMINAL`), so a run that was never asked would preview nothing and prove
+        nothing about what a real one writes.
+        """
+        return {
+            AptPackageItem(name=self.install_candidate, version="").item_id: Decision.APPLY,
+            snap_hold_item_id(self.hold_snap): Decision.APPLY,
+            FlatpakItem(
+                application=self.application,
+                version=self.version,
+                origin=self.remote_name,
+                scope=self.scope,
+                ref=self.ref,
+            ).item_id: Decision.APPLY,
+            self.manual_item_id: Decision.APPLY,
+        }
 
     @property
     def source_dest(self) -> str:
@@ -2788,7 +2812,7 @@ async def seed_a_pending_write_in_every_manager(
 
     install_candidate = apt.install_direction[0]
     hold_snap = (await snap_subjects(source, target, count=2))[1]
-    application, _version, scope, _remote, _url, _ref = await flatpak_subject(source)
+    application, version, scope, remote_name, _url, ref = await flatpak_subject(source)
     scope_flag = "--user" if scope == "user" else "--system"
     sudo = "sudo " if scope == "system" else ""
 
@@ -2821,7 +2845,10 @@ async def seed_a_pending_write_in_every_manager(
         install_candidate=install_candidate,
         hold_snap=hold_snap,
         application=application,
+        version=version,
         scope=scope,
+        remote_name=remote_name,
+        ref=ref,
         unowned_path=unowned_path,
         manual_item_id=manual_item_id,
         source_filename=source_filename,

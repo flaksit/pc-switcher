@@ -168,9 +168,10 @@ class TestDryRunContract:
 
         Run without `--yes`: a rehearsal must reach the end without a single prompt, so
         every gate it passes is one the dry-run path itself waved through, not one the
-        flag answered. It passes no review decisions either, which is what leaves every
-        decidable item unapproved: what the preview must still report is the DERIVED writes,
-        which no answer of the user's controls.
+        flag answered. The package reviews ARE answered, through the automation hook: a run
+        nobody attends leaves every decidable item SKIP_ONCE and each package job raises
+        `JobSkipped` before it previews anything (`PKG-FR-NO-TERMINAL`), so an unanswered
+        rehearsal would assert the absence of writes no run was ever going to make.
         """
         _ = (reset_pcswitcher_state, package_sync_subjects)  # Wipes config, history and snapshots on both VMs
         pc1 = pc1_with_pcswitcher_mod
@@ -189,8 +190,9 @@ class TestDryRunContract:
             source_before = await _capture_machine_state(pc1)
             target_before = await _capture_machine_state(pc2)
 
+            approve = package_sync_scenario.automation_env_assignment_multi(package_seed.approve_everything())
             rehearsal = await pc1.run_command(
-                "pc-switcher sync pc2 --dry-run",
+                f"{approve} pc-switcher sync pc2 --dry-run",
                 timeout=600.0,
                 login_shell=True,
             )

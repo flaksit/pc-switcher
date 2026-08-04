@@ -850,7 +850,9 @@ class TestIdempotency:
 
     @pytest.mark.asyncio
     async def test_identical_source_and_target_produce_no_diff_no_group_and_no_mutation(self) -> None:
-        """H32 — an already-converged pair produces no diff, no group, no converge and no `mutates=` command."""
+        """H32, J2 — an already-converged pair produces no diff, no group, no converge and no
+        `mutates=` command.
+        """
         reviewer = FakeReviewer()
         context = make_context(reviewer=reviewer)
         items = [FakeItem(name="pkg-a"), FakeItem(name="pkg-b")]
