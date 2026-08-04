@@ -18,6 +18,7 @@ import pytest
 import pytest_asyncio
 
 from pcswitcher.executor import BashLoginRemoteExecutor
+from tests.integration import SKIP_INSTALL_ON_TARGET
 
 pytestmark = pytest.mark.area_core
 
@@ -126,7 +127,7 @@ async def test_log_fr_aggregate(
     # --allow-first-sync: pc2 has no sync history (W1 gate, ADR-015); required in CI
     # (no TTY) to bypass the first-sync overwrite confirmation.
     sync_result = await pc1_executor.run_command(
-        "pc-switcher sync pc2 --yes --allow-first-sync",
+        f"{SKIP_INSTALL_ON_TARGET} pc-switcher sync pc2 --yes --allow-first-sync",
         timeout=180.0,
         login_shell=True,
     )

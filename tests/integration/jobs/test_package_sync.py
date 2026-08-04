@@ -111,6 +111,7 @@ from pcswitcher.jobs.packages.state import (
     SnippetRegistry,
 )
 from pcswitcher.models import CommandResult
+from tests.integration import SKIP_INSTALL_ON_TARGET
 
 pytestmark = pytest.mark.area_package
 
@@ -2530,7 +2531,9 @@ class TestOneRunConvergesEveryManager:
             # -- run 1: the rehearsal ----------------------------------------------------
             before_rehearsal = await _capture_machine_package_state(pc2_executor)
             rehearsal = await pc1_executor.run_command(
-                f"{automation} pc-switcher sync pc2 --yes --dry-run", timeout=600.0, login_shell=True
+                f"{SKIP_INSTALL_ON_TARGET} {automation} pc-switcher sync pc2 --yes --dry-run",
+                timeout=600.0,
+                login_shell=True,
             )
             assert rehearsal.success, (
                 f"pc-switcher sync --dry-run exited {rehearsal.exit_code}.\n"
@@ -2572,7 +2575,9 @@ class TestOneRunConvergesEveryManager:
             # -- run 2: the converging run -----------------------------------------------
             source_before = await _capture_machine_package_state(pc1_executor)
             converge = await pc1_executor.run_command(
-                f"{automation} pc-switcher sync pc2 --yes --allow-first-sync", timeout=900.0, login_shell=True
+                f"{SKIP_INSTALL_ON_TARGET} {automation} pc-switcher sync pc2 --yes --allow-first-sync",
+                timeout=900.0,
+                login_shell=True,
             )
             assert converge.success, (
                 f"pc-switcher sync exited {converge.exit_code}.\nstdout: {converge.stdout}\nstderr: {converge.stderr}"
@@ -2697,7 +2702,7 @@ class TestOneRunConvergesEveryManager:
             # presented.
             converged_item = AptPackageItem(name=install_candidate, version="").item_id
             second = await pc1_executor.run_command(
-                f"{_automation_env_assignment_multi({converged_item: Decision.SKIP_ALWAYS})} "
+                f"{SKIP_INSTALL_ON_TARGET} {_automation_env_assignment_multi({converged_item: Decision.SKIP_ALWAYS})} "
                 "pc-switcher sync pc2 --yes --allow-first-sync --allow-out-of-order",
                 timeout=600.0,
                 login_shell=True,
@@ -2739,7 +2744,8 @@ class TestOneRunConvergesEveryManager:
                 "take off"
             )
             unfiltered = await pc1_executor.run_command(
-                f"{automation} pc-switcher sync pc2 --yes --allow-first-sync --allow-out-of-order",
+                f"{SKIP_INSTALL_ON_TARGET} {automation}"
+                f" pc-switcher sync pc2 --yes --allow-first-sync --allow-out-of-order",
                 timeout=900.0,
                 login_shell=True,
             )
@@ -2878,7 +2884,8 @@ class TestTheAptOriginModelOnRealRepositories:
 
             # -- run 1: the repository travels and the vendor's build lands --------------
             first = await pc1_executor.run_command(
-                f"{_automation_env_assignment(vendor_item_id)} pc-switcher sync pc2 --yes --allow-first-sync",
+                f"{SKIP_INSTALL_ON_TARGET} {_automation_env_assignment(vendor_item_id)}"
+                f" pc-switcher sync pc2 --yes --allow-first-sync",
                 timeout=600.0,
                 login_shell=True,
             )
@@ -2928,7 +2935,7 @@ class TestTheAptOriginModelOnRealRepositories:
                 AptPackageItem(name=other_candidate, version="").item_id: Decision.APPLY,
             }
             second = await pc1_executor.run_command(
-                f"{_automation_env_assignment_multi(decisions)} "
+                f"{SKIP_INSTALL_ON_TARGET} {_automation_env_assignment_multi(decisions)} "
                 "pc-switcher sync pc2 --yes --allow-first-sync --allow-out-of-order",
                 timeout=600.0,
                 login_shell=True,
@@ -3131,7 +3138,9 @@ class TestARunWithNobodyToAsk:
             # No automation env prefix and no pty on this exec -- genuinely non-interactive
             # on both stdin and stdout, D-26's actual trigger condition.
             sync_result = await pc1_executor.run_command(
-                "pc-switcher sync pc2 --yes --allow-first-sync", timeout=900.0, login_shell=True
+                f"{SKIP_INSTALL_ON_TARGET} pc-switcher sync pc2 --yes --allow-first-sync",
+                timeout=900.0,
+                login_shell=True,
             )
             assert sync_result.success, (
                 "non-interactive sync unexpectedly failed (D-26's skip-all must not fail the job).\n"
@@ -3425,7 +3434,9 @@ class TestWhatFolderSyncMayAndMayNotCarry:
             # `manual_installs_sync` makes no push and the mirror is the only route left to
             # the registry, and the one snap install below stays declined.
             sync_result = await pc1_executor.run_command(
-                "pc-switcher sync pc2 --yes --allow-first-sync", timeout=900.0, login_shell=True
+                f"{SKIP_INSTALL_ON_TARGET} pc-switcher sync pc2 --yes --allow-first-sync",
+                timeout=900.0,
+                login_shell=True,
             )
             assert sync_result.success, (
                 f"pc-switcher sync exited {sync_result.exit_code}.\n"
@@ -3605,7 +3616,8 @@ class TestSkipAlwaysIsInertInBothRoles:
             # -- run 1: record -----------------------------------------------------------
             skip_always = {apt_item_id: Decision.SKIP_ALWAYS, deb_item_id: Decision.SKIP_ALWAYS}
             first = await pc1_executor.run_command(
-                f"{_automation_env_assignment_multi(skip_always)} pc-switcher sync pc2 --yes --allow-first-sync",
+                f"{SKIP_INSTALL_ON_TARGET} {_automation_env_assignment_multi(skip_always)}"
+                f" pc-switcher sync pc2 --yes --allow-first-sync",
                 timeout=300.0,
                 login_shell=True,
             )
@@ -3629,7 +3641,7 @@ class TestSkipAlwaysIsInertInBothRoles:
             # -- run 2: same direction, forced ------------------------------------------
             force_apply = {apt_item_id: Decision.APPLY, deb_item_id: Decision.APPLY}
             second = await pc1_executor.run_command(
-                f"{_automation_env_assignment_multi(force_apply)} "
+                f"{SKIP_INSTALL_ON_TARGET} {_automation_env_assignment_multi(force_apply)} "
                 "pc-switcher sync pc2 --yes --allow-first-sync --allow-out-of-order",
                 timeout=300.0,
                 login_shell=True,
@@ -3653,7 +3665,7 @@ class TestSkipAlwaysIsInertInBothRoles:
             # -- run 3: reversed roles ---------------------------------------------------
             await _write_apt_sync_config(pc2_executor)
             reversed_result = await pc2_executor.run_command(
-                f"{_automation_env_assignment_multi({apt_item_id: Decision.APPLY})} "
+                f"{SKIP_INSTALL_ON_TARGET} {_automation_env_assignment_multi({apt_item_id: Decision.APPLY})} "
                 "pc-switcher sync pc1 --yes --allow-first-sync --allow-out-of-order",
                 timeout=300.0,
                 login_shell=True,
@@ -3827,7 +3839,8 @@ class TestCrossDirectionRoundTrips:
                 _collateral_removal_item_id(target_dependent): Decision.APPLY,
             }
             forward = await pc1_executor.run_command(
-                f"{_automation_env_assignment_multi(forward_decisions)} pc-switcher sync pc2 --yes --allow-first-sync",
+                f"{SKIP_INSTALL_ON_TARGET} {_automation_env_assignment_multi(forward_decisions)}"
+                f" pc-switcher sync pc2 --yes --allow-first-sync",
                 timeout=600.0,
                 login_shell=True,
             )
@@ -3918,7 +3931,7 @@ class TestCrossDirectionRoundTrips:
 
             # -- run 2: pc2 -> pc1, removal direction, explicitly left undecided ----------
             undecided = await pc2_executor.run_command(
-                f"{_automation_env_assignment_multi({item_id: Decision.SKIP_ONCE})} "
+                f"{SKIP_INSTALL_ON_TARGET} {_automation_env_assignment_multi({item_id: Decision.SKIP_ONCE})} "
                 "pc-switcher sync pc1 --yes --allow-first-sync",
                 timeout=600.0,
                 login_shell=True,
@@ -3945,7 +3958,7 @@ class TestCrossDirectionRoundTrips:
                 _collateral_removal_item_id(source_dependent): Decision.SKIP_ONCE,
             }
             approved = await pc2_executor.run_command(
-                f"{_automation_env_assignment_multi(approved_decisions)} "
+                f"{SKIP_INSTALL_ON_TARGET} {_automation_env_assignment_multi(approved_decisions)} "
                 "pc-switcher sync pc1 --yes --allow-first-sync --allow-out-of-order",
                 timeout=600.0,
                 login_shell=True,
@@ -4138,7 +4151,8 @@ class TestAFailureCostsItsOwnItemAndNothingElse:
                 f"snap:{snap_candidate}": Decision.APPLY,
             }
             sync_result = await pc1_executor.run_command(
-                f"{_automation_env_assignment_multi(decisions)} pc-switcher sync pc2 --yes --allow-first-sync",
+                f"{SKIP_INSTALL_ON_TARGET} {_automation_env_assignment_multi(decisions)}"
+                f" pc-switcher sync pc2 --yes --allow-first-sync",
                 timeout=600.0,
                 login_shell=True,
             )
@@ -4258,7 +4272,10 @@ class TestSnapPerItemFailureOnVMs:
             await _write_package_sync_config(pc1_executor, snap_sync=True)
 
             decisions = {f"snap:{install_subject}": Decision.APPLY, f"snap:{removal_subject}": Decision.APPLY}
-            sync_cmd = f"{_automation_env_assignment_multi(decisions)} pc-switcher sync pc2 --yes --allow-first-sync"
+            sync_cmd = (
+                f"{SKIP_INSTALL_ON_TARGET} {_automation_env_assignment_multi(decisions)}"
+                f" pc-switcher sync pc2 --yes --allow-first-sync"
+            )
             sync_result = await pc1_executor.run_command(sync_cmd, timeout=300.0, login_shell=True)
 
             assert not sync_result.success, (
@@ -4356,7 +4373,9 @@ class TestTheESMAttachmentGateOnVMs:
             # No automation env and no pty: `ask_gate` finds no TTY, which is the
             # non-interactive path the user ruled must skip the whole job.
             sync_result = await pc1_executor.run_command(
-                "pc-switcher sync pc2 --yes --allow-first-sync", timeout=300.0, login_shell=True
+                f"{SKIP_INSTALL_ON_TARGET} pc-switcher sync pc2 --yes --allow-first-sync",
+                timeout=300.0,
+                login_shell=True,
             )
             assert sync_result.success, (
                 f"a skipped job must not fail the run.\nstdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
@@ -4451,7 +4470,10 @@ class TestAStrayAptHoldEndsTheRun:
             before = await _capture_machine_package_state(pc2_executor)
 
             item_id = AptPackageItem(name=install_candidate, version="").item_id
-            sync_cmd = f"{_automation_env_assignment(item_id)} pc-switcher sync pc2 --yes --allow-first-sync"
+            sync_cmd = (
+                f"{SKIP_INSTALL_ON_TARGET} {_automation_env_assignment(item_id)}"
+                f" pc-switcher sync pc2 --yes --allow-first-sync"
+            )
             sync_result = await pc1_executor.run_command(sync_cmd, timeout=300.0, login_shell=True)
             assert not sync_result.success, (
                 "a hold naming a package the machine does not have must end the run.\n"
@@ -4535,7 +4557,8 @@ class TestTheSyncWindowHoldIsTimed:
             await _write_package_sync_config(pc1_executor, snap_sync=True, dummy_success=True)
 
             started = await pc1_executor.run_command(
-                f"setsid nohup pc-switcher sync pc2 --yes --allow-first-sync > {run_log} 2>&1 < /dev/null &",
+                f"{SKIP_INSTALL_ON_TARGET} setsid nohup"
+                f" pc-switcher sync pc2 --yes --allow-first-sync > {run_log} 2>&1 < /dev/null &",
                 timeout=60.0,
                 login_shell=True,
             )

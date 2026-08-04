@@ -37,16 +37,10 @@ import pytest
 import pytest_asyncio
 
 from pcswitcher.executor import BashLoginRemoteExecutor
-from pcswitcher.jobs.install_on_target import INSTALL_ON_TARGET_SKIP_ENV
 from pcswitcher.version import get_this_version
+from tests.integration import SKIP_INSTALL_ON_TARGET
 
 pytestmark = pytest.mark.area_folder
-
-#: Prefix for a `pc-switcher sync` whose subject is not self-installation: it drops the
-#: install-on-target step, worth ~1.75s of `pc-switcher --version` over a login shell per
-#: run. Only usable where a fixture already puts pc-switcher on the machine being synced
-#: TO — `TestInstallOnTargetIntegration` must never carry it, since the step IS its subject.
-SKIP_INSTALL_ON_TARGET = f"{INSTALL_ON_TARGET_SKIP_ENV}=1"
 
 
 # Dataclass for pc1_to_pc2_traffic_blocker fixture
@@ -943,7 +937,7 @@ chmod 700 "$T/f755.txt"
         # --allow-first-sync: pc2 has no sync history (W1 gate, ADR-015); required in CI
         # (no TTY) to bypass the first-sync overwrite confirmation and reach job execution.
         start_result = await pc1_executor.run_command(
-            f"nohup bash -c 'echo $$ > {pid_file};"
+            f"nohup bash -c 'echo $$ > {pid_file}; export {SKIP_INSTALL_ON_TARGET};"
             f" exec pc-switcher sync pc2 --yes --allow-first-sync 2>&1'"
             f" > {output_file} &",
             timeout=10.0,
@@ -1060,7 +1054,7 @@ chmod 700 "$T/f755.txt"
         # (no TTY) to bypass the first-sync overwrite confirmation so the sync proceeds
         # into the job execution phase where the network failure is injected.
         start_result = await pc1_executor.run_command(
-            f"nohup bash -c 'echo $$ > {pid_file};"
+            f"nohup bash -c 'echo $$ > {pid_file}; export {SKIP_INSTALL_ON_TARGET};"
             f" exec pc-switcher sync pc2 --yes --allow-first-sync 2>&1'"
             f" > {output_file} &",
             timeout=10.0,
@@ -1338,7 +1332,7 @@ class TestConsecutiveSyncWarning:
         # Step 1: First sync (W1 gate) — pc2 has no history; --allow-first-sync is required
         # in non-interactive CI to bypass the first-sync overwrite confirmation.
         first_sync = await pc1_executor.run_command(
-            "pc-switcher sync pc2 --yes --allow-first-sync",
+            f"{SKIP_INSTALL_ON_TARGET} pc-switcher sync pc2 --yes --allow-first-sync",
             timeout=180.0,
             login_shell=True,
         )
@@ -1371,7 +1365,7 @@ class TestConsecutiveSyncWarning:
         # because pc1 is pushing to pc2 again without a back-sync.  Non-interactive mode
         # cannot confirm, so it aborts (title: "Consecutive Sync — No Back-Sync Received").
         second_sync = await pc1_executor.run_command(
-            "pc-switcher sync pc2 --yes",
+            f"{SKIP_INSTALL_ON_TARGET} pc-switcher sync pc2 --yes",
             timeout=60.0,
             login_shell=True,
         )
@@ -1388,7 +1382,7 @@ class TestConsecutiveSyncWarning:
 
         # Step 3: Third sync WITH --allow-out-of-order bypasses the W3 gate.
         third_sync = await pc1_executor.run_command(
-            "pc-switcher sync pc2 --yes --allow-out-of-order",
+            f"{SKIP_INSTALL_ON_TARGET} pc-switcher sync pc2 --yes --allow-out-of-order",
             timeout=180.0,
             login_shell=True,
         )
