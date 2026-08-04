@@ -17,6 +17,8 @@ Fixtures provided:
 - pc2_with_old_pcswitcher_fn: pc2 executor with old pc-switcher version (upgrade testing)
 - reset_pcswitcher_state: resets pc-switcher state on both VMs (config + data, for test isolation)
 - vm_test_fixtures: both VMs carry the package-manager subjects the package-sync tests operate on
+- package_sync_subjects: module-scoped gate on vm_test_fixtures, for the package-sync modules
+- apt_subjects: the apt packages a package-sync module diverges, selected once per module
 """
 
 from __future__ import annotations
@@ -26,10 +28,10 @@ import os
 import subprocess
 import sys
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import overload
+from typing import TYPE_CHECKING, overload
 
 import asyncssh
 import pytest
@@ -39,6 +41,9 @@ from pcswitcher.executor import BashLoginRemoteExecutor, RemoteExecutor
 from pcswitcher.install import get_install_with_script_command_line
 from pcswitcher.models import CommandResult
 from pcswitcher.version import Release, Version, find_one_version, get_releases, get_this_version
+
+if TYPE_CHECKING:
+    from tests.integration.jobs.package_sync_scenario import AptSubjects
 
 REQUIRED_ENV_VARS = [
     "HCLOUD_TOKEN",
@@ -177,6 +182,65 @@ def _check_integration_env_vars() -> None:  # pyright: ignore[reportUnusedFuncti
         )
 
 
+#: Set to any non-empty value to have each test report where its wall clock went. Off by
+#: default: it wraps every command the suite issues, and its only purpose is deciding what
+#: to optimise next (#216), not proving anything about the product.
+_TIMING_ENV = "PCSWITCHER_IT_TIMING"
+
+#: What a `pc-switcher sync` invocation looks like, for splitting the runs from everything a
+#: test does around them.
+_SYNC_COMMAND_MARKER = "pc-switcher sync"
+
+
+@pytest.fixture(autouse=True)
+def _report_where_the_time_went(request: pytest.FixtureRequest) -> Iterator[None]:  # pyright: ignore[reportUnusedFunction]
+    """Split each test's command time into the syncs it runs and the work it does around
+    them, and name the slowest individual commands.
+
+    A sync costs what it costs; everything else is setup, convergence and cleanup, which is
+    the only part a test can give back. Reading that split off a real run is what says which
+    of the two is worth attacking.
+
+    Autouse for the whole integration suite, and inert unless `PCSWITCHER_IT_TIMING` is set:
+    more than one module now pays for syncs, and the split is worth having wherever the
+    question is asked.
+
+    Command time, not wall clock: these tests run independent commands concurrently, so two
+    that overlap are each counted whole. What the totals rank is where the work is, which is
+    what they are for.
+    """
+    if not os.environ.get(_TIMING_ENV):
+        yield
+        return
+
+    original = BashLoginRemoteExecutor.run_command
+    samples: list[tuple[float, str]] = []
+
+    async def timed(self: BashLoginRemoteExecutor, command: str, *args: object, **kwargs: object) -> CommandResult:
+        started = time.monotonic()
+        try:
+            return await original(self, command, *args, **kwargs)  # pyright: ignore[reportCallIssue, reportArgumentType]
+        finally:
+            samples.append((time.monotonic() - started, command))
+
+    BashLoginRemoteExecutor.run_command = timed  # pyright: ignore[reportAttributeAccessIssue]
+    try:
+        yield
+    finally:
+        BashLoginRemoteExecutor.run_command = original  # pyright: ignore[reportAttributeAccessIssue]
+        syncs = [sample for sample in samples if _SYNC_COMMAND_MARKER in sample[1]]
+        around = [sample for sample in samples if _SYNC_COMMAND_MARKER not in sample[1]]
+        print(
+            f"\n[timing] {request.node.name}: "
+            f"{sum(d for d, _ in syncs):.1f}s in {len(syncs)} sync(s), "
+            f"{sum(d for d, _ in around):.1f}s in {len(around)} other command(s)",
+            file=sys.stderr,
+            flush=True,
+        )
+        for duration, command in sorted(around, reverse=True)[:5]:
+            print(f"[timing]     {duration:6.1f}s  {' '.join(command.split())[:110]}", file=sys.stderr, flush=True)
+
+
 @pytest.fixture(scope="module")
 async def _pc1_connection() -> AsyncIterator[asyncssh.SSHClientConnection]:  # pyright: ignore[reportUnusedFunction]
     """SSH connection to pc1 test VM.
@@ -302,6 +366,49 @@ async def vm_test_fixtures(
     await asyncio.gather(
         ensure_vm_test_fixtures(pc1_executor, install_app=True),
         ensure_vm_test_fixtures(pc2_executor, install_app=False),
+    )
+
+
+@pytest.fixture(scope="module")
+async def package_sync_subjects(vm_test_fixtures: None) -> None:
+    """Every package-sync test operates on a real snap or flatpak, so both VMs must own one
+    before any of them runs (`vm_test_fixtures`).
+    """
+    _ = vm_test_fixtures
+
+
+@pytest.fixture(scope="module")
+async def apt_subjects(pc1_executor: BashLoginRemoteExecutor, pc2_executor: BashLoginRemoteExecutor) -> AptSubjects:
+    """Select a module's apt subjects once, before any test has touched a package, so the
+    selection sees the machines as provisioning left them.
+
+    Nothing is put back. `run-integration-tests.sh` replaces both VMs' subvolumes with
+    their baseline btrfs snapshots and reboots before every run, so where these packages end
+    up is not something the tests owe the machines; restoring them would be ~36s spent
+    undoing what the next run's reset undoes anyway. Within a run each test converges to the
+    state IT needs (`ensure_absent`, `ensure_installed_and_manual`), which is a read
+    whenever the previous scenario already left it that way.
+
+    Under `--skip-reset`, where a developer keeps the machines between runs, the next run
+    simply selects again from what is installed then. Subjects left removed drop out of that
+    selection rather than breaking it -- and if enough runs drain the candidates,
+    `no_apt_candidate_message` says so instead of failing obscurely.
+    """
+    # Imported here rather than at module scope: `package_sync_scenario` imports
+    # `write_pcswitcher_config` from this file, so a top-level import would be a cycle.
+    from tests.integration.jobs.package_sync_scenario import (  # noqa: PLC0415
+        AptSubjects,
+        a_package_both_machines_have_unheld,
+        find_removable_candidates,
+        no_apt_candidate_message,
+    )
+
+    picked = await find_removable_candidates(pc1_executor, pc2_executor, count=4)
+    assert len(picked) == 4, f"{no_apt_candidate_message()} Needed 4 subjects, found {len(picked)}."
+    return AptSubjects(
+        install_direction=(picked[0], picked[1], picked[2]),
+        removal_direction=picked[3],
+        hold=await a_package_both_machines_have_unheld(pc1_executor, pc2_executor, exclude=frozenset(picked)),
     )
 
 

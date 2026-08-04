@@ -261,7 +261,8 @@ tests/integration/
 ├── test_installation_script.py, test_self_update.py, test_version_resolution.py
 ├── jobs/                        # Per-job integration tests
 │   ├── test_install_on_target_job.py
-│   └── test_package_sync.py
+│   ├── test_package_sync.py
+│   └── folder_sync_scenario.py, package_sync_scenario.py   # Helpers, no tests of their own
 ├── benchmarks/                  # Performance benchmarks (excluded from CI)
 └── scripts/                     # VM provisioning, reset, lock, CI selection
 ```

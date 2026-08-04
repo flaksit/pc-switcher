@@ -1,15 +1,15 @@
 """Unit tests for the pure candidate-selection/parsing helpers backing the plan 02-13
 VM-level `apt_sync` integration test.
 
-These functions have no I/O of their own -- the integration test module
-(`tests/integration/jobs/test_package_sync.py`) wires them to real `apt-mark`/
+These functions have no I/O of their own -- the integration scenario module
+(`tests/integration/jobs/package_sync_scenario.py`) wires them to real `apt-mark`/
 `dpkg-query`/`apt-cache rdepends` output over SSH, but the parsing and selection logic
 itself is ordinary Python and gets fast, VM-independent coverage here.
 """
 
 from __future__ import annotations
 
-from tests.integration.jobs.test_package_sync import (
+from tests.integration.jobs.package_sync_scenario import (
     nonblank_lines,
     parse_batched_rdepends,
     parse_dpkg_installed,
