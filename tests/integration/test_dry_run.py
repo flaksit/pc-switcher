@@ -146,7 +146,8 @@ class TestDryRunContract:
         package_sync_subjects: None,
         apt_subjects: AptSubjects,
     ) -> None:
-        """ADR-014 / D-12, J1, K9 — one rehearsal, every forbidden write asserted absent.
+        """J53, J58, J59, C165, C168, C169, C2, A65 — ADR-014 / D-12, one rehearsal, every
+        forbidden write asserted absent.
 
         pc2 is seeded so a real sync would add files, overwrite one and delete several
         inside the synced scope, would install a package, a flatpak ref and a snippet, and

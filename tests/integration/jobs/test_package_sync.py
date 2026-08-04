@@ -898,8 +898,9 @@ class TestSkipAlwaysIsInertInBothRoles:
         pc2_with_pcswitcher: BashLoginRemoteExecutor,
         reset_pcswitcher_state: None,
     ) -> None:
-        """H125, H126, H166, N1, N2, G27, I3, A54, H31 — D-08's permanent skip across three
-        runs, and the removal-direction item the last of them leaves undecided.
+        """H125, H126, H166, N1, N2, G27, A54, H31 — D-08's permanent skip across three runs,
+        and the removal-direction item the last of them leaves undecided (D-07's own unticked
+        group).
 
         Run 1 records SKIP_ALWAYS for both items and applies neither. The apt entry lands in
         pc1's apt decision file and the `.deb` entry in its manual one -- and that second

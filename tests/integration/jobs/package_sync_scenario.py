@@ -2092,11 +2092,6 @@ class ConvergenceSeed:
 
     install_candidate: str
     removal_candidate: str
-    #: A package both machines have, which the reverse direction removes from the target
-    #: after the user undoes it on the machine that becomes the source. Distinct from
-    #: `install_candidate`, which the reverse run needs still converged to witness a
-    #: fixed point with.
-    round_trip_candidate: str
     hold_subject: str
     revision_snap: str
     source_snap_revision: str
@@ -2192,7 +2187,6 @@ async def seed_a_divergence_in_every_manager(  # noqa: PLR0915
     _ = await asyncio.gather(assert_flatpak_available(source), assert_flatpak_available(target))
 
     install_candidate = apt.install_direction[0]
-    round_trip_candidate = apt.install_direction[1]
     removal_candidate = apt.removal_direction
     hold_subject = apt.hold
 
@@ -2362,7 +2356,6 @@ async def seed_a_divergence_in_every_manager(  # noqa: PLR0915
     return ConvergenceSeed(
         install_candidate=install_candidate,
         removal_candidate=removal_candidate,
-        round_trip_candidate=round_trip_candidate,
         hold_subject=hold_subject,
         revision_snap=revision_snap,
         source_snap_revision=source_snap_revision,
@@ -2561,15 +2554,15 @@ async def assert_every_manager_converged(
 def back_direction_decisions(seed: ConvergenceSeed) -> dict[str, Decision]:
     """What the reverse-direction run is told, once `seed_the_back_direction` has run.
 
-    The round-trip package's removal and the ref are approved; the package the FORWARD run
-    installed is mapped SKIP_ALWAYS, which is what makes "it was never presented" readable
-    off the decision files. An APPLY there could not tell an item that is genuinely no longer
-    a diff from an item that was never raised, whereas a SKIP_ALWAYS leaves a decision-file
-    entry if and only if the item WAS presented.
+    The removal of the package the forward run installed is approved, and so is the ref. The
+    snap that forward run converged is mapped SKIP_ALWAYS, which is what makes "it was never
+    presented" readable off the decision files: an APPLY could not tell an item that is
+    genuinely no longer a diff from an item that was never raised, whereas a SKIP_ALWAYS
+    leaves a decision-file entry if and only if the item WAS presented.
     """
     return {
-        AptPackageItem(name=seed.round_trip_candidate, version="").item_id: Decision.APPLY,
-        AptPackageItem(name=seed.install_candidate, version="").item_id: Decision.SKIP_ALWAYS,
+        AptPackageItem(name=seed.install_candidate, version="").item_id: Decision.APPLY,
+        f"snap:{seed.revision_snap}": Decision.SKIP_ALWAYS,
         seed.ref_item_id: Decision.APPLY,
     }
 
@@ -2577,18 +2570,22 @@ def back_direction_decisions(seed: ConvergenceSeed) -> dict[str, Decision]:
 async def seed_the_back_direction(
     new_source: BashLoginRemoteExecutor, new_target: BashLoginRemoteExecutor, seed: ConvergenceSeed
 ) -> None:
-    """Over the pair a converging run just left, set up the reverse direction: the user undoes
-    an install on the machine that is about to become the source, and that machine drops the
-    ref filter the forward run gave it.
+    """Over the pair a converging run just left, set up the reverse direction: the user removes
+    by hand, on the machine that is about to become the source, the very package the forward
+    run installed there, and that machine drops the ref filter the forward run gave it.
+
+    Removing what the forward run installed is what makes the round trip a round trip: the
+    reverse direction then offers the source's own undoing back, over an item whose whole
+    history is this scenario's.
 
     The app comes off the new target as well, and only the app: a filter is converged as part
     of writing the remote an approved ref DERIVES, so a reverse run over a fully converged
     pair would have no ref item, derive no remote, and leave the filter alone for a reason
     that has nothing to do with what the run is meant to show.
     """
-    await ensure_installed_and_manual(new_target, seed.round_trip_candidate)
+    await ensure_installed_and_manual(new_target, seed.install_candidate)
     await asyncio.gather(
-        ensure_absent(new_source, seed.round_trip_candidate),
+        ensure_absent(new_source, seed.install_candidate),
         restore_flatpak_source_baseline(new_source, seed.remote_name, seed.scope, seed.recorded_filter_path),
     )
     assert await flatpak_remote_filter(new_source, seed.remote_name, seed.scope) is None, (
@@ -2621,8 +2618,8 @@ async def assert_the_back_direction_converged(
     untouched. A run that rewrote `/etc/apt`, re-revisioned a snap or dropped a hold on the
     way past would be visible here and in nothing else.
 
-    The package the FORWARD run installed is the fixed-point witness: mapped SKIP_ALWAYS and
-    yet absent from both machines' decision files, which is state-based proof it was never
+    The snap the FORWARD run converged is the fixed-point witness: mapped SKIP_ALWAYS and yet
+    absent from both machines' decision files, which is state-based proof it was never
     presented -- a converged item produces no diff at all. It is scoped to that one item on
     purpose. Items still diverged between the two machines are legitimately presented again,
     which is not what idempotency promises.
@@ -2630,9 +2627,9 @@ async def assert_the_back_direction_converged(
     manual = nonblank_lines(
         (await new_target.run_command("apt-mark showmanual", login_shell=False, timeout=15.0)).stdout
     )
-    assert seed.round_trip_candidate not in manual, (
-        f"{seed.round_trip_candidate} is still manually installed on the new target -- the removal did not propagate "
-        "back across the reversed direction"
+    assert seed.install_candidate not in manual, (
+        f"{seed.install_candidate} is still manually installed on the new target -- the removal the user made on "
+        "the new source did not propagate back across the reversed direction"
     )
 
     assert await flatpak_remote_filter(new_target, seed.remote_name, seed.scope) is None, (
@@ -2643,20 +2640,20 @@ async def assert_the_back_direction_converged(
         f"{seed.application} was not reinstalled on the new target by the reverse run"
     )
 
-    converged_item = AptPackageItem(name=seed.install_candidate, version="").item_id
+    converged_item = f"snap:{seed.revision_snap}"
     source_entries, target_entries = await asyncio.gather(
-        DecisionFile("apt", new_source).load(), DecisionFile("apt", new_target).load()
+        DecisionFile("snap", new_source).load(), DecisionFile("snap", new_target).load()
     )
     assert converged_item not in source_entries and converged_item not in target_entries, (
-        f"{seed.install_candidate} was still presented in the reverse run's review (its SKIP_ALWAYS was recorded) "
+        f"{seed.revision_snap} was still presented in the reverse run's review (its SKIP_ALWAYS was recorded) "
         "-- an item the forward run converged must produce no diff at all"
     )
 
     after = await capture_machine_package_state(new_target)
     expected = replace(
         before,
-        apt_manual=tuple(name for name in before.apt_manual if name != seed.round_trip_candidate),
-        apt_installed=tuple(name for name in before.apt_installed if name != seed.round_trip_candidate),
+        apt_manual=tuple(name for name in before.apt_manual if name != seed.install_candidate),
+        apt_installed=tuple(name for name in before.apt_installed if name != seed.install_candidate),
     )
     assert after == expected, (
         "the reverse run moved something on the new target beyond the removal it was given.\n"
