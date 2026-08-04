@@ -78,7 +78,7 @@ while IFS= read -r f; do
             ;;
         src/pcswitcher/jobs/apt_sync/* | src/pcswitcher/jobs/snap_sync.py | \
         src/pcswitcher/jobs/flatpak_sync.py | src/pcswitcher/jobs/manual_installs_sync.py | \
-        src/pcswitcher/jobs/packages/* | src/pcswitcher/machine-packages.example.yaml)
+        src/pcswitcher/jobs/packages/*)
             add_area area_package
             ;;
         install.sh | src/pcswitcher/install.py | src/pcswitcher/version.py | \

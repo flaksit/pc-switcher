@@ -274,7 +274,16 @@ class DecisionEntry:
     recorded_at: str  # ISO-8601 UTC
 ```
 
-On disk, entries are keyed by `item_id` under a `machine_specific:` mapping.
+On disk, entries are keyed by `item_id` under a `machine_specific:` mapping:
+
+```yaml
+machine_specific:
+  apt:package:brscan3:
+    item_class: apt_package
+    label: brscan3 (0.4.11-2.amd64)
+    reason: Brother scanner driver for the printer wired to this desk only
+    recorded_at: "2026-07-22T09:14:03Z"
+```
 
 ### Install-snippet registry (synced)
 
