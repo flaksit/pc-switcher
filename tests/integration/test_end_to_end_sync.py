@@ -144,6 +144,47 @@ dummy_success:
 """
 
 
+# The run driven by the folder_sync scenario: a generic job (dummy_success) alongside
+# folder_sync of /home. The filter_file named here is written by the scenario module.
+_SCENARIO_CONFIG = """\
+logging:
+  file: DEBUG
+  tui: INFO
+  external: WARNING
+sync_jobs:
+  dummy_success: true
+  folder_sync: true
+disk_space_monitor:
+  preflight_minimum: "5%"
+  runtime_minimum: "3%"
+  warning_threshold: "10%"
+  check_interval: 5
+btrfs_snapshots:
+  subvolumes:
+    - "@"
+    - "@home"
+  keep_recent: 2
+dummy_success:
+  source_duration: 2
+  target_duration: 2
+folder_sync:
+  folders:
+    - path: /home
+      enabled: true
+      filter_file: ~/.config/pc-switcher/home.filter
+"""
+
+
+async def _write_scenario_config(executor: BashLoginRemoteExecutor) -> None:
+    """Write the scenario run's pc-switcher config to a VM."""
+    result = await executor.run_command(
+        "mkdir --parents ~/.config/pc-switcher"
+        f" && cat > ~/.config/pc-switcher/config.yaml << 'CONF_EOF'\n{_SCENARIO_CONFIG}CONF_EOF",
+        timeout=10.0,
+    )
+    assert result.success, f"Failed to write config: {result.stderr}"
+
+
 @pytest_asyncio.fixture
 async def sync_ready_source(
     pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
@@ -299,7 +340,7 @@ class TestEndToEndSync:
         state_dir = folder_sync_scenario.STATE_DIR
 
         try:
-            await folder_sync_scenario.write_config(pc1_executor)
+            await _write_scenario_config(pc1_executor)
             await folder_sync_scenario.write_filter_file(pc1_executor)
             await folder_sync_scenario.seed_rich_tree(pc1_executor, tree)
             await folder_sync_scenario.seed_included_markers(pc1_executor)

@@ -158,7 +158,7 @@ def _make_home_filter() -> str:
     `- .local/share/flatpak` is here purely for cost. The shipped `home.filter` ships no
     such rule on purpose (D-29: enabling `sync_jobs.flatpak_sync` excludes that store
     non-overridably, and a user who does not enable it legitimately wants it mirrored), but
-    this config does NOT enable flatpak_sync, and the test VMs carry a ~2.8 GB Flathub
+    the calling test's config does NOT enable flatpak_sync, and the test VMs carry a ~2.8 GB Flathub
     runtime under it (`vm-test-fixtures.sh`). Mirroring it would add gigabytes to a test
     whose subject is filter mechanics on a small seeded tree, and would prove nothing —
     the strict manifests here cover only that tree.
@@ -191,47 +191,6 @@ def _make_home_filter() -> str:
 - {FILTER_TREE}/excluded
 - {TESTTREE}/secret
 """
-
-
-def _make_config() -> str:
-    """Config exercising both a generic job (dummy_success) and folder_sync of /home."""
-    return """\
-logging:
-  file: DEBUG
-  tui: INFO
-  external: WARNING
-sync_jobs:
-  dummy_success: true
-  folder_sync: true
-disk_space_monitor:
-  preflight_minimum: "5%"
-  runtime_minimum: "3%"
-  warning_threshold: "10%"
-  check_interval: 5
-btrfs_snapshots:
-  subvolumes:
-    - "@"
-    - "@home"
-  keep_recent: 2
-dummy_success:
-  source_duration: 2
-  target_duration: 2
-folder_sync:
-  folders:
-    - path: /home
-      enabled: true
-      filter_file: ~/.config/pc-switcher/home.filter
-"""
-
-
-async def write_config(executor: BashLoginRemoteExecutor) -> None:
-    """Write the scenario's pc-switcher config to a VM."""
-    result = await executor.run_command(
-        f"mkdir --parents ~/.config/pc-switcher"
-        f" && cat > ~/.config/pc-switcher/config.yaml << 'CONF_EOF'\n{_make_config()}CONF_EOF",
-        timeout=10.0,
-    )
-    assert result.success, f"Failed to write config: {result.stderr}"
 
 
 async def write_filter_file(executor: BashLoginRemoteExecutor) -> None:
