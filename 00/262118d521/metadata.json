@@ -3,9 +3,11 @@
   "checkpoint_id": "00262118d521",
   "strategy": "manual-commit",
   "branch": "pc-216",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
-    "tests/integration/jobs/folder_sync_scenario.py"
+    "docs/dev/testing-guide.md",
+    "tests/integration/jobs/folder_sync_scenario.py",
+    "tests/integration/test_dry_run.py"
   ],
   "sessions": [
     {
@@ -14,13 +16,20 @@
       "compact_transcript": "/00/262118d521/0/transcript.jsonl",
       "content_hash": "/00/262118d521/0/content_hash.txt",
       "prompt": "/00/262118d521/0/prompt.txt"
+    },
+    {
+      "metadata": "/00/262118d521/1/metadata.json",
+      "transcript": "/00/262118d521/1/full.jsonl",
+      "compact_transcript": "/00/262118d521/1/transcript.jsonl",
+      "content_hash": "/00/262118d521/1/content_hash.txt",
+      "prompt": "/00/262118d521/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 35,
-    "cache_creation_tokens": 93345,
-    "cache_read_tokens": 1200475,
-    "output_tokens": 10655,
-    "api_call_count": 19
+    "input_tokens": 190,
+    "cache_creation_tokens": 546174,
+    "cache_read_tokens": 12969964,
+    "output_tokens": 71815,
+    "api_call_count": 101
   }
 }
