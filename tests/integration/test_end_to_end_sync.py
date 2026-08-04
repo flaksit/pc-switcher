@@ -117,11 +117,6 @@ async def pc1_to_pc2_traffic_blocker(
 _TEST_CONFIG_TEMPLATE = """# Test configuration for end-to-end sync tests
 # Short durations to keep tests fast
 
-logging:
-  file: DEBUG
-  tui: DEBUG
-  external: DEBUG
-
 sync_jobs:
   dummy_success: true
   dummy_fail: false
@@ -144,13 +139,9 @@ dummy_success:
 """
 
 
-# The run driven by the folder_sync scenario: a generic job (dummy_success) alongside
-# folder_sync of /home. The filter_file named here is written by the scenario module.
-_SCENARIO_CONFIG = """\
-logging:
-  file: DEBUG
-  tui: INFO
-  external: WARNING
+# The all-encompassing end-to-end run: the whole pipeline in one sync, with every kind of job it coordinates.
+# The filter_file named here is written by folder_sync_scenario, which owns filter content.
+_FULL_PIPELINE_CONFIG = """\
 sync_jobs:
   dummy_success: true
   folder_sync: true
@@ -175,11 +166,11 @@ folder_sync:
 """
 
 
-async def _write_scenario_config(executor: BashLoginRemoteExecutor) -> None:
-    """Write the scenario run's pc-switcher config to a VM."""
+async def _write_full_pipeline_config(executor: BashLoginRemoteExecutor) -> None:
+    """Write the end-to-end run's pc-switcher config to a VM."""
     result = await executor.run_command(
         "mkdir --parents ~/.config/pc-switcher"
-        f" && cat > ~/.config/pc-switcher/config.yaml << 'CONF_EOF'\n{_SCENARIO_CONFIG}CONF_EOF",
+        f" && cat > ~/.config/pc-switcher/config.yaml << 'CONF_EOF'\n{_FULL_PIPELINE_CONFIG}CONF_EOF",
         timeout=10.0,
     )
     assert result.success, f"Failed to write config: {result.stderr}"
@@ -340,7 +331,7 @@ class TestEndToEndSync:
         state_dir = folder_sync_scenario.STATE_DIR
 
         try:
-            await _write_scenario_config(pc1_executor)
+            await _write_full_pipeline_config(pc1_executor)
             await folder_sync_scenario.write_filter_file(pc1_executor)
             await folder_sync_scenario.seed_rich_tree(pc1_executor, tree)
             await folder_sync_scenario.seed_included_markers(pc1_executor)
