@@ -1,0 +1,11 @@
+"Removal does not purge the package's configuration" in docs/planning/package-sync-user-requirements.md. Is that good / what we want? Can purge be done later by user? Or will configuration be left behind forever?
+
+---
+
+"Removal does not purge the package's configuration" in docs/planning/package-sync-user-requirements.md. Is that good / what we want? Can purge be done later by user? Or will configuration be left behind forever?
+My first thought: purge config with package. We always have btrfs-snapshots as fallback.
+Or is "remove" and not "purge" standard, best practice?
+
+---
+
+y
