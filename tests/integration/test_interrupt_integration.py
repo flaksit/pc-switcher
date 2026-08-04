@@ -44,12 +44,12 @@ async def test_core_fr_target_term(
     pid = None
 
     try:
-        # Clean up any previous markers
-        await pc2_executor.run_command(f"rm --force {marker_file}")
-
-        # Start background process that creates a marker and sleeps
-        # Use nohup to ensure it runs independently
-        await pc2_executor.run_command(f"nohup sh -c 'echo $$ > {marker_file} && sleep 300' > /dev/null 2>&1 &")
+        # Clear any previous marker, then start a background process that writes a fresh one
+        # and sleeps. `;` rather than `&&`: the trailing `&` would otherwise background the
+        # whole list, including the removal the nohup depends on.
+        await pc2_executor.run_command(
+            f"rm --force {marker_file}; nohup sh -c 'echo $$ > {marker_file} && sleep 300' > /dev/null 2>&1 &"
+        )
 
         # Give it a moment to start
         await asyncio.sleep(1.0)
@@ -189,13 +189,13 @@ async def test_core_fr_no_orphan(
     target_pid = None
 
     try:
-        # Clean up any existing markers
-        await pc1_executor.run_command(f"rm --force {source_marker}")
-        await pc2_executor.run_command(f"rm --force {target_marker}")
-
-        # Start test processes on both hosts using nohup for proper background execution
-        await pc1_executor.run_command(f"nohup sh -c 'echo $$ > {source_marker} && sleep 300' > /dev/null 2>&1 &")
-        await pc2_executor.run_command(f"nohup sh -c 'echo $$ > {target_marker} && sleep 300' > /dev/null 2>&1 &")
+        # Clear any existing marker and start the test process, one command per host
+        await pc1_executor.run_command(
+            f"rm --force {source_marker}; nohup sh -c 'echo $$ > {source_marker} && sleep 300' > /dev/null 2>&1 &"
+        )
+        await pc2_executor.run_command(
+            f"rm --force {target_marker}; nohup sh -c 'echo $$ > {target_marker} && sleep 300' > /dev/null 2>&1 &"
+        )
 
         # Wait for processes to start
         await asyncio.sleep(1.0)
@@ -264,10 +264,10 @@ async def test_core_us_interrupt_as1_interrupt_requests_job_termination(
     job_pid = None
 
     try:
-        await pc2_executor.run_command(f"rm --force {job_marker}")
-
-        # Start a job-like operation on target using nohup
-        await pc2_executor.run_command(f"nohup sh -c 'echo $$ > {job_marker} && sleep 300' > /dev/null 2>&1 &")
+        # Clear any stale marker, then start a job-like operation on target using nohup
+        await pc2_executor.run_command(
+            f"rm --force {job_marker}; nohup sh -c 'echo $$ > {job_marker} && sleep 300' > /dev/null 2>&1 &"
+        )
 
         # Wait for job to start
         await asyncio.sleep(1.0)
@@ -323,10 +323,10 @@ async def test_core_us_interrupt_as3_second_interrupt_forces_termination(
     process_pid = None
 
     try:
-        await pc2_executor.run_command(f"rm --force {cleanup_marker}")
-
-        # Start a process that we'll try to clean up
-        await pc2_executor.run_command(f"nohup sh -c 'echo $$ > {cleanup_marker} && sleep 300' > /dev/null 2>&1 &")
+        # Clear any stale marker, then start a process that we'll try to clean up
+        await pc2_executor.run_command(
+            f"rm --force {cleanup_marker}; nohup sh -c 'echo $$ > {cleanup_marker} && sleep 300' > /dev/null 2>&1 &"
+        )
 
         await asyncio.sleep(1.0)
 
@@ -406,10 +406,11 @@ async def test_core_edge_source_crash_timeout(
     process_pid = None
 
     try:
-        await pc2_executor.run_command(f"rm --force {crash_marker}")
-
-        # Start a process on target that would normally be managed by source
-        await pc2_executor.run_command(f"nohup sh -c 'echo $$ > {crash_marker} && sleep 300' > /dev/null 2>&1 &")
+        # Clear any stale marker, then start a process on target that would normally be
+        # managed by source
+        await pc2_executor.run_command(
+            f"rm --force {crash_marker}; nohup sh -c 'echo $$ > {crash_marker} && sleep 300' > /dev/null 2>&1 &"
+        )
 
         await asyncio.sleep(1.0)
 

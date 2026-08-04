@@ -2772,11 +2772,12 @@ class TestOneRunConvergesEveryManager:
 
             async def clean_the_source() -> None:
                 await _restore_flatpak_source_baseline(pc1_executor, remote_name, scope, filter_path)
+                # `;`, so the apt hold comes off even when the snap one is already gone.
                 await pc1_executor.run_command(
-                    f"sudo snap refresh --unhold {shlex.quote(hold_snap)}", login_shell=False, timeout=60.0
-                )
-                await pc1_executor.run_command(
-                    f"sudo apt-mark unhold {shlex.quote(hold_subject)}", login_shell=False, timeout=30.0
+                    f"sudo snap refresh --unhold {shlex.quote(hold_snap)}; "
+                    f"sudo apt-mark unhold {shlex.quote(hold_subject)}",
+                    login_shell=False,
+                    timeout=90.0,
                 )
                 if cleanup_paths:
                     await pc1_executor.run_command(f"sudo rm --force {cleanup_paths}", login_shell=False, timeout=15.0)
@@ -2798,11 +2799,12 @@ class TestOneRunConvergesEveryManager:
                     timeout=60.0,
                 )
                 await _restore_flatpak_target_baseline(pc2_executor)
+                # `;`, so the apt hold comes off even when the snap one is already gone.
                 await pc2_executor.run_command(
-                    f"sudo snap refresh --unhold {shlex.quote(hold_snap)}", login_shell=False, timeout=60.0
-                )
-                await pc2_executor.run_command(
-                    f"sudo apt-mark unhold {shlex.quote(hold_subject)}", login_shell=False, timeout=30.0
+                    f"sudo snap refresh --unhold {shlex.quote(hold_snap)}; "
+                    f"sudo apt-mark unhold {shlex.quote(hold_subject)}",
+                    login_shell=False,
+                    timeout=90.0,
                 )
                 if cleanup_paths:
                     await pc2_executor.run_command(f"sudo rm --force {cleanup_paths}", login_shell=False, timeout=15.0)
