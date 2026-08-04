@@ -154,8 +154,8 @@ class TestTheDriftedTransactionIsAskedAbout:
         assert real_installs(target) == []
 
     @pytest.mark.asyncio
-    async def test_going_ahead_at_that_question_runs_the_install(self) -> None:
-        """The three answers are real ones: letting the consequence go ahead installs the
+    async def test_approving_the_removal_at_that_question_runs_the_install(self) -> None:
+        """The three answers are real ones: approving the consequence installs the
         package the question was about, rather than the guard refusing it anyway."""
         context, _source, target = _drifted_install_context(drifted="Remv manual-x [1.0]\n")
         job = AptSyncJob(context)

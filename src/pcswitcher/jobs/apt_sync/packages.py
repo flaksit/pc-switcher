@@ -135,7 +135,7 @@ class PackageConverger:
         plan-time collateral classification (D-30). Auto-installed collateral (a package
         apt pulls in that `Collateral.protected` does not cover) proceeds silently but is
         logged. A protected package's collateral removal, downgrade or upgrade is refused
-        unless the user let it go ahead in the review; the decision was made at plan time,
+        unless the user approved it in the review; the decision was made at plan time,
         and this guard only verifies the real transaction has not drifted to touch a
         protected package nobody saw.
 
@@ -234,7 +234,7 @@ class PackageConverger:
 
     async def _settle_drift(self, refused: Sequence[CollateralEffect], *, verb: str, name: str, refusal: str) -> None:
         """Put the drifted transaction's collateral to the user, and return only where they
-        let it go ahead (`PKG-FR-COLLATERAL-MANUAL`, `PKG-FR-ASK-AGAIN`).
+        approve it (`PKG-FR-COLLATERAL-MANUAL`, `PKG-FR-ASK-AGAIN`).
 
         The guard found a protected package no review saw, which is a fact this run's own
         earlier changes created: the article gives the user three answers to it, and telling
@@ -279,13 +279,13 @@ class PackageConverger:
         install guard is (D-30). A collateral removal of an auto-installed package proceeds
         and is logged: removing a package legitimately removes the now-orphaned dependencies
         apt pulled in for it. A collateral change to a package `Collateral.protected` covers
-        goes through only where it was itself an approved removal this run or was let go ahead
-        as collateral; anything else gets the three-way question here, before the command
+        goes through only where it was itself an approved removal this run or was approved as
+        collateral; anything else gets the three-way question here, before the command
         (`_settle_drift`).
 
         Nothing the guard sees at this point is older than the review. A casualty that is
         itself a removal CANDIDATE was asked about in the second round, over the removals
-        this run approved (`Collateral.after_answers`) — a go-ahead there is in the approved
+        this run approved (`Collateral.after_answers`) — an approval there is in the approved
         set and never reaches here, and keeping the package withdrew this very removal, so it
         never converges. What survives to this point is a transaction that has DRIFTED since
         that round, which is a fact this run's own earlier changes created and exactly what

@@ -56,7 +56,7 @@ something the user chose to have and is refused unless the user approved losing 
 runs two BATCHED simulations (the whole install candidate set, the whole removal candidate
 set — not one per-package, which would cost more than the sync itself for 150 packages) and
 classifies their collateral against the target manual set, emitting a three-way
-go-ahead / keep-the-package / stop-the-sync review item for each manual-collateral package so
+apply / keep-the-package / stop-the-sync review item for each manual-collateral package so
 the decision is made in the batched review, never as a prompt during apply. A batch that
 turns up manual collateral then simulates each candidate alone, so `skip` cancels the
 packages that actually cause the collateral rather than everything the user was reviewing

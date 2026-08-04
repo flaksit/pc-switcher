@@ -419,7 +419,7 @@ def collateral_diff(
 
     Identified by `(cause, act_word, package)` and not by the package alone: one protected
     package can be collateral of the install batch and of the removal batch in the same run,
-    and letting the install's casualty go ahead says nothing about the removal's. Sharing one
+    and approving the install's casualty says nothing about the removal's. Sharing one
     id made either answer govern both and lost the second item's attribution.
 
     `detail` is the whole finding as one sentence — which change, on which machine, and what

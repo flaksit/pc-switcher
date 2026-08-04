@@ -4794,7 +4794,7 @@ class TestACascadeOverASkippedRemovalCandidate:
         finally:
             await _remove_cascading_pair(pc2_executor, base, dependent, repo_dir, list_filename)
 
-    async def test_going_ahead_at_that_question_removes_the_approved_package_and_lets_the_cascade_take_the_other(
+    async def test_approving_the_consequence_removes_the_approved_package_and_lets_the_cascade_take_the_other(
         self,
         pc1_executor: BashLoginRemoteExecutor,
         pc2_executor: BashLoginRemoteExecutor,
@@ -4802,7 +4802,7 @@ class TestACascadeOverASkippedRemovalCandidate:
         pc2_with_pcswitcher: BashLoginRemoteExecutor,
         reset_pcswitcher_state: None,
     ) -> None:
-        """D72 — the same question answered "go ahead": the approved removal runs and the real
+        """D72 — the same question answered "approved": the approved removal runs and the real
         `apt-get remove` takes the kept candidate with it, past the apply-time guard.
 
         The skipped candidate's OWN removal item stays skipped -- what was approved is the
@@ -4834,22 +4834,22 @@ class TestACascadeOverASkippedRemovalCandidate:
                     )
                 ).stdout
             )
-            assert base not in installed, f"{base}'s approved removal did not run after the collateral go-ahead"
+            assert base not in installed, f"{base}'s approved removal did not run after the collateral approval"
             assert dependent not in installed, (
-                f"{dependent} survived a removal the user let go ahead -- the apply-time guard refused a "
-                "consequence that was approved"
+                f"{dependent} survived a removal the user approved -- the apply-time guard refused an "
+                "approved consequence"
             )
 
             collapsed = _collapse_run_output(sync_result.stdout + sync_result.stderr)
             assert f"reviewed {dependent} (report_only): applied" in collapsed, (
-                f"the go-ahead for {dependent} was never recorded against a collateral item in the review.\n"
+                f"the approval for {dependent} was never recorded against a collateral item in the review.\n"
                 f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
             )
             assert f"reviewed {dependent} (collateral)" not in collapsed, (
                 f"{dependent} was asked about at the apply-time guard instead of in the review's second round"
             )
             assert f"reviewed {dependent} ({_SYNTHETIC_PACKAGE_VERSION}) (remove): skipped this run" in collapsed, (
-                f"{dependent}'s own removal item did not stay skipped -- the go-ahead answered the consequence, "
+                f"{dependent}'s own removal item did not stay skipped -- the approval answered the consequence, "
                 f"not the item.\nstdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
             )
         finally:

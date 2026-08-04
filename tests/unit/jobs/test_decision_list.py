@@ -38,7 +38,7 @@ from pcswitcher.jobs.packages.decision_list import (
 )
 
 _ACT = DecisionOption(
-    value="apply", key="y", word="install", glyph="●", is_act=True, hint="go ahead — nomad changes this sync"
+    value="apply", key="y", word="install", glyph="●", is_act=True, hint="install — nomad changes this sync"
 )
 _SKIP_ONCE = DecisionOption(
     value="skip_once", key="s", word="skip now", glyph="○", hint="leave nomad alone; you are asked again next sync"
