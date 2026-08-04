@@ -1,0 +1,53 @@
+run integration tests from local machine so we know if they are still green
+
+---
+
+<task-notification>
+<task-id>bcoousdl6</task-id>
+<summary>Monitor event: "integration suite failures"</summary>
+<event>[31mERROR[0m
+[31mERROR[0m
+[31mERROR[0m
+[31mERROR[0m</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b1rkubx35</task-id>
+<summary>Monitor event: "integration run 2 failures and summary"</summary>
+<event>[36m[1m=========================== short test summary info ============================[0m
+[31m========== [31m[1m1 failed[0m, [32m71 passed[0m, [33m4657 deselected[0m[31m in 1123.36s (0:18:43)[0m[31m ==========[0m</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b764tnptz</task-id>
+<summary>Monitor event: "rerun of failing package-sync test"</summary>
+<event>[32m======================== [32m[1m1 passed[0m[32m in 151.74s (0:02:31)[0m[32m =========================[0m</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b764tnptz</task-id>
+<summary>Monitor event: "rerun of failing package-sync test"</summary>
+<event>[Monitor timed out — re-arm if needed.]</event>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b5l47rxyl</task-id>
+<summary>Monitor event: "full suite at HEAD e5e27f42"</summary>
+<event>[32m=============== [32m[1m72 passed[0m, [33m4657 deselected[0m[32m in 1139.99s (0:18:59)[0m[32m ===============[0m</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+Could run 2 failure be due to the order in which the tests were executed? Something not well setup or something lingering from a previous test, that the fixtures/setup for test_the_item_after_a_failure_and_the_jobs_after_its_job_all_still_land didn't clean up?
