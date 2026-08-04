@@ -48,6 +48,9 @@ dev = [
 [tool.hatch.version]
 source = "uv-dynamic-versioning"
 
+[tool.uv]
+reinstall-package = ["pcswitcher"]
+
 [tool.uv-dynamic-versioning]
 enable = true
 vcs = "git"
