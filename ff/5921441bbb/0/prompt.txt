@@ -1,0 +1,145 @@
+you said as well "did one SSH round trip per session folder". Do you mean each time a new SSH connection? Or re-using shared, open SSH connection?
+
+---
+
+As with ci_mark: instead of listing tests explicitly in select-ci-tests.sh, shouldn't we better mark the tests?
+
+---
+
+About "pre-merge": currently, integr tests run only after PR was set to ready-for-review. So on every push, the topic-subset is run.If we run full set upon "ready-for-review" event, that runs the full set while we are actually eager to get asap feedback on the specific feature the PR touches. Running the full set as "pre-merge"
+
+---
+
+About "pre-merge": currently, integr tests run only after PR was set to ready-for-review. So on every push, the topic-subset is run.
+If we run full set upon "ready-for-review" event, that runs the full set while we are actually eager to get asap feedback on the specific feature the PR touches. We WANT only the topic-subset to be run.
+Running the full set as "pre-merge" is a nice idea. But must be just before merge, not on ready-for-review.
+Could be part of the merge job (is that possible? Or only for merge groups (I don't want to go there now)?) and then it should cancel the merge on error. But I'm not sure we always want to run the full set for every PR. How to make it optional? Or just trigger full set manually when I want? How?
+
+---
+
+nightly cron: how does that work? What if multiple PRs open at same time (locking will fail)? Only for ready-for-review PR's, I hope.
+
+---
+
+"Multiple PRs pushing ...serialize": I have more the impression that they fail on lock. See history of failed jobs.
+
+---
+
+"Multiple PRs pushing ...serialize": I have more the impression that they fail on lock. See history of failed jobs.
+Ensure nightly job only runs if there were changes to main. This is rare and I don't want to waste hours of my github action minutes.
+
+---
+
+NO, DO NOT IMPLEMENT AUTO UNLOCKING
+
+---
+
+Rebase onto (or merge) current state of gsd/phase-02... branch. Then merge into that branch.
+
+---
+
+continue rebase. don't merge
+
+---
+
+Shouldn't ci_skip marker be removed from pytests now we have the topic-markers?
+
+---
+
+Shouldn't ci_skip marker be removed from pytests now we have the topic-markers? But keep the mechanism - can be useful for exceptions.
+
+---
+
+merge into gsd/phase-02-...
+
+---
+
+I pushed to PR 206 and CI ran. Failed, but that is not your concern. But it still took 25min. A bit better than before, but far from what you said it would be (around 10 min?)
+
+---
+
+merge into
+
+---
+
+Rebase on gsd/phase-02. Start on folding the package-sync tests into e2e and into as little scenarios as possible.
+
+---
+
+<task-notification>
+<task-id>ae750f01dabec343a</task-id>
+<tool-use-id>toolu_01LwWAWMu1YXsDPuFU784aUx</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-216/53d496e4-97d1-4460-811e-3fb656c48596/tasks/ae750f01dabec343a.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement P3 test consolidation" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done. All verifications pass. Compact report:
+
+## New test inventory (6 tests, 12 syncs; was 17 tests, ~26 syncs)
+
+File: `/home/janfr/dev/pc-216/tests/integration/jobs/test_package_sync.py` (2336 → 1922 lines)
+
+| Scenario | Class / test | Syncs | Folds |
+|---|---|---|---|
+| S1 | `TestConvergeMatrix.test_dry_run_then_converge_then_idempotent_rerun` | 3 (dry-run 180s, converge 900s, idempotency 300s) | test_apt_sync_installs_missing_package, test_apt_sync_dry_run_changes_nothing (broadened to all managers via `_MachinePackageState`), test_snap_revision_converges_without_hold, test_per_snap_hold_replicates_through_a_real_sync_window, test_flatpak_installs_into_source_scope_after_remote, test_manual_installs_sync_pushes_registry_and_replays_snippet, test_each_manager_reviews_before_its_own_mutation, test_second_consecutive_sync_has_nothing_to_do |
+| S2 | `TestReviewGates.test_non_interactive_skip_all_then_repo_dry_run_review` | 2 (180s each) | test_non_interactive_skip_all, test_apt_repository_state_dry_run_reviews_the_repo_and_carries_its_key |
+| S3 | `TestSkipAlwaysInertness.test_skip_always_is_inert_for_packages_and_holds_in_both_roles` | 3 (180s each) | test_skip_always_is_inert_in_both_roles, test_skip_always_on_an_apt_hold_is_inert_next_run, test_skip_always_on_a_snap_hold_is_inert_next_run |
+| S4 | `TestCrossDirectionRoundTrips.test_install_and_repo_removal_propagate_then_reversed_removal_needs_approval` | 3 (300s each) | test_install_propagates_then_reversed_removal_needs_approval (shape unchanged) + test_apt_source_and_its_key_removed_together (C24 folded into run 1) |
+| S5 | `TestSnapHoldCaptureTiming.test_system_refresh_hold_does_not_mask_a_per_snap_held_note` | 0 | kept verbatim |
+| S6 | `TestContinueOnItemFailure.test_continue_on_item_failure` | 1 | kept verbatim, moved into a new single-purpose class (its old container `TestPackageSyncWholeRunContracts` is gone) |
+
+Contract identifiers preserved in each scenario docstring (ADR-014, D-06/07/08/08a/14/23/24/26/27, N3, N4, J10/N2, C24, #215, #208 D3/D9, L6/L10, ledger #2); module docstring inventory rewritten, including both sanctioned log witnesses (flatpak remote-before-ref ordering; dry-run review lines). All seeds reverted in `finally`, mirroring the old tests' cleanup exactly (plus system-hold restore in S1 covering run C's engagement).
+
+## Helpers removed
+
+None. Every helper remains referenced: the pure parsers (incl. `pick_safe_removal_candidate`) are imported by `tests/unit/jobs/test_package_sync_candidate_selection.py`; `_common_apt_package`, `_holdable_snaps`, `_decision_file_exists`, `_apt_holds`, `_snap_subject(s)`, `_write_apt_sync_config`, both automation-env helpers, and all repo/flatpak/snap/manual helpers are called by the new scenarios. `_snap_hold_item_id` moved up into the helper section.
+
+## Verification results
+
+- `ruff check`: All checks passed
+- `ruff format --check`: already formatted
+- `basedpyright`: 0 errors, 0 warnings
+- `pytest --collect-only -q -m "integration and not benchmark"`: 6 tests collected, no errors
+- `pytest tests/unit -q`: 1206 passed
+
+## Deviations / notes
+
+1. **S4 timeouts kept at 300.0** (not the instruction's "others 180.0"): the primary rule "preserve the old tests' timeout values on the corresponding sync calls" wins — old N4 and C24 both used 300.0; the design doc's "180–300" range accommodates this.
+2. **S3 distinct-subject guard (new)**: `_common_apt_package` (hold subject) and `_removable_candidate` (removal subject) both pick alphabetically-first from overlapping sets and could return the same package, entangling the pkg and hold diffs. The pkg subject is now taken from `_find_removable_candidates(count=2)` filtered to differ from the hold subject (commented in the test).
+3. `# noqa: PLR0915` on S1 and S3 (repo precedent: `test_end_to_end_sync.py` as1 test); S4 stayed under the limit.
+4. **docs/**: no old test names found in docs/. Two comments in `tests/integration/scripts/internal/vm-test-fixtures.sh` and one helper docstring in the test file named old tests — updated to the new class names.
+5. S3's `finally` removes pc2's `config.yaml` (design-specified; the old test left it behind).
+
+Not run (per instructions): the real integration suite — the design's own note expects a live-VM run via `tests/run-integration-tests.sh` to confirm the ~450s estimate.</result>
+<usage><subagent_tokens>156084</subagent_tokens><tool_uses>30</tool_uses><duration_ms>763484</duration_ms></usage>
+</task-notification>
+
+---
+
+unlocked gpg
+
+---
+
+<task-notification>
+<task-id>bp0t7riux</task-id>
+<tool-use-id>toolu_01TNh6RGomEpUqt8T8NK8DKg</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-216/53d496e4-97d1-4460-811e-3fb656c48596/tasks/bp0t7riux.output</output-file>
+<status>completed</status>
+<summary>Background command "Run consolidated package tests on VMs" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+rebase again
+
+---
+
+Rename branch so clear what it is about (issue 216). Now impossible to know if you don't remember
+
+---
+
+Lots changed on package-sync. Write handover-prompt that I can give to fresh session to continue the work done in this session, now with package-sync in scope.
+
+---
+
+Not remeasure; CI just ran fully.
