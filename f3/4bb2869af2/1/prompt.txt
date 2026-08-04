@@ -1,0 +1,48 @@
+Is name test_core_us_job_arch_as1_job_integration_via_interface() good? Not better something that reflects the purpose of general, all-comprising e2e test?
+
+---
+
+We interleaved folder_sync into test_core_us_job_arch_as1_job_integration_via_interface(). However, now we are using area_ marks so we only run specific tests based on which files changed + the smoke tests, we maybe shouldn't have the folder_sync test in this complex test that checks some complex scenarios of the core logic.
+Maybe we'd better have a separate "general all-comprising e2e test" (in smoke and each area it covers; which should be all) that does a single first sync (or maybe a sync + back-sync), including folder-sync (and we will integrate a package-sync as well, later). And leave the complicated scenario specific to core in its own test in area_core.
+What do you think?
+
+---
+
+Nice plan. For 3 ("dry run"), we need to be sure that "writes nothing" is tested for each and every part of pc-switcher. Probably most economic way: in a single e2e test like the global smoke e2e. But needs not be in smoke; needs to be in each area it covers.
+
+---
+
+Nice plan. For 3 ("dry run"), we need to be sure that "writes nothing" is tested for each and every part of pc-switcher. Probably most economic way: in a single e2e test like the global smoke e2e. But needs not be in smoke; needs to be in each area it covers.
+
+Ok? Keep package-sync out of scope of this plan.
+If plan ok with that, delegate to subagents.
+
+---
+
+<task-notification>
+<task-id>a2a877ea63e5a5041</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-216/1c04a89f-42a4-4165-82a3-dd281279ab6c/tasks/a2a877ea63e5a5041.output</output-file>
+<status>completed</status>
+<summary>Agent "Slim smoke e2e, move gate steps" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done. Only my two files are modified; nothing committed.
+
+Smoke test (`test_end_to_end_sync.py`, still `smoke` + `area_folder`), now 2 syncs:
+- Renamed `test_core_us_job_arch_as1_job_integration_via_interface` → `test_sync_runs_every_job_and_replicates_home_both_directions`; requirement IDs (CORE-US-JOB-ARCH-AS1, ADR-015/016) live in the docstring only.
+- Kept: A→B `--allow-first-sync` (with `_assert_job_integration`, manifests, metadata details, exclusions, included markers, filter outcomes) and the mutate-pc2 → B→A propagation check. Sub-step labels renumbered 3a-3f → 1a-1f; docstring rewritten for the two-sync scenario; rationale comments preserved.
+- Deleted: the `--dry-run` rehearsal (step 2) outright, the W1-blocked run (step 1), and the second clean A→B (step 5). `assert_tree_absent` and `folder_sync_scenario.STATE_DIR` are no longer referenced from this file; helpers untouched.
+
+Gates module (`test_sync_order_gates.py`, `area_core`):
+- Already covered, so deleted rather than moved: the clean-round-trip claim (ADR-015 #159) is proven by `TestConsecutiveSyncWarning::test_back_sync_clears_warning` step 3 — pc1→pc2, pc2→pc1, then pc1→pc2 with no flags must succeed. Nothing added for it.
+- Genuinely missing, so added: W1 blocks non-interactively. Folded in as a new step 1 of `test_consecutive_sync_warning_workflow` (no new test, no new fixture cost) — that test's step 1 previously always passed the flag, so the block was never exercised. Asserts the run fails, output names `--allow-first-sync` and the abort, and pc2's sync-history is still absent (gate runs before any job, so nothing reached the target). Steps renumbered 2-4; docstring updated.
+
+Sync counts now: smoke test 2; `test_consecutive_sync_warning_workflow` 4 runs, of which 2 abort at the gate before any job (cheap); `test_back_sync_clears_warning` unchanged at 3.
+
+Verified: `ruff format`, `ruff check tests/`, `basedpyright`, `codespell`, `pytest -q` (4653 passed), and `pytest tests/integration --collect-only -q -m ""` (75 collected) all pass. Integration tests were not run (VM fleet/lock).</result>
+<usage><subagent_tokens>79286</subagent_tokens><tool_uses>20</tool_uses><duration_ms>194773</duration_ms></usage>
+</task-notification>
+
+---
+
+y
