@@ -1266,11 +1266,11 @@ class TestUnreproducibleGroupResolution:
 @pytest.mark.asyncio
 class TestCollateralGroupResolution:
     """D-30: a `COLLATERAL_REVIEW_ACTION` group gets the three-way per-entry flow
-    (go ahead / keep the package / stop the sync), recorded against `entry.item_id` (which the caller,
+    (apply / keep the package / stop the sync), recorded against `entry.item_id` (which the caller,
     `AptSyncJob`, maps onto the triggering install), never a checkbox tick.
     """
 
-    async def test_go_ahead_records_apply(self) -> None:
+    async def test_apply_records_apply(self) -> None:
         """H28 — letting the collateral happen records the act against the entry."""
         console = _interactive_console()
         ui = MagicMock()

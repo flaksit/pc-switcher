@@ -148,7 +148,7 @@ A package from a hand-downloaded `.deb` is not apt-sync's business — see [*Sof
 
 ### Removing a package
 
-A package on the target that the source lacks is offered for removal, with "skip" selected as default action. Removal does not purge the package's configuration.
+A package on the target that the source lacks is offered for removal, with "skip" selected as default action. Removal does not purge the package's configuration. What apt leaves behind under `/etc` can be purged by hand at any time, whereas a purge cannot be undone; and the configuration a user thinks of as their own lives under `$HOME`, which no removal touches.
 
 ### Reporting without acting
 

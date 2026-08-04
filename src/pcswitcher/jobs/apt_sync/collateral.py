@@ -5,7 +5,7 @@ Split by origin, which is the whole ruling: a collateral package apt installed
 automatically is apt resolving its own dependencies and proceeds silently — named in the log
 and nowhere else (`PKG-FR-COLLATERAL-AUTO`) — while one the user installed by hand on the
 TARGET, or marked as that machine's own, is something they chose to have, so it becomes its
-own three-way review item: go ahead, keep the package, or stop the sync.
+own three-way review item: apply, keep the package, or stop the sync.
 
 Two batched simulations per run, not one per package: a per-package simulation over a
 150-package manual set would cost more than the sync itself. Attribution is what costs extra,
@@ -138,9 +138,9 @@ class Collateral:
         # and at apply time by the converge guards, which must agree.
         self._target_manual_set = target_manual_set
         self._origins = origins
-        # The item id of every manual-collateral consequence the user let go ahead, computed
+        # The item id of every manual-collateral consequence the user approved, computed
         # from the collateral group's decisions — the id and not the package name, because
-        # one package can be collateral of two transactions and a go-ahead answers one of
+        # one package can be collateral of two transactions and an approval answers one of
         # them. The apply-time guard lets exactly those consequences through; every other
         # manual collateral stays refused (D-30 — the last line of defence behind plan-time
         # classification).
@@ -157,7 +157,7 @@ class Collateral:
         return self._approved
 
     def allow(self, item_ids: frozenset[str]) -> None:
-        """Add consequences let go ahead by a question asked AFTER `resolve` ran, so the
+        """Add consequences approved by a question asked AFTER `resolve` ran, so the
         apply-time guard honours an answer given minutes into the converge loop
         (`LateCollateral`, `PKG-FR-ASK-AGAIN`).
         """
@@ -378,7 +378,7 @@ class Collateral:
     ) -> list[CollateralEffect]:
         """The apply-time half of the same split, and the last line of defence behind
         plan-time classification (D-30): the protected packages this real transaction would
-        take that nobody let go ahead.
+        take that nobody approved.
 
         Runs the identical `classify` the review ran, so the package the user was asked about
         and the package the guard enforces cannot drift apart. Auto collateral is logged here
@@ -386,7 +386,7 @@ class Collateral:
         (`PKG-FR-COLLATERAL-AUTO`).
 
         Matched on the CONSEQUENCE — this direction, this effect, this package — and not on
-        the package alone: a go-ahead given for the install batch's casualty is not consent
+        the package alone: an approval given for the install batch's casualty is not consent
         to lose the same package to an approved removal's cascade
         (`PKG-FR-COLLATERAL-MANUAL`).
         """
@@ -713,7 +713,7 @@ class LateCollateral:
         found = [
             item
             for item in await self._collateral.for_direction(names, frozenset(), install_args, verb="Installing")
-            # A consequence the plan-time question already got a go-ahead for is not put
+            # A consequence the plan-time question already approved is not put
             # twice: the id is the consequence, so that answer covers this cause too. A
             # DECLINED one IS asked again — that answer cancelled the changes it was about,
             # and these are different changes (`PKG-FR-COLLATERAL-ATTRIBUTION`).
@@ -724,7 +724,7 @@ class LateCollateral:
 
     async def ask_about_drift(self, *, subject: str, verb: str, effects: Sequence[CollateralEffect]) -> str | None:
         """Put the three-way question for collateral the REAL transaction has just revealed,
-        and answer whether that transaction may run: `None` to go ahead, otherwise why it was
+        and answer whether that transaction may run: `None` to proceed, otherwise why it was
         withdrawn (`PKG-FR-COLLATERAL-MANUAL`, `PKG-FR-ASK-AGAIN`).
 
         The fact does not exist until the transaction is simulated, which happens once this

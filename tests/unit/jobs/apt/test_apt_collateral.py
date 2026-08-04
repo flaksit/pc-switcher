@@ -234,7 +234,7 @@ class TestPlanTimeCollateral:
 
 def _manual_collateral_context() -> tuple[JobContext, MagicMock, MagicMock]:
     """A job whose only install candidate (`pkg-a`) would, per the simulation, remove the
-    manually-installed `other-manual` — the shared fixture for the go-ahead / keep-the-package
+    manually-installed `other-manual` — the shared fixture for the install-anyway / keep-the-package
     flow tests. `other-manual` is manual and identical on both machines, so it is not a
     diff, only collateral. Its name is deliberately distinct from `pkg-a` so a bug that
     conflated the collateral package with its triggering install would be caught.
@@ -301,7 +301,7 @@ class TestCollateralFlow:
 
     @pytest.mark.asyncio
     async def test_install_anyway_proceeds_and_guard_allows_the_collateral_removal(self) -> None:
-        """D23 — going ahead runs the causing install and the guard lets the removal through."""
+        """D23 — the causing install proceeds and the guard lets the removal through."""
         context, _source, target = _manual_collateral_context()
         job = AptSyncJob(context)
         install_reviewer(
@@ -413,8 +413,8 @@ class TestASkippedRemovalKeepsItsProtection:
         assert not any("sudo" in cmd and "apt-get remove" in cmd for cmd in all_calls(target))
 
     @pytest.mark.asyncio
-    async def test_going_ahead_at_that_question_runs_the_approved_removal(self) -> None:
-        """D72 — the answer the old refusal could never offer: letting the cascade go ahead
+    async def test_approving_the_consequence_at_that_question_runs_the_approved_removal(self) -> None:
+        """D72 — the answer the old refusal could never offer: approving the consequence
         removes `pkg-x`, and the apply-time guard lets `pkg-y` go with it. `pkg-y`'s own
         removal item stays skipped — it is not what was approved.
         """
@@ -479,7 +479,7 @@ class TestTheAnswersTheItemComposes:
 
     @pytest.mark.asyncio
     async def test_an_install_cause_phrases_both_answers_around_the_install(self) -> None:
-        """D20, D21 — the go-ahead names the causing change and the consequence; the keep
+        """D20, D21 — the install answer names the causing change and the consequence; the keep
         answer names the package, the machine, the change that will not happen, and that the
         question comes back next sync.
         """
@@ -1246,8 +1246,8 @@ class TestOnePackageTwoConsequences:
         )
 
     @pytest.mark.asyncio
-    async def test_letting_the_installs_casualty_go_ahead_does_not_release_the_removals(self) -> None:
-        """D55, H48 — the whole consent model: a go-ahead on one consequence must leave the guard
+    async def test_approving_the_installs_casualty_does_not_release_the_removals(self) -> None:
+        """D55, H48 — the whole consent model: approving one consequence must leave the guard
         refusing the other, rather than exempting the package outright.
         """
         context, _source, target = self._context()
@@ -1273,7 +1273,7 @@ class TestOnePackageTwoConsequences:
     @pytest.mark.asyncio
     async def test_the_apply_time_guard_matches_the_consequence_not_the_package(self) -> None:
         """D56 — the apply-time half of the same rule. The removal's transaction drifts after
-        plan time to take `victim` as well, and the go-ahead the user gave for the INSTALL's
+        plan time to take `victim` as well, and the approval the user gave for the INSTALL's
         casualty does not cover it: the removal raises its own question, which this run
         leaves unanswered, so the removal is withdrawn while the install still runs.
         """
@@ -1434,8 +1434,8 @@ class TestCollateralForARepositoryThisRunWrites:
         assert not any("apt-get --dry-run" in cmd for cmd in all_calls(target))
 
     @pytest.mark.asyncio
-    async def test_going_ahead_installs_and_the_guard_allows_the_collateral_removal(self) -> None:
-        """D67 — going ahead at the late question installs, and the guard allows the removal."""
+    async def test_approving_the_removal_installs_and_the_guard_allows_the_collateral_removal(self) -> None:
+        """D67 — approving the removal at the late question installs, and the guard allows it."""
         context, _source, target = _late_collateral_context()
         job = AptSyncJob(context)
         install_reviewer(
@@ -1840,7 +1840,7 @@ class TestAConsequenceAlreadyAnsweredAtPlanTime:
     """
 
     @pytest.mark.asyncio
-    async def test_a_go_ahead_given_at_plan_time_is_not_asked_for_again(self) -> None:
+    async def test_an_approval_given_at_plan_time_is_not_asked_for_again(self) -> None:
         """D57 — the earlier answer covers this cause too: the late round finds the same
         consequence, says nothing, and both installs run.
         """

@@ -3728,7 +3728,7 @@ class TestCrossDirectionRoundTrips:
           data first: a snapshot of a snap that never held any is not the case the article is
           about;
         - two manually-installed packages pc2 has and pc1 does not, where removing the
-          approved one takes the SKIPPED one with it. Answering "go ahead" at that question
+          approved one takes the SKIPPED one with it. Answering "apply" at that question
           removes both, past the apply-time guard, while the skipped candidate's OWN removal
           item stays skipped -- what was approved is the consequence, not the item.
 
@@ -3892,15 +3892,15 @@ class TestCrossDirectionRoundTrips:
                 ).stdout
             )
             assert target_base not in target_installed, (
-                f"{target_base}'s approved removal did not run after the collateral go-ahead"
+                f"{target_base}'s approved removal did not run after the collateral approval"
             )
             assert target_dependent not in target_installed, (
-                f"{target_dependent} survived a removal the user let go ahead -- the apply-time guard refused a "
-                "consequence that was approved"
+                f"{target_dependent} survived a removal the user approved -- the apply-time guard refused an "
+                "approved consequence"
             )
             forward_collapsed = _collapse_run_output(forward.stdout + forward.stderr)
             assert f"reviewed {target_dependent} (report_only): applied" in forward_collapsed, (
-                f"the go-ahead for {target_dependent} was never recorded against a collateral item in the review.\n"
+                f"the approval for {target_dependent} was never recorded against a collateral item in the review.\n"
                 f"stdout: {forward.stdout}\nstderr: {forward.stderr}"
             )
             assert f"reviewed {target_dependent} (collateral)" not in forward_collapsed, (
@@ -3910,7 +3910,7 @@ class TestCrossDirectionRoundTrips:
                 f"reviewed {target_dependent} ({_SYNTHETIC_PACKAGE_VERSION}) (remove): skipped this run"
                 in forward_collapsed
             ), (
-                f"{target_dependent}'s own removal item did not stay skipped -- the go-ahead answered the "
+                f"{target_dependent}'s own removal item did not stay skipped -- the approval answered the "
                 f"consequence, not the item.\nstdout: {forward.stdout}\nstderr: {forward.stderr}"
             )
 

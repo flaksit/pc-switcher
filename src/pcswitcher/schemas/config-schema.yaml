@@ -57,7 +57,7 @@ properties:
       # Jobs implemented in 001-core:
       dummy_success:
         type: boolean
-        default: true
+        default: false
         description: "Test job that completes successfully"
       dummy_fail:
         type: boolean
@@ -84,11 +84,11 @@ properties:
       # Jobs implemented in Phase 1:
       folder_sync:
         type: boolean
-        default: true
+        default: false
         description: "Generic folder sync job (syncs /home and /root by default)"
       vscode_state_sync:
         type: boolean
-        default: true
+        default: false
         description: "SQLite-aware selective sync of VS Code editor state.vscdb"
       # Future jobs (add when features 5-10 are implemented):
       # user_data:

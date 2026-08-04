@@ -666,7 +666,7 @@ class AptSyncJob(PackageSyncJob):
         permanent machine-local mark on a file whose purpose is to feed packages would
         silently change where those packages come from forever. Manual-collateral diffs
         (D-30) become a `COLLATERAL_REVIEW_ACTION` group whose entries take the three-way
-        go-ahead / keep-the-package / stop-the-sync resolution.
+        apply / keep-the-package / stop-the-sync resolution.
 
         Both trail the base groups — packages and apt config — so the user sees the bulk of
         the diff before being asked to resolve anything, and collateral comes last because
@@ -898,7 +898,7 @@ class AptSyncJob(PackageSyncJob):
         superset test — the unit recomputes the exact set from the real decisions and returns
         early if it is empty — so the cost of a false positive is one no-op call.
 
-        Manual-collateral decisions (D-30) are resolved first: a go-ahead on a
+        Manual-collateral decisions (D-30) are resolved first: applying a
         collateral item marks its package approved so the apply-time guard lets the
         removal through, while a skip is translated into `SKIP_ONCE` on the approved
         packages that cause that collateral, so a declined collateral cleanly leaves them

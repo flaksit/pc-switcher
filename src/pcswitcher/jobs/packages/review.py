@@ -93,9 +93,9 @@ A `ReviewGroup` whose `action` is `COLLATERAL_REVIEW_ACTION` likewise gets its o
 interaction shape (D-30): each entry is a package the TARGET protects — its own apt has it
 marked manually installed, or that machine marked it machine-specific — that the pending
 transaction would remove, downgrade or upgrade, resolved one at a time with a three-way
-choice — go ahead, keep the package, or stop the whole sync. The decision
+choice — apply, keep the package, or stop the whole sync. The decision
 is recorded against the entry's `item_id` (the triggering change, set by the caller), so
-"go ahead" proceeds with it, "keep" leaves it unapproved, and "stop" raises
+"apply" proceeds with it, "keep" leaves it unapproved, and "stop" raises
 `SyncAbortedByUser` naming the collateral package. A non-interactive run leaves every
 collateral entry `SKIP_ONCE` like every other item, so the change it gates is simply not
 approved (D-26).
@@ -208,11 +208,11 @@ UNREPRODUCIBLE_REVIEW_ACTION = "unreproducible"
 
 # Sentinel `ReviewGroup.action` a caller (today, only `AptSyncJob`) uses to mark a group
 # of manual-collateral items (D-30) as needing the three-way per-entry resolution flow
-# below — go ahead / keep the package / stop the sync — rather than an ordinary decision
+# below — apply / keep the package / stop the sync — rather than an ordinary decision
 # screen. A manual-collateral item is a package `Collateral.protected` covers that the
 # pending transaction would remove, downgrade or upgrade; whether to lose it is not
 # a question the decision screen expresses, so it gets its own prompt (sibling to
-# `UNREPRODUCIBLE_REVIEW_ACTION`). Go-ahead records `Decision.APPLY` against
+# `UNREPRODUCIBLE_REVIEW_ACTION`). Apply records `Decision.APPLY` against
 # `ReviewEntry.item_id`, keep records `Decision.SKIP_ONCE`, and stop raises
 # `SyncAbortedByUser` naming the collateral package. The caller maps that recorded decision
 # onto the changes that cause it (`AptSyncJob.accept_review`): APPLY lets them proceed and
@@ -459,7 +459,7 @@ def _hints(group: ReviewGroup, source_hostname: str, target_hostname: str) -> tu
     """The act / skip-now / skip-always sentences for this screen's legend.
 
     Each says what the answer DOES — the act named as itself on the machine it happens to,
-    and each skip as the state it leaves behind plus how long that lasts. Not "go ahead" or
+    and each skip as the state it leaves behind plus how long that lasts. Not "proceed" or
     "leave nomad alone": a neutral word for the act is the same non-answer as "apply", and
     the user is reading these to find out what the key does, not to be reassured.
 
@@ -929,7 +929,7 @@ def _collateral_options(entry: ReviewEntry, target_hostname: str) -> tuple[Decis
     every collateral item and specific to none.
     """
     act_hint, skip_hint = entry.answer_hints or (
-        f"the change described above goes ahead on {target_hostname}",
+        f"the change described above is applied on {target_hostname}",
         f"keep {entry.label} on {target_hostname}; the change that would touch it is dropped from this sync; "
         "will be asked again next sync",
     )

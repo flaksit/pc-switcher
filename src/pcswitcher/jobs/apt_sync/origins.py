@@ -293,7 +293,7 @@ class OriginClassifier:
 
         What this defers, rather than gives up: an excluded package gets no plan-time
         collateral classification, because apt cannot say what it would remove for a package
-        it cannot resolve — the facts the three-way go-ahead/keep/stop question needs do not
+        it cannot resolve — the facts the three-way apply/keep/stop question needs do not
         exist yet. `LateCollateral.ensure_asked` puts that question once the `/etc/apt` unit
         has landed and `apt-get update` has run, over every such install together and before
         the first of them converges, so the same three answers are offered a few minutes
