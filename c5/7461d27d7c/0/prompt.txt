@@ -1,0 +1,10 @@
+package-sync tests are not folded into e2e smoke-test and not well folded inside themselves. We want to avoid as many "pc-switcher sync" runs as possible.
+
+For e2e-smoke: follow the same pattern as for folder_sync in test_end_to_end_sync.py: interleave tests, but put details and logic in other module.
+Fold tests about dry-run in test_dry_run.py.
+Fold package-sync tests into each other: many things can be tested in a single sync or in the same sequence of syncs. Just ensure the code stays readable, by putting the test logic (setup, assertions, ...) in separate functions, that are called from the main sequence.
+Ensure that install_on_target is disabled for package-sync tests (not the e2e-smoke test of course).
+
+---
+
+Continue. Delegate to subagents at your own discretion. NO other session is running.
