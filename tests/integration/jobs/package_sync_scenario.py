@@ -2649,13 +2649,20 @@ async def assert_the_back_direction_converged(
         "-- an item the forward run converged must produce no diff at all"
     )
 
+    # Each installed flatpak reduced to its application id: the reverse run REINSTALLS the app
+    # this scenario uninstalled between the two syncs, and a real remote may have moved on in
+    # between, so the version and ref columns are the one part of this comparison that can
+    # differ with nothing wrong. That the app is there at all is asserted above.
+    def by_application(state: MachinePackageState) -> MachinePackageState:
+        return replace(state, flatpak_refs=tuple((row[0], "", "", "", "") for row in state.flatpak_refs))
+
     after = await capture_machine_package_state(new_target)
     expected = replace(
         before,
         apt_manual=tuple(name for name in before.apt_manual if name != seed.install_candidate),
         apt_installed=tuple(name for name in before.apt_installed if name != seed.install_candidate),
     )
-    assert after == expected, (
+    assert by_application(after) == by_application(expected), (
         "the reverse run moved something on the new target beyond the removal it was given.\n"
         f"expected: {expected}\nactual: {after}"
     )

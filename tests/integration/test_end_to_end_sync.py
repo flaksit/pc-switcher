@@ -119,8 +119,8 @@ class TestEndToEndSync:
         pc1_executor: BashLoginRemoteExecutor,
         pc2_executor: BashLoginRemoteExecutor,
     ) -> None:
-        """CORE-US-JOB-ARCH-AS1, J1, K9, J116, B1, E21, E67, K10, E55, K11, F72, G67, H30,
-        K12, K16, N8, J145, A54, N9 — the full pipeline end-to-end (ADR-015/016), and ADR-020
+        """J1, K9, J116, B1, E21, E67, K10, E55, K11, F72, G67, H30, K12, K16, N8, J145, A54,
+        N9 — CORE-US-JOB-ARCH-AS1, the full pipeline end-to-end (ADR-015/016), and ADR-020
         D-37 in both flatpak directions plus `PKG-FR-FLATPAK-FILTER`'s two halves.
 
         One scenario, one seed, two syncs:
