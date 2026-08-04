@@ -90,7 +90,7 @@ import re
 import shlex
 import sys
 import time
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Literal
@@ -138,12 +138,16 @@ _SYNC_COMMAND_MARKER = "pc-switcher sync"
 
 @pytest.fixture(autouse=True)
 def _report_where_the_time_went(request: pytest.FixtureRequest) -> Iterator[None]:  # pyright: ignore[reportUnusedFunction]
-    """Split each test's wall clock into the syncs it runs and the work it does around them,
-    and name the slowest individual commands.
+    """Split each test's command time into the syncs it runs and the work it does around
+    them, and name the slowest individual commands.
 
     A sync costs what it costs; everything else is setup, convergence and cleanup, which is
     the only part a test can give back. Reading that split off a real run is what says which
     of the two is worth attacking.
+
+    Command time, not wall clock: this module runs independent commands concurrently, so two
+    that overlap are each counted whole. What the totals rank is where the work is, which is
+    what they are for.
     """
     if not os.environ.get(_TIMING_ENV):
         yield
@@ -196,6 +200,22 @@ _REMOVAL_REHEARSAL_HEADROOM = 4
 def nonblank_lines(text: str) -> list[str]:
     """Split command output into stripped, non-empty lines."""
     return [line.strip() for line in text.splitlines() if line.strip()]
+
+
+async def _cleanup_in_parallel(*chains: Awaitable[None]) -> None:
+    """Run one cleanup chain per machine at the same time (#216).
+
+    Concurrency is safe because `BashLoginRemoteExecutor.run_command` opens its own asyncssh
+    channel per command and this module takes no lock, so two machines' cleanups genuinely
+    overlap; the ORDER inside one machine's chain is what each caller still owns.
+
+    `return_exceptions=True` is what keeps one chain's failure from cancelling the other
+    machine's, and what stops a cleanup failure from replacing the test's own error -- it is
+    printed instead, like every other tolerated cleanup failure here.
+    """
+    for outcome in await asyncio.gather(*chains, return_exceptions=True):
+        if isinstance(outcome, BaseException):
+            print(f"[cleanup] {outcome!r}")
 
 
 # Every escape sequence `logger.RichFormatter` can emit around a log line's styled fields.
@@ -369,10 +389,13 @@ async def _find_removable_candidates(
     (see `pick_safe_removal_candidates`, then `_apt_would_remove_these`). Returns fewer than
     `count` -- possibly none -- when not enough candidates qualify.
     """
-    pc1_manual_result = await pc1_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0)
-    pc2_manual_result = await pc2_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0)
-    pc2_dpkg_result = await pc2_executor.run_command(
-        "dpkg-query --show --showformat='${Package}\\t${Status}\\n'", login_shell=False, timeout=20.0
+    # Three reads that write nothing and need nothing from each other, so they run at once.
+    pc1_manual_result, pc2_manual_result, pc2_dpkg_result = await asyncio.gather(
+        pc1_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0),
+        pc2_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0),
+        pc2_executor.run_command(
+            "dpkg-query --show --showformat='${Package}\\t${Status}\\n'", login_shell=False, timeout=20.0
+        ),
     )
 
     pc1_manual = nonblank_lines(pc1_manual_result.stdout)
@@ -546,10 +569,13 @@ async def _create_extra_on_target_apt_package(
     changes what apt_sync captures without changing what is on the disk. Reversed with
     `_restore_auto_marked_package`.
     """
-    pc1_manual_result = await pc1_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0)
-    pc2_manual_result = await pc2_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0)
-    pc2_dpkg_result = await pc2_executor.run_command(
-        "dpkg-query --show --showformat='${Package}\\t${Status}\\n'", login_shell=False, timeout=20.0
+    # Three reads that write nothing and need nothing from each other, so they run at once.
+    pc1_manual_result, pc2_manual_result, pc2_dpkg_result = await asyncio.gather(
+        pc1_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0),
+        pc2_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0),
+        pc2_executor.run_command(
+            "dpkg-query --show --showformat='${Package}\\t${Status}\\n'", login_shell=False, timeout=20.0
+        ),
     )
     pc1_manual = set(nonblank_lines(pc1_manual_result.stdout))
     pc2_manual = set(nonblank_lines(pc2_manual_result.stdout))
@@ -863,8 +889,10 @@ async def _snap_subjects(
     keeps that free whenever the previous scenario already left them installed.
     """
     subjects = _fixture_snap_names(count)
-    await _ensure_snaps_installed(pc1_executor, subjects)
-    await _ensure_snaps_installed(pc2_executor, subjects)
+    # One machine's snapd knows nothing of the other's, so both converge at once.
+    _ = await asyncio.gather(
+        _ensure_snaps_installed(pc1_executor, subjects), _ensure_snaps_installed(pc2_executor, subjects)
+    )
     return subjects
 
 
@@ -1714,32 +1742,38 @@ async def _capture_machine_package_state(executor: BashLoginRemoteExecutor) -> _
 
     Both flatpak scopes are read, because a job writes remotes in whichever scope an
     approved application came from.
+
+    All seven run at once: every one of them is read-only and none needs another's answer, so
+    the capture costs one round trip rather than seven -- and this is the read a whole-state
+    comparison takes twice per run (#216).
     """
-    manual = await executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0)
-    held = await executor.run_command("apt-mark showhold", login_shell=False, timeout=15.0)
-    dpkg = await executor.run_command(
-        "dpkg-query --show --showformat='${Package}\\t${Status}\\n'", login_shell=False, timeout=20.0
-    )
-    etc_apt = await executor.run_command(
-        "; ".join(
-            f"if sudo test -d {shlex.quote(directory)}; then "
-            f"sudo find {shlex.quote(directory)} -maxdepth 1 -type f -exec sha256sum {{}} +; fi"
-            for directory in _APT_STATE_DIRS
+    manual, held, dpkg, etc_apt, snaps, flatpaks, remotes = await asyncio.gather(
+        executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0),
+        executor.run_command("apt-mark showhold", login_shell=False, timeout=15.0),
+        executor.run_command(
+            "dpkg-query --show --showformat='${Package}\\t${Status}\\n'", login_shell=False, timeout=20.0
         ),
-        login_shell=False,
-        timeout=30.0,
+        executor.run_command(
+            "; ".join(
+                f"if sudo test -d {shlex.quote(directory)}; then "
+                f"sudo find {shlex.quote(directory)} -maxdepth 1 -type f -exec sha256sum {{}} +; fi"
+                for directory in _APT_STATE_DIRS
+            ),
+            login_shell=False,
+            timeout=30.0,
+        ),
+        executor.run_command("snap list --all", login_shell=False, timeout=20.0),
+        executor.run_command(
+            "flatpak list --app --columns=application,version,origin,installation,ref", login_shell=False, timeout=20.0
+        ),
+        executor.run_command(
+            "flatpak remotes --user --columns=name,url,options,filter; "
+            "flatpak remotes --system --columns=name,url,options,filter",
+            login_shell=False,
+            timeout=20.0,
+        ),
     )
     assert etc_apt.success, f"Failed to read /etc/apt digests: {etc_apt.stderr}"
-    snaps = await executor.run_command("snap list --all", login_shell=False, timeout=20.0)
-    flatpaks = await executor.run_command(
-        "flatpak list --app --columns=application,version,origin,installation,ref", login_shell=False, timeout=20.0
-    )
-    remotes = await executor.run_command(
-        "flatpak remotes --user --columns=name,url,options,filter; "
-        "flatpak remotes --system --columns=name,url,options,filter",
-        login_shell=False,
-        timeout=20.0,
-    )
     return _MachinePackageState(
         apt_manual=tuple(sorted(nonblank_lines(manual.stdout))),
         apt_held=tuple(sorted(nonblank_lines(held.stdout))),
@@ -1792,8 +1826,11 @@ async def _a_package_both_machines_have_unheld(
     one package and holds another needs the two to be different packages, and every
     selection in this module is alphabetical for determinism, so without this they collide.
     """
-    source_manual, source_held, source_versions = await _apt_selection_snapshot(pc1_executor)
-    target_manual, target_held, target_versions = await _apt_selection_snapshot(pc2_executor)
+    # One read-only snapshot per machine, taken at once.
+    (
+        (source_manual, source_held, source_versions),
+        (target_manual, target_held, target_versions),
+    ) = await asyncio.gather(_apt_selection_snapshot(pc1_executor), _apt_selection_snapshot(pc2_executor))
     shared = sorted(
         name
         for name in source_manual & target_manual
@@ -2265,8 +2302,7 @@ class TestOneRunConvergesEveryManager:
         """
         _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
 
-        await _assert_flatpak_available(pc1_executor)
-        await _assert_flatpak_available(pc2_executor)
+        _ = await asyncio.gather(_assert_flatpak_available(pc1_executor), _assert_flatpak_available(pc2_executor))
 
         # -- subjects, all selected before either machine is touched ---------------------
         install_candidate = apt_subjects.install_direction[0]
@@ -2274,8 +2310,9 @@ class TestOneRunConvergesEveryManager:
         hold_subject = apt_subjects.hold
 
         revision_snap, hold_snap = await _snap_subjects(pc1_executor, pc2_executor, count=2)
-        source_snap_revision = await _snap_revision(pc1_executor, revision_snap)
-        target_snap_revision = await _snap_revision(pc2_executor, revision_snap)
+        source_snap_revision, target_snap_revision = await asyncio.gather(
+            _snap_revision(pc1_executor, revision_snap), _snap_revision(pc2_executor, revision_snap)
+        )
         assert source_snap_revision and target_snap_revision, f"{revision_snap} is not installed on both machines"
         alternate_revision = await _alternate_snap_revision(pc2_executor, revision_snap, source_snap_revision)
 
@@ -2300,25 +2337,34 @@ class TestOneRunConvergesEveryManager:
         target_only_remote = f"pcswitcher-it-vendor-{uniq}"
         target_only_keyring = f"$HOME/.local/share/flatpak/repo/{target_only_remote}.trustedkeys.gpg"
 
-        pc1_prior_hold = await _capture_system_refresh_hold(pc1_executor)
-        pc2_prior_hold = await _capture_system_refresh_hold(pc2_executor)
+        pc1_prior_hold, pc2_prior_hold = await asyncio.gather(
+            _capture_system_refresh_hold(pc1_executor), _capture_system_refresh_hold(pc2_executor)
+        )
 
         source_filename = key_filename = pin_filename = recorded_filter_path = ""
         try:
-            await _engage_system_refresh_hold(pc1_executor)
-            await _engage_system_refresh_hold(pc2_executor)
+            _ = await asyncio.gather(
+                _engage_system_refresh_hold(pc1_executor), _engage_system_refresh_hold(pc2_executor)
+            )
 
             # -- seed apt ----------------------------------------------------------------
-            await _ensure_installed_and_manual(pc1_executor, install_candidate)
-            await _ensure_absent(pc2_executor, install_candidate)
-            await _ensure_installed_and_manual(pc2_executor, removal_candidate)
-            await _ensure_absent(pc1_executor, removal_candidate)
-            for executor in (pc1_executor, pc2_executor):
-                await _ensure_installed_and_manual(executor, hold_subject)
+            # One chain per machine, run at once: apt writes on ONE machine serialise on
+            # dpkg's own lock, but the two machines' apt work is independent and this seed is
+            # several transactions on each (#216).
+            async def seed_source_apt() -> CommandResult:
+                await _ensure_installed_and_manual(pc1_executor, install_candidate)
+                await _ensure_absent(pc1_executor, removal_candidate)
+                await _ensure_installed_and_manual(pc1_executor, hold_subject)
+                return await pc1_executor.run_command(
+                    f"sudo apt-mark hold {shlex.quote(hold_subject)}", login_shell=False, timeout=30.0
+                )
 
-            held = await pc1_executor.run_command(
-                f"sudo apt-mark hold {shlex.quote(hold_subject)}", login_shell=False, timeout=30.0
-            )
+            async def seed_target_apt() -> None:
+                await _ensure_absent(pc2_executor, install_candidate)
+                await _ensure_installed_and_manual(pc2_executor, removal_candidate)
+                await _ensure_installed_and_manual(pc2_executor, hold_subject)
+
+            held, _ = await asyncio.gather(seed_source_apt(), seed_target_apt())
             assert held.success, f"Failed to hold {hold_subject} on pc1: {held.stderr}"
 
             source_filename, key_filename = await _create_synthetic_repo_and_key(pc1_executor)
@@ -2334,16 +2380,19 @@ class TestOneRunConvergesEveryManager:
             assert absent.success, "synthetic /etc/apt files unexpectedly already present on pc2 before the run"
 
             # -- seed snap ---------------------------------------------------------------
-            diverged = await pc2_executor.run_command(
-                f"sudo snap refresh --revision={shlex.quote(alternate_revision)} {shlex.quote(revision_snap)}",
-                login_shell=False,
-                timeout=180.0,
+            # One snapd change on each machine, and neither snapd knows about the other's.
+            diverged, snap_held = await asyncio.gather(
+                pc2_executor.run_command(
+                    f"sudo snap refresh --revision={shlex.quote(alternate_revision)} {shlex.quote(revision_snap)}",
+                    login_shell=False,
+                    timeout=180.0,
+                ),
+                pc1_executor.run_command(
+                    f"sudo snap refresh --hold=forever {shlex.quote(hold_snap)}", login_shell=False, timeout=60.0
+                ),
             )
             assert diverged.success, (
                 f"Failed to move pc2's {revision_snap} to revision {alternate_revision}: {diverged.stderr}"
-            )
-            snap_held = await pc1_executor.run_command(
-                f"sudo snap refresh --hold=forever {shlex.quote(hold_snap)}", login_shell=False, timeout=60.0
             )
             assert snap_held.success, f"Failed to set a per-snap hold on pc1's {hold_snap}: {snap_held.stderr}"
             assert "held" not in await _snap_notes(pc2_executor, hold_snap), (
@@ -2351,8 +2400,20 @@ class TestOneRunConvergesEveryManager:
             )
 
             # -- seed flatpak ------------------------------------------------------------
-            source_remotes = await pc1_executor.run_command(
-                f"flatpak remotes {scope_flag} --columns=name", login_shell=False, timeout=15.0
+            # pc1's remote table is read while pc2 gives up the app and the remote: two
+            # machines, and neither reads what the other writes. The app is absent on pc2 by
+            # fixture; deleting the remote is what removes pc2's only trust in Flathub and
+            # makes the key replication load-bearing.
+            source_remotes, _dropped_on_target = await asyncio.gather(
+                pc1_executor.run_command(
+                    f"flatpak remotes {scope_flag} --columns=name", login_shell=False, timeout=15.0
+                ),
+                pc2_executor.run_command(
+                    f"{sudo}flatpak uninstall {scope_flag} --assumeyes {shlex.quote(application)} || true; "
+                    f"{sudo}flatpak remote-delete {scope_flag} --force {shlex.quote(remote_name)} || true",
+                    login_shell=False,
+                    timeout=120.0,
+                ),
             )
             assert _FIXTURE_UNUSED_FLATPAK_REMOTE in nonblank_lines(source_remotes.stdout), (
                 f"the fixture remote {_FIXTURE_UNUSED_FLATPAK_REMOTE} is not configured on pc1. It is created by "
@@ -2368,40 +2429,36 @@ class TestOneRunConvergesEveryManager:
                 f"`flatpak remote-modify {scope_flag} --filter=` failed on pc1, so there is no filtered remote to "
                 f"replicate: {filtered.stderr}"
             )
-            _source_url, source_options = await _flatpak_remote_row(pc1_executor, remote_name, scope)
+            # Two read-only views of the same remote table, taken at once.
+            (_source_url, source_options), recorded = await asyncio.gather(
+                _flatpak_remote_row(pc1_executor, remote_name, scope),
+                _flatpak_remote_filter(pc1_executor, remote_name, scope),
+            )
             assert _FLATPAK_FILTERED_OPTION in source_options, (
                 f"pc1's {remote_name} reports options {source_options!r} after `flatpak remote-modify {scope_flag} "
                 f"--filter=`, so this flatpak does not print the {_FLATPAK_FILTERED_OPTION!r} token "
                 "`flatpak_sync._FILTERED_OPTION` reads"
             )
-            recorded_filter_path = await _flatpak_remote_filter(pc1_executor, remote_name, scope) or ""
+            recorded_filter_path = recorded or ""
             assert recorded_filter_path, (
                 f"pc1's {remote_name} names no file in `flatpak remotes {scope_flag} --columns=filter`, so this "
                 "flatpak does not record the path `flatpak_sync` replicates"
             )
 
-            # The app is absent on pc2 by fixture; deleting the remote is what removes pc2's
-            # only trust in Flathub and makes the key replication load-bearing.
-            await pc2_executor.run_command(
-                f"{sudo}flatpak uninstall {scope_flag} --assumeyes {shlex.quote(application)} || true; "
-                f"{sudo}flatpak remote-delete {scope_flag} --force {shlex.quote(remote_name)} || true",
-                login_shell=False,
-                timeout=120.0,
+            before_remotes_result, before_app_rows = await asyncio.gather(
+                pc2_executor.run_command(
+                    f"flatpak remotes {scope_flag} --columns=name", login_shell=False, timeout=15.0
+                ),
+                _flatpak_app_rows(pc2_executor),
             )
-            before_remotes = nonblank_lines(
-                (
-                    await pc2_executor.run_command(
-                        f"flatpak remotes {scope_flag} --columns=name", login_shell=False, timeout=15.0
-                    )
-                ).stdout
-            )
+            before_remotes = nonblank_lines(before_remotes_result.stdout)
             assert remote_name not in before_remotes, (
                 f"remote {remote_name} still configured on pc2, so this run cannot show it being provisioned"
             )
             assert _FIXTURE_UNUSED_FLATPAK_REMOTE not in before_remotes, (
                 f"{_FIXTURE_UNUSED_FLATPAK_REMOTE} is already on pc2, so this run cannot show that it did not travel"
             )
-            assert application not in [row[0] for row in await _flatpak_app_rows(pc2_executor)], (
+            assert application not in [row[0] for row in before_app_rows], (
                 f"{application} still installed on pc2, so no approved application derives {remote_name}"
             )
 
@@ -2528,8 +2585,11 @@ class TestOneRunConvergesEveryManager:
                 "If the source capture ran inside the orchestrator's system-wide refresh.hold window and saw no "
                 "hold, #208 D9's capture-timing assumption is false and the capture must move earlier."
             )
-            for executor, machine in ((pc1_executor, "pc1"), (pc2_executor, "pc2")):
-                assert await _capture_system_refresh_hold(executor) is not None, (
+            pc1_hold_after, pc2_hold_after = await asyncio.gather(
+                _capture_system_refresh_hold(pc1_executor), _capture_system_refresh_hold(pc2_executor)
+            )
+            for hold_after, machine in ((pc1_hold_after, "pc1"), (pc2_hold_after, "pc2")):
+                assert hold_after is not None, (
                     f"the run left {machine} without the refresh.hold this test engaged -- D-06 forbids the "
                     "convergence mechanism from touching either machine's auto-refresh policy"
                 )
@@ -2627,8 +2687,9 @@ class TestOneRunConvergesEveryManager:
                 "the second consecutive sync changed pc2's package-manager state -- the run is not a fixed point.\n"
                 f"before: {before_second}\nafter: {after_second}"
             )
-            source_entries = await DecisionFile("apt", pc1_executor).load()
-            target_entries = await DecisionFile("apt", pc2_executor).load()
+            source_entries, target_entries = await asyncio.gather(
+                DecisionFile("apt", pc1_executor).load(), DecisionFile("apt", pc2_executor).load()
+            )
             assert converged_item not in source_entries and converged_item not in target_entries, (
                 f"{install_candidate} was still presented in the second run's review (its SKIP_ALWAYS was "
                 "recorded) -- a converged item must produce no diff at all"
@@ -2672,34 +2733,9 @@ class TestOneRunConvergesEveryManager:
                 f"stdout: {unfiltered.stdout}\nstderr: {unfiltered.stderr}"
             )
         finally:
-            await _restore_flatpak_source_baseline(pc1_executor, remote_name, scope, filter_path)
-            if recorded_filter_path:
-                # The replicated copy is pc-switcher's own write and lives outside anything
-                # `_restore_flatpak_target_baseline` knows about.
-                await pc2_executor.run_command(
-                    f"rm --force {shlex.quote(recorded_filter_path)}", login_shell=False, timeout=15.0
-                )
-            await pc2_executor.run_command(
-                f"flatpak remote-delete {scope_flag} --force {shlex.quote(target_only_remote)} || true; "
-                f"rm --force {target_only_keyring}",
-                login_shell=False,
-                timeout=60.0,
-            )
-            await _restore_flatpak_target_baseline(pc2_executor)
-
-            # The holds come off and the revisions do not: a per-snap hold is state every
-            # later scenario reads, while which revision pc2 ends on is nobody's precondition
-            # (`_snap_subjects`).
-            for executor in (pc1_executor, pc2_executor):
-                await executor.run_command(
-                    f"sudo snap refresh --unhold {shlex.quote(hold_snap)}", login_shell=False, timeout=60.0
-                )
-
-            for executor in (pc1_executor, pc2_executor):
-                await executor.run_command(
-                    f"sudo apt-mark unhold {shlex.quote(hold_subject)}", login_shell=False, timeout=30.0
-                )
-
+            # The holds come off and the package state does not: a hold is state every later
+            # scenario reads, while which revision pc2 ends on and which packages the run
+            # moved are nobody's precondition (module docstring, `_snap_subjects`).
             cleanup_paths = " ".join(
                 shlex.quote(f"{directory}/{filename}")
                 for directory, filename in (
@@ -2709,18 +2745,49 @@ class TestOneRunConvergesEveryManager:
                 )
                 if filename
             )
-            if cleanup_paths:
-                for executor in (pc1_executor, pc2_executor):
-                    await executor.run_command(f"sudo rm --force {cleanup_paths}", login_shell=False, timeout=15.0)
 
-            await _remove_unowned_marker(pc1_executor, unowned_path)
-            await pc2_executor.run_command(
-                f"rm --force {replay_marker} {registry_relpath}", login_shell=False, timeout=15.0
-            )
-            await pc1_executor.run_command(f"rm --force {registry_relpath}", login_shell=False, timeout=15.0)
+            async def clean_the_source() -> None:
+                await _restore_flatpak_source_baseline(pc1_executor, remote_name, scope, filter_path)
+                await pc1_executor.run_command(
+                    f"sudo snap refresh --unhold {shlex.quote(hold_snap)}", login_shell=False, timeout=60.0
+                )
+                await pc1_executor.run_command(
+                    f"sudo apt-mark unhold {shlex.quote(hold_subject)}", login_shell=False, timeout=30.0
+                )
+                if cleanup_paths:
+                    await pc1_executor.run_command(f"sudo rm --force {cleanup_paths}", login_shell=False, timeout=15.0)
+                await _remove_unowned_marker(pc1_executor, unowned_path)
+                await pc1_executor.run_command(f"rm --force {registry_relpath}", login_shell=False, timeout=15.0)
+                await _restore_system_refresh_hold(pc1_executor, pc1_prior_hold)
 
-            await _restore_system_refresh_hold(pc1_executor, pc1_prior_hold)
-            await _restore_system_refresh_hold(pc2_executor, pc2_prior_hold)
+            async def clean_the_target() -> None:
+                if recorded_filter_path:
+                    # The replicated copy is pc-switcher's own write and lives outside
+                    # anything `_restore_flatpak_target_baseline` knows about.
+                    await pc2_executor.run_command(
+                        f"rm --force {shlex.quote(recorded_filter_path)}", login_shell=False, timeout=15.0
+                    )
+                await pc2_executor.run_command(
+                    f"flatpak remote-delete {scope_flag} --force {shlex.quote(target_only_remote)} || true; "
+                    f"rm --force {target_only_keyring}",
+                    login_shell=False,
+                    timeout=60.0,
+                )
+                await _restore_flatpak_target_baseline(pc2_executor)
+                await pc2_executor.run_command(
+                    f"sudo snap refresh --unhold {shlex.quote(hold_snap)}", login_shell=False, timeout=60.0
+                )
+                await pc2_executor.run_command(
+                    f"sudo apt-mark unhold {shlex.quote(hold_subject)}", login_shell=False, timeout=30.0
+                )
+                if cleanup_paths:
+                    await pc2_executor.run_command(f"sudo rm --force {cleanup_paths}", login_shell=False, timeout=15.0)
+                await pc2_executor.run_command(
+                    f"rm --force {replay_marker} {registry_relpath}", login_shell=False, timeout=15.0
+                )
+                await _restore_system_refresh_hold(pc2_executor, pc2_prior_hold)
+
+            await _cleanup_in_parallel(clean_the_source(), clean_the_target())
 
 
 class TestTheAptOriginModelOnRealRepositories:
@@ -2826,8 +2893,11 @@ class TestTheAptOriginModelOnRealRepositories:
             assert purged.success, f"Failed to purge {_VENDOR_PACKAGE} from pc2 between the runs: {purged.stderr}"
             repo_dir, list_filename, pin_filename = await _publish_a_rival_candidate(pc2_executor)
 
-            await _ensure_installed_and_manual(pc1_executor, other_candidate)
-            await _ensure_absent(pc2_executor, other_candidate)
+            # One apt transaction on each machine, run at once: they contend on nothing.
+            _ = await asyncio.gather(
+                _ensure_installed_and_manual(pc1_executor, other_candidate),
+                _ensure_absent(pc2_executor, other_candidate),
+            )
 
             # -- run 2: the target's own arithmetic refuses the vendor's build -----------
             decisions = {
@@ -2874,11 +2944,18 @@ class TestTheAptOriginModelOnRealRepositories:
                 f"the refusal did not name the origin pc2 would have taken it from.\n{collapsed}"
             )
         finally:
-            if repo_dir:
-                await _remove_the_rival_candidate(pc2_executor, repo_dir, list_filename, pin_filename)
-            if source_filename:
-                await _undeclare_the_vendor_repository(pc2_executor, source_filename, key_filename)
-                await _undeclare_the_vendor_repository(pc1_executor, source_filename, key_filename)
+
+            async def clean_the_source() -> None:
+                if source_filename:
+                    await _undeclare_the_vendor_repository(pc1_executor, source_filename, key_filename)
+
+            async def clean_the_target() -> None:
+                if repo_dir:
+                    await _remove_the_rival_candidate(pc2_executor, repo_dir, list_filename, pin_filename)
+                if source_filename:
+                    await _undeclare_the_vendor_repository(pc2_executor, source_filename, key_filename)
+
+            await _cleanup_in_parallel(clean_the_source(), clean_the_target())
 
 
 class TestARunWithNobodyToAsk:
@@ -2957,10 +3034,24 @@ class TestARunWithNobodyToAsk:
 
         unlocatable = repo_dir = list_filename = ""
         try:
-            await _ensure_installed_and_manual(pc1_executor, install_candidate)
-            await _ensure_absent(pc2_executor, install_candidate)
+            # One apt transaction on each machine, run at once: they contend on nothing.
+            _ = await asyncio.gather(
+                _ensure_installed_and_manual(pc1_executor, install_candidate),
+                _ensure_absent(pc2_executor, install_candidate),
+            )
 
-            unlocatable, repo_dir, list_filename = await _install_from_a_repo_the_target_lacks(pc1_executor)
+            # pc1 builds and installs from its own repository while pc2 installs the ref this
+            # test then diverges: different machines, different package managers, and neither
+            # reads what the other writes.
+            (unlocatable, repo_dir, list_filename), install = await asyncio.gather(
+                _install_from_a_repo_the_target_lacks(pc1_executor),
+                pc2_executor.run_command(
+                    f"{sudo}flatpak install {scope_flag} --assumeyes --noninteractive "
+                    f"{shlex.quote(remote_name)} {shlex.quote(ref)}",
+                    login_shell=False,
+                    timeout=600.0,
+                ),
+            )
             # The precondition, asserted rather than assumed: without it the run below proves
             # nothing, because a target that CAN resolve the name never had the defect.
             refused = await pc2_executor.run_command(
@@ -2973,12 +3064,6 @@ class TestARunWithNobodyToAsk:
                 f"stdout: {refused.stdout}\nstderr: {refused.stderr}"
             )
 
-            install = await pc2_executor.run_command(
-                f"{sudo}flatpak install {scope_flag} --assumeyes --noninteractive "
-                f"{shlex.quote(remote_name)} {shlex.quote(ref)}",
-                login_shell=False,
-                timeout=600.0,
-            )
             assert install.success, (
                 f"failed to install {ref} on pc2 from {remote_name}, so the two machines never share the ref this "
                 f"test diverges: {install.stderr}"
@@ -3005,12 +3090,14 @@ class TestARunWithNobodyToAsk:
 
             await _write_package_sync_config(pc1_executor, apt_sync=True, flatpak_sync=True, manual_installs_sync=True)
 
-            manual_before = nonblank_lines(
-                (await pc2_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0)).stdout
+            # Four reads that change nothing anywhere, taken at once.
+            manual_before_result, flatpak_before, pc1_decision_before, pc2_decision_before = await asyncio.gather(
+                pc2_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0),
+                _flatpak_app_rows(pc2_executor),
+                _decision_file_exists(pc1_executor, "apt"),
+                _decision_file_exists(pc2_executor, "apt"),
             )
-            flatpak_before = await _flatpak_app_rows(pc2_executor)
-            pc1_decision_before = await _decision_file_exists(pc1_executor, "apt")
-            pc2_decision_before = await _decision_file_exists(pc2_executor, "apt")
+            manual_before = nonblank_lines(manual_before_result.stdout)
 
             # No automation env prefix and no pty on this exec -- genuinely non-interactive
             # on both stdin and stdout, D-26's actual trigger condition.
@@ -3022,19 +3109,24 @@ class TestARunWithNobodyToAsk:
                 f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
             )
 
-            manual_after = nonblank_lines(
-                (await pc2_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0)).stdout
+            # The same four reads, again at once.
+            manual_after_result, flatpak_after, pc1_decision_after, pc2_decision_after = await asyncio.gather(
+                pc2_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0),
+                _flatpak_app_rows(pc2_executor),
+                _decision_file_exists(pc1_executor, "apt"),
+                _decision_file_exists(pc2_executor, "apt"),
             )
+            manual_after = nonblank_lines(manual_after_result.stdout)
             assert manual_after == manual_before, (
                 "non-interactive run changed pc2's apt-mark showmanual -- D-26 requires nothing applied"
             )
-            assert await _flatpak_app_rows(pc2_executor) == flatpak_before, (
+            assert flatpak_after == flatpak_before, (
                 "the run changed pc2's installed refs; an ORIGIN_MISMATCH is reported and converged by nothing."
             )
-            assert await _decision_file_exists(pc1_executor, "apt") == pc1_decision_before, (
+            assert pc1_decision_after == pc1_decision_before, (
                 "non-interactive run created/removed a decision file on pc1"
             )
-            assert await _decision_file_exists(pc2_executor, "apt") == pc2_decision_before, (
+            assert pc2_decision_after == pc2_decision_before, (
                 "non-interactive run created/removed a decision file on pc2"
             )
 
@@ -3096,19 +3188,25 @@ class TestARunWithNobodyToAsk:
                     f"{combined_output}"
                 )
         finally:
-            await _remove_unowned_marker(pc1_executor, witness_path)
-            if repo_dir:
-                await _undeclare_local_repository(pc1_executor, repo_dir, list_filename)
-            # `_restore_flatpak_target_baseline` re-adds with `--if-not-exists`, which cannot
-            # repair a URL, so the repointed remote is deleted here first.
-            await pc2_executor.run_command(
-                f"{sudo}flatpak uninstall {scope_flag} --assumeyes {shlex.quote(application)} || true; "
-                f"{sudo}flatpak remote-delete {scope_flag} --force {shlex.quote(remote_name)} || true",
-                login_shell=False,
-                timeout=120.0,
-            )
-            await _restore_flatpak_target_baseline(pc2_executor)
-            await _restore_auto_marked_package(pc2_executor, removal_candidate)
+
+            async def clean_the_source() -> None:
+                await _remove_unowned_marker(pc1_executor, witness_path)
+                if repo_dir:
+                    await _undeclare_local_repository(pc1_executor, repo_dir, list_filename)
+
+            async def clean_the_target() -> None:
+                # `_restore_flatpak_target_baseline` re-adds with `--if-not-exists`, which
+                # cannot repair a URL, so the repointed remote is deleted here first.
+                await pc2_executor.run_command(
+                    f"{sudo}flatpak uninstall {scope_flag} --assumeyes {shlex.quote(application)} || true; "
+                    f"{sudo}flatpak remote-delete {scope_flag} --force {shlex.quote(remote_name)} || true",
+                    login_shell=False,
+                    timeout=120.0,
+                )
+                await _restore_flatpak_target_baseline(pc2_executor)
+                await _restore_auto_marked_package(pc2_executor, removal_candidate)
+
+            await _cleanup_in_parallel(clean_the_source(), clean_the_target())
 
 
 class TestWhatFolderSyncMayAndMayNotCarry:
@@ -3170,8 +3268,8 @@ class TestWhatFolderSyncMayAndMayNotCarry:
         """
         _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
 
-        home = await _home_dir(pc1_executor)
-        assert await _home_dir(pc2_executor) == home, (
+        home, target_home = await asyncio.gather(_home_dir(pc1_executor), _home_dir(pc2_executor))
+        assert target_home == home, (
             "the two machines' SSH users have different home directories, so `~/snap` and the registry's directory "
             "are not one path each to mirror"
         )
@@ -3179,9 +3277,12 @@ class TestWhatFolderSyncMayAndMayNotCarry:
         registry_dir = f"{home}/{_REGISTRY_DIR_RELPATH}"
 
         held_app, absent_app = await _snap_subjects(pc1_executor, pc2_executor, count=2)
-        held_revision = await _snap_revision(pc2_executor, held_app)
-        absent_source_revision = await _snap_revision(pc1_executor, absent_app)
-        absent_target_revision = await _snap_revision(pc2_executor, absent_app)
+        # Three reads of two `snap list --all` outputs, taken at once.
+        held_revision, absent_source_revision, absent_target_revision = await asyncio.gather(
+            _snap_revision(pc2_executor, held_app),
+            _snap_revision(pc1_executor, absent_app),
+            _snap_revision(pc2_executor, absent_app),
+        )
         assert held_revision and absent_source_revision and absent_target_revision, (
             f"{held_app} and {absent_app} must both be installed on both machines"
         )
@@ -3205,17 +3306,24 @@ class TestWhatFolderSyncMayAndMayNotCarry:
         target_body = f"# pc2's own snippet {uniq}"
         travelling = f"{registry_dir}/pcswitcher-it-{uniq}"
 
-        pc1_prior_hold = await _capture_system_refresh_hold(pc1_executor)
-        pc2_prior_hold = await _capture_system_refresh_hold(pc2_executor)
+        pc1_prior_hold, pc2_prior_hold = await asyncio.gather(
+            _capture_system_refresh_hold(pc1_executor), _capture_system_refresh_hold(pc2_executor)
+        )
         source_aside = target_aside = ""
         try:
-            await _engage_system_refresh_hold(pc1_executor)
-            await _engage_system_refresh_hold(pc2_executor)
+            _ = await asyncio.gather(
+                _engage_system_refresh_hold(pc1_executor), _engage_system_refresh_hold(pc2_executor)
+            )
 
+            # pc2 drops the snap this run must find absent while pc1 reads the base its
+            # sideload will declare: one snapd each, and neither knows about the other.
             # `--purge` leaves snapd no snapshot behind, so removing it here costs the next
             # scenario an install (`_snap_subjects`) and nothing more.
-            purged = await pc2_executor.run_command(
-                f"sudo snap remove --purge {shlex.quote(absent_app)}", login_shell=False, timeout=180.0
+            purged, base = await asyncio.gather(
+                pc2_executor.run_command(
+                    f"sudo snap remove --purge {shlex.quote(absent_app)}", login_shell=False, timeout=180.0
+                ),
+                _installed_base_snap(pc1_executor),
             )
             assert purged.success, f"could not remove {absent_app} from pc2: {purged.stderr}"
             assert await _snap_revision(pc2_executor, absent_app) is None, (
@@ -3223,24 +3331,25 @@ class TestWhatFolderSyncMayAndMayNotCarry:
                 "and this run cannot exercise the branch"
             )
 
-            base = await _installed_base_snap(pc1_executor)
             await _create_sideloaded_snap(pc1_executor, sideload_dir, sideload_name, base)
 
             # Captured AFTER the sideload and the purge, so what the run is held to is the
             # machines as it finds them, and set aside AFTER the capture so the sideload's own
             # `~/snap` entry travels with the rest of the real tree.
-            pc1_snaps_before = parse_snap_list_names_revisions(
-                (await pc1_executor.run_command("snap list --all", login_shell=False, timeout=20.0)).stdout
+            pc1_listing_before, pc2_listing_before = await asyncio.gather(
+                pc1_executor.run_command("snap list --all", login_shell=False, timeout=20.0),
+                pc2_executor.run_command("snap list --all", login_shell=False, timeout=20.0),
             )
-            pc2_snaps_before = parse_snap_list_names_revisions(
-                (await pc2_executor.run_command("snap list --all", login_shell=False, timeout=20.0)).stdout
-            )
+            pc1_snaps_before = parse_snap_list_names_revisions(pc1_listing_before.stdout)
+            pc2_snaps_before = parse_snap_list_names_revisions(pc2_listing_before.stdout)
             assert pc1_snaps_before.get(sideload_name, "").startswith("x"), (
                 f"pc1's {sideload_name} is at revision {pc1_snaps_before.get(sideload_name)!r}, not a sideloaded "
                 "`x`-prefixed one, so this run cannot exercise the sideload branch"
             )
             assert sideload_name not in pc2_snaps_before, f"{sideload_name} is somehow already on pc2"
 
+            # One machine at a time, deliberately: a failure here must still leave the machine
+            # that succeeded holding a backup directory this test can name and put back.
             source_aside = await _take_paths_aside(pc1_executor, [snap_root])
             target_aside = await _take_paths_aside(pc2_executor, [snap_root])
 
@@ -3260,9 +3369,16 @@ class TestWhatFolderSyncMayAndMayNotCarry:
             built = await pc1_executor.run_command(build, login_shell=False, timeout=30.0)
             assert built.success, f"could not build the ~/snap fixture on pc1: {built.stderr}"
 
-            await _create_unowned_marker(pc1_executor, source_path)
-            await _author_snippet(pc1_executor, source_item, source_path, f"touch /tmp/pcswitcher-it-{uniq}")
-            await _author_snippet(pc2_executor, target_item, target_path, target_body)
+            # Each machine authors its own registry entry; only pc1 needs the scan finding to
+            # go with it, so its two writes stay ordered against each other and nothing else.
+            async def seed_the_source_registry() -> None:
+                await _create_unowned_marker(pc1_executor, source_path)
+                await _author_snippet(pc1_executor, source_item, source_path, f"touch /tmp/pcswitcher-it-{uniq}")
+
+            _ = await asyncio.gather(
+                seed_the_source_registry(),
+                _author_snippet(pc2_executor, target_item, target_path, target_body),
+            )
 
             await _write_package_sync_config(
                 pc1_executor,
@@ -3337,12 +3453,12 @@ class TestWhatFolderSyncMayAndMayNotCarry:
                 f"rather than {target_body!r}"
             )
 
-            pc1_snaps_after = parse_snap_list_names_revisions(
-                (await pc1_executor.run_command("snap list --all", login_shell=False, timeout=20.0)).stdout
+            pc1_listing_after, pc2_listing_after = await asyncio.gather(
+                pc1_executor.run_command("snap list --all", login_shell=False, timeout=20.0),
+                pc2_executor.run_command("snap list --all", login_shell=False, timeout=20.0),
             )
-            pc2_snaps_after = parse_snap_list_names_revisions(
-                (await pc2_executor.run_command("snap list --all", login_shell=False, timeout=20.0)).stdout
-            )
+            pc1_snaps_after = parse_snap_list_names_revisions(pc1_listing_after.stdout)
+            pc2_snaps_after = parse_snap_list_names_revisions(pc2_listing_after.stdout)
             assert pc1_snaps_after == pc1_snaps_before, (
                 f"the run changed pc1's own snaps.\nbefore: {pc1_snaps_before}\nafter: {pc1_snaps_after}"
             )
@@ -3351,14 +3467,20 @@ class TestWhatFolderSyncMayAndMayNotCarry:
                 f"before: {pc2_snaps_before}\nafter: {pc2_snaps_after}"
             )
         finally:
-            await _remove_unowned_marker(pc1_executor, source_path)
-            if source_aside:
-                await _put_paths_back(pc1_executor, source_aside, [snap_root])
-            if target_aside:
-                await _put_paths_back(pc2_executor, target_aside, [snap_root])
-            await _remove_sideloaded_snap(pc1_executor, sideload_dir, sideload_name)
-            await _restore_system_refresh_hold(pc1_executor, pc1_prior_hold)
-            await _restore_system_refresh_hold(pc2_executor, pc2_prior_hold)
+
+            async def clean_the_source() -> None:
+                await _remove_unowned_marker(pc1_executor, source_path)
+                if source_aside:
+                    await _put_paths_back(pc1_executor, source_aside, [snap_root])
+                await _remove_sideloaded_snap(pc1_executor, sideload_dir, sideload_name)
+                await _restore_system_refresh_hold(pc1_executor, pc1_prior_hold)
+
+            async def clean_the_target() -> None:
+                if target_aside:
+                    await _put_paths_back(pc2_executor, target_aside, [snap_root])
+                await _restore_system_refresh_hold(pc2_executor, pc2_prior_hold)
+
+            await _cleanup_in_parallel(clean_the_source(), clean_the_target())
 
 
 class TestSkipAlwaysIsInertInBothRoles:
@@ -3423,10 +3545,13 @@ class TestSkipAlwaysIsInertInBothRoles:
 
         hand_deb = ""
         try:
-            await _ensure_installed_and_manual(pc1_executor, candidate)
-            await _ensure_absent(pc2_executor, candidate)
+            # pc1's two dpkg transactions stay ordered against each other and run alongside
+            # pc2's: two machines' apt work contends on nothing.
+            async def seed_the_source() -> str:
+                await _ensure_installed_and_manual(pc1_executor, candidate)
+                return await _install_a_hand_downloaded_deb(pc1_executor)
 
-            hand_deb = await _install_a_hand_downloaded_deb(pc1_executor)
+            hand_deb, _ = await asyncio.gather(seed_the_source(), _ensure_absent(pc2_executor, candidate))
             deb_item_id = _no_candidate_item_id(hand_deb)
             # The precondition, asserted rather than assumed: apt must name no repository for
             # the installed version, or the item this run is about was never detectable.
@@ -3596,10 +3721,14 @@ class TestCrossDirectionRoundTrips:
         candidate = apt_subjects.install_direction[0]
         item_id = AptPackageItem(name=candidate, version="").item_id
         snap_name = (await _snap_subjects(pc1_executor, pc2_executor, count=2))[1]
-        snap_source_revision = await _snap_revision(pc1_executor, snap_name)
-        snap_target_revision = await _snap_revision(pc2_executor, snap_name)
+        # Three snapd reads across the two machines, taken at once.
+        snap_source_revision, snap_target_revision, saved_before = await asyncio.gather(
+            _snap_revision(pc1_executor, snap_name),
+            _snap_revision(pc2_executor, snap_name),
+            _snap_saved_rows(pc2_executor),
+        )
         assert snap_source_revision and snap_target_revision, f"{snap_name} is not installed on both machines"
-        snapshot_sets_before = {set_id for set_id, _snap in await _snap_saved_rows(pc2_executor)}
+        snapshot_sets_before = {set_id for set_id, _snap in saved_before}
 
         uniq = uuid4().hex[:12]
         snap_data_file = f"/var/snap/{snap_name}/common/pcswitcher-it-{uniq}"
@@ -3608,8 +3737,10 @@ class TestCrossDirectionRoundTrips:
         target_pair: tuple[str, str, str, str] | None = None
         source_pair: tuple[str, str, str, str] | None = None
         try:
-            await _ensure_installed_and_manual(pc1_executor, candidate)
-            await _ensure_absent(pc2_executor, candidate)
+            # One apt transaction on each machine, run at once: they contend on nothing.
+            _ = await asyncio.gather(
+                _ensure_installed_and_manual(pc1_executor, candidate), _ensure_absent(pc2_executor, candidate)
+            )
 
             source_filename, key_filename = await _create_synthetic_repo_and_key(pc2_executor)
             source_dest = f"{_APT_SOURCES_DIR}/{source_filename}"
@@ -3631,12 +3762,16 @@ class TestCrossDirectionRoundTrips:
                 timeout=30.0,
             )
             assert seeded.success, f"could not give {snap_name} data on pc2 to snapshot: {seeded.stderr}"
-            purged = await pc1_executor.run_command(
-                f"sudo snap remove --purge {shlex.quote(snap_name)}", login_shell=False, timeout=180.0
+
+            # pc1 gives up the snap while pc2 builds and installs the cascading pair: one
+            # machine's snapd against the other's apt, neither reading the other's work.
+            purged, target_pair = await asyncio.gather(
+                pc1_executor.run_command(
+                    f"sudo snap remove --purge {shlex.quote(snap_name)}", login_shell=False, timeout=180.0
+                ),
+                _publish_a_cascading_pair(pc2_executor),
             )
             assert purged.success, f"Failed to remove {snap_name} from pc1: {purged.stderr}"
-
-            target_pair = await _publish_a_cascading_pair(pc2_executor)
             target_base, target_dependent, _target_repo, _target_list = target_pair
 
             await _write_package_sync_config(pc1_executor, apt_sync=True, snap_sync=True)
@@ -3808,20 +3943,6 @@ class TestCrossDirectionRoundTrips:
                 f"{source_dependent} was asked about at the apply-time guard instead of in the review's second round"
             )
         finally:
-            if target_pair:
-                _target_base, _target_dependent, target_repo, target_list = target_pair
-                await _undeclare_local_repository(pc2_executor, target_repo, target_list)
-            if source_pair:
-                _source_base, _source_dependent, source_repo, source_list = source_pair
-                await _undeclare_local_repository(pc1_executor, source_repo, source_list)
-            for set_id, snap in await _snap_saved_rows(pc2_executor):
-                if snap == snap_name and set_id not in snapshot_sets_before:
-                    await pc2_executor.run_command(
-                        f"sudo snap forget {shlex.quote(set_id)}", login_shell=False, timeout=60.0
-                    )
-            await pc2_executor.run_command(
-                f"sudo rm --force {shlex.quote(snap_data_file)}", login_shell=False, timeout=15.0
-            )
             cleanup_paths = " ".join(
                 shlex.quote(f"{directory}/{filename}")
                 for directory, filename in (
@@ -3830,9 +3951,30 @@ class TestCrossDirectionRoundTrips:
                 )
                 if filename
             )
-            if cleanup_paths:
-                for executor in (pc1_executor, pc2_executor):
-                    await executor.run_command(f"sudo rm --force {cleanup_paths}", login_shell=False, timeout=15.0)
+
+            async def clean_the_source() -> None:
+                if source_pair:
+                    _source_base, _source_dependent, source_repo, source_list = source_pair
+                    await _undeclare_local_repository(pc1_executor, source_repo, source_list)
+                if cleanup_paths:
+                    await pc1_executor.run_command(f"sudo rm --force {cleanup_paths}", login_shell=False, timeout=15.0)
+
+            async def clean_the_target() -> None:
+                if target_pair:
+                    _target_base, _target_dependent, target_repo, target_list = target_pair
+                    await _undeclare_local_repository(pc2_executor, target_repo, target_list)
+                for set_id, snap in await _snap_saved_rows(pc2_executor):
+                    if snap == snap_name and set_id not in snapshot_sets_before:
+                        await pc2_executor.run_command(
+                            f"sudo snap forget {shlex.quote(set_id)}", login_shell=False, timeout=60.0
+                        )
+                await pc2_executor.run_command(
+                    f"sudo rm --force {shlex.quote(snap_data_file)}", login_shell=False, timeout=15.0
+                )
+                if cleanup_paths:
+                    await pc2_executor.run_command(f"sudo rm --force {cleanup_paths}", login_shell=False, timeout=15.0)
+
+            await _cleanup_in_parallel(clean_the_source(), clean_the_target())
 
 
 class TestAFailureCostsItsOwnItemAndNothingElse:
@@ -3895,12 +4037,21 @@ class TestAFailureCostsItsOwnItemAndNothingElse:
         assert original_snap_revision, f"{snap_candidate} is not installed on pc2"
 
         try:
-            for subject in apt_subjects.install_direction:
-                await _ensure_installed_and_manual(pc1_executor, subject)
-                await _ensure_absent(pc2_executor, subject)
-            removed_snap = await pc2_executor.run_command(
-                f"sudo snap remove {shlex.quote(snap_candidate)}", login_shell=False, timeout=60.0
-            )
+            # One chain per machine, run at once: three apt transactions on each side, which
+            # serialise on their own machine's dpkg lock and on nothing else (#216). pc2's
+            # snap removal joins its chain -- it needs no result of pc1's.
+            async def seed_the_source() -> None:
+                for subject in apt_subjects.install_direction:
+                    await _ensure_installed_and_manual(pc1_executor, subject)
+
+            async def seed_the_target() -> CommandResult:
+                for subject in apt_subjects.install_direction:
+                    await _ensure_absent(pc2_executor, subject)
+                return await pc2_executor.run_command(
+                    f"sudo snap remove {shlex.quote(snap_candidate)}", login_shell=False, timeout=60.0
+                )
+
+            _, removed_snap = await asyncio.gather(seed_the_source(), seed_the_target())
             assert removed_snap.success, f"Failed to remove {snap_candidate} from pc2: {removed_snap.stderr}"
 
             for path in _CONTINUE_TEST_MARKERS:
@@ -3980,9 +4131,12 @@ class TestAFailureCostsItsOwnItemAndNothingElse:
             # some unrelated trouble, which the exit code alone cannot distinguish.
             assert _DELIBERATE_FAILURE_MESSAGE in sync_result.stdout + sync_result.stderr
         finally:
-            for executor in (pc1_executor, pc2_executor):
+
+            async def clean(executor: BashLoginRemoteExecutor) -> None:
                 for path in _CONTINUE_TEST_MARKERS:
                     await _remove_unowned_marker(executor, path)
+
+            await _cleanup_in_parallel(clean(pc1_executor), clean(pc2_executor))
 
 
 class TestSnapPerItemFailureOnVMs:
@@ -4019,23 +4173,29 @@ class TestSnapPerItemFailureOnVMs:
         _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
 
         removal_subject, install_subject = await _snap_subjects(pc1_executor, pc2_executor, count=2)
-        removal_revision = await _snap_revision(pc2_executor, removal_subject)
-        install_revision = await _snap_revision(pc1_executor, install_subject)
-        source_removal_revision = await _snap_revision(pc1_executor, removal_subject)
-        target_install_revision = await _snap_revision(pc2_executor, install_subject)
+        # Four reads of two `snap list --all` outputs, taken at once.
+        removal_revision, install_revision, source_removal_revision, target_install_revision = await asyncio.gather(
+            _snap_revision(pc2_executor, removal_subject),
+            _snap_revision(pc1_executor, install_subject),
+            _snap_revision(pc1_executor, removal_subject),
+            _snap_revision(pc2_executor, install_subject),
+        )
         assert removal_revision and install_revision and source_removal_revision and target_install_revision, (
             f"{removal_subject} and {install_subject} must both be installed on both machines"
         )
 
         store_offline = False
         try:
-            purged = await pc2_executor.run_command(
-                f"sudo snap remove --purge {shlex.quote(install_subject)}", login_shell=False, timeout=180.0
+            # One removal on each machine's own snapd, run at once.
+            purged, purged_source = await asyncio.gather(
+                pc2_executor.run_command(
+                    f"sudo snap remove --purge {shlex.quote(install_subject)}", login_shell=False, timeout=180.0
+                ),
+                pc1_executor.run_command(
+                    f"sudo snap remove --purge {shlex.quote(removal_subject)}", login_shell=False, timeout=180.0
+                ),
             )
             assert purged.success, f"Failed to remove {install_subject} from pc2: {purged.stderr}"
-            purged_source = await pc1_executor.run_command(
-                f"sudo snap remove --purge {shlex.quote(removal_subject)}", login_shell=False, timeout=180.0
-            )
             assert purged_source.success, f"Failed to remove {removal_subject} from pc1: {purged_source.stderr}"
 
             offline = await pc2_executor.run_command(_SNAP_STORE_OFFLINE_CMD, login_shell=False, timeout=60.0)
@@ -4065,15 +4225,14 @@ class TestSnapPerItemFailureOnVMs:
                 f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
             )
 
-            failed_item = await pc2_executor.run_command(
-                f"snap list {shlex.quote(install_subject)}", login_shell=False, timeout=15.0
+            # Two read-only listings on the same machine, taken at once.
+            failed_item, landed_item = await asyncio.gather(
+                pc2_executor.run_command(f"snap list {shlex.quote(install_subject)}", login_shell=False, timeout=15.0),
+                pc2_executor.run_command(f"snap list {shlex.quote(removal_subject)}", login_shell=False, timeout=15.0),
             )
             assert not failed_item.success, (
                 f"{install_subject} was installed on pc2 although its store is unreachable, so nothing failed and "
                 f"this run proves nothing.\n{failed_item.stdout}"
-            )
-            landed_item = await pc2_executor.run_command(
-                f"snap list {shlex.quote(removal_subject)}", login_shell=False, timeout=15.0
             )
             assert not landed_item.success, (
                 f"{removal_subject} is still on pc2: the item ordered after the failing one was never converged.\n"
@@ -4181,15 +4340,22 @@ class TestTheESMAttachmentGateOnVMs:
                 "a skipped apt_sync still wrote to pc2's /etc/apt — the whole job must leave it as it was"
             )
         finally:
-            if pin_dest:
-                # uuid-suffixed, so this can never name a file either machine came with.
-                cleanup = shlex.quote(pin_dest)
-                await pc1_executor.run_command(f"sudo rm --force {cleanup}", login_shell=False, timeout=15.0)
-                await pc2_executor.run_command(f"sudo rm --force {cleanup}", login_shell=False, timeout=15.0)
-            if source_aside:
-                await _put_paths_back(pc1_executor, source_aside, esm_dests)
-            if target_aside:
-                await _put_paths_back(pc2_executor, target_aside, esm_dests)
+            # uuid-suffixed, so this can never name a file either machine came with.
+            cleanup = shlex.quote(pin_dest)
+
+            async def clean_the_source() -> None:
+                if pin_dest:
+                    await pc1_executor.run_command(f"sudo rm --force {cleanup}", login_shell=False, timeout=15.0)
+                if source_aside:
+                    await _put_paths_back(pc1_executor, source_aside, esm_dests)
+
+            async def clean_the_target() -> None:
+                if pin_dest:
+                    await pc2_executor.run_command(f"sudo rm --force {cleanup}", login_shell=False, timeout=15.0)
+                if target_aside:
+                    await _put_paths_back(pc2_executor, target_aside, esm_dests)
+
+            await _cleanup_in_parallel(clean_the_source(), clean_the_target())
 
 
 class TestAStrayAptHoldEndsTheRun:
@@ -4222,11 +4388,16 @@ class TestAStrayAptHoldEndsTheRun:
         ghost = await _a_name_apt_knows_the_machine_does_not_have(pc2_executor)
         install_candidate = apt_subjects.install_direction[0]
         try:
-            await _ensure_installed_and_manual(pc1_executor, install_candidate)
-            await _ensure_absent(pc2_executor, install_candidate)
+            # One chain per machine, run at once: pc2's hold follows its own removal because
+            # both are apt writes on that machine, and neither waits on pc1's install.
+            async def seed_the_target() -> CommandResult:
+                await _ensure_absent(pc2_executor, install_candidate)
+                return await pc2_executor.run_command(
+                    f"sudo apt-mark hold {shlex.quote(ghost)}", login_shell=False, timeout=30.0
+                )
 
-            held = await pc2_executor.run_command(
-                f"sudo apt-mark hold {shlex.quote(ghost)}", login_shell=False, timeout=30.0
+            _, held = await asyncio.gather(
+                _ensure_installed_and_manual(pc1_executor, install_candidate), seed_the_target()
             )
             assert held.success, f"Failed to hold {ghost} on pc2: {held.stderr}"
             recorded = await pc2_executor.run_command("apt-mark showhold", login_shell=False, timeout=15.0)
@@ -4305,15 +4476,20 @@ class TestTheSyncWindowHoldIsTimed:
         """
         _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
 
-        pc1_prior_hold = await _capture_system_refresh_hold(pc1_executor)
-        pc2_prior_hold = await _capture_system_refresh_hold(pc2_executor)
+        pc1_prior_hold, pc2_prior_hold = await asyncio.gather(
+            _capture_system_refresh_hold(pc1_executor), _capture_system_refresh_hold(pc2_executor)
+        )
         run_log = f"/var/tmp/pcswitcher-it-killed-sync-{uuid4().hex[:12]}.log"
 
         try:
-            await _restore_system_refresh_hold(pc1_executor, None)
-            await _restore_system_refresh_hold(pc2_executor, None)
-            assert await _capture_system_refresh_hold(pc1_executor) is None, "pc1 still holds a refresh.hold"
-            assert await _capture_system_refresh_hold(pc2_executor) is None, "pc2 still holds a refresh.hold"
+            _ = await asyncio.gather(
+                _restore_system_refresh_hold(pc1_executor, None), _restore_system_refresh_hold(pc2_executor, None)
+            )
+            cleared_source, cleared_target = await asyncio.gather(
+                _capture_system_refresh_hold(pc1_executor), _capture_system_refresh_hold(pc2_executor)
+            )
+            assert cleared_source is None, "pc1 still holds a refresh.hold"
+            assert cleared_target is None, "pc2 still holds a refresh.hold"
 
             await _write_package_sync_config(pc1_executor, snap_sync=True, dummy_success=True)
 
@@ -4328,8 +4504,12 @@ class TestTheSyncWindowHoldIsTimed:
             engaged_target: str | None = None
             deadline = asyncio.get_running_loop().time() + _HOLD_POLL_TIMEOUT_SECONDS
             while asyncio.get_running_loop().time() < deadline:
-                engaged_source = await _capture_system_refresh_hold(pc1_executor)
-                engaged_target = await _capture_system_refresh_hold(pc2_executor)
+                # The one pair of commands this module issues while a sync is running: both
+                # are `snap get`, which reads and writes nothing, so neither can disturb the
+                # run they are watching.
+                engaged_source, engaged_target = await asyncio.gather(
+                    _capture_system_refresh_hold(pc1_executor), _capture_system_refresh_hold(pc2_executor)
+                )
                 if engaged_source and engaged_target:
                     break
                 await asyncio.sleep(_HOLD_POLL_INTERVAL_SECONDS)
@@ -4368,10 +4548,15 @@ class TestTheSyncWindowHoldIsTimed:
                     f"{_SNAP_HOLD_EXPECTED_DURATION} a sync window asks for"
                 )
         finally:
+            # The kill comes first and alone: a sync still running would write both machines'
+            # `refresh.hold` again after the restores below.
             await pc1_executor.run_command(_KILL_RUNNING_SYNC_CMD, login_shell=False, timeout=30.0)
-            await _restore_system_refresh_hold(pc1_executor, pc1_prior_hold)
-            await _restore_system_refresh_hold(pc2_executor, pc2_prior_hold)
-            await pc1_executor.run_command(f"rm --force {run_log}", login_shell=False, timeout=15.0)
+
+            async def clean_the_source() -> None:
+                await _restore_system_refresh_hold(pc1_executor, pc1_prior_hold)
+                await pc1_executor.run_command(f"rm --force {run_log}", login_shell=False, timeout=15.0)
+
+            await _cleanup_in_parallel(clean_the_source(), _restore_system_refresh_hold(pc2_executor, pc2_prior_hold))
 
 
 class TestSnapHoldCaptureTiming:
