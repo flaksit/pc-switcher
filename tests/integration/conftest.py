@@ -39,6 +39,7 @@ from pcswitcher.executor import BashLoginRemoteExecutor
 from pcswitcher.install import get_install_with_script_command_line
 from pcswitcher.models import CommandResult
 from pcswitcher.version import Release, Version, find_one_version, get_releases, get_this_version
+from tests.integration import SYNC_TEST_CONFIG_TEMPLATE
 
 REQUIRED_ENV_VARS = [
     "HCLOUD_TOKEN",
@@ -636,3 +637,53 @@ async def reset_pcswitcher_state(
 
     # Teardown: clean after test
     await cleanup()
+
+
+@pytest.fixture
+async def sync_ready_source(
+    pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
+    reset_pcswitcher_state: None,
+) -> AsyncIterator[BashLoginRemoteExecutor]:
+    """Provide pc1 configured and ready to run pc-switcher sync.
+
+    This fixture:
+    1. Ensures pc-switcher is installed (via pc1_with_pcswitcher_mod)
+    2. Cleans up any existing sync history (via reset_pcswitcher_state)
+    3. Creates a test configuration with short-duration jobs
+    4. Cleans up the test config after the test
+
+    Yields:
+        Executor for pc1, ready to run sync commands
+    """
+    _ = reset_pcswitcher_state  # Ensures cleanup runs before test
+    executor = pc1_with_pcswitcher_mod
+
+    # Backup existing config if any
+    await executor.run_command(
+        "if [ -f ~/.config/pc-switcher/config.yaml ]; then "
+        "cp ~/.config/pc-switcher/config.yaml ~/.config/pc-switcher/config.yaml.e2e-backup; "
+        "fi",
+        timeout=10.0,
+    )
+
+    # Create test config with short durations (4 seconds each = 8 seconds total for dummy_success)
+    test_config = SYNC_TEST_CONFIG_TEMPLATE.format(source_duration=4, target_duration=4)
+    await executor.run_command("mkdir --parents ~/.config/pc-switcher", timeout=10.0)
+
+    # Use heredoc to write config
+    write_result = await executor.run_command(
+        f"cat > ~/.config/pc-switcher/config.yaml << 'EOF'\n{test_config}EOF",
+        timeout=10.0,
+    )
+    assert write_result.success, f"Failed to write test config: {write_result.stderr}"
+
+    yield executor
+
+    # Cleanup: restore original config
+    await executor.run_command("rm --force ~/.config/pc-switcher/config.yaml", timeout=10.0)
+    await executor.run_command(
+        "if [ -f ~/.config/pc-switcher/config.yaml.e2e-backup ]; then "
+        "mv ~/.config/pc-switcher/config.yaml.e2e-backup ~/.config/pc-switcher/config.yaml; "
+        "fi",
+        timeout=10.0,
+    )
