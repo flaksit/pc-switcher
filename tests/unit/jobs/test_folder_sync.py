@@ -12,7 +12,7 @@ import logging
 import shlex
 from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -310,6 +310,26 @@ class TestValidatePreflight:
         job = FolderSyncJob(ctx)
         errors = await job.validate()
         assert any(e.host == Host.TARGET and "acl" in e.message.lower() for e in errors)
+
+    async def test_the_acl_check_asks_dpkg_for_the_install_status(self) -> None:
+        """The acl check must read dpkg's status field, not the two-letter `dpkg --list` code.
+
+        The first of those two letters is the DESIRED action, so a package the user has held
+        reads `hi`: matching `^ii` calls a held `acl` uninstalled and refuses the whole job.
+        Only a real dpkg can show that, which is why the behaviour is asserted on VMs (the
+        e2e smoke test holds a package while folder_sync runs); what is pinned here is that
+        the question asked is the one whose answer a hold cannot change.
+        """
+        ctx = make_context(config={"folders": [{"path": "/home"}]})
+        job = FolderSyncJob(ctx)
+        _ = await job.validate()
+
+        for executor in (ctx.source, ctx.target):
+            run_command = cast(AsyncMock, executor.run_command)
+            asked = [call.args[0] for call in run_command.call_args_list if "acl" in call.args[0]]
+            assert asked, "validate() never asked whether acl is installed"
+            assert all("db:Status-Status" in command for command in asked), asked
+            assert not any("^ii" in command for command in asked), asked
 
     async def test_missing_source_folder(self) -> None:
         """validate() returns a ValidationError naming the path when an enabled folder is absent on source."""

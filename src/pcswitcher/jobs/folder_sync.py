@@ -143,6 +143,11 @@ def _pass_display(path: str, label: str) -> str:
 # entry must permit, not an exact scope — a broader existing grant is fine.
 _RSYNC_SUDO_COMMANDS = ("/usr/bin/rsync",)
 
+# Whether `acl` is installed, asked of dpkg's own status field so that HOW the user got it
+# there cannot change the answer: `db:Status-Status` is `installed` for a package that is
+# held as much as for one that is not.
+_ACL_INSTALLED_CMD = "test \"$(dpkg-query --show --showformat='${db:Status-Status}' acl 2>/dev/null)\" = installed"
+
 _RUNTIME_EXCLUDE_RELPATHS: tuple[str, ...] = (
     ".local/share/pc-switcher",  # lock, sync-history.json, logs/
 )
@@ -363,7 +368,10 @@ class FolderSyncJob(SyncJob):
             )
 
         # --- Step 2: acl package on both ends ---
-        result = await self.source.run_command("dpkg --list acl | grep --quiet '^ii'")
+        # `db:Status-Status` rather than `dpkg --list ... | grep '^ii'`: the first of those two
+        # columns is the DESIRED action, and a package the user has held reads `hi`, so the
+        # `^ii` form called a held `acl` uninstalled and refused to sync at all.
+        result = await self.source.run_command(_ACL_INSTALLED_CMD)
         if result.exit_code != 0:
             errors.append(
                 self._validation_error(
@@ -373,7 +381,7 @@ class FolderSyncJob(SyncJob):
                 )
             )
 
-        result = await self.target.run_command("dpkg --list acl | grep --quiet '^ii'", login_shell=False)
+        result = await self.target.run_command(_ACL_INSTALLED_CMD, login_shell=False)
         if result.exit_code != 0:
             errors.append(
                 self._validation_error(
