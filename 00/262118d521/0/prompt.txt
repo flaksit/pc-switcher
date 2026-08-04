@@ -1,0 +1,11 @@
+tests/integration/test_lock_integration.py has "dummy_success: true" in _MIN_CONFIG. Needed? Otherwise, remove or set false. 4 seconds wasted.
+
+---
+
+Shouldn't _write_config() be in conftest.py so each test can use it? A lot of tests do something similar. Maybe best to refactor them to use this (or something similar) as common code. Analyze if this makes sense.
+
+---
+
+Commit your changes.
+
+Shouldn't _write_config() be in conftest.py so each test can use it? A lot of tests do something similar. Maybe best to refactor them to use this (or something similar) as common code. Analyze if this makes sense.

@@ -1,0 +1,39 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "00262118d521",
+  "session_id": "0b5ddd2b-2791-4864-9185-6ce2cc90fea6",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-04T17:58:59.557522487Z",
+  "branch": "pc-216",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    "tests/integration/jobs/folder_sync_scenario.py"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-5[1m]",
+  "turn_id": "1b65e6c49306",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 35,
+    "cache_creation_tokens": 93345,
+    "cache_read_tokens": 1200475,
+    "output_tokens": 10655,
+    "api_call_count": 19
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-04T17:58:59.536491084Z",
+    "agent_lines": 27,
+    "agent_removed": 0,
+    "human_added": 225,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 252,
+    "total_lines_changed": 252,
+    "agent_percentage": 10.714285714285714,
+    "metric_version": 2
+  }
+}
