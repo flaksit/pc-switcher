@@ -46,3 +46,31 @@ Verified: `ruff format`, `ruff check tests/`, `basedpyright`, `codespell`, `pyte
 ---
 
 y
+
+---
+
+<task-notification>
+<task-id>a9679419416445ff7</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-216/1c04a89f-42a4-4165-82a3-dd281279ab6c/tasks/a9679419416445ff7.output</output-file>
+<status>completed</status>
+<summary>Agent "Write comprehensive dry-run e2e" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done. Four checks pass (`ruff format`/`ruff check tests/`, `basedpyright`, `codespell`, `uv run pytest -q` → 4653 passed), and `tests/integration/test_dry_run.py` collects with its markers; `-m area_package` correctly deselects it.
+
+**Files**
+- `/home/janfr/dev/pc-216/tests/integration/test_dry_run.py` (new)
+- `/home/janfr/dev/pc-216/tests/integration/jobs/folder_sync_scenario.py` (appended `filter_tree_path()` and `assert_manifests_unchanged()` — the only two helpers missing; everything else reused)
+- `/home/janfr/dev/pc-216/docs/dev/testing-guide.md` (one line in the module list)
+
+**Markers** (module-level `pytestmark`, each justified in the docstring): `area_folder` (folder_sync is the run's only sync job and its rsync preview must leave the target payload alone), `area_btrfs` (both snapshot steps run and must leave no snapshot), `area_core` (locks, first-sync gate, config sync, sync-history skip). Not `smoke` (a full sync per PR is too costly); not `area_package` (the package rehearsal is already asserted in `jobs/test_package_sync.py` and would cost VM fixtures).
+
+**One run**: `PCSWITCHER_SKIP_INSTALL_ON_TARGET=1 pc-switcher sync pc2 --dry-run`, pc1→pc2, config with a single folder_sync scope = the small seeded filter tree (`pcsw-filter`, seeded via `seed_filter_source`/`seed_filter_target`) — chosen because a real sync would add ~9 files, overwrite one and delete ≥3 there, which is the whole point; the rich ownership matrix would cost more and prove no more. No `--yes`: a rehearsal must finish prompt-free.
+
+**Claims asserted**: exit 0 (the W1 first-sync gate does not block a rehearsal); pc2's tree manifests (mode/uid/gid/path + md5) byte-identical before/after; no entry under `/.snapshots/pc-switcher` on either machine; `sync-history.json` absent on both after; no `~/.config/pc-switcher/config.yaml` on pc2; the whole probed state (history+snapshots+config) equal before/after on both machines; the source log carries the dry-run banner, both lock acquisitions and the gate's "skipping confirmation in dry-run mode"; and folder_sync's `[dry-run] Completed sync of …: N files transferred, …, M deletions` with N&gt;0 and M&gt;0. I verified locally with rsync 3.2.7 that `--dry-run --delete --out-format='%i %n%L'` really emits `*deleting` lines and a non-zero `xfr#`, so both counts are sound.
+
+**Not assertable from an integration test**: install-on-target's no-install rule — proving it needs pc2 to lack pc-switcher or run an older build, i.e. a second mutating fixture; `SKIP_INSTALL_ON_TARGET` is set instead and `area_install` dropped. Also unasserted: ADR-014's "every future SyncJob implements a real preview" (a per-job contract, not observable from one run) and the lock acquisition itself, which is only visible in the log, not in post-run state.
+
+**Documented, not asserted** (legitimate dry-run writes, in comments): the source's log file and both machines' lock files under `~/.local/share/pc-switcher` — the probe deliberately reads only `sync-history.json` there; and `BtrfsSnapshotJob.validate()` may create `/.snapshots` itself, so the snapshot claim is scoped to `/.snapshots/pc-switcher` having no children.</result>
+<usage><subagent_tokens>224227</subagent_tokens><tool_uses>49</tool_uses><duration_ms>519805</duration_ms></usage>
+</task-notification>
