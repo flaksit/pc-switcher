@@ -11,12 +11,15 @@ these too.
 - Sync history on both machines, and a back-sync clearing the W3 state
 
 **What these tests do NOT cover:**
-- What the sync transfers (see test_end_to_end_sync.py)
+- What a sync transfers (see test_end_to_end_sync.py). No sync job is enabled here: the
+  gates decide before any job runs, so the runs below carry system jobs only.
 - The gate decisions in isolation (see tests/unit/orchestrator/test_consecutive_sync.py and
   test_first_sync_scope.py) or the history file itself (see tests/unit/test_sync_history.py)
 """
 
 from __future__ import annotations
+
+from collections.abc import AsyncIterator
 
 import pytest
 
@@ -24,6 +27,42 @@ from pcswitcher.executor import BashLoginRemoteExecutor
 from tests.integration import SKIP_INSTALL_ON_TARGET
 
 pytestmark = pytest.mark.area_core
+
+# What the gates need from a source config and nothing else: DEBUG logs to diagnose a
+# failed run, and no `sync_jobs` section, so a sync that passes the gates does its system
+# jobs and finishes. Everything else stays at pc-switcher's own defaults.
+_GATE_TEST_CONFIG = """# Test configuration for sync-order gate tests
+
+logging:
+  file: DEBUG
+  tui: DEBUG
+  external: DEBUG
+"""
+
+
+@pytest.fixture
+async def sync_ready_source(
+    pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
+    reset_pcswitcher_state: None,
+) -> AsyncIterator[BashLoginRemoteExecutor]:
+    """Provide pc1 installed, its sync history cleared, and configured to run a sync.
+
+    `reset_pcswitcher_state` removes config and history on both VMs before and after the
+    test, so this only has to write the config the run needs.
+    """
+    _ = reset_pcswitcher_state  # Ensures cleanup runs before test
+    executor = pc1_with_pcswitcher_mod
+
+    await executor.run_command("mkdir --parents ~/.config/pc-switcher", timeout=10.0)
+    write_result = await executor.run_command(
+        f"cat > ~/.config/pc-switcher/config.yaml << 'EOF'\n{_GATE_TEST_CONFIG}EOF",
+        timeout=10.0,
+    )
+    assert write_result.success, f"Failed to write test config: {write_result.stderr}"
+
+    yield executor
+
+    await executor.run_command("rm --force ~/.config/pc-switcher/config.yaml", timeout=10.0)
 
 
 class TestConsecutiveSyncWarning:

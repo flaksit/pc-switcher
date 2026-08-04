@@ -35,7 +35,7 @@ import pytest_asyncio
 
 from pcswitcher.executor import BashLoginRemoteExecutor
 from pcswitcher.version import get_this_version
-from tests.integration import SKIP_INSTALL_ON_TARGET, SYNC_TEST_CONFIG_TEMPLATE
+from tests.integration import SKIP_INSTALL_ON_TARGET
 from tests.integration.jobs import folder_sync_scenario
 
 pytestmark = pytest.mark.area_folder
@@ -113,6 +113,87 @@ async def pc1_to_pc2_traffic_blocker(
     await unblock_pc1()
 
 
+# Test config with short durations for faster tests
+_TEST_CONFIG_TEMPLATE = """# Test configuration for end-to-end sync tests
+# Short durations to keep tests fast
+
+logging:
+  file: DEBUG
+  tui: DEBUG
+  external: DEBUG
+
+sync_jobs:
+  dummy_success: true
+  dummy_fail: false
+
+disk_space_monitor:
+  preflight_minimum: "5%"
+  runtime_minimum: "3%"
+  warning_threshold: "10%"
+  check_interval: 5
+
+btrfs_snapshots:
+  subvolumes:
+    - "@"
+    - "@home"
+  keep_recent: 2
+
+dummy_success:
+  source_duration: {source_duration}
+  target_duration: {target_duration}
+"""
+
+
+@pytest_asyncio.fixture
+async def sync_ready_source(
+    pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
+    reset_pcswitcher_state: None,
+) -> AsyncIterator[BashLoginRemoteExecutor]:
+    """Provide pc1 configured and ready to run pc-switcher sync.
+
+    This fixture:
+    1. Ensures pc-switcher is installed (via pc1_with_pcswitcher_mod)
+    2. Cleans up any existing sync history (via reset_pcswitcher_state)
+    3. Creates a test configuration with short-duration jobs
+    4. Cleans up the test config after the test
+
+    Yields:
+        Executor for pc1, ready to run sync commands
+    """
+    _ = reset_pcswitcher_state  # Ensures cleanup runs before test
+    executor = pc1_with_pcswitcher_mod
+
+    # Backup existing config if any
+    await executor.run_command(
+        "if [ -f ~/.config/pc-switcher/config.yaml ]; then "
+        "cp ~/.config/pc-switcher/config.yaml ~/.config/pc-switcher/config.yaml.e2e-backup; "
+        "fi",
+        timeout=10.0,
+    )
+
+    # Create test config with short durations (4 seconds each = 8 seconds total for dummy_success)
+    test_config = _TEST_CONFIG_TEMPLATE.format(source_duration=4, target_duration=4)
+    await executor.run_command("mkdir --parents ~/.config/pc-switcher", timeout=10.0)
+
+    # Use heredoc to write config
+    write_result = await executor.run_command(
+        f"cat > ~/.config/pc-switcher/config.yaml << 'EOF'\n{test_config}EOF",
+        timeout=10.0,
+    )
+    assert write_result.success, f"Failed to write test config: {write_result.stderr}"
+
+    yield executor
+
+    # Cleanup: restore original config
+    await executor.run_command("rm --force ~/.config/pc-switcher/config.yaml", timeout=10.0)
+    await executor.run_command(
+        "if [ -f ~/.config/pc-switcher/config.yaml.e2e-backup ]; then "
+        "mv ~/.config/pc-switcher/config.yaml.e2e-backup ~/.config/pc-switcher/config.yaml; "
+        "fi",
+        timeout=10.0,
+    )
+
+
 @pytest_asyncio.fixture
 async def sync_ready_source_long_duration(
     pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
@@ -135,7 +216,7 @@ async def sync_ready_source_long_duration(
     )
 
     # Create test config with longer durations for interrupt testing
-    test_config = SYNC_TEST_CONFIG_TEMPLATE.format(source_duration=60, target_duration=60)
+    test_config = _TEST_CONFIG_TEMPLATE.format(source_duration=60, target_duration=60)
     await executor.run_command("mkdir --parents ~/.config/pc-switcher", timeout=10.0)
 
     write_result = await executor.run_command(
@@ -462,7 +543,7 @@ class TestEndToEndSync:
         # Create test config with short source phase but longer target phase
         # Source: 4s (quick to get to target phase)
         # Target: 30s (long enough for us to inject failure and observe timeout)
-        test_config = SYNC_TEST_CONFIG_TEMPLATE.format(source_duration=4, target_duration=30)
+        test_config = _TEST_CONFIG_TEMPLATE.format(source_duration=4, target_duration=30)
         await pc1_executor.run_command("mkdir --parents ~/.config/pc-switcher", timeout=10.0)
         await pc1_executor.run_command(
             f"cat > ~/.config/pc-switcher/config.yaml << 'EOF'\n{test_config}EOF",
@@ -608,7 +689,7 @@ class TestInstallOnTargetIntegration:
         pc1_executor = pc1_with_pcswitcher_mod
 
         # Create minimal test config
-        test_config = SYNC_TEST_CONFIG_TEMPLATE.format(source_duration=2, target_duration=2)
+        test_config = _TEST_CONFIG_TEMPLATE.format(source_duration=2, target_duration=2)
         await pc1_executor.run_command("mkdir --parents ~/.config/pc-switcher", timeout=10.0)
         await pc1_executor.run_command(
             f"cat > ~/.config/pc-switcher/config.yaml << 'EOF'\n{test_config}EOF",
@@ -673,7 +754,7 @@ class TestInstallOnTargetIntegration:
         _ = reset_pcswitcher_state  # Ensures test isolation
 
         # Create minimal test config
-        test_config = SYNC_TEST_CONFIG_TEMPLATE.format(source_duration=2, target_duration=2)
+        test_config = _TEST_CONFIG_TEMPLATE.format(source_duration=2, target_duration=2)
         await pc1_with_pcswitcher_mod.run_command("mkdir --parents ~/.config/pc-switcher", timeout=10.0)
         await pc1_with_pcswitcher_mod.run_command(
             f"cat > ~/.config/pc-switcher/config.yaml << 'EOF'\n{test_config}EOF",
