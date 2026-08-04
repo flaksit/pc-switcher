@@ -33,26 +33,23 @@ async def clean_config_environment(
     Removes existing config file before test, restores after test.
     """
     pc1_executor = pc1_with_pcswitcher_mod
-    # Backup existing config if it exists
-    await pc1_executor.run_command(
+    # Back up any existing config, remove it, and report back whether it is really gone --
+    # the trailing `test` is what the command exits on, so `result` answers that question.
+    result = await pc1_executor.run_command(
         "if [ -f ~/.config/pc-switcher/config.yaml ]; then "
         "cp ~/.config/pc-switcher/config.yaml ~/.config/pc-switcher/config.yaml.backup; "
-        "fi",
+        "fi; "
+        "rm --force ~/.config/pc-switcher/config.yaml; "
+        "test -f ~/.config/pc-switcher/config.yaml",
         timeout=10.0,
     )
-
-    # Remove config file
-    await pc1_executor.run_command("rm --force ~/.config/pc-switcher/config.yaml", timeout=10.0)
-
-    # Verify config removed
-    result = await pc1_executor.run_command("test -f ~/.config/pc-switcher/config.yaml")
     assert not result.success, "Fixture failed: config file still exists after cleanup"
 
     yield pc1_executor
 
-    # Restore environment
-    await pc1_executor.run_command("rm --force ~/.config/pc-switcher/config.yaml", timeout=10.0)
+    # Restore environment: drop what the test wrote, put the backup back
     await pc1_executor.run_command(
+        "rm --force ~/.config/pc-switcher/config.yaml; "
         "if [ -f ~/.config/pc-switcher/config.yaml.backup ]; then "
         "mv ~/.config/pc-switcher/config.yaml.backup ~/.config/pc-switcher/config.yaml; "
         "fi",
@@ -127,17 +124,12 @@ class TestInitCommand:
         executor = pc1_with_pcswitcher_mod
 
         try:
-            # Setup: create config directory and file with marker
-            await executor.run_command("mkdir --parents ~/.config/pc-switcher", timeout=10.0)
+            # Setup: write a config carrying a marker, and read it back in the same command
             custom_marker = "# CUSTOM_CONFIG_MARKER_FOR_TESTING_12345"
-            await executor.run_command(
-                f"echo '{custom_marker}' > ~/.config/pc-switcher/config.yaml",
-                timeout=10.0,
-            )
-
-            # Verify marker was written
             verify_marker = await executor.run_command(
-                "cat ~/.config/pc-switcher/config.yaml",
+                "mkdir --parents ~/.config/pc-switcher"
+                f" && echo '{custom_marker}' > ~/.config/pc-switcher/config.yaml"
+                " && cat ~/.config/pc-switcher/config.yaml",
                 timeout=10.0,
             )
             assert custom_marker in verify_marker.stdout, "Failed to create test config with marker"
@@ -216,9 +208,9 @@ class TestInitCommand:
             assert "exists" in file_check.stdout, "Config file should be created"
 
         finally:
-            # Restore original directory
-            await executor.run_command("rm --recursive --force ~/.config/pc-switcher", timeout=10.0)
+            # Restore original directory: drop what init created, put the backup back
             await executor.run_command(
+                "rm --recursive --force ~/.config/pc-switcher; "
                 "if [ -d ~/.config/pc-switcher.backup ]; then "
                 "mv ~/.config/pc-switcher.backup ~/.config/pc-switcher; "
                 "fi",

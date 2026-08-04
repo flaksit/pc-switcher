@@ -365,15 +365,14 @@ class TestEndToEndSync:
         output_file = "/tmp/pcswitcher-e2e-interrupt-test-output.txt"
         pid_file = "/tmp/pcswitcher-e2e-interrupt-test-pid.txt"
 
-        # Clean up from any previous run
-        await pc1_executor.run_command(f"rm --force {output_file} {pid_file}", timeout=10.0)
-
-        # Start sync in background with script for TTY emulation
-        # We use bash -c to wrap the command and capture the PID.
+        # Clean up from any previous run, then start sync in background with script for TTY
+        # emulation. We use bash -c to wrap the command and capture the PID. `;` rather than
+        # `&&`: the trailing `&` would otherwise background the removal too.
         # --allow-first-sync: pc2 has no sync history (W1 gate, ADR-015); required in CI
         # (no TTY) to bypass the first-sync overwrite confirmation and reach job execution.
         start_result = await pc1_executor.run_command(
-            f"nohup bash -c 'echo $$ > {pid_file}; export {SKIP_INSTALL_ON_TARGET};"
+            f"rm --force {output_file} {pid_file};"
+            f" nohup bash -c 'echo $$ > {pid_file}; export {SKIP_INSTALL_ON_TARGET};"
             f" exec pc-switcher sync pc2 --yes --allow-first-sync 2>&1'"
             f" > {output_file} &",
             timeout=10.0,
@@ -480,14 +479,14 @@ class TestEndToEndSync:
         # Start sync in background, capturing output to temp file
         output_file = "/tmp/pcswitcher-network-failure-test-output.txt"
         pid_file = "/tmp/pcswitcher-network-failure-test-pid.txt"
-        await pc1_executor.run_command(f"rm --force {output_file} {pid_file}", timeout=10.0)
-
-        # Start sync in background.
+        # Clean up from any previous run, then start sync in background. `;` rather than
+        # `&&`: the trailing `&` would otherwise background the removal too.
         # --allow-first-sync: pc2 has no sync history (W1 gate, ADR-015); required in CI
         # (no TTY) to bypass the first-sync overwrite confirmation so the sync proceeds
         # into the job execution phase where the network failure is injected.
         start_result = await pc1_executor.run_command(
-            f"nohup bash -c 'echo $$ > {pid_file}; export {SKIP_INSTALL_ON_TARGET};"
+            f"rm --force {output_file} {pid_file};"
+            f" nohup bash -c 'echo $$ > {pid_file}; export {SKIP_INSTALL_ON_TARGET};"
             f" exec pc-switcher sync pc2 --yes --allow-first-sync 2>&1'"
             f" > {output_file} &",
             timeout=10.0,

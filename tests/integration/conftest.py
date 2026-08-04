@@ -80,6 +80,28 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         )
 
 
+def purge_subvolume_script(path: str) -> str:
+    """Shell fragment: best-effort delete of `path` and of every subvolume nested inside it.
+
+    Nested subvolumes go first — btrfs refuses to delete a subvolume that still contains one.
+
+    Returned as a fragment rather than run here so callers can append whatever they do next
+    (create the subvolume, `rm --recursive`) into a single remote command: every separate
+    `run_command` pays a full SSH round trip and login-shell startup. It contains no single
+    quotes, so it embeds directly in the caller's `sudo sh -c '...'`, and it needs that
+    wrapper because the `xargs`-driven delete has to run as root too.
+
+    Each step is best-effort and separated by `;`: the goal is a clean slate, and a path
+    that was already absent is success, not an error to report.
+    """
+    return (
+        f"btrfs subvolume list -o {path} 2>/dev/null | "
+        'awk "{print \\$NF}" | '
+        "xargs --no-run-if-empty -I {} btrfs subvolume delete /{}; "
+        f"btrfs subvolume delete {path} 2>/dev/null"
+    )
+
+
 # ---------------------------------------------------------------------------------
 # Live progress and failure reporting.
 #
