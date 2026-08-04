@@ -1,0 +1,5 @@
+"conftest rule that a test must not mix a *_pcswitcher* fixture with pc2_executor": is that rule true and valid? If so,
+- if at all possible, add a check for that in the conftest.py, so that it fails fast and not after a long run of the test suite
+- sweep the code for violations of that rule and fix them"conftest rule that a test must not mix a *_pcswitcher* fixture with pc2_executor": is that rule true and valid?
+
+Answer first.
