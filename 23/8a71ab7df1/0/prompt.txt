@@ -1,0 +1,4 @@
+A long time ago, we interleaved some folder_sync tests into tests/integration/test_end_to_end_sync.py. However, the idea was NOT to put all code/constants/fixture/test-logic that has to do with folder-sync inside that file.
+E.g. I see _INCLUDED_MARKERS, _write_filter_file(), ...
+
+Better to separate: extract all this folder-sync specific stuff into a helper .py (in jobs/) and call it from test_end_to_end_sync.py.

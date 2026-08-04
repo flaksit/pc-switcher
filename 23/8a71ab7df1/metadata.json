@@ -1,0 +1,29 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "238a71ab7df1",
+  "strategy": "manual-commit",
+  "branch": "pc-216",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "docs/dev/testing-guide.md",
+    "tests/integration/jobs/folder_sync_scenario.py",
+    "tests/integration/scripts/select-ci-tests.sh",
+    "tests/integration/test_end_to_end_sync.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/23/8a71ab7df1/0/metadata.json",
+      "transcript": "/23/8a71ab7df1/0/full.jsonl",
+      "compact_transcript": "/23/8a71ab7df1/0/transcript.jsonl",
+      "content_hash": "/23/8a71ab7df1/0/content_hash.txt",
+      "prompt": "/23/8a71ab7df1/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 60,
+    "cache_creation_tokens": 128575,
+    "cache_read_tokens": 3256991,
+    "output_tokens": 28890,
+    "api_call_count": 32
+  }
+}
