@@ -17,9 +17,9 @@
 #   - Source files → area, via the case patterns below. Every file must match,
 #     or the whole suite runs: new source files run the full suite until someone
 #     maps them here — silently running too much, never too little.
-#   - Changed test files → area, read from the file's own pytestmark
-#     (smoke/area_* markers; presence on every test is enforced at collection
-#     time in tests/integration/conftest.py).
+#   - Changed test files → areas, read from the file's own smoke/area_* markers
+#     (a file may carry several; presence of at least one on every test is
+#     enforced at collection time in tests/integration/conftest.py).
 set -euo pipefail
 
 if [[ $# -ne 1 ]]; then
@@ -61,15 +61,20 @@ while IFS= read -r f; do
         # gated by ci.yml, benchmarks are deselected from CI integration runs.
         docs/* | *.md | .planning/* | LICENSE | tests/unit/* | tests/integration/benchmarks/*)
             ;;
-        # A changed integration test runs its own area: read it from the file's
-        # pytestmark. Deleted files (absent from the checkout) and files without
-        # a recognizable marker fall back to the full suite.
+        # A changed integration test runs its own areas: read them from the file's
+        # markers. Every smoke/area_* marker in the file counts, wherever it sits
+        # (module pytestmark, class pytestmark, per-test decorator), so a file
+        # spanning areas selects all of them. Deleted files (absent from the
+        # checkout) and files without a recognizable marker fall back to the full
+        # suite.
         tests/integration/*test_*.py)
-            marker=$([[ -f "$f" ]] && grep --only-matching --extended-regexp 'pytest\.mark\.(area_[a-z]+|smoke)' "$f" | head --lines=1 | cut --delimiter='.' --fields=3 || true)
-            if [[ -z "$marker" ]]; then
-                full "$f (no smoke/area_* pytestmark found)"
+            markers=$([[ -f "$f" ]] && grep --only-matching --extended-regexp 'pytest\.mark\.(area_[a-z]+|smoke)' "$f" | cut --delimiter='.' --fields=3 | sort --unique || true)
+            if [[ -z "$markers" ]]; then
+                full "$f (no smoke/area_* marker found)"
             fi
-            add_area "$marker"
+            while IFS= read -r marker; do
+                add_area "$marker"
+            done <<< "$markers"
             ;;
         src/pcswitcher/jobs/apt_sync/* | src/pcswitcher/jobs/snap_sync.py | \
         src/pcswitcher/jobs/flatpak_sync.py | src/pcswitcher/jobs/manual_installs_sync.py | \

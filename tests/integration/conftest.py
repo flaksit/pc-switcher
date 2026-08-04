@@ -52,6 +52,8 @@ REQUIRED_ENV_VARS = [
 # (tests/integration/scripts/select-ci-tests.sh): an area marker, `smoke`, or
 # `area_core` for core behavior with no topic mapping (full-suite runs only).
 # Enforced at collection so a new test file cannot silently fall outside topic runs.
+# A test may carry several: a test touching two areas runs whenever either is
+# selected, since the workflow selects with an `or` expression over the markers.
 _CI_SELECTION_MARKERS = {"smoke", "area_package", "area_install", "area_btrfs", "area_folder", "area_core"}
 
 
