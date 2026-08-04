@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "0a37859cad48",
+  "strategy": "manual-commit",
+  "branch": "pc-216",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "tests/unit/jobs/test_package_sync_candidate_selection.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0a/37859cad48/0/metadata.json",
+      "transcript": "/0a/37859cad48/0/full.jsonl",
+      "compact_transcript": "/0a/37859cad48/0/transcript.jsonl",
+      "content_hash": "/0a/37859cad48/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 499,
+    "cache_creation_tokens": 543974,
+    "cache_read_tokens": 68943044,
+    "output_tokens": 175989,
+    "api_call_count": 252
+  }
+}
