@@ -37,9 +37,16 @@ import pytest
 import pytest_asyncio
 
 from pcswitcher.executor import BashLoginRemoteExecutor
+from pcswitcher.jobs.install_on_target import INSTALL_ON_TARGET_SKIP_ENV
 from pcswitcher.version import get_this_version
 
 pytestmark = pytest.mark.area_folder
+
+#: Prefix for a `pc-switcher sync` whose subject is not self-installation: it drops the
+#: install-on-target step, worth ~1.75s of `pc-switcher --version` over a login shell per
+#: run. Only usable where a fixture already puts pc-switcher on the machine being synced
+#: TO — `TestInstallOnTargetIntegration` must never carry it, since the step IS its subject.
+SKIP_INSTALL_ON_TARGET = f"{INSTALL_ON_TARGET_SKIP_ENV}=1"
 
 
 # Dataclass for pc1_to_pc2_traffic_blocker fixture
@@ -709,7 +716,9 @@ class TestEndToEndSync:
             assert src_md5.success, f"source md5 manifest failed: {src_md5.stderr}"
 
             # --- Step 1: blocked first sync (W1 gate, non-interactive) ---
-            blocked = await pc1_executor.run_command("pc-switcher sync pc2 --yes", timeout=180.0, login_shell=True)
+            blocked = await pc1_executor.run_command(
+                f"{SKIP_INSTALL_ON_TARGET} pc-switcher sync pc2 --yes", timeout=180.0, login_shell=True
+            )
             assert not blocked.success, (
                 f"W1 first-sync gate should block non-interactively, got exit {blocked.exit_code}.\n{blocked.stdout}"
             )
@@ -725,7 +734,7 @@ class TestEndToEndSync:
                 f"cat {_STATE_DIR}/sync-history.json 2>/dev/null || echo absent", timeout=10.0
             )
             dry = await pc1_executor.run_command(
-                "pc-switcher sync pc2 --yes --dry-run", timeout=180.0, login_shell=True
+                f"{SKIP_INSTALL_ON_TARGET} pc-switcher sync pc2 --yes --dry-run", timeout=180.0, login_shell=True
             )
             assert dry.success, f"--dry-run should not be blocked (ADR-014).\nstderr: {dry.stderr}"
             still_no_tree = await pc2_executor.run_command(f"test ! -e {tree}", timeout=10.0, login_shell=False)
@@ -737,7 +746,9 @@ class TestEndToEndSync:
 
             # --- Step 3: real first sync (--allow-first-sync) ---
             sync_ab = await pc1_executor.run_command(
-                "pc-switcher sync pc2 --yes --allow-first-sync", timeout=300.0, login_shell=True
+                f"{SKIP_INSTALL_ON_TARGET} pc-switcher sync pc2 --yes --allow-first-sync",
+                timeout=300.0,
+                login_shell=True,
             )
             assert sync_ab.success, (
                 f"A→B first sync failed.\nexit={sync_ab.exit_code}\nstdout: {sync_ab.stdout}\nstderr: {sync_ab.stderr}"
@@ -850,7 +861,9 @@ chmod 700 "$T/f755.txt"
             )
             assert mutate.success, f"Mutation on pc2 failed: {mutate.stderr}"
 
-            sync_ba = await pc2_executor.run_command("pc-switcher sync pc1 --yes", timeout=300.0, login_shell=True)
+            sync_ba = await pc2_executor.run_command(
+                f"{SKIP_INSTALL_ON_TARGET} pc-switcher sync pc1 --yes", timeout=300.0, login_shell=True
+            )
             assert sync_ba.success, (
                 f"B→A sync failed.\nexit={sync_ba.exit_code}\nstdout: {sync_ba.stdout}\nstderr: {sync_ba.stderr}"
             )
@@ -877,7 +890,9 @@ chmod 700 "$T/f755.txt"
             assert "GONE_DIR" in gone, "directory deletion (d700) not propagated on B→A"
 
             # --- Step 5: clean A→B again must not trip the out-of-order gate ---
-            sync_ab2 = await pc1_executor.run_command("pc-switcher sync pc2 --yes", timeout=300.0, login_shell=True)
+            sync_ab2 = await pc1_executor.run_command(
+                f"{SKIP_INSTALL_ON_TARGET} pc-switcher sync pc2 --yes", timeout=300.0, login_shell=True
+            )
             assert sync_ab2.success, (
                 f"Second A→B failed (out-of-order gate wrongly tripped for a clean round-trip, ADR-015 #159).\n"
                 f"exit={sync_ab2.exit_code}\nstdout: {sync_ab2.stdout}\nstderr: {sync_ab2.stderr}"
@@ -1406,7 +1421,7 @@ class TestConsecutiveSyncWarning:
 
         # Step 1: pc1 syncs to pc2 — W1 gate (pc2 has no history), --allow-first-sync required.
         first_sync = await pc1_executor.run_command(
-            "pc-switcher sync pc2 --yes --allow-first-sync",
+            f"{SKIP_INSTALL_ON_TARGET} pc-switcher sync pc2 --yes --allow-first-sync",
             timeout=180.0,
             login_shell=True,
         )
@@ -1416,10 +1431,10 @@ class TestConsecutiveSyncWarning:
         pc1_history = await pc1_executor.run_command("cat ~/.local/share/pc-switcher/sync-history.json", timeout=10.0)
         assert '"last_role": "source"' in pc1_history.stdout, "pc1 should be source after first sync"
 
-        # Step 2: pc2 syncs back to pc1
-        # pc2 has pc-switcher installed (from first sync) and config synced
+        # Step 2: pc2 syncs back to pc1 — pc1_with_pcswitcher_mod (via sync_ready_source)
+        # already has pc1 at the branch tip, so nothing here needs installing either way.
         back_sync = await pc2_executor.run_command(
-            "pc-switcher sync pc1 --yes",
+            f"{SKIP_INSTALL_ON_TARGET} pc-switcher sync pc1 --yes",
             timeout=180.0,
             login_shell=True,
         )
@@ -1435,7 +1450,8 @@ class TestConsecutiveSyncWarning:
         # Step 3: pc1 syncs to pc2 again — clean case: pc1's last_role=TARGET (received
         # back-sync from pc2), so no consecutive-push W3 gate fires.  No flags needed.
         third_sync = await pc1_executor.run_command(
-            "pc-switcher sync pc2 --yes",  # No --allow-out-of-order needed (clean round-trip)
+            # No --allow-out-of-order needed (clean round-trip)
+            f"{SKIP_INSTALL_ON_TARGET} pc-switcher sync pc2 --yes",
             timeout=180.0,
             login_shell=True,
         )

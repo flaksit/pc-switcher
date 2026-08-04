@@ -721,7 +721,18 @@ class Orchestrator:
             raise RuntimeError("Installation validation failed:\n" + "\n".join(error_msgs))
 
         # Execute
-        await install_job.execute()
+        try:
+            await install_job.execute()
+        except JobSkipped as e:
+            # This step is not one of the config-driven jobs, so it has no JobResult to
+            # carry a SKIPPED status; the WARNING the job loop logs for a skip is the whole
+            # record here. Not re-raised — a skip is not a failure of the run.
+            self._logger.warning(
+                "Job %s skipped: %s",
+                e.job_name,
+                e.reason,
+                extra={"job": "orchestrator", "host": "target"},
+            )
 
     async def _sync_config_to_target(self) -> None:
         """Sync configuration from source to target machine.
