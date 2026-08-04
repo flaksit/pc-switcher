@@ -1,0 +1,35 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "dda6ceccf1d7",
+  "strategy": "manual-commit",
+  "branch": "pc-216",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "docs/dev/testing-guide.md",
+    "tests/integration/conftest.py",
+    "tests/integration/jobs/test_install_on_target_job.py",
+    "tests/integration/jobs/test_package_sync.py",
+    "tests/integration/test_config_sync.py",
+    "tests/integration/test_dry_run.py",
+    "tests/integration/test_end_to_end_sync.py",
+    "tests/integration/test_lock_integration.py",
+    "tests/integration/test_logging_integration.py",
+    "tests/integration/test_sync_order_gates.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/dd/a6ceccf1d7/0/metadata.json",
+      "transcript": "/dd/a6ceccf1d7/0/full.jsonl",
+      "compact_transcript": "/dd/a6ceccf1d7/0/transcript.jsonl",
+      "content_hash": "/dd/a6ceccf1d7/0/content_hash.txt",
+      "prompt": "/dd/a6ceccf1d7/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 89,
+    "cache_creation_tokens": 30994,
+    "cache_read_tokens": 5009820,
+    "output_tokens": 16164,
+    "api_call_count": 47
+  }
+}
