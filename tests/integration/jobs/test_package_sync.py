@@ -59,11 +59,15 @@ likewise an assertion failure, never a skip.
 Preconditions, not teardown: a test states the package state it needs and converges to it
 (`_ensure_absent`, `_ensure_installed_and_manual`) instead of putting the machines back
 afterwards. What one scenario leaves behind is usually what the next one wanted anyway, so
-the converger reads and returns; the module's own fixture is what owes the machines their
-baseline. Cleanup that costs nothing -- `/etc/apt` files, markers, holds, `refresh.hold`,
-paths taken aside -- stays in each test's `finally`, and the `/etc/apt` half has to: a
-synthetic repository left configured makes every later `apt-get update` on that machine
-slower and noisier.
+the converger reads and returns. Nobody restores the packages at the end either:
+`run-integration-tests.sh` replaces both VMs' subvolumes with their baseline btrfs
+snapshots and reboots before every run, which is what makes the machines identical run to
+run -- so a package left removed costs nothing and undoing it would.
+
+Cleanup that costs nothing -- `/etc/apt` files, markers, holds, `refresh.hold`, paths taken
+aside -- stays in each test's `finally`, and the `/etc/apt` half has to: a synthetic
+repository left configured makes every later `apt-get update` on that machine slower and
+noisier for the rest of the run.
 
 The flatpak subject is the REAL Flathub, and its app is provisioned on pc1 only, so the
 source->target divergence the convergence test needs is part of the baseline rather than
@@ -78,7 +82,7 @@ import asyncio
 import json
 import re
 import shlex
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Literal
@@ -386,39 +390,31 @@ class _AptSubjects:
     #: the source is a run's only apt work for it.
     hold: str
 
-    @property
-    def every_package(self) -> tuple[str, ...]:
-        """Every subject whose presence a test may change, for the module's own teardown."""
-        return (*self.install_direction, self.removal_direction)
-
 
 @pytest.fixture(scope="module")
-async def apt_subjects(
-    pc1_executor: BashLoginRemoteExecutor, pc2_executor: BashLoginRemoteExecutor
-) -> AsyncIterator[_AptSubjects]:
-    """Select this module's apt subjects once, and put them back once.
+async def apt_subjects(pc1_executor: BashLoginRemoteExecutor, pc2_executor: BashLoginRemoteExecutor) -> _AptSubjects:
+    """Select this module's apt subjects once, before any test has touched a package, so
+    the selection sees the machines as provisioning left them.
 
-    Runs before any test has touched a package, so the selection sees the machines as
-    provisioning left them.
+    Nothing is put back. `run-integration-tests.sh` replaces both VMs' subvolumes with
+    their baseline btrfs snapshots and reboots before every run, so where these packages end
+    up is not something this module owes the machines; restoring them would be ~36s spent
+    undoing what the next run's reset undoes anyway. Within a run each test converges to the
+    state IT needs (`_ensure_absent`, `_ensure_installed_and_manual`), which is a read
+    whenever the previous scenario already left it that way.
 
-    The teardown is the module's, not each test's: within a run the tests leave these
-    packages wherever their scenario ended and the next test converges to what IT needs
-    (`_ensure_absent`, `_ensure_installed_and_manual`), which is a read when the state
-    already matches instead of an `apt-get install` that the next removal would undo. What
-    the module owes the machines is that they end as they started, and that is four
-    restores rather than twelve.
+    Under `--skip-reset`, where a developer keeps the machines between runs, the next run
+    simply selects again from what is installed then. Subjects left removed drop out of that
+    selection rather than breaking it -- and if enough runs drain the candidates,
+    `_no_apt_candidate_message` says so instead of failing obscurely.
     """
     picked = await _find_removable_candidates(pc1_executor, pc2_executor, count=4)
     assert len(picked) == 4, f"{_no_apt_candidate_message()} Needed 4 subjects, found {len(picked)}."
-    subjects = _AptSubjects(
+    return _AptSubjects(
         install_direction=(picked[0], picked[1], picked[2]),
         removal_direction=picked[3],
         hold=await _a_package_both_machines_have_unheld(pc1_executor, pc2_executor, exclude=frozenset(picked)),
     )
-    yield subjects
-    for executor in (pc1_executor, pc2_executor):
-        for name in subjects.every_package:
-            await _ensure_installed_and_manual(executor, name)
 
 
 # Splits the two reads `_ensure_installed_and_manual` issues as one command.
