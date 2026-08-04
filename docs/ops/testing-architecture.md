@@ -144,6 +144,7 @@ The baseline snapshots capture the following VM state (as configured during prov
 | **OS** | Ubuntu 24.04 LTS | Installed via Hetzner `installimage` |
 | **Packages** | btrfs-progs, qemu-guest-agent, fail2ban, ufw, sudo (`configure-vm.sh`); snapd and flatpak (`vm-test-fixtures.sh`) | Basic system tools plus what the package-sync tests need |
 | **Test fixtures** | `hello` and `hello-world` snaps; the real Flathub remote plus `org.freedesktop.Platform/x86_64/25.08` in user scope on **both** VMs; `io.github.fragglet.sdl_sopwith` and the `flathub-beta` remote in user scope on **pc1 only** | Created by `vm-test-fixtures.sh`; the subjects the package-sync integration tests hold, diverge, remove and reinstall |
+| **Automatic updates** | None: `unattended-upgrades` purged, `apt-daily`/`apt-daily-upgrade` timers and services masked (`vm-test-fixtures.sh`) | The suite must not compete with the machine for the dpkg lock; `upgrade-vms.sh` patches the VMs explicitly instead |
 | **Filesystem** | btrfs with flat subvolume layout (`@`, `@home`, `@snapshots`) | Root mounted as `@`, home as `@home` |
 | **Users** | `testuser` with passwordless sudo | All developer SSH keys injected |
 | **SSH** | Hardened (root login disabled, password auth disabled) | Only key-based auth allowed |
@@ -156,6 +157,8 @@ The baseline snapshots capture the following VM state (as configured during prov
 ### Test Fixtures in the Baseline
 
 The package-sync integration tests need packages they may hold, diverge, remove and reinstall. A stock Ubuntu 24.04 VM offers none: `snap list` shows only `snapd`, `core*` and `bare` — every other snap depends on those, so none is a safe subject — and flatpak is not installed at all. `internal/vm-test-fixtures.sh` creates the subjects, and provisioning runs it before the baseline snapshot so every test run inherits them at no cost.
+
+The same script also removes what would otherwise compete with the tests for the package managers. Ubuntu patches itself in the background, and `apt_sync`'s validation probes the target's dpkg frontend lock once and ends the whole run when it is held — so an updater firing in the minutes after `reset-vm.sh` reboots into the baseline fails whichever test `pytest-randomly`'s seed happened to schedule there, on package state that never had a chance to change. `unattended-upgrades` is therefore purged and the `apt-daily` timers masked. The VMs are still patched: `upgrade-vms.sh` upgrades them explicitly and rebuilds the baseline, daily, from the `VM Updates` workflow.
 
 The flatpak subject is **the real Flathub**, not a locally built stand-in. A synthetic repository is far cheaper, but it only ever tests pc-switcher's model of a remote: our own repo layout, our own key, our own `gpg-verify` state. The GPG-trust replication `flatpak_sync` performs (issue #215) is a claim about a real remote's real trust configuration, so the remote under test carries Flathub's.
 

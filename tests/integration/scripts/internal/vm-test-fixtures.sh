@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
-# Create the package-manager subjects the integration suite operates on.
+# Put the machine's package managers into the state the integration suite requires: the
+# subjects it operates on present, and nothing else touching them behind its back.
 #
 # The suite proves things about snap and flatpak convergence, so both machines must
 # actually own a snap and a flatpak the tests may hold, diverge, remove and reinstall.
 # A stock Ubuntu 24.04 VM owns neither: `snap list` shows only snapd/core*/bare (all of
 # which every other snap depends on, so none is a safe subject) and flatpak is not
 # installed at all. This script creates those subjects.
+#
+# It also removes the machine's automatic apt updater, which is not a subject but a rival
+# for the same locks (see remove_automatic_updates).
 #
 # WITHOUT --with-app (the sync TARGET, pc2), the machine ends up with:
 #   - apt: snapd and flatpak installed;
@@ -41,7 +45,7 @@ set -euo pipefail
 # Bumping this forces provisioning to rebuild the baseline: provision-test-infra.sh and
 # run-integration-tests.sh compare the marker file's contents against their own copy of
 # this number (PCSWITCHER_TEST_FIXTURES_VERSION in internal/common.sh — keep in sync).
-readonly FIXTURES_VERSION=4
+readonly FIXTURES_VERSION=5
 readonly MARKER=/etc/pcswitcher-test-fixtures
 
 INSTALL_APP=false
@@ -117,6 +121,44 @@ readonly LEGACY_FLATPAK_APP=org.pcswitcher.TestApp
 readonly LEGACY_FLATPAK_RUNTIME=org.pcswitcher.TestRuntime
 
 log() { echo "[vm-test-fixtures] $*"; }
+
+# -- the machine's own updater -------------------------------------------------------
+
+# Ubuntu patches itself in the background, and the suite cannot tell that apart from a
+# sync misbehaving: `apt_sync.validate` probes the target's dpkg frontend lock once and
+# ends the whole run when it is held, so a test scheduled into the post-boot window fails
+# on package state that never had a chance to change. reset-vm.sh reboots into the
+# baseline before every run and the updater fires minutes later, so which test pays is
+# decided by pytest-randomly's seed rather than by anything under test (#249).
+#
+# Patching is not lost with it: upgrade-vms.sh applies updates explicitly and rebuilds the
+# baseline, daily, from .github/workflows/vm-updates.yml.
+remove_automatic_updates() {
+    # Timers first, so the purge below cannot lose the dpkg lock to the very updater it is
+    # removing. `disable --now` settles the current boot, `mask` every later one — and the
+    # .service units too, since the timer is not the only thing that can start them.
+    sudo systemctl disable --now apt-daily.timer apt-daily-upgrade.timer >/dev/null 2>&1 || true
+    sudo systemctl mask apt-daily.timer apt-daily-upgrade.timer \
+        apt-daily.service apt-daily-upgrade.service >/dev/null
+
+    # A run already in flight holds the lock the purge needs. Stopping the service waits
+    # for it to finish rather than tearing down a dpkg transaction half-applied.
+    sudo systemctl stop unattended-upgrades.service >/dev/null 2>&1 || true
+
+    if dpkg-query --show unattended-upgrades >/dev/null 2>&1; then
+        log "purging unattended-upgrades"
+        sudo DEBIAN_FRONTEND=noninteractive apt-get purge --assume-yes unattended-upgrades
+    fi
+
+    # The purge takes the package's own conffiles, but 20auto-upgrades is written by the
+    # installer rather than shipped by the package, so it outlives it — and it is the file
+    # that would switch automatic updates back on if the package ever returned.
+    sudo rm --force /etc/apt/apt.conf.d/20auto-upgrades
+
+    # Masked while absent, too: a reinstall arriving as somebody's dependency must not
+    # quietly resume updating.
+    sudo systemctl mask unattended-upgrades.service >/dev/null
+}
 
 # -- snaps -------------------------------------------------------------------------
 
@@ -284,6 +326,7 @@ if [[ -f "$MARKER" ]] && [[ "$(cat "$MARKER")" != "$FIXTURES_VERSION" ]]; then
     sudo rm --recursive --force "$LEGACY_FLATPAK_ROOT" "$LEGACY_OSTREE_TRUSTED_KEY"
 fi
 
+remove_automatic_updates
 install_snaps
 install_flatpak_packages
 add_flathub_remote
