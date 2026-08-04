@@ -94,6 +94,14 @@ while IFS= read -r f; do
         tests/integration/jobs/folder_sync_scenario.py)
             add_area area_folder
             ;;
+        # Core modules the area_core tests own outright: the orchestrator is their only
+        # importer, and the tests that assert their behavior (test_lock_integration.py,
+        # test_sync_order_gates.py) carry area_core. The rest of the spine — orchestrator.py,
+        # cli.py, config.py, executor.py, connection.py, logger.py — reaches every area's
+        # tests and so stays unmapped below, selecting the full suite.
+        src/pcswitcher/lock.py | src/pcswitcher/sync_history.py)
+            add_area area_core
+            ;;
         *)
             full "$f (outside every mapped area)"
             ;;

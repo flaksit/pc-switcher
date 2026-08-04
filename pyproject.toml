@@ -76,7 +76,7 @@ markers = [
     "area_install: Install and self-update tests; topic-selected by select-ci-tests.sh",
     "area_btrfs: Btrfs snapshot tests; topic-selected by select-ci-tests.sh",
     "area_folder: Folder-sync end-to-end tests; topic-selected by select-ci-tests.sh",
-    "area_core: Core-behavior tests with no topic mapping (run in full-suite runs only)",
+    "area_core: Core sync-spine tests (locking, sync history, logging, init, interrupts); topic-selected by select-ci-tests.sh",
 ]
 log_cli = true
 # Here, set log level to the level we want from logs from our code.

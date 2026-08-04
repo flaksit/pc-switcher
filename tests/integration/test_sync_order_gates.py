@@ -1,8 +1,8 @@
 """Integration tests for the sync-order gates that guard a `pc-switcher sync` (ADR-015).
 
-The gates live in the CLI and the orchestrator, not in any sync job, so no topic area maps
-to them (marker `area_core`): a change to the gate code selects the full suite, which runs
-these too.
+The gates live in the CLI and the orchestrator, not in any sync job, so these carry
+`area_core`. CI selects them for a change to `sync_history.py`; a change to the gate code in
+cli.py or orchestrator.py reaches every area and selects the full suite, which runs them too.
 
 **What these tests cover:**
 - W1 first-sync gate: a target with no sync history needs --allow-first-sync

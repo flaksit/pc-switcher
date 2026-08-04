@@ -277,7 +277,7 @@ Registered in `[tool.pytest]` in `pyproject.toml`; `--strict-markers` rejects an
 @pytest.mark.area_install  # CI selection: install / self-update tests
 @pytest.mark.area_btrfs    # CI selection: btrfs snapshot tests
 @pytest.mark.area_folder   # CI selection: folder-sync end-to-end tests
-@pytest.mark.area_core     # CI selection: core behavior, no topic mapping (full-suite runs only)
+@pytest.mark.area_core     # CI selection: core sync spine (locking, sync history, logging, init, interrupts)
 ```
 
 Every integration test MUST carry at least one CI-selection marker (`smoke` or an `area_*`), normally as a module-level `pytestmark` — collection fails otherwise (enforced in `tests/integration/conftest.py`). `ci_skip` is additive to the area marker, not a replacement.
