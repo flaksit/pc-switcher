@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "db562506c299",
+  "strategy": "manual-commit",
+  "branch": "pc-216",
+  "checkpoints_count": 5,
+  "files_touched": [
+    "docs/dev/testing-guide.md",
+    "tests/integration/conftest.py",
+    "tests/integration/scripts/select-ci-tests.sh"
+  ],
+  "sessions": [
+    {
+      "metadata": "/db/562506c299/0/metadata.json",
+      "transcript": "/db/562506c299/0/full.jsonl",
+      "compact_transcript": "/db/562506c299/0/transcript.jsonl",
+      "content_hash": "/db/562506c299/0/content_hash.txt",
+      "prompt": "/db/562506c299/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 499,
+    "cache_creation_tokens": 2033003,
+    "cache_read_tokens": 60344272,
+    "output_tokens": 204902,
+    "api_call_count": 260
+  }
+}
