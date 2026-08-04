@@ -18,18 +18,20 @@ import json
 import re
 import shlex
 from collections.abc import Awaitable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 from uuid import uuid4
 
 from pcswitcher.executor import BashLoginRemoteExecutor
-from pcswitcher.jobs.apt_sync.items import collateral_item_id
+from pcswitcher.jobs.apt_sync.items import AptPackageItem, collateral_item_id
+from pcswitcher.jobs.flatpak_sync import FlatpakItem
 from pcswitcher.jobs.manual_installs_sync import UnreproducibleItem
 from pcswitcher.jobs.packages.review import PACKAGE_REVIEW_AUTOMATION_ENV, Decision
 from pcswitcher.jobs.packages.state import (
     DECISION_FILE_RELPATH_TEMPLATE,
     SNIPPET_REGISTRY_RELPATH,
+    DecisionFile,
     Snippet,
     SnippetRegistry,
 )
@@ -2065,3 +2067,664 @@ KILL_RUNNING_SYNC_CMD = "pkill --signal KILL --full 'pc-switcher[ ]sync'"
 # the orchestrator's private constant currently says would not assert.
 SNAP_HOLD_EXPECTED_DURATION = timedelta(hours=6)
 SNAP_HOLD_DURATION_SLACK = timedelta(minutes=15)
+
+
+# ---------------------------------------------------------------------------------
+# The whole happy path, as one seeded divergence per manager and the assertions that read
+# it back. Three modules drive it: `test_dry_run.py` rehearses it, `test_end_to_end_sync.py`
+# converges it and then converges the reverse direction over the same pair. Keeping the
+# seeds and the witnesses here is what lets each of those hold its own spine -- config, the
+# runs, and one call per claim -- instead of two thousand lines of package detail.
+# ---------------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ConvergenceSeed:
+    """What `seed_a_divergence_in_every_manager` picked and built, named back for the
+    assertions that follow the run.
+
+    Every field is a machine's own answer rather than a constant: which apt packages were
+    free to move, which revision the source's snap is actually on, which ref and remote the
+    fixture app reports, and which uuid-suffixed paths this seeding built. A witness that
+    re-derived any of them would be reading the same machine twice instead of comparing the
+    run against what was set up.
+    """
+
+    install_candidate: str
+    removal_candidate: str
+    #: A package both machines have, which the reverse direction removes from the target
+    #: after the user undoes it on the machine that becomes the source. Distinct from
+    #: `install_candidate`, which the reverse run needs still converged to witness a
+    #: fixed point with.
+    round_trip_candidate: str
+    hold_subject: str
+    revision_snap: str
+    source_snap_revision: str
+    hold_snap: str
+    application: str
+    scope: Literal["user", "system"]
+    remote_name: str
+    ref: str
+    ref_item_id: str
+    filter_path: str
+    recorded_filter_path: str
+    target_only_remote: str
+    target_only_keyring: str
+    unowned_path: str
+    manual_item_id: str
+    replay_marker: str
+    source_filename: str
+    key_filename: str
+    pin_filename: str
+    prior_source_hold: str | None
+    prior_target_hold: str | None
+
+    @property
+    def scope_flag(self) -> str:
+        """`--user` or `--system`, the flag every `flatpak` call about this ref needs."""
+        return "--user" if self.scope == "user" else "--system"
+
+    @property
+    def sudo(self) -> str:
+        """`sudo ` for a system-scope ref, empty for a user-scope one."""
+        return "sudo " if self.scope == "system" else ""
+
+    @property
+    def source_dest(self) -> str:
+        """Where the synthetic repository's declaration sits on the machine that has it."""
+        return f"{APT_SOURCES_DIR}/{self.source_filename}"
+
+    @property
+    def key_dest(self) -> str:
+        """Where the synthetic repository's signing key sits."""
+        return f"{APT_KEYRINGS_DIR}/{self.key_filename}"
+
+    @property
+    def pin_dest(self) -> str:
+        """Where the always-sync pin sits."""
+        return f"{APT_PREFERENCES_DIR}/{self.pin_filename}"
+
+    @property
+    def registry_relpath(self) -> str:
+        """The snippet registry, as a `~`-relative path both machines resolve for themselves."""
+        return f"~/{SNIPPET_REGISTRY_RELPATH}"
+
+    def approve_everything(self) -> dict[str, Decision]:
+        """APPLY for every item this divergence raises, one per manager.
+
+        The two `/etc/apt` files are absent on purpose: neither is decidable, and a run that
+        wrote one because something else was ticked is the defect the rehearsal looks for.
+        """
+        return {
+            AptPackageItem(name=self.install_candidate, version="").item_id: Decision.APPLY,
+            AptPackageItem(name=self.removal_candidate, version="").item_id: Decision.APPLY,
+            f"snap:{self.revision_snap}": Decision.APPLY,
+            snap_hold_item_id(self.hold_snap): Decision.APPLY,
+            self.ref_item_id: Decision.APPLY,
+            self.manual_item_id: Decision.APPLY,
+        }
+
+
+async def seed_a_divergence_in_every_manager(  # noqa: PLR0915
+    source: BashLoginRemoteExecutor, target: BashLoginRemoteExecutor, apt: AptSubjects
+) -> ConvergenceSeed:
+    """Put one divergence per manager between `source` and `target`, and hold snapd still.
+
+    - apt: a package removed from the target (install direction), a package removed from the
+      source (removal direction), a hold set on the source for a package both machines have
+      at the same version, and a synthetic vendor repository, signing key and always-sync pin
+      written to the source's `/etc/apt`;
+    - snap: the target's first fixture snap moved to another revision, and a per-snap hold set
+      on the source's second one;
+    - flatpak: the fixture app and its remote deleted from the target, a ref filter applied to
+      the source's copy of that remote, and a uuid-named remote added to the target that the
+      source does not have;
+    - manual installs: an unowned `/opt` path on the source with a snippet authored against it.
+
+    Converges to those preconditions rather than assuming them: by the time a module using
+    this runs, an earlier one may already have converged the same pair.
+
+    Both machines' snapd auto-refresh is suspended for the duration -- the same timed
+    `refresh.hold` a sync engages -- so a background refresh cannot move `snap list` between
+    two captures and be misread as a run's doing. `restore_after_the_divergence` puts the
+    prior value back.
+    """
+    _ = await asyncio.gather(assert_flatpak_available(source), assert_flatpak_available(target))
+
+    install_candidate = apt.install_direction[0]
+    round_trip_candidate = apt.install_direction[1]
+    removal_candidate = apt.removal_direction
+    hold_subject = apt.hold
+
+    revision_snap, hold_snap = await snap_subjects(source, target, count=2)
+    source_snap_revision, target_snap_revision = await asyncio.gather(
+        snap_revision(source, revision_snap), snap_revision(target, revision_snap)
+    )
+    assert source_snap_revision and target_snap_revision, f"{revision_snap} is not installed on both machines"
+    alternate_revision = await alternate_snap_revision(target, revision_snap, source_snap_revision)
+
+    application, version, scope, remote_name, _remote_url, ref = await flatpak_subject(source)
+    scope_flag = "--user" if scope == "user" else "--system"
+    sudo = "sudo " if scope == "system" else ""
+    ref_item_id = FlatpakItem(
+        application=application, version=version, origin=remote_name, scope=scope, ref=ref
+    ).item_id
+
+    uniq = uuid4().hex[:12]
+    unowned_path = f"/opt/pcswitcher-it-converge-{uniq}"
+    # Home-relative marker so the snippet needs no sudo: replay runs `bash -c <body>` as the
+    # SSH user on the target, and $HOME expands there.
+    replay_marker = f"$HOME/.cache/pcswitcher-it-converge-{uniq}"
+    # Unquoted `$HOME` on purpose: the remote shell expands it, and flatpak stores whatever
+    # path it is given verbatim. `flatpak_remote_filter` reads the expanded path back off the
+    # machine, which is the one both machines must end up naming.
+    filter_path = f"$HOME/.cache/pcswitcher-it-flatpak-filter-{uniq}"
+    target_only_remote = f"pcswitcher-it-vendor-{uniq}"
+    target_only_keyring = f"$HOME/.local/share/flatpak/repo/{target_only_remote}.trustedkeys.gpg"
+
+    prior_source_hold, prior_target_hold = await asyncio.gather(
+        capture_system_refresh_hold(source), capture_system_refresh_hold(target)
+    )
+    _ = await asyncio.gather(engage_system_refresh_hold(source), engage_system_refresh_hold(target))
+
+    # -- apt: one chain per machine, run at once. apt writes on ONE machine serialise on
+    # dpkg's own lock, but the two machines' apt work is independent and this is several
+    # transactions on each (#216).
+    async def seed_source_apt() -> CommandResult:
+        await ensure_installed_and_manual(source, install_candidate)
+        await ensure_absent(source, removal_candidate)
+        await ensure_installed_and_manual(source, hold_subject)
+        return await source.run_command(
+            f"sudo apt-mark hold {shlex.quote(hold_subject)}", login_shell=False, timeout=30.0
+        )
+
+    async def seed_target_apt() -> None:
+        await ensure_absent(target, install_candidate)
+        await ensure_installed_and_manual(target, removal_candidate)
+        await ensure_installed_and_manual(target, hold_subject)
+
+    held, _ = await asyncio.gather(seed_source_apt(), seed_target_apt())
+    assert held.success, f"Failed to hold {hold_subject} on the source: {held.stderr}"
+
+    source_filename, key_filename = await create_synthetic_repo_and_key(source)
+    pin_filename = await create_synthetic_pin(source)
+    absent = await target.run_command(
+        " && ".join(
+            f"test ! -e {shlex.quote(path)}"
+            for path in (
+                f"{APT_SOURCES_DIR}/{source_filename}",
+                f"{APT_KEYRINGS_DIR}/{key_filename}",
+                f"{APT_PREFERENCES_DIR}/{pin_filename}",
+            )
+        ),
+        login_shell=False,
+        timeout=10.0,
+    )
+    assert absent.success, "synthetic /etc/apt files unexpectedly already present on the target before the run"
+
+    # -- snap: one snapd change on each machine, and neither snapd knows about the other's.
+    diverged, snap_held = await asyncio.gather(
+        target.run_command(
+            f"sudo snap refresh --revision={shlex.quote(alternate_revision)} {shlex.quote(revision_snap)}",
+            login_shell=False,
+            timeout=180.0,
+        ),
+        source.run_command(
+            f"sudo snap refresh --hold=forever {shlex.quote(hold_snap)}", login_shell=False, timeout=60.0
+        ),
+    )
+    assert diverged.success, (
+        f"Failed to move the target's {revision_snap} to revision {alternate_revision}: {diverged.stderr}"
+    )
+    assert snap_held.success, f"Failed to set a per-snap hold on the source's {hold_snap}: {snap_held.stderr}"
+    assert "held" not in await snap_notes(target, hold_snap), (
+        f"{hold_snap} is already held on the target before the run; its replication would prove nothing"
+    )
+
+    # -- flatpak: the source's remote table is read while the target gives up the app and the
+    # remote. Deleting the remote is what removes the target's only trust in Flathub and makes
+    # the key replication load-bearing.
+    source_remotes, _dropped_on_target = await asyncio.gather(
+        source.run_command(f"flatpak remotes {scope_flag} --columns=name", login_shell=False, timeout=15.0),
+        target.run_command(
+            f"{sudo}flatpak uninstall {scope_flag} --assumeyes {shlex.quote(application)} || true; "
+            f"{sudo}flatpak remote-delete {scope_flag} --force {shlex.quote(remote_name)} || true",
+            login_shell=False,
+            timeout=120.0,
+        ),
+    )
+    assert FIXTURE_UNUSED_FLATPAK_REMOTE in nonblank_lines(source_remotes.stdout), (
+        f"the fixture remote {FIXTURE_UNUSED_FLATPAK_REMOTE} is not configured on the source. It is created by "
+        f"tests/integration/scripts/internal/vm-test-fixtures.sh.\n{source_remotes.stdout}"
+    )
+    filtered = await source.run_command(
+        f"mkdir --parents $HOME/.cache && printf %s {shlex.quote(FLATPAK_FILTER_BODY)} > {filter_path} && "
+        f"{sudo}flatpak remote-modify {scope_flag} --filter={filter_path} {shlex.quote(remote_name)}",
+        login_shell=False,
+        timeout=30.0,
+    )
+    assert filtered.success, (
+        f"`flatpak remote-modify {scope_flag} --filter=` failed on the source, so there is no filtered remote to "
+        f"replicate: {filtered.stderr}"
+    )
+    # Two read-only views of the same remote table, taken at once.
+    (_source_url, source_options), recorded = await asyncio.gather(
+        flatpak_remote_row(source, remote_name, scope), flatpak_remote_filter(source, remote_name, scope)
+    )
+    assert FLATPAK_FILTERED_OPTION in source_options, (
+        f"the source's {remote_name} reports options {source_options!r} after `flatpak remote-modify {scope_flag} "
+        f"--filter=`, so this flatpak does not print the {FLATPAK_FILTERED_OPTION!r} token "
+        "`flatpak_sync._FILTERED_OPTION` reads"
+    )
+    recorded_filter_path = recorded or ""
+    assert recorded_filter_path, (
+        f"the source's {remote_name} names no file in `flatpak remotes {scope_flag} --columns=filter`, so this "
+        "flatpak does not record the path `flatpak_sync` replicates"
+    )
+
+    before_remotes_result, before_app_rows = await asyncio.gather(
+        target.run_command(f"flatpak remotes {scope_flag} --columns=name", login_shell=False, timeout=15.0),
+        flatpak_app_rows(target),
+    )
+    before_remotes = nonblank_lines(before_remotes_result.stdout)
+    assert remote_name not in before_remotes, (
+        f"remote {remote_name} still configured on the target, so this run cannot show it being provisioned"
+    )
+    assert FIXTURE_UNUSED_FLATPAK_REMOTE not in before_remotes, (
+        f"{FIXTURE_UNUSED_FLATPAK_REMOTE} is already on the target, so this run cannot show that it did not travel"
+    )
+    assert application not in [row[0] for row in before_app_rows], (
+        f"{application} still installed on the target, so no approved application derives {remote_name}"
+    )
+
+    added = await target.run_command(
+        f"flatpak remote-add {scope_flag} {shlex.quote(target_only_remote)} {shlex.quote(FIXTURE_FLATPAK_REPOFILE)}",
+        login_shell=False,
+        timeout=180.0,
+    )
+    assert added.success, f"could not add the target-only remote {target_only_remote}: {added.stderr}"
+    key_before = await target.run_command(f"test -f {target_only_keyring}", login_shell=False, timeout=15.0)
+    assert key_before.success, (
+        f"the target holds no {target_only_keyring} for {target_only_remote}, so this flatpak does not keep a "
+        "per-remote keyring and its absence after the deletion would prove nothing"
+    )
+
+    # -- manual installs
+    await create_unowned_marker(source, unowned_path)
+    manual_item_id = unowned_item_id(unowned_path)
+    await author_snippet(
+        source,
+        manual_item_id,
+        unowned_path,
+        f'mkdir --parents "$(dirname {replay_marker})" && touch {replay_marker}',
+    )
+
+    return ConvergenceSeed(
+        install_candidate=install_candidate,
+        removal_candidate=removal_candidate,
+        round_trip_candidate=round_trip_candidate,
+        hold_subject=hold_subject,
+        revision_snap=revision_snap,
+        source_snap_revision=source_snap_revision,
+        hold_snap=hold_snap,
+        application=application,
+        scope=scope,
+        remote_name=remote_name,
+        ref=ref,
+        ref_item_id=ref_item_id,
+        filter_path=filter_path,
+        recorded_filter_path=recorded_filter_path,
+        target_only_remote=target_only_remote,
+        target_only_keyring=target_only_keyring,
+        unowned_path=unowned_path,
+        manual_item_id=manual_item_id,
+        replay_marker=replay_marker,
+        source_filename=source_filename,
+        key_filename=key_filename,
+        pin_filename=pin_filename,
+        prior_source_hold=prior_source_hold,
+        prior_target_hold=prior_target_hold,
+    )
+
+
+def assert_the_rehearsal_wrote_nothing(
+    seed: ConvergenceSeed,
+    before: MachinePackageState,
+    after: MachinePackageState,
+    run_output: str,
+) -> None:
+    """ADR-014 over the seeded divergence: the target's whole package state is byte-identical
+    across the rehearsal, and the preview reports what a real run WOULD write.
+
+    The always-sync pin is previewed as a derived write. The synthetic repository is not:
+    nothing approved comes from it, so under derivation it neither travels nor becomes a
+    review line, and its key is previewed only for the repositories that survive a run
+    (`PKG-FR-DERIVED-VISIBLE`). The decisions passed in name only packages and refs, so a
+    preview that wrote either `/etc/apt` file because something else was ticked is the defect.
+    """
+    assert after == before, (
+        f"--dry-run changed the target's package-manager state (ADR-014 violation).\nbefore: {before}\nafter: {after}"
+    )
+
+    previewed = collapse_run_output(run_output)
+    assert f"Would write {seed.pin_dest}" in previewed, (
+        f"always-sync pin {seed.pin_dest!r} was not previewed as a derived write.\n{run_output}"
+    )
+    assert f"install {seed.source_filename}" not in previewed, (
+        f"repository {seed.source_filename!r} was still offered as a review entry.\n{run_output}"
+    )
+    assert f"Would write {seed.source_dest}" not in previewed, (
+        f"repository {seed.source_dest!r} was previewed as a derived write although no approved package needs it.\n"
+        f"{run_output}"
+    )
+    assert f"Would write signing key {seed.key_dest}" not in previewed, (
+        f"signing key {seed.key_dest!r} was previewed as a write for a repository no package needed.\n{run_output}"
+    )
+    # The intended metadata refresh (the apt-get update the pin write requires) is reported as
+    # its own marker item, by the label that item carries.
+    assert "Would change Refresh apt package metadata (apt-get update)" in previewed, (
+        f"intended apt-get update (metadata refresh) not reported.\n{run_output}"
+    )
+
+
+async def assert_every_manager_converged(
+    source: BashLoginRemoteExecutor,
+    target: BashLoginRemoteExecutor,
+    seed: ConvergenceSeed,
+    run_output: str,
+    source_before: MachinePackageState,
+) -> None:
+    """Every manager's half of the seeded divergence, read off the target's own package
+    managers and filesystem -- and the source's own state, which a run must not move.
+
+    apt installs what the target lost, removes what the source lost, and registers the
+    source's hold with no review line of its own (`PKG-FR-BLOCKS-DERIVED`). snap lands the
+    target on the source's revision without either machine's `refresh.hold` moving (D-06),
+    and the source's per-snap hold reaches the target's `snap list` Notes through the very
+    window the orchestrator holds snapd in (#208 D9). flatpak provisions the remote BEFORE
+    installing the ref that needs it (D-14), carrying the real signing key (#215) and the
+    source's ref filter, deletes the target-only remote together with its keyring, and leaves
+    the unused remote -- which no approved ref comes from -- on the source alone. manual
+    installs pushes the registry and replays the snippet in the same run (D-23).
+
+    The source's own `MachinePackageState` is identical across all of it
+    (`PKG-FR-SOURCE-INTENT`): a run that genuinely installs, removes and re-revisions on the
+    target changes nothing about what software the source has, nor where it gets it from.
+    """
+    collapsed = collapse_run_output(run_output)
+
+    target_manual = nonblank_lines(
+        (await target.run_command("apt-mark showmanual", login_shell=False, timeout=15.0)).stdout
+    )
+    assert seed.install_candidate in target_manual, (
+        f"{seed.install_candidate} not reinstalled on the target after the sync.\n{run_output}"
+    )
+    assert seed.removal_candidate not in target_manual, (
+        f"{seed.removal_candidate} was not removed from the target, so the removal direction converged nothing.\n"
+        f"{run_output}"
+    )
+    target_holds = await target.run_command("apt-mark showhold", login_shell=False, timeout=15.0)
+    assert seed.hold_subject in nonblank_lines(target_holds.stdout), (
+        f"the source's hold on {seed.hold_subject} did not reach the target, although a block replicates without "
+        f"review.\n{run_output}"
+    )
+    assert f"reviewed {seed.hold_subject} (hold)" not in collapsed, (
+        f"the hold on {seed.hold_subject} was presented as a reviewed item -- a block is never a question"
+    )
+
+    assert await snap_revision(target, seed.revision_snap) == seed.source_snap_revision, (
+        f"the target's {seed.revision_snap} did not converge to source revision {seed.source_snap_revision}.\n"
+        f"{run_output}"
+    )
+    replicated_notes = await snap_notes(target, seed.hold_snap)
+    assert "held" in replicated_notes, (
+        f"the source's per-snap hold on {seed.hold_snap} did not reach the target (target notes: "
+        f"{sorted(replicated_notes)}). If the source capture ran inside the orchestrator's system-wide refresh.hold "
+        "window and saw no hold, #208 D9's capture-timing assumption is false and the capture must move earlier."
+    )
+    source_hold_after, target_hold_after = await asyncio.gather(
+        capture_system_refresh_hold(source), capture_system_refresh_hold(target)
+    )
+    for hold_after, machine in ((source_hold_after, "the source"), (target_hold_after, "the target")):
+        assert hold_after is not None, (
+            f"the run left {machine} without the refresh.hold this scenario engaged -- D-06 forbids the convergence "
+            "mechanism from touching either machine's auto-refresh policy"
+        )
+
+    after_remotes = nonblank_lines(
+        (
+            await target.run_command(
+                f"flatpak remotes {seed.scope_flag} --columns=name", login_shell=False, timeout=15.0
+            )
+        ).stdout
+    )
+    assert seed.remote_name in after_remotes, (
+        f"remote {seed.remote_name} not provisioned in scope {seed.scope} on the target after sync"
+    )
+    assert FIXTURE_UNUSED_FLATPAK_REMOTE not in after_remotes, (
+        f"{FIXTURE_UNUSED_FLATPAK_REMOTE} travelled to the target although no approved ref comes from it"
+    )
+    assert seed.target_only_remote not in after_remotes, (
+        f"{seed.target_only_remote} is still configured on the target, so the source-lacks-it deletion never "
+        f"happened.\n{run_output}"
+    )
+    key_after = await target.run_command(f"test -f {seed.target_only_keyring}", login_shell=False, timeout=15.0)
+    assert not key_after.success, (
+        f"{seed.target_only_keyring} survived the deletion of {seed.target_only_remote}: the target still trusts "
+        "that vendor's signing key for a remote it no longer has"
+    )
+    assert seed.application in [row[0] for row in await flatpak_app_rows(target)], (
+        f"{seed.application} not installed in scope {seed.scope} on the target after sync.\n{run_output}"
+    )
+    _target_url, target_options = await flatpak_remote_row(target, seed.remote_name, seed.scope)
+    assert FLATPAK_FILTERED_OPTION in target_options, (
+        f"the target's provisioned {seed.remote_name} reports options {target_options!r}: the source's ref filter "
+        f"was not applied there.\n{run_output}"
+    )
+    assert await flatpak_remote_filter(target, seed.remote_name, seed.scope) == seed.recorded_filter_path, (
+        f"the target's {seed.remote_name} does not name {seed.recorded_filter_path} as its ref filter -- the file "
+        "must land at the same absolute path the source records"
+    )
+    copied = await target.run_command(f"cat {shlex.quote(seed.recorded_filter_path)}", login_shell=False, timeout=15.0)
+    assert copied.success and copied.stdout == FLATPAK_FILTER_BODY, (
+        f"the target's copy of the ref filter at {seed.recorded_filter_path} is not the source's file byte-for-byte: "
+        f"{copied.stdout!r} ({copied.stderr})"
+    )
+    # The one ordering exception the package suite's own prohibition carves out: the remote's
+    # mere presence afterwards does not distinguish "remote added before ref" from any other
+    # order, so only the run's own per-item converge log (`PackageSyncJob._converge_one`)
+    # proves it.
+    remote_marker = f"provision {seed.scope} flatpak remote {seed.remote_name}"
+    ref_marker = f"install {seed.ref} ("
+    remote_index = run_output.find(remote_marker)
+    ref_index = run_output.find(ref_marker)
+    assert remote_index != -1, f"derived remote write log line not found: {remote_marker!r}"
+    assert ref_index != -1, f"ref converge log line not found: {ref_marker!r}"
+    assert remote_index < ref_index, "remote must be provisioned before the ref installs (D-14)"
+
+    registry_exists = await target.run_command(f"test -f {seed.registry_relpath}", login_shell=False, timeout=10.0)
+    assert registry_exists.success, (
+        f"snippet registry not present on the target at {seed.registry_relpath} after the run -- the push did not land"
+    )
+    replayed = await target.run_command(f"test -f {seed.replay_marker}", login_shell=False, timeout=10.0)
+    assert replayed.success, (
+        f"marker {seed.replay_marker} absent on the target -- the pushed snippet was not replayed.\n{run_output}"
+    )
+
+    source_after = await capture_machine_package_state(source)
+    assert source_after == source_before, (
+        "the run changed the source's own package state: a sync must not change what software the source has, nor "
+        f"where it gets it from.\nbefore: {source_before}\nafter: {source_after}"
+    )
+
+
+def back_direction_decisions(seed: ConvergenceSeed) -> dict[str, Decision]:
+    """What the reverse-direction run is told, once `seed_the_back_direction` has run.
+
+    The round-trip package's removal and the ref are approved; the package the FORWARD run
+    installed is mapped SKIP_ALWAYS, which is what makes "it was never presented" readable
+    off the decision files. An APPLY there could not tell an item that is genuinely no longer
+    a diff from an item that was never raised, whereas a SKIP_ALWAYS leaves a decision-file
+    entry if and only if the item WAS presented.
+    """
+    return {
+        AptPackageItem(name=seed.round_trip_candidate, version="").item_id: Decision.APPLY,
+        AptPackageItem(name=seed.install_candidate, version="").item_id: Decision.SKIP_ALWAYS,
+        seed.ref_item_id: Decision.APPLY,
+    }
+
+
+async def seed_the_back_direction(
+    new_source: BashLoginRemoteExecutor, new_target: BashLoginRemoteExecutor, seed: ConvergenceSeed
+) -> None:
+    """Over the pair a converging run just left, set up the reverse direction: the user undoes
+    an install on the machine that is about to become the source, and that machine drops the
+    ref filter the forward run gave it.
+
+    The app comes off the new target as well, and only the app: a filter is converged as part
+    of writing the remote an approved ref DERIVES, so a reverse run over a fully converged
+    pair would have no ref item, derive no remote, and leave the filter alone for a reason
+    that has nothing to do with what the run is meant to show.
+    """
+    await ensure_installed_and_manual(new_target, seed.round_trip_candidate)
+    await asyncio.gather(
+        ensure_absent(new_source, seed.round_trip_candidate),
+        restore_flatpak_source_baseline(new_source, seed.remote_name, seed.scope, seed.recorded_filter_path),
+    )
+    assert await flatpak_remote_filter(new_source, seed.remote_name, seed.scope) is None, (
+        f"the new source's {seed.remote_name} still carries a ref filter, so the run cannot show a target-only one "
+        "coming off"
+    )
+    await new_target.run_command(
+        f"{seed.sudo}flatpak uninstall {seed.scope_flag} --assumeyes {shlex.quote(seed.application)}",
+        login_shell=False,
+        timeout=120.0,
+    )
+    assert await flatpak_remote_filter(new_target, seed.remote_name, seed.scope) == seed.recorded_filter_path, (
+        f"the new target's {seed.remote_name} lost its ref filter before the reverse run started; there is no "
+        "target-only filter to take off"
+    )
+
+
+async def assert_the_back_direction_converged(
+    new_source: BashLoginRemoteExecutor,
+    new_target: BashLoginRemoteExecutor,
+    seed: ConvergenceSeed,
+    before: MachinePackageState,
+) -> None:
+    """The reverse direction over the same pair: what the user undid comes back, a ref filter
+    the source dropped comes off the target, and NOTHING else on the target moves.
+
+    `before` is the new target's state as the forward run left it, so the expected state is
+    that one minus the round-trip package: the app this scenario uninstalls between the runs
+    is reinstalled by the run itself, and every other field must survive the round trip
+    untouched. A run that rewrote `/etc/apt`, re-revisioned a snap or dropped a hold on the
+    way past would be visible here and in nothing else.
+
+    The package the FORWARD run installed is the fixed-point witness: mapped SKIP_ALWAYS and
+    yet absent from both machines' decision files, which is state-based proof it was never
+    presented -- a converged item produces no diff at all. It is scoped to that one item on
+    purpose. Items still diverged between the two machines are legitimately presented again,
+    which is not what idempotency promises.
+    """
+    manual = nonblank_lines(
+        (await new_target.run_command("apt-mark showmanual", login_shell=False, timeout=15.0)).stdout
+    )
+    assert seed.round_trip_candidate not in manual, (
+        f"{seed.round_trip_candidate} is still manually installed on the new target -- the removal did not propagate "
+        "back across the reversed direction"
+    )
+
+    assert await flatpak_remote_filter(new_target, seed.remote_name, seed.scope) is None, (
+        f"the new target's {seed.remote_name} still carries a ref filter the source does not have -- the two "
+        "machines would never converge"
+    )
+    assert seed.application in [row[0] for row in await flatpak_app_rows(new_target)], (
+        f"{seed.application} was not reinstalled on the new target by the reverse run"
+    )
+
+    converged_item = AptPackageItem(name=seed.install_candidate, version="").item_id
+    source_entries, target_entries = await asyncio.gather(
+        DecisionFile("apt", new_source).load(), DecisionFile("apt", new_target).load()
+    )
+    assert converged_item not in source_entries and converged_item not in target_entries, (
+        f"{seed.install_candidate} was still presented in the reverse run's review (its SKIP_ALWAYS was recorded) "
+        "-- an item the forward run converged must produce no diff at all"
+    )
+
+    after = await capture_machine_package_state(new_target)
+    expected = replace(
+        before,
+        apt_manual=tuple(name for name in before.apt_manual if name != seed.round_trip_candidate),
+        apt_installed=tuple(name for name in before.apt_installed if name != seed.round_trip_candidate),
+    )
+    assert after == expected, (
+        "the reverse run moved something on the new target beyond the removal it was given.\n"
+        f"expected: {expected}\nactual: {after}"
+    )
+
+
+async def restore_after_the_divergence(
+    source: BashLoginRemoteExecutor, target: BashLoginRemoteExecutor, seed: ConvergenceSeed
+) -> None:
+    """Take back what a later scenario would otherwise inherit, and leave the package state
+    where the runs put it.
+
+    Holds, `/etc/apt` files, remotes, keyrings, markers and the replicated filter come off;
+    which revision the target ends on and which packages the runs moved are nobody's
+    precondition (`test_package_sync.py`'s module docstring, `snap_subjects`).
+    """
+    cleanup_paths = " ".join(
+        shlex.quote(f"{directory}/{filename}")
+        for directory, filename in (
+            (APT_SOURCES_DIR, seed.source_filename),
+            (APT_KEYRINGS_DIR, seed.key_filename),
+            (APT_PREFERENCES_DIR, seed.pin_filename),
+        )
+        if filename
+    )
+
+    async def clean_the_source() -> None:
+        await restore_flatpak_source_baseline(source, seed.remote_name, seed.scope, seed.filter_path)
+        # `;`, so the apt hold comes off even when the snap one is already gone.
+        await source.run_command(
+            f"sudo snap refresh --unhold {shlex.quote(seed.hold_snap)}; "
+            f"sudo apt-mark unhold {shlex.quote(seed.hold_subject)}",
+            login_shell=False,
+            timeout=90.0,
+        )
+        if cleanup_paths:
+            await source.run_command(f"sudo rm --force {cleanup_paths}", login_shell=False, timeout=15.0)
+        await remove_unowned_marker(source, seed.unowned_path)
+        await source.run_command(f"rm --force {seed.registry_relpath}", login_shell=False, timeout=15.0)
+        await restore_system_refresh_hold(source, seed.prior_source_hold)
+
+    async def clean_the_target() -> None:
+        if seed.recorded_filter_path:
+            # The replicated copy is pc-switcher's own write and lives outside anything
+            # `restore_flatpak_target_baseline` knows about.
+            await target.run_command(
+                f"rm --force {shlex.quote(seed.recorded_filter_path)}", login_shell=False, timeout=15.0
+            )
+        await target.run_command(
+            f"flatpak remote-delete {seed.scope_flag} --force {shlex.quote(seed.target_only_remote)} || true; "
+            f"rm --force {seed.target_only_keyring}",
+            login_shell=False,
+            timeout=60.0,
+        )
+        await restore_flatpak_target_baseline(target)
+        # `;`, so the apt hold comes off even when the snap one is already gone.
+        await target.run_command(
+            f"sudo snap refresh --unhold {shlex.quote(seed.hold_snap)}; "
+            f"sudo apt-mark unhold {shlex.quote(seed.hold_subject)}",
+            login_shell=False,
+            timeout=90.0,
+        )
+        if cleanup_paths:
+            await target.run_command(f"sudo rm --force {cleanup_paths}", login_shell=False, timeout=15.0)
+        await target.run_command(
+            f"rm --force {seed.replay_marker} {seed.registry_relpath}", login_shell=False, timeout=15.0
+        )
+        await restore_system_refresh_hold(target, seed.prior_target_hold)
+
+    await cleanup_in_parallel(clean_the_source(), clean_the_target())
