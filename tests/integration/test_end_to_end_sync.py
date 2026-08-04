@@ -393,7 +393,6 @@ class TestEndToEndSync:
     async def test_core_us_job_arch_as7_interrupt_terminates_job(
         self,
         sync_ready_source_long_duration: BashLoginRemoteExecutor,
-        pc2_executor: BashLoginRemoteExecutor,
     ) -> None:
         """Test CORE-US-JOB-ARCH-AS7: Ctrl+C terminates job with cleanup.
 
@@ -501,7 +500,6 @@ class TestEndToEndSync:
     async def test_core_edge_target_unreachable_mid_sync(
         self,
         pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
-        pc2_executor: BashLoginRemoteExecutor,
         reset_pcswitcher_state: None,
         pc1_to_pc2_traffic_blocker: Pc1ToPc2TrafficBlocker,
     ) -> None:
