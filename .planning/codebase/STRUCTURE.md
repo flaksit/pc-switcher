@@ -10,7 +10,7 @@ pc-switcher/
 │   ├── jobs/                # Job implementations + job base classes
 │   ├── schemas/             # JSON schema for config.yaml
 │   ├── *.filter             # rsync filter rule files shipped as package data
-│   └── *.yaml               # default config + example machine-packages
+│   └── default-config.yaml  # shipped default user config
 ├── tests/
 │   ├── unit/                # Default pytest run
 │   ├── unit_jobs/           # Extra unit tests kept outside tests/unit/jobs
@@ -69,7 +69,6 @@ pc-switcher/
 - `src/pcswitcher/default-config.yaml`: shipped default user config
 - `src/pcswitcher/schemas/config-schema.yaml`: config validation schema
 - `src/pcswitcher/home.filter`, `src/pcswitcher/root.filter`: rsync filter rules (no inline comments allowed — a trailing `#` becomes part of the pattern)
-- `src/pcswitcher/machine-packages.example.yaml`: example machine-specific package list
 
 **Core Logic:**
 - `src/pcswitcher/orchestrator.py`: session phases

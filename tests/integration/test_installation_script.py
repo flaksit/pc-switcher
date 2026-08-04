@@ -7,13 +7,14 @@ These tests run on VMs, not on development machine.
 
 **What these tests cover:**
 - install.sh works without prerequisites (fresh install)
+- install.sh installs uv when it is missing (the shared-install-logic path)
 - install.sh can install specific versions via VERSION parameter
 - install.sh can upgrade from older to newer versions
 - Version-specific installation matches expected behavior
 
 **What these tests do NOT cover:**
 - InstallOnTargetJob class methods (see jobs/test_install_on_target_job.py)
-- Config synchronization (see jobs/test_install_on_target_job.py)
+- Config synchronization (see test_config_sync.py)
 - Pre/post-sync operations (see test_snapshot_infrastructure.py, etc.)
 """
 
@@ -59,9 +60,8 @@ async def test_core_fr_install_script(
     executor = pc2_without_pcswitcher_fn
 
     # Note: We assume uv is already installed on the test VM for test infrastructure.
-    # The script should handle both cases (uv present and not present).
-    # Testing the "no uv" case would require uninstalling uv, which could break
-    # the test infrastructure.
+    # The script should handle both cases (uv present and not present); the "no uv"
+    # case is covered by test_core_us_install_as2_shared_install_logic below.
 
     # Run the installation script
     result = await executor.run_command(
@@ -95,6 +95,56 @@ async def test_core_fr_install_script(
     assert "pc-switcher init" in result.stdout, (
         "Installation output should include instructions to run 'pc-switcher init'"
     )
+
+
+async def test_core_us_install_as2_shared_install_logic(pc1_executor: BashLoginRemoteExecutor) -> None:
+    """CORE-US-INSTALL-AS2: Target install uses shared install logic - installs uv if missing.
+
+    Verifies that when target is missing uv, the install.sh script (used by
+    InstallOnTargetJob) successfully installs uv first, then pc-switcher.
+    This confirms target install and initial install share the same logic.
+
+    Runs on pc1 rather than the pc2 clean-target fixtures because it has to remove
+    uv itself, which no fixture does, and restore it afterwards.
+
+    Reference: docs/system/spec.md - CORE-US-INSTALL, Acceptance Scenario 2
+    """
+    # Save current uv installation state
+    uv_check = await pc1_executor.run_command("command -v uv")
+    had_uv = uv_check.success
+
+    # Uninstall uv to simulate missing prerequisite
+    await pc1_executor.run_command("rm --force ~/.local/bin/uv")
+
+    try:
+        # Run install.sh - this simulates what InstallOnTargetJob does
+        install_result = await pc1_executor.run_command(
+            f"curl --location --silent --show-error --fail {INSTALL_SCRIPT_URL} | bash",
+            timeout=180.0,
+        )
+
+        # Verify install succeeded
+        assert install_result.success, f"Install script failed: {install_result.stderr}"
+
+        # Verify uv was installed
+        uv_result = await pc1_executor.run_command("command -v uv")
+        assert uv_result.success, "uv should be installed by install.sh"
+        assert "/.local/bin/uv" in uv_result.stdout, "uv should be in ~/.local/bin"
+
+        # Verify pc-switcher was installed
+        pc_result = await pc1_executor.run_command("pc-switcher --version")
+        assert pc_result.success, "pc-switcher should be installed"
+        assert "pc-switcher" in pc_result.stdout.lower(), "Version output should mention pc-switcher"
+
+    finally:
+        # Cleanup: uninstall what install.sh put there. The uv tool is named after the
+        # package (`pcswitcher`), not after the `pc-switcher` command it provides.
+        # Tolerate failure: install.sh may have died before installing anything.
+        await pc1_executor.run_command("uv tool uninstall pcswitcher 2>/dev/null || true")
+
+        # Restore uv if it wasn't there before (leave system as we found it)
+        if not had_uv:
+            await pc1_executor.run_command("rm --force ~/.local/bin/uv")
 
 
 # Tests test_001_fr036_default_config_with_comments, test_001_us7_as1_install_script_fresh_machine,

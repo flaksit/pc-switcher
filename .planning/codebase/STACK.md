@@ -64,7 +64,7 @@
 **User config:**
 - `~/.config/pc-switcher/config.yaml` (`src/pcswitcher/config.py:214`), created by `pc-switcher init` from `src/pcswitcher/default-config.yaml`
 - Validated against `src/pcswitcher/schemas/config-schema.yaml`
-- Per-machine package declarations follow `src/pcswitcher/machine-packages.example.yaml`
+- Per-machine package decisions in `~/.config/pc-switcher/<manager>.decisions.yaml` (`src/pcswitcher/jobs/packages/state.py:85`), never synced
 
 **Runtime state:**
 - `~/.local/share/pc-switcher/logs/` (`src/pcswitcher/logger.py:336`)

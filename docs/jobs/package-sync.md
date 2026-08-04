@@ -203,7 +203,7 @@ Choosing the permanent answer — `<x>`, `keep for good` or `never <verb>` — m
 
 Which of the two machines it is written on is the one whose copy your answer keeps: an install you never want here is recorded on the machine that has it, and both a removal you refuse and an overwrite you refuse are recorded on the machine you are syncing *to* — its copy is the one the answer protects. An item both machines have is the case where that is not the machine the sync was launched from, so the mark still counts when a later sync is launched the other way round.
 
-The mark is recorded in that machine's own decision file at `~/.config/pc-switcher/<manager>.decisions.yaml` (one per manager: `apt.decisions.yaml`, `snap.decisions.yaml`, `flatpak.decisions.yaml`, `manual.decisions.yaml`). That file is **never synced** — it stays local to the machine it describes. An annotated example lives at [`src/pcswitcher/machine-packages.example.yaml`](../../src/pcswitcher/machine-packages.example.yaml).
+The mark is recorded in that machine's own decision file at `~/.config/pc-switcher/<manager>.decisions.yaml` (one per manager: `apt.decisions.yaml`, `snap.decisions.yaml`, `flatpak.decisions.yaml`, `manual.decisions.yaml`). That file is **never synced** — it stays local to the machine it describes.
 
 To un-mark something, delete its entry from the decision file (or delete the whole file to clear every machine-specific decision for that manager). The next sync treats the item as live again and re-offers it in the review.
 

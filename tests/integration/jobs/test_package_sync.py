@@ -24,21 +24,21 @@ config here sets `tui: DEBUG`, so a filename appearing SOMEWHERE in a run is no 
 of anything. `apt-cache rdepends` output is also read to pick a safe removal candidate
 before either machine's package state is touched.
 
-`TestPackageSyncWholeRunContracts` (plan 02-11) extends this same module with the
-phase's whole-run contracts -- properties of an entire sync (non-interactive skip-all,
-continue-on-item-failure, snap/flatpak convergence, skip-always inertness in both roles,
-per-manager review-before-own-mutation) that are invisible to any single item's
-mocked-executor unit test, reusing the fixture/teardown/candidate-selection
-conventions established below by the tracer.
+The classes below are SCENARIOS, not one claim each. A `pc-switcher sync` costs 30-40s of
+wall clock whatever it converges, so the number of runs is the whole cost of this module
+(#216) -- and claims that want the same shape of run share one. Each class states which
+premise its claims share, and each test's docstring lists every contract id it settles, so
+what is proven stays traceable to
+docs/dev/package-sync-scenario-coverage.md. Four shapes recur:
 
-`TestPackageSyncIdempotency`, `TestSnapHoldCaptureTiming`, `TestBlockStateDecisionRoundTrip`
-and `TestCrossDirectionRoundTrips` cover what only more than one run can show
-(docs/dev/package-sync-scenario-coverage.md N8, E71, N4, N5, N9, N13): that a converged pair is a fixed
-point, that a system-wide snapd `refresh.hold` does not mask the per-snap `held` note
-snap_sync reads inside that same window (#208 D9's promised VM check), that a
-skip-always recorded against a hold silences it in the next run, and that an install
-propagating one way and its removal propagating back the other are one continuous
-narrative. They reuse the fixture, teardown and candidate-selection conventions below.
+- a converging run over one seeded divergence PER MANAGER, rehearsed first and re-run
+  afterwards (`TestOneRunConvergesEveryManager`);
+- a run with nobody to ask, which applies nothing and is the only run that PRINTS every
+  review group (`TestARunWithNobodyToAsk`, `TestWhatFolderSyncMayAndMayNotCarry`);
+- a run sequence across both directions, carrying the removal-shaped claims that need a
+  real `apt-get remove` (`TestCrossDirectionRoundTrips`, `TestSkipAlwaysIsInertInBothRoles`);
+- runs that FAIL, ABORT or are KILLED, which no converging run can carry and which
+  therefore keep a sync each.
 
 The pure parsing/selection helpers below (`nonblank_lines`, `parse_dpkg_installed`,
 `parse_reverse_depends`, `parse_batched_rdepends`, `pick_safe_removal_candidate`) have no
@@ -52,8 +52,27 @@ none at all for flatpak (which is not installed). Those subjects are therefore C
 by provisioning and re-applied by the module-scoped `vm_test_fixtures` fixture. No test in
 this module declines to run for want of a subject: a missing subject is a broken machine
 and fails naming what is missing and which script creates it. apt subjects are still
-selected by querying the machines (any Debian system has hundreds), but an empty selection
-is likewise an assertion failure, never a skip.
+selected by querying the machines (any Debian system has hundreds), but once for the whole
+module rather than per test (`apt_subjects`, `_AptSubjects`), and an empty selection is
+likewise an assertion failure, never a skip.
+
+Preconditions, not teardown: a test states the package state it needs and converges to it
+(`_ensure_absent`, `_ensure_installed_and_manual` for apt, `_ensure_snaps_installed` behind
+`_snap_subjects`/`_holdable_snaps` for snap) instead of putting the machines back afterwards.
+What one scenario leaves behind is usually what the next one wanted anyway, so the converger
+reads and returns. Nobody restores the packages at the end either:
+`run-integration-tests.sh` replaces both VMs' subvolumes with their baseline btrfs
+snapshots and reboots before every run, which is what makes the machines identical run to
+run -- so a package left removed costs nothing and undoing it would.
+
+Cleanup that costs nothing -- `/etc/apt` files, markers, holds, `refresh.hold`, paths taken
+aside -- stays in each test's `finally`, and the `/etc/apt` half has to: a synthetic
+repository left configured makes every later `apt-get update` on that machine slower and
+noisier for the rest of the run. What a test INSTALLED is left installed. Every package built
+or fetched here is uuid-suffixed or comes from a repository the same test declared, so no
+later selection or assertion reaches it and the review lines it may raise are left unapproved
+by the automation hook's SKIP_ONCE default -- an `apt-get purge` would spend seconds of dpkg
+work undoing what the next run's baseline reset undoes anyway.
 
 The flatpak subject is the REAL Flathub, and its app is provisioned on pc1 only, so the
 source->target divergence the convergence test needs is part of the baseline rather than
@@ -66,9 +85,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import shlex
-from collections.abc import Mapping, Sequence
+import sys
+import time
+from collections.abc import Awaitable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Literal
@@ -89,6 +111,8 @@ from pcswitcher.jobs.packages.state import (
     SnippetRegistry,
 )
 from pcswitcher.models import CommandResult
+from tests.integration import SKIP_INSTALL_ON_TARGET
+from tests.integration.conftest import write_pcswitcher_config
 
 pytestmark = pytest.mark.area_package
 
@@ -104,17 +128,119 @@ async def _package_sync_subjects(vm_test_fixtures: None) -> None:  # pyright: ig
     _ = vm_test_fixtures
 
 
+#: Set to any non-empty value to have each test report where its wall clock went. Off by
+#: default: it wraps every command this module issues, and its only purpose is deciding what
+#: to optimise next (#216), not proving anything about the product.
+_TIMING_ENV = "PCSWITCHER_IT_TIMING"
+
+#: What a `pc-switcher sync` invocation looks like, for splitting the runs from everything a
+#: test does around them.
+_SYNC_COMMAND_MARKER = "pc-switcher sync"
+
+
+@pytest.fixture(autouse=True)
+def _report_where_the_time_went(request: pytest.FixtureRequest) -> Iterator[None]:  # pyright: ignore[reportUnusedFunction]
+    """Split each test's command time into the syncs it runs and the work it does around
+    them, and name the slowest individual commands.
+
+    A sync costs what it costs; everything else is setup, convergence and cleanup, which is
+    the only part a test can give back. Reading that split off a real run is what says which
+    of the two is worth attacking.
+
+    Command time, not wall clock: this module runs independent commands concurrently, so two
+    that overlap are each counted whole. What the totals rank is where the work is, which is
+    what they are for.
+    """
+    if not os.environ.get(_TIMING_ENV):
+        yield
+        return
+
+    original = BashLoginRemoteExecutor.run_command
+    samples: list[tuple[float, str]] = []
+
+    async def timed(self: BashLoginRemoteExecutor, command: str, *args: object, **kwargs: object) -> CommandResult:
+        started = time.monotonic()
+        try:
+            return await original(self, command, *args, **kwargs)  # pyright: ignore[reportCallIssue, reportArgumentType]
+        finally:
+            samples.append((time.monotonic() - started, command))
+
+    BashLoginRemoteExecutor.run_command = timed  # pyright: ignore[reportAttributeAccessIssue]
+    try:
+        yield
+    finally:
+        BashLoginRemoteExecutor.run_command = original  # pyright: ignore[reportAttributeAccessIssue]
+        syncs = [sample for sample in samples if _SYNC_COMMAND_MARKER in sample[1]]
+        around = [sample for sample in samples if _SYNC_COMMAND_MARKER not in sample[1]]
+        print(
+            f"\n[timing] {request.node.name}: "
+            f"{sum(d for d, _ in syncs):.1f}s in {len(syncs)} sync(s), "
+            f"{sum(d for d, _ in around):.1f}s in {len(around)} other command(s)",
+            file=sys.stderr,
+            flush=True,
+        )
+        for duration, command in sorted(around, reverse=True)[:5]:
+            print(f"[timing]     {duration:6.1f}s  {' '.join(command.split())[:110]}", file=sys.stderr, flush=True)
+
+
 # How many shared packages to probe for reverse dependencies when looking for one safe
-# to remove. Each probe is a separate `apt-cache rdepends` process on the target, so the
-# cost is linear and the whole probe runs under a single command timeout — bounding it
-# keeps the search well inside that budget while still offering far more candidates than
-# any test asks for.
-_RDEPENDS_PROBE_LIMIT = 40
+# to remove, per round and in total. Each probe is a separate `apt-cache rdepends` process
+# on the target reloading the apt cache, so the cost is linear and the whole probe runs
+# under a single command timeout: the total bounds the search inside that budget, and
+# probing a ROUND at a time means a search that succeeds immediately — which is every
+# search here so far — pays for one round instead of all of them (measured in a stock
+# `ubuntu:24.04`: 8.2s for 12 probes against 26.7s for 40).
+_RDEPENDS_PROBE_ROUND = 12
+_RDEPENDS_PROBE_LIMIT = 48
+
+# How many candidates beyond the requested count to rehearse, so apt refusing a few still
+# leaves enough. Every one costs an `apt-get --dry-run remove` on the target, and no test in
+# this module asks for more than three subjects.
+_REMOVAL_REHEARSAL_HEADROOM = 4
 
 
 def nonblank_lines(text: str) -> list[str]:
     """Split command output into stripped, non-empty lines."""
     return [line.strip() for line in text.splitlines() if line.strip()]
+
+
+async def _cleanup_in_parallel(*chains: Awaitable[None]) -> None:
+    """Run one cleanup chain per machine at the same time (#216).
+
+    Concurrency is safe because `BashLoginRemoteExecutor.run_command` opens its own asyncssh
+    channel per command and this module takes no lock, so two machines' cleanups genuinely
+    overlap; the ORDER inside one machine's chain is what each caller still owns.
+
+    `return_exceptions=True` is what keeps one chain's failure from cancelling the other
+    machine's, and what stops a cleanup failure from replacing the test's own error -- it is
+    printed instead, like every other tolerated cleanup failure here.
+    """
+    for outcome in await asyncio.gather(*chains, return_exceptions=True):
+        if isinstance(outcome, BaseException):
+            print(f"[cleanup] {outcome!r}")
+
+
+async def _finish_both[T, U](first: Awaitable[T], second: Awaitable[U]) -> tuple[T, U]:
+    """Run two things at once, let BOTH finish, then raise the first failure.
+
+    For the gathers whose result a `finally` needs. A plain `asyncio.gather` raises the moment
+    one side does and leaves the other RUNNING, unawaited: a test can reach its cleanup while a
+    command is still writing to a machine, and it never gets the tuple, so a handle the other
+    side already produced -- the repository to undeclare, the pair to take back -- is lost and
+    what it names stays on the machine.
+
+    Nothing is cancelled: an apt or snapd transaction stopped halfway leaves a machine worse
+    off than one that ran to the end, and the rest of the run has to live on that machine.
+
+    A caller whose cleanup needs a value from one side must still record it as it arrives
+    (`nonlocal`): a raise here means there is no tuple to unpack.
+    """
+    left, right = await asyncio.gather(first, second, return_exceptions=True)
+    if isinstance(left, BaseException):
+        raise left
+    if isinstance(right, BaseException):
+        raise right
+    return left, right
 
 
 # Every escape sequence `logger.RichFormatter` can emit around a log line's styled fields.
@@ -247,17 +373,54 @@ def _no_apt_candidate_message() -> str:
     )
 
 
+async def _apt_would_remove_these(executor: BashLoginRemoteExecutor, names: Sequence[str]) -> set[str]:
+    """Of `names`, the ones `executor`'s own apt would actually carry out a removal for --
+    one `apt-get --dry-run remove` each, batched into a single command
+    (testing-guide.md's command-grouping rule).
+
+    `pick_safe_removal_candidates` reads `apt-cache rdepends --installed` and rejects a
+    candidate whose reverse dependencies include a MANUALLY-installed package. That misses
+    the packages nothing marks manual and apt still refuses to let go: an essential one
+    (`bash` was the case that failed here) is a reverse dependency like any other, so a
+    candidate that takes one with it passes the rdepends check and then fails the real
+    removal. Only apt can settle that, so it is asked.
+
+    Individually safe implies safe together: a batch's removal closure is the union of the
+    single ones, so nothing here needs to rehearse the combination.
+    """
+    if not names:
+        return set()
+    quoted = " ".join(shlex.quote(name) for name in names)
+    result = await executor.run_command(
+        f'for p in {quoted}; do echo "{RDEPENDS_MARKER}$p"; '
+        'if apt-get --dry-run remove --assume-yes "$p" > /dev/null 2>&1; then echo SAFE; fi; done',
+        login_shell=False,
+        timeout=120.0,
+    )
+    safe: set[str] = set()
+    current = ""
+    for line in result.stdout.splitlines():
+        if line.startswith(RDEPENDS_MARKER):
+            current = line.removeprefix(RDEPENDS_MARKER)
+        elif line.strip() == "SAFE" and current:
+            safe.add(current)
+    return safe
+
+
 async def _find_removable_candidates(
     pc1_executor: BashLoginRemoteExecutor, pc2_executor: BashLoginRemoteExecutor, count: int = 1
 ) -> list[str]:
     """Query both VMs and pick up to `count` packages safe to remove from pc2 for a test
-    (see `pick_safe_removal_candidates`). Returns fewer than `count` -- possibly none --
-    when not enough candidates qualify.
+    (see `pick_safe_removal_candidates`, then `_apt_would_remove_these`). Returns fewer than
+    `count` -- possibly none -- when not enough candidates qualify.
     """
-    pc1_manual_result = await pc1_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0)
-    pc2_manual_result = await pc2_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0)
-    pc2_dpkg_result = await pc2_executor.run_command(
-        "dpkg-query --show --showformat='${Package}\\t${Status}\\n'", login_shell=False, timeout=20.0
+    # Three reads that write nothing and need nothing from each other, so they run at once.
+    pc1_manual_result, pc2_manual_result, pc2_dpkg_result = await asyncio.gather(
+        pc1_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0),
+        pc2_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0),
+        pc2_executor.run_command(
+            "dpkg-query --show --showformat='${Package}\\t${Status}\\n'", login_shell=False, timeout=20.0
+        ),
     )
 
     pc1_manual = nonblank_lines(pc1_manual_result.stdout)
@@ -268,33 +431,153 @@ async def _find_removable_candidates(
     if not initial_candidates:
         return []
 
-    # Probe only a bounded slice, not every shared package. Each loop iteration is its
-    # own `apt-cache rdepends` process reloading the apt cache, so probing the whole
-    # `apt-mark showmanual` intersection (~100-150 packages on these VMs) costs more
-    # wall-clock than the timeout allows — which is exactly how this helper timed out
-    # and took all six tests in this module with it. We only ever need `count` safe
-    # candidates, so a slice comfortably larger than `count` is sufficient; the
-    # docstring already allows returning fewer than requested.
-    probe_set = initial_candidates[:_RDEPENDS_PROBE_LIMIT]
+    reverse_deps_by_candidate: dict[str, set[str]] = {}
+    probed: set[str] = set()
+    rehearsed: set[str] = set()
+    confirmed: list[str] = []
+    for start in range(0, min(len(initial_candidates), _RDEPENDS_PROBE_LIMIT), _RDEPENDS_PROBE_ROUND):
+        this_round = initial_candidates[start : start + _RDEPENDS_PROBE_ROUND]
+        quoted = " ".join(shlex.quote(name) for name in this_round)
+        rdepends_result = await pc2_executor.run_command(
+            f'for p in {quoted}; do echo "{RDEPENDS_MARKER}$p"; apt-cache rdepends --installed "$p"; done',
+            login_shell=False,
+            timeout=120.0,
+        )
+        reverse_deps_by_candidate |= parse_batched_rdepends(rdepends_result.stdout)
+        probed |= set(this_round)
 
-    quoted = " ".join(shlex.quote(name) for name in probe_set)
-    rdepends_result = await pc2_executor.run_command(
-        f'for p in {quoted}; do echo "{RDEPENDS_MARKER}$p"; apt-cache rdepends --installed "$p"; done',
+        # `pick_safe_removal_candidates` walks the WHOLE intersection and reads an unprobed
+        # name as having no reverse dependency at all, so only probed names may be kept.
+        shortlist = [
+            name
+            for name in pick_safe_removal_candidates(
+                pc1_manual, pc2_installed, pc2_manual, reverse_deps_by_candidate, len(probed)
+            )
+            if name in probed and name not in rehearsed
+        ][: count - len(confirmed) + _REMOVAL_REHEARSAL_HEADROOM]
+
+        # apt's own verdict on each, because the rdepends check cannot see a candidate that
+        # takes an essential package with it (`_apt_would_remove_these`).
+        removable = await _apt_would_remove_these(pc2_executor, shortlist)
+        rehearsed |= set(shortlist)
+        confirmed += [name for name in shortlist if name in removable]
+        if len(confirmed) >= count:
+            break
+
+    return confirmed[:count]
+
+
+@dataclass(frozen=True)
+class _AptSubjects:
+    """The apt packages every test in this module operates on, selected ONCE for the whole
+    module by the `apt_subjects` fixture.
+
+    Pinned rather than rediscovered per test, for two reasons that both cost real wall
+    clock (#216). Selecting one costs a round of `apt-cache rdepends` plus an
+    `apt-get --dry-run remove` for each survivor, and six tests were each paying it. And a
+    pinned name is what lets a test converge to its precondition instead of restoring
+    afterwards: with a fresh selection each time, a package left removed simply drops out of
+    the `apt-mark showmanual` intersection and the next test picks the NEXT one down the
+    alphabet, so nothing is reused and the pool drains.
+
+    Snap and flatpak subjects have always been pinned this way (`_FIXTURE_SNAPS`,
+    `_FIXTURE_FLATPAK_APP`); apt's were discovered only because any Debian system offers
+    hundreds, never because a test needed them to vary.
+    """
+
+    #: Packages a test may remove from the TARGET so the run has an install to converge.
+    #: Three, because the one run proving a failing item does not stop the job needs three
+    #: independent apt items.
+    install_direction: tuple[str, str, str]
+    #: A package a test may remove from the SOURCE, so the run has a removal to converge.
+    #: Vetted against pc2 like the others: the two VMs come from one baseline, so a package
+    #: safe to remove there is safe to remove here.
+    removal_direction: str
+    #: Installed at the same version on both machines and held on neither, so holding it on
+    #: the source is a run's only apt work for it.
+    hold: str
+
+
+@pytest.fixture(scope="module")
+async def apt_subjects(pc1_executor: BashLoginRemoteExecutor, pc2_executor: BashLoginRemoteExecutor) -> _AptSubjects:
+    """Select this module's apt subjects once, before any test has touched a package, so
+    the selection sees the machines as provisioning left them.
+
+    Nothing is put back. `run-integration-tests.sh` replaces both VMs' subvolumes with
+    their baseline btrfs snapshots and reboots before every run, so where these packages end
+    up is not something this module owes the machines; restoring them would be ~36s spent
+    undoing what the next run's reset undoes anyway. Within a run each test converges to the
+    state IT needs (`_ensure_absent`, `_ensure_installed_and_manual`), which is a read
+    whenever the previous scenario already left it that way.
+
+    Under `--skip-reset`, where a developer keeps the machines between runs, the next run
+    simply selects again from what is installed then. Subjects left removed drop out of that
+    selection rather than breaking it -- and if enough runs drain the candidates,
+    `_no_apt_candidate_message` says so instead of failing obscurely.
+    """
+    picked = await _find_removable_candidates(pc1_executor, pc2_executor, count=4)
+    assert len(picked) == 4, f"{_no_apt_candidate_message()} Needed 4 subjects, found {len(picked)}."
+    return _AptSubjects(
+        install_direction=(picked[0], picked[1], picked[2]),
+        removal_direction=picked[3],
+        hold=await _a_package_both_machines_have_unheld(pc1_executor, pc2_executor, exclude=frozenset(picked)),
+    )
+
+
+# Splits the two reads `_ensure_installed_and_manual` issues as one command.
+_SUBJECT_STATE_MARKER = "@@PCSWITCHER_IT_SUBJECT@@"
+
+
+async def _subject_state(executor: BashLoginRemoteExecutor, name: str) -> tuple[bool, bool]:
+    """`(fully installed, marked manual)` for `name` on `executor`'s machine, in one command.
+
+    `apt-mark showmanual <name>` rather than the whole manual set: it answers about the one
+    package, which is all a converger needs and a fraction of the cost.
+    """
+    quoted = shlex.quote(name)
+    result = await executor.run_command(
+        f"dpkg-query --show --showformat='${{Status}}' {quoted}; echo; echo {_SUBJECT_STATE_MARKER}; "
+        f"apt-mark showmanual {quoted}",
+        login_shell=False,
+        timeout=20.0,
+    )
+    status_block, _, manual_block = result.stdout.partition(_SUBJECT_STATE_MARKER)
+    return status_block.strip() == "install ok installed", name in nonblank_lines(manual_block)
+
+
+async def _ensure_absent(executor: BashLoginRemoteExecutor, name: str) -> None:
+    """Make `name` absent from `executor`'s machine, doing nothing when it already is.
+
+    The read is what makes a scenario that inherits the state it wanted pay nothing
+    (measured on a test VM: the read is hundredths of a second against 6.5s for the
+    removal).
+    """
+    installed, _manual = await _subject_state(executor, name)
+    if not installed:
+        return
+    result = await executor.run_command(
+        f"sudo DEBIAN_FRONTEND=noninteractive apt-get remove --assume-yes {shlex.quote(name)}",
         login_shell=False,
         timeout=120.0,
     )
-    reverse_deps_by_candidate = parse_batched_rdepends(rdepends_result.stdout)
-
-    return pick_safe_removal_candidates(pc1_manual, pc2_installed, pc2_manual, reverse_deps_by_candidate, count)
+    assert result.success, f"Failed to remove {name}: {result.stderr}"
 
 
-async def _removable_candidate(pc1_executor: BashLoginRemoteExecutor, pc2_executor: BashLoginRemoteExecutor) -> str:
-    """Query both VMs and pick a package safe to remove from pc2 for this test (see
-    `pick_safe_removal_candidate`).
+async def _ensure_installed_and_manual(executor: BashLoginRemoteExecutor, name: str) -> None:
+    """Make `name` installed and marked manual on `executor`'s machine, doing nothing when
+    it already is (the counterpart of `_ensure_absent`, 8.2s when it has to act).
     """
-    found = await _find_removable_candidates(pc1_executor, pc2_executor, count=1)
-    assert found, _no_apt_candidate_message()
-    return found[0]
+    installed, manual = await _subject_state(executor, name)
+    if installed and manual:
+        return
+    quoted = shlex.quote(name)
+    result = await executor.run_command(
+        f"sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes {quoted} && sudo apt-mark manual {quoted}",
+        login_shell=False,
+        timeout=120.0,
+    )
+    if not result.success:
+        print(f"[converge] failed to restore {name}: {result.stderr}")
 
 
 async def _create_extra_on_target_apt_package(
@@ -311,10 +594,13 @@ async def _create_extra_on_target_apt_package(
     changes what apt_sync captures without changing what is on the disk. Reversed with
     `_restore_auto_marked_package`.
     """
-    pc1_manual_result = await pc1_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0)
-    pc2_manual_result = await pc2_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0)
-    pc2_dpkg_result = await pc2_executor.run_command(
-        "dpkg-query --show --showformat='${Package}\\t${Status}\\n'", login_shell=False, timeout=20.0
+    # Three reads that write nothing and need nothing from each other, so they run at once.
+    pc1_manual_result, pc2_manual_result, pc2_dpkg_result = await asyncio.gather(
+        pc1_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0),
+        pc2_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0),
+        pc2_executor.run_command(
+            "dpkg-query --show --showformat='${Package}\\t${Status}\\n'", login_shell=False, timeout=20.0
+        ),
     )
     pc1_manual = set(nonblank_lines(pc1_manual_result.stdout))
     pc2_manual = set(nonblank_lines(pc2_manual_result.stdout))
@@ -374,11 +660,15 @@ def _package_sync_test_config(*, extra_sections: str = "", **enabled_jobs: bool)
     )
 
 
-def _folder_sync_section(folder_path: str) -> str:
-    """A `folder_sync` config section mirroring exactly `folder_path`, with no central
+def _folder_sync_section(*folder_paths: str) -> str:
+    """A `folder_sync` config section mirroring exactly `folder_paths`, with no central
     filter file (the schema makes `filter_file` optional).
+
+    Every path in ONE section: `folder_sync` is a mapping key, so two sections would make
+    the config a YAML document with a duplicate key and the run would end before any job.
     """
-    return f"folder_sync:\n  folders:\n    - path: {folder_path}\n      enabled: true\n"
+    folders = "".join(f"    - path: {path}\n      enabled: true\n" for path in folder_paths)
+    return f"folder_sync:\n  folders:\n{folders}"
 
 
 async def _write_package_sync_config(
@@ -387,13 +677,7 @@ async def _write_package_sync_config(
     """Write a package-sync test config enabling exactly `enabled_jobs` to `executor`
     (always the machine acting as source for the sync under test).
     """
-    config = _package_sync_test_config(extra_sections=extra_sections, **enabled_jobs)
-    result = await executor.run_command(
-        f"mkdir --parents ~/.config/pc-switcher"
-        f" && cat > ~/.config/pc-switcher/config.yaml << 'CONF_EOF'\n{config}CONF_EOF",
-        timeout=10.0,
-    )
-    assert result.success, f"Failed to write package-sync test config: {result.stderr}"
+    await write_pcswitcher_config(executor, _package_sync_test_config(extra_sections=extra_sections, **enabled_jobs))
 
 
 async def _write_apt_sync_config(executor: BashLoginRemoteExecutor) -> None:
@@ -408,20 +692,6 @@ async def _decision_file_exists(executor: BashLoginRemoteExecutor, manager: str)
     relpath = shlex.quote(DECISION_FILE_RELPATH_TEMPLATE.format(manager=manager))
     result = await executor.run_command(f"test -f ~/{relpath}", login_shell=False, timeout=10.0)
     return result.success
-
-
-async def _restore_package(executor: BashLoginRemoteExecutor, name: str) -> None:
-    """Idempotently ensure `name` is installed and marked manual on pc2, regardless of
-    test outcome -- the test must not leave pc2's package state changed.
-    """
-    quoted = shlex.quote(name)
-    result = await executor.run_command(
-        f"sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes {quoted} && sudo apt-mark manual {quoted}",
-        login_shell=False,
-        timeout=120.0,
-    )
-    if not result.success:
-        print(f"[cleanup] failed to restore {name} on pc2: {result.stderr}")
 
 
 def _automation_env_assignment_multi(decisions_by_item_id: Mapping[str, Decision]) -> str:
@@ -446,12 +716,14 @@ def _automation_env_assignment(item_id: str) -> str:
 
 
 # ---------------------------------------------------------------------------------
-# test_continue_on_item_failure: three "unowned install" snippets authored directly
-# into pc1's registry (D-18/D-20/D-21) -- two that genuinely `apt-get install` a real
-# package, one that deliberately exits non-zero. `ManualInstallsSyncJob._scan_unowned_installs`
-# sorts its findings alphabetically by path, which is what places the failing item
-# strictly BETWEEN the two installs in convergence order (a < b < c below), so
-# "the item after the failure was still processed" is a real, ordered claim.
+# `TestAFailureCostsItsOwnItemAndNothingElse`: three "unowned install" snippets authored
+# directly into pc1's registry (D-18/D-20/D-21) -- two that genuinely `apt-get install` a
+# real package, one that deliberately exits non-zero.
+# `ManualInstallsSyncJob._scan_unowned_installs` sorts its findings alphabetically by path,
+# which is what places the failing item strictly BETWEEN the two installs in convergence
+# order (a < b < c below), so "the item after the failure was still processed" is a real,
+# ordered claim. `manual_installs_sync` is ordered FIRST in that test's config, so the same
+# snippet is also what fails BEFORE the three jobs whose work the test then checks survived.
 # ---------------------------------------------------------------------------------
 
 _CONTINUE_TEST_MARKER_ROOT = "/opt"
@@ -463,13 +735,7 @@ _CONTINUE_TEST_MARKERS = (
     _CONTINUE_TEST_MARKER_FAIL,
     _CONTINUE_TEST_MARKER_INSTALL_SECOND,
 )
-
-# The same device for `test_one_failing_job_leaves_the_other_jobs_work_intact`: one
-# deliberately-failing snippet, under its own marker path so the two tests can never see
-# each other's items. `manual_installs_sync` is ordered FIRST in that test's config, so
-# this is what fails BEFORE the three jobs whose work the test then checks survived.
-_WHOLE_RUN_FAILURE_MARKER = f"{_CONTINUE_TEST_MARKER_ROOT}/pcswitcher-it-whole-run-fail"
-_WHOLE_RUN_FAILURE_MESSAGE = "deliberate whole-run integration-test failure"
+_DELIBERATE_FAILURE_MESSAGE = "deliberate integration-test failure"
 
 
 # What a stock Ubuntu 24.04 machine's own `/usr/local` holds — the two scan roots plus the
@@ -592,27 +858,59 @@ def parse_snap_info_revisions(output: str) -> set[str]:
     return set(_SNAP_INFO_REVISION_RE.findall(output))
 
 
+def _fixture_snap_names(count: int) -> list[str]:
+    """The first `count` fixture snaps outside `_SNAP_REMOVAL_DENYLIST` (T-02-28: never a
+    base/snapd runtime everything else depends on).
+    """
+    subjects = [name for name in _FIXTURE_SNAPS if name not in _SNAP_REMOVAL_DENYLIST][:count]
+    assert len(subjects) == count, (
+        f"Need {count} subjects out of the fixture snaps {_FIXTURE_SNAPS}, of which "
+        f"{sorted(set(_FIXTURE_SNAPS) & _SNAP_REMOVAL_DENYLIST)} may never be one."
+    )
+    return subjects
+
+
+async def _ensure_snaps_installed(executor: BashLoginRemoteExecutor, names: Sequence[str]) -> None:
+    """Make every one of `names` installed on `executor`'s machine, doing nothing about the
+    ones that already are -- the snap counterpart of `_ensure_installed_and_manual`.
+
+    One `snap list --all` decides for all of them, so a machine that has them pays a single
+    read (measured: hundredths of a second against seconds for an install).
+
+    At whatever revision the store offers, exactly as the fixture script installs them: the
+    tests that need a particular revision read it off the machines and diverge to it
+    themselves.
+    """
+    result = await executor.run_command("snap list --all", login_shell=False, timeout=20.0)
+    installed = set(parse_snap_list_names_revisions(result.stdout))
+    for name in names:
+        if name in installed:
+            continue
+        created = await executor.run_command(
+            f"sudo snap install {shlex.quote(name)}", login_shell=False, timeout=300.0
+        )
+        assert created.success, (
+            f"Failed to install the fixture snap {name}, so this scenario has no subject to work on. The fixture "
+            f"snaps are created by tests/integration/scripts/internal/vm-test-fixtures.sh.\n{created.stderr}"
+        )
+
+
 async def _snap_subjects(
     pc1_executor: BashLoginRemoteExecutor, pc2_executor: BashLoginRemoteExecutor, count: int = 1
 ) -> list[str]:
-    """The first `count` fixture snaps (`_FIXTURE_SNAPS`) confirmed installed on BOTH
-    machines and outside `_SNAP_REMOVAL_DENYLIST` (T-02-28: never a base/snapd runtime
-    everything else depends on).
+    """The first `count` fixture snaps (`_FIXTURE_SNAPS`), converged to installed on BOTH
+    machines.
 
-    Confirmed rather than assumed: the fixture script guarantees they are there, and
-    this reads both machines' `snap list --all` so a machine that somehow lacks one
-    fails naming it instead of failing later inside the sync under test.
+    Converged rather than asserted, for the reason the module docstring gives for the apt
+    subjects: a scenario here removes a snap when its claim needs one removed and puts nothing
+    back, so getting the machines to "installed on both" belongs to whoever needs it next
+    rather than to whoever last touched it. The read `_ensure_snaps_installed` makes is what
+    keeps that free whenever the previous scenario already left them installed.
     """
-    pc1_list = await pc1_executor.run_command("snap list --all", login_shell=False, timeout=20.0)
-    pc2_list = await pc2_executor.run_command("snap list --all", login_shell=False, timeout=20.0)
-    installed_on_both = (
-        set(parse_snap_list_names_revisions(pc1_list.stdout)) & set(parse_snap_list_names_revisions(pc2_list.stdout))
-    ) - _SNAP_REMOVAL_DENYLIST
-    subjects = [name for name in _FIXTURE_SNAPS if name in installed_on_both][:count]
-    assert len(subjects) == count, (
-        f"Need {count} of the fixture snaps {_FIXTURE_SNAPS} installed on both machines, "
-        f"found {sorted(installed_on_both)}. They are created by "
-        "tests/integration/scripts/internal/vm-test-fixtures.sh."
+    subjects = _fixture_snap_names(count)
+    # One machine's snapd knows nothing of the other's, so both converge at once.
+    _ = await asyncio.gather(
+        _ensure_snaps_installed(pc1_executor, subjects), _ensure_snaps_installed(pc2_executor, subjects)
     )
     return subjects
 
@@ -717,24 +1015,6 @@ async def _snap_revision(executor: BashLoginRemoteExecutor, name: str) -> str | 
     """The revision `name` is active at on `executor`'s machine, or None when it is absent."""
     result = await executor.run_command("snap list --all", login_shell=False, timeout=20.0)
     return parse_snap_list_names_revisions(result.stdout).get(name)
-
-
-async def _restore_snap(executor: BashLoginRemoteExecutor, name: str, revision: str) -> None:
-    """Idempotently put `name` back at `revision` on `executor`'s machine, whether the test
-    removed it or moved it: install when absent, refresh when present at another revision.
-
-    Same shape as the snap restore the whole-run tests already use, in one command so the
-    two cases cost one SSH round trip rather than a read plus a write.
-    """
-    quoted = shlex.quote(name)
-    rev = shlex.quote(revision)
-    result = await executor.run_command(
-        f"sudo snap install --revision={rev} {quoted} || sudo snap refresh --revision={rev} {quoted}",
-        login_shell=False,
-        timeout=300.0,
-    )
-    if not result.success:
-        print(f"[cleanup] failed to restore snap {name} at revision {revision}: {result.stderr}")
 
 
 # A sideloaded snap needs a base its machine already has, or snapd downloads one. Read off
@@ -891,19 +1171,16 @@ async def _restore_system_refresh_hold(executor: BashLoginRemoteExecutor, prior:
 
 
 async def _holdable_snaps(executor: BashLoginRemoteExecutor, count: int = 1) -> list[str]:
-    """The first `count` fixture snaps confirmed on `executor`'s machine and outside
-    `_SNAP_REMOVAL_DENYLIST` -- safe subjects for a per-snap `--hold`/`--unhold` round
-    trip (which, unlike a removal, leaves the snap itself untouched).
+    """The first `count` fixture snaps, converged to installed on `executor`'s machine --
+    safe subjects for a per-snap `--hold`/`--unhold` round trip (which, unlike a removal,
+    leaves the snap itself untouched).
 
-    One-machine variant of `_snap_subjects`, for the tests that never run a sync.
+    One-machine variant of `_snap_subjects`, for the tests that never run a sync. It converges
+    for the same reason: the scenarios before this one leave the fixture snaps wherever their
+    own claims needed them.
     """
-    result = await executor.run_command("snap list --all", login_shell=False, timeout=20.0)
-    installed = set(parse_snap_list_names_revisions(result.stdout)) - _SNAP_REMOVAL_DENYLIST
-    subjects = [name for name in _FIXTURE_SNAPS if name in installed][:count]
-    assert len(subjects) == count, (
-        f"Need {count} of the fixture snaps {_FIXTURE_SNAPS} installed, found {sorted(installed)}. "
-        "They are created by tests/integration/scripts/internal/vm-test-fixtures.sh."
-    )
+    subjects = _fixture_snap_names(count)
+    await _ensure_snaps_installed(executor, subjects)
     return subjects
 
 
@@ -1222,7 +1499,7 @@ async def _install_from_a_repo_the_target_lacks(executor: BashLoginRemoteExecuto
     built = await executor.run_command(build, login_shell=False, timeout=60.0)
     assert built.success, f"Failed to build the synthetic repository on the source: {built.stderr}"
 
-    updated = await _apt_get_update(executor)
+    updated = await _apt_get_update_for(executor, f"{_APT_SOURCES_DIR}/{list_filename}")
     assert updated.success, f"apt-get update failed on the source after adding {repo_dir}: {updated.stderr}"
 
     installed = await executor.run_command(
@@ -1234,22 +1511,24 @@ async def _install_from_a_repo_the_target_lacks(executor: BashLoginRemoteExecuto
     return name, repo_dir, list_filename
 
 
-async def _remove_local_repo_package(
-    executor: BashLoginRemoteExecutor, name: str, repo_dir: str, list_filename: str
-) -> None:
-    """Undo `_install_from_a_repo_the_target_lacks`: purge the package, drop the repository
-    and its declaration, and discard the index apt cached for it.
+async def _undeclare_local_repository(executor: BashLoginRemoteExecutor, repo_dir: str, list_filename: str) -> None:
+    """Take a test-built `file:` repository off `executor`'s machine: its declaration, the
+    published tree, and the index apt cached for it.
+
+    The packages installed FROM it stay installed (module docstring). The declaration is what
+    every later `apt-get update` on the machine pays for and taking it off is a `rm`; the
+    purge is dpkg work nothing later reads. The tree goes with it because it sits under
+    `/opt`, one of `manual_installs_sync`'s scan roots.
 
     Every step runs unconditionally (`;`, not `&&`) so a setup that failed halfway still
     has the rest of itself removed.
     """
     await executor.run_command(
-        f"sudo DEBIAN_FRONTEND=noninteractive apt-get purge --assume-yes {shlex.quote(name)}; "
         f"sudo rm --force --recursive {shlex.quote(repo_dir)} "
         f"{shlex.quote(f'{_APT_SOURCES_DIR}/{list_filename}')}; "
         f"sudo rm --force /var/lib/apt/lists/_opt_{repo_dir.rsplit('/', 1)[-1]}_*",
         login_shell=False,
-        timeout=120.0,
+        timeout=60.0,
     )
 
 
@@ -1371,6 +1650,32 @@ async def _apt_get_update(executor: BashLoginRemoteExecutor) -> CommandResult:
     )
 
 
+async def _apt_get_update_for(executor: BashLoginRemoteExecutor, source_path: str) -> CommandResult:
+    """Refresh the index of the repository `source_path` declares, and of nothing else.
+
+    A test that has just written one repository file needs apt to notice THAT repository;
+    a plain `apt-get update` also refetches every Ubuntu archive index over the network,
+    which several setups here were paying for a purely local `file:` repository (#216).
+    Measured in a stock `ubuntu:24.04`: 0.02s against 0.78s with warm archives, in both the
+    one-line and the deb822 file format, after which the repository's package installs.
+
+    `sourceparts` rather than `sourcelist` because it is the one that reads both formats;
+    `List-Cleanup=0` because without it apt prunes the cached lists of every repository this
+    run did not visit, and the next operation would have to fetch them all back.
+    """
+    quoted = shlex.quote(source_path)
+    return await executor.run_command(
+        "narrow=$(mktemp --directory) && "
+        f'sudo cp {quoted} "$narrow/" && '
+        "sudo LC_ALL=C DEBIAN_FRONTEND=noninteractive apt-get update"
+        ' -o Dir::Etc::sourcelist=/dev/null -o Dir::Etc::sourceparts="$narrow"'
+        " -o APT::Get::List-Cleanup=0; "
+        'status=$?; rm --recursive --force "$narrow"; exit $status',
+        login_shell=False,
+        timeout=180.0,
+    )
+
+
 def apt_update_lines_naming(result: CommandResult, host: str) -> list[str]:
     """Every line of an `apt-get update` run (stdout and stderr together) that names
     `host`.
@@ -1456,32 +1761,38 @@ async def _capture_machine_package_state(executor: BashLoginRemoteExecutor) -> _
 
     Both flatpak scopes are read, because a job writes remotes in whichever scope an
     approved application came from.
+
+    All seven run at once: every one of them is read-only and none needs another's answer, so
+    the capture costs one round trip rather than seven -- and this is the read a whole-state
+    comparison takes twice per run (#216).
     """
-    manual = await executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0)
-    held = await executor.run_command("apt-mark showhold", login_shell=False, timeout=15.0)
-    dpkg = await executor.run_command(
-        "dpkg-query --show --showformat='${Package}\\t${Status}\\n'", login_shell=False, timeout=20.0
-    )
-    etc_apt = await executor.run_command(
-        "; ".join(
-            f"if sudo test -d {shlex.quote(directory)}; then "
-            f"sudo find {shlex.quote(directory)} -maxdepth 1 -type f -exec sha256sum {{}} +; fi"
-            for directory in _APT_STATE_DIRS
+    manual, held, dpkg, etc_apt, snaps, flatpaks, remotes = await asyncio.gather(
+        executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0),
+        executor.run_command("apt-mark showhold", login_shell=False, timeout=15.0),
+        executor.run_command(
+            "dpkg-query --show --showformat='${Package}\\t${Status}\\n'", login_shell=False, timeout=20.0
         ),
-        login_shell=False,
-        timeout=30.0,
+        executor.run_command(
+            "; ".join(
+                f"if sudo test -d {shlex.quote(directory)}; then "
+                f"sudo find {shlex.quote(directory)} -maxdepth 1 -type f -exec sha256sum {{}} +; fi"
+                for directory in _APT_STATE_DIRS
+            ),
+            login_shell=False,
+            timeout=30.0,
+        ),
+        executor.run_command("snap list --all", login_shell=False, timeout=20.0),
+        executor.run_command(
+            "flatpak list --app --columns=application,version,origin,installation,ref", login_shell=False, timeout=20.0
+        ),
+        executor.run_command(
+            "flatpak remotes --user --columns=name,url,options,filter; "
+            "flatpak remotes --system --columns=name,url,options,filter",
+            login_shell=False,
+            timeout=20.0,
+        ),
     )
     assert etc_apt.success, f"Failed to read /etc/apt digests: {etc_apt.stderr}"
-    snaps = await executor.run_command("snap list --all", login_shell=False, timeout=20.0)
-    flatpaks = await executor.run_command(
-        "flatpak list --app --columns=application,version,origin,installation,ref", login_shell=False, timeout=20.0
-    )
-    remotes = await executor.run_command(
-        "flatpak remotes --user --columns=name,url,options,filter; "
-        "flatpak remotes --system --columns=name,url,options,filter",
-        login_shell=False,
-        timeout=20.0,
-    )
     return _MachinePackageState(
         apt_manual=tuple(sorted(nonblank_lines(manual.stdout))),
         apt_held=tuple(sorted(nonblank_lines(held.stdout))),
@@ -1493,1512 +1804,105 @@ async def _capture_machine_package_state(executor: BashLoginRemoteExecutor) -> _
     )
 
 
-class TestAptSyncEndToEnd:
-    """VM-level proof of plan 02-03's tracer path: a package missing on pc2 travels
-    source capture -> target query -> diff -> apt_sync's own batched review ->
-    `apt-get install` on pc2 -- proven against pc2's own package manager, never against
-    pc-switcher's log text.
+# -- apt selection state, for the tests that read `apt-mark` rather than a transaction ---
+
+# Splits several reads issued as ONE command back into their own outputs
+# (testing-guide.md's command-grouping rule). Chosen so no apt or dpkg output can contain
+# it.
+_SECTION_MARKER = "@@PCSWITCHER_IT_SECTION@@"
+
+
+async def _apt_selection_snapshot(
+    executor: BashLoginRemoteExecutor,
+) -> tuple[set[str], set[str], dict[str, str]]:
+    """One machine's `(manual set, hold set, {package: installed version})`, read in ONE
+    command (testing-guide.md's command-grouping rule).
     """
-
-    async def test_apt_sync_installs_missing_package(
-        self,
-        pc1_executor: BashLoginRemoteExecutor,
-        pc2_executor: BashLoginRemoteExecutor,
-        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
-        pc2_with_pcswitcher: BashLoginRemoteExecutor,
-        reset_pcswitcher_state: None,
-    ) -> None:
-        """J1, K9 — A real `pc-switcher sync pc2` reinstalls a package removed from pc2, proven by
-        pc2's own `apt-mark showmanual` (never pc-switcher's log output).
-        """
-        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
-
-        candidate = await _removable_candidate(pc1_executor, pc2_executor)
-
-        try:
-            remove_result = await pc2_executor.run_command(
-                f"sudo DEBIAN_FRONTEND=noninteractive apt-get remove --assume-yes {shlex.quote(candidate)}",
-                login_shell=False,
-                timeout=120.0,
-            )
-            assert remove_result.success, f"Failed to remove {candidate} from pc2: {remove_result.stderr}"
-
-            after_removal = await pc2_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0)
-            assert candidate not in nonblank_lines(after_removal.stdout), (
-                f"{candidate} still in pc2's apt-mark showmanual after removal"
-            )
-
-            await _write_apt_sync_config(pc1_executor)
-
-            item_id = AptPackageItem(name=candidate, version="").item_id
-            sync_cmd = f"{_automation_env_assignment(item_id)} pc-switcher sync pc2 --yes --allow-first-sync"
-            sync_result = await pc1_executor.run_command(sync_cmd, timeout=180.0, login_shell=True)
-            assert sync_result.success, (
-                f"pc-switcher sync exited {sync_result.exit_code}.\n"
-                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
-            )
-
-            restored = await pc2_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0)
-            assert candidate in nonblank_lines(restored.stdout), (
-                f"{candidate} not reinstalled on pc2 after sync.\n"
-                f"sync stdout: {sync_result.stdout}\nsync stderr: {sync_result.stderr}"
-            )
-        finally:
-            await _restore_package(pc2_executor, candidate)
-
-    async def test_apt_sync_dry_run_changes_nothing(
-        self,
-        pc1_executor: BashLoginRemoteExecutor,
-        pc2_executor: BashLoginRemoteExecutor,
-        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
-        pc2_with_pcswitcher: BashLoginRemoteExecutor,
-        reset_pcswitcher_state: None,
-    ) -> None:
-        """J58, J59 — `--dry-run` with the same automation mapping leaves pc2's `apt-mark showmanual`
-        byte-identical before and after -- ADR-014's read-only preview contract for a
-        package job.
-        """
-        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
-
-        candidate = await _removable_candidate(pc1_executor, pc2_executor)
-
-        try:
-            remove_result = await pc2_executor.run_command(
-                f"sudo DEBIAN_FRONTEND=noninteractive apt-get remove --assume-yes {shlex.quote(candidate)}",
-                login_shell=False,
-                timeout=120.0,
-            )
-            assert remove_result.success, f"Failed to remove {candidate} from pc2: {remove_result.stderr}"
-
-            await _write_apt_sync_config(pc1_executor)
-
-            before = await pc2_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0)
-            assert before.success, f"Failed to read pc2's apt-mark showmanual: {before.stderr}"
-
-            item_id = AptPackageItem(name=candidate, version="").item_id
-            sync_cmd = f"{_automation_env_assignment(item_id)} pc-switcher sync pc2 --yes --dry-run"
-            sync_result = await pc1_executor.run_command(sync_cmd, timeout=180.0, login_shell=True)
-            assert sync_result.success, (
-                f"pc-switcher sync --dry-run exited {sync_result.exit_code}.\n"
-                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
-            )
-
-            after = await pc2_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0)
-            assert after.stdout == before.stdout, (
-                "--dry-run changed pc2's apt-mark showmanual output (ADR-014 violation).\n"
-                f"before:\n{before.stdout}\nafter:\n{after.stdout}"
-            )
-        finally:
-            await _restore_package(pc2_executor, candidate)
-
-    async def test_apt_repository_state_dry_run_previews_derived_writes_and_reviews_no_repository(
-        self,
-        pc1_executor: BashLoginRemoteExecutor,
-        pc2_executor: BashLoginRemoteExecutor,
-        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
-        pc2_with_pcswitcher: BashLoginRemoteExecutor,
-        reset_pcswitcher_state: None,
-    ) -> None:
-        """A65, C2, C165, C168, C169, J53, J116 — ADR-020 D-37/D-38 at VM level, in both directions at once.
-
-        The synthetic repository the source has and the target lacks feeds NO package this
-        run syncs, so under derivation it does not travel and it is not a review line
-        either — ruling 4 working as intended, and the property a unit test can only assert
-        against a mocked `/etc/apt`. The synthetic PIN beside it is in the always-sync
-        bucket, so it travels with no review line at all, which is what the preview has to
-        report for `--dry-run` to remain the whole truth about a run (ADR-014).
-
-        This is the one test whose subject is legitimately the run's own output: `--dry-run`
-        makes no filesystem change to assert against, so the preview IS the result. The
-        decisions passed in name nothing — under this model the two `/etc/apt` files here
-        need no decision, and a run that wrote them because something was ticked would be
-        the defect.
-
-        A fresh runner VM has neither file, so the test SETS UP its own divergence instead
-        of skipping: a uuid-suffixed `.sources`+keyring pair and a uuid-suffixed
-        `preferences.d` file, all written on the SOURCE (pc1). Because it is `--dry-run`
-        nothing on pc2 changes; the synthetic files are removed from pc1 in a `finally`
-        regardless of outcome.
-
-        Every claim here is a PREVIEW LINE, never the bare presence of a filename: the run's
-        log records each command's own output verbatim at DEBUG (`PKG-FR-LOG-VERBATIM`) and
-        this config sets `tui: DEBUG`, so pc1's `sha256sum` listing of `/etc/apt/keyrings`
-        and the `Signed-By:` scan both put the key's name on the run's output whatever the
-        preview says about it.
-        """
-        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
-
-        source_filename = ""
-        key_filename = ""
-        pin_filename = ""
-        try:
-            source_filename, key_filename = await _create_synthetic_repo_and_key(pc1_executor)
-            pin_filename = await _create_synthetic_pin(pc1_executor)
-            source_dest = f"{_APT_SOURCES_DIR}/{source_filename}"
-            key_dest = f"{_APT_KEYRINGS_DIR}/{key_filename}"
-            pin_dest = f"{_APT_PREFERENCES_DIR}/{pin_filename}"
-
-            # The fresh target provably lacks every uuid-suffixed file, so the divergence is
-            # exactly the one this test built (defensive, cheap: --dry-run writes nothing).
-            absent = await pc2_executor.run_command(
-                " && ".join(f"test ! -e {shlex.quote(path)}" for path in (source_dest, key_dest, pin_dest)),
-                login_shell=False,
-                timeout=10.0,
-            )
-            assert absent.success, "synthetic /etc/apt files unexpectedly already present on pc2 before the run"
-
-            await _write_apt_sync_config(pc1_executor)
-
-            # Nothing is decided: neither file is a question any more.
-            sync_cmd = f"{_automation_env_assignment_multi({})} pc-switcher sync pc2 --yes --dry-run"
-            sync_result = await pc1_executor.run_command(sync_cmd, timeout=180.0, login_shell=True)
-            assert sync_result.success, (
-                f"pc-switcher sync --dry-run exited {sync_result.exit_code}.\n"
-                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
-            )
-
-            combined_output = sync_result.stdout + sync_result.stderr
-            collapsed = _collapse_run_output(combined_output)
-            # The always-sync pin is previewed as a derived write, with no review entry.
-            assert f"Would write {pin_dest}" in collapsed, (
-                f"always-sync pin {pin_dest!r} was not previewed as a derived write.\n{combined_output}"
-            )
-            # The repository feeds no approved package, so nothing about it is written — and
-            # it is offered in no direction, which is what makes "derived, never ticked" true.
-            assert f"install {source_filename}" not in collapsed, (
-                f"repository {source_filename!r} was still offered as a review entry.\n{combined_output}"
-            )
-            assert f"Would write {source_dest}" not in collapsed, (
-                f"repository {source_dest!r} was previewed as a derived write although no approved package needs "
-                f"it.\n{combined_output}"
-            )
-            # A key is previewed by `AptSyncJob.apply` for the repositories that survive the
-            # run (`PKG-FR-DERIVED-VISIBLE`), and this repository is not one of them.
-            assert f"Would write signing key {key_dest}" not in collapsed, (
-                f"signing key {key_dest!r} was previewed as a write for a repository no package needed.\n"
-                f"{combined_output}"
-            )
-            # The intended metadata refresh (the apt-get update the pin write requires) is
-            # reported as its own marker item, by the label that item carries.
-            assert "Would change Refresh apt package metadata (apt-get update)" in collapsed, (
-                f"intended apt-get update (metadata refresh) not reported.\n{combined_output}"
-            )
-        finally:
-            # Remove the synthetic files from pc1 (where they were created) regardless of
-            # outcome; defensively from pc2 too, though --dry-run writes nothing there.
-            cleanup_paths = " ".join(
-                shlex.quote(f"{directory}/{filename}")
-                for directory, filename in (
-                    (_APT_SOURCES_DIR, source_filename),
-                    (_APT_KEYRINGS_DIR, key_filename),
-                    (_APT_PREFERENCES_DIR, pin_filename),
-                )
-                if filename
-            )
-            if cleanup_paths:
-                await pc1_executor.run_command(f"sudo rm --force {cleanup_paths}", login_shell=False, timeout=15.0)
-                await pc2_executor.run_command(f"sudo rm --force {cleanup_paths}", login_shell=False, timeout=15.0)
-
-    async def test_a_package_the_targets_apt_cannot_locate_still_reaches_the_review(
-        self,
-        pc1_executor: BashLoginRemoteExecutor,
-        pc2_executor: BashLoginRemoteExecutor,
-        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
-        pc2_with_pcswitcher: BashLoginRemoteExecutor,
-        reset_pcswitcher_state: None,
-    ) -> None:
-        """A30, J98 — ADR-020 D-34 class 3 at VM level: the repository that supplies the package is
-        derived from the package's own approval and written during converge, so at plan time
-        the target's apt has never heard the name and refuses to rehearse any transaction
-        containing it.
-
-        The property no mocked-executor test could establish: the whole run survives it, so
-        the user sees the package and the rest of the diff rather than nothing at all.
-
-        Run WITHOUT the automation hook, on purpose -- the same carve-out F23 takes: the
-        hook answers a review without ever printing it, so with it set the package's name
-        in the run's output comes from the dry-run apply preview and witnesses no review at
-        all. `PKG-FR-NO-TERMINAL` then ends the job before `apply()`, which is what pins the
-        name below to the printed group and nothing else.
-
-        `--dry-run`, so pc2's `/etc/apt` and package set are untouched; the subject is built
-        on pc1 and removed from pc1 in a `finally` regardless of outcome.
-        """
-        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
-
-        name = repo_dir = list_filename = ""
-        try:
-            name, repo_dir, list_filename = await _install_from_a_repo_the_target_lacks(pc1_executor)
-
-            # The precondition, asserted rather than assumed: without it the run below proves
-            # nothing, because a target that CAN resolve the name never had the defect.
-            refused = await pc2_executor.run_command(
-                f"apt-get --dry-run install --assume-yes --no-install-recommends {shlex.quote(name)}",
-                login_shell=False,
-                timeout=60.0,
-            )
-            assert not refused.success, (
-                f"pc2 resolved {name}, so this run cannot exercise the class-3 path.\n"
-                f"stdout: {refused.stdout}\nstderr: {refused.stderr}"
-            )
-
-            await _write_apt_sync_config(pc1_executor)
-
-            sync_result = await pc1_executor.run_command(
-                "pc-switcher sync pc2 --yes --dry-run", timeout=300.0, login_shell=True
-            )
-            assert sync_result.success, (
-                f"pc-switcher sync --dry-run exited {sync_result.exit_code} for a package pc2's apt "
-                f"cannot locate yet.\nstdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
-            )
-
-            combined_output = sync_result.stdout + sync_result.stderr
-            collapsed = _collapse_run_output(combined_output)
-            # The group panel's own title is the witness. A dry run previews through the
-            # review itself (ADR-014), so there is no separate apply output to confuse it
-            # with, and only the review draws this title.
-            assert "Install apt packages" in collapsed, (
-                f"the run drew no apt install review group at all.\n{combined_output}"
-            )
-            assert f"install {name}" in collapsed, (
-                f"{name} reached no review line, so the run survived by dropping it.\n{combined_output}"
-            )
-            assert "Unable to locate package" not in combined_output, (
-                f"apt's plan-time refusal still surfaced as a run-level failure.\n{combined_output}"
-            )
-        finally:
-            if name:
-                await _remove_local_repo_package(pc1_executor, name, repo_dir, list_filename)
+    result = await executor.run_command(
+        f"apt-mark showmanual; echo {_SECTION_MARKER}; apt-mark showhold; echo {_SECTION_MARKER}; "
+        "dpkg-query --show --showformat='${Package}\\t${Version}\\n'",
+        login_shell=False,
+        timeout=30.0,
+    )
+    assert result.success, f"Failed to read the machine's apt selection state: {result.stderr}"
+    manual_block, hold_block, version_block = result.stdout.split(_SECTION_MARKER)
+    versions: dict[str, str] = {}
+    for line in nonblank_lines(version_block):
+        name, _, version = line.partition("\t")
+        versions[name] = version
+    return set(nonblank_lines(manual_block)), set(nonblank_lines(hold_block)), versions
 
 
-class TestPackageSyncWholeRunContracts:
-    """VM-level proof of the phase's whole-run contracts (plan 02-11): properties of an
-    entire sync -- non-interactive skip-all, continue-on-item-failure, snap/flatpak
-    convergence, skip-always inertness in both roles, and one job's failure leaving every
-    other job's approved work intact -- rather than any single item's diff/converge, and
-    therefore invisible to plans 02-03/02-05/02-07/02-08's mocked-executor unit tests.
+async def _a_package_both_machines_have_unheld(
+    pc1_executor: BashLoginRemoteExecutor,
+    pc2_executor: BashLoginRemoteExecutor,
+    exclude: frozenset[str] = frozenset(),
+) -> str:
+    """A package manually installed at the SAME version on both machines and held on
+    neither, so holding it on the source is the run's only apt work for it.
+
+    `exclude` keeps a scenario's other apt subjects out of the answer: a run that diverges
+    one package and holds another needs the two to be different packages, and every
+    selection in this module is alphabetical for determinism, so without this they collide.
     """
-
-    async def test_non_interactive_skip_all(
-        self,
-        pc1_executor: BashLoginRemoteExecutor,
-        pc2_executor: BashLoginRemoteExecutor,
-        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
-        pc2_with_pcswitcher: BashLoginRemoteExecutor,
-        reset_pcswitcher_state: None,
-    ) -> None:
-        """H162, J9, J12, J14, J37, J44, J49, J103 — A non-interactive `pc-switcher sync`
-        (no `PACKAGE_REVIEW_AUTOMATION_ENV`, no
-        TTY on stdin/stdout -- the default for a command run through this fixture's
-        plain SSH exec, which requests no pty) applies nothing, records no permanent
-        decision, names every item it could not ask about, and reports the job as skipped
-        (`PKG-FR-NO-TERMINAL`, `PKG-FR-LOG-DECISIONS`), proven with an item diverged in
-        each direction.
-        """
-        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
-
-        install_candidate = await _removable_candidate(pc1_executor, pc2_executor)
-        removal_candidate = await _create_extra_on_target_apt_package(pc1_executor, pc2_executor)
-
-        try:
-            remove_result = await pc2_executor.run_command(
-                f"sudo DEBIAN_FRONTEND=noninteractive apt-get remove --assume-yes {shlex.quote(install_candidate)}",
-                login_shell=False,
-                timeout=120.0,
-            )
-            assert remove_result.success, f"Failed to remove {install_candidate} from pc2: {remove_result.stderr}"
-
-            await _write_apt_sync_config(pc1_executor)
-
-            pc2_manual_before = nonblank_lines(
-                (await pc2_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0)).stdout
-            )
-            pc1_decision_before = await _decision_file_exists(pc1_executor, "apt")
-            pc2_decision_before = await _decision_file_exists(pc2_executor, "apt")
-
-            # No automation env prefix and no pty on this exec -- genuinely
-            # non-interactive on both stdin and stdout, D-26's actual trigger condition.
-            sync_cmd = "pc-switcher sync pc2 --yes --allow-first-sync"
-            sync_result = await pc1_executor.run_command(sync_cmd, timeout=180.0, login_shell=True)
-            assert sync_result.success, (
-                "non-interactive sync unexpectedly failed (D-26's skip-all must not fail the job).\n"
-                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
-            )
-
-            pc2_manual_after = nonblank_lines(
-                (await pc2_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0)).stdout
-            )
-            assert pc2_manual_after == pc2_manual_before, (
-                "non-interactive run changed pc2's apt-mark showmanual -- D-26 requires nothing applied"
-            )
-
-            pc1_decision_after = await _decision_file_exists(pc1_executor, "apt")
-            pc2_decision_after = await _decision_file_exists(pc2_executor, "apt")
-            assert pc1_decision_after == pc1_decision_before, (
-                "non-interactive run created/removed a decision file on pc1"
-            )
-            assert pc2_decision_after == pc2_decision_before, (
-                "non-interactive run created/removed a decision file on pc2"
-            )
-
-            # Secondary confirmation only -- the primary evidence above is pc2's own
-            # package state and the decision-file paths (this plan's own prohibition).
-            # `PKG-FR-LOG-DECISIONS` requires the run to NAME each item nobody could be
-            # asked about, so a count would no longer say which ones were declined; and
-            # `PKG-FR-NO-TERMINAL` requires the job itself to be reported skipped.
-            combined_output = sync_result.stdout + sync_result.stderr
-            collapsed = _collapse_run_output(combined_output)
-            for candidate, direction in ((install_candidate, "install"), (removal_candidate, "removal")):
-                assert f"not asked, declined for this run (no TTY): {candidate}" in collapsed, (
-                    f"{direction}-direction item {candidate} was not named as declined for this run.\n"
-                    f"{combined_output}"
-                )
-            assert "Job apt_sync skipped: non-interactive run left every apt review item undecided" in collapsed, (
-                f"the run did not report apt_sync as skipped (PKG-FR-NO-TERMINAL).\n{combined_output}"
-            )
-        finally:
-            await _restore_package(pc2_executor, install_candidate)
-            await _restore_auto_marked_package(pc2_executor, removal_candidate)
-
-    async def test_continue_on_item_failure(
-        self,
-        pc1_executor: BashLoginRemoteExecutor,
-        pc2_executor: BashLoginRemoteExecutor,
-        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
-        pc2_with_pcswitcher: BashLoginRemoteExecutor,
-        reset_pcswitcher_state: None,
-    ) -> None:
-        """J20, J26, J34 — A failing item does not stop the job (D-27): the item ordered after it still
-        converges, the failure's stderr and exit code land in the run's own summary, and
-        the sync's own exit code is non-zero (the orchestrator derives it from job
-        results, not from whether an exception propagated -- `_summarize_job_outcomes`).
-
-        The failing item must genuinely reach the converge path. A package name that
-        resolves to nothing is classified REPO_UNAVAILABLE/REPORT_ONLY (plan 02-05) and
-        short-circuits before ever touching the target, so it would prove nothing about
-        D-27. Instead this test authors three "unowned install" snippets (D-18/D-20)
-        directly into pc1's registry -- two that genuinely `apt-get install` a real
-        package, one that deliberately exits non-zero -- relying on
-        `ManualInstallsSyncJob._scan_unowned_installs`'s alphabetical sort to place the failing one
-        strictly between the two installs (`_CONTINUE_TEST_MARKERS`).
-        """
-        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
-
-        candidates = await _find_removable_candidates(pc1_executor, pc2_executor, count=2)
-        assert len(candidates) == 2, (
-            f"{_no_apt_candidate_message()} Needed 2 independent candidates, found {len(candidates)}."
-        )
-        pkg_first, pkg_second = candidates
-
-        try:
-            remove_result = await pc2_executor.run_command(
-                "sudo DEBIAN_FRONTEND=noninteractive apt-get remove --assume-yes "
-                f"{shlex.quote(pkg_first)} {shlex.quote(pkg_second)}",
-                login_shell=False,
-                timeout=120.0,
-            )
-            assert remove_result.success, f"Failed to remove {pkg_first}/{pkg_second} from pc2: {remove_result.stderr}"
-
-            for path in _CONTINUE_TEST_MARKERS:
-                await _create_unowned_marker(pc1_executor, path)
-
-            item_id_first = _unowned_item_id(_CONTINUE_TEST_MARKER_INSTALL_FIRST)
-            item_id_fail = _unowned_item_id(_CONTINUE_TEST_MARKER_FAIL)
-            item_id_second = _unowned_item_id(_CONTINUE_TEST_MARKER_INSTALL_SECOND)
-
-            await _author_snippet(
-                pc1_executor,
-                item_id_first,
-                _CONTINUE_TEST_MARKER_INSTALL_FIRST,
-                f"sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes {shlex.quote(pkg_first)}",
-            )
-            await _author_snippet(
-                pc1_executor,
-                item_id_fail,
-                _CONTINUE_TEST_MARKER_FAIL,
-                'echo "deliberate integration-test failure" >&2; exit 42',
-            )
-            await _author_snippet(
-                pc1_executor,
-                item_id_second,
-                _CONTINUE_TEST_MARKER_INSTALL_SECOND,
-                f"sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes {shlex.quote(pkg_second)}",
-            )
-
-            # The three unowned-install snippets are owned by manual_installs_sync (D-18),
-            # not apt_sync: enabling apt_sync alone leaves them inert, the sync exits 0, and
-            # the D-27 `assert not sync_result.success` below never fires (the defect CI
-            # caught on PR #206). With manual_installs_sync enabled they converge the same
-            # run, and the deliberately-failing middle item makes the sync exit non-zero.
-            await _write_package_sync_config(pc1_executor, manual_installs_sync=True)
-
-            decisions = {
-                item_id_first: Decision.APPLY,
-                item_id_fail: Decision.APPLY,
-                item_id_second: Decision.APPLY,
-            }
-            sync_cmd = f"{_automation_env_assignment_multi(decisions)} pc-switcher sync pc2 --yes --allow-first-sync"
-            sync_result = await pc1_executor.run_command(sync_cmd, timeout=180.0, login_shell=True)
-
-            assert not sync_result.success, (
-                "sync with a failed item must exit non-zero (D-27).\n"
-                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
-            )
-
-            after_lines = nonblank_lines(
-                (await pc2_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0)).stdout
-            )
-            assert pkg_first in after_lines, f"{pkg_first} (before the failing item) not installed on pc2"
-            assert pkg_second in after_lines, (
-                f"{pkg_second} (after the failing item) not installed on pc2 -- "
-                "D-27's 'continue, collect, report' promise did not hold"
-            )
-
-            # Secondary confirmation only -- the primary evidence above is pc2's own
-            # apt-mark showmanual and the sync's own exit code: the failing item's
-            # stderr should be named in the run's own failure summary
-            # (PackageSyncJob.apply()'s per-item failure log).
-            combined_output = sync_result.stdout + sync_result.stderr
-            assert "deliberate integration-test failure" in combined_output
-        finally:
-            for path in _CONTINUE_TEST_MARKERS:
-                await _remove_unowned_marker(pc1_executor, path)
-            await _restore_package(pc2_executor, pkg_first)
-            await _restore_package(pc2_executor, pkg_second)
-
-    async def test_snap_revision_converges_without_hold(
-        self,
-        pc1_executor: BashLoginRemoteExecutor,
-        pc2_executor: BashLoginRemoteExecutor,
-        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
-        pc2_with_pcswitcher: BashLoginRemoteExecutor,
-        reset_pcswitcher_state: None,
-    ) -> None:
-        """E21, E67, K10 — snap convergence lands the target on the source's revision (D-06) without
-        ever touching `snap get system refresh.hold` on either machine -- the exact
-        constraint `SnapSyncJob` exists to satisfy (module docstring: `snap refresh
-        --hold` with no snap name is a global-mutating command this job never calls).
-        """
-        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
-
-        name = await _snap_subject(pc1_executor, pc2_executor)
-        pc1_list = await pc1_executor.run_command("snap list --all", login_shell=False, timeout=20.0)
-        source_revision = parse_snap_list_names_revisions(pc1_list.stdout)[name]
-        alternate_revision = await _alternate_snap_revision(pc2_executor, name, source_revision)
-
-        pc2_list_before = await pc2_executor.run_command("snap list --all", login_shell=False, timeout=20.0)
-        original_pc2_revision = parse_snap_list_names_revisions(pc2_list_before.stdout)[name]
-        pc1_hold_before = await _capture_system_refresh_hold(pc1_executor)
-        pc2_hold_before = await _capture_system_refresh_hold(pc2_executor)
-
-        try:
-            diverge_result = await pc2_executor.run_command(
-                f"sudo snap refresh --revision={shlex.quote(alternate_revision)} {shlex.quote(name)}",
-                login_shell=False,
-                timeout=120.0,
-            )
-            assert diverge_result.success, (
-                f"Failed to diverge {name} to revision {alternate_revision} on pc2: {diverge_result.stderr}"
-            )
-            diverged = await pc2_executor.run_command(
-                f"snap list {shlex.quote(name)}", login_shell=False, timeout=15.0
-            )
-            assert alternate_revision in diverged.stdout, f"pc2's {name} did not land on revision {alternate_revision}"
-
-            await _write_package_sync_config(pc1_executor, snap_sync=True)
-
-            item_id = f"snap:{name}"
-            sync_cmd = f"{_automation_env_assignment(item_id)} pc-switcher sync pc2 --yes --allow-first-sync"
-            sync_result = await pc1_executor.run_command(sync_cmd, timeout=180.0, login_shell=True)
-            assert sync_result.success, (
-                f"pc-switcher sync exited {sync_result.exit_code}.\n"
-                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
-            )
-
-            converged = await pc2_executor.run_command(
-                f"snap list {shlex.quote(name)}", login_shell=False, timeout=15.0
-            )
-            assert source_revision in converged.stdout, (
-                f"pc2's {name} did not converge to source revision {source_revision}.\n{converged.stdout}"
-            )
-
-            pc1_hold_after = await _capture_system_refresh_hold(pc1_executor)
-            pc2_hold_after = await _capture_system_refresh_hold(pc2_executor)
-            assert pc1_hold_after == pc1_hold_before, "sync mutated pc1's refresh.hold"
-            assert pc2_hold_after == pc2_hold_before, (
-                "sync mutated pc2's refresh.hold -- D-06 forbids the convergence mechanism from blocking auto-refresh"
-            )
-        finally:
-            await pc2_executor.run_command(
-                f"sudo snap refresh --revision={shlex.quote(original_pc2_revision)} {shlex.quote(name)}",
-                login_shell=False,
-                timeout=120.0,
-            )
-
-    async def test_flatpak_derives_the_remote_its_ref_needs_and_carries_its_key(
-        self,
-        pc1_executor: BashLoginRemoteExecutor,
-        pc2_executor: BashLoginRemoteExecutor,
-        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
-        pc2_with_pcswitcher: BashLoginRemoteExecutor,
-        reset_pcswitcher_state: None,
-    ) -> None:
-        """K11 — flatpak convergence installs into the scope the source item carries and
-        provisions the remote first (D-06, D-14): `flatpak install` refuses outright
-        when its remote is not yet configured in that scope.
-
-        The remote is DERIVED (ADR-020 D-41): a remote is no review entry in any
-        direction, so the review below decides the ref alone and the remote travels as a
-        consequence of that one approval.
-
-        The subject is a real Flathub app, present on pc1 only (`vm-test-fixtures.sh`), and
-        the real Flathub remote. Nothing on pc2 trusts Flathub once this test deletes the
-        remote there — `flatpak remote-delete` takes `flathub.trustedkeys.gpg` with it and
-        Ubuntu ships no machine-level anchor for it (both verified live) — so the ref
-        install after the sync can only succeed if pc-switcher carried the remote's real
-        signing key across (#215), which is exactly the claim this makes.
-
-        pc2 keeps the app's runtime throughout, so the install the sync performs is the
-        146 kB app and nothing else.
-        """
-        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
-
-        application, version, scope, remote_name, _remote_url, ref = await _flatpak_subject(pc1_executor)
-        scope_flag = "--user" if scope == "user" else "--system"
-        sudo = "sudo " if scope == "system" else ""
-
-        ref_item_id = FlatpakItem(
-            application=application, version=version, origin=remote_name, scope=scope, ref=ref
-        ).item_id
-
-        try:
-            # The app is already absent on pc2 (it is installed on pc1 only), so this is
-            # defensive: it keeps the test independent of anything an earlier failure left
-            # behind. Deleting the remote is NOT defensive — it is what removes pc2's only
-            # trust in Flathub and makes the key replication load-bearing.
-            await pc2_executor.run_command(
-                f"{sudo}flatpak uninstall --assumeyes {scope_flag} {shlex.quote(application)}",
-                login_shell=False,
-                timeout=60.0,
-            )
-            await pc2_executor.run_command(
-                f"{sudo}flatpak remote-delete --force {scope_flag} {shlex.quote(remote_name)}",
-                login_shell=False,
-                timeout=30.0,
-            )
-
-            before_refs = await pc2_executor.run_command(
-                f"flatpak list --app {scope_flag} --columns=application", login_shell=False, timeout=15.0
-            )
-            assert application not in nonblank_lines(before_refs.stdout), (
-                f"{application} still installed on pc2 after uninstall; cannot prove D-14 from a pre-existing state"
-            )
-            before_remotes = await pc2_executor.run_command(
-                f"flatpak remotes {scope_flag} --columns=name", login_shell=False, timeout=15.0
-            )
-            assert remote_name not in nonblank_lines(before_remotes.stdout), (
-                f"remote {remote_name} still configured on pc2 after remote-delete"
-            )
-
-            await _write_package_sync_config(pc1_executor, flatpak_sync=True)
-
-            decisions = {ref_item_id: Decision.APPLY}
-            sync_cmd = f"{_automation_env_assignment_multi(decisions)} pc-switcher sync pc2 --yes --allow-first-sync"
-            # Longer than the other syncs in this module: with pc2's runtime in place the
-            # app install takes about a second, but if Flathub has moved the app onto a
-            # newer runtime major since the baseline was built, this install pulls that
-            # runtime. The fixture script fails loudly on that drift; the headroom here is
-            # what keeps the failure legible instead of a timeout.
-            sync_result = await pc1_executor.run_command(sync_cmd, timeout=900.0, login_shell=True)
-            assert sync_result.success, (
-                f"pc-switcher sync exited {sync_result.exit_code}.\n"
-                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
-            )
-
-            after_remotes = await pc2_executor.run_command(
-                f"flatpak remotes {scope_flag} --columns=name,url", login_shell=False, timeout=15.0
-            )
-            remote_lines = nonblank_lines(after_remotes.stdout)
-            assert any(line.split("\t")[0] == remote_name for line in remote_lines), (
-                f"remote {remote_name} not provisioned in scope {scope} on pc2 after sync"
-            )
-
-            after_refs = await pc2_executor.run_command(
-                f"flatpak list --app {scope_flag} --columns=application", login_shell=False, timeout=15.0
-            )
-            assert application in nonblank_lines(after_refs.stdout), (
-                f"{application} not installed in scope {scope} on pc2 after sync"
-            )
-
-            # The one ordering exception this plan's own prohibition carves out for
-            # THIS particular claim: the remote's mere presence afterwards does not
-            # distinguish "remote added before ref" from any other order, so only the
-            # run's own per-item converge log (PackageSyncJob._converge_one) proves it.
-            combined_output = sync_result.stdout + sync_result.stderr
-            remote_marker = f"provision {scope} flatpak remote {remote_name}"
-            ref_marker = f"install {ref} ("
-            remote_index = combined_output.find(remote_marker)
-            ref_index = combined_output.find(ref_marker)
-            assert remote_index != -1, f"derived remote write log line not found: {remote_marker!r}"
-            assert ref_index != -1, f"ref converge log line not found: {ref_marker!r}"
-            assert remote_index < ref_index, "remote must be provisioned before the ref installs (D-14)"
-        finally:
-            # Put pc2 back to a freshly provisioned TARGET's state: Flathub configured
-            # with its real trust, the runtime kept, the app gone again. Leaving the app
-            # installed would converge the pair and silently make a re-run of this test
-            # prove nothing.
-            await _restore_flatpak_target_baseline(pc2_executor)
-
-    async def test_a_flatpak_remote_no_synced_ref_needs_does_not_travel(
-        self,
-        pc1_executor: BashLoginRemoteExecutor,
-        pc2_executor: BashLoginRemoteExecutor,
-        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
-        pc2_with_pcswitcher: BashLoginRemoteExecutor,
-        reset_pcswitcher_state: None,
-    ) -> None:
-        """The other half of derivation (ADR-020 D-37): a remote the source has and no
-        approved ref comes from stays where it is.
-
-        Without this, "the target ends up with the source's remotes" and "the target ends
-        up with the remotes its refs need" are indistinguishable — the baseline used to
-        carry exactly one remote, from which the subject app also came. `flathub-beta` is
-        on pc1 only and feeds nothing (`vm-test-fixtures.sh`, FIXTURES_VERSION 4).
-
-        There is no flatpak counterpart to apt's never-removed distribution sources here:
-        a fresh flatpak install configures zero remotes, so nothing is exempt from this.
-
-        pc2 loses the approved ref's OWN remote too, not just the ref: the guard that a
-        derived remote did travel is what separates this claim from a run that provisioned
-        nothing at all, and it can only fail if that remote is absent beforehand.
-        """
-        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
-
-        application, version, scope, remote_name, _remote_url, ref = await _flatpak_subject(pc1_executor)
-        scope_flag = "--user" if scope == "user" else "--system"
-        sudo = "sudo " if scope == "system" else ""
-        ref_item_id = FlatpakItem(
-            application=application, version=version, origin=remote_name, scope=scope, ref=ref
-        ).item_id
-
-        source_remotes = await pc1_executor.run_command(
-            f"flatpak remotes {scope_flag} --columns=name", login_shell=False, timeout=15.0
-        )
-        assert _FIXTURE_UNUSED_FLATPAK_REMOTE in nonblank_lines(source_remotes.stdout), (
-            f"the fixture remote {_FIXTURE_UNUSED_FLATPAK_REMOTE} is not configured on pc1. It is created by "
-            f"tests/integration/scripts/internal/vm-test-fixtures.sh.\n{source_remotes.stdout}"
-        )
-        before = await pc2_executor.run_command(
-            f"flatpak remotes {scope_flag} --columns=name", login_shell=False, timeout=15.0
-        )
-        assert _FIXTURE_UNUSED_FLATPAK_REMOTE not in nonblank_lines(before.stdout), (
-            f"{_FIXTURE_UNUSED_FLATPAK_REMOTE} is already on pc2, so this run cannot show that it did not travel"
-        )
-
-        try:
-            await pc2_executor.run_command(
-                f"{sudo}flatpak uninstall --assumeyes {scope_flag} {shlex.quote(ref)}",
-                login_shell=False,
-                timeout=60.0,
-            )
-            await pc2_executor.run_command(
-                f"{sudo}flatpak remote-delete --force {scope_flag} {shlex.quote(remote_name)}",
-                login_shell=False,
-                timeout=30.0,
-            )
-            remotes_before = await pc2_executor.run_command(
-                f"flatpak remotes {scope_flag} --columns=name", login_shell=False, timeout=15.0
-            )
-            assert remote_name not in nonblank_lines(remotes_before.stdout), (
-                f"remote {remote_name} is still configured on pc2 after remote-delete, so its presence after the "
-                "sync would say nothing about what the run provisioned"
-            )
-            await _write_package_sync_config(pc1_executor, flatpak_sync=True)
-
-            sync_cmd = (
-                f"{_automation_env_assignment_multi({ref_item_id: Decision.APPLY})} "
-                "pc-switcher sync pc2 --yes --allow-first-sync"
-            )
-            sync_result = await pc1_executor.run_command(sync_cmd, timeout=900.0, login_shell=True)
-            assert sync_result.success, (
-                f"pc-switcher sync exited {sync_result.exit_code}.\n"
-                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
-            )
-
-            after = await pc2_executor.run_command(
-                f"flatpak remotes {scope_flag} --columns=name", login_shell=False, timeout=15.0
-            )
-            remotes_after = nonblank_lines(after.stdout)
-            # The approved ref's own remote DID travel, from an absence asserted above:
-            # without this the assertion below would pass on a run that provisioned
-            # nothing at all.
-            assert remote_name in remotes_after, f"{remote_name} not provisioned on pc2 after sync"
-            assert _FIXTURE_UNUSED_FLATPAK_REMOTE not in remotes_after, (
-                f"{_FIXTURE_UNUSED_FLATPAK_REMOTE} travelled to pc2 although no approved ref comes from it"
-            )
-        finally:
-            await _restore_flatpak_target_baseline(pc2_executor)
-
-    async def test_one_ref_from_two_vendors_is_reported_with_both_urls(
-        self,
-        pc1_executor: BashLoginRemoteExecutor,
-        pc2_executor: BashLoginRemoteExecutor,
-        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
-        pc2_with_pcswitcher: BashLoginRemoteExecutor,
-        reset_pcswitcher_state: None,
-    ) -> None:
-        """ADR-020 D-41 at VM level: one ref, one scope, one branch, two vendors is
-        `ORIGIN_MISMATCH` -- reported naming both remotes and both URLs, and converged by
-        nothing.
-
-        The divergence is built by installing the fixture app on pc2 from the real Flathub
-        and then repointing pc2's `flathub` at the beta repository's URL (`remote-modify
-        --url=`, no second download: the app is already there). Both machines then print
-        `flathub` in `flatpak list --columns=origin`, which is asserted below BEFORE the
-        sync -- so a comparison by remote NAME provably sees nothing here, and only the URL
-        comparison D-41 mandates can produce the finding. The two URLs are what the run has
-        to name, and the assertion that it does is what proves the origin column and the
-        remote table were read the way the comparison assumes.
-
-        Run WITHOUT the automation hook, on purpose. A `REPORT_ONLY` diff makes no
-        filesystem change to assert against, so the review panel IS the result -- the same
-        carve-out the apt repository-state dry run takes -- and the automation hook answers
-        a review without ever printing it. D-26 then skips the job, which is why pc2's
-        unchanged app list below is a guard against a convergence that must not happen
-        rather than the claim itself; that a ticked `ORIGIN_MISMATCH` still converges
-        nothing is `sync_core.apply()`'s own exclusion, asserted by unit test.
-        """
-        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
-
-        application, _version, scope, remote_name, source_url, ref = await _flatpak_subject(pc1_executor)
-        scope_flag = "--user" if scope == "user" else "--system"
-        sudo = "sudo " if scope == "system" else ""
-
-        # The fixture's second remote supplies a real, differently-vendored URL, so nothing
-        # here invents one. Both Flathub keyrings share a sha256 (measured, vm-test-fixtures.sh),
-        # which is why the URL -- never a key digest -- is the whole evidence.
-        beta_url, _beta_options = await _flatpak_remote_row(pc1_executor, _FIXTURE_UNUSED_FLATPAK_REMOTE, scope)
-        assert beta_url != source_url, (
-            f"pc1's {remote_name} and {_FIXTURE_UNUSED_FLATPAK_REMOTE} both report {source_url!r}, so no vendor "
-            "divergence can be built from the fixture remotes "
-            "(tests/integration/scripts/internal/vm-test-fixtures.sh)"
-        )
-
-        try:
-            install = await pc2_executor.run_command(
-                f"{sudo}flatpak install {scope_flag} --assumeyes --noninteractive "
-                f"{shlex.quote(remote_name)} {shlex.quote(ref)}",
-                login_shell=False,
-                timeout=600.0,
-            )
-            assert install.success, (
-                f"failed to install {ref} on pc2 from {remote_name}, so the two machines never share the ref this "
-                f"test diverges: {install.stderr}"
-            )
-
-            target_rows = [row for row in await _flatpak_app_rows(pc2_executor) if row[4] == ref]
-            assert target_rows, f"{ref} is not installed on pc2 after the install; there is no shared ref to diverge"
-            assert target_rows[0][2] == remote_name, (
-                f"pc2 reports origin {target_rows[0][2]!r} for {ref}, not {remote_name!r} -- the two machines must "
-                "print the SAME origin name for the name comparison to be provably blind to this divergence"
-            )
-
-            repoint = await pc2_executor.run_command(
-                f"{sudo}flatpak remote-modify {scope_flag} --url={shlex.quote(beta_url)} {shlex.quote(remote_name)}",
-                login_shell=False,
-                timeout=30.0,
-            )
-            assert repoint.success, f"failed to repoint pc2's {remote_name} at {beta_url}: {repoint.stderr}"
-            target_url, _target_options = await _flatpak_remote_row(pc2_executor, remote_name, scope)
-            assert target_url != source_url, (
-                f"pc2's {remote_name} still reports {target_url!r} after the repoint, so both machines' copies of "
-                f"{ref} still come from one vendor and this run cannot exercise ORIGIN_MISMATCH"
-            )
-
-            before_rows = await _flatpak_app_rows(pc2_executor)
-            await _write_package_sync_config(pc1_executor, flatpak_sync=True)
-
-            # No automation env and no pty: the non-interactive path prints every group.
-            sync_result = await pc1_executor.run_command(
-                "pc-switcher sync pc2 --yes --allow-first-sync", timeout=900.0, login_shell=True
-            )
-            assert sync_result.success, (
-                f"pc-switcher sync exited {sync_result.exit_code}.\n"
-                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
-            )
-
-            combined_output = sync_result.stdout + sync_result.stderr
-            collapsed = _collapse_run_output(combined_output)
-            # A report group is titled by its CAUSE (`sync_core._REPORT_TITLES`), so this
-            # asserts the mismatch reached the ORIGIN_MISMATCH group specifically rather
-            # than any report group at all — which is the distinction the version-mismatch
-            # check below is here to make.
-            assert "Installed from different remotes (flatpak applications)" in collapsed, (
-                f"the mismatch reached no origin-mismatch review group.\n{combined_output}"
-            )
-            assert ref in combined_output, f"the report does not name the ref {ref}.\n{combined_output}"
-            # The discriminating pair: a VERSION_MISMATCH -- what this diverged pair would
-            # produce if the vendor comparison missed -- names two versions and no URL at all.
-            assert source_url in combined_output, (
-                f"the report does not name the source's vendor {source_url}.\n{combined_output}"
-            )
-            assert target_url in combined_output, (
-                f"the report does not name the target's vendor {target_url}.\n{combined_output}"
-            )
-
-            after_rows = await _flatpak_app_rows(pc2_executor)
-            assert after_rows == before_rows, (
-                "the run changed pc2's installed refs; an ORIGIN_MISMATCH is reported and converged by nothing.\n"
-                f"before: {before_rows}\nafter: {after_rows}"
-            )
-        finally:
-            # `_restore_flatpak_target_baseline` re-adds with `--if-not-exists`, which cannot
-            # repair a URL, so the repointed remote is deleted here first.
-            await pc2_executor.run_command(
-                f"{sudo}flatpak uninstall {scope_flag} --assumeyes {shlex.quote(application)} || true; "
-                f"{sudo}flatpak remote-delete {scope_flag} --force {shlex.quote(remote_name)} || true",
-                login_shell=False,
-                timeout=120.0,
-            )
-            await _restore_flatpak_target_baseline(pc2_executor)
-
-    async def test_a_source_filter_replicates_and_a_target_only_filter_comes_off(
-        self,
-        pc1_executor: BashLoginRemoteExecutor,
-        pc2_executor: BashLoginRemoteExecutor,
-        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
-        pc2_with_pcswitcher: BashLoginRemoteExecutor,
-        reset_pcswitcher_state: None,
-    ) -> None:
-        """`PKG-FR-FLATPAK-FILTER` at VM level, both halves, in two runs.
-
-        Run 1: pc1's `flathub` carries a ref filter and pc2 has no `flathub` at all, so the
-        derived write provisions it — and the filter file lands at the SAME absolute path on
-        pc2 with the source's bytes, with `flatpak remote-modify --filter=` naming it there.
-        A filter is derived like a signing key and is a review entry in no direction, so the
-        decision below names the application alone.
-
-        Run 2: pc1's filter is gone and pc2 still carries run 1's. `_converge_remote_filters`
-        takes it off — the other direction of the same obligation, and the only thing that
-        converges a filter the source has dropped — before the application installs, and pc2
-        ends the run unfiltered.
-
-        What only a real machine can establish is the fact the whole behaviour rests on:
-        that `flatpak remote-modify --filter=<file>` puts a `filtered` token in THIS
-        flatpak's `flatpak remotes --columns=options` and the path in its `filter` column,
-        which is what `_parse_flatpak_remotes` reads. Both are asserted on pc1 before the
-        first sync, so a flatpak that records the filter some other way fails here naming the
-        command instead of leaving this test green for the wrong reason.
-
-        The filter body allows the fixture app and denies nothing (`_FLATPAK_FILTER_BODY`),
-        so it never stands between the run and the install it is applied ahead of; a filter
-        denying an app the source itself has installed ends the run instead
-        (`_abort_on_a_source_filter_that_denies_its_own_apps`), and that flatpak really does
-        refuse such an install is measured in
-        `docs/adr/considerations/adr-020-flatpak-filter-and-trust-measurements.md`.
-        """
-        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
-
-        application, version, scope, remote_name, _source_url, ref = await _flatpak_subject(pc1_executor)
-        scope_flag = "--user" if scope == "user" else "--system"
-        sudo = "sudo " if scope == "system" else ""
-        ref_item_id = FlatpakItem(
-            application=application, version=version, origin=remote_name, scope=scope, ref=ref
-        ).item_id
-        # Unquoted `$HOME` on purpose: the remote shell expands it, and flatpak stores
-        # whatever path it is given verbatim. `_flatpak_remote_filter` reads the expanded
-        # path back off the machine, which is the one both machines must end up naming.
-        filter_path = f"$HOME/.cache/pcswitcher-it-flatpak-filter-{uuid4().hex[:12]}"
-        recorded_path = ""
-
-        await _write_package_sync_config(pc1_executor, flatpak_sync=True)
-        sync_cmd = f"{_automation_env_assignment(ref_item_id)} pc-switcher sync pc2 --yes --allow-first-sync"
-
-        try:
-            filtered = await pc1_executor.run_command(
-                f"mkdir --parents $HOME/.cache && printf %s {shlex.quote(_FLATPAK_FILTER_BODY)} > {filter_path} && "
-                f"{sudo}flatpak remote-modify {scope_flag} --filter={filter_path} {shlex.quote(remote_name)}",
-                login_shell=False,
-                timeout=30.0,
-            )
-            assert filtered.success, (
-                f"`flatpak remote-modify {scope_flag} --filter=` failed on pc1, so there is no filtered remote to "
-                f"replicate: {filtered.stderr}"
-            )
-            _source_url_after, source_options = await _flatpak_remote_row(pc1_executor, remote_name, scope)
-            assert _FLATPAK_FILTERED_OPTION in source_options, (
-                f"pc1's {remote_name} reports options {source_options!r} after `flatpak remote-modify {scope_flag} "
-                f"--filter=`, so this flatpak does not print the {_FLATPAK_FILTERED_OPTION!r} token "
-                "`flatpak_sync._FILTERED_OPTION` reads"
-            )
-            recorded_path = await _flatpak_remote_filter(pc1_executor, remote_name, scope) or ""
-            assert recorded_path, (
-                f"pc1's {remote_name} names no file in `flatpak remotes {scope_flag} --columns=filter`, so this "
-                "flatpak does not record the path `flatpak_sync` replicates"
-            )
-
-            # The app is absent on pc2 by fixture; deleting the remote is what makes the
-            # derived write provision it, and the target's own filter column meaningful.
-            await pc2_executor.run_command(
-                f"{sudo}flatpak uninstall {scope_flag} --assumeyes {shlex.quote(application)} || true; "
-                f"{sudo}flatpak remote-delete {scope_flag} --force {shlex.quote(remote_name)} || true",
-                login_shell=False,
-                timeout=120.0,
-            )
-            before_remotes = await pc2_executor.run_command(
-                f"flatpak remotes {scope_flag} --columns=name", login_shell=False, timeout=15.0
-            )
-            assert remote_name not in nonblank_lines(before_remotes.stdout), (
-                f"remote {remote_name} still configured on pc2, so this run cannot show it being provisioned"
-            )
-            assert application not in [row[0] for row in await _flatpak_app_rows(pc2_executor)], (
-                f"{application} still installed on pc2, so no approved application derives {remote_name}"
-            )
-
-            first_result = await pc1_executor.run_command(sync_cmd, timeout=900.0, login_shell=True)
-            assert first_result.success, (
-                f"pc-switcher sync exited {first_result.exit_code}.\n"
-                f"stdout: {first_result.stdout}\nstderr: {first_result.stderr}"
-            )
-
-            # The app first: a remote provisioned but not usable fails here rather than as a
-            # confusing lookup miss on the rows read below.
-            assert application in [row[0] for row in await _flatpak_app_rows(pc2_executor)], (
-                f"{application} not installed on pc2 -- {remote_name} was never usably provisioned.\n"
-                f"stdout: {first_result.stdout}\nstderr: {first_result.stderr}"
-            )
-            _target_url, target_options = await _flatpak_remote_row(pc2_executor, remote_name, scope)
-            assert _FLATPAK_FILTERED_OPTION in target_options, (
-                f"pc2's provisioned {remote_name} reports options {target_options!r}: the source's ref filter was not "
-                f"applied there.\nstdout: {first_result.stdout}\nstderr: {first_result.stderr}"
-            )
-            assert await _flatpak_remote_filter(pc2_executor, remote_name, scope) == recorded_path, (
-                f"pc2's {remote_name} does not name {recorded_path} as its ref filter -- the file must land at the "
-                "same absolute path the source records"
-            )
-            copied = await pc2_executor.run_command(
-                f"cat {shlex.quote(recorded_path)}", login_shell=False, timeout=15.0
-            )
-            assert copied.success and copied.stdout == _FLATPAK_FILTER_BODY, (
-                f"pc2's copy of the ref filter at {recorded_path} is not the source's file byte-for-byte: "
-                f"{copied.stdout!r} ({copied.stderr})"
-            )
-
-            _source_url_final, source_options_after = await _flatpak_remote_row(pc1_executor, remote_name, scope)
-            assert _FLATPAK_FILTERED_OPTION in source_options_after, (
-                f"the run changed pc1's own {remote_name}: a source is read, never converged"
-            )
-
-            # Run 2: the source no longer filters, pc2 still does. Delete-and-re-add rather
-            # than `--no-filter` for `_restore_flatpak_source_baseline`'s own reason.
-            await _restore_flatpak_source_baseline(pc1_executor, remote_name, scope, filter_path)
-            assert await _flatpak_remote_filter(pc1_executor, remote_name, scope) is None, (
-                f"pc1's {remote_name} still carries a ref filter, so run 2 cannot show a target-only one coming off"
-            )
-            await pc2_executor.run_command(
-                f"{sudo}flatpak uninstall {scope_flag} --assumeyes {shlex.quote(application)}",
-                login_shell=False,
-                timeout=120.0,
-            )
-            assert await _flatpak_remote_filter(pc2_executor, remote_name, scope) == recorded_path, (
-                f"pc2's {remote_name} lost its ref filter before run 2 started; there is no target-only filter to "
-                "take off"
-            )
-
-            second_cmd = f"{sync_cmd} --allow-out-of-order"
-            second_result = await pc1_executor.run_command(second_cmd, timeout=900.0, login_shell=True)
-            assert second_result.success, (
-                f"second pc-switcher sync exited {second_result.exit_code}.\n"
-                f"stdout: {second_result.stdout}\nstderr: {second_result.stderr}"
-            )
-
-            assert await _flatpak_remote_filter(pc2_executor, remote_name, scope) is None, (
-                f"pc2's {remote_name} still carries a ref filter the source does not have -- the two machines would "
-                f"never converge.\nstdout: {second_result.stdout}\nstderr: {second_result.stderr}"
-            )
-            assert application in [row[0] for row in await _flatpak_app_rows(pc2_executor)], (
-                f"{application} not installed on pc2 by the second run.\n"
-                f"stdout: {second_result.stdout}\nstderr: {second_result.stderr}"
-            )
-        finally:
-            await _restore_flatpak_source_baseline(pc1_executor, remote_name, scope, filter_path)
-            if recorded_path:
-                # The replicated copy is pc-switcher's own write and lives outside anything
-                # `_restore_flatpak_target_baseline` knows about.
-                await pc2_executor.run_command(
-                    f"rm --force {shlex.quote(recorded_path)}", login_shell=False, timeout=15.0
-                )
-            await _restore_flatpak_target_baseline(pc2_executor)
-
-    async def test_skip_always_is_inert_in_both_roles(
-        self,
-        pc1_executor: BashLoginRemoteExecutor,
-        pc2_executor: BashLoginRemoteExecutor,
-        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
-        pc2_with_pcswitcher: BashLoginRemoteExecutor,
-        reset_pcswitcher_state: None,
-    ) -> None:
-        """H125, H126, H166, N1, N2 — A skip-always decision recorded in one run makes the item produce no diff in
-        the next run, in BOTH roles this machine can play (D-08): source (never pushed
-        again) and target (never installed/removed here again).
-
-        The ordinary review checkbox has no UI path to SKIP_ALWAYS yet for a regular
-        item (`package_review.py`'s own docstring: only the unreproducible-items'
-        three-way prompt and a hand-constructed `ReviewOutcome` reach it today) -- this
-        test drives it through the same `PACKAGE_REVIEW_AUTOMATION_ENV` hook every
-        other test in this module uses, proving the underlying mechanism
-        (`PackageSyncJob._record_permanent_skips`/`filter_inert`) independent of that
-        UI gap.
-        """
-        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
-
-        candidate = await _removable_candidate(pc1_executor, pc2_executor)
-        item_id = AptPackageItem(name=candidate, version="").item_id
-
-        try:
-            remove_result = await pc2_executor.run_command(
-                f"sudo DEBIAN_FRONTEND=noninteractive apt-get remove --assume-yes {shlex.quote(candidate)}",
-                login_shell=False,
-                timeout=120.0,
-            )
-            assert remove_result.success, f"Failed to remove {candidate} from pc2: {remove_result.stderr}"
-
-            await _write_apt_sync_config(pc1_executor)
-
-            skip_always = {item_id: Decision.SKIP_ALWAYS}
-            first_sync_cmd = (
-                f"{_automation_env_assignment_multi(skip_always)} pc-switcher sync pc2 --yes --allow-first-sync"
-            )
-            first_result = await pc1_executor.run_command(first_sync_cmd, timeout=180.0, login_shell=True)
-            assert first_result.success, (
-                f"skip-always run unexpectedly failed.\nstdout: {first_result.stdout}\nstderr: {first_result.stderr}"
-            )
-
-            entries = await DecisionFile("apt", pc1_executor).load()
-            assert item_id in entries, (
-                f"{candidate} not recorded in pc1's apt decision file after a skip-always decision (D-08a)"
-            )
-
-            still_absent = await pc2_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0)
-            assert candidate not in nonblank_lines(still_absent.stdout), "skip-always must not itself install the item"
-
-            # Second sync, SOURCE role, same direction: force-map the same item to
-            # APPLY. If D-08's inertness genuinely holds, the item never becomes a diff
-            # at all, so this mapping has nothing to attach to -- proven by the package
-            # staying absent despite explicitly asking for it to be applied.
-            # --allow-out-of-order bypasses the unrelated W3 consecutive-push gate a
-            # second same-direction sync would otherwise trip (ADR-015) -- orthogonal
-            # to what this test proves.
-            force_apply = {item_id: Decision.APPLY}
-            second_sync_cmd = (
-                f"{_automation_env_assignment_multi(force_apply)} "
-                "pc-switcher sync pc2 --yes --allow-first-sync --allow-out-of-order"
-            )
-            second_result = await pc1_executor.run_command(second_sync_cmd, timeout=180.0, login_shell=True)
-            assert second_result.success, (
-                f"second sync unexpectedly failed.\nstdout: {second_result.stdout}\nstderr: {second_result.stderr}"
-            )
-            still_absent_2 = await pc2_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0)
-            assert candidate not in nonblank_lines(still_absent_2.stdout), (
-                f"{candidate} was installed on pc2 despite a source-held skip-always decision -- "
-                "the item produced a diff when it should have been filtered out entirely (D-08)"
-            )
-
-            # Reversed role: pc2 as source, pc1 as target. The decision lives on pc1
-            # (this machine), now the TARGET -- D-08 promises inertness there too, so
-            # force-mapping the same item to APPLY (which, if a diff existed at all,
-            # would mean REMOVE -- pc1 genuinely still has the package installed) must
-            # still leave it untouched.
-            await _write_apt_sync_config(pc2_executor)
-            reversed_sync_cmd = (
-                f"{_automation_env_assignment_multi(force_apply)} "
-                "pc-switcher sync pc1 --yes --allow-first-sync --allow-out-of-order"
-            )
-            reversed_result = await pc2_executor.run_command(reversed_sync_cmd, timeout=180.0, login_shell=True)
-            assert reversed_result.success, (
-                f"reversed sync unexpectedly failed.\n"
-                f"stdout: {reversed_result.stdout}\nstderr: {reversed_result.stderr}"
-            )
-
-            pc1_manual_after = await pc1_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0)
-            assert candidate in nonblank_lines(pc1_manual_after.stdout), (
-                f"{candidate} was removed from pc1 despite a target-held skip-always decision -- "
-                "the item produced a diff when it should have been filtered out entirely (D-08)"
-            )
-        finally:
-            await _restore_package(pc2_executor, candidate)
-
-    async def test_one_failing_job_leaves_the_other_jobs_work_intact(
-        self,
-        pc1_executor: BashLoginRemoteExecutor,
-        pc2_executor: BashLoginRemoteExecutor,
-        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
-        pc2_with_pcswitcher: BashLoginRemoteExecutor,
-        reset_pcswitcher_state: None,
-    ) -> None:
-        """H12, K20, N22 — All four package jobs enabled in one run, the first of them failing: the
-        three ordered after it still review and converge their own diffs, and the sync's own exit
-        code reports the failure (`PKG-FR-JOB-INDEPENDENCE`, `PKG-FR-OUTCOME-FAILED`).
-
-        Each manager settling its OWN review before its OWN mutation is carried by the same
-        witness: an item converges only because that manager's review returned APPLY for it, so
-        apt's and snap's items both landing is what says each reviewed then mutated its own diff.
-        No inter-manager ordering is asserted and no run-log line is scraped for it.
-
-        The failure has to come FIRST for the claim to mean anything -- a job that fails last
-        leaves the others' work intact whatever the orchestrator does. Jobs run in the order
-        the config names them (`_discover_and_validate_jobs` iterates `sync_jobs` as written),
-        so `manual_installs_sync` is written first and fails on a snippet that exits non-zero,
-        the same device as `test_continue_on_item_failure` but at whole-run scale.
-
-        `flatpak_sync` is enabled and left unanswered: this run's claim is about four jobs
-        being enabled together, and a job whose items are all declined still plans, reviews
-        and reports -- it just converges nothing, which is why nothing is asserted about it.
-
-        The witness is pc2's own package managers, as everywhere else in this module: the apt
-        package is back in `apt-mark showmanual` and the snap is back in `snap list`, each of
-        which could only happen if that manager reviewed its own diff and then applied it,
-        after the run had already failed a job.
-        """
-        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
-
-        apt_candidate = await _removable_candidate(pc1_executor, pc2_executor)
-        snap_candidate = await _snap_subject(pc1_executor, pc2_executor)
-
-        pc2_snap_list_before = await pc2_executor.run_command("snap list --all", login_shell=False, timeout=20.0)
-        original_snap_revision = parse_snap_list_names_revisions(pc2_snap_list_before.stdout)[snap_candidate]
-
-        try:
-            remove_apt = await pc2_executor.run_command(
-                f"sudo DEBIAN_FRONTEND=noninteractive apt-get remove --assume-yes {shlex.quote(apt_candidate)}",
-                login_shell=False,
-                timeout=120.0,
-            )
-            assert remove_apt.success, f"Failed to remove {apt_candidate} from pc2: {remove_apt.stderr}"
-
-            remove_snap = await pc2_executor.run_command(
-                f"sudo snap remove {shlex.quote(snap_candidate)}", login_shell=False, timeout=60.0
-            )
-            assert remove_snap.success, f"Failed to remove {snap_candidate} from pc2: {remove_snap.stderr}"
-
-            await _create_unowned_marker(pc1_executor, _WHOLE_RUN_FAILURE_MARKER)
-            failing_item_id = _unowned_item_id(_WHOLE_RUN_FAILURE_MARKER)
-            await _author_snippet(
-                pc1_executor,
-                failing_item_id,
-                _WHOLE_RUN_FAILURE_MARKER,
-                f'echo "{_WHOLE_RUN_FAILURE_MESSAGE}" >&2; exit 42',
-            )
-
-            # Written in execution order: the failing job first, the three whose work must
-            # survive it after.
-            await _write_package_sync_config(
-                pc1_executor,
-                manual_installs_sync=True,
-                apt_sync=True,
-                snap_sync=True,
-                flatpak_sync=True,
-            )
-
-            apt_item_id = AptPackageItem(name=apt_candidate, version="").item_id
-            decisions = {
-                failing_item_id: Decision.APPLY,
-                apt_item_id: Decision.APPLY,
-                f"snap:{snap_candidate}": Decision.APPLY,
-            }
-            sync_cmd = f"{_automation_env_assignment_multi(decisions)} pc-switcher sync pc2 --yes --allow-first-sync"
-            sync_result = await pc1_executor.run_command(sync_cmd, timeout=300.0, login_shell=True)
-
-            assert not sync_result.success, (
-                "a run with a failed job must exit non-zero (PKG-FR-OUTCOME-FAILED).\n"
-                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
-            )
-
-            after_apt = await pc2_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0)
-            assert apt_candidate in nonblank_lines(after_apt.stdout), (
-                f"{apt_candidate} not reinstalled on pc2 -- apt_sync's approved work did not survive the "
-                "earlier job's failure (PKG-FR-JOB-INDEPENDENCE)"
-            )
-            after_snap = await pc2_executor.run_command(
-                f"snap list {shlex.quote(snap_candidate)}", login_shell=False, timeout=15.0
-            )
-            assert after_snap.success, (
-                f"{snap_candidate} not reinstalled on pc2 -- snap_sync's approved work did not survive the "
-                f"earlier job's failure (PKG-FR-JOB-INDEPENDENCE): {after_snap.stderr}"
-            )
-
-            # Secondary confirmation only -- the exit code and pc2's own managers above are
-            # the primary evidence. This says the non-zero exit is THIS failure's and not
-            # some unrelated trouble, which the exit code alone cannot distinguish.
-            assert _WHOLE_RUN_FAILURE_MESSAGE in sync_result.stdout + sync_result.stderr
-        finally:
-            await _remove_unowned_marker(pc1_executor, _WHOLE_RUN_FAILURE_MARKER)
-            await _remove_unowned_marker(pc2_executor, _WHOLE_RUN_FAILURE_MARKER)
-            await _restore_package(pc2_executor, apt_candidate)
-            current_snap = await pc2_executor.run_command(
-                f"snap list {shlex.quote(snap_candidate)}", login_shell=False, timeout=15.0
-            )
-            if original_snap_revision not in current_snap.stdout:
-                restore_result = await pc2_executor.run_command(
-                    f"sudo snap install --revision={shlex.quote(original_snap_revision)} "
-                    f"{shlex.quote(snap_candidate)} || "
-                    f"sudo snap refresh --revision={shlex.quote(original_snap_revision)} "
-                    f"{shlex.quote(snap_candidate)}",
-                    login_shell=False,
-                    timeout=120.0,
-                )
-                if not restore_result.success:
-                    print(
-                        f"[cleanup] failed to restore {snap_candidate} to revision "
-                        f"{original_snap_revision} on pc2: {restore_result.stderr}"
-                    )
-
-
-class TestManualInstallsSyncEndToEnd:
-    """VM-level proof that `manual_installs_sync` pushes the install-snippet registry to
-    the target with its OWN `send_file()` (D-23) and replays a snippet there (D-18/D-20),
-    against pc2's own filesystem and registry file -- never pc-switcher's log text.
+    # One read-only snapshot per machine, taken at once.
+    (
+        (source_manual, source_held, source_versions),
+        (target_manual, target_held, target_versions),
+    ) = await asyncio.gather(_apt_selection_snapshot(pc1_executor), _apt_selection_snapshot(pc2_executor))
+    shared = sorted(
+        name
+        for name in source_manual & target_manual
+        if name not in exclude
+        and name not in source_held
+        and name not in target_held
+        and name in source_versions
+        and source_versions[name] == target_versions.get(name)
+    )
+    assert shared, (
+        "No package is manually installed at the same version on both machines and held on neither. The two VMs "
+        "come from one baseline, so an empty result means the machines are not what these tests assume."
+    )
+    return shared[0]
+
+
+# Small archive packages a stock Ubuntu 24.04 does not install, for the hold that names a
+# package its machine does not have. Several, because the one requirement is that apt knows
+# the name and dpkg does not have it, and which of them satisfies that is the machine's
+# business rather than this module's.
+_UNINSTALLED_ARCHIVE_CANDIDATES = ("cowsay", "sl", "toilet", "fortune-mod")
+
+
+async def _a_name_apt_knows_the_machine_does_not_have(executor: BashLoginRemoteExecutor) -> str:
+    """A package `_UNINSTALLED_ARCHIVE_CANDIDATES` names that this machine's apt can resolve
+    and dpkg does not have installed -- the only state `apt-mark hold` can be given to
+    produce a hold that freezes nothing.
     """
+    result = await executor.run_command(
+        f"apt-cache policy {' '.join(_UNINSTALLED_ARCHIVE_CANDIDATES)}", login_shell=False, timeout=30.0
+    )
+    assert result.success, f"Failed to read apt's policy for the hold candidates: {result.stderr}"
 
-    async def test_manual_installs_sync_pushes_registry_and_replays_snippet(
-        self,
-        pc1_executor: BashLoginRemoteExecutor,
-        pc2_executor: BashLoginRemoteExecutor,
-        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
-        pc2_with_pcswitcher: BashLoginRemoteExecutor,
-        reset_pcswitcher_state: None,
-    ) -> None:
-        """G67, H30, K12, K16 — A snippet registered on the source travels to the target by the job's own push
-        and is replayed there, all in one run (D-23), proven against pc2's own filesystem
-        and registry file.
+    facts: dict[str, dict[str, str]] = {}
+    current = ""
+    for line in result.stdout.splitlines():
+        stripped = line.strip()
+        if line and not line[0].isspace() and stripped.endswith(":"):
+            current = stripped[:-1]
+            facts[current] = {}
+            continue
+        for field in ("Installed:", "Candidate:"):
+            if current and stripped.startswith(field):
+                facts[current][field] = stripped.removeprefix(field).strip()
 
-        Under the corrected source-based classification (02-22), `manual_installs_sync.plan()`
-        judges reproducibility from the SOURCE registry: a snippet present on pc1 classifies
-        the item `INSTALL` regardless of whether pc2 already holds one. `after_review()` then
-        pushes the source registry to the target before `apply()` replays it. So the snippet
-        is authored on the SOURCE (pc1) ONLY -- no target seeding is needed, and the old
-        item-on-both-machines trick (an OLD body on pc2 to force the pre-correction
-        target-registry classification) is gone. pc2 has no registry before the run, so its
-        presence afterwards witnesses the push, and the NEW marker witnesses the pushed
-        source snippet being replayed the same run. An unowned `/opt` path on pc1 makes the
-        item detectable (`_scan_unowned_installs`).
-        """
-        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
-
-        uniq = uuid4().hex[:12]
-        unowned_path = f"/opt/pcswitcher-it-manual-{uniq}"
-        item_id = _unowned_item_id(unowned_path)
-        # Home-relative marker so the snippet needs no sudo: replay runs `bash -c <body>`
-        # as the SSH user on pc2, and $HOME expands there.
-        new_marker = f"$HOME/.cache/pcswitcher-it-manual-new-{uniq}"
-        registry_relpath = "~/.config/pc-switcher/package-snippets.yaml"
-
-        try:
-            # The source item to detect (unowned, so root-owned /opt needs sudo to create).
-            await _create_unowned_marker(pc1_executor, unowned_path)
-
-            # Author on the SOURCE (pc1) ONLY: plan() classifies reproducibility from the
-            # source registry (corrected D-23), so a source snippet plans INSTALL without
-            # pc2 holding anything. The post-review push then places it on pc2 before replay.
-            await _author_snippet(
-                pc1_executor, item_id, unowned_path, f'mkdir --parents "$(dirname {new_marker})" && touch {new_marker}'
-            )
-
-            await _write_package_sync_config(pc1_executor, manual_installs_sync=True)
-
-            sync_cmd = f"{_automation_env_assignment(item_id)} pc-switcher sync pc2 --yes --allow-first-sync"
-            sync_result = await pc1_executor.run_command(sync_cmd, timeout=180.0, login_shell=True)
-            assert sync_result.success, (
-                f"pc-switcher sync exited {sync_result.exit_code}.\n"
-                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
-            )
-
-            # The push placed the source registry on pc2 (D-23): pc2 held no registry before
-            # the run, so its presence afterwards witnesses the push landing.
-            registry_exists = await pc2_executor.run_command(
-                f"test -f {registry_relpath}", login_shell=False, timeout=10.0
-            )
-            assert registry_exists.success, (
-                f"snippet registry not present on pc2 at {registry_relpath} after the run -- the push did not land"
-            )
-
-            # The replay ran the pushed source snippet body: the NEW marker exists on pc2 --
-            # proving the pushed source snippet was replayed the same run (D-23).
-            new_exists = await pc2_executor.run_command(f"test -f {new_marker}", login_shell=False, timeout=10.0)
-            assert new_exists.success, (
-                f"NEW marker {new_marker} absent on pc2 -- the pushed snippet was not replayed.\n"
-                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
-            )
-        finally:
-            await _remove_unowned_marker(pc1_executor, unowned_path)
-            await pc2_executor.run_command(
-                f"rm --force {new_marker} {registry_relpath}", login_shell=False, timeout=15.0
-            )
-            await pc1_executor.run_command(f"rm --force {registry_relpath}", login_shell=False, timeout=15.0)
-
-    async def test_a_real_hand_downloaded_deb_is_presented_as_needing_a_snippet(
-        self,
-        pc1_executor: BashLoginRemoteExecutor,
-        pc2_executor: BashLoginRemoteExecutor,
-        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
-        pc2_with_pcswitcher: BashLoginRemoteExecutor,
-        reset_pcswitcher_state: None,
-    ) -> None:
-        """G27 — A `.deb` installed by hand on a real machine reaches the review as an item no
-        package manager can install on pc2.
-
-        What only a real apt can establish: a package installed straight from a `.deb` has
-        its INSTALLED version as its own candidate and no repository origin at all, so the
-        detection rests on what apt genuinely prints for such a package rather than on
-        policy output a test author composed. It is not marked manually installed by anything
-        here either — `dpkg --install` is the whole setup — and the scan reads the INSTALLED
-        set, so `apt-mark showmanual` is not the boundary being relied on.
-
-        The witness is state, not log text: SKIP_ALWAYS is recorded against an item only if
-        the review presented it (`_finalize_unreproducible`), and it is recorded on pc1
-        because an unreproducible item is always source-held (D-08a). pc1 holds no decision
-        file before the run (`reset_pcswitcher_state`), so the entry's presence afterwards
-        can only come from this item having been offered.
-        """
-        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
-        _ = pc2_executor
-
-        name = ""
-        try:
-            name = await _install_a_hand_downloaded_deb(pc1_executor)
-            item_id = _no_candidate_item_id(name)
-
-            # The precondition, asserted rather than assumed: apt must name no repository for
-            # the installed version, or the item this run is about was never detectable.
-            policy = await pc1_executor.run_command(
-                f"LC_ALL=C apt-cache policy {shlex.quote(name)}", login_shell=False, timeout=30.0
-            )
-            assert policy.success and "1.0" in policy.stdout, (
-                f"apt says nothing about the hand-installed {name}.\nstdout: {policy.stdout}\nstderr: {policy.stderr}"
-            )
-            assert "http" not in policy.stdout, (
-                f"apt names a repository origin for the hand-installed {name}, so it is reproducible after all and "
-                f"this run cannot exercise the branch.\n{policy.stdout}"
-            )
-
-            await _write_package_sync_config(pc1_executor, manual_installs_sync=True)
-
-            decisions = {item_id: Decision.SKIP_ALWAYS}
-            sync_cmd = f"{_automation_env_assignment_multi(decisions)} pc-switcher sync pc2 --yes --allow-first-sync"
-            sync_result = await pc1_executor.run_command(sync_cmd, timeout=300.0, login_shell=True)
-            assert sync_result.success, (
-                f"pc-switcher sync exited {sync_result.exit_code}.\n"
-                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
-            )
-
-            entries = await DecisionFile("manual", pc1_executor).load()
-            assert item_id in entries, (
-                f"{name} was never presented as an item needing an install snippet: no decision was recorded for "
-                f"{item_id} on pc1 although the review was answered SKIP_ALWAYS for it.\n"
-                f"recorded: {sorted(entries)}"
-            )
-        finally:
-            if name:
-                await pc1_executor.run_command(
-                    f"sudo DEBIAN_FRONTEND=noninteractive dpkg --purge {shlex.quote(name)}",
-                    login_shell=False,
-                    timeout=120.0,
-                )
-
-    async def test_the_scan_of_a_real_machine_never_names_the_stock_skeleton(
-        self,
-        pc1_executor: BashLoginRemoteExecutor,
-        pc2_executor: BashLoginRemoteExecutor,
-        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
-        pc2_with_pcswitcher: BashLoginRemoteExecutor,
-        reset_pcswitcher_state: None,
-    ) -> None:
-        """G28 — What the unreproducible scan names on a stock Ubuntu 24.04 machine never
-        includes a directory the distribution itself created: neither scan root, nor any of
-        the nine entries `base-files` makes under `/usr/local`.
-
-        A characterisation test, so it asserts the PROPERTY rather than a golden list: the
-        set of things under `/usr/local` and `/opt` on a real machine is not this project's
-        to fix, and a list of them would fail on every unrelated package that ships one.
-
-        It has to run on a real machine because the skeleton is exactly where ownership does
-        not settle the question: dpkg owns none of those directories on a stock install, so
-        nothing but the scan's own rule keeps them out — and a mocked `dpkg --search` can be
-        made to say anything about them.
-
-        Run non-interactively on purpose, and with only this job enabled: with nobody to ask,
-        the run NAMES every item it could not ask about (`PKG-FR-LOG-DECISIONS`,
-        `_warn_every_item_unasked`), which is the one place the whole finding set is written
-        down. Every such line here is therefore this job's.
-
-        One unowned marker of the test's own is created under `/opt` and asserted to be
-        among the findings: without it a scan that found nothing at all would pass this
-        vacuously.
-        """
-        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
-        _ = pc2_executor
-
-        witness_path = f"/opt/pcswitcher-it-g28-{uuid4().hex[:12]}"
-        try:
-            await _create_unowned_marker(pc1_executor, witness_path)
-
-            await _write_package_sync_config(pc1_executor, manual_installs_sync=True)
-
-            # No automation env and no pty: the non-interactive path names every item.
-            sync_result = await pc1_executor.run_command(
-                "pc-switcher sync pc2 --yes --allow-first-sync", timeout=300.0, login_shell=True
-            )
-            assert sync_result.success, (
-                f"a run with nobody to ask must not fail.\nstdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
-            )
-
-            combined_output = sync_result.stdout + sync_result.stderr
-            # A trailing space so the last finding on the line has the same right-hand
-            # boundary as every other one (see the skeleton check below).
-            collapsed = f"{_collapse_run_output(combined_output)} "
-            assert f"{_UNASKED_ITEM_MARKER}{witness_path} " in collapsed, (
-                f"the scan did not name {witness_path}, so this run says nothing about what it names.\n"
-                f"{combined_output}"
-            )
-            for stock in _STOCK_DIRECTORIES:
-                # The trailing space is the boundary: `/usr/local/bin` must not satisfy the
-                # check for `/usr/local`.
-                assert f"{_UNASKED_ITEM_MARKER}{stock} " not in collapsed, (
-                    f"the scan reported {stock}, a directory the distribution itself creates, so every user "
-                    f"would be asked to write an install snippet for a stock directory on every run.\n"
-                    f"{combined_output}"
-                )
-        finally:
-            await _remove_unowned_marker(pc1_executor, witness_path)
-
-    async def test_the_stock_skeleton_is_still_what_base_files_creates(
-        self, pc1_executor: BashLoginRemoteExecutor
-    ) -> None:
-        """G114 — the tripwire under the hardcoded skeleton: the machine's own
-        `base-files.postinst` must still create exactly the nine entries directly under
-        `/usr/local` that the scan refuses to present.
-
-        The list is hardcoded in the job for predictability — what the scan presents must not
-        change with whatever a postinst says on the day — so this is the assertion that
-        catches a distribution changing it: a failure here means the skeleton moved and the
-        constant has to follow, not that a run is broken.
-
-        `/usr/local` itself and `share/man` are excluded on purpose: the first is a scan root
-        rather than an entry of anything, and the second is not directly under `/usr/local`,
-        which is the only level the scan can meet these at.
-        """
-        postinst = await pc1_executor.run_command(
-            "cat /var/lib/dpkg/info/base-files.postinst", login_shell=False, timeout=15.0
-        )
-        assert postinst.success, f"could not read base-files.postinst: {postinst.stderr}"
-
-        created = set(re.findall(r"^\s*install_local_dir\s+(/usr/local/[^\s/]+)\s*$", postinst.stdout, re.MULTILINE))
-        symlinked = set(re.findall(r'ln -s\S*\s+\S+\s+"?\$DPKG_ROOT(/usr/local/[^\s/"]+)"?', postinst.stdout))
-
-        assert created | symlinked == {stock for stock in _STOCK_DIRECTORIES if stock.count("/") == 3}, (
-            "base-files no longer creates the `/usr/local` skeleton the scan is built on; "
-            f"it declares {sorted(created | symlinked)}.\n{postinst.stdout}"
-        )
+    for name in _UNINSTALLED_ARCHIVE_CANDIDATES:
+        block = facts.get(name, {})
+        if block.get("Installed:") == "(none)" and block.get("Candidate:", "(none)") != "(none)":
+            return name
+    raise AssertionError(
+        f"None of {list(_UNINSTALLED_ARCHIVE_CANDIDATES)} is both known to apt and absent from dpkg on this "
+        f"machine, so no hold naming a package it does not have can be set up.\n{result.stdout}"
+    )
 
 
 # `snap:hold:<name>` has no `SnapHoldItem` dataclass to build the id from -- `snap_sync`
@@ -3008,1566 +1912,9 @@ def _snap_hold_item_id(name: str) -> str:
     return f"snap:hold:{name}"
 
 
-class TestPackageSyncIdempotency:
-    """The property a convergence tool exists to have (J10/N2): converge once, and the
-    NEXT identical run has nothing left to do.
-
-    Every other test in this module proves a single run does the right thing. None of
-    them proves the run is a fixed point, which is what makes the tool usable at all --
-    a sync that re-proposes what it just applied is indistinguishable, from the user's
-    seat, from one that never applied it.
-    """
-
-    async def test_second_consecutive_sync_has_nothing_to_do(
-        self,
-        pc1_executor: BashLoginRemoteExecutor,
-        pc2_executor: BashLoginRemoteExecutor,
-        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
-        pc2_with_pcswitcher: BashLoginRemoteExecutor,
-        reset_pcswitcher_state: None,
-    ) -> None:
-        """J2, N8 — Run 1 converges a real apt divergence; run 2, with all three package-manager
-        jobs enabled, changes NO package-manager state on the target and no longer
-        presents the converged item at all.
-
-        All three managers run, none conditionally: apt and snap ship with Ubuntu 24.04,
-        and flatpak is installed on both VMs by the fixture script. `flatpak_sync` fails
-        validation where flatpak is absent, and a validation error aborts the whole sync
-        before any job executes, so its absence is checked up front rather than quietly
-        narrowing what this test covers.
-
-        Two independent witnesses, both read off pc2's own package managers rather than
-        pc-switcher's output:
-
-        1. `_MachinePackageState` (apt manual set, hold set, full dpkg-installed set and
-           `/etc/apt` digests; `snap list` revisions; `flatpak list` refs and the remote
-           table) is captured immediately before and after run 2 and must be identical --
-           no install, no removal, no re-mark, and none of the derived `/etc/apt` or remote
-           writes a run makes without a review line of its own.
-        2. Run 2 maps the converged item to SKIP_ALWAYS. A SKIP_ALWAYS on a presented
-           item writes a `DecisionEntry` on the machine that holds it (D-08a), so the
-           entry's ABSENCE from both machines' decision files afterwards is state-based
-           proof that the review never presented the item -- it is no longer a diff.
-
-        Scope, stated honestly: witness 2 is scoped to the item this test converged.
-        Items that were already diverged between the two VMs and were left SKIP_ONCE by
-        run 1 are legitimately presented again in run 2; that is not what idempotency
-        promises. Witness 1 is unscoped and covers all three managers.
-
-        snapd auto-refresh is paused on both hosts for the whole test (the same timed
-        `refresh.hold` a sync engages, restored exactly afterwards) so a background
-        refresh cannot change `snap list` between the two captures and be misread as the
-        run having done something.
-        """
-        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
-
-        candidate = await _removable_candidate(pc1_executor, pc2_executor)
-        item_id = AptPackageItem(name=candidate, version="").item_id
-
-        pc1_prior_hold = await _capture_system_refresh_hold(pc1_executor)
-        pc2_prior_hold = await _capture_system_refresh_hold(pc2_executor)
-
-        try:
-            await _engage_system_refresh_hold(pc1_executor)
-            await _engage_system_refresh_hold(pc2_executor)
-
-            remove_result = await pc2_executor.run_command(
-                f"sudo DEBIAN_FRONTEND=noninteractive apt-get remove --assume-yes {shlex.quote(candidate)}",
-                login_shell=False,
-                timeout=120.0,
-            )
-            assert remove_result.success, f"Failed to remove {candidate} from pc2: {remove_result.stderr}"
-
-            await _assert_flatpak_available(pc1_executor)
-            await _assert_flatpak_available(pc2_executor)
-            await _write_package_sync_config(pc1_executor, apt_sync=True, snap_sync=True, flatpak_sync=True)
-
-            first_cmd = f"{_automation_env_assignment(item_id)} pc-switcher sync pc2 --yes --allow-first-sync"
-            first_result = await pc1_executor.run_command(first_cmd, timeout=300.0, login_shell=True)
-            assert first_result.success, (
-                f"converging sync exited {first_result.exit_code}.\n"
-                f"stdout: {first_result.stdout}\nstderr: {first_result.stderr}"
-            )
-            converged = await pc2_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0)
-            assert candidate in nonblank_lines(converged.stdout), (
-                f"{candidate} not reinstalled on pc2 -- run 1 did not converge, so run 2 proves nothing"
-            )
-
-            before = await _capture_machine_package_state(pc2_executor)
-
-            # SKIP_ALWAYS, not APPLY: an APPLY on an item that is genuinely no longer a
-            # diff and an APPLY on an item that was never presented are indistinguishable
-            # from the end state, whereas a SKIP_ALWAYS leaves a decision-file trace iff
-            # the item WAS presented.
-            second_decisions = {item_id: Decision.SKIP_ALWAYS}
-            second_cmd = (
-                f"{_automation_env_assignment_multi(second_decisions)} "
-                "pc-switcher sync pc2 --yes --allow-first-sync --allow-out-of-order"
-            )
-            second_result = await pc1_executor.run_command(second_cmd, timeout=300.0, login_shell=True)
-            assert second_result.success, (
-                f"second sync exited {second_result.exit_code}.\n"
-                f"stdout: {second_result.stdout}\nstderr: {second_result.stderr}"
-            )
-
-            after = await _capture_machine_package_state(pc2_executor)
-            assert after == before, (
-                "the second consecutive sync changed pc2's package-manager state -- the run is not a fixed point.\n"
-                f"before: {before}\nafter: {after}"
-            )
-
-            source_entries = await DecisionFile("apt", pc1_executor).load()
-            target_entries = await DecisionFile("apt", pc2_executor).load()
-            assert item_id not in source_entries and item_id not in target_entries, (
-                f"{candidate} was still presented in the second run's review (its SKIP_ALWAYS was recorded) -- "
-                "a converged item must produce no diff at all"
-            )
-        finally:
-            await _restore_package(pc2_executor, candidate)
-            await _restore_system_refresh_hold(pc1_executor, pc1_prior_hold)
-            await _restore_system_refresh_hold(pc2_executor, pc2_prior_hold)
-
-
-class TestSnapHoldCaptureTiming:
-    """The VM check #208 D9 promised and never got (L10).
-
-    `SnapSyncJob` reads per-snap holds out of `snap list`'s Notes column DURING the sync,
-    i.e. inside the window in which the orchestrator has a system-wide `refresh.hold`
-    engaged on both hosts. D9 assumes those are separate snapstate -- that a system-wide
-    hold neither sets nor clears an individual snap's `held` note -- and says so in a
-    comment in `snap_sync._parse_snap_list`. Nothing had ever checked it against a real
-    snapd.
-    """
-
-    async def test_system_refresh_hold_does_not_mask_a_per_snap_held_note(
-        self,
-        pc2_executor: BashLoginRemoteExecutor,
-    ) -> None:
-        """E71 — With a system-wide `refresh.hold` engaged, a per-snap hold still reads `held`
-        in `snap list` Notes, and a snap WITHOUT a per-snap hold still reads no `held`.
-
-        Both directions matter. If the system hold masked the note, capture inside the
-        sync window would silently drop every hold the user set (holds would never
-        replicate). If it ADDED the note, capture would invent a hold for every snap on
-        the machine. D9's fail-safe (a system hold flips both hosts symmetrically, so a
-        spurious flag cancels out in the membership diff) covers the second case only as
-        long as both hosts are held -- which is why this asserts the note itself rather
-        than relying on the diff to absorb it.
-
-        Runs no sync, so it needs neither a pc-switcher install nor the state reset: the
-        subject is snapd's own semantics, read straight off `snap list`.
-        """
-        held_name, unheld_name = await _holdable_snaps(pc2_executor, count=2)
-
-        prior_hold = await _capture_system_refresh_hold(pc2_executor)
-        try:
-            hold_result = await pc2_executor.run_command(
-                f"sudo snap refresh --hold=forever {shlex.quote(held_name)}", login_shell=False, timeout=60.0
-            )
-            assert hold_result.success, f"Failed to set a per-snap hold on {held_name}: {hold_result.stderr}"
-
-            # Baseline, before any system-wide hold exists: the per-snap hold is visible
-            # at all. Without this the assertion below could pass vacuously on a snapd
-            # that never writes `held` into Notes.
-            assert "held" in await _snap_notes(pc2_executor, held_name), (
-                f"snapd did not report `held` in `snap list` Notes for {held_name} after "
-                "`snap refresh --hold=forever` -- the per-snap hold mechanism this assumption is about is not visible"
-            )
-
-            await _engage_system_refresh_hold(pc2_executor)
-            engaged = await _capture_system_refresh_hold(pc2_executor)
-            assert engaged is not None, (
-                "system-wide refresh.hold did not take effect; the check below would be vacuous"
-            )
-
-            notes_under_system_hold = await _snap_notes(pc2_executor, held_name)
-            assert "held" in notes_under_system_hold, (
-                f"#208 D9 IS FALSE: with a system-wide refresh.hold engaged ({engaged}), {held_name}'s per-snap hold "
-                f"no longer reads `held` in `snap list` Notes (notes: {sorted(notes_under_system_hold)}). "
-                "snap_sync captures inside exactly this window, so every per-snap hold would be silently dropped -- "
-                "the capture must move BEFORE the sync-window hold is applied."
-            )
-
-            unheld_notes = await _snap_notes(pc2_executor, unheld_name)
-            assert "held" not in unheld_notes, (
-                f"#208 D9 IS FALSE in the other direction: a system-wide refresh.hold ({engaged}) put `held` "
-                f"into {unheld_name}'s Notes even though no per-snap hold was set on it "
-                f"(notes: {sorted(unheld_notes)}) -- capture inside the sync window would invent holds."
-            )
-        finally:
-            await pc2_executor.run_command(
-                f"sudo snap refresh --unhold {shlex.quote(held_name)}", login_shell=False, timeout=60.0
-            )
-            await _restore_system_refresh_hold(pc2_executor, prior_hold)
-
-    async def test_per_snap_hold_replicates_through_a_real_sync_window(
-        self,
-        pc1_executor: BashLoginRemoteExecutor,
-        pc2_executor: BashLoginRemoteExecutor,
-        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
-        pc2_with_pcswitcher: BashLoginRemoteExecutor,
-        reset_pcswitcher_state: None,
-    ) -> None:
-        """E55 — The same assumption, end to end: a hold set on the source only reaches the
-        target through a real sync -- whose orchestrator engages the system-wide
-        `refresh.hold` on both hosts around the job window (L6) before snap_sync reads
-        `snap list`.
-
-        Proven against pc2's own `snap list` Notes. If the system hold masked per-snap
-        holds, the source-side capture would see no hold, emit no `snap:hold:` diff, and
-        pc2 would end the run unheld.
-        """
-        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
-
-        name = await _snap_subject(pc1_executor, pc2_executor)
-
-        try:
-            hold_result = await pc1_executor.run_command(
-                f"sudo snap refresh --hold=forever {shlex.quote(name)}", login_shell=False, timeout=60.0
-            )
-            assert hold_result.success, f"Failed to set a per-snap hold on pc1's {name}: {hold_result.stderr}"
-            assert "held" not in await _snap_notes(pc2_executor, name), (
-                f"{name} is already held on pc2 before the run; the replication below would prove nothing"
-            )
-
-            await _write_package_sync_config(pc1_executor, snap_sync=True)
-
-            sync_cmd = (
-                f"{_automation_env_assignment(_snap_hold_item_id(name))} pc-switcher sync pc2 --yes --allow-first-sync"
-            )
-            sync_result = await pc1_executor.run_command(sync_cmd, timeout=300.0, login_shell=True)
-            assert sync_result.success, (
-                f"pc-switcher sync exited {sync_result.exit_code}.\n"
-                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
-            )
-
-            target_notes = await _snap_notes(pc2_executor, name)
-            assert "held" in target_notes, (
-                f"pc1's per-snap hold on {name} did not reach pc2 (pc2 notes: {sorted(target_notes)}). "
-                "If the source capture ran inside the orchestrator's system-wide refresh.hold window and saw no "
-                "hold, #208 D9's capture-timing assumption is false and the capture must move earlier."
-            )
-        finally:
-            for executor in (pc1_executor, pc2_executor):
-                await executor.run_command(
-                    f"sudo snap refresh --unhold {shlex.quote(name)}", login_shell=False, timeout=60.0
-                )
-
-
-class TestCrossDirectionRoundTrips:
-    """Narratives that only exist across MORE than one run and, for N4, more than one
-    direction -- the shape a real two-machine workflow actually has, and the one thing a
-    single-run test can never observe.
-    """
-
-    async def test_install_propagates_then_reversed_removal_needs_approval(
-        self,
-        pc1_executor: BashLoginRemoteExecutor,
-        pc2_executor: BashLoginRemoteExecutor,
-        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
-        pc2_with_pcswitcher: BashLoginRemoteExecutor,
-        reset_pcswitcher_state: None,
-    ) -> None:
-        """A54, H31, H114, N7, N9 — N4, whole: pc1 -> pc2 installs a package; the user then removes it on pc2;
-        pc2 -> pc1 offers that removal as an item that does NOT take effect on its own
-        and DOES when approved.
-
-        The middle run is the point. A removal-direction item lands in its own unticked
-        group (D-07/I3), so leaving it undecided must leave pc1's package installed --
-        proven by deciding it SKIP_ONCE explicitly and reading pc1's own
-        `apt-mark showmanual`. Only the third run, which approves the same item, may
-        remove it.
-
-        Candidate safety is vetted against pc2's reverse dependencies
-        (`pick_safe_removal_candidates`); the final run removes the package from pc1
-        instead. The two VMs are provisioned from one baseline, so the reverse-dependency
-        picture is the same on both -- if it ever diverges, apt_sync's own collateral
-        guard refuses the item and this test fails loudly rather than damaging pc1.
-        """
-        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
-
-        candidate = await _removable_candidate(pc1_executor, pc2_executor)
-        item_id = AptPackageItem(name=candidate, version="").item_id
-
-        try:
-            remove_result = await pc2_executor.run_command(
-                f"sudo DEBIAN_FRONTEND=noninteractive apt-get remove --assume-yes {shlex.quote(candidate)}",
-                login_shell=False,
-                timeout=120.0,
-            )
-            assert remove_result.success, f"Failed to remove {candidate} from pc2: {remove_result.stderr}"
-
-            # Run 1: pc1 -> pc2, the install direction.
-            await _write_apt_sync_config(pc1_executor)
-            forward_cmd = f"{_automation_env_assignment(item_id)} pc-switcher sync pc2 --yes --allow-first-sync"
-            forward_result = await pc1_executor.run_command(forward_cmd, timeout=300.0, login_shell=True)
-            assert forward_result.success, (
-                f"forward sync exited {forward_result.exit_code}.\n"
-                f"stdout: {forward_result.stdout}\nstderr: {forward_result.stderr}"
-            )
-            after_forward = await pc2_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0)
-            assert candidate in nonblank_lines(after_forward.stdout), (
-                f"{candidate} did not propagate to pc2; the reversed direction below would have nothing to remove"
-            )
-
-            # The user removes it again on pc2, which is about to become the SOURCE.
-            second_removal = await pc2_executor.run_command(
-                f"sudo DEBIAN_FRONTEND=noninteractive apt-get remove --assume-yes {shlex.quote(candidate)}",
-                login_shell=False,
-                timeout=120.0,
-            )
-            assert second_removal.success, f"Failed to remove {candidate} from pc2 again: {second_removal.stderr}"
-
-            await _write_apt_sync_config(pc2_executor)
-
-            # Run 2: pc2 -> pc1, removal direction, explicitly left undecided.
-            undecided_cmd = (
-                f"{_automation_env_assignment_multi({item_id: Decision.SKIP_ONCE})} "
-                "pc-switcher sync pc1 --yes --allow-first-sync"
-            )
-            undecided_result = await pc2_executor.run_command(undecided_cmd, timeout=300.0, login_shell=True)
-            assert undecided_result.success, (
-                f"reversed sync (undecided) exited {undecided_result.exit_code}.\n"
-                f"stdout: {undecided_result.stdout}\nstderr: {undecided_result.stderr}"
-            )
-            pc1_after_undecided = await pc1_executor.run_command(
-                "apt-mark showmanual", login_shell=False, timeout=15.0
-            )
-            assert candidate in nonblank_lines(pc1_after_undecided.stdout), (
-                f"{candidate} was removed from pc1 without being approved -- a removal-direction item must take "
-                "effect only when the user ticks it"
-            )
-
-            # Run 3: same direction, same item, approved this time.
-            approved_cmd = (
-                f"{_automation_env_assignment(item_id)} "
-                "pc-switcher sync pc1 --yes --allow-first-sync --allow-out-of-order"
-            )
-            approved_result = await pc2_executor.run_command(approved_cmd, timeout=300.0, login_shell=True)
-            assert approved_result.success, (
-                f"reversed sync (approved) exited {approved_result.exit_code}.\n"
-                f"stdout: {approved_result.stdout}\nstderr: {approved_result.stderr}"
-            )
-            pc1_after_approved = await pc1_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0)
-            assert candidate not in nonblank_lines(pc1_after_approved.stdout), (
-                f"{candidate} still manually installed on pc1 after the removal was approved -- the removal did not "
-                "propagate back across the reversed direction"
-            )
-        finally:
-            await _restore_package(pc1_executor, candidate)
-            await _restore_package(pc2_executor, candidate)
-
-    async def test_apt_source_and_its_key_removed_together(
-        self,
-        pc1_executor: BashLoginRemoteExecutor,
-        pc2_executor: BashLoginRemoteExecutor,
-        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
-        pc2_with_pcswitcher: BashLoginRemoteExecutor,
-        reset_pcswitcher_state: None,
-    ) -> None:
-        """C24, C63, C104: a vendor repository file that exists only on the TARGET is removed, and
-        its signing key goes with it although the user decided only about the repository —
-        leaving pc2 with an `apt-get update` that works and no longer reaches for the
-        removed repository at all.
-
-        The key is collected because, once the repository file is gone, nothing on pc2
-        references it any more. That count is taken after the deletion actually happened,
-        which is why this run is the VM-level witness for it.
-
-        The witness is apt's own account of which repositories it tried, not its exit
-        code: `apt-get update` exits 0 when an index fails to fetch (it downgrades the
-        failure to a `W:` warning and reuses the cached list), so the exit code says the
-        same thing before and after. What differs is the output. While the pair exists
-        apt prints an `Err:` line naming the unresolvable synthetic host -- asserted
-        before the run, which is what makes that host's total absence from the run
-        afterwards a real witness rather than a tautology, and non-vacuous in both
-        directions: had the removal not happened, the `Err:` line would still be there.
-
-        The post-removal exit code is asserted too, for the failure the output check
-        cannot see: an `/etc/apt` left syntactically unreadable, which apt does treat as
-        a hard error.
-
-        Unlike this module's other repo test this one is NOT a dry run: the removals are
-        real, which is the only way `/etc/apt` and a live `apt-get update` can be the
-        witnesses.
-        """
-        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
-
-        source_filename = ""
-        key_filename = ""
-        try:
-            source_filename, key_filename = await _create_synthetic_repo_and_key(pc2_executor)
-            source_dest = f"{_APT_SOURCES_DIR}/{source_filename}"
-            key_dest = f"{_APT_KEYRINGS_DIR}/{key_filename}"
-
-            broken_update = await _apt_get_update(pc2_executor)
-            reached_for_repo = apt_update_lines_naming(broken_update, _SYNTHETIC_REPO_HOST)
-            assert any(line.startswith("Err:") for line in reached_for_repo), (
-                f"pc2's `apt-get update` reported no `Err:` line naming {_SYNTHETIC_REPO_HOST} while the unreachable "
-                "synthetic repo was configured, so apt is not actually reaching for that repo and its absence from "
-                "the post-removal run below would prove nothing.\n"
-                f"lines naming the host: {reached_for_repo}\n"
-                f"stdout: {broken_update.stdout}\nstderr: {broken_update.stderr}"
-            )
-
-            await _write_apt_sync_config(pc1_executor)
-
-            # The REPOSITORY only: the key has no reviewable identity to decide about.
-            decisions = {f"apt:source:{source_filename}": Decision.APPLY}
-            sync_cmd = f"{_automation_env_assignment_multi(decisions)} pc-switcher sync pc2 --yes --allow-first-sync"
-            sync_result = await pc1_executor.run_command(sync_cmd, timeout=300.0, login_shell=True)
-            assert sync_result.success, (
-                f"pc-switcher sync exited {sync_result.exit_code}.\n"
-                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
-            )
-
-            gone = await pc2_executor.run_command(
-                f"test ! -e {shlex.quote(source_dest)} && test ! -e {shlex.quote(key_dest)}",
-                login_shell=False,
-                timeout=10.0,
-            )
-            assert gone.success, (
-                f"{source_filename} and/or {key_filename} still present under /etc/apt on pc2 after the repository "
-                f"removal was approved -- the key it left unreferenced was not collected.\n"
-                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
-            )
-
-            working_update = await _apt_get_update(pc2_executor)
-            still_reaching = apt_update_lines_naming(working_update, _SYNTHETIC_REPO_HOST)
-            assert not still_reaching, (
-                f"pc2's `apt-get update` still names {_SYNTHETIC_REPO_HOST} after the repo file and its key were "
-                "removed -- apt is still configured with the repository, so the pair did not actually leave "
-                f"/etc/apt.\nlines naming the host: {still_reaching}\n"
-                f"stdout: {working_update.stdout}\nstderr: {working_update.stderr}"
-            )
-            assert working_update.success, (
-                "pc2's `apt-get update` exits non-zero after the repo file and its key were removed -- /etc/apt was "
-                f"left unreadable.\nstdout: {working_update.stdout}\nstderr: {working_update.stderr}"
-            )
-        finally:
-            cleanup_paths = " ".join(
-                shlex.quote(f"{directory}/{filename}")
-                for directory, filename in (
-                    (_APT_SOURCES_DIR, source_filename),
-                    (_APT_KEYRINGS_DIR, key_filename),
-                )
-                if filename
-            )
-            if cleanup_paths:
-                await pc2_executor.run_command(f"sudo rm --force {cleanup_paths}", login_shell=False, timeout=15.0)
-                await pc1_executor.run_command(f"sudo rm --force {cleanup_paths}", login_shell=False, timeout=15.0)
-
-
-# The two files ADR-020 D-38 gates on the target's Ubuntu Pro attachment, with the real
-# stanzas `pro enable` writes. Their `Signed-By:` keyrings ship with `ubuntu-pro-client`
-# on every Ubuntu 24.04, attached or not, so this is the file set a genuinely attached
-# source carries — not an approximation of it.
-_ESM_SOURCE_BODIES = {
-    "ubuntu-esm-apps.sources": (
-        "Types: deb\n"
-        "URIs: https://esm.ubuntu.com/apps/ubuntu\n"
-        "Suites: noble-apps-security noble-apps-updates\n"
-        "Components: main\n"
-        "Signed-By: /usr/share/keyrings/ubuntu-pro-esm-apps.gpg\n"
-    ),
-    "ubuntu-esm-infra.sources": (
-        "Types: deb\n"
-        "URIs: https://esm.ubuntu.com/infra/ubuntu\n"
-        "Suites: noble-infra-security noble-infra-updates\n"
-        "Components: main\n"
-        "Signed-By: /usr/share/keyrings/ubuntu-pro-esm-infra.gpg\n"
-    ),
-}
-
-
-class TestTheESMAttachmentGateOnVMs:
-    """ADR-020 D-38 at VM level: a source carrying the two `ubuntu-esm-*` sources and a
-    target with no Ubuntu Pro attachment.
-
-    Only the SKIP arm is testable here, and that is a statement about the fixtures, not a
-    gap in the gate: `pro attach` needs the user's own subscription token from their Pro
-    dashboard or an interactive browser short-code flow, a machine's credentials are not
-    transferable, and putting a subscription token in CI would violate the project's
-    secrets rule. Both VMs are therefore permanently unattached — which is exactly the
-    machine this test needs, and is why nothing here is skipped or discovered: the test
-    puts both machines in the state the gate needs and restores them in a `finally`.
-
-    What only a VM can prove: that the skip costs the WHOLE job. `/etc/apt/preferences.d`
-    always-syncs with no derivation predicate, so an implementation that withheld only the
-    two sources would still put the source's pin on the target — visible here as a file on
-    pc2, and invisible to any mocked-executor unit test. That pin is the uuid-suffixed
-    synthetic one, not `ubuntu-pro-esm-apps`: `ubuntu-pro-client` SHIPS
-    `/etc/apt/preferences.d/ubuntu-pro-esm-apps` and `-esm-infra` (`dpkg -L`, measured on
-    both VMs) whether or not the machine is attached, so the real ESM pins are byte-identical
-    on source and target and can never be a pending write to witness anything with.
-    """
-
-    async def test_an_unattached_target_skips_apt_sync_and_leaves_etc_apt_untouched(
-        self,
-        pc1_executor: BashLoginRemoteExecutor,
-        pc2_executor: BashLoginRemoteExecutor,
-        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
-        pc2_with_pcswitcher: BashLoginRemoteExecutor,
-        reset_pcswitcher_state: None,
-    ) -> None:
-        """H54, J10, N18."""
-        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
-
-        esm_dests = [f"{_APT_SOURCES_DIR}/{name}" for name in _ESM_SOURCE_BODIES]
-        source_aside = ""
-        target_aside = ""
-        pin_dest = ""
-        try:
-            # Both machines are PUT in the state the gate needs rather than asked to be in
-            # it already: pc2 carrying neither file — a target copy with the source's digest
-            # is not a pending write, so the gate would never fire — and pc1 carrying both
-            # with the bodies below, whatever either machine came with.
-            target_aside = await _take_paths_aside(pc2_executor, esm_dests)
-            source_aside = await _take_paths_aside(pc1_executor, esm_dests)
-            writes = [
-                f"printf %s {shlex.quote(body)} | sudo tee {shlex.quote(f'{_APT_SOURCES_DIR}/{name}')} > /dev/null"
-                for name, body in _ESM_SOURCE_BODIES.items()
-            ]
-            created = await pc1_executor.run_command(" && ".join(writes), login_shell=False, timeout=20.0)
-            assert created.success, f"Failed to create the ESM sources on pc1: {created.stderr}"
-
-            pin_dest = f"{_APT_PREFERENCES_DIR}/{await _create_synthetic_pin(pc1_executor)}"
-
-            # snap_sync runs after apt_sync and is the evidence that a skip is not an abort.
-            await _write_package_sync_config(pc1_executor, apt_sync=True, snap_sync=True)
-
-            # No automation env and no pty: `ask_gate` finds no TTY, which is the
-            # non-interactive path the user ruled must skip the whole job.
-            sync_result = await pc1_executor.run_command(
-                "pc-switcher sync pc2 --yes --allow-first-sync", timeout=300.0, login_shell=True
-            )
-            assert sync_result.success, (
-                f"a skipped job must not fail the run.\nstdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
-            )
-
-            combined_output = sync_result.stdout + sync_result.stderr
-            assert "apt_sync skipped" in combined_output, f"apt_sync was not reported as skipped.\n{combined_output}"
-            for name in _ESM_SOURCE_BODIES:
-                assert name in combined_output, f"the skip reason does not name {name}.\n{combined_output}"
-            assert "snap_sync" in combined_output, (
-                f"the job after apt_sync did not run — a skip must not abort the sync.\n{combined_output}"
-            )
-
-            # The load-bearing assertion: pc2's /etc/apt is exactly as it was, the PIN
-            # included. A gate that withheld only the two sources would leave the pin here.
-            untouched = await pc2_executor.run_command(
-                " && ".join(f"test ! -e {shlex.quote(path)}" for path in (*esm_dests, pin_dest)),
-                login_shell=False,
-                timeout=10.0,
-            )
-            assert untouched.success, (
-                "a skipped apt_sync still wrote to pc2's /etc/apt — the whole job must leave it as it was"
-            )
-        finally:
-            if pin_dest:
-                # uuid-suffixed, so this can never name a file either machine came with.
-                cleanup = shlex.quote(pin_dest)
-                await pc1_executor.run_command(f"sudo rm --force {cleanup}", login_shell=False, timeout=15.0)
-                await pc2_executor.run_command(f"sudo rm --force {cleanup}", login_shell=False, timeout=15.0)
-            if source_aside:
-                await _put_paths_back(pc1_executor, source_aside, esm_dests)
-            if target_aside:
-                await _put_paths_back(pc2_executor, target_aside, esm_dests)
-
-
-class TestSnapRemovalKeepsSnapdsSnapshot:
-    """`PKG-FR-SNAP-REMOVE-SNAPSHOT` on real machines: a removal made through a sync leaves
-    snapd's own pre-removal snapshot behind, so the data the removed snap held is still
-    recoverable.
-
-    The unit test proves the command shape — the removal never passes `--purge`. What it
-    cannot show is the consequence the article is actually about, which lives entirely in
-    snapd: that a removal without `--purge` really does take a snapshot, and that it is
-    still there once the run has finished.
-    """
-
-    async def test_a_removal_through_a_sync_leaves_a_snapshot_snap_saved_lists(
-        self,
-        pc1_executor: BashLoginRemoteExecutor,
-        pc2_executor: BashLoginRemoteExecutor,
-        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
-        pc2_with_pcswitcher: BashLoginRemoteExecutor,
-        reset_pcswitcher_state: None,
-    ) -> None:
-        """E36, E37 — A snap the source no longer has is removed from pc2 by an approved item,
-        and `snap saved` on pc2 then lists a snapshot for it.
-
-        The subject is made target-only by removing it from pc1 with `--purge`, so pc1 keeps
-        no snapshot of its own and the one found on pc2 afterwards can only be this run's.
-        The snap is given system data first: a snapshot of a snap that never held any is not
-        the case the article is about, and asserting on one would leave the test passing for
-        a reason nobody intended.
-
-        `_FIXTURE_SNAPS[1]` rather than `[0]`: the first fixture snap is the one carrying
-        distinct revisions across channels, which `_alternate_snap_revision` needs intact.
-        """
-        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
-
-        name = (await _snap_subjects(pc1_executor, pc2_executor, count=2))[1]
-        quoted = shlex.quote(name)
-        source_revision = await _snap_revision(pc1_executor, name)
-        target_revision = await _snap_revision(pc2_executor, name)
-        assert source_revision and target_revision, f"{name} is not installed on both machines"
-        sets_before = {set_id for set_id, _snap in await _snap_saved_rows(pc2_executor)}
-
-        uniq = uuid4().hex[:12]
-        data_file = f"/var/snap/{name}/common/pcswitcher-it-{uniq}"
-        try:
-            seeded = await pc2_executor.run_command(
-                f"sudo mkdir --parents {shlex.quote(f'/var/snap/{name}/common')} && "
-                f"printf %s pcswitcher-it-{uniq} | sudo tee {shlex.quote(data_file)} > /dev/null",
-                login_shell=False,
-                timeout=30.0,
-            )
-            assert seeded.success, f"could not give {name} data on pc2 to snapshot: {seeded.stderr}"
-
-            removed = await pc1_executor.run_command(
-                f"sudo snap remove --purge {quoted}", login_shell=False, timeout=180.0
-            )
-            assert removed.success, f"Failed to remove {name} from pc1: {removed.stderr}"
-
-            await _write_package_sync_config(pc1_executor, snap_sync=True)
-
-            sync_cmd = f"{_automation_env_assignment(f'snap:{name}')} pc-switcher sync pc2 --yes --allow-first-sync"
-            sync_result = await pc1_executor.run_command(sync_cmd, timeout=300.0, login_shell=True)
-            assert sync_result.success, (
-                f"pc-switcher sync exited {sync_result.exit_code}.\n"
-                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
-            )
-
-            still_there = await pc2_executor.run_command(f"snap list {quoted}", login_shell=False, timeout=15.0)
-            assert not still_there.success, (
-                f"{name} is still installed on pc2, so no removal happened and the snapshot check below would say "
-                f"nothing.\n{still_there.stdout}"
-            )
-
-            saved = await _snap_saved_rows(pc2_executor)
-            assert any(snap == name for _set_id, snap in saved), (
-                f"snapd kept no snapshot for {name} after the sync removed it from pc2 — the removal took the "
-                f"machine's data with it.\nsnap saved: {saved}"
-            )
-        finally:
-            for set_id, snap in await _snap_saved_rows(pc2_executor):
-                if snap == name and set_id not in sets_before:
-                    await pc2_executor.run_command(
-                        f"sudo snap forget {shlex.quote(set_id)}", login_shell=False, timeout=60.0
-                    )
-            await _restore_snap(pc1_executor, name, source_revision)
-            await _restore_snap(pc2_executor, name, target_revision)
-            await pc2_executor.run_command(
-                f"sudo rm --force {shlex.quote(data_file)}", login_shell=False, timeout=15.0
-            )
-
-
-class TestSideloadedSnapsThroughARealRun:
-    """`PKG-FR-SNAP-SIDELOAD` end to end: a snap installed from local bytes is out of scope
-    entirely, so a whole run leaves it exactly where it was.
-
-    The unit coverage of the branch set is dense, and every one of those tests asserts about
-    a `snap list` listing this project composed. This asserts about one snapd produced for a
-    snap that genuinely has no store revision.
-    """
-
-    async def test_a_sideloaded_snap_survives_a_whole_run_untouched(
-        self,
-        pc1_executor: BashLoginRemoteExecutor,
-        pc2_executor: BashLoginRemoteExecutor,
-        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
-        pc2_with_pcswitcher: BashLoginRemoteExecutor,
-        reset_pcswitcher_state: None,
-    ) -> None:
-        """E49 — pc1 carries a sideloaded snap when the run starts; the run finishes and both
-        machines' `snap list` are exactly what they were.
-
-        Both machines' whole listings are compared, not just the sideload's row: "the run
-        does nothing about it" includes not installing it on pc2, not removing it from pc1,
-        and not moving anything else while it is there.
-
-        snapd's automatic refresh is paused on both machines for the whole test (the same
-        timed `refresh.hold` a sync engages, restored exactly afterwards), so a background
-        refresh cannot change a revision between the two listings and be read as the run's
-        doing.
-        """
-        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
-
-        uniq = uuid4().hex[:12]
-        name = f"pcswitcher-it-sideload-{uniq}"
-        directory = f"/var/tmp/pcswitcher-it-sideload-{uniq}"
-        pc1_prior_hold = await _capture_system_refresh_hold(pc1_executor)
-        pc2_prior_hold = await _capture_system_refresh_hold(pc2_executor)
-
-        try:
-            await _engage_system_refresh_hold(pc1_executor)
-            await _engage_system_refresh_hold(pc2_executor)
-
-            base = await _installed_base_snap(pc1_executor)
-            await _create_sideloaded_snap(pc1_executor, directory, name, base)
-
-            pc1_before = parse_snap_list_names_revisions(
-                (await pc1_executor.run_command("snap list --all", login_shell=False, timeout=20.0)).stdout
-            )
-            pc2_before = parse_snap_list_names_revisions(
-                (await pc2_executor.run_command("snap list --all", login_shell=False, timeout=20.0)).stdout
-            )
-            assert pc1_before.get(name, "").startswith("x"), (
-                f"pc1's {name} is at revision {pc1_before.get(name)!r}, not a sideloaded `x`-prefixed one, so this "
-                "run cannot exercise the sideload branch"
-            )
-            assert name not in pc2_before, f"{name} is somehow already on pc2"
-
-            await _write_package_sync_config(pc1_executor, snap_sync=True)
-
-            # An empty automation map: the review is answered, and nothing is approved. A
-            # sideload must produce no item at all, so there is nothing here to answer.
-            sync_cmd = f"{_automation_env_assignment_multi({})} pc-switcher sync pc2 --yes --allow-first-sync"
-            sync_result = await pc1_executor.run_command(sync_cmd, timeout=300.0, login_shell=True)
-            assert sync_result.success, (
-                f"pc-switcher sync exited {sync_result.exit_code} with a sideloaded snap on the source.\n"
-                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
-            )
-
-            pc1_after = parse_snap_list_names_revisions(
-                (await pc1_executor.run_command("snap list --all", login_shell=False, timeout=20.0)).stdout
-            )
-            pc2_after = parse_snap_list_names_revisions(
-                (await pc2_executor.run_command("snap list --all", login_shell=False, timeout=20.0)).stdout
-            )
-            assert pc1_after == pc1_before, (
-                f"the run changed pc1's own snaps.\nbefore: {pc1_before}\nafter: {pc1_after}"
-            )
-            assert pc2_after == pc2_before, (
-                f"the run changed pc2's snaps although the only divergence was a sideload.\n"
-                f"before: {pc2_before}\nafter: {pc2_after}"
-            )
-        finally:
-            await _remove_sideloaded_snap(pc1_executor, directory, name)
-            await _restore_system_refresh_hold(pc1_executor, pc1_prior_hold)
-            await _restore_system_refresh_hold(pc2_executor, pc2_prior_hold)
-
-
-class TestSnapPerItemFailureOnVMs:
-    """`PKG-FR-SNAP-FAIL-ITEM` on real machines: one snap item failing costs that item and
-    nothing else.
-
-    The failure is real snapd's, not a mock's: pc2 is put offline as far as the store is
-    concerned (`snap set system store.access=offline`), which is precisely the split the
-    claim needs — an install has to reach the store and a removal does not.
-    """
-
-    async def test_one_snap_item_fails_and_the_item_after_it_still_lands(
-        self,
-        pc1_executor: BashLoginRemoteExecutor,
-        pc2_executor: BashLoginRemoteExecutor,
-        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
-        pc2_with_pcswitcher: BashLoginRemoteExecutor,
-        reset_pcswitcher_state: None,
-    ) -> None:
-        """E53 — Two approved snap items, the first of which pc2's snapd cannot carry out: it
-        fails alone, the second still lands, and the sync's own exit code reports it.
-
-        Ordering is what makes "the rest still landed" a real claim rather than an accident:
-        `_diff_snap_items` walks the SOURCE's snaps before the target-only ones, so the
-        install is converged before the removal. The install is the item that fails.
-
-        Both subjects are fixture snaps, made divergent by removing one from each machine
-        with `--purge` (no snapshot to clean up afterwards), and both are put back at their
-        original revisions in the `finally`.
-        """
-        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
-
-        removal_subject, install_subject = await _snap_subjects(pc1_executor, pc2_executor, count=2)
-        removal_revision = await _snap_revision(pc2_executor, removal_subject)
-        install_revision = await _snap_revision(pc1_executor, install_subject)
-        source_removal_revision = await _snap_revision(pc1_executor, removal_subject)
-        target_install_revision = await _snap_revision(pc2_executor, install_subject)
-        assert removal_revision and install_revision and source_removal_revision and target_install_revision, (
-            f"{removal_subject} and {install_subject} must both be installed on both machines"
-        )
-
-        store_offline = False
-        try:
-            purged = await pc2_executor.run_command(
-                f"sudo snap remove --purge {shlex.quote(install_subject)}", login_shell=False, timeout=180.0
-            )
-            assert purged.success, f"Failed to remove {install_subject} from pc2: {purged.stderr}"
-            purged_source = await pc1_executor.run_command(
-                f"sudo snap remove --purge {shlex.quote(removal_subject)}", login_shell=False, timeout=180.0
-            )
-            assert purged_source.success, f"Failed to remove {removal_subject} from pc1: {purged_source.stderr}"
-
-            offline = await pc2_executor.run_command(_SNAP_STORE_OFFLINE_CMD, login_shell=False, timeout=60.0)
-            assert offline.success, (
-                f"`{_SNAP_STORE_OFFLINE_CMD}` failed, so pc2's snapd cannot be made to refuse an install and this "
-                f"run has no per-item failure to observe: {offline.stderr}"
-            )
-            store_offline = True
-            # The precondition, asserted rather than assumed: a store pc2 can still reach
-            # would install the snap and leave nothing to fail.
-            reachable = await pc2_executor.run_command(
-                f"snap info {shlex.quote(install_subject)}", login_shell=False, timeout=60.0
-            )
-            assert not reachable.success, (
-                f"pc2 still reaches the store for {install_subject}, so the install below would succeed.\n"
-                f"stdout: {reachable.stdout}\nstderr: {reachable.stderr}"
-            )
-
-            await _write_package_sync_config(pc1_executor, snap_sync=True)
-
-            decisions = {f"snap:{install_subject}": Decision.APPLY, f"snap:{removal_subject}": Decision.APPLY}
-            sync_cmd = f"{_automation_env_assignment_multi(decisions)} pc-switcher sync pc2 --yes --allow-first-sync"
-            sync_result = await pc1_executor.run_command(sync_cmd, timeout=300.0, login_shell=True)
-
-            assert not sync_result.success, (
-                "a run with a failed snap item must exit non-zero.\n"
-                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
-            )
-
-            failed_item = await pc2_executor.run_command(
-                f"snap list {shlex.quote(install_subject)}", login_shell=False, timeout=15.0
-            )
-            assert not failed_item.success, (
-                f"{install_subject} was installed on pc2 although its store is unreachable, so nothing failed and "
-                f"this run proves nothing.\n{failed_item.stdout}"
-            )
-            landed_item = await pc2_executor.run_command(
-                f"snap list {shlex.quote(removal_subject)}", login_shell=False, timeout=15.0
-            )
-            assert not landed_item.success, (
-                f"{removal_subject} is still on pc2: the item ordered after the failing one was never converged.\n"
-                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
-            )
-
-            # Secondary confirmation only — the exit code and pc2's own snapd above are the
-            # primary evidence. This says exactly one item failed rather than the whole job
-            # having collapsed, which the exit code cannot distinguish.
-            collapsed = _collapse_run_output(sync_result.stdout + sync_result.stderr)
-            assert "1 snap item(s) failed" in collapsed, (
-                f"the run did not report exactly one failed snap item.\n{sync_result.stdout}\n{sync_result.stderr}"
-            )
-        finally:
-            if store_offline:
-                restored = await pc2_executor.run_command(_SNAP_STORE_ONLINE_CMD, login_shell=False, timeout=60.0)
-                if not restored.success:
-                    print(f"[cleanup] failed to put pc2's snapd back online: {restored.stderr}")
-            await _restore_snap(pc1_executor, removal_subject, source_removal_revision)
-            await _restore_snap(pc2_executor, removal_subject, removal_revision)
-            await _restore_snap(pc2_executor, install_subject, target_install_revision)
-
-
-# How long to wait for a running sync to engage its sync-window hold, and how often to look.
-# The poll is what makes "inside the window" a measurement rather than a guess about how
-# long the steps before RUN_JOBS take on a given machine.
-_HOLD_POLL_TIMEOUT_SECONDS = 180.0
-_HOLD_POLL_INTERVAL_SECONDS = 0.5
-
-# `pkill --full` matches on the whole command line, and the shell that RUNS pkill has the
-# pattern in its own. The bracket makes the two differ: this regex matches `pc-switcher
-# sync`, and the literal text `pc-switcher[ ]sync` sitting in the shell's command line does
-# not match it — so the kill reaches the sync and not the shell asking for it.
-_KILL_RUNNING_SYNC_CMD = "pkill --signal KILL --full 'pc-switcher[ ]sync'"
-
-# How far ahead of the writing machine's own clock the sync-window suspension lapses, and
-# how much of that may already have elapsed by the time the value is read back. Restated
-# rather than imported, exactly as `_SYSTEM_REFRESH_HOLD_SET_CMD` above is: the point is
-# that the value snapd holds IS a near-future instant, which a test agreeing with whatever
-# the orchestrator's private constant currently says would not assert.
-_SNAP_HOLD_EXPECTED_DURATION = timedelta(hours=6)
-_SNAP_HOLD_DURATION_SLACK = timedelta(minutes=15)
-
-
-class TestTheSyncWindowHoldIsTimed:
-    """`PKG-FR-SNAP-REFRESH-PAUSE`'s self-healing half: the suspension a run writes is a
-    timed value on each machine's own clock, so a run that dies without cleaning up leaves
-    a hold that lapses rather than one that never does.
-
-    Only a real run can show it. The value is written by the orchestrator and put back by
-    its own cleanup, so the only moment it exists is inside the sync window — and the only
-    way it survives to be read is a run that never reaches its cleanup.
-    """
-
-    async def test_a_killed_run_leaves_a_timed_hold_on_each_machines_own_clock(
-        self,
-        pc1_executor: BashLoginRemoteExecutor,
-        pc2_executor: BashLoginRemoteExecutor,
-        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
-        pc2_with_pcswitcher: BashLoginRemoteExecutor,
-        reset_pcswitcher_state: None,
-    ) -> None:
-        """E88, E89 — A sync is killed inside its own window, and what snapd is left holding on
-        BOTH machines is an instant in that machine's own near future — never `forever`.
-
-        Killed with SIGKILL so no cleanup path can run: an orchestrator that restored the
-        prior value would leave nothing to read, and a run that exited normally would say
-        nothing about the case the article is about.
-
-        `dummy_success` is enabled after `snap_sync` purely to widen the window: it sleeps
-        for its configured default on each machine, which is what gives the poll below
-        something to catch the run in the middle of. Both machines' `refresh.hold` is
-        cleared first, so "a hold is set at all" is an unambiguous signal that the run wrote
-        one, and both are put back exactly as found in the `finally`.
-
-        The comparison is against each machine's OWN clock, never this runner's: an expiry
-        computed anywhere else would still look like a future instant here, and would lapse
-        at the wrong moment on the machine that has to honour it.
-        """
-        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
-
-        pc1_prior_hold = await _capture_system_refresh_hold(pc1_executor)
-        pc2_prior_hold = await _capture_system_refresh_hold(pc2_executor)
-        run_log = f"/var/tmp/pcswitcher-it-killed-sync-{uuid4().hex[:12]}.log"
-
-        try:
-            await _restore_system_refresh_hold(pc1_executor, None)
-            await _restore_system_refresh_hold(pc2_executor, None)
-            assert await _capture_system_refresh_hold(pc1_executor) is None, "pc1 still holds a refresh.hold"
-            assert await _capture_system_refresh_hold(pc2_executor) is None, "pc2 still holds a refresh.hold"
-
-            await _write_package_sync_config(pc1_executor, snap_sync=True, dummy_success=True)
-
-            started = await pc1_executor.run_command(
-                f"setsid nohup pc-switcher sync pc2 --yes --allow-first-sync > {run_log} 2>&1 < /dev/null &",
-                timeout=60.0,
-                login_shell=True,
-            )
-            assert started.success, f"could not start a sync in the background: {started.stderr}"
-
-            engaged_source: str | None = None
-            engaged_target: str | None = None
-            deadline = asyncio.get_running_loop().time() + _HOLD_POLL_TIMEOUT_SECONDS
-            while asyncio.get_running_loop().time() < deadline:
-                engaged_source = await _capture_system_refresh_hold(pc1_executor)
-                engaged_target = await _capture_system_refresh_hold(pc2_executor)
-                if engaged_source and engaged_target:
-                    break
-                await asyncio.sleep(_HOLD_POLL_INTERVAL_SECONDS)
-            log = await pc1_executor.run_command(f"cat {run_log}", login_shell=False, timeout=30.0)
-            assert engaged_source and engaged_target, (
-                "the run never paused snapd auto-refresh on both machines, so there is no window to die inside "
-                f"(pc1: {engaged_source!r}, pc2: {engaged_target!r}).\n{log.stdout}"
-            )
-
-            killed = await pc1_executor.run_command(_KILL_RUNNING_SYNC_CMD, login_shell=False, timeout=30.0)
-            assert killed.success, (
-                f"no running sync to kill — the run had already finished and restored both machines.\n{log.stdout}"
-            )
-
-            for executor, machine in ((pc1_executor, "pc1"), (pc2_executor, "pc2")):
-                left = await _capture_system_refresh_hold(executor)
-                assert left is not None, (
-                    f"{machine} was left with no refresh.hold at all by a run that died inside its own window"
-                )
-                assert left != "forever", (
-                    f"{machine} was left with an INDEFINITE snapd refresh.hold by a run that died: nothing will ever "
-                    "lift it, so that machine stops refreshing its snaps for good"
-                )
-                lapses = parse_rfc3339_utc(left)
-                now = await _machine_utc_now(executor)
-                assert lapses > now, (
-                    f"{machine}'s refresh.hold {left!r} is not in its own future (its clock reads {now}), so the "
-                    "suspension either never took effect or was computed against another machine's clock"
-                )
-                assert lapses - now <= _SNAP_HOLD_EXPECTED_DURATION, (
-                    f"{machine}'s refresh.hold {left!r} lapses {lapses - now} from now, further ahead than the "
-                    f"{_SNAP_HOLD_EXPECTED_DURATION} a sync window asks for"
-                )
-                assert lapses - now >= _SNAP_HOLD_EXPECTED_DURATION - _SNAP_HOLD_DURATION_SLACK, (
-                    f"{machine}'s refresh.hold {left!r} lapses {lapses - now} from now, far sooner than the "
-                    f"{_SNAP_HOLD_EXPECTED_DURATION} a sync window asks for"
-                )
-        finally:
-            await pc1_executor.run_command(_KILL_RUNNING_SYNC_CMD, login_shell=False, timeout=30.0)
-            await _restore_system_refresh_hold(pc1_executor, pc1_prior_hold)
-            await _restore_system_refresh_hold(pc2_executor, pc2_prior_hold)
-            await pc1_executor.run_command(f"rm --force {run_log}", login_shell=False, timeout=15.0)
-
-
-class TestTheSnapExclusionIsBuiltFromTheTargetsOwnSnapList:
-    """`PKG-FR-SNAP-DATA-BOUNDARY` where it hands off from one job to another: the exclusion
-    `folder_sync` applies is built from the TARGET's live `snap list`, read mid-run after the
-    package jobs have gone (`PKG-FR-JOB-ORDER` is what makes that read meaningful).
-
-    The unit tests compute that exclusion from a revision map a test wrote into them, so the
-    one thing they cannot show is where the map comes from: `folder_sync` asking the real
-    target machine and getting the revision its snapd is genuinely active at. That handoff is
-    the whole of what this costs two VMs for — the rest of the article is settled as strings
-    at the unit tier.
-
-    Two shapes of one listing, one test each: an app pc2 holds, where the answer names a
-    revision, and an app pc2 holds no revision of, where it names nothing at all.
-    """
-
-    async def test_the_revision_the_targets_snapd_holds_is_the_one_that_travels(
-        self,
-        pc1_executor: BashLoginRemoteExecutor,
-        pc2_executor: BashLoginRemoteExecutor,
-        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
-        pc2_with_pcswitcher: BashLoginRemoteExecutor,
-        reset_pcswitcher_state: None,
-    ) -> None:
-        """E113 — With `snap_sync` and `folder_sync` both enabled, the data directory that
-        reaches pc2 is the one for the revision pc2's OWN snapd reports, and not the one for a
-        revision it has never installed.
-
-        One app, two revision directories on pc1: the revision pc2 is active at — read off
-        pc2, never chosen here, so the directory travels because the target holds that
-        revision — and one no snapd on either machine has ever installed. The first arriving
-        is what makes the second's absence a witness rather than a run that transferred
-        nothing at all.
-
-        `~/snap` alone is the synced folder, and both machines' real one is set aside for the
-        duration: the mirror is a `--delete` one, so a hermetic tree is the only way the
-        transfer's outcome is exactly what this test built.
-        """
-        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
-
-        home = await _home_dir(pc1_executor)
-        assert await _home_dir(pc2_executor) == home, (
-            "the two machines' SSH users have different home directories, so `~/snap` is not one path to mirror"
-        )
-        snap_root = f"{home}/snap"
-
-        held_app = await _snap_subject(pc1_executor, pc2_executor)
-        held_revision = await _snap_revision(pc2_executor, held_app)
-        assert held_revision, f"{held_app} is not installed on pc2, so pc2 holds no revision of it"
-        stale_revision = str(int(held_revision) + 1000) if held_revision.isdigit() else f"{held_revision}0"
-
-        uniq = uuid4().hex[:12]
-        held_marker = f"{snap_root}/{held_app}/{held_revision}/pcswitcher-it-{uniq}"
-        stale_dir = f"{snap_root}/{held_app}/{stale_revision}"
-        stale_marker = f"{stale_dir}/pcswitcher-it-{uniq}"
-
-        source_aside = ""
-        target_aside = ""
-        try:
-            source_aside = await _take_paths_aside(pc1_executor, [snap_root])
-            target_aside = await _take_paths_aside(pc2_executor, [snap_root])
-
-            # `current` decides which revision dir the source offers at all; without it every
-            # one of the app's revision dirs is excluded and the run below proves nothing.
-            build = "\n".join(
-                ["set -eu"]
-                + [f"mkdir --parents {shlex.quote(path.rsplit('/', 1)[0])}" for path in (held_marker, stale_marker)]
-                + [f"printf %s {uniq} > {shlex.quote(path)}" for path in (held_marker, stale_marker)]
-                + [
-                    f"ln --symbolic --no-dereference --force {shlex.quote(held_revision)} "
-                    f"{shlex.quote(f'{snap_root}/{held_app}/current')}"
-                ]
-            )
-            built = await pc1_executor.run_command(build, login_shell=False, timeout=30.0)
-            assert built.success, f"could not build the ~/snap fixture on pc1: {built.stderr}"
-
-            await _write_package_sync_config(
-                pc1_executor,
-                extra_sections=_folder_sync_section(snap_root),
-                snap_sync=True,
-                folder_sync=True,
-            )
-
-            # An empty automation map: both machines are converged on the snaps themselves,
-            # and what this asserts is which listing the exclusion was built from, not a
-            # convergence.
-            sync_cmd = f"{_automation_env_assignment_multi({})} pc-switcher sync pc2 --yes --allow-first-sync"
-            sync_result = await pc1_executor.run_command(sync_cmd, timeout=600.0, login_shell=True)
-            assert sync_result.success, (
-                f"pc-switcher sync exited {sync_result.exit_code}.\n"
-                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
-            )
-
-            listing = await pc2_executor.run_command(
-                f"find {shlex.quote(snap_root)} -mindepth 1 | sort", login_shell=False, timeout=30.0
-            )
-            assert listing.success, f"could not read pc2's {snap_root}: {listing.stderr}"
-            arrived = set(nonblank_lines(listing.stdout))
-
-            assert held_marker in arrived, (
-                f"{held_marker} did not reach pc2, which is itself active at revision {held_revision} of "
-                f"{held_app}.\n{listing.stdout}"
-            )
-            assert not any(path == stale_dir or path.startswith(f"{stale_dir}/") for path in arrived), (
-                f"a data directory for revision {stale_revision} of {held_app} exists on pc2, whose snapd is on "
-                f"{held_revision} and never installed {stale_revision}.\n{listing.stdout}"
-            )
-        finally:
-            if source_aside:
-                await _put_paths_back(pc1_executor, source_aside, [snap_root])
-            if target_aside:
-                await _put_paths_back(pc2_executor, target_aside, [snap_root])
-
-    async def test_an_app_the_target_holds_no_revision_of_keeps_every_revision_dir_home(
-        self,
-        pc1_executor: BashLoginRemoteExecutor,
-        pc2_executor: BashLoginRemoteExecutor,
-        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
-        pc2_with_pcswitcher: BashLoginRemoteExecutor,
-        reset_pcswitcher_state: None,
-    ) -> None:
-        """E115 — pc1 has a snap pc2 does not, the install is declined, and no revision
-        directory of that app reaches pc2 — while `~/snap/<app>/common`, which belongs to no
-        revision, does.
-
-        The same read of pc2's own `snap list` the test above rests on, over the other answer
-        it can give: no entry for the app at all, rather than an entry naming a different
-        revision. Only a real run can produce that answer honestly — the app is absent from
-        pc2 because pc2's snapd genuinely never installed it, the decline being what leaves it
-        that way, and `folder_sync` reads that state itself after `snap_sync` has run
-        (`PKG-FR-JOB-ORDER`).
-
-        `common` arriving is the witness: it sits inside the same app directory and is never
-        excluded, so the revision directory's absence is the exclusion at work rather than a
-        transfer that never reached the app's tree.
-
-        `~/snap` alone is the synced folder, and both machines' real one is set aside for the
-        duration, for the reason the test above states.
-        """
-        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
-
-        home = await _home_dir(pc1_executor)
-        assert await _home_dir(pc2_executor) == home, (
-            "the two machines' SSH users have different home directories, so `~/snap` is not one path to mirror"
-        )
-        snap_root = f"{home}/snap"
-
-        # The second fixture snap, so the app whose revisions the test above works inside is
-        # left alone: this one is removed from pc2 outright.
-        absent_app = (await _snap_subjects(pc1_executor, pc2_executor, count=2))[1]
-        source_revision = await _snap_revision(pc1_executor, absent_app)
-        target_revision = await _snap_revision(pc2_executor, absent_app)
-        assert source_revision and target_revision, (
-            f"{absent_app} must be installed on both machines before this test removes it from pc2"
-        )
-
-        uniq = uuid4().hex[:12]
-        revision_dir = f"{snap_root}/{absent_app}/{source_revision}"
-        revision_marker = f"{revision_dir}/pcswitcher-it-{uniq}"
-        common_marker = f"{snap_root}/{absent_app}/common/pcswitcher-it-{uniq}"
-
-        source_aside = ""
-        target_aside = ""
-        removed = False
-        try:
-            # `--purge` leaves snapd no snapshot behind, so the machine ends this test as it
-            # started it once the snap is put back.
-            purged = await pc2_executor.run_command(
-                f"sudo snap remove --purge {shlex.quote(absent_app)}", login_shell=False, timeout=180.0
-            )
-            assert purged.success, f"could not remove {absent_app} from pc2: {purged.stderr}"
-            removed = True
-            assert await _snap_revision(pc2_executor, absent_app) is None, (
-                f"{absent_app} is still installed on pc2 after `snap remove --purge`, so pc2 holds a revision of it "
-                "and this run cannot exercise the branch"
-            )
-
-            source_aside = await _take_paths_aside(pc1_executor, [snap_root])
-            target_aside = await _take_paths_aside(pc2_executor, [snap_root])
-
-            # `current` decides which revision dir the source offers at all; without it the
-            # exclusion falls back to excluding every one for a different reason than the one
-            # under test.
-            build = "\n".join(
-                ["set -eu"]
-                + [
-                    f"mkdir --parents {shlex.quote(path.rsplit('/', 1)[0])}"
-                    for path in (revision_marker, common_marker)
-                ]
-                + [f"printf %s {uniq} > {shlex.quote(path)}" for path in (revision_marker, common_marker)]
-                + [
-                    f"ln --symbolic --no-dereference --force {shlex.quote(source_revision)} "
-                    f"{shlex.quote(f'{snap_root}/{absent_app}/current')}"
-                ]
-            )
-            built = await pc1_executor.run_command(build, login_shell=False, timeout=30.0)
-            assert built.success, f"could not build the ~/snap fixture on pc1: {built.stderr}"
-
-            await _write_package_sync_config(
-                pc1_executor,
-                extra_sections=_folder_sync_section(snap_root),
-                snap_sync=True,
-                folder_sync=True,
-            )
-
-            # The install is declined for this run, which is what keeps pc2 off every revision
-            # of the app. Stated rather than left to the automation hook's SKIP_ONCE default,
-            # since it is the premise of everything below.
-            decisions = {f"snap:{absent_app}": Decision.SKIP_ONCE}
-            sync_cmd = f"{_automation_env_assignment_multi(decisions)} pc-switcher sync pc2 --yes --allow-first-sync"
-            sync_result = await pc1_executor.run_command(sync_cmd, timeout=900.0, login_shell=True)
-            assert sync_result.success, (
-                f"pc-switcher sync exited {sync_result.exit_code}.\n"
-                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
-            )
-
-            assert await _snap_revision(pc2_executor, absent_app) is None, (
-                f"{absent_app} was installed on pc2 although its install was declined, so pc2 holds a revision of it "
-                f"and the absence below would prove nothing.\n"
-                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
-            )
-
-            listing = await pc2_executor.run_command(
-                f"find {shlex.quote(snap_root)} -mindepth 1 | sort", login_shell=False, timeout=30.0
-            )
-            assert listing.success, f"could not read pc2's {snap_root}: {listing.stderr}"
-            arrived = set(nonblank_lines(listing.stdout))
-
-            assert common_marker in arrived, (
-                f"{common_marker} did not reach pc2, so the mirror never reached {absent_app}'s tree at all and the "
-                f"absence of its revision directory says nothing.\n{listing.stdout}"
-            )
-            assert not any(path == revision_dir or path.startswith(f"{revision_dir}/") for path in arrived), (
-                f"a data directory for revision {source_revision} of {absent_app} exists on pc2, whose snapd holds no "
-                f"revision of that app at all.\n{listing.stdout}"
-            )
-        finally:
-            if source_aside:
-                await _put_paths_back(pc1_executor, source_aside, [snap_root])
-            if target_aside:
-                await _put_paths_back(pc2_executor, target_aside, [snap_root])
-            if removed:
-                await _restore_snap(pc2_executor, absent_app, target_revision)
-
-
 # The directory the install-snippet registry lives in, derived from the relpath
 # `packages.state` owns rather than restated, so moving the registry moves this with it.
 _REGISTRY_DIR_RELPATH = SNIPPET_REGISTRY_RELPATH.rsplit("/", 1)[0]
-
-
-class TestTheSnippetRegistrySurvivesAMirrorOfItsOwnDirectory:
-    """`PKG-FR-REGISTRY-CONSENT` where `folder_sync` could undo it: the registry travels only
-    as `manual_installs_sync`'s own push, which names the entries an overwrite would lose and
-    asks first, so a mirror of the same file is that transfer with the question removed.
-
-    The unit tests assert the `--filter` argument `folder_sync` builds for it. What they
-    cannot show is that argument holding against real rsync over the directory the registry
-    actually lives in — a `--delete` mirror that both overwrites and deletes, and carries
-    every other file in that directory across, while the target's own registry stands. The
-    exclusion is also built from live machine state: the path is resolved against the
-    invoking user's real home on the source and anchored to the transfer root.
-
-    The run has no terminal, one of the two shapes in which the push is never made, so
-    whatever reaches pc2's registry in it could only have come from the mirror.
-    """
-
-    async def test_a_deleting_mirror_of_the_registrys_directory_leaves_the_targets_copy_alone(
-        self,
-        pc1_executor: BashLoginRemoteExecutor,
-        pc2_executor: BashLoginRemoteExecutor,
-        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
-        pc2_with_pcswitcher: BashLoginRemoteExecutor,
-        reset_pcswitcher_state: None,
-    ) -> None:
-        """K88 — `folder_sync` mirrors the very directory the registry sits in and
-        `manual_installs_sync` runs with nobody to ask: pc2 ends the run holding its own
-        registry, entry for entry, and pc1's entry is nowhere in it.
-
-        The two machines hold registries that disagree — one entry each, neither known to the
-        other — which is exactly the loss `PKG-FR-REGISTRY-CONSENT` exists to put a question
-        in front of. pc1 also has a matching unowned `/opt` path, so the source's entry is one
-        this run genuinely has a use for rather than an inert line in a file.
-
-        A file of pc1's own beside the registry is the witness: it must arrive, or the mirror
-        never covered this directory and the registry surviving proves nothing about the
-        exclusion.
-
-        `~/.config/pc-switcher` alone is the synced folder — the tightest mirror that can
-        reach the registry at all, so the run touches nothing else on pc2, and the fixture
-        that clears that directory on both machines around every test is what makes each
-        registry exactly what this test wrote.
-        """
-        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
-
-        home = await _home_dir(pc1_executor)
-        assert await _home_dir(pc2_executor) == home, (
-            "the two machines' SSH users have different home directories, so the registry's directory is not one "
-            "path to mirror"
-        )
-        registry_dir = f"{home}/{_REGISTRY_DIR_RELPATH}"
-
-        uniq = uuid4().hex[:12]
-        source_path = f"/opt/pcswitcher-it-k88-source-{uniq}"
-        source_item = _unowned_item_id(source_path)
-        target_path = f"/opt/pcswitcher-it-k88-target-{uniq}"
-        target_item = _unowned_item_id(target_path)
-        target_body = f"# pc2's own snippet {uniq}"
-        travelling = f"{registry_dir}/pcswitcher-it-{uniq}"
-
-        try:
-            await _create_unowned_marker(pc1_executor, source_path)
-            await _author_snippet(pc1_executor, source_item, source_path, f"touch /tmp/pcswitcher-it-{uniq}")
-            await _author_snippet(pc2_executor, target_item, target_path, target_body)
-
-            await _write_package_sync_config(
-                pc1_executor,
-                extra_sections=_folder_sync_section(registry_dir),
-                manual_installs_sync=True,
-                folder_sync=True,
-            )
-            seeded = await pc1_executor.run_command(
-                f"printf %s {uniq} > {shlex.quote(travelling)}", login_shell=False, timeout=15.0
-            )
-            assert seeded.success, f"could not seed {travelling} on pc1: {seeded.stderr}"
-
-            # No pty and no automation hook: nobody is there to answer, so `manual_installs_sync`
-            # makes no push and the mirror is the only route left to the registry.
-            sync_result = await pc1_executor.run_command(
-                "pc-switcher sync pc2 --yes --allow-first-sync", timeout=900.0, login_shell=True
-            )
-            assert sync_result.success, (
-                f"pc-switcher sync exited {sync_result.exit_code}.\n"
-                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
-            )
-
-            arrived = await pc2_executor.run_command(f"cat {shlex.quote(travelling)}", login_shell=False, timeout=15.0)
-            assert arrived.success and arrived.stdout.strip() == uniq, (
-                f"{travelling} did not reach pc2, so the mirror never covered the directory the registry lives in and "
-                f"the registry surviving below says nothing.\nstdout: {arrived.stdout}\nstderr: {arrived.stderr}"
-            )
-
-            entries = await SnippetRegistry(pc2_executor).load()
-            assert source_item not in entries, (
-                f"pc1's snippet for {source_path} is in pc2's registry although nobody was asked: the registry "
-                f"reached pc2 without the question that is its only route.\nregistry holds: {sorted(entries)}"
-            )
-            assert set(entries) == {target_item}, (
-                f"pc2's registry is no longer its own: it holds {sorted(entries)} rather than the single entry "
-                f"{target_item} pc2 had before the run"
-            )
-            assert entries[target_item].body == target_body, (
-                f"pc2's own entry for {target_path} was overwritten: its body reads {entries[target_item].body!r} "
-                f"rather than {target_body!r}"
-            )
-        finally:
-            await _remove_unowned_marker(pc1_executor, source_path)
-
-
-class TestADeletedFlatpakRemoteTakesItsKey:
-    """`PKG-FR-FLATPAK-REMOTE-DELETE`'s last sentence: deleting a remote takes its signing
-    key with it.
-
-    Delegated to flatpak — this job issues `flatpak remote-delete` and nothing else — so the
-    claim is about what flatpak does, and no mocked executor can say anything about it. What
-    is at stake is trust: a keyring left behind is a vendor the machine still trusts for a
-    remote it no longer has.
-    """
-
-    async def test_deleting_an_unused_target_remote_removes_its_keyring_file(
-        self,
-        pc1_executor: BashLoginRemoteExecutor,
-        pc2_executor: BashLoginRemoteExecutor,
-        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
-        pc2_with_pcswitcher: BashLoginRemoteExecutor,
-        reset_pcswitcher_state: None,
-    ) -> None:
-        """F72 — After a run deletes a remote pc1 does not have and nothing on pc2 installs
-        from, `<installation>/repo/<remote>.trustedkeys.gpg` is gone from pc2.
-
-        The remote is added on pc2 from Flathub's own `.flatpakrepo`, under a uuid-suffixed
-        name pc1 provably lacks: a real signing key, so the keyring file genuinely exists
-        beforehand — asserted, which is what makes its absence afterwards a witness rather
-        than a tautology.
-
-        The review is answered with an empty automation map. A remote is a review item in no
-        direction, so this deletion needs no answer; what the map buys is a run that reaches
-        `apply()` at all, where the deletion is derived after the converge loop.
-        """
-        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
-
-        await _assert_flatpak_available(pc1_executor)
-        await _assert_flatpak_available(pc2_executor)
-
-        scope_flag = "--user"
-        remote_name = f"pcswitcher-it-vendor-{uuid4().hex[:12]}"
-        keyring = f"$HOME/.local/share/flatpak/repo/{remote_name}.trustedkeys.gpg"
-
-        try:
-            added = await pc2_executor.run_command(
-                f"flatpak remote-add {scope_flag} {shlex.quote(remote_name)} {shlex.quote(_FIXTURE_FLATPAK_REPOFILE)}",
-                login_shell=False,
-                timeout=180.0,
-            )
-            assert added.success, f"could not add the target-only remote {remote_name} to pc2: {added.stderr}"
-
-            source_remotes = await pc1_executor.run_command(
-                f"flatpak remotes {scope_flag} --columns=name", login_shell=False, timeout=15.0
-            )
-            assert remote_name not in nonblank_lines(source_remotes.stdout), (
-                f"{remote_name} is configured on pc1 too, so it is not a remote the source lacks"
-            )
-            key_before = await pc2_executor.run_command(f"test -f {keyring}", login_shell=False, timeout=15.0)
-            assert key_before.success, (
-                f"pc2 holds no {keyring} for {remote_name}, so this flatpak does not keep a per-remote keyring and "
-                "its absence after the deletion would prove nothing"
-            )
-
-            await _write_package_sync_config(pc1_executor, flatpak_sync=True)
-
-            sync_cmd = f"{_automation_env_assignment_multi({})} pc-switcher sync pc2 --yes --allow-first-sync"
-            sync_result = await pc1_executor.run_command(sync_cmd, timeout=900.0, login_shell=True)
-            assert sync_result.success, (
-                f"pc-switcher sync exited {sync_result.exit_code}.\n"
-                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
-            )
-
-            after_remotes = await pc2_executor.run_command(
-                f"flatpak remotes {scope_flag} --columns=name", login_shell=False, timeout=15.0
-            )
-            assert remote_name not in nonblank_lines(after_remotes.stdout), (
-                f"{remote_name} is still configured on pc2, so nothing was deleted and the keyring check below "
-                f"would say nothing.\nstdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
-            )
-            key_after = await pc2_executor.run_command(f"test -f {keyring}", login_shell=False, timeout=15.0)
-            assert not key_after.success, (
-                f"{keyring} survived the deletion of {remote_name}: pc2 still trusts that vendor's signing key for a "
-                "remote it no longer has"
-            )
-        finally:
-            await pc2_executor.run_command(
-                f"flatpak remote-delete {scope_flag} --force {shlex.quote(remote_name)} || true; rm --force {keyring}",
-                login_shell=False,
-                timeout=60.0,
-            )
-
-
-class TestASyncLeavesTheSourcesOwnSoftwareAlone:
-    """`PKG-FR-SOURCE-INTENT` on real machines: the source states the intent and a sync must
-    not change what software it has, nor where it gets it from.
-
-    The unit half is as far as a mock reaches — no command carrying `mutates=` is issued on
-    the source's executor while both directions are applied. It says nothing about the
-    machine: a source can be left changed by something that never went through that
-    executor at all, and only two real machines can show that it was not.
-    """
-
-    async def test_a_converging_run_leaves_the_sources_own_package_state_identical(
-        self,
-        pc1_executor: BashLoginRemoteExecutor,
-        pc2_executor: BashLoginRemoteExecutor,
-        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
-        pc2_with_pcswitcher: BashLoginRemoteExecutor,
-        reset_pcswitcher_state: None,
-    ) -> None:
-        """J145 — A run that genuinely installs, removes and re-revisions software on pc2 leaves
-        every piece of package state pc1 holds byte-identical.
-
-        A converging run, never a no-op: pc2 gains an apt package, loses another, and moves a
-        snap to pc1's revision, all in the one run. Those three are asserted on pc2 first —
-        without them "pc1 is unchanged" is what an empty run would also produce.
-
-        `_MachinePackageState` is the comparison, so "what software Atlas has" is its apt
-        manual, hold and installed sets, its snap revisions and its flatpak refs, and "where
-        it gets it from" is the digests of all five `/etc/apt` directories plus its own remote
-        table. All three managers are enabled, so all three read pc1 during the run and the
-        snap auto-refresh pause is genuinely engaged on it.
-
-        Nothing is answered permanently. A machine-specific mark is one of the exactly three
-        writes a sync IS allowed to make on the source, so a SKIP_ALWAYS anywhere here would
-        change pc1's decision file and prove the wrong thing; every decision below is APPLY.
-        The pause is the second of those three, and it moves pc1's `refresh.hold` — which is
-        why what is captured is software, never refresh policy.
-
-        The two apt subjects are vetted by `pick_safe_removal_candidates` before either
-        machine is touched, and the setup that makes them divergent happens BEFORE the
-        capture, so it is not part of what the run is being held to.
-        """
-        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
-
-        await _assert_flatpak_available(pc1_executor)
-        await _assert_flatpak_available(pc2_executor)
-
-        candidates = await _find_removable_candidates(pc1_executor, pc2_executor, count=2)
-        assert len(candidates) == 2, (
-            f"{_no_apt_candidate_message()} Needed 2 independent candidates, found {len(candidates)}."
-        )
-        install_candidate, removal_candidate = candidates
-
-        snap_name = await _snap_subject(pc1_executor, pc2_executor)
-        source_snap_revision = await _snap_revision(pc1_executor, snap_name)
-        target_snap_revision = await _snap_revision(pc2_executor, snap_name)
-        assert source_snap_revision and target_snap_revision, f"{snap_name} is not installed on both machines"
-        alternate_revision = await _alternate_snap_revision(pc2_executor, snap_name, source_snap_revision)
-
-        pc1_prior_hold = await _capture_system_refresh_hold(pc1_executor)
-        pc2_prior_hold = await _capture_system_refresh_hold(pc2_executor)
-
-        try:
-            await _engage_system_refresh_hold(pc1_executor)
-            await _engage_system_refresh_hold(pc2_executor)
-
-            # pc2 loses one package (so the run installs it) and pc1 loses another (so the
-            # run removes pc2's copy). Both happen before the capture below.
-            removed_on_target = await pc2_executor.run_command(
-                f"sudo DEBIAN_FRONTEND=noninteractive apt-get remove --assume-yes {shlex.quote(install_candidate)}",
-                login_shell=False,
-                timeout=120.0,
-            )
-            assert removed_on_target.success, (
-                f"Failed to remove {install_candidate} from pc2: {removed_on_target.stderr}"
-            )
-            removed_on_source = await pc1_executor.run_command(
-                f"sudo DEBIAN_FRONTEND=noninteractive apt-get remove --assume-yes {shlex.quote(removal_candidate)}",
-                login_shell=False,
-                timeout=120.0,
-            )
-            assert removed_on_source.success, (
-                f"Failed to remove {removal_candidate} from pc1: {removed_on_source.stderr}"
-            )
-            diverged = await pc2_executor.run_command(
-                f"sudo snap refresh --revision={shlex.quote(alternate_revision)} {shlex.quote(snap_name)}",
-                login_shell=False,
-                timeout=180.0,
-            )
-            assert diverged.success, (
-                f"Failed to move pc2's {snap_name} to revision {alternate_revision}: {diverged.stderr}"
-            )
-
-            await _write_package_sync_config(pc1_executor, apt_sync=True, snap_sync=True, flatpak_sync=True)
-
-            before = await _capture_machine_package_state(pc1_executor)
-
-            decisions = {
-                AptPackageItem(name=install_candidate, version="").item_id: Decision.APPLY,
-                AptPackageItem(name=removal_candidate, version="").item_id: Decision.APPLY,
-                f"snap:{snap_name}": Decision.APPLY,
-            }
-            sync_cmd = f"{_automation_env_assignment_multi(decisions)} pc-switcher sync pc2 --yes --allow-first-sync"
-            sync_result = await pc1_executor.run_command(sync_cmd, timeout=600.0, login_shell=True)
-            assert sync_result.success, (
-                f"pc-switcher sync exited {sync_result.exit_code}.\n"
-                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
-            )
-
-            # Non-vacuous first: the run really did install, remove and re-revision on pc2.
-            target_manual = nonblank_lines(
-                (await pc2_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0)).stdout
-            )
-            assert install_candidate in target_manual, (
-                f"{install_candidate} was not installed on pc2, so this run converged nothing and pc1 being "
-                f"unchanged says nothing.\nstdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
-            )
-            assert removal_candidate not in target_manual, (
-                f"{removal_candidate} was not removed from pc2, so the removal direction converged nothing.\n"
-                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
-            )
-            assert await _snap_revision(pc2_executor, snap_name) == source_snap_revision, (
-                f"pc2's {snap_name} did not converge to pc1's revision {source_snap_revision}, so the snap manager "
-                f"converged nothing.\nstdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
-            )
-
-            after = await _capture_machine_package_state(pc1_executor)
-            assert after == before, (
-                "the run changed pc1's own package state: a sync must not change what software the source has, nor "
-                f"where it gets it from.\nbefore: {before}\nafter: {after}"
-            )
-        finally:
-            await _restore_package(pc2_executor, install_candidate)
-            await _restore_package(pc1_executor, removal_candidate)
-            await _restore_package(pc2_executor, removal_candidate)
-            await _restore_snap(pc2_executor, snap_name, target_snap_revision)
-            await _restore_system_refresh_hold(pc1_executor, pc1_prior_hold)
-            await _restore_system_refresh_hold(pc2_executor, pc2_prior_hold)
 
 
 # ---------------------------------------------------------------------------------
@@ -4579,11 +1926,6 @@ class TestASyncLeavesTheSourcesOwnSoftwareAlone:
 # ---------------------------------------------------------------------------------
 
 _SYNTHETIC_PACKAGE_VERSION = "1.0"
-
-# Splits several reads issued as ONE command back into their own outputs
-# (testing-guide.md's command-grouping rule). Chosen so no apt or dpkg output can contain
-# it.
-_SECTION_MARKER = "@@PCSWITCHER_IT_SECTION@@"
 
 
 def _synthetic_control(name: str, *, version: str = _SYNTHETIC_PACKAGE_VERSION, depends: str = "") -> str:
@@ -4662,7 +2004,7 @@ async def _publish_a_cascading_pair(executor: BashLoginRemoteExecutor) -> tuple[
     built = await executor.run_command(build, login_shell=False, timeout=60.0)
     assert built.success, f"Failed to build the cascading pair's repository: {built.stderr}"
 
-    updated = await _apt_get_update(executor)
+    updated = await _apt_get_update_for(executor, f"{_APT_SOURCES_DIR}/{list_filename}")
     assert updated.success, f"apt-get update failed after adding {repo_dir}: {updated.stderr}"
 
     installed = await executor.run_command(
@@ -4686,174 +2028,12 @@ async def _publish_a_cascading_pair(executor: BashLoginRemoteExecutor) -> tuple[
     return base, dependent, repo_dir, list_filename
 
 
-async def _remove_cascading_pair(
-    executor: BashLoginRemoteExecutor, base: str, dependent: str, repo_dir: str, list_filename: str
-) -> None:
-    """Undo `_publish_a_cascading_pair`, whether or not the run under test removed either
-    package.
-
-    Every step runs unconditionally (`;`, not `&&`) so a setup that failed halfway still has
-    the rest of itself removed.
-    """
-    await executor.run_command(
-        f"sudo DEBIAN_FRONTEND=noninteractive apt-get purge --assume-yes "
-        f"{shlex.quote(dependent)} {shlex.quote(base)}; "
-        f"sudo rm --force --recursive {shlex.quote(repo_dir)} "
-        f"{shlex.quote(f'{_APT_SOURCES_DIR}/{list_filename}')}; "
-        f"sudo rm --force /var/lib/apt/lists/_opt_{repo_dir.rsplit('/', 1)[-1]}_*",
-        login_shell=False,
-        timeout=120.0,
-    )
-
-
 def _collateral_removal_item_id(package: str) -> str:
     """The item id a removal's cascade over `package` produces
     (`apt:collateral:remove:remove:<package>`), built from the shipped function so a change
     to the identity fails here rather than silently answering nothing.
     """
     return collateral_item_id("remove", "remove", package)
-
-
-class TestACascadeOverASkippedRemovalCandidate:
-    """`PKG-FR-COLLATERAL-MANUAL` where only a real apt can produce the situation: an
-    approved removal whose transaction carries off a second manually-installed package the
-    user did NOT approve for removal.
-
-    The unit tier proves the shape against a mocked `apt-get --dry-run`, which answers with
-    whatever the test wrote into it. What it cannot settle is that apt really takes
-    `dependent` when `base` goes, that the review's second round rehearses the transaction
-    that will really run, and that the answer given there is what the real `apt-get remove`
-    then does.
-
-    "Stop the sync" is the one answer not driven here. It is not a `Decision` value at all
-    -- `packages.review` raises `SyncAbortedByUser` from the screen itself -- so the
-    automation hook cannot express it, and nothing about it depends on apt.
-
-    Each test asserts the question was put in the REVIEW and not at the apply-time guard, by
-    the words each writes: the review's own decision pass logs `reviewed <pkg>
-    (report_only)`, while `LateCollateral` logs `reviewed <pkg> (collateral)`. Both answers
-    would otherwise leave the same machine state whichever round asked.
-    """
-
-    async def test_a_skipped_candidate_the_cascade_would_take_is_asked_about_and_keeping_it_cancels_the_removal(
-        self,
-        pc1_executor: BashLoginRemoteExecutor,
-        pc2_executor: BashLoginRemoteExecutor,
-        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
-        pc2_with_pcswitcher: BashLoginRemoteExecutor,
-        reset_pcswitcher_state: None,
-    ) -> None:
-        """D37 — pc2 holds two manually-installed packages pc1 does not have, so both are removal
-        candidates; the user approves one removal and skips the other, and apt would take the
-        skipped one anyway.
-
-        Keeping it leaves the approved removal unapplied rather than failing it, so both
-        packages survive and the run still succeeds.
-        """
-        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
-
-        base, dependent, repo_dir, list_filename = await _publish_a_cascading_pair(pc2_executor)
-        try:
-            await _write_apt_sync_config(pc1_executor)
-
-            decisions = {
-                AptPackageItem(name=base, version="").item_id: Decision.APPLY,
-                AptPackageItem(name=dependent, version="").item_id: Decision.SKIP_ONCE,
-                _collateral_removal_item_id(dependent): Decision.SKIP_ONCE,
-            }
-            sync_cmd = f"{_automation_env_assignment_multi(decisions)} pc-switcher sync pc2 --yes --allow-first-sync"
-            sync_result = await pc1_executor.run_command(sync_cmd, timeout=300.0, login_shell=True)
-            assert sync_result.success, (
-                "keeping a collateral package must leave the change that causes it unapplied, not fail it.\n"
-                f"exit {sync_result.exit_code}\nstdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
-            )
-
-            installed = parse_dpkg_installed(
-                (
-                    await pc2_executor.run_command(
-                        "dpkg-query --show --showformat='${Package}\\t${Status}\\n'", login_shell=False, timeout=20.0
-                    )
-                ).stdout
-            )
-            assert dependent in installed, (
-                f"{dependent} was removed from pc2 although the user kept it at the collateral question"
-            )
-            assert base in installed, (
-                f"{base}'s approved removal still ran after {dependent} was kept -- keeping a collateral package "
-                "must cancel the change that causes it"
-            )
-
-            collapsed = _collapse_run_output(sync_result.stdout + sync_result.stderr)
-            assert f"reviewed {dependent} (report_only): skipped this run" in collapsed, (
-                f"{dependent} was never put to the user as a collateral question in the review.\n"
-                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
-            )
-            assert f"reviewed {dependent} (collateral)" not in collapsed, (
-                f"{dependent} was asked about at the apply-time guard instead of in the review's second round"
-            )
-        finally:
-            await _remove_cascading_pair(pc2_executor, base, dependent, repo_dir, list_filename)
-
-    async def test_approving_the_consequence_removes_the_approved_package_and_lets_the_cascade_take_the_other(
-        self,
-        pc1_executor: BashLoginRemoteExecutor,
-        pc2_executor: BashLoginRemoteExecutor,
-        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
-        pc2_with_pcswitcher: BashLoginRemoteExecutor,
-        reset_pcswitcher_state: None,
-    ) -> None:
-        """D72 — the same question answered "approved": the approved removal runs and the real
-        `apt-get remove` takes the kept candidate with it, past the apply-time guard.
-
-        The skipped candidate's OWN removal item stays skipped -- what was approved is the
-        consequence, not the item -- which is why the run's decision log has to say both
-        things about the same package.
-        """
-        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
-
-        base, dependent, repo_dir, list_filename = await _publish_a_cascading_pair(pc2_executor)
-        try:
-            await _write_apt_sync_config(pc1_executor)
-
-            decisions = {
-                AptPackageItem(name=base, version="").item_id: Decision.APPLY,
-                AptPackageItem(name=dependent, version="").item_id: Decision.SKIP_ONCE,
-                _collateral_removal_item_id(dependent): Decision.APPLY,
-            }
-            sync_cmd = f"{_automation_env_assignment_multi(decisions)} pc-switcher sync pc2 --yes --allow-first-sync"
-            sync_result = await pc1_executor.run_command(sync_cmd, timeout=300.0, login_shell=True)
-            assert sync_result.success, (
-                f"pc-switcher sync exited {sync_result.exit_code}.\n"
-                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
-            )
-
-            installed = parse_dpkg_installed(
-                (
-                    await pc2_executor.run_command(
-                        "dpkg-query --show --showformat='${Package}\\t${Status}\\n'", login_shell=False, timeout=20.0
-                    )
-                ).stdout
-            )
-            assert base not in installed, f"{base}'s approved removal did not run after the collateral approval"
-            assert dependent not in installed, (
-                f"{dependent} survived a removal the user approved -- the apply-time guard refused an "
-                "approved consequence"
-            )
-
-            collapsed = _collapse_run_output(sync_result.stdout + sync_result.stderr)
-            assert f"reviewed {dependent} (report_only): applied" in collapsed, (
-                f"the approval for {dependent} was never recorded against a collateral item in the review.\n"
-                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
-            )
-            assert f"reviewed {dependent} (collateral)" not in collapsed, (
-                f"{dependent} was asked about at the apply-time guard instead of in the review's second round"
-            )
-            assert f"reviewed {dependent} ({_SYNTHETIC_PACKAGE_VERSION}) (remove): skipped this run" in collapsed, (
-                f"{dependent}'s own removal item did not stay skipped -- the approval answered the consequence, "
-                f"not the item.\nstdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
-            )
-        finally:
-            await _remove_cascading_pair(pc2_executor, base, dependent, repo_dir, list_filename)
 
 
 # -- the apt origin model: one real vendor repository, and a rival for its candidate ----
@@ -4905,7 +2085,7 @@ async def _install_from_the_vendor_repository(executor: BashLoginRemoteExecutor)
         f"unreachable host or a missing curl reports itself here.\n{declared.stderr}"
     )
 
-    updated = await _apt_get_update(executor)
+    updated = await _apt_get_update_for(executor, source_dest)
     assert updated.success, f"apt-get update failed after adding {_VENDOR_REPO_URI}: {updated.stderr}"
 
     installed = await executor.run_command(
@@ -4918,23 +2098,21 @@ async def _install_from_the_vendor_repository(executor: BashLoginRemoteExecutor)
     return source_filename, key_filename
 
 
-async def _remove_the_vendor_repository(
+async def _undeclare_the_vendor_repository(
     executor: BashLoginRemoteExecutor, source_filename: str, key_filename: str
 ) -> None:
-    """Undo `_install_from_the_vendor_repository` on either machine, whether or not the run
-    under test installed anything there.
+    """Take the vendor repository's declaration and its signing key off `executor`'s machine.
 
-    The cached index goes too: an `/etc/apt/sources.list.d` file is what makes a repository
-    configured, but a list left in `/var/lib/apt/lists` keeps its name in every later
-    `apt-cache policy` on the machine.
+    The two `rm`s and nothing else. `_VENDOR_PACKAGE` stays wherever the run under test left
+    it (module docstring): what a later `apt-get update` pays for is the repository being
+    configured, and purging a package installed from a repository this test declared undoes
+    something nothing later reads.
     """
     await executor.run_command(
-        f"sudo DEBIAN_FRONTEND=noninteractive apt-get purge --assume-yes {shlex.quote(_VENDOR_PACKAGE)}; "
         f"sudo rm --force {shlex.quote(f'{_APT_SOURCES_DIR}/{source_filename}')} "
-        f"{shlex.quote(f'{_APT_KEYRINGS_DIR}/{key_filename}')}; "
-        f"sudo rm --force /var/lib/apt/lists/*{_VENDOR_REPO_HOST}*",
+        f"{shlex.quote(f'{_APT_KEYRINGS_DIR}/{key_filename}')}",
         login_shell=False,
-        timeout=180.0,
+        timeout=15.0,
     )
 
 
@@ -4981,7 +2159,7 @@ async def _publish_a_rival_candidate(executor: BashLoginRemoteExecutor) -> tuple
     built = await executor.run_command(build, login_shell=False, timeout=60.0)
     assert built.success, f"Failed to publish the rival candidate on the target: {built.stderr}"
 
-    updated = await _apt_get_update(executor)
+    updated = await _apt_get_update_for(executor, f"{_APT_SOURCES_DIR}/{list_filename}")
     assert updated.success, f"apt-get update failed after adding {repo_dir}: {updated.stderr}"
 
     # The rival is what the target would install today, before the vendor's repository has
@@ -4999,7 +2177,12 @@ async def _publish_a_rival_candidate(executor: BashLoginRemoteExecutor) -> tuple
 async def _remove_the_rival_candidate(
     executor: BashLoginRemoteExecutor, repo_dir: str, list_filename: str, pin_filename: str
 ) -> None:
-    """Undo `_publish_a_rival_candidate`, every step unconditional."""
+    """Undo `_publish_a_rival_candidate`, every step unconditional.
+
+    Kept whole where the purges around it are not (module docstring): all of it is `rm`, and a
+    repository and a pin left in `/etc/apt` change what apt answers on this machine for the
+    rest of the run.
+    """
     await executor.run_command(
         f"sudo rm --force --recursive {shlex.quote(repo_dir)} "
         f"{shlex.quote(f'{_APT_SOURCES_DIR}/{list_filename}')} "
@@ -5008,6 +2191,629 @@ async def _remove_the_rival_candidate(
         login_shell=False,
         timeout=60.0,
     )
+
+
+# The two files ADR-020 D-38 gates on the target's Ubuntu Pro attachment, with the real
+# stanzas `pro enable` writes. Their `Signed-By:` keyrings ship with `ubuntu-pro-client`
+# on every Ubuntu 24.04, attached or not, so this is the file set a genuinely attached
+# source carries — not an approximation of it.
+_ESM_SOURCE_BODIES = {
+    "ubuntu-esm-apps.sources": (
+        "Types: deb\n"
+        "URIs: https://esm.ubuntu.com/apps/ubuntu\n"
+        "Suites: noble-apps-security noble-apps-updates\n"
+        "Components: main\n"
+        "Signed-By: /usr/share/keyrings/ubuntu-pro-esm-apps.gpg\n"
+    ),
+    "ubuntu-esm-infra.sources": (
+        "Types: deb\n"
+        "URIs: https://esm.ubuntu.com/infra/ubuntu\n"
+        "Suites: noble-infra-security noble-infra-updates\n"
+        "Components: main\n"
+        "Signed-By: /usr/share/keyrings/ubuntu-pro-esm-infra.gpg\n"
+    ),
+}
+
+
+# How long to wait for a running sync to engage its sync-window hold, and how often to look.
+# The poll is what makes "inside the window" a measurement rather than a guess about how
+# long the steps before RUN_JOBS take on a given machine.
+_HOLD_POLL_TIMEOUT_SECONDS = 180.0
+_HOLD_POLL_INTERVAL_SECONDS = 0.5
+
+# `pkill --full` matches on the whole command line, and the shell that RUNS pkill has the
+# pattern in its own. The bracket makes the two differ: this regex matches `pc-switcher
+# sync`, and the literal text `pc-switcher[ ]sync` sitting in the shell's command line does
+# not match it — so the kill reaches the sync and not the shell asking for it.
+_KILL_RUNNING_SYNC_CMD = "pkill --signal KILL --full 'pc-switcher[ ]sync'"
+
+# How far ahead of the writing machine's own clock the sync-window suspension lapses, and
+# how much of that may already have elapsed by the time the value is read back. Restated
+# rather than imported, exactly as `_SYSTEM_REFRESH_HOLD_SET_CMD` above is: the point is
+# that the value snapd holds IS a near-future instant, which a test agreeing with whatever
+# the orchestrator's private constant currently says would not assert.
+_SNAP_HOLD_EXPECTED_DURATION = timedelta(hours=6)
+_SNAP_HOLD_DURATION_SLACK = timedelta(minutes=15)
+
+
+class TestOneRunConvergesEveryManager:
+    """One seeded divergence per manager, carried through four runs of the same pair: a
+    rehearsal that changes nothing, a run that converges all of it, an identical re-run that
+    finds nothing left to do, and a last run that takes a ref filter off the target after the
+    source drops it.
+
+    Every claim below used to be its own `pc-switcher sync`, and a three-manager sync costs
+    30-40s of wall clock whatever it converges (#216). They share a run here because they
+    share a premise: one pair of machines, one seeded divergence per manager, one set of
+    decisions. What each of them needs from the run is an assertion, not a run of its own.
+
+    The seeds, one per manager. The `finally` takes back the ones a later scenario would
+    otherwise inherit -- holds, `/etc/apt` files, remotes, markers -- and leaves the package
+    state where the run put it (module docstring):
+
+    - apt: a package removed from pc2 (install direction), a package removed from pc1
+      (removal direction), a hold set on pc1 for a package both machines already have at the
+      same version, and a synthetic vendor repository + signing key + pin written to pc1's
+      `/etc/apt`;
+    - snap: pc2's first fixture snap moved to another revision, and a per-snap hold set on
+      pc1's second one;
+    - flatpak: the fixture app and the Flathub remote deleted from pc2, a ref filter applied
+      to pc1's Flathub, and a uuid-named remote added to pc2 that pc1 does not have;
+    - manual installs: an unowned `/opt` path on pc1 with a snippet authored against it.
+
+    Witnesses are the target's own package managers and filesystem throughout, except where
+    a claim is about ordering or about a rehearsal, which leave nothing on disk to read.
+    """
+
+    async def test_a_divergence_in_every_manager_is_rehearsed_converged_and_then_a_fixed_point(  # noqa: PLR0915
+        self,
+        pc1_executor: BashLoginRemoteExecutor,
+        pc2_executor: BashLoginRemoteExecutor,
+        apt_subjects: _AptSubjects,
+        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
+        pc2_with_pcswitcher: BashLoginRemoteExecutor,
+        reset_pcswitcher_state: None,
+    ) -> None:
+        """J1, K9, J58, J59, A65, C2, C165, C168, C169, J53, J116, B1, E21, E67, K10, E55,
+        K11, F72, G67, H30, K12, K16, J2, N8, J145 — and ADR-020 D-37 in both flatpak
+        directions plus `PKG-FR-FLATPAK-FILTER`'s two halves.
+
+        Run 1 (`--dry-run`, ADR-014): pc2's whole `_MachinePackageState` is byte-identical
+        across it, and the preview reports the always-sync pin as a derived write while
+        saying nothing at all about the synthetic repository and its key -- which no approved
+        package needs, so under derivation it neither travels nor becomes a review line
+        (ruling 4). The decisions passed in name only packages and refs; neither `/etc/apt`
+        file is decidable, and a run that wrote one because something else was ticked would
+        be the defect.
+
+        Run 2 converges everything and is the whole-run witness:
+
+        - apt installs the package pc2 lost, removes the one pc1 lost, and registers pc1's
+          hold on pc2 with no review line of its own (`PKG-FR-BLOCKS-DERIVED`);
+        - snap lands pc2 on pc1's revision without either machine's `refresh.hold` moving
+          (D-06), and pc1's per-snap hold reaches pc2's `snap list` Notes through the very
+          window the orchestrator holds snapd in (#208 D9);
+        - flatpak provisions the remote BEFORE installing the ref that needs it (D-14),
+          carrying Flathub's real signing key (#215) and the source's ref filter, deletes the
+          target-only remote together with its keyring, and leaves `flathub-beta` -- which no
+          approved ref comes from -- on pc1 alone;
+        - manual installs pushes the source registry to pc2 and replays the snippet there in
+          the same run (D-23);
+        - and pc1's own `_MachinePackageState` is identical across it
+          (`PKG-FR-SOURCE-INTENT`): a run that genuinely installs, removes and re-revisions
+          on the target changes nothing about what software the source has, nor where it gets
+          it from.
+
+        Run 3 is the fixed point (`--allow-out-of-order`): pc2's `_MachinePackageState` does
+        not move, and the converged apt item is mapped SKIP_ALWAYS yet no decision entry
+        appears on either machine -- state-based proof it was never presented. Witness 2 is
+        scoped to that item; items already diverged between the two VMs and left SKIP_ONCE by
+        run 2 are legitimately presented again, which is not what idempotency promises.
+        Witness 1 is unscoped and covers all four managers.
+
+        Run 4 removes pc1's ref filter and syncs once more: `_converge_remote_filters` takes
+        pc2's copy off, which is the only thing that converges a filter the source has
+        dropped, and the app stays installed.
+
+        snapd auto-refresh is paused on both hosts for the whole test (the same timed
+        `refresh.hold` a sync engages, restored exactly afterwards) so a background refresh
+        cannot move `snap list` between two captures and be misread as a run's doing.
+        """
+        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
+
+        _ = await asyncio.gather(_assert_flatpak_available(pc1_executor), _assert_flatpak_available(pc2_executor))
+
+        # -- subjects, all selected before either machine is touched ---------------------
+        install_candidate = apt_subjects.install_direction[0]
+        removal_candidate = apt_subjects.removal_direction
+        hold_subject = apt_subjects.hold
+
+        revision_snap, hold_snap = await _snap_subjects(pc1_executor, pc2_executor, count=2)
+        source_snap_revision, target_snap_revision = await asyncio.gather(
+            _snap_revision(pc1_executor, revision_snap), _snap_revision(pc2_executor, revision_snap)
+        )
+        assert source_snap_revision and target_snap_revision, f"{revision_snap} is not installed on both machines"
+        alternate_revision = await _alternate_snap_revision(pc2_executor, revision_snap, source_snap_revision)
+
+        application, version, scope, remote_name, _remote_url, ref = await _flatpak_subject(pc1_executor)
+        scope_flag = "--user" if scope == "user" else "--system"
+        sudo = "sudo " if scope == "system" else ""
+        ref_item_id = FlatpakItem(
+            application=application, version=version, origin=remote_name, scope=scope, ref=ref
+        ).item_id
+
+        uniq = uuid4().hex[:12]
+        unowned_path = f"/opt/pcswitcher-it-converge-{uniq}"
+        manual_item_id = _unowned_item_id(unowned_path)
+        # Home-relative marker so the snippet needs no sudo: replay runs `bash -c <body>` as
+        # the SSH user on pc2, and $HOME expands there.
+        replay_marker = f"$HOME/.cache/pcswitcher-it-converge-{uniq}"
+        registry_relpath = f"~/{SNIPPET_REGISTRY_RELPATH}"
+        # Unquoted `$HOME` on purpose: the remote shell expands it, and flatpak stores
+        # whatever path it is given verbatim. `_flatpak_remote_filter` reads the expanded
+        # path back off the machine, which is the one both machines must end up naming.
+        filter_path = f"$HOME/.cache/pcswitcher-it-flatpak-filter-{uniq}"
+        target_only_remote = f"pcswitcher-it-vendor-{uniq}"
+        target_only_keyring = f"$HOME/.local/share/flatpak/repo/{target_only_remote}.trustedkeys.gpg"
+
+        pc1_prior_hold, pc2_prior_hold = await asyncio.gather(
+            _capture_system_refresh_hold(pc1_executor), _capture_system_refresh_hold(pc2_executor)
+        )
+
+        source_filename = key_filename = pin_filename = recorded_filter_path = ""
+        try:
+            _ = await asyncio.gather(
+                _engage_system_refresh_hold(pc1_executor), _engage_system_refresh_hold(pc2_executor)
+            )
+
+            # -- seed apt ----------------------------------------------------------------
+            # One chain per machine, run at once: apt writes on ONE machine serialise on
+            # dpkg's own lock, but the two machines' apt work is independent and this seed is
+            # several transactions on each (#216).
+            async def seed_source_apt() -> CommandResult:
+                await _ensure_installed_and_manual(pc1_executor, install_candidate)
+                await _ensure_absent(pc1_executor, removal_candidate)
+                await _ensure_installed_and_manual(pc1_executor, hold_subject)
+                return await pc1_executor.run_command(
+                    f"sudo apt-mark hold {shlex.quote(hold_subject)}", login_shell=False, timeout=30.0
+                )
+
+            async def seed_target_apt() -> None:
+                await _ensure_absent(pc2_executor, install_candidate)
+                await _ensure_installed_and_manual(pc2_executor, removal_candidate)
+                await _ensure_installed_and_manual(pc2_executor, hold_subject)
+
+            held, _ = await asyncio.gather(seed_source_apt(), seed_target_apt())
+            assert held.success, f"Failed to hold {hold_subject} on pc1: {held.stderr}"
+
+            source_filename, key_filename = await _create_synthetic_repo_and_key(pc1_executor)
+            pin_filename = await _create_synthetic_pin(pc1_executor)
+            source_dest = f"{_APT_SOURCES_DIR}/{source_filename}"
+            key_dest = f"{_APT_KEYRINGS_DIR}/{key_filename}"
+            pin_dest = f"{_APT_PREFERENCES_DIR}/{pin_filename}"
+            absent = await pc2_executor.run_command(
+                " && ".join(f"test ! -e {shlex.quote(path)}" for path in (source_dest, key_dest, pin_dest)),
+                login_shell=False,
+                timeout=10.0,
+            )
+            assert absent.success, "synthetic /etc/apt files unexpectedly already present on pc2 before the run"
+
+            # -- seed snap ---------------------------------------------------------------
+            # One snapd change on each machine, and neither snapd knows about the other's.
+            diverged, snap_held = await asyncio.gather(
+                pc2_executor.run_command(
+                    f"sudo snap refresh --revision={shlex.quote(alternate_revision)} {shlex.quote(revision_snap)}",
+                    login_shell=False,
+                    timeout=180.0,
+                ),
+                pc1_executor.run_command(
+                    f"sudo snap refresh --hold=forever {shlex.quote(hold_snap)}", login_shell=False, timeout=60.0
+                ),
+            )
+            assert diverged.success, (
+                f"Failed to move pc2's {revision_snap} to revision {alternate_revision}: {diverged.stderr}"
+            )
+            assert snap_held.success, f"Failed to set a per-snap hold on pc1's {hold_snap}: {snap_held.stderr}"
+            assert "held" not in await _snap_notes(pc2_executor, hold_snap), (
+                f"{hold_snap} is already held on pc2 before the run; its replication would prove nothing"
+            )
+
+            # -- seed flatpak ------------------------------------------------------------
+            # pc1's remote table is read while pc2 gives up the app and the remote: two
+            # machines, and neither reads what the other writes. The app is absent on pc2 by
+            # fixture; deleting the remote is what removes pc2's only trust in Flathub and
+            # makes the key replication load-bearing.
+            source_remotes, _dropped_on_target = await asyncio.gather(
+                pc1_executor.run_command(
+                    f"flatpak remotes {scope_flag} --columns=name", login_shell=False, timeout=15.0
+                ),
+                pc2_executor.run_command(
+                    f"{sudo}flatpak uninstall {scope_flag} --assumeyes {shlex.quote(application)} || true; "
+                    f"{sudo}flatpak remote-delete {scope_flag} --force {shlex.quote(remote_name)} || true",
+                    login_shell=False,
+                    timeout=120.0,
+                ),
+            )
+            assert _FIXTURE_UNUSED_FLATPAK_REMOTE in nonblank_lines(source_remotes.stdout), (
+                f"the fixture remote {_FIXTURE_UNUSED_FLATPAK_REMOTE} is not configured on pc1. It is created by "
+                f"tests/integration/scripts/internal/vm-test-fixtures.sh.\n{source_remotes.stdout}"
+            )
+            filtered = await pc1_executor.run_command(
+                f"mkdir --parents $HOME/.cache && printf %s {shlex.quote(_FLATPAK_FILTER_BODY)} > {filter_path} && "
+                f"{sudo}flatpak remote-modify {scope_flag} --filter={filter_path} {shlex.quote(remote_name)}",
+                login_shell=False,
+                timeout=30.0,
+            )
+            assert filtered.success, (
+                f"`flatpak remote-modify {scope_flag} --filter=` failed on pc1, so there is no filtered remote to "
+                f"replicate: {filtered.stderr}"
+            )
+            # Two read-only views of the same remote table, taken at once.
+            (_source_url, source_options), recorded = await asyncio.gather(
+                _flatpak_remote_row(pc1_executor, remote_name, scope),
+                _flatpak_remote_filter(pc1_executor, remote_name, scope),
+            )
+            assert _FLATPAK_FILTERED_OPTION in source_options, (
+                f"pc1's {remote_name} reports options {source_options!r} after `flatpak remote-modify {scope_flag} "
+                f"--filter=`, so this flatpak does not print the {_FLATPAK_FILTERED_OPTION!r} token "
+                "`flatpak_sync._FILTERED_OPTION` reads"
+            )
+            recorded_filter_path = recorded or ""
+            assert recorded_filter_path, (
+                f"pc1's {remote_name} names no file in `flatpak remotes {scope_flag} --columns=filter`, so this "
+                "flatpak does not record the path `flatpak_sync` replicates"
+            )
+
+            before_remotes_result, before_app_rows = await asyncio.gather(
+                pc2_executor.run_command(
+                    f"flatpak remotes {scope_flag} --columns=name", login_shell=False, timeout=15.0
+                ),
+                _flatpak_app_rows(pc2_executor),
+            )
+            before_remotes = nonblank_lines(before_remotes_result.stdout)
+            assert remote_name not in before_remotes, (
+                f"remote {remote_name} still configured on pc2, so this run cannot show it being provisioned"
+            )
+            assert _FIXTURE_UNUSED_FLATPAK_REMOTE not in before_remotes, (
+                f"{_FIXTURE_UNUSED_FLATPAK_REMOTE} is already on pc2, so this run cannot show that it did not travel"
+            )
+            assert application not in [row[0] for row in before_app_rows], (
+                f"{application} still installed on pc2, so no approved application derives {remote_name}"
+            )
+
+            added = await pc2_executor.run_command(
+                f"flatpak remote-add {scope_flag} {shlex.quote(target_only_remote)} "
+                f"{shlex.quote(_FIXTURE_FLATPAK_REPOFILE)}",
+                login_shell=False,
+                timeout=180.0,
+            )
+            assert added.success, f"could not add the target-only remote {target_only_remote} to pc2: {added.stderr}"
+            key_before = await pc2_executor.run_command(
+                f"test -f {target_only_keyring}", login_shell=False, timeout=15.0
+            )
+            assert key_before.success, (
+                f"pc2 holds no {target_only_keyring} for {target_only_remote}, so this flatpak does not keep a "
+                "per-remote keyring and its absence after the deletion would prove nothing"
+            )
+
+            # -- seed manual installs ----------------------------------------------------
+            await _create_unowned_marker(pc1_executor, unowned_path)
+            await _author_snippet(
+                pc1_executor,
+                manual_item_id,
+                unowned_path,
+                f'mkdir --parents "$(dirname {replay_marker})" && touch {replay_marker}',
+            )
+
+            await _write_package_sync_config(
+                pc1_executor,
+                apt_sync=True,
+                snap_sync=True,
+                flatpak_sync=True,
+                manual_installs_sync=True,
+            )
+
+            decisions = {
+                AptPackageItem(name=install_candidate, version="").item_id: Decision.APPLY,
+                AptPackageItem(name=removal_candidate, version="").item_id: Decision.APPLY,
+                f"snap:{revision_snap}": Decision.APPLY,
+                _snap_hold_item_id(hold_snap): Decision.APPLY,
+                ref_item_id: Decision.APPLY,
+                manual_item_id: Decision.APPLY,
+            }
+            automation = _automation_env_assignment_multi(decisions)
+
+            # -- run 1: the rehearsal ----------------------------------------------------
+            before_rehearsal = await _capture_machine_package_state(pc2_executor)
+            rehearsal = await pc1_executor.run_command(
+                f"{SKIP_INSTALL_ON_TARGET} {automation} pc-switcher sync pc2 --yes --dry-run",
+                timeout=600.0,
+                login_shell=True,
+            )
+            assert rehearsal.success, (
+                f"pc-switcher sync --dry-run exited {rehearsal.exit_code}.\n"
+                f"stdout: {rehearsal.stdout}\nstderr: {rehearsal.stderr}"
+            )
+            after_rehearsal = await _capture_machine_package_state(pc2_executor)
+            assert after_rehearsal == before_rehearsal, (
+                "--dry-run changed pc2's package-manager state (ADR-014 violation).\n"
+                f"before: {before_rehearsal}\nafter: {after_rehearsal}"
+            )
+
+            rehearsal_output = rehearsal.stdout + rehearsal.stderr
+            previewed = _collapse_run_output(rehearsal_output)
+            # The always-sync pin is previewed as a derived write, with no review entry.
+            assert f"Would write {pin_dest}" in previewed, (
+                f"always-sync pin {pin_dest!r} was not previewed as a derived write.\n{rehearsal_output}"
+            )
+            # The repository feeds no approved package, so nothing about it is written — and
+            # it is offered in no direction, which is what makes "derived, never ticked" true.
+            assert f"install {source_filename}" not in previewed, (
+                f"repository {source_filename!r} was still offered as a review entry.\n{rehearsal_output}"
+            )
+            assert f"Would write {source_dest}" not in previewed, (
+                f"repository {source_dest!r} was previewed as a derived write although no approved package needs "
+                f"it.\n{rehearsal_output}"
+            )
+            # A key is previewed by `AptSyncJob.apply` for the repositories that survive the
+            # run (`PKG-FR-DERIVED-VISIBLE`), and this repository is not one of them.
+            assert f"Would write signing key {key_dest}" not in previewed, (
+                f"signing key {key_dest!r} was previewed as a write for a repository no package needed.\n"
+                f"{rehearsal_output}"
+            )
+            # The intended metadata refresh (the apt-get update the pin write requires) is
+            # reported as its own marker item, by the label that item carries.
+            assert "Would change Refresh apt package metadata (apt-get update)" in previewed, (
+                f"intended apt-get update (metadata refresh) not reported.\n{rehearsal_output}"
+            )
+
+            # -- run 2: the converging run -----------------------------------------------
+            source_before = await _capture_machine_package_state(pc1_executor)
+            converge = await pc1_executor.run_command(
+                f"{SKIP_INSTALL_ON_TARGET} {automation} pc-switcher sync pc2 --yes --allow-first-sync",
+                timeout=900.0,
+                login_shell=True,
+            )
+            assert converge.success, (
+                f"pc-switcher sync exited {converge.exit_code}.\nstdout: {converge.stdout}\nstderr: {converge.stderr}"
+            )
+            converge_output = converge.stdout + converge.stderr
+            converge_collapsed = _collapse_run_output(converge_output)
+
+            target_manual = nonblank_lines(
+                (await pc2_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0)).stdout
+            )
+            assert install_candidate in target_manual, (
+                f"{install_candidate} not reinstalled on pc2 after the sync.\n{converge_output}"
+            )
+            assert removal_candidate not in target_manual, (
+                f"{removal_candidate} was not removed from pc2, so the removal direction converged nothing.\n"
+                f"{converge_output}"
+            )
+            target_holds = await pc2_executor.run_command("apt-mark showhold", login_shell=False, timeout=15.0)
+            assert hold_subject in nonblank_lines(target_holds.stdout), (
+                f"pc1's hold on {hold_subject} did not reach pc2, although a block replicates without review.\n"
+                f"{converge_output}"
+            )
+            assert f"reviewed {hold_subject} (hold)" not in converge_collapsed, (
+                f"the hold on {hold_subject} was presented as a reviewed item -- a block is never a question"
+            )
+
+            assert await _snap_revision(pc2_executor, revision_snap) == source_snap_revision, (
+                f"pc2's {revision_snap} did not converge to source revision {source_snap_revision}.\n{converge_output}"
+            )
+            replicated_notes = await _snap_notes(pc2_executor, hold_snap)
+            assert "held" in replicated_notes, (
+                f"pc1's per-snap hold on {hold_snap} did not reach pc2 (pc2 notes: {sorted(replicated_notes)}). "
+                "If the source capture ran inside the orchestrator's system-wide refresh.hold window and saw no "
+                "hold, #208 D9's capture-timing assumption is false and the capture must move earlier."
+            )
+            pc1_hold_after, pc2_hold_after = await asyncio.gather(
+                _capture_system_refresh_hold(pc1_executor), _capture_system_refresh_hold(pc2_executor)
+            )
+            for hold_after, machine in ((pc1_hold_after, "pc1"), (pc2_hold_after, "pc2")):
+                assert hold_after is not None, (
+                    f"the run left {machine} without the refresh.hold this test engaged -- D-06 forbids the "
+                    "convergence mechanism from touching either machine's auto-refresh policy"
+                )
+
+            after_remotes = nonblank_lines(
+                (
+                    await pc2_executor.run_command(
+                        f"flatpak remotes {scope_flag} --columns=name", login_shell=False, timeout=15.0
+                    )
+                ).stdout
+            )
+            assert remote_name in after_remotes, (
+                f"remote {remote_name} not provisioned in scope {scope} on pc2 after sync"
+            )
+            assert _FIXTURE_UNUSED_FLATPAK_REMOTE not in after_remotes, (
+                f"{_FIXTURE_UNUSED_FLATPAK_REMOTE} travelled to pc2 although no approved ref comes from it"
+            )
+            assert target_only_remote not in after_remotes, (
+                f"{target_only_remote} is still configured on pc2, so the source-lacks-it deletion never happened.\n"
+                f"{converge_output}"
+            )
+            key_after = await pc2_executor.run_command(
+                f"test -f {target_only_keyring}", login_shell=False, timeout=15.0
+            )
+            assert not key_after.success, (
+                f"{target_only_keyring} survived the deletion of {target_only_remote}: pc2 still trusts that "
+                "vendor's signing key for a remote it no longer has"
+            )
+            assert application in [row[0] for row in await _flatpak_app_rows(pc2_executor)], (
+                f"{application} not installed in scope {scope} on pc2 after sync.\n{converge_output}"
+            )
+            _target_url, target_options = await _flatpak_remote_row(pc2_executor, remote_name, scope)
+            assert _FLATPAK_FILTERED_OPTION in target_options, (
+                f"pc2's provisioned {remote_name} reports options {target_options!r}: the source's ref filter was "
+                f"not applied there.\n{converge_output}"
+            )
+            assert await _flatpak_remote_filter(pc2_executor, remote_name, scope) == recorded_filter_path, (
+                f"pc2's {remote_name} does not name {recorded_filter_path} as its ref filter -- the file must land "
+                "at the same absolute path the source records"
+            )
+            copied = await pc2_executor.run_command(
+                f"cat {shlex.quote(recorded_filter_path)}", login_shell=False, timeout=15.0
+            )
+            assert copied.success and copied.stdout == _FLATPAK_FILTER_BODY, (
+                f"pc2's copy of the ref filter at {recorded_filter_path} is not the source's file byte-for-byte: "
+                f"{copied.stdout!r} ({copied.stderr})"
+            )
+            # The one ordering exception this module's own prohibition carves out: the
+            # remote's mere presence afterwards does not distinguish "remote added before
+            # ref" from any other order, so only the run's own per-item converge log
+            # (`PackageSyncJob._converge_one`) proves it.
+            remote_marker = f"provision {scope} flatpak remote {remote_name}"
+            ref_marker = f"install {ref} ("
+            remote_index = converge_output.find(remote_marker)
+            ref_index = converge_output.find(ref_marker)
+            assert remote_index != -1, f"derived remote write log line not found: {remote_marker!r}"
+            assert ref_index != -1, f"ref converge log line not found: {ref_marker!r}"
+            assert remote_index < ref_index, "remote must be provisioned before the ref installs (D-14)"
+
+            registry_exists = await pc2_executor.run_command(
+                f"test -f {registry_relpath}", login_shell=False, timeout=10.0
+            )
+            assert registry_exists.success, (
+                f"snippet registry not present on pc2 at {registry_relpath} after the run -- the push did not land"
+            )
+            replayed = await pc2_executor.run_command(f"test -f {replay_marker}", login_shell=False, timeout=10.0)
+            assert replayed.success, (
+                f"marker {replay_marker} absent on pc2 -- the pushed snippet was not replayed.\n{converge_output}"
+            )
+
+            source_after = await _capture_machine_package_state(pc1_executor)
+            assert source_after == source_before, (
+                "the run changed pc1's own package state: a sync must not change what software the source has, nor "
+                f"where it gets it from.\nbefore: {source_before}\nafter: {source_after}"
+            )
+
+            # -- run 3: the fixed point --------------------------------------------------
+            before_second = await _capture_machine_package_state(pc2_executor)
+            # SKIP_ALWAYS, not APPLY: an APPLY on an item that is genuinely no longer a diff
+            # and an APPLY on an item that was never presented are indistinguishable from the
+            # end state, whereas a SKIP_ALWAYS leaves a decision-file trace iff the item WAS
+            # presented.
+            converged_item = AptPackageItem(name=install_candidate, version="").item_id
+            second = await pc1_executor.run_command(
+                f"{SKIP_INSTALL_ON_TARGET} {_automation_env_assignment_multi({converged_item: Decision.SKIP_ALWAYS})} "
+                "pc-switcher sync pc2 --yes --allow-first-sync --allow-out-of-order",
+                timeout=600.0,
+                login_shell=True,
+            )
+            assert second.success, (
+                f"second sync exited {second.exit_code}.\nstdout: {second.stdout}\nstderr: {second.stderr}"
+            )
+            after_second = await _capture_machine_package_state(pc2_executor)
+            assert after_second == before_second, (
+                "the second consecutive sync changed pc2's package-manager state -- the run is not a fixed point.\n"
+                f"before: {before_second}\nafter: {after_second}"
+            )
+            source_entries, target_entries = await asyncio.gather(
+                DecisionFile("apt", pc1_executor).load(), DecisionFile("apt", pc2_executor).load()
+            )
+            assert converged_item not in source_entries and converged_item not in target_entries, (
+                f"{install_candidate} was still presented in the second run's review (its SKIP_ALWAYS was "
+                "recorded) -- a converged item must produce no diff at all"
+            )
+
+            # -- run 4: the source drops its ref filter ----------------------------------
+            # Delete-and-re-add rather than `--no-filter`, for
+            # `_restore_flatpak_source_baseline`'s own reason.
+            await _restore_flatpak_source_baseline(pc1_executor, remote_name, scope, filter_path)
+            assert await _flatpak_remote_filter(pc1_executor, remote_name, scope) is None, (
+                f"pc1's {remote_name} still carries a ref filter, so run 4 cannot show a target-only one coming off"
+            )
+            # The app comes off pc2 again, and only the app: a filter is converged as part of
+            # writing the remote an approved ref DERIVES, so a run 4 over a converged pair
+            # would have no ref item, derive no remote, and leave the filter alone for a
+            # reason that has nothing to do with what this asserts.
+            await pc2_executor.run_command(
+                f"{sudo}flatpak uninstall {scope_flag} --assumeyes {shlex.quote(application)}",
+                login_shell=False,
+                timeout=120.0,
+            )
+            assert await _flatpak_remote_filter(pc2_executor, remote_name, scope) == recorded_filter_path, (
+                f"pc2's {remote_name} lost its ref filter before run 4 started; there is no target-only filter to "
+                "take off"
+            )
+            unfiltered = await pc1_executor.run_command(
+                f"{SKIP_INSTALL_ON_TARGET} {automation}"
+                f" pc-switcher sync pc2 --yes --allow-first-sync --allow-out-of-order",
+                timeout=900.0,
+                login_shell=True,
+            )
+            assert unfiltered.success, (
+                f"fourth pc-switcher sync exited {unfiltered.exit_code}.\n"
+                f"stdout: {unfiltered.stdout}\nstderr: {unfiltered.stderr}"
+            )
+            assert await _flatpak_remote_filter(pc2_executor, remote_name, scope) is None, (
+                f"pc2's {remote_name} still carries a ref filter the source does not have -- the two machines would "
+                f"never converge.\nstdout: {unfiltered.stdout}\nstderr: {unfiltered.stderr}"
+            )
+            assert application in [row[0] for row in await _flatpak_app_rows(pc2_executor)], (
+                f"{application} was uninstalled from pc2 by the filter run.\n"
+                f"stdout: {unfiltered.stdout}\nstderr: {unfiltered.stderr}"
+            )
+        finally:
+            # The holds come off and the package state does not: a hold is state every later
+            # scenario reads, while which revision pc2 ends on and which packages the run
+            # moved are nobody's precondition (module docstring, `_snap_subjects`).
+            cleanup_paths = " ".join(
+                shlex.quote(f"{directory}/{filename}")
+                for directory, filename in (
+                    (_APT_SOURCES_DIR, source_filename),
+                    (_APT_KEYRINGS_DIR, key_filename),
+                    (_APT_PREFERENCES_DIR, pin_filename),
+                )
+                if filename
+            )
+
+            async def clean_the_source() -> None:
+                await _restore_flatpak_source_baseline(pc1_executor, remote_name, scope, filter_path)
+                # `;`, so the apt hold comes off even when the snap one is already gone.
+                await pc1_executor.run_command(
+                    f"sudo snap refresh --unhold {shlex.quote(hold_snap)}; "
+                    f"sudo apt-mark unhold {shlex.quote(hold_subject)}",
+                    login_shell=False,
+                    timeout=90.0,
+                )
+                if cleanup_paths:
+                    await pc1_executor.run_command(f"sudo rm --force {cleanup_paths}", login_shell=False, timeout=15.0)
+                await _remove_unowned_marker(pc1_executor, unowned_path)
+                await pc1_executor.run_command(f"rm --force {registry_relpath}", login_shell=False, timeout=15.0)
+                await _restore_system_refresh_hold(pc1_executor, pc1_prior_hold)
+
+            async def clean_the_target() -> None:
+                if recorded_filter_path:
+                    # The replicated copy is pc-switcher's own write and lives outside
+                    # anything `_restore_flatpak_target_baseline` knows about.
+                    await pc2_executor.run_command(
+                        f"rm --force {shlex.quote(recorded_filter_path)}", login_shell=False, timeout=15.0
+                    )
+                await pc2_executor.run_command(
+                    f"flatpak remote-delete {scope_flag} --force {shlex.quote(target_only_remote)} || true; "
+                    f"rm --force {target_only_keyring}",
+                    login_shell=False,
+                    timeout=60.0,
+                )
+                await _restore_flatpak_target_baseline(pc2_executor)
+                # `;`, so the apt hold comes off even when the snap one is already gone.
+                await pc2_executor.run_command(
+                    f"sudo snap refresh --unhold {shlex.quote(hold_snap)}; "
+                    f"sudo apt-mark unhold {shlex.quote(hold_subject)}",
+                    login_shell=False,
+                    timeout=90.0,
+                )
+                if cleanup_paths:
+                    await pc2_executor.run_command(f"sudo rm --force {cleanup_paths}", login_shell=False, timeout=15.0)
+                await pc2_executor.run_command(
+                    f"rm --force {replay_marker} {registry_relpath}", login_shell=False, timeout=15.0
+                )
+                await _restore_system_refresh_hold(pc2_executor, pc2_prior_hold)
+
+            await _cleanup_in_parallel(clean_the_source(), clean_the_target())
 
 
 class TestTheAptOriginModelOnRealRepositories:
@@ -5019,28 +2825,46 @@ class TestTheAptOriginModelOnRealRepositories:
     which of several repositories, once priorities and version ordering are applied. A run
     that carries a repository and its key to the target and then installs from it is the only
     place that arithmetic is done by apt rather than by the test.
+
+    Both halves share one declaration of the vendor repository on the source, which is a
+    network fetch and an `apt-get update` (#216): the second half purges what the first
+    installed on the target and publishes the rival there, so the two runs differ in the
+    target's own arithmetic and in nothing else.
     """
 
-    async def test_a_vendor_repository_travels_with_the_package_and_the_install_lands_from_it(
+    async def test_the_vendor_repository_travels_and_then_loses_to_a_rival_on_the_target(
         self,
         pc1_executor: BashLoginRemoteExecutor,
         pc2_executor: BashLoginRemoteExecutor,
+        apt_subjects: _AptSubjects,
         pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
         pc2_with_pcswitcher: BashLoginRemoteExecutor,
         reset_pcswitcher_state: None,
     ) -> None:
-        """A29, A41 — pc1 has a package from a vendor repository pc2 does not have; approving the
-        install carries that repository and its signing key across, and pc2's own apt then
-        installs the vendor's build.
+        """A29, A41, A42.
 
-        The whole chain is asserted on pc2's own state: the `.sources` file and the keyring
-        the approval derived, the package in `apt-mark showmanual`, and `apt-cache policy`
-        naming the vendor as where it came from. Nothing here reads the run's output --
-        every claim is something the target's package manager says about itself.
+        Run 1: pc1 has a package from a vendor repository pc2 does not have; approving the
+        install carries that repository and its signing key across, and pc2's own apt then
+        installs the vendor's build. The whole chain is asserted on pc2's own state -- the
+        `.sources` file and the keyring the approval derived, the package in `apt-mark
+        showmanual`, and `apt-cache policy` naming the vendor as where it came from.
+
+        Between the runs pc2 loses that package again and gains a rival: another repository
+        offering the same name at a higher version, and a pin holding the vendor's build at
+        priority 1.
+
+        Run 2: the vendor's repository is on pc2 and still does not win, so after the run's
+        `apt-get update` pc2's candidate is somebody else's software. That install is refused
+        as its own failure naming both origins, and nothing of that name is installed. A
+        second, ordinary install approved in the same run lands anyway, which is what makes
+        the refusal one item's failure rather than the run's.
         """
         _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
 
+        other_candidate = apt_subjects.install_direction[0]
+        vendor_item_id = AptPackageItem(name=_VENDOR_PACKAGE, version="").item_id
         source_filename = key_filename = ""
+        repo_dir = list_filename = pin_filename = ""
         try:
             source_filename, key_filename = await _install_from_the_vendor_repository(pc1_executor)
             source_dest = f"{_APT_SOURCES_DIR}/{source_filename}"
@@ -5055,12 +2879,15 @@ class TestTheAptOriginModelOnRealRepositories:
 
             await _write_apt_sync_config(pc1_executor)
 
-            item_id = AptPackageItem(name=_VENDOR_PACKAGE, version="").item_id
-            sync_cmd = f"{_automation_env_assignment(item_id)} pc-switcher sync pc2 --yes --allow-first-sync"
-            sync_result = await pc1_executor.run_command(sync_cmd, timeout=600.0, login_shell=True)
-            assert sync_result.success, (
-                f"pc-switcher sync exited {sync_result.exit_code}.\n"
-                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
+            # -- run 1: the repository travels and the vendor's build lands --------------
+            first = await pc1_executor.run_command(
+                f"{SKIP_INSTALL_ON_TARGET} {_automation_env_assignment(vendor_item_id)}"
+                f" pc-switcher sync pc2 --yes --allow-first-sync",
+                timeout=600.0,
+                login_shell=True,
+            )
+            assert first.success, (
+                f"pc-switcher sync exited {first.exit_code}.\nstdout: {first.stdout}\nstderr: {first.stderr}"
             )
 
             landed = await pc2_executor.run_command(
@@ -5070,15 +2897,12 @@ class TestTheAptOriginModelOnRealRepositories:
             )
             assert landed.success, (
                 f"the approved install did not carry {source_dest} and {key_dest} to pc2.\n"
-                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
+                f"stdout: {first.stdout}\nstderr: {first.stderr}"
             )
-
             manual = await pc2_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0)
             assert _VENDOR_PACKAGE in nonblank_lines(manual.stdout), (
-                f"{_VENDOR_PACKAGE} was not installed on pc2.\n"
-                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
+                f"{_VENDOR_PACKAGE} was not installed on pc2.\nstdout: {first.stdout}\nstderr: {first.stderr}"
             )
-
             policy = await pc2_executor.run_command(
                 f"apt-cache policy {shlex.quote(_VENDOR_PACKAGE)}", login_shell=False, timeout=30.0
             )
@@ -5086,55 +2910,36 @@ class TestTheAptOriginModelOnRealRepositories:
                 f"pc2 has {_VENDOR_PACKAGE} but apt names no {_VENDOR_REPO_URI} version for it, so the copy that "
                 f"landed is not the vendor's.\n{policy.stdout}"
             )
-        finally:
-            if source_filename:
-                await _remove_the_vendor_repository(pc2_executor, source_filename, key_filename)
-                await _remove_the_vendor_repository(pc1_executor, source_filename, key_filename)
 
-    async def test_the_post_refresh_verification_refuses_an_install_the_target_would_take_from_elsewhere(
-        self,
-        pc1_executor: BashLoginRemoteExecutor,
-        pc2_executor: BashLoginRemoteExecutor,
-        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
-        pc2_with_pcswitcher: BashLoginRemoteExecutor,
-        reset_pcswitcher_state: None,
-    ) -> None:
-        """A42 — the vendor's repository lands on pc2 and still does not win: another repository
-        there offers the same name at a higher version and a pin holds the vendor's build at
-        priority 1, so after the run's `apt-get update` pc2's candidate is somebody else's
-        software.
-
-        That install is refused as its own failure naming both origins, and nothing of that
-        name is installed. A second, ordinary install approved in the same run lands anyway,
-        which is what makes the refusal one item's failure rather than the run's.
-        """
-        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
-
-        other_candidate = await _removable_candidate(pc1_executor, pc2_executor)
-        source_filename = key_filename = ""
-        repo_dir = list_filename = pin_filename = ""
-        try:
-            source_filename, key_filename = await _install_from_the_vendor_repository(pc1_executor)
+            # -- between the runs: pc2 loses the package and gains a rival for its name ---
+            purged = await pc2_executor.run_command(
+                f"sudo DEBIAN_FRONTEND=noninteractive apt-get purge --assume-yes {shlex.quote(_VENDOR_PACKAGE)}",
+                login_shell=False,
+                timeout=180.0,
+            )
+            assert purged.success, f"Failed to purge {_VENDOR_PACKAGE} from pc2 between the runs: {purged.stderr}"
             repo_dir, list_filename, pin_filename = await _publish_a_rival_candidate(pc2_executor)
 
-            removed = await pc2_executor.run_command(
-                f"sudo DEBIAN_FRONTEND=noninteractive apt-get remove --assume-yes {shlex.quote(other_candidate)}",
-                login_shell=False,
-                timeout=120.0,
+            # One apt transaction on each machine, run at once: they contend on nothing.
+            _ = await asyncio.gather(
+                _ensure_installed_and_manual(pc1_executor, other_candidate),
+                _ensure_absent(pc2_executor, other_candidate),
             )
-            assert removed.success, f"Failed to remove {other_candidate} from pc2: {removed.stderr}"
 
-            await _write_apt_sync_config(pc1_executor)
-
+            # -- run 2: the target's own arithmetic refuses the vendor's build -----------
             decisions = {
-                AptPackageItem(name=_VENDOR_PACKAGE, version="").item_id: Decision.APPLY,
+                vendor_item_id: Decision.APPLY,
                 AptPackageItem(name=other_candidate, version="").item_id: Decision.APPLY,
             }
-            sync_cmd = f"{_automation_env_assignment_multi(decisions)} pc-switcher sync pc2 --yes --allow-first-sync"
-            sync_result = await pc1_executor.run_command(sync_cmd, timeout=600.0, login_shell=True)
-            assert not sync_result.success, (
+            second = await pc1_executor.run_command(
+                f"{SKIP_INSTALL_ON_TARGET} {_automation_env_assignment_multi(decisions)} "
+                "pc-switcher sync pc2 --yes --allow-first-sync --allow-out-of-order",
+                timeout=600.0,
+                login_shell=True,
+            )
+            assert not second.success, (
                 "a refused install is its own failure, so the run must not report success.\n"
-                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
+                f"stdout: {second.stdout}\nstderr: {second.stderr}"
             )
 
             installed = parse_dpkg_installed(
@@ -5150,13 +2955,13 @@ class TestTheAptOriginModelOnRealRepositories:
             )
             assert other_candidate in installed, (
                 f"{other_candidate} was not installed, so the refusal ended the run instead of failing one item.\n"
-                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
+                f"stdout: {second.stdout}\nstderr: {second.stderr}"
             )
 
-            collapsed = _collapse_run_output(sync_result.stdout + sync_result.stderr)
+            collapsed = _collapse_run_output(second.stdout + second.stderr)
             assert f"{_VENDOR_PACKAGE} was not installed:" in collapsed, (
                 f"the run did not report {_VENDOR_PACKAGE} as refused.\n"
-                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
+                f"stdout: {second.stdout}\nstderr: {second.stderr}"
             )
             assert (
                 f"has it from {_VENDOR_REPO_URI.removeprefix('https://')}, but after this run's apt-get update"
@@ -5166,111 +2971,301 @@ class TestTheAptOriginModelOnRealRepositories:
                 f"the refusal did not name the origin pc2 would have taken it from.\n{collapsed}"
             )
         finally:
-            if repo_dir:
-                await _remove_the_rival_candidate(pc2_executor, repo_dir, list_filename, pin_filename)
-            if source_filename:
-                await _remove_the_vendor_repository(pc2_executor, source_filename, key_filename)
-                await _remove_the_vendor_repository(pc1_executor, source_filename, key_filename)
-            await _restore_package(pc2_executor, other_candidate)
+
+            async def clean_the_source() -> None:
+                if source_filename:
+                    await _undeclare_the_vendor_repository(pc1_executor, source_filename, key_filename)
+
+            async def clean_the_target() -> None:
+                if repo_dir:
+                    await _remove_the_rival_candidate(pc2_executor, repo_dir, list_filename, pin_filename)
+                if source_filename:
+                    await _undeclare_the_vendor_repository(pc2_executor, source_filename, key_filename)
+
+            await _cleanup_in_parallel(clean_the_source(), clean_the_target())
 
 
-# -- apt holds through a real run: what `apt-mark` records, and what it records without ---
+class TestARunWithNobodyToAsk:
+    """Everything a single non-interactive run says and refuses to do (`PKG-FR-NO-TERMINAL`,
+    `PKG-FR-LOG-DECISIONS`).
 
-# Small archive packages a stock Ubuntu 24.04 does not install, for the hold that names a
-# package its machine does not have. Several, because the one requirement is that apt knows
-# the name and dpkg does not have it, and which of them satisfies that is the machine's
-# business rather than this module's.
-_UNINSTALLED_ARCHIVE_CANDIDATES = ("cowsay", "sl", "toilet", "fortune-mod")
+    The runs these claims used to make one each were identical in every respect that costs
+    wall clock: no `PACKAGE_REVIEW_AUTOMATION_ENV`, no TTY on stdin or stdout (the default
+    for a command run through this fixture's plain SSH exec, which requests no pty), and
+    therefore nothing applied anywhere. What differs between them is only which manager's
+    groups they read, so they share one run here (#216).
 
-
-async def _apt_selection_snapshot(
-    executor: BashLoginRemoteExecutor,
-) -> tuple[set[str], set[str], dict[str, str]]:
-    """One machine's `(manual set, hold set, {package: installed version})`, read in ONE
-    command (testing-guide.md's command-grouping rule).
-    """
-    result = await executor.run_command(
-        f"apt-mark showmanual; echo {_SECTION_MARKER}; apt-mark showhold; echo {_SECTION_MARKER}; "
-        "dpkg-query --show --showformat='${Package}\\t${Version}\\n'",
-        login_shell=False,
-        timeout=30.0,
-    )
-    assert result.success, f"Failed to read the machine's apt selection state: {result.stderr}"
-    manual_block, hold_block, version_block = result.stdout.split(_SECTION_MARKER)
-    versions: dict[str, str] = {}
-    for line in nonblank_lines(version_block):
-        name, _, version = line.partition("\t")
-        versions[name] = version
-    return set(nonblank_lines(manual_block)), set(nonblank_lines(hold_block)), versions
-
-
-async def _a_package_both_machines_have_unheld(
-    pc1_executor: BashLoginRemoteExecutor, pc2_executor: BashLoginRemoteExecutor
-) -> str:
-    """A package manually installed at the SAME version on both machines and held on
-    neither, so holding it on the source is the run's only apt work.
-    """
-    source_manual, source_held, source_versions = await _apt_selection_snapshot(pc1_executor)
-    target_manual, target_held, target_versions = await _apt_selection_snapshot(pc2_executor)
-    shared = sorted(
-        name
-        for name in source_manual & target_manual
-        if name not in source_held
-        and name not in target_held
-        and name in source_versions
-        and source_versions[name] == target_versions.get(name)
-    )
-    assert shared, (
-        "No package is manually installed at the same version on both machines and held on neither. The two VMs "
-        "come from one baseline, so an empty result means the machines are not what these tests assume."
-    )
-    return shared[0]
-
-
-async def _a_name_apt_knows_the_machine_does_not_have(executor: BashLoginRemoteExecutor) -> str:
-    """A package `_UNINSTALLED_ARCHIVE_CANDIDATES` names that this machine's apt can resolve
-    and dpkg does not have installed -- the only state `apt-mark hold` can be given to
-    produce a hold that freezes nothing.
-    """
-    result = await executor.run_command(
-        f"apt-cache policy {' '.join(_UNINSTALLED_ARCHIVE_CANDIDATES)}", login_shell=False, timeout=30.0
-    )
-    assert result.success, f"Failed to read apt's policy for the hold candidates: {result.stderr}"
-
-    facts: dict[str, dict[str, str]] = {}
-    current = ""
-    for line in result.stdout.splitlines():
-        stripped = line.strip()
-        if line and not line[0].isspace() and stripped.endswith(":"):
-            current = stripped[:-1]
-            facts[current] = {}
-            continue
-        for field in ("Installed:", "Candidate:"):
-            if current and stripped.startswith(field):
-                facts[current][field] = stripped.removeprefix(field).strip()
-
-    for name in _UNINSTALLED_ARCHIVE_CANDIDATES:
-        block = facts.get(name, {})
-        if block.get("Installed:") == "(none)" and block.get("Candidate:", "(none)") != "(none)":
-            return name
-    raise AssertionError(
-        f"None of {list(_UNINSTALLED_ARCHIVE_CANDIDATES)} is both known to apt and absent from dpkg on this "
-        f"machine, so no hold naming a package it does not have can be set up.\n{result.stdout}"
-    )
-
-
-class TestAptHoldsThroughARealRun:
-    """`PKG-FR-BLOCKS-DERIVED` and `PKG-FR-HOLD-WITHOUT-PACKAGE` against real `apt-mark`
-    state.
-
-    Both rulings are about dpkg selection state rather than about any transaction, and the
-    unit tier can only assert that the commands we believe in are the commands we send. What
-    a real run has to show is that the hold arrives on the target with nothing asked, and
-    that a hold naming a package its machine does not have ends the run before anything is
-    written.
+    A run with nobody to ask is also the only run that PRINTS every group, which is why the
+    two claims whose subject is legitimately the run's own output live here: a `REPORT_ONLY`
+    flatpak diff changes nothing anywhere, and an apt item the target's own apt cannot
+    resolve is proven to have reached a review by the group that named it. The automation
+    hook answers a review without ever printing it, so neither could be read from a run that
+    used it.
     """
 
-    async def test_a_source_hold_reaches_the_target_with_no_review_line(
+    async def test_a_non_interactive_run_names_every_item_applies_none_and_prints_each_group(  # noqa: PLR0915
+        self,
+        pc1_executor: BashLoginRemoteExecutor,
+        pc2_executor: BashLoginRemoteExecutor,
+        apt_subjects: _AptSubjects,
+        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
+        pc2_with_pcswitcher: BashLoginRemoteExecutor,
+        reset_pcswitcher_state: None,
+    ) -> None:
+        """H162, J9, J12, J14, J37, J44, J49, J103, A30, J98, G28 — and ADR-020 D-41's
+        `ORIGIN_MISMATCH` at VM level.
+
+        Four seeded divergences, one per claim, and one run:
+
+        - an apt package removed from pc2 and another promoted to manual there, so an item
+          exists in each direction: nothing is applied, no permanent decision is recorded on
+          either machine, both items are NAMED as declined, and the job itself is reported
+          skipped;
+        - an apt package pc1 installed from a `file:` repository pc2 has never heard of
+          (ADR-020 D-34 class 3): the target's apt refuses to rehearse any transaction
+          containing the name, and the whole run survives it -- proven by the review group
+          that names the package rather than by a run that quietly dropped it;
+        - the fixture flatpak installed on pc2 from the real Flathub with pc2's `flathub`
+          then repointed at the beta repository's URL: both machines print the same origin
+          NAME, so a comparison by name is provably blind to it and only D-41's URL
+          comparison can produce the finding, which is reported naming both vendors and
+          converged by nothing;
+        - one unowned `/opt` path on pc1, so the unreproducible scan has a finding of its own
+          and its refusal to name any part of the stock `/usr/local` skeleton is a real claim
+          rather than a scan that found nothing.
+
+        This run is deliberately NOT a `--dry-run`. `PKG-FR-NO-TERMINAL` ends every package
+        job before `apply()` when there is nobody to ask, which is the same protection for
+        pc2 and the condition the printed groups above depend on; a rehearsal would add a
+        second reason for the same silence and make neither observable.
+        """
+        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
+
+        install_candidate = apt_subjects.install_direction[0]
+        removal_candidate = await _create_extra_on_target_apt_package(pc1_executor, pc2_executor)
+        application, _version, scope, remote_name, source_url, ref = await _flatpak_subject(pc1_executor)
+        scope_flag = "--user" if scope == "user" else "--system"
+        sudo = "sudo " if scope == "system" else ""
+        witness_path = f"/opt/pcswitcher-it-scan-{uuid4().hex[:12]}"
+
+        # The fixture's second remote supplies a real, differently-vendored URL, so nothing
+        # here invents one. Both Flathub keyrings share a sha256 (measured,
+        # vm-test-fixtures.sh), which is why the URL -- never a key digest -- is the whole
+        # evidence.
+        beta_url, _beta_options = await _flatpak_remote_row(pc1_executor, _FIXTURE_UNUSED_FLATPAK_REMOTE, scope)
+        assert beta_url != source_url, (
+            f"pc1's {remote_name} and {_FIXTURE_UNUSED_FLATPAK_REMOTE} both report {source_url!r}, so no vendor "
+            "divergence can be built from the fixture remotes "
+            "(tests/integration/scripts/internal/vm-test-fixtures.sh)"
+        )
+
+        unlocatable = repo_dir = list_filename = ""
+        try:
+            # One apt transaction on each machine, run at once: they contend on nothing.
+            _ = await asyncio.gather(
+                _ensure_installed_and_manual(pc1_executor, install_candidate),
+                _ensure_absent(pc2_executor, install_candidate),
+            )
+
+            # pc1 builds and installs from its own repository while pc2 installs the ref this
+            # test then diverges: different machines, different package managers, and neither
+            # reads what the other writes. The repository's names are recorded here rather
+            # than unpacked from the result, because the `finally` undeclares it from them and
+            # a failure on pc2's side would otherwise leave it configured for the whole run.
+            async def declare_on_the_source() -> None:
+                nonlocal unlocatable, repo_dir, list_filename
+                unlocatable, repo_dir, list_filename = await _install_from_a_repo_the_target_lacks(pc1_executor)
+
+            _, install = await _finish_both(
+                declare_on_the_source(),
+                pc2_executor.run_command(
+                    f"{sudo}flatpak install {scope_flag} --assumeyes --noninteractive "
+                    f"{shlex.quote(remote_name)} {shlex.quote(ref)}",
+                    login_shell=False,
+                    timeout=600.0,
+                ),
+            )
+            # The precondition, asserted rather than assumed: without it the run below proves
+            # nothing, because a target that CAN resolve the name never had the defect.
+            refused = await pc2_executor.run_command(
+                f"apt-get --dry-run install --assume-yes --no-install-recommends {shlex.quote(unlocatable)}",
+                login_shell=False,
+                timeout=60.0,
+            )
+            assert not refused.success, (
+                f"pc2 resolved {unlocatable}, so this run cannot exercise the class-3 path.\n"
+                f"stdout: {refused.stdout}\nstderr: {refused.stderr}"
+            )
+
+            assert install.success, (
+                f"failed to install {ref} on pc2 from {remote_name}, so the two machines never share the ref this "
+                f"test diverges: {install.stderr}"
+            )
+            target_rows = [row for row in await _flatpak_app_rows(pc2_executor) if row[4] == ref]
+            assert target_rows, f"{ref} is not installed on pc2 after the install; there is no shared ref to diverge"
+            assert target_rows[0][2] == remote_name, (
+                f"pc2 reports origin {target_rows[0][2]!r} for {ref}, not {remote_name!r} -- the two machines must "
+                "print the SAME origin name for the name comparison to be provably blind to this divergence"
+            )
+            repoint = await pc2_executor.run_command(
+                f"{sudo}flatpak remote-modify {scope_flag} --url={shlex.quote(beta_url)} {shlex.quote(remote_name)}",
+                login_shell=False,
+                timeout=30.0,
+            )
+            assert repoint.success, f"failed to repoint pc2's {remote_name} at {beta_url}: {repoint.stderr}"
+            target_url, _target_options = await _flatpak_remote_row(pc2_executor, remote_name, scope)
+            assert target_url != source_url, (
+                f"pc2's {remote_name} still reports {target_url!r} after the repoint, so both machines' copies of "
+                f"{ref} still come from one vendor and this run cannot exercise ORIGIN_MISMATCH"
+            )
+
+            await _create_unowned_marker(pc1_executor, witness_path)
+
+            await _write_package_sync_config(pc1_executor, apt_sync=True, flatpak_sync=True, manual_installs_sync=True)
+
+            # Four reads that change nothing anywhere, taken at once.
+            manual_before_result, flatpak_before, pc1_decision_before, pc2_decision_before = await asyncio.gather(
+                pc2_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0),
+                _flatpak_app_rows(pc2_executor),
+                _decision_file_exists(pc1_executor, "apt"),
+                _decision_file_exists(pc2_executor, "apt"),
+            )
+            manual_before = nonblank_lines(manual_before_result.stdout)
+
+            # No automation env prefix and no pty on this exec -- genuinely non-interactive
+            # on both stdin and stdout, D-26's actual trigger condition.
+            sync_result = await pc1_executor.run_command(
+                f"{SKIP_INSTALL_ON_TARGET} pc-switcher sync pc2 --yes --allow-first-sync",
+                timeout=900.0,
+                login_shell=True,
+            )
+            assert sync_result.success, (
+                "non-interactive sync unexpectedly failed (D-26's skip-all must not fail the job).\n"
+                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
+            )
+
+            # The same four reads, again at once.
+            manual_after_result, flatpak_after, pc1_decision_after, pc2_decision_after = await asyncio.gather(
+                pc2_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0),
+                _flatpak_app_rows(pc2_executor),
+                _decision_file_exists(pc1_executor, "apt"),
+                _decision_file_exists(pc2_executor, "apt"),
+            )
+            manual_after = nonblank_lines(manual_after_result.stdout)
+            assert manual_after == manual_before, (
+                "non-interactive run changed pc2's apt-mark showmanual -- D-26 requires nothing applied"
+            )
+            assert flatpak_after == flatpak_before, (
+                "the run changed pc2's installed refs; an ORIGIN_MISMATCH is reported and converged by nothing."
+            )
+            assert pc1_decision_after == pc1_decision_before, (
+                "non-interactive run created/removed a decision file on pc1"
+            )
+            assert pc2_decision_after == pc2_decision_before, (
+                "non-interactive run created/removed a decision file on pc2"
+            )
+
+            combined_output = sync_result.stdout + sync_result.stderr
+            # A trailing space so the last finding on the line has the same right-hand
+            # boundary as every other one (see the skeleton check below).
+            collapsed = f"{_collapse_run_output(combined_output)} "
+
+            # `PKG-FR-LOG-DECISIONS` requires the run to NAME each item nobody could be asked
+            # about, so a count would no longer say which ones were declined; and
+            # `PKG-FR-NO-TERMINAL` requires the job itself to be reported skipped.
+            for candidate, direction in ((install_candidate, "install"), (removal_candidate, "removal")):
+                assert f"{_UNASKED_ITEM_MARKER}{candidate} " in collapsed, (
+                    f"{direction}-direction item {candidate} was not named as declined for this run.\n"
+                    f"{combined_output}"
+                )
+            assert "Job apt_sync skipped: non-interactive run left every apt review item undecided" in collapsed, (
+                f"the run did not report apt_sync as skipped (PKG-FR-NO-TERMINAL).\n{combined_output}"
+            )
+
+            # The group panel's own title is the witness that the class-3 package reached a
+            # review at all rather than being dropped to keep the run alive.
+            assert "Install apt packages" in collapsed, (
+                f"the run drew no apt install review group at all.\n{combined_output}"
+            )
+            assert f"install {unlocatable}" in collapsed, (
+                f"{unlocatable} reached no review line, so the run survived by dropping it.\n{combined_output}"
+            )
+            assert "Unable to locate package" not in combined_output, (
+                f"apt's plan-time refusal still surfaced as a run-level failure.\n{combined_output}"
+            )
+
+            # A report group is titled by its CAUSE (`sync_core._REPORT_TITLES`), so this
+            # asserts the mismatch reached the ORIGIN_MISMATCH group specifically rather than
+            # any report group at all. The discriminating pair: a VERSION_MISMATCH -- what
+            # this diverged pair would produce if the vendor comparison missed -- names two
+            # versions and no URL at all.
+            assert "Installed from different remotes (flatpak applications)" in collapsed, (
+                f"the mismatch reached no origin-mismatch review group.\n{combined_output}"
+            )
+            assert ref in combined_output, f"the report does not name the ref {ref}.\n{combined_output}"
+            assert source_url in combined_output, (
+                f"the report does not name the source's vendor {source_url}.\n{combined_output}"
+            )
+            assert target_url in combined_output, (
+                f"the report does not name the target's vendor {target_url}.\n{combined_output}"
+            )
+
+            assert f"{_UNASKED_ITEM_MARKER}{witness_path} " in collapsed, (
+                f"the scan did not name {witness_path}, so this run says nothing about what it names.\n"
+                f"{combined_output}"
+            )
+            for stock in _STOCK_DIRECTORIES:
+                # The trailing space is the boundary: `/usr/local/bin` must not satisfy the
+                # check for `/usr/local`.
+                assert f"{_UNASKED_ITEM_MARKER}{stock} " not in collapsed, (
+                    f"the scan reported {stock}, a directory the distribution itself creates, so every user "
+                    f"would be asked to write an install snippet for a stock directory on every run.\n"
+                    f"{combined_output}"
+                )
+        finally:
+
+            async def clean_the_source() -> None:
+                await _remove_unowned_marker(pc1_executor, witness_path)
+                if repo_dir:
+                    await _undeclare_local_repository(pc1_executor, repo_dir, list_filename)
+
+            async def clean_the_target() -> None:
+                # `_restore_flatpak_target_baseline` re-adds with `--if-not-exists`, which
+                # cannot repair a URL, so the repointed remote is deleted here first.
+                await pc2_executor.run_command(
+                    f"{sudo}flatpak uninstall {scope_flag} --assumeyes {shlex.quote(application)} || true; "
+                    f"{sudo}flatpak remote-delete {scope_flag} --force {shlex.quote(remote_name)} || true",
+                    login_shell=False,
+                    timeout=120.0,
+                )
+                await _restore_flatpak_target_baseline(pc2_executor)
+                await _restore_auto_marked_package(pc2_executor, removal_candidate)
+
+            await _cleanup_in_parallel(clean_the_source(), clean_the_target())
+
+
+class TestWhatFolderSyncMayAndMayNotCarry:
+    """The two boundaries `folder_sync` has to honour, where each hands off from a package
+    job (`PKG-FR-SNAP-DATA-BOUNDARY`, `PKG-FR-REGISTRY-CONSENT`), and the snap a whole run
+    must not touch at all (`PKG-FR-SNAP-SIDELOAD`).
+
+    The unit tests compute the snap exclusion from a revision map a test wrote into them and
+    assert the `--filter` argument built for the registry. What they cannot show is where
+    either comes from: `folder_sync` asking the real target machine mid-run, after the
+    package jobs have gone (`PKG-FR-JOB-ORDER`), and both arguments holding against real
+    rsync over the directories these files actually live in.
+
+    All three claims want the same run: `snap_sync` and `manual_installs_sync` converging
+    nothing, `folder_sync` mirroring two real directories with `--delete`. They share it
+    (#216). The run has no terminal, which is one of the two shapes in which the registry
+    push is never made and is also what declines the one snap install the boundary test needs
+    declined.
+
+    Both machines' real `~/snap` is set aside for the duration: the mirror deletes, so a
+    hermetic tree is the only way the transfer's outcome is exactly what this test built.
+    """
+
+    async def test_the_mirror_honours_the_snap_revision_boundary_and_the_registrys_consent(  # noqa: PLR0915
         self,
         pc1_executor: BashLoginRemoteExecutor,
         pc2_executor: BashLoginRemoteExecutor,
@@ -5278,52 +3273,940 @@ class TestAptHoldsThroughARealRun:
         pc2_with_pcswitcher: BashLoginRemoteExecutor,
         reset_pcswitcher_state: None,
     ) -> None:
-        """B1 — pc1 holds a package both machines already have at the same version, so the package
-        itself is no item; the run registers the hold on pc2 having asked nothing about it.
+        """E113, E115, K88, E49.
 
-        The review is answered with an EMPTY mapping, so the only thing that can carry the
-        hold is its derivation: any item that did reach a group is left skipped, and a hold
-        that needed a decision would be skipped with them. The run's decision log names every
-        item it presented, so the absence of a line for the hold is what says no question was
-        put.
+        The `~/snap` tree pc1 offers holds two apps, each answering one of the two shapes
+        pc2's own `snap list` can give:
+
+        - the first fixture snap, which pc2 is active at a revision of: that revision's data
+          directory reaches pc2 and one for a revision no snapd anywhere has ever installed
+          does not;
+        - the second, removed from pc2 with `--purge` and left declined by this run: no
+          revision directory of it reaches pc2 at all, while `~/snap/<app>/common`, which
+          belongs to no revision, does -- the witness that the mirror reached the app's tree
+          and the absence is the exclusion at work.
+
+        The registry's own directory is mirrored too, with both machines holding registries
+        that disagree -- one entry each, neither known to the other -- which is exactly the
+        loss `PKG-FR-REGISTRY-CONSENT` exists to put a question in front of. pc2 ends the run
+        holding its own registry entry for entry, and a file of pc1's own beside it arrives,
+        which is what makes the registry's survival evidence about the exclusion rather than
+        about a mirror that never covered the directory.
+
+        pc1 also carries a sideloaded snap for the whole run. Both machines' complete
+        `snap list` listings are compared across the run, so "the run does nothing about it"
+        includes not installing it on pc2, not removing it from pc1, and not moving anything
+        else while it is there. snapd's automatic refresh is paused on both machines
+        throughout (the same timed `refresh.hold` a sync engages, restored exactly
+        afterwards) so a background refresh cannot change a revision between the two listings
+        and be read as the run's doing.
         """
         _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
 
-        subject = await _a_package_both_machines_have_unheld(pc1_executor, pc2_executor)
+        home, target_home = await asyncio.gather(_home_dir(pc1_executor), _home_dir(pc2_executor))
+        assert target_home == home, (
+            "the two machines' SSH users have different home directories, so `~/snap` and the registry's directory "
+            "are not one path each to mirror"
+        )
+        snap_root = f"{home}/snap"
+        registry_dir = f"{home}/{_REGISTRY_DIR_RELPATH}"
+
+        held_app, absent_app = await _snap_subjects(pc1_executor, pc2_executor, count=2)
+        # Three reads of two `snap list --all` outputs, taken at once.
+        held_revision, absent_source_revision, absent_target_revision = await asyncio.gather(
+            _snap_revision(pc2_executor, held_app),
+            _snap_revision(pc1_executor, absent_app),
+            _snap_revision(pc2_executor, absent_app),
+        )
+        assert held_revision and absent_source_revision and absent_target_revision, (
+            f"{held_app} and {absent_app} must both be installed on both machines"
+        )
+        stale_revision = str(int(held_revision) + 1000) if held_revision.isdigit() else f"{held_revision}0"
+
+        uniq = uuid4().hex[:12]
+        held_marker = f"{snap_root}/{held_app}/{held_revision}/pcswitcher-it-{uniq}"
+        stale_dir = f"{snap_root}/{held_app}/{stale_revision}"
+        stale_marker = f"{stale_dir}/pcswitcher-it-{uniq}"
+        absent_revision_dir = f"{snap_root}/{absent_app}/{absent_source_revision}"
+        absent_revision_marker = f"{absent_revision_dir}/pcswitcher-it-{uniq}"
+        common_marker = f"{snap_root}/{absent_app}/common/pcswitcher-it-{uniq}"
+
+        sideload_name = f"pcswitcher-it-sideload-{uniq}"
+        sideload_dir = f"/var/tmp/pcswitcher-it-sideload-{uniq}"
+
+        source_path = f"/opt/pcswitcher-it-registry-source-{uniq}"
+        source_item = _unowned_item_id(source_path)
+        target_path = f"/opt/pcswitcher-it-registry-target-{uniq}"
+        target_item = _unowned_item_id(target_path)
+        target_body = f"# pc2's own snippet {uniq}"
+        travelling = f"{registry_dir}/pcswitcher-it-{uniq}"
+
+        pc1_prior_hold, pc2_prior_hold = await asyncio.gather(
+            _capture_system_refresh_hold(pc1_executor), _capture_system_refresh_hold(pc2_executor)
+        )
+        source_aside = target_aside = ""
         try:
-            held = await pc1_executor.run_command(
-                f"sudo apt-mark hold {shlex.quote(subject)}", login_shell=False, timeout=30.0
+            _ = await asyncio.gather(
+                _engage_system_refresh_hold(pc1_executor), _engage_system_refresh_hold(pc2_executor)
             )
-            assert held.success, f"Failed to hold {subject} on pc1: {held.stderr}"
 
-            await _write_apt_sync_config(pc1_executor)
+            # pc2 drops the snap this run must find absent while pc1 reads the base its
+            # sideload will declare: one snapd each, and neither knows about the other.
+            # `--purge` leaves snapd no snapshot behind, so removing it here costs the next
+            # scenario an install (`_snap_subjects`) and nothing more.
+            purged, base = await asyncio.gather(
+                pc2_executor.run_command(
+                    f"sudo snap remove --purge {shlex.quote(absent_app)}", login_shell=False, timeout=180.0
+                ),
+                _installed_base_snap(pc1_executor),
+            )
+            assert purged.success, f"could not remove {absent_app} from pc2: {purged.stderr}"
+            assert await _snap_revision(pc2_executor, absent_app) is None, (
+                f"{absent_app} is still installed on pc2 after `snap remove --purge`, so pc2 holds a revision of it "
+                "and this run cannot exercise the branch"
+            )
 
-            sync_cmd = f"{_automation_env_assignment_multi({})} pc-switcher sync pc2 --yes --allow-first-sync"
-            sync_result = await pc1_executor.run_command(sync_cmd, timeout=300.0, login_shell=True)
+            await _create_sideloaded_snap(pc1_executor, sideload_dir, sideload_name, base)
+
+            # Captured AFTER the sideload and the purge, so what the run is held to is the
+            # machines as it finds them, and set aside AFTER the capture so the sideload's own
+            # `~/snap` entry travels with the rest of the real tree.
+            pc1_listing_before, pc2_listing_before = await asyncio.gather(
+                pc1_executor.run_command("snap list --all", login_shell=False, timeout=20.0),
+                pc2_executor.run_command("snap list --all", login_shell=False, timeout=20.0),
+            )
+            pc1_snaps_before = parse_snap_list_names_revisions(pc1_listing_before.stdout)
+            pc2_snaps_before = parse_snap_list_names_revisions(pc2_listing_before.stdout)
+            assert pc1_snaps_before.get(sideload_name, "").startswith("x"), (
+                f"pc1's {sideload_name} is at revision {pc1_snaps_before.get(sideload_name)!r}, not a sideloaded "
+                "`x`-prefixed one, so this run cannot exercise the sideload branch"
+            )
+            assert sideload_name not in pc2_snaps_before, f"{sideload_name} is somehow already on pc2"
+
+            # One machine at a time, deliberately: a failure here must still leave the machine
+            # that succeeded holding a backup directory this test can name and put back.
+            source_aside = await _take_paths_aside(pc1_executor, [snap_root])
+            target_aside = await _take_paths_aside(pc2_executor, [snap_root])
+
+            # `current` decides which revision dir the source offers at all; without it every
+            # one of an app's revision dirs is excluded and the run below proves nothing.
+            markers = (held_marker, stale_marker, absent_revision_marker, common_marker)
+            build = "\n".join(
+                ["set -eu"]
+                + [f"mkdir --parents {shlex.quote(path.rsplit('/', 1)[0])}" for path in markers]
+                + [f"printf %s {uniq} > {shlex.quote(path)}" for path in markers]
+                + [
+                    f"ln --symbolic --no-dereference --force {shlex.quote(revision)} "
+                    f"{shlex.quote(f'{snap_root}/{app}/current')}"
+                    for app, revision in ((held_app, held_revision), (absent_app, absent_source_revision))
+                ]
+            )
+            built = await pc1_executor.run_command(build, login_shell=False, timeout=30.0)
+            assert built.success, f"could not build the ~/snap fixture on pc1: {built.stderr}"
+
+            # Each machine authors its own registry entry; only pc1 needs the scan finding to
+            # go with it, so its two writes stay ordered against each other and nothing else.
+            async def seed_the_source_registry() -> None:
+                await _create_unowned_marker(pc1_executor, source_path)
+                await _author_snippet(pc1_executor, source_item, source_path, f"touch /tmp/pcswitcher-it-{uniq}")
+
+            _ = await asyncio.gather(
+                seed_the_source_registry(),
+                _author_snippet(pc2_executor, target_item, target_path, target_body),
+            )
+
+            await _write_package_sync_config(
+                pc1_executor,
+                extra_sections=_folder_sync_section(snap_root, registry_dir),
+                snap_sync=True,
+                manual_installs_sync=True,
+                folder_sync=True,
+            )
+            seeded = await pc1_executor.run_command(
+                f"printf %s {uniq} > {shlex.quote(travelling)}", login_shell=False, timeout=15.0
+            )
+            assert seeded.success, f"could not seed {travelling} on pc1: {seeded.stderr}"
+
+            # No pty and no automation hook: nobody is there to answer, so
+            # `manual_installs_sync` makes no push and the mirror is the only route left to
+            # the registry, and the one snap install below stays declined.
+            sync_result = await pc1_executor.run_command(
+                f"{SKIP_INSTALL_ON_TARGET} pc-switcher sync pc2 --yes --allow-first-sync",
+                timeout=900.0,
+                login_shell=True,
+            )
             assert sync_result.success, (
                 f"pc-switcher sync exited {sync_result.exit_code}.\n"
                 f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
             )
 
-            target_holds = await pc2_executor.run_command("apt-mark showhold", login_shell=False, timeout=15.0)
-            assert subject in nonblank_lines(target_holds.stdout), (
-                f"pc1's hold on {subject} did not reach pc2, although a block replicates without review.\n"
+            assert await _snap_revision(pc2_executor, absent_app) is None, (
+                f"{absent_app} was installed on pc2 although nobody approved it, so pc2 holds a revision of it and "
+                f"the absence below would prove nothing.\n"
                 f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
             )
 
-            collapsed = _collapse_run_output(sync_result.stdout + sync_result.stderr)
-            assert f"reviewed {subject} (hold)" not in collapsed, (
-                f"the hold on {subject} was presented as a reviewed item -- a block is never a question"
+            listing = await pc2_executor.run_command(
+                f"find {shlex.quote(snap_root)} -mindepth 1 | sort", login_shell=False, timeout=30.0
             )
-        finally:
-            await pc1_executor.run_command(
-                f"sudo apt-mark unhold {shlex.quote(subject)}", login_shell=False, timeout=30.0
+            assert listing.success, f"could not read pc2's {snap_root}: {listing.stderr}"
+            arrived = set(nonblank_lines(listing.stdout))
+
+            assert held_marker in arrived, (
+                f"{held_marker} did not reach pc2, which is itself active at revision {held_revision} of "
+                f"{held_app}.\n{listing.stdout}"
             )
-            await pc2_executor.run_command(
-                f"sudo apt-mark unhold {shlex.quote(subject)}", login_shell=False, timeout=30.0
+            assert not any(path == stale_dir or path.startswith(f"{stale_dir}/") for path in arrived), (
+                f"a data directory for revision {stale_revision} of {held_app} exists on pc2, whose snapd is on "
+                f"{held_revision} and never installed {stale_revision}.\n{listing.stdout}"
+            )
+            assert common_marker in arrived, (
+                f"{common_marker} did not reach pc2, so the mirror never reached {absent_app}'s tree at all and the "
+                f"absence of its revision directory says nothing.\n{listing.stdout}"
+            )
+            assert not any(
+                path == absent_revision_dir or path.startswith(f"{absent_revision_dir}/") for path in arrived
+            ), (
+                f"a data directory for revision {absent_source_revision} of {absent_app} exists on pc2, whose snapd "
+                f"holds no revision of that app at all.\n{listing.stdout}"
             )
 
-    async def test_a_hold_naming_a_package_the_machine_does_not_have_ends_the_run(
+            landed = await pc2_executor.run_command(f"cat {shlex.quote(travelling)}", login_shell=False, timeout=15.0)
+            assert landed.success and landed.stdout.strip() == uniq, (
+                f"{travelling} did not reach pc2, so the mirror never covered the directory the registry lives in "
+                f"and the registry surviving below says nothing.\nstdout: {landed.stdout}\nstderr: {landed.stderr}"
+            )
+            entries = await SnippetRegistry(pc2_executor).load()
+            assert source_item not in entries, (
+                f"pc1's snippet for {source_path} is in pc2's registry although nobody was asked: the registry "
+                f"reached pc2 without the question that is its only route.\nregistry holds: {sorted(entries)}"
+            )
+            assert set(entries) == {target_item}, (
+                f"pc2's registry is no longer its own: it holds {sorted(entries)} rather than the single entry "
+                f"{target_item} pc2 had before the run"
+            )
+            assert entries[target_item].body == target_body, (
+                f"pc2's own entry for {target_path} was overwritten: its body reads {entries[target_item].body!r} "
+                f"rather than {target_body!r}"
+            )
+
+            pc1_listing_after, pc2_listing_after = await asyncio.gather(
+                pc1_executor.run_command("snap list --all", login_shell=False, timeout=20.0),
+                pc2_executor.run_command("snap list --all", login_shell=False, timeout=20.0),
+            )
+            pc1_snaps_after = parse_snap_list_names_revisions(pc1_listing_after.stdout)
+            pc2_snaps_after = parse_snap_list_names_revisions(pc2_listing_after.stdout)
+            assert pc1_snaps_after == pc1_snaps_before, (
+                f"the run changed pc1's own snaps.\nbefore: {pc1_snaps_before}\nafter: {pc1_snaps_after}"
+            )
+            assert pc2_snaps_after == pc2_snaps_before, (
+                f"the run changed pc2's snaps although nothing about them was approved.\n"
+                f"before: {pc2_snaps_before}\nafter: {pc2_snaps_after}"
+            )
+        finally:
+
+            async def clean_the_source() -> None:
+                await _remove_unowned_marker(pc1_executor, source_path)
+                if source_aside:
+                    await _put_paths_back(pc1_executor, source_aside, [snap_root])
+                await _remove_sideloaded_snap(pc1_executor, sideload_dir, sideload_name)
+                await _restore_system_refresh_hold(pc1_executor, pc1_prior_hold)
+
+            async def clean_the_target() -> None:
+                if target_aside:
+                    await _put_paths_back(pc2_executor, target_aside, [snap_root])
+                await _restore_system_refresh_hold(pc2_executor, pc2_prior_hold)
+
+            await _cleanup_in_parallel(clean_the_source(), clean_the_target())
+
+
+class TestSkipAlwaysIsInertInBothRoles:
+    """D-08's permanent skip, recorded once and then held against every later run, in both
+    roles a machine can play.
+
+    The ordinary review checkbox has no UI path to SKIP_ALWAYS yet for a regular item
+    (`packages.review`'s own docstring: only the unreproducible items' three-way prompt and a
+    hand-constructed `ReviewOutcome` reach it today) -- this drives it through the same
+    `PACKAGE_REVIEW_AUTOMATION_ENV` hook every other test in this module uses, proving the
+    underlying mechanism (`PackageSyncJob._record_permanent_skips`/`filter_inert`)
+    independent of that UI gap.
+
+    Two item shapes are recorded in the same first run: an ordinary apt package, which is
+    source-held for the direction it was decided in, and a package installed straight from a
+    `.deb`, which is unreproducible and therefore always source-held (D-08a). One shape is
+    what the hook can already express and the other is what the real UI already offers, and
+    the same three runs settle both (#216).
+    """
+
+    async def test_a_recorded_skip_always_survives_a_forced_apply_in_either_direction(
+        self,
+        pc1_executor: BashLoginRemoteExecutor,
+        pc2_executor: BashLoginRemoteExecutor,
+        apt_subjects: _AptSubjects,
+        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
+        pc2_with_pcswitcher: BashLoginRemoteExecutor,
+        reset_pcswitcher_state: None,
+    ) -> None:
+        """H125, H126, H166, N1, N2, G27.
+
+        Run 1 records SKIP_ALWAYS for both items and applies neither. The apt entry lands in
+        pc1's apt decision file and the `.deb` entry in its manual one -- and that second
+        entry is also the whole witness that a hand-installed package reached the review at
+        all: SKIP_ALWAYS is recorded against an item only if the review presented it
+        (`_finalize_unreproducible`), and `reset_pcswitcher_state` leaves pc1 holding no
+        decision file before the run.
+
+        What only a real apt can settle about that item: a package installed straight from a
+        `.deb` has its INSTALLED version as its own candidate and no repository origin at
+        all, so the detection rests on what apt genuinely prints for such a package rather
+        than on policy output a test author composed. Nothing marks it manually installed
+        either -- `dpkg --install` is the whole setup -- and the scan reads the INSTALLED set.
+
+        Run 2 force-maps both items to APPLY in the same direction. If D-08's inertness
+        holds, neither becomes a diff at all, so the mapping has nothing to attach to:
+        proven by the apt package staying absent from pc2 despite being asked for, and by the
+        `.deb` entry still reading SKIP_ALWAYS rather than being presented again.
+
+        Run 3 reverses the roles. The decision lives on pc1, now the TARGET, and D-08
+        promises inertness there too -- so force-mapping the same apt item to APPLY (which,
+        if a diff existed at all, would mean REMOVE, since pc1 genuinely still has the
+        package) must still leave it untouched.
+
+        `--allow-out-of-order` bypasses the unrelated W3 consecutive-push gate a second
+        same-direction sync would otherwise trip (ADR-015) -- orthogonal to what this proves.
+        """
+        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
+
+        candidate = apt_subjects.install_direction[0]
+        apt_item_id = AptPackageItem(name=candidate, version="").item_id
+
+        hand_deb = ""
+        try:
+            # pc1's two dpkg transactions stay ordered against each other and run alongside
+            # pc2's: two machines' apt work contends on nothing. The package's name is
+            # recorded as it arrives rather than unpacked from the result, because the
+            # `finally` purges it by that name and a failure on pc2's side would otherwise
+            # leave it installed.
+            async def seed_the_source() -> None:
+                nonlocal hand_deb
+                await _ensure_installed_and_manual(pc1_executor, candidate)
+                hand_deb = await _install_a_hand_downloaded_deb(pc1_executor)
+
+            _ = await _finish_both(seed_the_source(), _ensure_absent(pc2_executor, candidate))
+            deb_item_id = _no_candidate_item_id(hand_deb)
+            # The precondition, asserted rather than assumed: apt must name no repository for
+            # the installed version, or the item this run is about was never detectable.
+            policy = await pc1_executor.run_command(
+                f"LC_ALL=C apt-cache policy {shlex.quote(hand_deb)}", login_shell=False, timeout=30.0
+            )
+            assert policy.success and "1.0" in policy.stdout, (
+                f"apt says nothing about the hand-installed {hand_deb}.\n"
+                f"stdout: {policy.stdout}\nstderr: {policy.stderr}"
+            )
+            assert "http" not in policy.stdout, (
+                f"apt names a repository origin for the hand-installed {hand_deb}, so it is reproducible after all "
+                f"and this run cannot exercise the branch.\n{policy.stdout}"
+            )
+
+            await _write_package_sync_config(pc1_executor, apt_sync=True, manual_installs_sync=True)
+
+            # -- run 1: record -----------------------------------------------------------
+            skip_always = {apt_item_id: Decision.SKIP_ALWAYS, deb_item_id: Decision.SKIP_ALWAYS}
+            first = await pc1_executor.run_command(
+                f"{SKIP_INSTALL_ON_TARGET} {_automation_env_assignment_multi(skip_always)}"
+                f" pc-switcher sync pc2 --yes --allow-first-sync",
+                timeout=300.0,
+                login_shell=True,
+            )
+            assert first.success, (
+                f"skip-always run unexpectedly failed.\nstdout: {first.stdout}\nstderr: {first.stderr}"
+            )
+
+            apt_entries = await DecisionFile("apt", pc1_executor).load()
+            assert apt_item_id in apt_entries, (
+                f"{candidate} not recorded in pc1's apt decision file after a skip-always decision (D-08a)"
+            )
+            manual_entries = await DecisionFile("manual", pc1_executor).load()
+            assert deb_item_id in manual_entries, (
+                f"{hand_deb} was never presented as an item needing an install snippet: no decision was recorded "
+                f"for {deb_item_id} on pc1 although the review was answered SKIP_ALWAYS for it.\n"
+                f"recorded: {sorted(manual_entries)}"
+            )
+            still_absent = await pc2_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0)
+            assert candidate not in nonblank_lines(still_absent.stdout), "skip-always must not itself install the item"
+
+            # -- run 2: same direction, forced ------------------------------------------
+            force_apply = {apt_item_id: Decision.APPLY, deb_item_id: Decision.APPLY}
+            second = await pc1_executor.run_command(
+                f"{SKIP_INSTALL_ON_TARGET} {_automation_env_assignment_multi(force_apply)} "
+                "pc-switcher sync pc2 --yes --allow-first-sync --allow-out-of-order",
+                timeout=300.0,
+                login_shell=True,
+            )
+            assert second.success, (
+                f"second sync unexpectedly failed.\nstdout: {second.stdout}\nstderr: {second.stderr}"
+            )
+            still_absent_2 = await pc2_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0)
+            assert candidate not in nonblank_lines(still_absent_2.stdout), (
+                f"{candidate} was installed on pc2 despite a source-held skip-always decision -- "
+                "the item produced a diff when it should have been filtered out entirely (D-08)"
+            )
+            # A decision file holds nothing but skip-always entries, so the entry being
+            # BYTE-IDENTICAL to run 1's -- `recorded_at` included -- is what says nobody
+            # answered this item again.
+            assert (await DecisionFile("manual", pc1_executor).load())[deb_item_id] == manual_entries[deb_item_id], (
+                f"{hand_deb}'s recorded decision was rewritten by the second run -- the item was presented again, "
+                "when D-08 makes it inert"
+            )
+
+            # -- run 3: reversed roles ---------------------------------------------------
+            await _write_apt_sync_config(pc2_executor)
+            reversed_result = await pc2_executor.run_command(
+                f"{SKIP_INSTALL_ON_TARGET} {_automation_env_assignment_multi({apt_item_id: Decision.APPLY})} "
+                "pc-switcher sync pc1 --yes --allow-first-sync --allow-out-of-order",
+                timeout=300.0,
+                login_shell=True,
+            )
+            assert reversed_result.success, (
+                f"reversed sync unexpectedly failed.\n"
+                f"stdout: {reversed_result.stdout}\nstderr: {reversed_result.stderr}"
+            )
+            pc1_manual_after = await pc1_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0)
+            assert candidate in nonblank_lines(pc1_manual_after.stdout), (
+                f"{candidate} was removed from pc1 despite a target-held skip-always decision -- "
+                "the item produced a diff when it should have been filtered out entirely (D-08)"
+            )
+        finally:
+            if hand_deb:
+                await pc1_executor.run_command(
+                    f"sudo DEBIAN_FRONTEND=noninteractive dpkg --purge {shlex.quote(hand_deb)}",
+                    login_shell=False,
+                    timeout=120.0,
+                )
+
+
+class TestCrossDirectionRoundTrips:
+    """Narratives that only exist across MORE than one run and more than one direction -- the
+    shape a real two-machine workflow actually has, and the one thing a single-run test can
+    never observe.
+
+    Three runs carry the round trip: an install propagates one way, the user undoes it on the
+    machine that is about to become the source, and the removal comes back the other way --
+    offered first without effect and only then approved. Each of the two removal-direction
+    runs also carries the removal-shaped claims that need a real `apt-get remove` on a real
+    machine and nothing else of their own (#216): what a repository's deletion takes with it,
+    what snapd keeps when a sync removes a snap, and what apt's own dependency resolution
+    does to a second package the user did not approve.
+    """
+
+    async def test_an_install_propagates_and_the_removals_come_back_the_other_way(  # noqa: PLR0915
+        self,
+        pc1_executor: BashLoginRemoteExecutor,
+        pc2_executor: BashLoginRemoteExecutor,
+        apt_subjects: _AptSubjects,
+        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
+        pc2_with_pcswitcher: BashLoginRemoteExecutor,
+        reset_pcswitcher_state: None,
+    ) -> None:
+        """A54, H31, H114, N7, N9, C24, C63, C104, E36, E37, D37, D72.
+
+        Run 1 (pc1 -> pc2) converges three removal-shaped things at once, plus the install
+        the reversed direction later has something to undo:
+
+        - a vendor repository file that exists only on pc2 is removed, and its signing key
+          goes with it although the user decided only about the repository: once the
+          repository file is gone nothing on pc2 references the key any more, and that count
+          is taken after the deletion actually happened, which is why a real run is its only
+          witness. apt's own account of which repositories it tried is the evidence, not its
+          exit code -- `apt-get update` exits 0 when an index fails to fetch. While the pair
+          exists apt prints an `Err:` line naming the unresolvable synthetic host, asserted
+          BEFORE the run so its total absence afterwards is a real witness in both
+          directions; the post-removal exit code is asserted too, for the failure the output
+          check cannot see (an `/etc/apt` left syntactically unreadable);
+        - a snap pc1 no longer has is removed from pc2 by an approved item, and `snap saved`
+          on pc2 then lists a snapshot for it (`PKG-FR-SNAP-REMOVE-SNAPSHOT`). The subject is
+          made target-only by removing it from pc1 with `--purge`, so pc1 keeps no snapshot
+          of its own and the one found on pc2 can only be this run's, and it is given system
+          data first: a snapshot of a snap that never held any is not the case the article is
+          about;
+        - two manually-installed packages pc2 has and pc1 does not, where removing the
+          approved one takes the SKIPPED one with it. Answering "apply" at that question
+          removes both, past the apply-time guard, while the skipped candidate's OWN removal
+          item stays skipped -- what was approved is the consequence, not the item.
+
+        Run 2 (pc2 -> pc1) is the point of the round trip. A removal-direction item lands in
+        its own unticked group (D-07/I3), so leaving it undecided must leave pc1's package
+        installed -- proven by deciding it SKIP_ONCE explicitly and reading pc1's own
+        `apt-mark showmanual`.
+
+        Run 3 (pc2 -> pc1) approves the same item, and pc1 loses the package. It also carries
+        the other answer to the collateral question, over a fresh pair published on pc1:
+        keeping the skipped candidate leaves the approved removal unapplied rather than
+        failing it, so both packages survive and the run still succeeds.
+
+        Each cascade claim asserts the question was put in the REVIEW and not at the
+        apply-time guard, by the words each writes: the review's own decision pass logs
+        `reviewed <pkg> (report_only)`, while `LateCollateral` logs `reviewed <pkg>
+        (collateral)`. Both answers would otherwise leave the same machine state whichever
+        round asked. "Stop the sync" is the one answer not driven here -- it is not a
+        `Decision` value at all (`packages.review` raises `SyncAbortedByUser` from the screen
+        itself), so the automation hook cannot express it.
+
+        Candidate safety is vetted against pc2's reverse dependencies
+        (`pick_safe_removal_candidates`) before either machine is touched; the two VMs are
+        provisioned from one baseline, so the reverse-dependency picture is the same on both
+        -- if it ever diverges, apt_sync's own collateral guard refuses the item and this
+        fails loudly rather than damaging pc1.
+        """
+        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
+
+        candidate = apt_subjects.install_direction[0]
+        item_id = AptPackageItem(name=candidate, version="").item_id
+        snap_name = (await _snap_subjects(pc1_executor, pc2_executor, count=2))[1]
+        # Three snapd reads across the two machines, taken at once.
+        snap_source_revision, snap_target_revision, saved_before = await asyncio.gather(
+            _snap_revision(pc1_executor, snap_name),
+            _snap_revision(pc2_executor, snap_name),
+            _snap_saved_rows(pc2_executor),
+        )
+        assert snap_source_revision and snap_target_revision, f"{snap_name} is not installed on both machines"
+        snapshot_sets_before = {set_id for set_id, _snap in saved_before}
+
+        uniq = uuid4().hex[:12]
+        snap_data_file = f"/var/snap/{snap_name}/common/pcswitcher-it-{uniq}"
+
+        source_filename = key_filename = ""
+        target_pair: tuple[str, str, str, str] | None = None
+        source_pair: tuple[str, str, str, str] | None = None
+        try:
+            # One apt transaction on each machine, run at once: they contend on nothing.
+            _ = await asyncio.gather(
+                _ensure_installed_and_manual(pc1_executor, candidate), _ensure_absent(pc2_executor, candidate)
+            )
+
+            source_filename, key_filename = await _create_synthetic_repo_and_key(pc2_executor)
+            source_dest = f"{_APT_SOURCES_DIR}/{source_filename}"
+            key_dest = f"{_APT_KEYRINGS_DIR}/{key_filename}"
+            broken_update = await _apt_get_update(pc2_executor)
+            reached_for_repo = apt_update_lines_naming(broken_update, _SYNTHETIC_REPO_HOST)
+            assert any(line.startswith("Err:") for line in reached_for_repo), (
+                f"pc2's `apt-get update` reported no `Err:` line naming {_SYNTHETIC_REPO_HOST} while the "
+                "unreachable synthetic repo was configured, so apt is not actually reaching for that repo and its "
+                "absence from the post-removal run below would prove nothing.\n"
+                f"lines naming the host: {reached_for_repo}\n"
+                f"stdout: {broken_update.stdout}\nstderr: {broken_update.stderr}"
+            )
+
+            seeded = await pc2_executor.run_command(
+                f"sudo mkdir --parents {shlex.quote(f'/var/snap/{snap_name}/common')} && "
+                f"printf %s pcswitcher-it-{uniq} | sudo tee {shlex.quote(snap_data_file)} > /dev/null",
+                login_shell=False,
+                timeout=30.0,
+            )
+            assert seeded.success, f"could not give {snap_name} data on pc2 to snapshot: {seeded.stderr}"
+
+            # pc1 gives up the snap while pc2 builds and installs the cascading pair: one
+            # machine's snapd against the other's apt, neither reading the other's work. The
+            # pair is recorded as it arrives rather than unpacked from the result, because the
+            # `finally` undeclares its repository from it and a failure on pc1's side would
+            # otherwise leave that repository configured for the whole run.
+            async def publish_on_the_target() -> tuple[str, str, str, str]:
+                nonlocal target_pair
+                target_pair = await _publish_a_cascading_pair(pc2_executor)
+                return target_pair
+
+            purged, published = await _finish_both(
+                pc1_executor.run_command(
+                    f"sudo snap remove --purge {shlex.quote(snap_name)}", login_shell=False, timeout=180.0
+                ),
+                publish_on_the_target(),
+            )
+            assert purged.success, f"Failed to remove {snap_name} from pc1: {purged.stderr}"
+            target_base, target_dependent, _target_repo, _target_list = published
+
+            await _write_package_sync_config(pc1_executor, apt_sync=True, snap_sync=True)
+
+            # -- run 1: pc1 -> pc2, the install direction and every removal ---------------
+            forward_decisions = {
+                item_id: Decision.APPLY,
+                f"apt:source:{source_filename}": Decision.APPLY,
+                f"snap:{snap_name}": Decision.APPLY,
+                AptPackageItem(name=target_base, version="").item_id: Decision.APPLY,
+                AptPackageItem(name=target_dependent, version="").item_id: Decision.SKIP_ONCE,
+                _collateral_removal_item_id(target_dependent): Decision.APPLY,
+            }
+            forward = await pc1_executor.run_command(
+                f"{SKIP_INSTALL_ON_TARGET} {_automation_env_assignment_multi(forward_decisions)}"
+                f" pc-switcher sync pc2 --yes --allow-first-sync",
+                timeout=600.0,
+                login_shell=True,
+            )
+            assert forward.success, (
+                f"forward sync exited {forward.exit_code}.\nstdout: {forward.stdout}\nstderr: {forward.stderr}"
+            )
+
+            after_forward = await pc2_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0)
+            assert candidate in nonblank_lines(after_forward.stdout), (
+                f"{candidate} did not propagate to pc2; the reversed direction below would have nothing to remove"
+            )
+
+            gone = await pc2_executor.run_command(
+                f"test ! -e {shlex.quote(source_dest)} && test ! -e {shlex.quote(key_dest)}",
+                login_shell=False,
+                timeout=10.0,
+            )
+            assert gone.success, (
+                f"{source_filename} and/or {key_filename} still present under /etc/apt on pc2 after the repository "
+                f"removal was approved -- the key it left unreferenced was not collected.\n"
+                f"stdout: {forward.stdout}\nstderr: {forward.stderr}"
+            )
+            working_update = await _apt_get_update(pc2_executor)
+            still_reaching = apt_update_lines_naming(working_update, _SYNTHETIC_REPO_HOST)
+            assert not still_reaching, (
+                f"pc2's `apt-get update` still names {_SYNTHETIC_REPO_HOST} after the repo file and its key were "
+                "removed -- apt is still configured with the repository, so the pair did not actually leave "
+                f"/etc/apt.\nlines naming the host: {still_reaching}\n"
+                f"stdout: {working_update.stdout}\nstderr: {working_update.stderr}"
+            )
+            assert working_update.success, (
+                "pc2's `apt-get update` exits non-zero after the repo file and its key were removed -- /etc/apt was "
+                f"left unreadable.\nstdout: {working_update.stdout}\nstderr: {working_update.stderr}"
+            )
+
+            snap_still_there = await pc2_executor.run_command(
+                f"snap list {shlex.quote(snap_name)}", login_shell=False, timeout=15.0
+            )
+            assert not snap_still_there.success, (
+                f"{snap_name} is still installed on pc2, so no removal happened and the snapshot check below would "
+                f"say nothing.\n{snap_still_there.stdout}"
+            )
+            saved = await _snap_saved_rows(pc2_executor)
+            assert any(snap == snap_name for _set_id, snap in saved), (
+                f"snapd kept no snapshot for {snap_name} after the sync removed it from pc2 — the removal took the "
+                f"machine's data with it.\nsnap saved: {saved}"
+            )
+
+            target_installed = parse_dpkg_installed(
+                (
+                    await pc2_executor.run_command(
+                        "dpkg-query --show --showformat='${Package}\\t${Status}\\n'", login_shell=False, timeout=20.0
+                    )
+                ).stdout
+            )
+            assert target_base not in target_installed, (
+                f"{target_base}'s approved removal did not run after the collateral approval"
+            )
+            assert target_dependent not in target_installed, (
+                f"{target_dependent} survived a removal the user approved -- the apply-time guard refused an "
+                "approved consequence"
+            )
+            forward_collapsed = _collapse_run_output(forward.stdout + forward.stderr)
+            assert f"reviewed {target_dependent} (report_only): applied" in forward_collapsed, (
+                f"the approval for {target_dependent} was never recorded against a collateral item in the review.\n"
+                f"stdout: {forward.stdout}\nstderr: {forward.stderr}"
+            )
+            assert f"reviewed {target_dependent} (collateral)" not in forward_collapsed, (
+                f"{target_dependent} was asked about at the apply-time guard instead of in the review's second round"
+            )
+            assert (
+                f"reviewed {target_dependent} ({_SYNTHETIC_PACKAGE_VERSION}) (remove): skipped this run"
+                in forward_collapsed
+            ), (
+                f"{target_dependent}'s own removal item did not stay skipped -- the approval answered the "
+                f"consequence, not the item.\nstdout: {forward.stdout}\nstderr: {forward.stderr}"
+            )
+
+            # The user removes the package again on pc2, which is about to become the SOURCE.
+            second_removal = await pc2_executor.run_command(
+                f"sudo DEBIAN_FRONTEND=noninteractive apt-get remove --assume-yes {shlex.quote(candidate)}",
+                login_shell=False,
+                timeout=120.0,
+            )
+            assert second_removal.success, f"Failed to remove {candidate} from pc2 again: {second_removal.stderr}"
+
+            await _write_apt_sync_config(pc2_executor)
+
+            # -- run 2: pc2 -> pc1, removal direction, explicitly left undecided ----------
+            undecided = await pc2_executor.run_command(
+                f"{SKIP_INSTALL_ON_TARGET} {_automation_env_assignment_multi({item_id: Decision.SKIP_ONCE})} "
+                "pc-switcher sync pc1 --yes --allow-first-sync",
+                timeout=600.0,
+                login_shell=True,
+            )
+            assert undecided.success, (
+                f"reversed sync (undecided) exited {undecided.exit_code}.\n"
+                f"stdout: {undecided.stdout}\nstderr: {undecided.stderr}"
+            )
+            pc1_after_undecided = await pc1_executor.run_command(
+                "apt-mark showmanual", login_shell=False, timeout=15.0
+            )
+            assert candidate in nonblank_lines(pc1_after_undecided.stdout), (
+                f"{candidate} was removed from pc1 without being approved -- a removal-direction item must take "
+                "effect only when the user ticks it"
+            )
+
+            # -- run 3: pc2 -> pc1, same item approved, and the cascade kept --------------
+            source_pair = await _publish_a_cascading_pair(pc1_executor)
+            source_base, source_dependent, _source_repo, _source_list = source_pair
+            approved_decisions = {
+                item_id: Decision.APPLY,
+                AptPackageItem(name=source_base, version="").item_id: Decision.APPLY,
+                AptPackageItem(name=source_dependent, version="").item_id: Decision.SKIP_ONCE,
+                _collateral_removal_item_id(source_dependent): Decision.SKIP_ONCE,
+            }
+            approved = await pc2_executor.run_command(
+                f"{SKIP_INSTALL_ON_TARGET} {_automation_env_assignment_multi(approved_decisions)} "
+                "pc-switcher sync pc1 --yes --allow-first-sync --allow-out-of-order",
+                timeout=600.0,
+                login_shell=True,
+            )
+            assert approved.success, (
+                "keeping a collateral package must leave the change that causes it unapplied, not fail it.\n"
+                f"exit {approved.exit_code}\nstdout: {approved.stdout}\nstderr: {approved.stderr}"
+            )
+
+            pc1_after_approved = await pc1_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0)
+            assert candidate not in nonblank_lines(pc1_after_approved.stdout), (
+                f"{candidate} still manually installed on pc1 after the removal was approved -- the removal did not "
+                "propagate back across the reversed direction"
+            )
+
+            source_installed = parse_dpkg_installed(
+                (
+                    await pc1_executor.run_command(
+                        "dpkg-query --show --showformat='${Package}\\t${Status}\\n'", login_shell=False, timeout=20.0
+                    )
+                ).stdout
+            )
+            assert source_dependent in source_installed, (
+                f"{source_dependent} was removed from pc1 although the user kept it at the collateral question"
+            )
+            assert source_base in source_installed, (
+                f"{source_base}'s approved removal still ran after {source_dependent} was kept -- keeping a "
+                "collateral package must cancel the change that causes it"
+            )
+            approved_collapsed = _collapse_run_output(approved.stdout + approved.stderr)
+            assert f"reviewed {source_dependent} (report_only): skipped this run" in approved_collapsed, (
+                f"{source_dependent} was never put to the user as a collateral question in the review.\n"
+                f"stdout: {approved.stdout}\nstderr: {approved.stderr}"
+            )
+            assert f"reviewed {source_dependent} (collateral)" not in approved_collapsed, (
+                f"{source_dependent} was asked about at the apply-time guard instead of in the review's second round"
+            )
+        finally:
+            cleanup_paths = " ".join(
+                shlex.quote(f"{directory}/{filename}")
+                for directory, filename in (
+                    (_APT_SOURCES_DIR, source_filename),
+                    (_APT_KEYRINGS_DIR, key_filename),
+                )
+                if filename
+            )
+
+            async def clean_the_source() -> None:
+                if source_pair:
+                    _source_base, _source_dependent, source_repo, source_list = source_pair
+                    await _undeclare_local_repository(pc1_executor, source_repo, source_list)
+                if cleanup_paths:
+                    await pc1_executor.run_command(f"sudo rm --force {cleanup_paths}", login_shell=False, timeout=15.0)
+
+            async def clean_the_target() -> None:
+                if target_pair:
+                    _target_base, _target_dependent, target_repo, target_list = target_pair
+                    await _undeclare_local_repository(pc2_executor, target_repo, target_list)
+                for set_id, snap in await _snap_saved_rows(pc2_executor):
+                    if snap == snap_name and set_id not in snapshot_sets_before:
+                        await pc2_executor.run_command(
+                            f"sudo snap forget {shlex.quote(set_id)}", login_shell=False, timeout=60.0
+                        )
+                await pc2_executor.run_command(
+                    f"sudo rm --force {shlex.quote(snap_data_file)}", login_shell=False, timeout=15.0
+                )
+                if cleanup_paths:
+                    await pc2_executor.run_command(f"sudo rm --force {cleanup_paths}", login_shell=False, timeout=15.0)
+
+            await _cleanup_in_parallel(clean_the_source(), clean_the_target())
+
+
+class TestAFailureCostsItsOwnItemAndNothingElse:
+    """D-27 and `PKG-FR-JOB-INDEPENDENCE` in the one run that can show both: a job that fails
+    on its own middle item while every job ordered after it still reviews and converges its
+    own diff.
+
+    The two claims are the same device at two scales -- one item's failure inside a job, and
+    that job's failure inside a run -- so one failing snippet settles both (#216). It has to
+    come FIRST for either to mean anything: a job that fails last leaves the others' work
+    intact whatever the orchestrator does, and an item that fails last says nothing about the
+    item after it. Jobs run in the order the config names them (`_discover_and_validate_jobs`
+    iterates `sync_jobs` as written), so `manual_installs_sync` is written first; within it,
+    `_scan_unowned_installs` sorts its findings alphabetically by path, which is what places
+    the failing snippet strictly BETWEEN the two that install something
+    (`_CONTINUE_TEST_MARKERS`, a < b < c).
+
+    The failing item must genuinely reach the converge path. A package name that resolves to
+    nothing is classified REPO_UNAVAILABLE/REPORT_ONLY (plan 02-05) and short-circuits before
+    ever touching the target, so it would prove nothing about D-27 -- hence a snippet that
+    deliberately exits non-zero.
+    """
+
+    async def test_the_item_after_a_failure_and_the_jobs_after_its_job_all_still_land(
+        self,
+        pc1_executor: BashLoginRemoteExecutor,
+        pc2_executor: BashLoginRemoteExecutor,
+        apt_subjects: _AptSubjects,
+        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
+        pc2_with_pcswitcher: BashLoginRemoteExecutor,
+        reset_pcswitcher_state: None,
+    ) -> None:
+        """J20, J26, J34, H12, K20, N22.
+
+        All four package jobs are enabled and `manual_installs_sync` runs first, holding
+        three approved snippets: two that genuinely `apt-get install` a real package and,
+        between them, one that exits 42. The sync's own exit code is non-zero -- the
+        orchestrator derives it from job results, not from whether an exception propagated
+        (`_summarize_job_outcomes`) -- and the failure's stderr lands in the run's own
+        summary.
+
+        The witnesses are pc2's own package managers, as everywhere else in this module. The
+        snippet ordered AFTER the failing one installed its package, which is D-27's
+        "continue, collect, report" promise. The apt package is back in `apt-mark showmanual`
+        and the snap is back in `snap list`, each of which could only happen if that manager
+        reviewed its own diff and then applied it, after the run had already failed a job --
+        which is also how each manager settling its OWN review before its OWN mutation is
+        carried here: no inter-manager ordering is asserted and no run-log line is scraped
+        for it.
+
+        `flatpak_sync` is enabled and left unanswered: this run's claim is about four jobs
+        being enabled together, and a job whose items are all declined still plans, reviews
+        and reports -- it just converges nothing, which is why nothing is asserted about it.
+        """
+        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
+
+        snippet_first, snippet_second, apt_candidate = apt_subjects.install_direction
+        snap_candidate = await _snap_subject(pc1_executor, pc2_executor)
+        original_snap_revision = await _snap_revision(pc2_executor, snap_candidate)
+        assert original_snap_revision, f"{snap_candidate} is not installed on pc2"
+
+        try:
+            # One chain per machine, run at once: three apt transactions on each side, which
+            # serialise on their own machine's dpkg lock and on nothing else (#216). pc2's
+            # snap removal joins its chain -- it needs no result of pc1's.
+            async def seed_the_source() -> None:
+                for subject in apt_subjects.install_direction:
+                    await _ensure_installed_and_manual(pc1_executor, subject)
+
+            async def seed_the_target() -> CommandResult:
+                for subject in apt_subjects.install_direction:
+                    await _ensure_absent(pc2_executor, subject)
+                return await pc2_executor.run_command(
+                    f"sudo snap remove {shlex.quote(snap_candidate)}", login_shell=False, timeout=60.0
+                )
+
+            _, removed_snap = await asyncio.gather(seed_the_source(), seed_the_target())
+            assert removed_snap.success, f"Failed to remove {snap_candidate} from pc2: {removed_snap.stderr}"
+
+            for path in _CONTINUE_TEST_MARKERS:
+                await _create_unowned_marker(pc1_executor, path)
+
+            item_id_first = _unowned_item_id(_CONTINUE_TEST_MARKER_INSTALL_FIRST)
+            item_id_fail = _unowned_item_id(_CONTINUE_TEST_MARKER_FAIL)
+            item_id_second = _unowned_item_id(_CONTINUE_TEST_MARKER_INSTALL_SECOND)
+            await _author_snippet(
+                pc1_executor,
+                item_id_first,
+                _CONTINUE_TEST_MARKER_INSTALL_FIRST,
+                f"sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes {shlex.quote(snippet_first)}",
+            )
+            await _author_snippet(
+                pc1_executor,
+                item_id_fail,
+                _CONTINUE_TEST_MARKER_FAIL,
+                f'echo "{_DELIBERATE_FAILURE_MESSAGE}" >&2; exit 42',
+            )
+            await _author_snippet(
+                pc1_executor,
+                item_id_second,
+                _CONTINUE_TEST_MARKER_INSTALL_SECOND,
+                f"sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes {shlex.quote(snippet_second)}",
+            )
+
+            # Written in execution order: the failing job first, the three whose work must
+            # survive it after.
+            await _write_package_sync_config(
+                pc1_executor,
+                manual_installs_sync=True,
+                apt_sync=True,
+                snap_sync=True,
+                flatpak_sync=True,
+            )
+
+            decisions = {
+                item_id_first: Decision.APPLY,
+                item_id_fail: Decision.APPLY,
+                item_id_second: Decision.APPLY,
+                AptPackageItem(name=apt_candidate, version="").item_id: Decision.APPLY,
+                f"snap:{snap_candidate}": Decision.APPLY,
+            }
+            sync_result = await pc1_executor.run_command(
+                f"{SKIP_INSTALL_ON_TARGET} {_automation_env_assignment_multi(decisions)}"
+                f" pc-switcher sync pc2 --yes --allow-first-sync",
+                timeout=600.0,
+                login_shell=True,
+            )
+            assert not sync_result.success, (
+                "a run with a failed item and a failed job must exit non-zero (D-27, PKG-FR-OUTCOME-FAILED).\n"
+                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
+            )
+            # Read before pc2's managers are: a non-zero exit says the run failed, not that it
+            # reached the item this test fails deliberately. A run that ended earlier -- a
+            # validate() abort, say -- satisfies the exit code and then fails every package
+            # assertion below, which reads as a job misbehaving rather than as a run that never
+            # started one.
+            assert _DELIBERATE_FAILURE_MESSAGE in sync_result.stdout + sync_result.stderr, (
+                "the run failed, but not on this test's deliberate item -- it ended before reaching it.\n"
+                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
+            )
+
+            after_lines = nonblank_lines(
+                (await pc2_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0)).stdout
+            )
+            assert snippet_first in after_lines, f"{snippet_first} (before the failing item) not installed on pc2"
+            assert snippet_second in after_lines, (
+                f"{snippet_second} (after the failing item) not installed on pc2 -- "
+                "D-27's 'continue, collect, report' promise did not hold"
+            )
+            assert apt_candidate in after_lines, (
+                f"{apt_candidate} not reinstalled on pc2 -- apt_sync's approved work did not survive the earlier "
+                "job's failure (PKG-FR-JOB-INDEPENDENCE)"
+            )
+            after_snap = await pc2_executor.run_command(
+                f"snap list {shlex.quote(snap_candidate)}", login_shell=False, timeout=15.0
+            )
+            assert after_snap.success, (
+                f"{snap_candidate} not reinstalled on pc2 -- snap_sync's approved work did not survive the earlier "
+                f"job's failure (PKG-FR-JOB-INDEPENDENCE): {after_snap.stderr}"
+            )
+        finally:
+
+            async def clean(executor: BashLoginRemoteExecutor) -> None:
+                for path in _CONTINUE_TEST_MARKERS:
+                    await _remove_unowned_marker(executor, path)
+
+            await _cleanup_in_parallel(clean(pc1_executor), clean(pc2_executor))
+
+
+class TestSnapPerItemFailureOnVMs:
+    """`PKG-FR-SNAP-FAIL-ITEM` on real machines: one snap item failing costs that item and
+    nothing else.
+
+    The failure is real snapd's, not a mock's: pc2 is put offline as far as the store is
+    concerned (`snap set system store.access=offline`), which is precisely the split the
+    claim needs — an install has to reach the store and a removal does not. That also puts
+    it out of reach of every converging run in this module, which is why it keeps a sync of
+    its own.
+    """
+
+    async def test_one_snap_item_fails_and_the_item_after_it_still_lands(
         self,
         pc1_executor: BashLoginRemoteExecutor,
         pc2_executor: BashLoginRemoteExecutor,
@@ -5331,8 +4214,231 @@ class TestAptHoldsThroughARealRun:
         pc2_with_pcswitcher: BashLoginRemoteExecutor,
         reset_pcswitcher_state: None,
     ) -> None:
-        """B16 — pc2 records a hold for a package it does not have; the run ends naming the package
-        and pc2, and pc2's package state is byte-identical afterwards.
+        """E53 — Two approved snap items, the first of which pc2's snapd cannot carry out: it
+        fails alone, the second still lands, and the sync's own exit code reports it.
+
+        Ordering is what makes "the rest still landed" a real claim rather than an accident:
+        `_diff_snap_items` walks the SOURCE's snaps before the target-only ones, so the
+        install is converged before the removal. The install is the item that fails.
+
+        Both subjects are fixture snaps, made divergent by removing one from each machine
+        with `--purge` (no snapshot to clean up afterwards). Neither is put back: every
+        scenario that wants a fixture snap converges to it itself (`_snap_subjects`), so what
+        this one leaves removed costs the next one an install only if it needs one.
+        """
+        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
+
+        removal_subject, install_subject = await _snap_subjects(pc1_executor, pc2_executor, count=2)
+        # Four reads of two `snap list --all` outputs, taken at once.
+        removal_revision, install_revision, source_removal_revision, target_install_revision = await asyncio.gather(
+            _snap_revision(pc2_executor, removal_subject),
+            _snap_revision(pc1_executor, install_subject),
+            _snap_revision(pc1_executor, removal_subject),
+            _snap_revision(pc2_executor, install_subject),
+        )
+        assert removal_revision and install_revision and source_removal_revision and target_install_revision, (
+            f"{removal_subject} and {install_subject} must both be installed on both machines"
+        )
+
+        store_offline = False
+        try:
+            # One removal on each machine's own snapd, run at once.
+            purged, purged_source = await asyncio.gather(
+                pc2_executor.run_command(
+                    f"sudo snap remove --purge {shlex.quote(install_subject)}", login_shell=False, timeout=180.0
+                ),
+                pc1_executor.run_command(
+                    f"sudo snap remove --purge {shlex.quote(removal_subject)}", login_shell=False, timeout=180.0
+                ),
+            )
+            assert purged.success, f"Failed to remove {install_subject} from pc2: {purged.stderr}"
+            assert purged_source.success, f"Failed to remove {removal_subject} from pc1: {purged_source.stderr}"
+
+            offline = await pc2_executor.run_command(_SNAP_STORE_OFFLINE_CMD, login_shell=False, timeout=60.0)
+            assert offline.success, (
+                f"`{_SNAP_STORE_OFFLINE_CMD}` failed, so pc2's snapd cannot be made to refuse an install and this "
+                f"run has no per-item failure to observe: {offline.stderr}"
+            )
+            store_offline = True
+            # The precondition, asserted rather than assumed: a store pc2 can still reach
+            # would install the snap and leave nothing to fail.
+            reachable = await pc2_executor.run_command(
+                f"snap info {shlex.quote(install_subject)}", login_shell=False, timeout=60.0
+            )
+            assert not reachable.success, (
+                f"pc2 still reaches the store for {install_subject}, so the install below would succeed.\n"
+                f"stdout: {reachable.stdout}\nstderr: {reachable.stderr}"
+            )
+
+            await _write_package_sync_config(pc1_executor, snap_sync=True)
+
+            decisions = {f"snap:{install_subject}": Decision.APPLY, f"snap:{removal_subject}": Decision.APPLY}
+            sync_cmd = (
+                f"{SKIP_INSTALL_ON_TARGET} {_automation_env_assignment_multi(decisions)}"
+                f" pc-switcher sync pc2 --yes --allow-first-sync"
+            )
+            sync_result = await pc1_executor.run_command(sync_cmd, timeout=300.0, login_shell=True)
+
+            assert not sync_result.success, (
+                "a run with a failed snap item must exit non-zero.\n"
+                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
+            )
+            # Read before pc2's snapd is: a non-zero exit says the run failed, not that it got
+            # as far as the item that fails here. A run that ended earlier -- a validate()
+            # abort, say -- satisfies the exit code and then fails the convergence assertions
+            # below, which reads as one item costing the others rather than as a run that
+            # converged nothing.
+            collapsed = _collapse_run_output(sync_result.stdout + sync_result.stderr)
+            assert "1 snap item(s) failed" in collapsed, (
+                f"the run did not report exactly one failed snap item.\n{sync_result.stdout}\n{sync_result.stderr}"
+            )
+
+            # Two read-only listings on the same machine, taken at once.
+            failed_item, landed_item = await asyncio.gather(
+                pc2_executor.run_command(f"snap list {shlex.quote(install_subject)}", login_shell=False, timeout=15.0),
+                pc2_executor.run_command(f"snap list {shlex.quote(removal_subject)}", login_shell=False, timeout=15.0),
+            )
+            assert not failed_item.success, (
+                f"{install_subject} was installed on pc2 although its store is unreachable, so nothing failed and "
+                f"this run proves nothing.\n{failed_item.stdout}"
+            )
+            assert not landed_item.success, (
+                f"{removal_subject} is still on pc2: the item ordered after the failing one was never converged.\n"
+                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
+            )
+        finally:
+            if store_offline:
+                restored = await pc2_executor.run_command(_SNAP_STORE_ONLINE_CMD, login_shell=False, timeout=60.0)
+                if not restored.success:
+                    print(f"[cleanup] failed to put pc2's snapd back online: {restored.stderr}")
+
+
+class TestTheESMAttachmentGateOnVMs:
+    """ADR-020 D-38 at VM level: a source carrying the two `ubuntu-esm-*` sources and a
+    target with no Ubuntu Pro attachment.
+
+    Only the SKIP arm is testable here, and that is a statement about the fixtures, not a
+    gap in the gate: `pro attach` needs the user's own subscription token from their Pro
+    dashboard or an interactive browser short-code flow, a machine's credentials are not
+    transferable, and putting a subscription token in CI would violate the project's
+    secrets rule. Both VMs are therefore permanently unattached — which is exactly the
+    machine this test needs, and is why nothing here is skipped or discovered: the test
+    puts both machines in the state the gate needs and restores them in a `finally`.
+
+    It keeps a sync of its own because the gate costs the WHOLE apt job: no converging run
+    can carry it, since a skipped apt_sync converges nothing at all.
+
+    What only a VM can prove: that the skip costs the WHOLE job. `/etc/apt/preferences.d`
+    always-syncs with no derivation predicate, so an implementation that withheld only the
+    two sources would still put the source's pin on the target — visible here as a file on
+    pc2, and invisible to any mocked-executor unit test. That pin is the uuid-suffixed
+    synthetic one, not `ubuntu-pro-esm-apps`: `ubuntu-pro-client` SHIPS
+    `/etc/apt/preferences.d/ubuntu-pro-esm-apps` and `-esm-infra` (`dpkg -L`, measured on
+    both VMs) whether or not the machine is attached, so the real ESM pins are byte-identical
+    on source and target and can never be a pending write to witness anything with.
+    """
+
+    async def test_an_unattached_target_skips_apt_sync_and_leaves_etc_apt_untouched(
+        self,
+        pc1_executor: BashLoginRemoteExecutor,
+        pc2_executor: BashLoginRemoteExecutor,
+        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
+        pc2_with_pcswitcher: BashLoginRemoteExecutor,
+        reset_pcswitcher_state: None,
+    ) -> None:
+        """H54, J10, N18."""
+        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
+
+        esm_dests = [f"{_APT_SOURCES_DIR}/{name}" for name in _ESM_SOURCE_BODIES]
+        source_aside = ""
+        target_aside = ""
+        pin_dest = ""
+        try:
+            # Both machines are PUT in the state the gate needs rather than asked to be in
+            # it already: pc2 carrying neither file — a target copy with the source's digest
+            # is not a pending write, so the gate would never fire — and pc1 carrying both
+            # with the bodies below, whatever either machine came with.
+            target_aside = await _take_paths_aside(pc2_executor, esm_dests)
+            source_aside = await _take_paths_aside(pc1_executor, esm_dests)
+            writes = [
+                f"printf %s {shlex.quote(body)} | sudo tee {shlex.quote(f'{_APT_SOURCES_DIR}/{name}')} > /dev/null"
+                for name, body in _ESM_SOURCE_BODIES.items()
+            ]
+            created = await pc1_executor.run_command(" && ".join(writes), login_shell=False, timeout=20.0)
+            assert created.success, f"Failed to create the ESM sources on pc1: {created.stderr}"
+
+            pin_dest = f"{_APT_PREFERENCES_DIR}/{await _create_synthetic_pin(pc1_executor)}"
+
+            # snap_sync runs after apt_sync and is the evidence that a skip is not an abort.
+            await _write_package_sync_config(pc1_executor, apt_sync=True, snap_sync=True)
+
+            # No automation env and no pty: `ask_gate` finds no TTY, which is the
+            # non-interactive path the user ruled must skip the whole job.
+            sync_result = await pc1_executor.run_command(
+                f"{SKIP_INSTALL_ON_TARGET} pc-switcher sync pc2 --yes --allow-first-sync",
+                timeout=300.0,
+                login_shell=True,
+            )
+            assert sync_result.success, (
+                f"a skipped job must not fail the run.\nstdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
+            )
+
+            combined_output = sync_result.stdout + sync_result.stderr
+            assert "apt_sync skipped" in combined_output, f"apt_sync was not reported as skipped.\n{combined_output}"
+            for name in _ESM_SOURCE_BODIES:
+                assert name in combined_output, f"the skip reason does not name {name}.\n{combined_output}"
+            assert "snap_sync" in combined_output, (
+                f"the job after apt_sync did not run — a skip must not abort the sync.\n{combined_output}"
+            )
+
+            # The load-bearing assertion: pc2's /etc/apt is exactly as it was, the PIN
+            # included. A gate that withheld only the two sources would leave the pin here.
+            untouched = await pc2_executor.run_command(
+                " && ".join(f"test ! -e {shlex.quote(path)}" for path in (*esm_dests, pin_dest)),
+                login_shell=False,
+                timeout=10.0,
+            )
+            assert untouched.success, (
+                "a skipped apt_sync still wrote to pc2's /etc/apt — the whole job must leave it as it was"
+            )
+        finally:
+            # uuid-suffixed, so this can never name a file either machine came with.
+            cleanup = shlex.quote(pin_dest)
+
+            async def clean_the_source() -> None:
+                if pin_dest:
+                    await pc1_executor.run_command(f"sudo rm --force {cleanup}", login_shell=False, timeout=15.0)
+                if source_aside:
+                    await _put_paths_back(pc1_executor, source_aside, esm_dests)
+
+            async def clean_the_target() -> None:
+                if pin_dest:
+                    await pc2_executor.run_command(f"sudo rm --force {cleanup}", login_shell=False, timeout=15.0)
+                if target_aside:
+                    await _put_paths_back(pc2_executor, target_aside, esm_dests)
+
+            await _cleanup_in_parallel(clean_the_source(), clean_the_target())
+
+
+class TestAStrayAptHoldEndsTheRun:
+    """`PKG-FR-HOLD-WITHOUT-PACKAGE` against real `apt-mark` state: a hold naming a package
+    its machine does not have ends the run before anything is written.
+
+    It keeps a sync of its own for the reason the ESM gate does -- the run it needs is one
+    that ABORTS, and no converging run can be that.
+    """
+
+    async def test_a_hold_naming_a_package_the_machine_does_not_have_ends_the_run(
+        self,
+        pc1_executor: BashLoginRemoteExecutor,
+        pc2_executor: BashLoginRemoteExecutor,
+        apt_subjects: _AptSubjects,
+        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
+        pc2_with_pcswitcher: BashLoginRemoteExecutor,
+        reset_pcswitcher_state: None,
+    ) -> None:
+        """B16 — pc2 records a hold for a package it does not have; the run ends naming the
+        package and pc2, and pc2's package state is byte-identical afterwards.
 
         The run is given real work first -- a package removed from pc2 that it would
         otherwise install -- so "nothing was written" is a claim about a run that had
@@ -5342,17 +4448,18 @@ class TestAptHoldsThroughARealRun:
         _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
 
         ghost = await _a_name_apt_knows_the_machine_does_not_have(pc2_executor)
-        install_candidate = await _removable_candidate(pc1_executor, pc2_executor)
+        install_candidate = apt_subjects.install_direction[0]
         try:
-            removed = await pc2_executor.run_command(
-                f"sudo DEBIAN_FRONTEND=noninteractive apt-get remove --assume-yes {shlex.quote(install_candidate)}",
-                login_shell=False,
-                timeout=120.0,
-            )
-            assert removed.success, f"Failed to remove {install_candidate} from pc2: {removed.stderr}"
+            # One chain per machine, run at once: pc2's hold follows its own removal because
+            # both are apt writes on that machine, and neither waits on pc1's install.
+            async def seed_the_target() -> CommandResult:
+                await _ensure_absent(pc2_executor, install_candidate)
+                return await pc2_executor.run_command(
+                    f"sudo apt-mark hold {shlex.quote(ghost)}", login_shell=False, timeout=30.0
+                )
 
-            held = await pc2_executor.run_command(
-                f"sudo apt-mark hold {shlex.quote(ghost)}", login_shell=False, timeout=30.0
+            _, held = await asyncio.gather(
+                _ensure_installed_and_manual(pc1_executor, install_candidate), seed_the_target()
             )
             assert held.success, f"Failed to hold {ghost} on pc2: {held.stderr}"
             recorded = await pc2_executor.run_command("apt-mark showhold", login_shell=False, timeout=15.0)
@@ -5365,7 +4472,10 @@ class TestAptHoldsThroughARealRun:
             before = await _capture_machine_package_state(pc2_executor)
 
             item_id = AptPackageItem(name=install_candidate, version="").item_id
-            sync_cmd = f"{_automation_env_assignment(item_id)} pc-switcher sync pc2 --yes --allow-first-sync"
+            sync_cmd = (
+                f"{SKIP_INSTALL_ON_TARGET} {_automation_env_assignment(item_id)}"
+                f" pc-switcher sync pc2 --yes --allow-first-sync"
+            )
             sync_result = await pc1_executor.run_command(sync_cmd, timeout=300.0, login_shell=True)
             assert not sync_result.success, (
                 "a hold naming a package the machine does not have must end the run.\n"
@@ -5391,4 +4501,236 @@ class TestAptHoldsThroughARealRun:
             await pc2_executor.run_command(
                 f"sudo apt-mark unhold {shlex.quote(ghost)}", login_shell=False, timeout=30.0
             )
-            await _restore_package(pc2_executor, install_candidate)
+
+
+class TestTheSyncWindowHoldIsTimed:
+    """`PKG-FR-SNAP-REFRESH-PAUSE`'s self-healing half: the suspension a run writes is a
+    timed value on each machine's own clock, so a run that dies without cleaning up leaves
+    a hold that lapses rather than one that never does.
+
+    Only a real run can show it, and only a run that never finishes: the value is written by
+    the orchestrator and put back by its own cleanup, so the only moment it exists is inside
+    the sync window. No completed run can carry this claim, which is why it keeps a sync of
+    its own.
+    """
+
+    async def test_a_killed_run_leaves_a_timed_hold_on_each_machines_own_clock(
+        self,
+        pc1_executor: BashLoginRemoteExecutor,
+        pc2_executor: BashLoginRemoteExecutor,
+        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
+        pc2_with_pcswitcher: BashLoginRemoteExecutor,
+        reset_pcswitcher_state: None,
+    ) -> None:
+        """E88, E89 — A sync is killed inside its own window, and what snapd is left holding on
+        BOTH machines is an instant in that machine's own near future — never `forever`.
+
+        Killed with SIGKILL so no cleanup path can run: an orchestrator that restored the
+        prior value would leave nothing to read, and a run that exited normally would say
+        nothing about the case the article is about.
+
+        `dummy_success` is enabled after `snap_sync` purely to widen the window: it sleeps
+        for its configured default on each machine, which is what gives the poll below
+        something to catch the run in the middle of. Both machines' `refresh.hold` is
+        cleared first, so "a hold is set at all" is an unambiguous signal that the run wrote
+        one, and both are put back exactly as found in the `finally`.
+
+        The comparison is against each machine's OWN clock, never this runner's: an expiry
+        computed anywhere else would still look like a future instant here, and would lapse
+        at the wrong moment on the machine that has to honour it.
+        """
+        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
+
+        pc1_prior_hold, pc2_prior_hold = await asyncio.gather(
+            _capture_system_refresh_hold(pc1_executor), _capture_system_refresh_hold(pc2_executor)
+        )
+        run_log = f"/var/tmp/pcswitcher-it-killed-sync-{uuid4().hex[:12]}.log"
+
+        try:
+            _ = await asyncio.gather(
+                _restore_system_refresh_hold(pc1_executor, None), _restore_system_refresh_hold(pc2_executor, None)
+            )
+            cleared_source, cleared_target = await asyncio.gather(
+                _capture_system_refresh_hold(pc1_executor), _capture_system_refresh_hold(pc2_executor)
+            )
+            assert cleared_source is None, "pc1 still holds a refresh.hold"
+            assert cleared_target is None, "pc2 still holds a refresh.hold"
+
+            await _write_package_sync_config(pc1_executor, snap_sync=True, dummy_success=True)
+
+            started = await pc1_executor.run_command(
+                f"{SKIP_INSTALL_ON_TARGET} setsid nohup"
+                f" pc-switcher sync pc2 --yes --allow-first-sync > {run_log} 2>&1 < /dev/null &",
+                timeout=60.0,
+                login_shell=True,
+            )
+            assert started.success, f"could not start a sync in the background: {started.stderr}"
+
+            engaged_source: str | None = None
+            engaged_target: str | None = None
+            deadline = asyncio.get_running_loop().time() + _HOLD_POLL_TIMEOUT_SECONDS
+            while asyncio.get_running_loop().time() < deadline:
+                # The one pair of commands this module issues while a sync is running: both
+                # are `snap get`, which reads and writes nothing, so neither can disturb the
+                # run they are watching.
+                engaged_source, engaged_target = await asyncio.gather(
+                    _capture_system_refresh_hold(pc1_executor), _capture_system_refresh_hold(pc2_executor)
+                )
+                if engaged_source and engaged_target:
+                    break
+                await asyncio.sleep(_HOLD_POLL_INTERVAL_SECONDS)
+            log = await pc1_executor.run_command(f"cat {run_log}", login_shell=False, timeout=30.0)
+            assert engaged_source and engaged_target, (
+                "the run never paused snapd auto-refresh on both machines, so there is no window to die inside "
+                f"(pc1: {engaged_source!r}, pc2: {engaged_target!r}).\n{log.stdout}"
+            )
+
+            killed = await pc1_executor.run_command(_KILL_RUNNING_SYNC_CMD, login_shell=False, timeout=30.0)
+            assert killed.success, (
+                f"no running sync to kill — the run had already finished and restored both machines.\n{log.stdout}"
+            )
+
+            for executor, machine in ((pc1_executor, "pc1"), (pc2_executor, "pc2")):
+                left = await _capture_system_refresh_hold(executor)
+                assert left is not None, (
+                    f"{machine} was left with no refresh.hold at all by a run that died inside its own window"
+                )
+                assert left != "forever", (
+                    f"{machine} was left with an INDEFINITE snapd refresh.hold by a run that died: nothing will ever "
+                    "lift it, so that machine stops refreshing its snaps for good"
+                )
+                lapses = parse_rfc3339_utc(left)
+                now = await _machine_utc_now(executor)
+                assert lapses > now, (
+                    f"{machine}'s refresh.hold {left!r} is not in its own future (its clock reads {now}), so the "
+                    "suspension either never took effect or was computed against another machine's clock"
+                )
+                assert lapses - now <= _SNAP_HOLD_EXPECTED_DURATION, (
+                    f"{machine}'s refresh.hold {left!r} lapses {lapses - now} from now, further ahead than the "
+                    f"{_SNAP_HOLD_EXPECTED_DURATION} a sync window asks for"
+                )
+                assert lapses - now >= _SNAP_HOLD_EXPECTED_DURATION - _SNAP_HOLD_DURATION_SLACK, (
+                    f"{machine}'s refresh.hold {left!r} lapses {lapses - now} from now, far sooner than the "
+                    f"{_SNAP_HOLD_EXPECTED_DURATION} a sync window asks for"
+                )
+        finally:
+            # The kill comes first and alone: a sync still running would write both machines'
+            # `refresh.hold` again after the restores below.
+            await pc1_executor.run_command(_KILL_RUNNING_SYNC_CMD, login_shell=False, timeout=30.0)
+
+            async def clean_the_source() -> None:
+                await _restore_system_refresh_hold(pc1_executor, pc1_prior_hold)
+                await pc1_executor.run_command(f"rm --force {run_log}", login_shell=False, timeout=15.0)
+
+            await _cleanup_in_parallel(clean_the_source(), _restore_system_refresh_hold(pc2_executor, pc2_prior_hold))
+
+
+class TestSnapHoldCaptureTiming:
+    """The VM check #208 D9 promised and never got (L10), in the half that needs no sync.
+
+    `SnapSyncJob` reads per-snap holds out of `snap list`'s Notes column DURING the sync,
+    i.e. inside the window in which the orchestrator has a system-wide `refresh.hold`
+    engaged on both hosts. D9 assumes those are separate snapstate -- that a system-wide
+    hold neither sets nor clears an individual snap's `held` note -- and says so in a
+    comment in `snap_sync._parse_snap_list`. Nothing had ever checked it against a real
+    snapd.
+
+    The end-to-end half of the same assumption, where a hold set on the source reaches the
+    target through a real sync window, is one of the divergences
+    `TestOneRunConvergesEveryManager` seeds.
+    """
+
+    async def test_system_refresh_hold_does_not_mask_a_per_snap_held_note(
+        self,
+        pc2_executor: BashLoginRemoteExecutor,
+    ) -> None:
+        """E71 — With a system-wide `refresh.hold` engaged, a per-snap hold still reads `held`
+        in `snap list` Notes, and a snap WITHOUT a per-snap hold still reads no `held`.
+
+        Both directions matter. If the system hold masked the note, capture inside the
+        sync window would silently drop every hold the user set (holds would never
+        replicate). If it ADDED the note, capture would invent a hold for every snap on
+        the machine. D9's fail-safe (a system hold flips both hosts symmetrically, so a
+        spurious flag cancels out in the membership diff) covers the second case only as
+        long as both hosts are held -- which is why this asserts the note itself rather
+        than relying on the diff to absorb it.
+
+        Runs no sync, so it needs neither a pc-switcher install nor the state reset: the
+        subject is snapd's own semantics, read straight off `snap list`.
+        """
+        held_name, unheld_name = await _holdable_snaps(pc2_executor, count=2)
+
+        prior_hold = await _capture_system_refresh_hold(pc2_executor)
+        try:
+            hold_result = await pc2_executor.run_command(
+                f"sudo snap refresh --hold=forever {shlex.quote(held_name)}", login_shell=False, timeout=60.0
+            )
+            assert hold_result.success, f"Failed to set a per-snap hold on {held_name}: {hold_result.stderr}"
+
+            # Baseline, before any system-wide hold exists: the per-snap hold is visible
+            # at all. Without this the assertion below could pass vacuously on a snapd
+            # that never writes `held` into Notes.
+            assert "held" in await _snap_notes(pc2_executor, held_name), (
+                f"snapd did not report `held` in `snap list` Notes for {held_name} after "
+                "`snap refresh --hold=forever` -- the per-snap hold mechanism this assumption is about is not visible"
+            )
+
+            await _engage_system_refresh_hold(pc2_executor)
+            engaged = await _capture_system_refresh_hold(pc2_executor)
+            assert engaged is not None, (
+                "system-wide refresh.hold did not take effect; the check below would be vacuous"
+            )
+
+            notes_under_system_hold = await _snap_notes(pc2_executor, held_name)
+            assert "held" in notes_under_system_hold, (
+                f"#208 D9 IS FALSE: with a system-wide refresh.hold engaged ({engaged}), {held_name}'s per-snap hold "
+                f"no longer reads `held` in `snap list` Notes (notes: {sorted(notes_under_system_hold)}). "
+                "snap_sync captures inside exactly this window, so every per-snap hold would be silently dropped -- "
+                "the capture must move BEFORE the sync-window hold is applied."
+            )
+
+            unheld_notes = await _snap_notes(pc2_executor, unheld_name)
+            assert "held" not in unheld_notes, (
+                f"#208 D9 IS FALSE in the other direction: a system-wide refresh.hold ({engaged}) put `held` "
+                f"into {unheld_name}'s Notes even though no per-snap hold was set on it "
+                f"(notes: {sorted(unheld_notes)}) -- capture inside the sync window would invent holds."
+            )
+        finally:
+            await pc2_executor.run_command(
+                f"sudo snap refresh --unhold {shlex.quote(held_name)}", login_shell=False, timeout=60.0
+            )
+            await _restore_system_refresh_hold(pc2_executor, prior_hold)
+
+
+class TestTheStockSkeletonTheScanRefusesToName:
+    """The tripwire under the hardcoded `/usr/local` skeleton `manual_installs_sync` refuses
+    to present. It needs no sync at all -- the subject is one file the distribution ships.
+    """
+
+    async def test_the_stock_skeleton_is_still_what_base_files_creates(
+        self, pc1_executor: BashLoginRemoteExecutor
+    ) -> None:
+        """G114 — the machine's own `base-files.postinst` must still create exactly the nine
+        entries directly under `/usr/local` that the scan refuses to present.
+
+        The list is hardcoded in the job for predictability — what the scan presents must not
+        change with whatever a postinst says on the day — so this is the assertion that
+        catches a distribution changing it: a failure here means the skeleton moved and the
+        constant has to follow, not that a run is broken.
+
+        `/usr/local` itself and `share/man` are excluded on purpose: the first is a scan root
+        rather than an entry of anything, and the second is not directly under `/usr/local`,
+        which is the only level the scan can meet these at.
+        """
+        postinst = await pc1_executor.run_command(
+            "cat /var/lib/dpkg/info/base-files.postinst", login_shell=False, timeout=15.0
+        )
+        assert postinst.success, f"could not read base-files.postinst: {postinst.stderr}"
+
+        created = set(re.findall(r"^\s*install_local_dir\s+(/usr/local/[^\s/]+)\s*$", postinst.stdout, re.MULTILINE))
+        symlinked = set(re.findall(r'ln -s\S*\s+\S+\s+"?\$DPKG_ROOT(/usr/local/[^\s/"]+)"?', postinst.stdout))
+
+        assert created | symlinked == {stock for stock in _STOCK_DIRECTORIES if stock.count("/") == 3}, (
+            "base-files no longer creates the `/usr/local` skeleton the scan is built on; "
+            f"it declares {sorted(created | symlinked)}.\n{postinst.stdout}"
+        )

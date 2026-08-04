@@ -43,7 +43,7 @@ uv run codespell
 uv run basedpyright
 uv run pytest                                 # Unit tests
 tests/run-integration-tests.sh                # Integration tests
-tests/run-integration-tests.sh tests/integration/test_end_to_end_sync.py::TestInstallOnTargetIntegration::test_install_on_target_fresh_machine                # Specific integration test
+tests/run-integration-tests.sh tests/integration/jobs/test_install_on_target_job.py::TestInstallOnTargetIntegration::test_install_on_target_fresh_machine   # Specific integration test
 ```
 
 ## Executor calls: `mutates=` unless purely read-only

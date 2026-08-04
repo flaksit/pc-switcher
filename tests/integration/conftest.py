@@ -35,7 +35,7 @@ import asyncssh
 import pytest
 
 from pcswitcher.btrfs_snapshots import delete_all_snapshots
-from pcswitcher.executor import BashLoginRemoteExecutor
+from pcswitcher.executor import BashLoginRemoteExecutor, RemoteExecutor
 from pcswitcher.install import get_install_with_script_command_line
 from pcswitcher.models import CommandResult
 from pcswitcher.version import Release, Version, find_one_version, get_releases, get_this_version
@@ -50,8 +50,10 @@ REQUIRED_ENV_VARS = [
 
 # Every integration test must declare where it belongs in CI's topic-based selection
 # (tests/integration/scripts/select-ci-tests.sh): an area marker, `smoke`, or
-# `area_core` for core behavior with no topic mapping (full-suite runs only).
+# `area_core` for the core sync spine (locking, sync history, logging, init, interrupts).
 # Enforced at collection so a new test file cannot silently fall outside topic runs.
+# A test may carry several: a test touching two areas runs whenever either is
+# selected, since the workflow selects with an `or` expression over the markers.
 _CI_SELECTION_MARKERS = {"smoke", "area_package", "area_install", "area_btrfs", "area_folder", "area_core"}
 
 
@@ -76,6 +78,28 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             f"({', '.join(sorted(_CI_SELECTION_MARKERS))}); "
             'see "CI test selection" in docs/dev/testing-guide.md:\n  ' + "\n  ".join(unmapped)
         )
+
+
+def purge_subvolume_script(path: str) -> str:
+    """Shell fragment: best-effort delete of `path` and of every subvolume nested inside it.
+
+    Nested subvolumes go first — btrfs refuses to delete a subvolume that still contains one.
+
+    Returned as a fragment rather than run here so callers can append whatever they do next
+    (create the subvolume, `rm --recursive`) into a single remote command: every separate
+    `run_command` pays a full SSH round trip and login-shell startup. It contains no single
+    quotes, so it embeds directly in the caller's `sudo sh -c '...'`, and it needs that
+    wrapper because the `xargs`-driven delete has to run as root too.
+
+    Each step is best-effort and separated by `;`: the goal is a clean slate, and a path
+    that was already absent is success, not an error to report.
+    """
+    return (
+        f"btrfs subvolume list -o {path} 2>/dev/null | "
+        'awk "{print \\$NF}" | '
+        "xargs --no-run-if-empty -I {} btrfs subvolume delete /{}; "
+        f"btrfs subvolume delete {path} 2>/dev/null"
+    )
 
 
 # ---------------------------------------------------------------------------------
@@ -510,6 +534,21 @@ async def _remove_config_and_data(executor: BashLoginRemoteExecutor) -> None:
         "rm --recursive --force ~/.config/pc-switcher ~/.local/share/pc-switcher",
         timeout=10.0,
     )
+
+
+async def write_pcswitcher_config(executor: RemoteExecutor, config: str) -> None:
+    """Write `config` to a machine's `~/.config/pc-switcher/config.yaml`.
+
+    The config *content* stays with the test that needs it — each one states what that
+    test requires of a run — so this only owns the mechanics: create the directory,
+    write via a quoted heredoc (no shell expansion of the YAML), fail loudly on error.
+    """
+    result = await executor.run_command(
+        "mkdir --parents ~/.config/pc-switcher"
+        f" && cat > ~/.config/pc-switcher/config.yaml << 'CONF_EOF'\n{config}CONF_EOF",
+        timeout=10.0,
+    )
+    assert result.success, f"Failed to write pc-switcher config: {result.stderr}"
 
 
 async def uninstall_pcswitcher_and_config(executor: BashLoginRemoteExecutor) -> None:

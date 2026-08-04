@@ -17,9 +17,9 @@
 #   - Source files → area, via the case patterns below. Every file must match,
 #     or the whole suite runs: new source files run the full suite until someone
 #     maps them here — silently running too much, never too little.
-#   - Changed test files → area, read from the file's own pytestmark
-#     (smoke/area_* markers; presence on every test is enforced at collection
-#     time in tests/integration/conftest.py).
+#   - Changed test files → areas, read from the file's own smoke/area_* markers
+#     (a file may carry several; presence of at least one on every test is
+#     enforced at collection time in tests/integration/conftest.py).
 set -euo pipefail
 
 if [[ $# -ne 1 ]]; then
@@ -61,19 +61,24 @@ while IFS= read -r f; do
         # gated by ci.yml, benchmarks are deselected from CI integration runs.
         docs/* | *.md | .planning/* | LICENSE | tests/unit/* | tests/integration/benchmarks/*)
             ;;
-        # A changed integration test runs its own area: read it from the file's
-        # pytestmark. Deleted files (absent from the checkout) and files without
-        # a recognizable marker fall back to the full suite.
+        # A changed integration test runs its own areas: read them from the file's
+        # markers. Every smoke/area_* marker in the file counts, wherever it sits
+        # (module pytestmark, class pytestmark, per-test decorator), so a file
+        # spanning areas selects all of them. Deleted files (absent from the
+        # checkout) and files without a recognizable marker fall back to the full
+        # suite.
         tests/integration/*test_*.py)
-            marker=$([[ -f "$f" ]] && grep --only-matching --extended-regexp 'pytest\.mark\.(area_[a-z]+|smoke)' "$f" | head --lines=1 | cut --delimiter='.' --fields=3 || true)
-            if [[ -z "$marker" ]]; then
-                full "$f (no smoke/area_* pytestmark found)"
+            markers=$([[ -f "$f" ]] && grep --only-matching --extended-regexp 'pytest\.mark\.(area_[a-z]+|smoke)' "$f" | cut --delimiter='.' --fields=3 | sort --unique || true)
+            if [[ -z "$markers" ]]; then
+                full "$f (no smoke/area_* marker found)"
             fi
-            add_area "$marker"
+            while IFS= read -r marker; do
+                add_area "$marker"
+            done <<< "$markers"
             ;;
         src/pcswitcher/jobs/apt_sync/* | src/pcswitcher/jobs/snap_sync.py | \
         src/pcswitcher/jobs/flatpak_sync.py | src/pcswitcher/jobs/manual_installs_sync.py | \
-        src/pcswitcher/jobs/packages/* | src/pcswitcher/machine-packages.example.yaml)
+        src/pcswitcher/jobs/packages/*)
             add_area area_package
             ;;
         install.sh | src/pcswitcher/install.py | src/pcswitcher/version.py | \
@@ -83,8 +88,19 @@ while IFS= read -r f; do
         src/pcswitcher/btrfs_snapshots.py | src/pcswitcher/jobs/btrfs.py)
             add_area area_btrfs
             ;;
-        src/pcswitcher/jobs/folder_sync.py | src/pcswitcher/home.filter | src/pcswitcher/root.filter)
+        # folder_sync_scenario.py is a helper, not a test file: it carries no markers of
+        # its own, so it is mapped here like a source file.
+        src/pcswitcher/jobs/folder_sync.py | src/pcswitcher/home.filter | src/pcswitcher/root.filter | \
+        tests/integration/jobs/folder_sync_scenario.py)
             add_area area_folder
+            ;;
+        # Core modules the area_core tests own outright: the orchestrator is their only
+        # importer, and the tests that assert their behavior (test_lock_integration.py,
+        # test_sync_order_gates.py) carry area_core. The rest of the spine — orchestrator.py,
+        # cli.py, config.py, executor.py, connection.py, logger.py — reaches every area's
+        # tests and so stays unmapped below, selecting the full suite.
+        src/pcswitcher/lock.py | src/pcswitcher/sync_history.py)
+            add_area area_core
             ;;
         *)
             full "$f (outside every mapped area)"

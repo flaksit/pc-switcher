@@ -6,19 +6,142 @@ Tests CORE-US-INTERRUPT (Graceful Interrupt Handling) acceptance scenarios and r
 - CORE-FR-NO-ORPHAN: No orphaned processes
 - CORE-US-INTERRUPT-AS1: Ctrl+C requests job termination
 - CORE-US-INTERRUPT-AS3: Second Ctrl+C forces termination
+- CORE-US-JOB-ARCH-AS7: Ctrl+C during job execution terminates the job
 - Edge: Source crashes mid-sync
+- Edge: Target becomes unreachable mid-sync
 """
 
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import suppress
+from dataclasses import dataclass
 
 import pytest
+import pytest_asyncio
 
-from pcswitcher.executor import RemoteExecutor
+from pcswitcher.executor import BashLoginRemoteExecutor, RemoteExecutor
+from tests.integration import SKIP_INSTALL_ON_TARGET
+from tests.integration.conftest import write_pcswitcher_config
 
 pytestmark = pytest.mark.area_core
+
+# Test config with short durations for faster tests
+_TEST_CONFIG_TEMPLATE = """# Test configuration for interrupt/network-failure sync tests
+# Short durations to keep tests fast
+
+sync_jobs:
+  dummy_success: true
+  dummy_fail: false
+
+disk_space_monitor:
+  preflight_minimum: "5%"
+  runtime_minimum: "3%"
+  warning_threshold: "10%"
+  check_interval: 5
+
+btrfs_snapshots:
+  subvolumes:
+    - "@"
+    - "@home"
+  keep_recent: 2
+
+dummy_success:
+  source_duration: {source_duration}
+  target_duration: {target_duration}
+"""
+
+
+# Dataclass for pc1_to_pc2_traffic_blocker fixture
+@dataclass
+class Pc1ToPc2TrafficBlocker:
+    """Provides async callables to block/unblock pc1->pc2 SSH traffic.
+
+    Both `block` and `unblock` are callables returning an awaitable that
+    resolves to None when complete.
+    """
+
+    block: Callable[[], Awaitable[None]]
+    unblock: Callable[[], Awaitable[None]]
+
+
+@pytest.fixture
+async def pc1_to_pc2_traffic_blocker(
+    pc2_executor: BashLoginRemoteExecutor,
+) -> AsyncIterator[Pc1ToPc2TrafficBlocker]:
+    """Blocks SSH traffic from pc1 to pc2 for network failure simulation.
+
+    This fixture allows tests to simulate network failures by blocking SSH
+    traffic from pc1 to pc2 using iptables on pc2. The block only affects
+    pc1→pc2 traffic; the test runner retains full access to both VMs.
+
+    Yields a dict with:
+        - block: async callable to block pc1→pc2 SSH traffic
+        - unblock: async callable to restore connectivity
+
+    Cleanup is automatic on fixture teardown, even if test fails.
+    """
+    pc1_ip: str | None = None
+    blocked = False
+
+    async def block_pc1() -> None:
+        nonlocal pc1_ip, blocked
+        if blocked:
+            return
+        # Resolve pc1's IP from /etc/hosts on pc2
+        result = await pc2_executor.run_command(
+            "getent hosts pc1 | awk '{print $1}'",
+            timeout=10.0,
+            login_shell=False,
+        )
+        pc1_ip = result.stdout.strip()
+        assert pc1_ip, f"Failed to resolve pc1 IP: {result.stderr}"
+
+        # Block all TCP traffic from pc1 to port 22 (SSH)
+        block_result = await pc2_executor.run_command(
+            f"sudo iptables --insert INPUT --source {pc1_ip} --protocol tcp --dport 22 --jump DROP",
+            timeout=10.0,
+            login_shell=False,
+        )
+        assert block_result.success, f"Failed to add iptables rule: {block_result.stderr}"
+        blocked = True
+
+    async def unblock_pc1() -> None:
+        nonlocal blocked
+        if not blocked or not pc1_ip:
+            return
+        # Remove the blocking rule
+        await pc2_executor.run_command(
+            f"sudo iptables --delete INPUT --source {pc1_ip} --protocol tcp --dport 22 --jump DROP",
+            timeout=10.0,
+            login_shell=False,
+        )
+        blocked = False
+
+    yield Pc1ToPc2TrafficBlocker(block=block_pc1, unblock=unblock_pc1)
+
+    # Cleanup: ensure network is unblocked even if test fails
+    await unblock_pc1()
+
+
+@pytest_asyncio.fixture
+async def sync_ready_source_long_duration(
+    pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
+    reset_pcswitcher_state: None,
+) -> AsyncIterator[BashLoginRemoteExecutor]:
+    """Provide pc1 installed, its state reset, and configured for a 60s-per-phase sync.
+
+    The long durations leave time to interrupt the run while a job is executing.
+    `reset_pcswitcher_state` wipes config and history before and after the test, so this
+    only writes.
+    """
+    _ = reset_pcswitcher_state  # Ensures cleanup runs before test
+    executor = pc1_with_pcswitcher_mod
+
+    await write_pcswitcher_config(executor, _TEST_CONFIG_TEMPLATE.format(source_duration=60, target_duration=60))
+
+    yield executor
 
 
 async def test_core_fr_target_term(
@@ -44,12 +167,12 @@ async def test_core_fr_target_term(
     pid = None
 
     try:
-        # Clean up any previous markers
-        await pc2_executor.run_command(f"rm --force {marker_file}")
-
-        # Start background process that creates a marker and sleeps
-        # Use nohup to ensure it runs independently
-        await pc2_executor.run_command(f"nohup sh -c 'echo $$ > {marker_file} && sleep 300' > /dev/null 2>&1 &")
+        # Clear any previous marker, then start a background process that writes a fresh one
+        # and sleeps. `;` rather than `&&`: the trailing `&` would otherwise background the
+        # whole list, including the removal the nohup depends on.
+        await pc2_executor.run_command(
+            f"rm --force {marker_file}; nohup sh -c 'echo $$ > {marker_file} && sleep 300' > /dev/null 2>&1 &"
+        )
 
         # Give it a moment to start
         await asyncio.sleep(1.0)
@@ -189,13 +312,13 @@ async def test_core_fr_no_orphan(
     target_pid = None
 
     try:
-        # Clean up any existing markers
-        await pc1_executor.run_command(f"rm --force {source_marker}")
-        await pc2_executor.run_command(f"rm --force {target_marker}")
-
-        # Start test processes on both hosts using nohup for proper background execution
-        await pc1_executor.run_command(f"nohup sh -c 'echo $$ > {source_marker} && sleep 300' > /dev/null 2>&1 &")
-        await pc2_executor.run_command(f"nohup sh -c 'echo $$ > {target_marker} && sleep 300' > /dev/null 2>&1 &")
+        # Clear any existing marker and start the test process, one command per host
+        await pc1_executor.run_command(
+            f"rm --force {source_marker}; nohup sh -c 'echo $$ > {source_marker} && sleep 300' > /dev/null 2>&1 &"
+        )
+        await pc2_executor.run_command(
+            f"rm --force {target_marker}; nohup sh -c 'echo $$ > {target_marker} && sleep 300' > /dev/null 2>&1 &"
+        )
 
         # Wait for processes to start
         await asyncio.sleep(1.0)
@@ -264,10 +387,10 @@ async def test_core_us_interrupt_as1_interrupt_requests_job_termination(
     job_pid = None
 
     try:
-        await pc2_executor.run_command(f"rm --force {job_marker}")
-
-        # Start a job-like operation on target using nohup
-        await pc2_executor.run_command(f"nohup sh -c 'echo $$ > {job_marker} && sleep 300' > /dev/null 2>&1 &")
+        # Clear any stale marker, then start a job-like operation on target using nohup
+        await pc2_executor.run_command(
+            f"rm --force {job_marker}; nohup sh -c 'echo $$ > {job_marker} && sleep 300' > /dev/null 2>&1 &"
+        )
 
         # Wait for job to start
         await asyncio.sleep(1.0)
@@ -323,10 +446,10 @@ async def test_core_us_interrupt_as3_second_interrupt_forces_termination(
     process_pid = None
 
     try:
-        await pc2_executor.run_command(f"rm --force {cleanup_marker}")
-
-        # Start a process that we'll try to clean up
-        await pc2_executor.run_command(f"nohup sh -c 'echo $$ > {cleanup_marker} && sleep 300' > /dev/null 2>&1 &")
+        # Clear any stale marker, then start a process that we'll try to clean up
+        await pc2_executor.run_command(
+            f"rm --force {cleanup_marker}; nohup sh -c 'echo $$ > {cleanup_marker} && sleep 300' > /dev/null 2>&1 &"
+        )
 
         await asyncio.sleep(1.0)
 
@@ -379,6 +502,111 @@ async def test_core_us_interrupt_as3_second_interrupt_forces_termination(
         await pc2_executor.run_command(f"rm --force {cleanup_marker}")
 
 
+async def test_core_us_job_arch_as7_interrupt_terminates_job(
+    sync_ready_source_long_duration: BashLoginRemoteExecutor,
+) -> None:
+    """Test CORE-US-JOB-ARCH-AS7: Ctrl+C terminates job with cleanup.
+
+    Verifies that when user presses Ctrl+C during job execution, the orchestrator:
+    - Catches SIGINT signal
+    - Requests termination of currently-executing job
+    - Logs interruption at WARNING level
+    - Exits with code 130
+
+    Expected behavior:
+    1. Start sync with long-running dummy_success job (60s)
+    2. Wait for job to begin execution
+    3. Send SIGINT to the sync process
+    4. Verify process exits with code 130
+    5. Verify "interrupted" message in output
+
+    Test approach:
+    - Start sync in background using nohup and capture PID
+    - Wait for sync to start (check for running process or log output)
+    - Send SIGINT to the process
+    - Wait for process to terminate
+    - Check exit code and output
+    """
+    pc1_executor = sync_ready_source_long_duration
+
+    # Start sync in background and capture output to a temp file
+    # Use script to run in a pseudo-terminal for proper signal handling
+    output_file = "/tmp/pcswitcher-e2e-interrupt-test-output.txt"
+    pid_file = "/tmp/pcswitcher-e2e-interrupt-test-pid.txt"
+
+    # Clean up from any previous run, then start sync in background with script for TTY
+    # emulation. We use bash -c to wrap the command and capture the PID. `;` rather than
+    # `&&`: the trailing `&` would otherwise background the removal too.
+    # --allow-first-sync: pc2 has no sync history (W1 gate, ADR-015); required in CI
+    # (no TTY) to bypass the first-sync overwrite confirmation and reach job execution.
+    start_result = await pc1_executor.run_command(
+        f"rm --force {output_file} {pid_file};"
+        f" nohup bash -c 'echo $$ > {pid_file}; export {SKIP_INSTALL_ON_TARGET};"
+        f" exec pc-switcher sync pc2 --yes --allow-first-sync 2>&1'"
+        f" > {output_file} &",
+        timeout=10.0,
+        login_shell=True,
+    )
+    assert start_result.success, f"Failed to start background sync: {start_result.stderr}"
+
+    # Wait for PID file to be written and process to start
+    await asyncio.sleep(2)
+
+    # Get the PID
+    pid_result = await pc1_executor.run_command(f"cat {pid_file}", timeout=10.0)
+    assert pid_result.success and pid_result.stdout.strip(), f"Failed to get sync process PID: {pid_result.stderr}"
+    sync_pid = pid_result.stdout.strip()
+
+    # Wait for sync to actually start (look for connection or log activity)
+    # Give it time to establish SSH connection and start job execution
+    for _ in range(30):  # Wait up to 30 seconds for job to start
+        await asyncio.sleep(1)
+        output_check = await pc1_executor.run_command(f"cat {output_file} 2>/dev/null || true", timeout=10.0)
+        # Check if we see any progress indicating sync has started
+        if "source" in output_check.stdout.lower() or "target" in output_check.stdout.lower():
+            break
+        if "connecting" in output_check.stdout.lower() or "lock" in output_check.stdout.lower():
+            continue  # Still in setup phase, keep waiting
+        # Check if process is still running
+        ps_check = await pc1_executor.run_command(
+            f"ps --pid {sync_pid} --format pid= 2>/dev/null || true", timeout=5.0
+        )
+        if not ps_check.stdout.strip():
+            break  # Process finished (possibly errored out)
+
+    # Send SIGINT to the sync process
+    await pc1_executor.run_command(
+        f"kill -INT {sync_pid} 2>/dev/null || true",
+        timeout=10.0,
+        login_shell=False,
+    )
+
+    # Wait for process to terminate (up to 35 seconds for cleanup timeout)
+    process_terminated = False
+    for _ in range(40):  # Wait up to 40 seconds
+        await asyncio.sleep(1)
+        ps_check = await pc1_executor.run_command(
+            f"ps --pid {sync_pid} --format pid= 2>/dev/null || echo 'terminated'",
+            timeout=5.0,
+            login_shell=False,
+        )
+        if "terminated" in ps_check.stdout or not ps_check.stdout.strip():
+            process_terminated = True
+            break
+
+    assert process_terminated, f"Sync process {sync_pid} did not terminate after SIGINT"
+
+    # Read the output
+    output_result = await pc1_executor.run_command(f"cat {output_file}", timeout=10.0)
+    output_text = output_result.stdout
+
+    # Verify interrupt handling message
+    assert "interrupt" in output_text.lower(), f"Output should contain interrupt message.\nOutput:\n{output_text}"
+
+    # Clean up temp files
+    await pc1_executor.run_command(f"rm --force {output_file} {pid_file}", timeout=10.0)
+
+
 async def test_core_edge_source_crash_timeout(
     pc1_executor: RemoteExecutor,
     pc2_executor: RemoteExecutor,
@@ -406,10 +634,11 @@ async def test_core_edge_source_crash_timeout(
     process_pid = None
 
     try:
-        await pc2_executor.run_command(f"rm --force {crash_marker}")
-
-        # Start a process on target that would normally be managed by source
-        await pc2_executor.run_command(f"nohup sh -c 'echo $$ > {crash_marker} && sleep 300' > /dev/null 2>&1 &")
+        # Clear any stale marker, then start a process on target that would normally be
+        # managed by source
+        await pc2_executor.run_command(
+            f"rm --force {crash_marker}; nohup sh -c 'echo $$ > {crash_marker} && sleep 300' > /dev/null 2>&1 &"
+        )
 
         await asyncio.sleep(1.0)
 
@@ -442,3 +671,148 @@ async def test_core_edge_source_crash_timeout(
         if process_pid:
             await pc2_executor.run_command(f"kill -9 {process_pid} 2>/dev/null || true")
         await pc2_executor.run_command(f"rm --force {crash_marker}")
+
+
+async def test_core_edge_target_unreachable_mid_sync(
+    pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
+    reset_pcswitcher_state: None,
+    pc1_to_pc2_traffic_blocker: Pc1ToPc2TrafficBlocker,
+) -> None:
+    """Test CORE-EDGE: Target becomes unreachable mid-sync.
+
+    Spec reference: docs/system/spec.md - Edge Cases
+
+    Simulates network failure by blocking pc1→pc2 traffic with iptables
+    during the target phase of DummySuccessJob. Verifies that:
+    - Sync detects the connection failure
+    - Sync exits with non-zero code
+    - Error output indicates connection/network failure
+
+    Test approach:
+    1. Configure DummySuccessJob with short source phase (4s) and longer target (30s)
+    2. Start sync in background, capturing output to temp file
+    3. Monitor output for "target phase" indicator
+    4. When detected, block pc1→pc2 traffic via iptables
+    5. Wait for sync to fail (keepalive timeout ~45s)
+    6. Verify error message indicates connection failure
+
+    Safety:
+    - iptables rule only blocks pc1→pc2, test runner retains full access
+    - network_blocker fixture ensures cleanup even on test failure
+    """
+    _ = reset_pcswitcher_state  # Ensures test isolation
+    pc1_executor = pc1_with_pcswitcher_mod
+
+    # Create test config with short source phase but longer target phase
+    # Source: 4s (quick to get to target phase)
+    # Target: 30s (long enough for us to inject failure and observe timeout)
+    await write_pcswitcher_config(pc1_executor, _TEST_CONFIG_TEMPLATE.format(source_duration=4, target_duration=30))
+
+    # Start sync in background, capturing output to temp file
+    output_file = "/tmp/pcswitcher-network-failure-test-output.txt"
+    pid_file = "/tmp/pcswitcher-network-failure-test-pid.txt"
+    # Clean up from any previous run, then start sync in background. `;` rather than
+    # `&&`: the trailing `&` would otherwise background the removal too.
+    # --allow-first-sync: pc2 has no sync history (W1 gate, ADR-015); required in CI
+    # (no TTY) to bypass the first-sync overwrite confirmation so the sync proceeds
+    # into the job execution phase where the network failure is injected.
+    start_result = await pc1_executor.run_command(
+        f"rm --force {output_file} {pid_file};"
+        f" nohup bash -c 'echo $$ > {pid_file}; export {SKIP_INSTALL_ON_TARGET};"
+        f" exec pc-switcher sync pc2 --yes --allow-first-sync 2>&1'"
+        f" > {output_file} &",
+        timeout=10.0,
+        login_shell=True,
+    )
+    assert start_result.success, f"Failed to start background sync: {start_result.stderr}"
+
+    # Wait for PID file and get PID
+    await asyncio.sleep(2)
+    pid_result = await pc1_executor.run_command(f"cat {pid_file}", timeout=10.0)
+    assert pid_result.success and pid_result.stdout.strip(), f"Failed to get sync process PID: {pid_result.stderr}"
+    sync_pid = pid_result.stdout.strip()
+
+    # Monitor log file for "Target phase:" indicator, then block network
+    # The TUI "Recent Logs" only shows FULL level messages, but DummySuccessJob
+    # logs at INFO level. We check the log file directly for reliable detection.
+    network_blocked = False
+    last_log_content = ""
+    for _ in range(60):  # Wait up to 60 seconds for target phase
+        await asyncio.sleep(1)
+
+        # Check the log file for "Target phase:" messages
+        log_check = await pc1_executor.run_command(
+            "cat ~/.local/share/pc-switcher/logs/sync-*.log 2>/dev/null | grep --ignore-case 'target phase' || true",
+            timeout=10.0,
+        )
+        last_log_content = log_check.stdout
+
+        # Check if target phase has started
+        if "target phase" in last_log_content.lower():
+            # Block pc1→pc2 traffic
+            await pc1_to_pc2_traffic_blocker.block()
+            network_blocked = True
+            break
+
+        # Check if process is still running
+        ps_check = await pc1_executor.run_command(
+            f"ps --pid {sync_pid} --format pid= 2>/dev/null || true",
+            timeout=5.0,
+            login_shell=False,
+        )
+        if not ps_check.stdout.strip():
+            break  # Process exited early
+
+    # Read TUI output for debugging if assertion fails
+    tui_output = await pc1_executor.run_command(
+        f"cat {output_file} 2>/dev/null || true",
+        timeout=10.0,
+    )
+
+    assert network_blocked, (
+        f"Target phase not detected before process exited.\n"
+        f"Log content:\n{last_log_content}\n"
+        f"TUI output:\n{tui_output.stdout}"
+    )
+
+    # Wait for sync to fail due to keepalive timeout (~45 seconds)
+    # Total wait: up to 90 seconds to be safe
+    process_exited = False
+    for _ in range(90):
+        await asyncio.sleep(1)
+        ps_check = await pc1_executor.run_command(
+            f"ps --pid {sync_pid} --format pid= 2>/dev/null || echo 'exited'",
+            timeout=5.0,
+            login_shell=False,
+        )
+        if "exited" in ps_check.stdout or not ps_check.stdout.strip():
+            process_exited = True
+            break
+
+    assert process_exited, f"Sync process {sync_pid} did not exit after network failure"
+
+    # Read final output
+    output_result = await pc1_executor.run_command(f"cat {output_file}", timeout=10.0)
+    output_text = output_result.stdout
+
+    # Verify sync failed with connection-related error
+    # Look for various error indicators
+    error_indicators = [
+        "connection",
+        "timeout",
+        "unreachable",
+        "lost",
+        "closed",
+        "failed",
+        "error",
+        "ssh",
+    ]
+    output_lower = output_text.lower()
+    has_error_indicator = any(ind in output_lower for ind in error_indicators)
+
+    assert has_error_indicator, f"Output should indicate connection failure.\nOutput:\n{output_text}"
+
+    # Clean up temp files
+    await pc1_executor.run_command(f"rm --force {output_file} {pid_file}", timeout=10.0)
+
+    # Note: pc1_to_pc2_traffic_blocker fixture handles unblocking automatically

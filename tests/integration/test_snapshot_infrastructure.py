@@ -30,6 +30,8 @@ from pcswitcher.btrfs_snapshots import (
 from pcswitcher.executor import RemoteExecutor
 from pcswitcher.models import Host, SnapshotPhase
 
+from .conftest import purge_subvolume_script
+
 pytestmark = pytest.mark.area_btrfs
 
 
@@ -45,31 +47,17 @@ async def test_subvolume(pc1_executor: RemoteExecutor) -> AsyncIterator[str]:
     """
     subvolume_path = "/test-snapshots-vol"
 
-    # Clean slate: remove any leftover from previous runs
-    await pc1_executor.run_command(
-        "sudo sh -c '"
-        f"btrfs subvolume list -o {subvolume_path} 2>/dev/null | "
-        'awk "{print \\$NF}" | '
-        "xargs --no-run-if-empty -I {} btrfs subvolume delete /{}"
-        "'",
+    # Clean slate (leftovers from previous runs), then create fresh: one command, so
+    # `result` carries the create's own status.
+    result = await pc1_executor.run_command(
+        f"sudo sh -c '{purge_subvolume_script(subvolume_path)}; btrfs subvolume create {subvolume_path}'",
     )
-    await pc1_executor.run_command(f"sudo btrfs subvolume delete {subvolume_path} 2>/dev/null || true")
-
-    # Create fresh test subvolume
-    result = await pc1_executor.run_command(f"sudo btrfs subvolume create {subvolume_path}")
     assert result.success, f"Failed to create test subvolume: {result.stderr}"
 
     yield subvolume_path
 
     # Cleanup: delete all nested snapshots first, then the subvolume
-    await pc1_executor.run_command(
-        "sudo sh -c '"
-        f"btrfs subvolume list -o {subvolume_path} 2>/dev/null | "
-        'awk "{print \\$NF}" | '
-        "xargs --no-run-if-empty -I {} btrfs subvolume delete /{}"
-        "'",
-    )
-    await pc1_executor.run_command(f"sudo btrfs subvolume delete {subvolume_path}")
+    await pc1_executor.run_command(f"sudo sh -c '{purge_subvolume_script(subvolume_path)}'")
 
 
 @pytest.mark.parametrize("phase", [SnapshotPhase.PRE, SnapshotPhase.POST])
@@ -126,9 +114,11 @@ async def test_core_us_btrfs_create_snapshots(
         assert session_id in snap_path, "Snapshot not in session-specific folder"
 
     finally:
-        # Cleanup
-        await pc1_executor.run_command(f"sudo btrfs subvolume delete {snap_path} 2>/dev/null || true", timeout=10.0)
-        await pc1_executor.run_command(f"sudo rmdir {session_path} 2>/dev/null || true")
+        # Cleanup: the snapshot, then the session folder that held it
+        await pc1_executor.run_command(
+            f"sudo btrfs subvolume delete {snap_path} 2>/dev/null; sudo rmdir {session_path} 2>/dev/null || true",
+            timeout=10.0,
+        )
 
 
 async def test_core_us_btrfs_as4_create_snapshots_subvolume(
@@ -149,19 +139,13 @@ async def test_core_us_btrfs_as4_create_snapshots_subvolume(
     test_snapshots_path = "/test-snapshots-creation"
 
     try:
-        # Clean up any existing test directory
-        await pc1_executor.run_command(
-            "sudo sh -c '"
-            f"btrfs subvolume list -o {test_snapshots_path} 2>/dev/null | "
-            'awk "{print \\$NF}" | '
-            "xargs --no-run-if-empty -I {} btrfs subvolume delete /{}"
-            "'"
+        # Clean up any existing test directory, then report whether it is really gone -- the
+        # trailing `test` is what the command exits on, so `check_result` answers that.
+        check_result = await pc1_executor.run_command(
+            f"sudo sh -c '{purge_subvolume_script(test_snapshots_path)}; "
+            f"rm --recursive --force {test_snapshots_path}'; "
+            f"test -e {test_snapshots_path}"
         )
-        await pc1_executor.run_command(f"sudo btrfs subvolume delete {test_snapshots_path} 2>/dev/null || true")
-        await pc1_executor.run_command(f"sudo rm --recursive --force {test_snapshots_path}")
-
-        # Verify test path doesn't exist
-        check_result = await pc1_executor.run_command(f"test -e {test_snapshots_path}")
         assert not check_result.success, f"{test_snapshots_path} should not exist before test"
 
         # Create a subvolume (simulating what validate_snapshots_directory would do)
@@ -187,14 +171,8 @@ async def test_core_us_btrfs_as4_create_snapshots_subvolume(
     finally:
         # Cleanup test directory
         await pc1_executor.run_command(
-            "sudo sh -c '"
-            f"btrfs subvolume list -o {test_snapshots_path} 2>/dev/null | "
-            'awk "{print \\$NF}" | '
-            "xargs --no-run-if-empty -I {} btrfs subvolume delete /{}"
-            "'"
+            f"sudo sh -c '{purge_subvolume_script(test_snapshots_path)}; rm --recursive --force {test_snapshots_path}'"
         )
-        await pc1_executor.run_command(f"sudo btrfs subvolume delete {test_snapshots_path} 2>/dev/null || true")
-        await pc1_executor.run_command(f"sudo rm --recursive --force {test_snapshots_path}")
 
 
 async def test_core_us_btrfs_as7_cleanup_snapshots_with_retention(

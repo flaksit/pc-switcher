@@ -18,6 +18,8 @@ import pytest
 
 from pcswitcher.executor import RemoteExecutor
 
+from .conftest import purge_subvolume_script
+
 pytestmark = pytest.mark.area_btrfs
 
 
@@ -31,31 +33,17 @@ async def test_volume(pc1_executor: RemoteExecutor) -> AsyncIterator[str]:
     Module-scoped: shared across all tests in this module for efficiency.
     Individual tests must clean up their own artifacts (snapshots) in try/finally.
     """
-    # Clean slate: remove any leftover from crashed previous run
-    await pc1_executor.run_command(
-        "sudo sh -c '"
-        "btrfs subvolume list -o /test-vol 2>/dev/null | "
-        'awk "{print \\$NF}" | '
-        "xargs --no-run-if-empty -I {} btrfs subvolume delete /{}"
-        "'",
+    # Clean slate (leftovers from a crashed previous run), then create fresh: one command,
+    # so `result` carries the create's own status.
+    result = await pc1_executor.run_command(
+        f"sudo sh -c '{purge_subvolume_script('/test-vol')}; btrfs subvolume create /test-vol'",
     )
-    await pc1_executor.run_command("sudo btrfs subvolume delete /test-vol 2>/dev/null || true")
-
-    # Create fresh test subvolume
-    result = await pc1_executor.run_command("sudo btrfs subvolume create /test-vol")
     assert result.success, f"Failed to create test volume: {result.stderr}"
 
     yield "/test-vol"
 
     # Cleanup: delete all nested snapshots first, then the subvolume
-    await pc1_executor.run_command(
-        "sudo sh -c '"
-        "btrfs subvolume list -o /test-vol 2>/dev/null | "
-        'awk "{print \\$NF}" | '
-        "xargs --no-run-if-empty -I {} btrfs subvolume delete /{}"
-        "'",
-    )
-    await pc1_executor.run_command("sudo btrfs subvolume delete /test-vol")
+    await pc1_executor.run_command(f"sudo sh -c '{purge_subvolume_script('/test-vol')}'")
 
 
 async def test_snapshot_preserves_content(pc1_executor: RemoteExecutor, test_volume: str) -> None:
@@ -74,8 +62,9 @@ async def test_snapshot_preserves_content(pc1_executor: RemoteExecutor, test_vol
         assert create_file.success
 
         # Create snapshot
-        await pc1_executor.run_command("sudo mkdir --parents /test-vol/.snapshots")
-        snapshot_result = await pc1_executor.run_command(f"sudo btrfs subvolume snapshot -r /test-vol {snapshot_name}")
+        snapshot_result = await pc1_executor.run_command(
+            f"sudo mkdir --parents /test-vol/.snapshots && sudo btrfs subvolume snapshot -r /test-vol {snapshot_name}"
+        )
         assert snapshot_result.success
 
         # Verify file exists in snapshot with same content
@@ -94,10 +83,9 @@ async def test_snapshot_preserves_content(pc1_executor: RemoteExecutor, test_vol
         assert "modified" not in read_snapshot_again.stdout
 
     finally:
-        # Cleanup
-        await pc1_executor.run_command(f"sudo rm --force {test_file}")
+        # Cleanup (`;`: both run even if the first has nothing to remove)
         await pc1_executor.run_command(
-            f"sudo btrfs subvolume delete {snapshot_name}",
+            f"sudo rm --force {test_file}; sudo btrfs subvolume delete {snapshot_name}",
             timeout=10.0,
         )
 
@@ -112,10 +100,10 @@ async def test_multiple_snapshots_isolation(pc1_executor: RemoteExecutor, test_v
     snapshot2 = "/test-vol/.snapshots/test-multi-2"
 
     try:
-        await pc1_executor.run_command("sudo mkdir --parents /test-vol/.snapshots")
-
         # Create first snapshot
-        result1 = await pc1_executor.run_command(f"sudo btrfs subvolume snapshot -r /test-vol {snapshot1}")
+        result1 = await pc1_executor.run_command(
+            f"sudo mkdir --parents /test-vol/.snapshots && sudo btrfs subvolume snapshot -r /test-vol {snapshot1}"
+        )
         assert result1.success
 
         # Create second snapshot
@@ -140,12 +128,9 @@ async def test_multiple_snapshots_isolation(pc1_executor: RemoteExecutor, test_v
         assert verify2.success
 
     finally:
-        # Cleanup both snapshots (in case test failed partway)
+        # Cleanup both snapshots (in case test failed partway); `;` so the second runs
+        # even when the first was already deleted by the test body.
         await pc1_executor.run_command(
-            f"sudo btrfs subvolume delete {snapshot1}",
-            timeout=10.0,
-        )
-        await pc1_executor.run_command(
-            f"sudo btrfs subvolume delete {snapshot2}",
-            timeout=10.0,
+            f"sudo btrfs subvolume delete {snapshot1}; sudo btrfs subvolume delete {snapshot2}",
+            timeout=20.0,
         )

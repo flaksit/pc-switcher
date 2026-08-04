@@ -159,6 +159,8 @@ vm_test_fixtures            # Both VMs carry the current package-manager subject
 
 The SSH connections themselves (`_pc1_connection`, `_pc2_connection`) are private; go through the executors.
 
+`conftest.py` also exports plain helpers, imported directly (`from tests.integration.conftest import ...`). Use `write_pcswitcher_config(executor, config)` to place a config on a VM — never hand-roll the heredoc. Keep the config *string* in your own test module: it states what that test needs of a run. A test that also takes `reset_pcswitcher_state` needs no config teardown; that fixture wipes `~/.config/pc-switcher` before and after.
+
 Anything named `*_pcswitcher*` mutates a VM. A test using one MUST NOT also use `pc2_executor` directly — both drive the same machine.
 
 Install fixtures build from the **current branch as pushed to origin**. Push before running, or they install stale code.
@@ -251,6 +253,8 @@ tests/integration/
 ├── conftest.py                  # VM fixtures, marker enforcement, live failure reporting
 ├── test_vm_connectivity.py      # VM infrastructure validation
 ├── test_end_to_end_sync.py      # Full sync workflow
+├── test_sync_order_gates.py     # First-sync and consecutive-push gates (ADR-015)
+├── test_dry_run.py              # The --dry-run no-write contract (ADR-014)
 ├── test_btrfs_operations.py, test_snapshot_infrastructure.py
 ├── test_config_sync.py, test_init_command.py, test_logging_integration.py
 ├── test_interrupt_integration.py, test_lock_integration.py
@@ -276,16 +280,27 @@ Registered in `[tool.pytest]` in `pyproject.toml`; `--strict-markers` rejects an
 @pytest.mark.area_install  # CI selection: install / self-update tests
 @pytest.mark.area_btrfs    # CI selection: btrfs snapshot tests
 @pytest.mark.area_folder   # CI selection: folder-sync end-to-end tests
-@pytest.mark.area_core     # CI selection: core behavior, no topic mapping (full-suite runs only)
+@pytest.mark.area_core     # CI selection: core sync spine (locking, sync history, logging, init, interrupts)
 ```
 
-Every integration test MUST carry exactly one CI-selection marker (`smoke` or an `area_*`), normally as a module-level `pytestmark` — collection fails otherwise (enforced in `tests/integration/conftest.py`). `ci_skip` is additive to the area marker, not a replacement.
+Every integration test MUST carry at least one CI-selection marker (`smoke` or an `area_*`), normally as a module-level `pytestmark` — collection fails otherwise (enforced in `tests/integration/conftest.py`). `ci_skip` is additive to the area marker, not a replacement.
+
+A test that genuinely exercises two areas may carry both, and then runs whenever either is selected — CI selects with an `or` expression, so extra markers only widen when a test runs. Markers compose from all three levels, so a single class inside a module can join a second area:
+
+```python
+pytestmark = [pytest.mark.area_folder, pytest.mark.area_install]   # whole module in both areas
+
+class TestInstallOnTarget:
+    pytestmark = pytest.mark.area_install                          # this class only, on top of the module's
+```
+
+Use it for tests that really span areas, not to broaden coverage by default: every added marker costs VM minutes on every PR that touches the other area.
 
 ## CI test selection (topic-based)
 
-On ordinary PR pushes, CI runs only the integration tests for the areas the PR touches, plus the `smoke` set, via a pytest `-m` expression (e.g. `integration and not benchmark and (smoke or area_package)`). `tests/integration/scripts/select-ci-tests.sh` builds the expression: product source files map to areas through its case patterns, and a changed test file contributes the area named by its own `pytestmark`. Any changed file outside the mapped areas selects the full suite — the mapping errs toward running too much, never too little.
+On ordinary PR pushes, CI runs only the integration tests for the areas the PR touches, plus the `smoke` set, via a pytest `-m` expression (e.g. `integration and not benchmark and (smoke or area_package)`). `tests/integration/scripts/select-ci-tests.sh` builds the expression: product source files map to areas through its case patterns, and a changed test file contributes every area its own markers name. Any changed file outside the mapped areas selects the full suite — the mapping errs toward running too much, never too little.
 
-Every PR run — including `ready_for_review` — is topic-scoped; the full suite runs on: the `ci: full` PR label (while present, every run is full; adding it triggers a run immediately), the nightly schedule on main, and manual `workflow_dispatch` (`gh workflow run "Integration Tests" --ref <branch>`). Pre-merge gating is opt-in: add `ci: full` as the last step before merging and let the run go green — a red run blocks the merge like any failing required check. When adding a new source module, map it in `select-ci-tests.sh`; new test files only need their marker.
+Every PR run — including `ready_for_review` — is topic-scoped; the full suite runs on: the `ci: full` PR label (while present, every run is full; adding it triggers a run immediately), the nightly schedule on main, and manual `workflow_dispatch` (`gh workflow run "Integration Tests" --ref <branch>`). Pre-merge gating is opt-in: add `ci: full` as the last step before merging and let the run go green — a red run blocks the merge like any failing required check. When adding a new source module — or a helper module under `tests/integration/` that carries no markers of its own — map it in `select-ci-tests.sh`; new test files only need their marker.
 
 ## Common Pitfalls
 
@@ -361,7 +376,7 @@ When writing tests:
 - [ ] Unit tests use mocked executors and the shared `mock_job_context`, not real SSH
 - [ ] New unit test module mirrors the source layout
 - [ ] Integration tests clean up all artifacts in finally block
-- [ ] Integration test file carries exactly one `smoke`/`area_*` `pytestmark`
+- [ ] Integration test file carries a `smoke`/`area_*` `pytestmark` (more than one only if it truly spans areas)
 - [ ] Used unique names for test artifacts
 - [ ] Grouped commands when making >3 sequential SSH calls
 - [ ] Verified tests pass with `uv run pytest tests/unit tests/contract`
