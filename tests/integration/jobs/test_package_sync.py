@@ -4157,6 +4157,15 @@ class TestAFailureCostsItsOwnItemAndNothingElse:
                 "a run with a failed item and a failed job must exit non-zero (D-27, PKG-FR-OUTCOME-FAILED).\n"
                 f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
             )
+            # Read before pc2's managers are: a non-zero exit says the run failed, not that it
+            # reached the item this test fails deliberately. A run that ended earlier -- a
+            # validate() abort, say -- satisfies the exit code and then fails every package
+            # assertion below, which reads as a job misbehaving rather than as a run that never
+            # started one.
+            assert _DELIBERATE_FAILURE_MESSAGE in sync_result.stdout + sync_result.stderr, (
+                "the run failed, but not on this test's deliberate item -- it ended before reaching it.\n"
+                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
+            )
 
             after_lines = nonblank_lines(
                 (await pc2_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0)).stdout
@@ -4177,11 +4186,6 @@ class TestAFailureCostsItsOwnItemAndNothingElse:
                 f"{snap_candidate} not reinstalled on pc2 -- snap_sync's approved work did not survive the earlier "
                 f"job's failure (PKG-FR-JOB-INDEPENDENCE): {after_snap.stderr}"
             )
-
-            # Secondary confirmation only -- the exit code and pc2's own managers above are
-            # the primary evidence. This says the non-zero exit is THIS failure's and not
-            # some unrelated trouble, which the exit code alone cannot distinguish.
-            assert _DELIBERATE_FAILURE_MESSAGE in sync_result.stdout + sync_result.stderr
         finally:
 
             async def clean(executor: BashLoginRemoteExecutor) -> None:
@@ -4279,6 +4283,15 @@ class TestSnapPerItemFailureOnVMs:
                 "a run with a failed snap item must exit non-zero.\n"
                 f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
             )
+            # Read before pc2's snapd is: a non-zero exit says the run failed, not that it got
+            # as far as the item that fails here. A run that ended earlier -- a validate()
+            # abort, say -- satisfies the exit code and then fails the convergence assertions
+            # below, which reads as one item costing the others rather than as a run that
+            # converged nothing.
+            collapsed = _collapse_run_output(sync_result.stdout + sync_result.stderr)
+            assert "1 snap item(s) failed" in collapsed, (
+                f"the run did not report exactly one failed snap item.\n{sync_result.stdout}\n{sync_result.stderr}"
+            )
 
             # Two read-only listings on the same machine, taken at once.
             failed_item, landed_item = await asyncio.gather(
@@ -4292,14 +4305,6 @@ class TestSnapPerItemFailureOnVMs:
             assert not landed_item.success, (
                 f"{removal_subject} is still on pc2: the item ordered after the failing one was never converged.\n"
                 f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
-            )
-
-            # Secondary confirmation only — the exit code and pc2's own snapd above are the
-            # primary evidence. This says exactly one item failed rather than the whole job
-            # having collapsed, which the exit code cannot distinguish.
-            collapsed = _collapse_run_output(sync_result.stdout + sync_result.stderr)
-            assert "1 snap item(s) failed" in collapsed, (
-                f"the run did not report exactly one failed snap item.\n{sync_result.stdout}\n{sync_result.stderr}"
             )
         finally:
             if store_offline:
