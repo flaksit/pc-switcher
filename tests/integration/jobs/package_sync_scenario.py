@@ -2388,7 +2388,7 @@ async def seed_a_divergence_in_every_manager(  # noqa: PLR0915
 
 
 def assert_the_rehearsal_wrote_nothing(
-    seed: ConvergenceSeed,
+    seed: RehearsalSeed,
     before: MachinePackageState,
     after: MachinePackageState,
     run_output: str,
@@ -2728,3 +2728,128 @@ async def restore_after_the_divergence(
         await restore_system_refresh_hold(target, seed.prior_target_hold)
 
     await cleanup_in_parallel(clean_the_source(), clean_the_target())
+
+
+@dataclass(frozen=True)
+class RehearsalSeed:
+    """One PENDING write per manager, and nothing that costs more than one.
+
+    What a rehearsal has to be given is a run with something to do in every manager; what it
+    must not be given is the machinery a converging run needs to read its work back
+    (`ConvergenceSeed`). Moving a snap to another revision, deleting and re-adding a remote
+    and building a target-only remote cost minutes between them and prove nothing about a run
+    that writes nothing.
+    """
+
+    install_candidate: str
+    hold_snap: str
+    application: str
+    scope: Literal["user", "system"]
+    unowned_path: str
+    manual_item_id: str
+    source_filename: str
+    key_filename: str
+    pin_filename: str
+
+    @property
+    def source_dest(self) -> str:
+        """Where the synthetic repository's declaration sits on the source."""
+        return f"{APT_SOURCES_DIR}/{self.source_filename}"
+
+    @property
+    def key_dest(self) -> str:
+        """Where the synthetic repository's signing key sits."""
+        return f"{APT_KEYRINGS_DIR}/{self.key_filename}"
+
+    @property
+    def pin_dest(self) -> str:
+        """Where the always-sync pin sits."""
+        return f"{APT_PREFERENCES_DIR}/{self.pin_filename}"
+
+
+async def seed_a_pending_write_in_every_manager(
+    source: BashLoginRemoteExecutor, target: BashLoginRemoteExecutor, apt: AptSubjects
+) -> RehearsalSeed:
+    """Give a run something to do in each of the four managers, as cheaply as each allows.
+
+    apt: a package removed from the target, plus a synthetic vendor repository, signing key
+    and always-sync pin on the source. snap: a per-snap hold on the source, which replicates
+    as a block. flatpak: the fixture app uninstalled from the target, so an approved ref would
+    have to be installed there. manual installs: an unowned `/opt` path on the source with a
+    snippet authored against it.
+
+    The two machines' work runs at once; neither reads what the other writes.
+    """
+    await assert_flatpak_available(source)
+
+    install_candidate = apt.install_direction[0]
+    hold_snap = (await snap_subjects(source, target, count=2))[1]
+    application, _version, scope, _remote, _url, _ref = await flatpak_subject(source)
+    scope_flag = "--user" if scope == "user" else "--system"
+    sudo = "sudo " if scope == "system" else ""
+
+    uniq = uuid4().hex[:12]
+    unowned_path = f"/opt/pcswitcher-it-rehearsal-{uniq}"
+    manual_item_id = unowned_item_id(unowned_path)
+
+    async def seed_the_source() -> tuple[tuple[str, str], str]:
+        held = await source.run_command(
+            f"sudo snap refresh --hold=forever {shlex.quote(hold_snap)}", login_shell=False, timeout=60.0
+        )
+        assert held.success, f"Failed to set a per-snap hold on the source's {hold_snap}: {held.stderr}"
+        await create_unowned_marker(source, unowned_path)
+        await author_snippet(source, manual_item_id, unowned_path, f"echo {shlex.quote(unowned_path)}")
+        repo_and_key = await create_synthetic_repo_and_key(source)
+        return repo_and_key, await create_synthetic_pin(source)
+
+    async def seed_the_target() -> None:
+        await ensure_absent(target, install_candidate)
+        dropped = await target.run_command(
+            f"{sudo}flatpak uninstall {scope_flag} --assumeyes {shlex.quote(application)} || true",
+            login_shell=False,
+            timeout=120.0,
+        )
+        assert dropped.success, f"could not uninstall {application} from the target: {dropped.stderr}"
+
+    (repo_and_key, pin_filename), _ = await asyncio.gather(seed_the_source(), seed_the_target())
+    source_filename, key_filename = repo_and_key
+    return RehearsalSeed(
+        install_candidate=install_candidate,
+        hold_snap=hold_snap,
+        application=application,
+        scope=scope,
+        unowned_path=unowned_path,
+        manual_item_id=manual_item_id,
+        source_filename=source_filename,
+        key_filename=key_filename,
+        pin_filename=pin_filename,
+    )
+
+
+async def restore_after_the_pending_writes(
+    source: BashLoginRemoteExecutor, target: BashLoginRemoteExecutor, seed: RehearsalSeed
+) -> None:
+    """Take the source's hold, `/etc/apt` files, marker and registry back off.
+
+    The target needs nothing: a rehearsal wrote nothing there, and what the seeding removed
+    from it — a package and a flatpak app — is what the next scenario wants removed anyway
+    (`test_package_sync.py`'s module docstring on preconditions).
+    """
+    cleanup_paths = " ".join(
+        shlex.quote(f"{directory}/{filename}")
+        for directory, filename in (
+            (APT_SOURCES_DIR, seed.source_filename),
+            (APT_KEYRINGS_DIR, seed.key_filename),
+            (APT_PREFERENCES_DIR, seed.pin_filename),
+        )
+        if filename
+    )
+    _ = target
+    await source.run_command(
+        f"sudo snap refresh --unhold {shlex.quote(seed.hold_snap)}; "
+        f"sudo rm --force {cleanup_paths}; "
+        f"rm --force ~/{SNIPPET_REGISTRY_RELPATH}",
+        login_shell=False,
+        timeout=90.0,
+    )
+    await remove_unowned_marker(source, seed.unowned_path)
