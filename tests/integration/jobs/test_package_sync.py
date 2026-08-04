@@ -218,6 +218,29 @@ async def _cleanup_in_parallel(*chains: Awaitable[None]) -> None:
             print(f"[cleanup] {outcome!r}")
 
 
+async def _finish_both[T, U](first: Awaitable[T], second: Awaitable[U]) -> tuple[T, U]:
+    """Run two things at once, let BOTH finish, then raise the first failure.
+
+    For the gathers whose result a `finally` needs. A plain `asyncio.gather` raises the moment
+    one side does and leaves the other RUNNING, unawaited: a test can reach its cleanup while a
+    command is still writing to a machine, and it never gets the tuple, so a handle the other
+    side already produced -- the repository to undeclare, the pair to take back -- is lost and
+    what it names stays on the machine.
+
+    Nothing is cancelled: an apt or snapd transaction stopped halfway leaves a machine worse
+    off than one that ran to the end, and the rest of the run has to live on that machine.
+
+    A caller whose cleanup needs a value from one side must still record it as it arrives
+    (`nonlocal`): a raise here means there is no tuple to unpack.
+    """
+    left, right = await asyncio.gather(first, second, return_exceptions=True)
+    if isinstance(left, BaseException):
+        raise left
+    if isinstance(right, BaseException):
+        raise right
+    return left, right
+
+
 # Every escape sequence `logger.RichFormatter` can emit around a log line's styled fields.
 # Stripped before any assertion reads the run's own output: the formatter always renders
 # through a `force_terminal=True` console, so the text is coloured even when stdout is a pipe.
@@ -3042,9 +3065,15 @@ class TestARunWithNobodyToAsk:
 
             # pc1 builds and installs from its own repository while pc2 installs the ref this
             # test then diverges: different machines, different package managers, and neither
-            # reads what the other writes.
-            (unlocatable, repo_dir, list_filename), install = await asyncio.gather(
-                _install_from_a_repo_the_target_lacks(pc1_executor),
+            # reads what the other writes. The repository's names are recorded here rather
+            # than unpacked from the result, because the `finally` undeclares it from them and
+            # a failure on pc2's side would otherwise leave it configured for the whole run.
+            async def declare_on_the_source() -> None:
+                nonlocal unlocatable, repo_dir, list_filename
+                unlocatable, repo_dir, list_filename = await _install_from_a_repo_the_target_lacks(pc1_executor)
+
+            _, install = await _finish_both(
+                declare_on_the_source(),
                 pc2_executor.run_command(
                     f"{sudo}flatpak install {scope_flag} --assumeyes --noninteractive "
                     f"{shlex.quote(remote_name)} {shlex.quote(ref)}",
@@ -3546,12 +3575,16 @@ class TestSkipAlwaysIsInertInBothRoles:
         hand_deb = ""
         try:
             # pc1's two dpkg transactions stay ordered against each other and run alongside
-            # pc2's: two machines' apt work contends on nothing.
-            async def seed_the_source() -> str:
+            # pc2's: two machines' apt work contends on nothing. The package's name is
+            # recorded as it arrives rather than unpacked from the result, because the
+            # `finally` purges it by that name and a failure on pc2's side would otherwise
+            # leave it installed.
+            async def seed_the_source() -> None:
+                nonlocal hand_deb
                 await _ensure_installed_and_manual(pc1_executor, candidate)
-                return await _install_a_hand_downloaded_deb(pc1_executor)
+                hand_deb = await _install_a_hand_downloaded_deb(pc1_executor)
 
-            hand_deb, _ = await asyncio.gather(seed_the_source(), _ensure_absent(pc2_executor, candidate))
+            _ = await _finish_both(seed_the_source(), _ensure_absent(pc2_executor, candidate))
             deb_item_id = _no_candidate_item_id(hand_deb)
             # The precondition, asserted rather than assumed: apt must name no repository for
             # the installed version, or the item this run is about was never detectable.
@@ -3764,15 +3797,23 @@ class TestCrossDirectionRoundTrips:
             assert seeded.success, f"could not give {snap_name} data on pc2 to snapshot: {seeded.stderr}"
 
             # pc1 gives up the snap while pc2 builds and installs the cascading pair: one
-            # machine's snapd against the other's apt, neither reading the other's work.
-            purged, target_pair = await asyncio.gather(
+            # machine's snapd against the other's apt, neither reading the other's work. The
+            # pair is recorded as it arrives rather than unpacked from the result, because the
+            # `finally` undeclares its repository from it and a failure on pc1's side would
+            # otherwise leave that repository configured for the whole run.
+            async def publish_on_the_target() -> tuple[str, str, str, str]:
+                nonlocal target_pair
+                target_pair = await _publish_a_cascading_pair(pc2_executor)
+                return target_pair
+
+            purged, published = await _finish_both(
                 pc1_executor.run_command(
                     f"sudo snap remove --purge {shlex.quote(snap_name)}", login_shell=False, timeout=180.0
                 ),
-                _publish_a_cascading_pair(pc2_executor),
+                publish_on_the_target(),
             )
             assert purged.success, f"Failed to remove {snap_name} from pc1: {purged.stderr}"
-            target_base, target_dependent, _target_repo, _target_list = target_pair
+            target_base, target_dependent, _target_repo, _target_list = published
 
             await _write_package_sync_config(pc1_executor, apt_sync=True, snap_sync=True)
 
