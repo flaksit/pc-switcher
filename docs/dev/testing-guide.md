@@ -252,6 +252,7 @@ tests/integration/
 ├── test_vm_connectivity.py      # VM infrastructure validation
 ├── test_end_to_end_sync.py      # Full sync workflow
 ├── test_sync_order_gates.py     # First-sync and consecutive-push gates (ADR-015)
+├── test_dry_run.py              # The --dry-run no-write contract (ADR-014)
 ├── test_btrfs_operations.py, test_snapshot_infrastructure.py
 ├── test_config_sync.py, test_init_command.py, test_logging_integration.py
 ├── test_interrupt_integration.py, test_lock_integration.py

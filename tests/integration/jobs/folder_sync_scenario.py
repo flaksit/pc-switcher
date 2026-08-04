@@ -550,3 +550,30 @@ async def assert_mutations_propagated(executor: BashLoginRemoteExecutor, tree: s
     assert f755_mode == "700", f"permission change not propagated on B→A: {f755_mode}"
     assert "GONE_FILE" in gone, "file deletion (f600.txt) not propagated on B→A"
     assert "GONE_DIR" in gone, "directory deletion (d700) not propagated on B→A"
+
+
+# ---------------------------------------------------------------------------
+# Rehearsals (ADR-014): the same seeded trees, asserted NOT to have moved
+# ---------------------------------------------------------------------------
+
+
+def filter_tree_path() -> str:
+    """Absolute path of the seeded filter subtree within the test user's real home."""
+    return f"/home/{os.environ['PC_SWITCHER_TEST_USER']}/{FILTER_TREE}"
+
+
+async def assert_manifests_unchanged(
+    executor: BashLoginRemoteExecutor,
+    tree: str,
+    before: TreeManifests,
+    reason: str,
+) -> None:
+    """Assert `tree` still matches manifests captured off the SAME machine earlier."""
+    after = await capture_manifests(executor, tree)
+    assert after.entries == before.entries, (
+        f"{reason}\nOwnership/permission manifest moved.\n--- before ---\n{before.entries}\n--- after ---\n"
+        f"{after.entries}"
+    )
+    assert after.md5s == before.md5s, (
+        f"{reason}\nContent md5 manifest moved.\n--- before ---\n{before.md5s}\n--- after ---\n{after.md5s}"
+    )
