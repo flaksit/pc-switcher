@@ -1,0 +1,295 @@
+Continue issue #216 ("Integration tests take too long": target <10 min, preferably <5). Sessions before you already shipped and merged into `gsd/phase-02-package-management-sync`: P1 (btrfs `list_snapshots` N+1 fix, 443s→5s), P2 (install-skip probe in `tests/integration/conftest.py::ensure_pcswitcher_at_branch_head`, matches the version stamp on a 7-char commit prefix), P4 (topic-based CI selection via `smoke`/`area_*` pytest markers + `tests/integration/scripts/select-ci-tests.sh`; full suite only on `ci: full` label, nightly-if-main-changed, or dispatch; `ci_skip` is an exception hatch; collection fails on tests without a selection marker). See docs/dev/testing-guide.md "CI test selection".
+
+Remaining piece: **P3 — consolidate `tests/integration/jobs/test_package_sync.py` into as few scenario tests as possible.** A finished, VM-verified fold of the OLD 17-test file (875.7s → 467.6s, 6 scenarios / 12 syncs) is parked on branch `216-fold-package-sync-tests` (commit f31015c3). It could NOT be rebased: package-sync semantics changed underneath it (flatpak remote now derived from the approved ref, ESM/unattached-target gate, review-panel witnesses; file grew to 22+ tests). Do NOT rebase or cherry-pick f31015c3 — use it only as the reference for the proven scenario shapes and the fold method. Package-sync work has now settled, so the whole current file is in scope, including the newer tests.
+
+Baseline: do NOT re-measure — the latest full-suite CI run of integration-tests.yml has fresh numbers. Pull its log (`gh run list --workflow=integration-tests.yml`, then the run's "Run integration tests" step or the pytest-output.log artifact) and extract the `[it …] END … (Ns)` per-test lines for the current per-test/per-file baseline.
+
+Method (validated last time): a three-manager `pc-switcher sync` costs 30–40s, so sync count is the only lever. Read every current test's docstring — they name their contracts (D-xx, N4, C24, ADR-014, #215, #208 D9, …). Fold tests that can share one seeded divergence + one sync into e2e-style scenarios; each scenario docstring must list the folded contract IDs. Proven shapes in f31015c3: one converge-matrix (seed one divergence per manager; dry-run → converging run → idempotency re-run with `_MachinePackageState` capture), one review-gates scenario (the non-mutating runs), one skip-always scenario (all shapes recorded then force-applied in one run sequence, plus reversed role), cross-direction round trip absorbing removal-shaped one-off tests. Keep standalone: tests requiring a FAILED run (continue-on-item-failure) and no-sync probes. Keep witnesses state-based (target's own apt-mark/snap list/flatpak list), keep every seed reverted in `finally`, keep `pytestmark = pytest.mark.area_package`, keep old timeout values per sync.
+
+Working setup: repo worktree `/home/janfr/dev/pc-216`, branch `pc-216` (rebase it onto `gsd/phase-02-package-management-sync` first; that branch is checked out at `/home/janfr/dev/pc-switcher` — merges into it happen there, `--no-ff`, only when I say). Verify with lint/typecheck/unit + `--collect-only` first, then the real run: `GITHUB_HEAD_REF=gsd/phase-02-package-management-sync tests/run-integration-tests.sh tests/integration/jobs/test_package_sync.py` (handles the hcloud VM lock itself — never touch pc1/pc2 without that lock, never auto-clear a held lock; if `pass` fails to decrypt tokens, ask me to unlock GPG). Per-test timings stream as `[it …] END … (Ns)` lines. After the fold, compare that verification run's timings against the CI baseline and report before/after per scenario. Commit `test(02): …` with `Refs #216`; don't push or merge without asking.
+
+---
+
+<task-notification>
+<task-id>b009q7eqv</task-id>
+<tool-use-id>toolu_01QUXob1n9ZrWxURKMcQWMNc</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/f3b94f6d-39e1-4fc6-93f2-de5091cb656a/tasks/b009q7eqv.output</output-file>
+<status>completed</status>
+<summary>Background command "Check verification run progress" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>brr5g5gld</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/f3b94f6d-39e1-4fc6-93f2-de5091cb656a/tasks/brr5g5gld.output</output-file>
+<status>completed</status>
+<summary>Background command "Poll verification run" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b6ib5tatm</task-id>
+<tool-use-id>toolu_015UvEVecLeWX2igWVWJr5QK</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/f3b94f6d-39e1-4fc6-93f2-de5091cb656a/tasks/b6ib5tatm.output</output-file>
+<status>completed</status>
+<summary>Background command "Poll after 10 minutes" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bf57h33j0</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/f3b94f6d-39e1-4fc6-93f2-de5091cb656a/tasks/bf57h33j0.output</output-file>
+<status>completed</status>
+<summary>Background command "Run the folded package-sync integration tests on the VMs" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b2z24itde</task-id>
+<tool-use-id>toolu_016zdiPuzTwjTNiPabhkhDHM</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/f3b94f6d-39e1-4fc6-93f2-de5091cb656a/tasks/b2z24itde.output</output-file>
+<status>completed</status>
+<summary>Background command "Poll until the run finishes" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bumgwf526</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/f3b94f6d-39e1-4fc6-93f2-de5091cb656a/tasks/bumgwf526.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for the run to finish" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bksa8ajh5</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/f3b94f6d-39e1-4fc6-93f2-de5091cb656a/tasks/bksa8ajh5.output</output-file>
+<status>completed</status>
+<summary>Background command "Poll the second run" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bdetcwed0</task-id>
+<tool-use-id>toolu_019nVPujcvtiqxdxrudXLeod</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/f3b94f6d-39e1-4fc6-93f2-de5091cb656a/tasks/bdetcwed0.output</output-file>
+<status>completed</status>
+<summary>Background command "Poll the second run" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b4fdj5y72</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/f3b94f6d-39e1-4fc6-93f2-de5091cb656a/tasks/b4fdj5y72.output</output-file>
+<status>completed</status>
+<summary>Background command "Re-run the folded package-sync integration tests" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bp010aieu</task-id>
+<tool-use-id>toolu_018NFjAFCj1mrhU54G3DEqFo</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/f3b94f6d-39e1-4fc6-93f2-de5091cb656a/tasks/bp010aieu.output</output-file>
+<status>completed</status>
+<summary>Background command "Poll the second run" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>blu3prm4h</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/f3b94f6d-39e1-4fc6-93f2-de5091cb656a/tasks/blu3prm4h.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for the final scenario" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+What is _RDEPENDS_PROBE_LIMIT?
+"real network installs": not possible to share more between syncs?
+
+---
+
+y
+
+---
+
+gpg unlocked.
+
+---
+
+<task-notification>
+<task-id>bibd9qcol</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/f4445fef-8f5e-483c-9510-6227071e5a29/tasks/bibd9qcol.output</output-file>
+<status>completed</status>
+<summary>Background command "Verification run with the setup-cost reductions" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+dev-machine→VM vs gh->vm latency won't make the difference.
+
+What do you think about the following idea: Instead of tearing down (parts of) installed stuff/configuration after test, just leave it in place and let fixtures (only ran when test starts) ensure the environment contains what the test needs and not what it must not have. Feasible? Do you expect impact on time?
+
+---
+
+Measure, then go.
+Cross-file contamination: What is "This file"? Is there only a single file for package-sync, or are you only talking about a specific part of the package-sync integration tests? I think we can do (almost) whatever we want on packages and that won't impact tests for core or other jobs (like folder_sync).
+
+---
+
+<task-notification>
+<task-id>bqhd7t9bp</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/f4445fef-8f5e-483c-9510-6227071e5a29/tasks/bqhd7t9bp.output</output-file>
+<status>completed</status>
+<summary>Background command "Verification run with pinned subjects and convergers" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+what is "--skip-reset"?
+
+---
+
+remove the module teardown. What's in there?
+
+---
+
+"Snap, flatpak, /etc/apt and marker cleanup are all per-test and unaffected." So still cleaned up instead of left in place like I suggested? That is ok if you tell me (from evidence, no preference) that this is not worth it.
+My reasoning: if there are many tests, cleanup after test and the following test is not bothered by the thing that was cleaned-up, that cleanup was a waste of time - better have the tests enforce their prerequisites than being too tidy. Then the cleanup is only done when needed.
+
+We are still at ~813s now. I want to get more insight in where that time is spent. Maybe best to check that first.
+
+Moreover, did I see correctly in the code that you just removed, that the cleanup was done SEQUENTIALLY for executor1 and then executor2? Sweep ALL tests for cases where we could do things in parallel rather than sequentially. Or not possible with pytest?
+
+---
+
+Delegate, don't do everything yourself.
+
+---
+
+<task-notification>
+<task-id>bf2m36jx0</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/f4445fef-8f5e-483c-9510-6227071e5a29/tasks/bf2m36jx0.output</output-file>
+<status>completed</status>
+<summary>Background command "Verification run without the module teardown" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+"cleanup stays for one-off artifacts a test invented": only if cleanup is cheap. If cleanup expensive, don't bother cleaning. Next run resets vm's anyway.
+
+"two calls on the same executor share one SSH connection": wasn't this a multiplexed connection, allowing for multiple, concurrent requests? Of course, ordering dependencies must be respected.
+
+---
+
+<task-notification>
+<task-id>a51926f904a89cc83</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/f4445fef-8f5e-483c-9510-6227071e5a29/tasks/a51926f904a89cc83.output</output-file>
+<status>completed</status>
+<summary>Agent "Sweep for parallelisable awaits" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Coordinator's correction applied. `self._conn.run(cmd)` per call, no lock — I re-swept every same-executor rejection. Revised report below; it replaces the previous one.
+
+## A. Cross-machine gathers — biggest wins, unchanged
+
+All `pc1_executor` vs `pc2_executor`, in `/home/janfr/dev/pc-216/tests/integration/jobs/test_package_sync.py`.
+
+**A1. `finally`, 3811-3836** (`test_an_install_propagates_…`). pc1 chain = `_remove_cascading_pair(pc1, *source_pair)` (3815), `_restore_snap(pc1, snap_name, snap_source_revision)` (3821), pc1's `sudo rm /etc/apt/…` (3835-3836). pc2 chain = `_remove_cascading_pair(pc2, *target_pair)` (3813), `_snap_saved_rows` + `snap forget` (3816-3820), `_restore_snap(pc2, …)` (3822), `rm snap_data_file` (3823), pc2's `rm`. Grouping: two `async def` chains, one gather. Safe: per-machine cleanup writes, no cross-read, all runs finished. Saving: an `apt-get purge` and a store `snap install` stop running twice serially — 15-40s, unmeasured.
+
+**A2. `finally`, 3352-3362** (mirror test). pc1 = 3353, 3355, 3358 (`snap remove --purge`), 3361. pc2 = 3357, 3360 (`_restore_snap`, store install), 3362. Two chains, one gather. Safe: disjoint machines, cleanup only. Saving ~10-30s.
+
+**A3. Setup, 3899-3902** (failure test). pc1 chain = the three `_ensure_installed_and_manual`; pc2 chain = the three `_ensure_absent` plus 3902's `snap remove`. Safe: per-machine apt state, sync is at 3949. Per-machine ops stay serial — two `apt-get`s on one host contend on `lock-frontend`. Saving: three ~6.5s removals hide under three ~8.2s installs, up to ~20s.
+
+**A4. Seed block, 2311-2316** (converge test). pc1 chain = install `install_candidate`, remove `removal_candidate`, install `hold_subject`; pc2 chain = the mirror image. Same safety as A3. Saving up to ~20s; 0 when both machines inherit the state.
+
+**A5. Setup, 2957-3001** (non-interactive test). gather(pc1 = 2957 + 2960 `_install_from_a_repo_the_target_lacks` + 3001, pc2 = 2958 + 2973 `flatpak install` + 2983 + 2989 + 2995), then 2963 after. Safe: different machines and managers; 2963 stays last because it needs the package name 2960 generates. Saving: a Flathub download overlaps a deb build + `apt-get update` + install, ~10-20s.
+
+**A6. Setup, 4033-4040** (snap per-item failure). The two `snap remove --purge`, pc2 then pc1 — one gather. Safe: different machines, different snaps. Saving ~5-15s.
+
+**A7. `finally`, 4091-4098.** gather(pc1 = 4096, pc2 = 4093 + 4097 + 4098). Saving: one store install, ~10-30s.
+
+**A8. Setup, 3612-3640.** gather(pc1 = 3612 + 3635 `snap remove --purge`, pc2 = 3613 + 3615 + 3618 `_apt_get_update` + 3628 + 3640 `_publish_a_cascading_pair`). Safe: disjoint machines, sync at 3654. Saving ~15s (pc1 side fully hidden).
+
+**A9. `finally`, 3095-3108.** gather(pc1 = 3096 + 3098 apt purge, pc2 = 3101 + 3107 network `remote-add` + 3108). Saving ~5-10s.
+
+**A10. `finally`, 2673-2720.** Two chains — pc1 = 2674, pc1 halves of 2690/2695/2709, 2713, 2717, 2719; pc2 = 2678, 2681, 2687, 2689, pc2 halves, 2714, 2720. Subsumes the three `for executor in (pc1_executor, pc2_executor)` loops. Saving ~10-20s.
+
+**A11. Between runs, 2818-2827** (vendor test). gather(pc1 = 2826, pc2 = 2818 purge + 2824 + 2827). Saving one ~8s install.
+
+**A12. `finally`, 2873-2878.** gather(pc1 = 2878, pc2 = 2875 + 2877). Saving one `apt-get purge gh`.
+
+**A13. Setup, 3215-3226.** gather(pc2 = 3215 purge + 3220 verify, pc1 = 3225 + 3226 `snap try`). 3220 observes only pc2's own write and stays inside its chain. Saving ~5-15s.
+
+**A14. Poll loop, 4334-4339.** `_capture_system_refresh_hold(pc1)` then `(pc2)` → one gather per iteration. Safe: two `sudo snap get` reads; the loop consumes both only after the pair returns. This is the one gather inside a live sync — legitimate because both calls are reads that take part in no sync lock. Halves each poll's latency over a loop that can spin for the whole pre-`RUN_JOBS` stretch.
+
+**A15. Module helpers.** `_find_removable_candidates` 367-371 (pc1 showmanual ‖ pc2 showmanual ‖ pc2 dpkg-query — now all three, see D). `_create_extra_on_target_apt_package` 544-548, same shape. `_snap_subjects` 822-823 (two `snap list --all`; used by 6 tests). `_a_package_both_machines_have_unheld` 1779-1780 (two `_apt_selection_snapshot`).
+
+**A16. Cheap cross-machine pairs.** 2267-2268 `_assert_flatpak_available`; 2276-2277 `_snap_revision`; 2279 ‖ 2281 (`_flatpak_subject` does not use `alternate_revision`); 2302-2303 / 3205-3206 / 4312-4313 `_capture_system_refresh_hold`; 2307-2308 / 3210-3211 `_engage_system_refresh_hold` (writes, disjoint machines); 2336 ‖ 2344 (pc2 `snap refresh --revision` ‖ pc1 `snap refresh --hold`); 2629-2630 `DecisionFile("apt", …).load()` on both; 3170-3171 `_home_dir`; 3243-3244 `_take_paths_aside`; 3263-3264 `_author_snippet`; 3427-3428 `_ensure_*` (extend the pc1 side with 3430 + 3434); 4146-4147 `_take_paths_aside`; 4191-4192 and 4194-4196; 4226 + 4229-4230 (gather pc1 = 4229, pc2 = 4226 then 4230, ~8s); 4242 ‖ 4243; 4317-4318 and 4319-4320; 4374-4378 `finally`.
+
+## D. Same-machine read groupings — new, previously excluded
+
+Every command listed is read-only (`dpkg-query`, `apt-mark show*`, `apt-cache`, `snap list`/`snap saved`/`snap get`, `flatpak list`/`remotes`, `test`, `cat`, `find`, `sha256sum`), so none takes `lock-frontend`, drives a snapd change, or writes a flatpak installation. Within each group no call observes what another does; all observe the same already-settled state.
+
+**D1. Post-converge assertion block, 2502-2602** — the largest fan in the file. Fourteen awaits, ~20 commands: 2503 `apt-mark showmanual`, 2512 `apt-mark showhold`, 2521 `_snap_revision`, 2524 `_snap_notes`, 2531 `_capture_system_refresh_hold` (both machines), 2538 `flatpak remotes`, 2553 `test -f`, 2560 `_flatpak_app_rows`, 2563 `_flatpak_remote_row`, 2568 `_flatpak_remote_filter`, 2572 `cat`, 2591 `test -f`, 2597 `test -f`, 2602 `_capture_machine_package_state(pc1)`. Grouping: one gather of all fourteen, then every assert. Safe: all read run 2's finished state; 2568 and 2572 both key off `recorded_filter_path` captured back at 2376, not off each other. Saving: four separate `flatpak` invocations (~0.3-1s each) plus a `snap list` plus the seven-command capture collapse to the slowest one — several seconds, unmeasured.
+
+**D2. `_capture_machine_package_state`, 1702-1726** — seven read-only commands on one executor, none using another's output. Gather all seven (or batch the three apt reads into one and gather that with the `/etc/apt` digest scan, `snap list`, `flatpak list`, `flatpak remotes`). Gather beats the one-command batch here because execution time, not round trips, dominates: `flatpak remotes` runs twice, `flatpak list` and `snap list --all` are each a manager query. Called 8× (2450, 2458, 2492, 2602, 2609, 2624, 4243, 4263), so the fix pays back eight times. Two of those calls are already cross-machine pairs (2458 ‖ 2492, 2602 ‖ 2609) — gather the pair *and* the internals for one 14-command wave.
+
+**D3. Setup read fan, 2267-2303** (converge test). 2267, 2268, 2275 (2 cmds), 2276, 2277, 2281 (2 cmds), 2302, 2303 — one gather, then 2279 `_alternate_snap_revision`, which needs `source_snap_revision` from 2276. ~10 commands → one wave.
+
+**D4. Post-sync read fan, 3289-3343** (mirror test). 3289 `_snap_revision(pc2)`, 3295 `find`, 3320 `cat`, 3325 `SnippetRegistry(pc2).load()`, 3339 pc1 `snap list`, 3343 pc2 `snap list` — one gather. Safe: all read the finished run; 3289's assert gates the *meaning* of the later ones but not their execution.
+
+**D5. Post-forward read fan, 3663-3704** (round-trip test). 3663 `apt-mark showmanual`, 3668 `test`, 3691 `snap list &lt;name&gt;`, 3698 `_snap_saved_rows`, 3704 `dpkg-query` — one gather (5 → 1 wave). Keep 3678 `_apt_get_update` serial: it writes `/var/lib/apt/lists` and takes apt's lock.
+
+**D6. Subject-selection fans.** 4022-4026 (`_snap_subjects` + four `_snap_revision` = 6 commands, 3 per machine) → one gather. 3178-3181 (5 commands) → one gather. 3599-3603 (`_snap_subjects` + two `_snap_revision` + `_snap_saved_rows` = 5) → one gather. 3894-3895 → one gather. All pure `snap list`/`snap saved` reads. See B2: the duplication itself is the deeper fix.
+
+**D7. Non-interactive test read fans.** Pre-run 3005 + 3008 + 3009 + 3010 → one gather (3 pc2 reads + 1 pc1). Post-run 3022 + 3028 + 3031 + 3034 → one gather. Setup 2938 + 2939 + 2948 → one gather: 2939 `_flatpak_subject(pc1)` and 2948 `_flatpak_remote_row(pc1, flathub-beta)` share only the module constant `_FIXTURE_FLATPAK_SCOPE`, and 2938's single pc2 `apt-mark manual` write contends with nothing on pc1.
+
+**D8. `_flatpak_subject`, 1181-1199.** `flatpak list` then `flatpak remotes`; the second command's arguments come from `_FIXTURE_FLATPAK_SCOPE`, only the *matching* needs the first's `origin`. Gather both, match after. Used by 3 tests.
+
+**D9. Remaining two- and three-call read fans.** 2390-2405 (2392 `flatpak remotes` + 2403 `_flatpak_app_rows`, both after the 2384 write). 2640 ‖ 2647 (pc1 filter read ‖ pc2 uninstall). 2665 + 2669. 3459 + 3463 + 3469. 3483 + 3491. 3783 + 3789. 3959 + 3971. 4069 + 4076. 4351-4373 (per machine `_capture_system_refresh_hold` + `_machine_utc_now`; gather all four). 4414 + 4416. 4437 + 4445.
+
+**D10. `apt_subjects` fixture, 465-471.** `_a_package_both_machines_have_unheld`'s two `_apt_selection_snapshot` reads do not depend on `picked` — only the filtering does. Hoist them to run inside the same gather as `_find_removable_candidates`, and apply `exclude` afterwards. Safe: four read-only commands across both machines. Saving: one `_apt_selection_snapshot` pair off the module-scoped critical path.
+
+## B. One-command batching — still worth it where it removes work, not just waiting
+
+**B1. Redundant `snap list --all` listings.** `_snap_revision`, `_snap_notes`, `_holdable_snaps`, `_installed_base_snap` and `_snap_subjects` each run their own full listing: 6 where 2 suffice at 4022-4026, 5 → 2 at 3178-3181, 4 → 2 at 3599-3601, 3 → 2 at 4426/4437/4445. Gathering (D6) makes the waste cheap; returning the parsed `{name: revision}` map from `_snap_subjects`, or adding `_snap_revisions(executor)`, removes it. Prefer the latter.
+
+**B2. `_ensure_installed_and_manual` / `_ensure_absent`, 495-527.** A read then a conditional write — 2 round trips even when acting, and the two halves cannot be gathered (read-after-write on apt). One `if`-guarded command keeps the cheap-no-op property the docstrings claim and costs 1. Called ~20 times.
+
+**B3. Marker loops.** 3907-3908: three `_create_unowned_marker(pc1, path)` → one `sudo mkdir --parents a b c &amp;&amp; sudo touch a/marker b/marker c/marker`. 3984-3986: six `rm` → one per machine, then gather the two. Each is a write, so batching is the only fix available.
+
+**B4. Write+verify pairs on one machine.** 4232 + 4236 (`apt-mark hold` then `apt-mark showhold`) → one command; 4152 + 4155 (both `printf | sudo tee`, filenames generated in Python) → one command. These are read-after-write, so gather is unavailable and batching is the only route.
+
+**B5. `_author_snippet`, 746-759.** `SnippetRegistry.add` is `cat` + write = 2 round trips; test 7 calls it 3× on pc1 (3913-3930). The three are read-modify-write on one file, so neither gather nor a shell batch is safe — only a batch-add on `SnippetRegistry` would help. Flagging, not recommending: it changes shipped code.
+
+## C. Excluded, with reason
+
+- **Anything spanning a `pc-switcher sync`**: 2451, 2493, 2615, 2656, 2787, 2834, 3014, 3281, 3450, 3474, 3498, 3654, 3745, 3772, 3949, 4062, 4162, 4247, 4324. The sync locks both machines. A14's read-only poll is the sole deliberate exception.
+- **Same-machine writes on one subsystem**: two `apt-get`/`apt-mark` writes (`/var/lib/dpkg/lock-frontend`), two snapd changes, two flatpak writes. Rules out gathering within either chain of A3/A4, and rules out 3678 `_apt_get_update` joining D5.
+- **Read-after-write / write-after-read on one machine**: 3215→3220, 4042→4050, 2360→2370/2376, 2384→2392, 2407→2414, 2989→2995, 3618→3620, 4232→4236, 4431→4437.
+- **Data dependencies**: 2963 needs the name 2960 generates; 2279 needs 2276's revision; 2328 needs the uuid filenames from 2323/2324; `apt_subjects`' `exclude=frozenset(picked)` needs `_find_removable_candidates` (though D10 still parallelises the reads under it).
+- **`_find_removable_candidates`' probe loop, 385-412**: rounds are sequential by design and, per the comment at 176-181, every search so far finishes in round 1 — prefetching round 2 buys nothing. Whether `apt-get --dry-run remove` (line 346) takes an apt lock is unverified, so I did not propose gathering it with the `apt-cache` probe.
+
+Two implementation notes: `_report_where_the_time_went` (134-172) wraps `run_command` and appends to a plain list — concurrency-safe under asyncio, no change needed. And several `finally` helpers `print` rather than assert, so gathering them does not change which machine a failure names; the ones that do assert already carry the machine in their message.</result>
+<usage><subagent_tokens>158655</subagent_tokens><tool_uses>10</tool_uses><duration_ms>523946</duration_ms></usage>
+</task-notification>

@@ -1,0 +1,51 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "8e2dbd5e20b1",
+  "session_id": "f3b94f6d-39e1-4fc6-93f2-de5091cb656a",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-04T12:34:45.483661454Z",
+  "branch": "gsd/phase-02-package-management-sync",
+  "checkpoints_count": 10,
+  "save_step_count": 1,
+  "files_touched": [
+    "docs/planning/package-sync-user-requirements.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "809800c35840",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 381,
+    "cache_creation_tokens": 2330992,
+    "cache_read_tokens": 80497148,
+    "output_tokens": 299005,
+    "api_call_count": 203
+  },
+  "session_metrics": {
+    "turn_count": 10
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-04T12:34:45.281174346Z",
+    "agent_lines": 1,
+    "agent_removed": 1,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 1,
+    "total_lines_changed": 2,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 9,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 9
+      }
+    }
+  ]
+}
