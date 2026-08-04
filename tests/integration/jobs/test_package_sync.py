@@ -67,7 +67,11 @@ run -- so a package left removed costs nothing and undoing it would.
 Cleanup that costs nothing -- `/etc/apt` files, markers, holds, `refresh.hold`, paths taken
 aside -- stays in each test's `finally`, and the `/etc/apt` half has to: a synthetic
 repository left configured makes every later `apt-get update` on that machine slower and
-noisier for the rest of the run.
+noisier for the rest of the run. What a test INSTALLED is left installed. Every package built
+or fetched here is uuid-suffixed or comes from a repository the same test declared, so no
+later selection or assertion reaches it and the review lines it may raise are left unapproved
+by the automation hook's SKIP_ONCE default -- an `apt-get purge` would spend seconds of dpkg
+work undoing what the next run's baseline reset undoes anyway.
 
 The flatpak subject is the REAL Flathub, and its app is provisioned on pc1 only, so the
 source->target divergence the convergence test needs is part of the baseline rather than
@@ -1450,22 +1454,24 @@ async def _install_from_a_repo_the_target_lacks(executor: BashLoginRemoteExecuto
     return name, repo_dir, list_filename
 
 
-async def _remove_local_repo_package(
-    executor: BashLoginRemoteExecutor, name: str, repo_dir: str, list_filename: str
-) -> None:
-    """Undo `_install_from_a_repo_the_target_lacks`: purge the package, drop the repository
-    and its declaration, and discard the index apt cached for it.
+async def _undeclare_local_repository(executor: BashLoginRemoteExecutor, repo_dir: str, list_filename: str) -> None:
+    """Take a test-built `file:` repository off `executor`'s machine: its declaration, the
+    published tree, and the index apt cached for it.
+
+    The packages installed FROM it stay installed (module docstring). The declaration is what
+    every later `apt-get update` on the machine pays for and taking it off is a `rm`; the
+    purge is dpkg work nothing later reads. The tree goes with it because it sits under
+    `/opt`, one of `manual_installs_sync`'s scan roots.
 
     Every step runs unconditionally (`;`, not `&&`) so a setup that failed halfway still
     has the rest of itself removed.
     """
     await executor.run_command(
-        f"sudo DEBIAN_FRONTEND=noninteractive apt-get purge --assume-yes {shlex.quote(name)}; "
         f"sudo rm --force --recursive {shlex.quote(repo_dir)} "
         f"{shlex.quote(f'{_APT_SOURCES_DIR}/{list_filename}')}; "
         f"sudo rm --force /var/lib/apt/lists/_opt_{repo_dir.rsplit('/', 1)[-1]}_*",
         login_shell=False,
-        timeout=120.0,
+        timeout=60.0,
     )
 
 
@@ -1956,26 +1962,6 @@ async def _publish_a_cascading_pair(executor: BashLoginRemoteExecutor) -> tuple[
     return base, dependent, repo_dir, list_filename
 
 
-async def _remove_cascading_pair(
-    executor: BashLoginRemoteExecutor, base: str, dependent: str, repo_dir: str, list_filename: str
-) -> None:
-    """Undo `_publish_a_cascading_pair`, whether or not the run under test removed either
-    package.
-
-    Every step runs unconditionally (`;`, not `&&`) so a setup that failed halfway still has
-    the rest of itself removed.
-    """
-    await executor.run_command(
-        f"sudo DEBIAN_FRONTEND=noninteractive apt-get purge --assume-yes "
-        f"{shlex.quote(dependent)} {shlex.quote(base)}; "
-        f"sudo rm --force --recursive {shlex.quote(repo_dir)} "
-        f"{shlex.quote(f'{_APT_SOURCES_DIR}/{list_filename}')}; "
-        f"sudo rm --force /var/lib/apt/lists/_opt_{repo_dir.rsplit('/', 1)[-1]}_*",
-        login_shell=False,
-        timeout=120.0,
-    )
-
-
 def _collateral_removal_item_id(package: str) -> str:
     """The item id a removal's cascade over `package` produces
     (`apt:collateral:remove:remove:<package>`), built from the shipped function so a change
@@ -2046,23 +2032,21 @@ async def _install_from_the_vendor_repository(executor: BashLoginRemoteExecutor)
     return source_filename, key_filename
 
 
-async def _remove_the_vendor_repository(
+async def _undeclare_the_vendor_repository(
     executor: BashLoginRemoteExecutor, source_filename: str, key_filename: str
 ) -> None:
-    """Undo `_install_from_the_vendor_repository` on either machine, whether or not the run
-    under test installed anything there.
+    """Take the vendor repository's declaration and its signing key off `executor`'s machine.
 
-    The cached index goes too: an `/etc/apt/sources.list.d` file is what makes a repository
-    configured, but a list left in `/var/lib/apt/lists` keeps its name in every later
-    `apt-cache policy` on the machine.
+    The two `rm`s and nothing else. `_VENDOR_PACKAGE` stays wherever the run under test left
+    it (module docstring): what a later `apt-get update` pays for is the repository being
+    configured, and purging a package installed from a repository this test declared undoes
+    something nothing later reads.
     """
     await executor.run_command(
-        f"sudo DEBIAN_FRONTEND=noninteractive apt-get purge --assume-yes {shlex.quote(_VENDOR_PACKAGE)}; "
         f"sudo rm --force {shlex.quote(f'{_APT_SOURCES_DIR}/{source_filename}')} "
-        f"{shlex.quote(f'{_APT_KEYRINGS_DIR}/{key_filename}')}; "
-        f"sudo rm --force /var/lib/apt/lists/*{_VENDOR_REPO_HOST}*",
+        f"{shlex.quote(f'{_APT_KEYRINGS_DIR}/{key_filename}')}",
         login_shell=False,
-        timeout=180.0,
+        timeout=15.0,
     )
 
 
@@ -2127,7 +2111,12 @@ async def _publish_a_rival_candidate(executor: BashLoginRemoteExecutor) -> tuple
 async def _remove_the_rival_candidate(
     executor: BashLoginRemoteExecutor, repo_dir: str, list_filename: str, pin_filename: str
 ) -> None:
-    """Undo `_publish_a_rival_candidate`, every step unconditional."""
+    """Undo `_publish_a_rival_candidate`, every step unconditional.
+
+    Kept whole where the purges around it are not (module docstring): all of it is `rm`, and a
+    repository and a pin left in `/etc/apt` change what apt answers on this machine for the
+    rest of the run.
+    """
     await executor.run_command(
         f"sudo rm --force --recursive {shlex.quote(repo_dir)} "
         f"{shlex.quote(f'{_APT_SOURCES_DIR}/{list_filename}')} "
@@ -2874,8 +2863,8 @@ class TestTheAptOriginModelOnRealRepositories:
             if repo_dir:
                 await _remove_the_rival_candidate(pc2_executor, repo_dir, list_filename, pin_filename)
             if source_filename:
-                await _remove_the_vendor_repository(pc2_executor, source_filename, key_filename)
-                await _remove_the_vendor_repository(pc1_executor, source_filename, key_filename)
+                await _undeclare_the_vendor_repository(pc2_executor, source_filename, key_filename)
+                await _undeclare_the_vendor_repository(pc1_executor, source_filename, key_filename)
 
 
 class TestARunWithNobodyToAsk:
@@ -3094,8 +3083,8 @@ class TestARunWithNobodyToAsk:
                 )
         finally:
             await _remove_unowned_marker(pc1_executor, witness_path)
-            if unlocatable:
-                await _remove_local_repo_package(pc1_executor, unlocatable, repo_dir, list_filename)
+            if repo_dir:
+                await _undeclare_local_repository(pc1_executor, repo_dir, list_filename)
             # `_restore_flatpak_target_baseline` re-adds with `--if-not-exists`, which cannot
             # repair a URL, so the repointed remote is deleted here first.
             await pc2_executor.run_command(
@@ -3810,9 +3799,11 @@ class TestCrossDirectionRoundTrips:
             )
         finally:
             if target_pair:
-                await _remove_cascading_pair(pc2_executor, *target_pair)
+                _target_base, _target_dependent, target_repo, target_list = target_pair
+                await _undeclare_local_repository(pc2_executor, target_repo, target_list)
             if source_pair:
-                await _remove_cascading_pair(pc1_executor, *source_pair)
+                _source_base, _source_dependent, source_repo, source_list = source_pair
+                await _undeclare_local_repository(pc1_executor, source_repo, source_list)
             for set_id, snap in await _snap_saved_rows(pc2_executor):
                 if snap == snap_name and set_id not in snapshot_sets_before:
                     await pc2_executor.run_command(
