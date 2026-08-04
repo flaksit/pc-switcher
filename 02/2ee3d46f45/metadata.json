@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "022ee3d46f45",
+  "strategy": "manual-commit",
+  "branch": "pc-216",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "docs/dev/package-sync-scenario-coverage.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/02/2ee3d46f45/0/metadata.json",
+      "transcript": "/02/2ee3d46f45/0/full.jsonl",
+      "compact_transcript": "/02/2ee3d46f45/0/transcript.jsonl",
+      "content_hash": "/02/2ee3d46f45/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 345,
+    "cache_creation_tokens": 470946,
+    "cache_read_tokens": 39676197,
+    "output_tokens": 142425,
+    "api_call_count": 175
+  }
+}
