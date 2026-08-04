@@ -80,9 +80,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import shlex
-from collections.abc import Mapping, Sequence
+import sys
+import time
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Literal
@@ -116,6 +119,57 @@ async def _package_sync_subjects(vm_test_fixtures: None) -> None:  # pyright: ig
     one before any of them runs (`conftest.vm_test_fixtures`).
     """
     _ = vm_test_fixtures
+
+
+#: Set to any non-empty value to have each test report where its wall clock went. Off by
+#: default: it wraps every command this module issues, and its only purpose is deciding what
+#: to optimise next (#216), not proving anything about the product.
+_TIMING_ENV = "PCSWITCHER_IT_TIMING"
+
+#: What a `pc-switcher sync` invocation looks like, for splitting the runs from everything a
+#: test does around them.
+_SYNC_COMMAND_MARKER = "pc-switcher sync"
+
+
+@pytest.fixture(autouse=True)
+def _report_where_the_time_went(request: pytest.FixtureRequest) -> Iterator[None]:  # pyright: ignore[reportUnusedFunction]
+    """Split each test's wall clock into the syncs it runs and the work it does around them,
+    and name the slowest individual commands.
+
+    A sync costs what it costs; everything else is setup, convergence and cleanup, which is
+    the only part a test can give back. Reading that split off a real run is what says which
+    of the two is worth attacking.
+    """
+    if not os.environ.get(_TIMING_ENV):
+        yield
+        return
+
+    original = BashLoginRemoteExecutor.run_command
+    samples: list[tuple[float, str]] = []
+
+    async def timed(self: BashLoginRemoteExecutor, command: str, *args: object, **kwargs: object) -> CommandResult:
+        started = time.monotonic()
+        try:
+            return await original(self, command, *args, **kwargs)  # pyright: ignore[reportCallIssue, reportArgumentType]
+        finally:
+            samples.append((time.monotonic() - started, command))
+
+    BashLoginRemoteExecutor.run_command = timed  # pyright: ignore[reportAttributeAccessIssue]
+    try:
+        yield
+    finally:
+        BashLoginRemoteExecutor.run_command = original  # pyright: ignore[reportAttributeAccessIssue]
+        syncs = [sample for sample in samples if _SYNC_COMMAND_MARKER in sample[1]]
+        around = [sample for sample in samples if _SYNC_COMMAND_MARKER not in sample[1]]
+        print(
+            f"\n[timing] {request.node.name}: "
+            f"{sum(d for d, _ in syncs):.1f}s in {len(syncs)} sync(s), "
+            f"{sum(d for d, _ in around):.1f}s in {len(around)} other command(s)",
+            file=sys.stderr,
+            flush=True,
+        )
+        for duration, command in sorted(around, reverse=True)[:5]:
+            print(f"[timing]     {duration:6.1f}s  {' '.join(command.split())[:110]}", file=sys.stderr, flush=True)
 
 
 # How many shared packages to probe for reverse dependencies when looking for one safe
