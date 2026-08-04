@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "3f685db3bd88",
+  "strategy": "manual-commit",
+  "branch": "pc-216",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "tests/integration/jobs/package_sync_scenario.py",
+    "tests/integration/test_end_to_end_sync.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/3f/685db3bd88/0/metadata.json",
+      "transcript": "/3f/685db3bd88/0/full.jsonl",
+      "compact_transcript": "/3f/685db3bd88/0/transcript.jsonl",
+      "content_hash": "/3f/685db3bd88/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 283,
+    "cache_creation_tokens": 448829,
+    "cache_read_tokens": 29520206,
+    "output_tokens": 130544,
+    "api_call_count": 144
+  }
+}
