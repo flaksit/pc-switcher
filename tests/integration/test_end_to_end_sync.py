@@ -53,6 +53,8 @@ pytestmark = pytest.mark.smoke
 # folder_sync must stay last: it asks the target for the snap revision map and the snippet registry's
 # consent after the package jobs have gone (`PKG-FR-JOB-ORDER`).
 _FULL_PIPELINE_CONFIG = """\
+logging:
+  tui: FULL
 sync_jobs:
   dummy_success: true
   apt_sync: true
