@@ -54,6 +54,37 @@
         "label": "Skill: gsd-progress",
         "default_collapsed": true
       }
+    },
+    {
+      "id": "claude-skill-toolu_01WeHBfZ2dKdxpUoA5DSCN9t",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-extract-learnings"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "59be19bd0548",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 202,
+        "end": 203,
+        "entry_ids": [
+          "dba2c6d6-e437-440c-9cbd-d1ddde938ace"
+        ],
+        "tool_use_id": "toolu_01WeHBfZ2dKdxpUoA5DSCN9t"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01WeHBfZ2dKdxpUoA5DSCN9t"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-extract-learnings",
+        "default_collapsed": true
+      }
     }
   ],
   "session_metrics": {
