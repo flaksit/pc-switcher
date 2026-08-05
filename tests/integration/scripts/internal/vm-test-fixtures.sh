@@ -2,17 +2,19 @@
 # Put the machine's package managers into the state the integration suite requires: the
 # subjects it operates on present, and nothing else touching them behind its back.
 #
-# The suite proves things about snap and flatpak convergence, so both machines must
-# actually own a snap and a flatpak the tests may hold, diverge, remove and reinstall.
-# A stock Ubuntu 24.04 VM owns neither: `snap list` shows only snapd/core*/bare (all of
-# which every other snap depends on, so none is a safe subject) and flatpak is not
-# installed at all. This script creates those subjects.
+# The suite proves things about apt, snap and flatpak convergence, so both machines must
+# actually own a package per manager the tests may hold, diverge, remove and reinstall.
+# A stock Ubuntu 24.04 VM owns none: `snap list` shows only snapd/core*/bare (all of which
+# every other snap depends on, so none is a safe subject), flatpak is not installed at all,
+# and every apt package it carries is one the machine or pc-switcher itself needs. This
+# script creates those subjects.
 #
 # It also removes the machine's automatic apt updater, which is not a subject but a rival
 # for the same locks (see remove_automatic_updates).
 #
 # WITHOUT --with-app (the sync TARGET, pc2), the machine ends up with:
-#   - apt: snapd and flatpak installed;
+#   - apt: snapd and flatpak installed, plus the five subject packages cmatrix, figlet,
+#     nyancat, rolldice and sysvbanner, installed and marked manual;
 #   - snaps: `hello` and `hello-world`, from the stable channel, system scope;
 #   - flatpak remote `flathub`, user scope, added from Flathub's own `.flatpakrepo`;
 #   - flatpak runtime org.freedesktop.Platform/x86_64/25.08 plus its related refs, user
@@ -45,7 +47,7 @@ set -euo pipefail
 # Bumping this forces provisioning to rebuild the baseline: provision-test-infra.sh and
 # run-integration-tests.sh compare the marker file's contents against their own copy of
 # this number (PCSWITCHER_TEST_FIXTURES_VERSION in internal/common.sh — keep in sync).
-readonly FIXTURES_VERSION=5
+readonly FIXTURES_VERSION=6
 readonly MARKER=/etc/pcswitcher-test-fixtures
 
 INSTALL_APP=false
@@ -69,6 +71,19 @@ readonly INSTALL_APP
 # strictly confined, contain no daemon, and are safe to hold, unhold, remove and
 # reinstall; neither is a base snap anything else depends on.
 readonly -a FIXTURE_SNAPS=(hello hello-world)
+
+# The apt subjects, on BOTH machines: three the suite removes from the target so a run has
+# installs to converge, one it removes from the source so a run has a removal to converge,
+# and one both machines carry at the same version for the hold scenarios. Which is which is
+# pinned in FIXTURE_APT_SUBJECTS (tests/integration/jobs/package_sync_scenario.py); this
+# script only has to put all five on the machine.
+#
+# Dedicated packages rather than borrowed ones, because apt's own reverse-dependency check
+# has no idea pc-switcher exists: removing `btrfs-progs` succeeds cleanly and a LATER test's
+# sync then reports `btrfs: command not found`. Each of these is a few dozen kB, has no
+# reverse dependency on these VMs, pulls in no dependency the baseline lacks (measured with
+# `apt-get --dry-run install`), and is needed by nothing pc-switcher does.
+readonly -a FIXTURE_APT_PACKAGES=(cmatrix figlet nyancat rolldice sysvbanner)
 
 # THE REAL FLATHUB, deliberately, not a local stand-in. A synthetic signed OSTree
 # repository is cheap (~270 kB against Flathub's ~270 MB runtime) but it only ever tests
@@ -161,6 +176,29 @@ remove_automatic_updates() {
     # Masked while absent, too: a reinstall arriving as somebody's dependency must not
     # quietly resume updating.
     sudo systemctl mask unattended-upgrades.service >/dev/null
+}
+
+# -- apt ---------------------------------------------------------------------------
+
+install_apt_subjects() {
+    # Matched on the install status, not on the package being known: `dpkg-query --show`
+    # succeeds for a package that is merely available in the archive.
+    local missing=() name
+    for name in "${FIXTURE_APT_PACKAGES[@]}"; do
+        if ! dpkg-query -W -f='${Status}' "$name" 2>/dev/null | grep --quiet '^install ok installed'; then
+            missing+=("$name")
+        fi
+    done
+    if ((${#missing[@]} == 0)); then
+        log "apt subjects already installed"
+        return
+    fi
+    log "installing apt subjects: ${missing[*]}"
+    sudo apt-get update
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes "${missing[@]}"
+    # Explicit, so a subject that arrived as somebody else's dependency is still in the
+    # manual set the sync under test compares.
+    sudo apt-mark manual "${missing[@]}" >/dev/null
 }
 
 # -- snaps -------------------------------------------------------------------------
@@ -330,6 +368,7 @@ if [[ -f "$MARKER" ]] && [[ "$(cat "$MARKER")" != "$FIXTURES_VERSION" ]]; then
 fi
 
 remove_automatic_updates
+install_apt_subjects
 install_snaps
 install_flatpak_packages
 add_flathub_remote

@@ -379,37 +379,29 @@ async def package_sync_subjects(vm_test_fixtures: None) -> None:
 
 @pytest.fixture(scope="module")
 async def apt_subjects(pc1_executor: BashLoginRemoteExecutor, pc2_executor: BashLoginRemoteExecutor) -> AptSubjects:
-    """Select a module's apt subjects once, before any test has touched a package, so the
-    selection sees the machines as provisioning left them.
+    """The module's apt subjects: the pinned `FIXTURE_APT_SUBJECTS`, once both machines are
+    confirmed to carry them (one `dpkg-query` each).
 
-    Nothing is put back. `run-integration-tests.sh` replaces both VMs' subvolumes with
-    their baseline btrfs snapshots and reboots before every run, so where these packages end
-    up is not something the tests owe the machines; restoring them would be ~36s spent
-    undoing what the next run's reset undoes anyway. Within a run each test converges to the
-    state IT needs (`ensure_absent`, `ensure_installed_and_manual`), which is a read
-    whenever the previous scenario already left it that way.
+    Confirmed, not selected. `vm-test-fixtures.sh` installs these packages on both machines
+    and provisioning bakes them into the baseline, so a missing one is a stale baseline and
+    fails naming the package and that script -- the same way a missing snap or flatpak
+    subject fails.
 
-    Under `--skip-reset`, where a developer keeps the machines between runs, the next run
-    simply selects again from what is installed then. Subjects left removed drop out of that
-    selection rather than breaking it -- and if enough runs drain the candidates,
-    `no_apt_candidate_message` says so instead of failing obscurely.
+    Nothing is put back. `run-integration-tests.sh` replaces both VMs' subvolumes with their
+    baseline btrfs snapshots and reboots before every run, so where these packages end up is
+    not something the tests owe the machines. Within a run each test converges to the state
+    IT needs (`ensure_absent`, `ensure_installed_and_manual`), which is a read whenever the
+    previous scenario already left it that way.
     """
     # Imported here rather than at module scope: `package_sync_scenario` imports
     # `write_pcswitcher_config` from this file, so a top-level import would be a cycle.
     from tests.integration.jobs.package_sync_scenario import (  # noqa: PLC0415
-        AptSubjects,
-        a_package_both_machines_have_unheld,
-        find_removable_candidates,
-        no_apt_candidate_message,
+        FIXTURE_APT_SUBJECTS,
+        assert_apt_subjects_present,
     )
 
-    picked = await find_removable_candidates(pc1_executor, pc2_executor, count=4)
-    assert len(picked) == 4, f"{no_apt_candidate_message()} Needed 4 subjects, found {len(picked)}."
-    return AptSubjects(
-        install_direction=(picked[0], picked[1], picked[2]),
-        removal_direction=picked[3],
-        hold=await a_package_both_machines_have_unheld(pc1_executor, pc2_executor, exclude=frozenset(picked)),
-    )
+    _ = await asyncio.gather(assert_apt_subjects_present(pc1_executor), assert_apt_subjects_present(pc2_executor))
+    return FIXTURE_APT_SUBJECTS
 
 
 @pytest.fixture(scope="session")

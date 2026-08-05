@@ -7,8 +7,8 @@ offer (a vendor repository, a cascading pair, a sideloaded snap), and the whole-
 state captures a "this run changed nothing" claim compares.
 
 No test classes and no markers: this is a library, imported by the test modules that own the
-claims. The apt subjects it selects are handed out by the `apt_subjects` fixture in
-`tests/integration/conftest.py`.
+claims. The apt subjects it names (`FIXTURE_APT_SUBJECTS`) are handed out by the
+`apt_subjects` fixture in `tests/integration/conftest.py`.
 """
 
 from __future__ import annotations
@@ -37,45 +37,6 @@ from pcswitcher.jobs.packages.state import (
 )
 from pcswitcher.models import CommandResult
 from tests.integration.conftest import write_pcswitcher_config
-
-# Prefix marking each candidate's reverse-dependency block in the batched pc2 probe below.
-RDEPENDS_MARKER = "@@RDEPENDS_FOR@@"
-
-
-# How many shared packages to probe for reverse dependencies when looking for one safe
-# to remove, per round and in total. Each probe is a separate `apt-cache rdepends` process
-# on the target reloading the apt cache, so the cost is linear and the whole probe runs
-# under a single command timeout: the total bounds the search inside that budget, and
-# probing a ROUND at a time means a search that succeeds immediately — which is every
-# search here so far — pays for one round instead of all of them (measured in a stock
-# `ubuntu:24.04`: 8.2s for 12 probes against 26.7s for 40).
-RDEPENDS_PROBE_ROUND = 12
-RDEPENDS_PROBE_LIMIT = 48
-
-# How many candidates beyond the requested count to rehearse, so apt refusing a few still
-# leaves enough. Every one costs an `apt-get --dry-run remove` on the target, and no test
-# asks for more than three subjects.
-REMOVAL_REHEARSAL_HEADROOM = 4
-
-# Packages a run of pc-switcher needs on the machine it is running against, so no scenario
-# may borrow one as a subject to remove: apt's own reverse-dependency check has no idea this
-# tool exists, and the removal succeeds cleanly right up until the next sync fails in a step
-# that has nothing to do with the test that took the package away (`btrfs-progs` gone, and
-# the snapshot step reports `btrfs: command not found`). The snap counterpart is
-# `SNAP_REMOVAL_DENYLIST`.
-APT_SUBJECT_DENYLIST = frozenset(
-    {
-        "acl",  # folder_sync validates it and passes rsync --acls
-        "btrfs-progs",  # every pre- and post-sync snapshot
-        "flatpak",  # flatpak_sync
-        "openssh-client",  # the connection to the target
-        "openssh-server",  # the connection from the source
-        "rsync",  # folder_sync's whole transfer
-        "snapd",  # snap_sync
-        "sudo",  # every escalated command on either machine
-        "ubuntu-pro-client",  # the ESM attachment gate reads its state
-    }
-)
 
 
 def nonblank_lines(text: str) -> list[str]:
@@ -161,208 +122,16 @@ def parse_dpkg_installed(dpkg_query_output: str) -> set[str]:
     return installed
 
 
-def parse_reverse_depends(rdepends_block: str) -> set[str]:
-    """Parse one `apt-cache rdepends --installed <pkg>` block into its reverse-dep names.
-
-    Output shape: the package's own name on the first line, a `Reverse Depends:` header,
-    then one indented name per line; only names after the header count.
-    """
-    names: set[str] = set()
-    seen_header = False
-    for line in rdepends_block.splitlines():
-        if line.strip() == "Reverse Depends:":
-            seen_header = True
-            continue
-        if not seen_header:
-            continue
-        stripped = line.strip()
-        if stripped:
-            names.add(stripped.split()[0])
-    return names
-
-
-def parse_batched_rdepends(batched_output: str) -> dict[str, set[str]]:
-    """Split a `for p in ...; do echo MARKER$p; apt-cache rdepends --installed "$p"; done`
-    run into `{package: reverse_dep_names}` -- one SSH round-trip for every candidate
-    instead of one per candidate (testing-guide.md's command-grouping rule).
-    """
-    result: dict[str, set[str]] = {}
-    current: str | None = None
-    block: list[str] = []
-    for line in batched_output.splitlines():
-        if line.startswith(RDEPENDS_MARKER):
-            if current is not None:
-                result[current] = parse_reverse_depends("\n".join(block))
-            current = line.removeprefix(RDEPENDS_MARKER)
-            block = []
-        else:
-            block.append(line)
-    if current is not None:
-        result[current] = parse_reverse_depends("\n".join(block))
-    return result
-
-
-def pick_safe_removal_candidates(
-    pc1_manual: list[str],
-    pc2_installed: set[str],
-    pc2_manual: set[str],
-    reverse_deps_by_candidate: dict[str, set[str]],
-    count: int = 1,
-) -> list[str]:
-    """Pick up to `count` packages (alphabetically, for determinism) that are manually
-    installed on pc1, present on pc2, whose installed reverse dependencies on pc2 include no
-    manually-installed package there (T-02-28's safety check before removing anything from a
-    real VM), and that pc-switcher itself does not need (`APT_SUBJECT_DENYLIST`). Returns
-    fewer than `count` entries -- possibly none -- when not enough candidates satisfy all
-    four conditions.
-    """
-    picked: list[str] = []
-    for name in sorted((set(pc1_manual) & pc2_installed) - APT_SUBJECT_DENYLIST):
-        if not (reverse_deps_by_candidate.get(name, set()) & pc2_manual):
-            picked.append(name)
-            if len(picked) == count:
-                break
-    return picked
-
-
-def pick_safe_removal_candidate(
-    pc1_manual: list[str],
-    pc2_installed: set[str],
-    pc2_manual: set[str],
-    reverse_deps_by_candidate: dict[str, set[str]],
-) -> str | None:
-    """Pick the first (alphabetically, for determinism) package that is manually installed
-    on pc1, present on pc2, and whose installed reverse dependencies on pc2 include no
-    manually-installed package there (T-02-28's safety check before removing anything from
-    a real VM). Returns `None` when no candidate satisfies all three conditions.
-    """
-    picked = pick_safe_removal_candidates(pc1_manual, pc2_installed, pc2_manual, reverse_deps_by_candidate, count=1)
-    return picked[0] if picked else None
-
-
-def no_apt_candidate_message() -> str:
-    """Why an apt subject could not be selected, for the assertion that fires if one
-    ever cannot be: every Debian system has hundreds of manually-installed packages with
-    no manually-installed reverse dependency, so an empty result means the machine is not
-    what these tests assume, not that the test is inapplicable.
-    """
-    return (
-        "No safe apt package candidate found: searched pc1's `apt-mark showmanual` "
-        "intersected with pc2's installed set (`dpkg-query`), filtered to packages whose "
-        "`apt-cache rdepends --installed` names no manually-installed package on pc2."
-    )
-
-
-async def apt_would_remove_these(executor: BashLoginRemoteExecutor, names: Sequence[str]) -> set[str]:
-    """Of `names`, the ones `executor`'s own apt would actually carry out a removal for --
-    one `apt-get --dry-run remove` each, batched into a single command
-    (testing-guide.md's command-grouping rule).
-
-    `pick_safe_removal_candidates` reads `apt-cache rdepends --installed` and rejects a
-    candidate whose reverse dependencies include a MANUALLY-installed package. That misses
-    the packages nothing marks manual and apt still refuses to let go: an essential one
-    (`bash` was the case that failed here) is a reverse dependency like any other, so a
-    candidate that takes one with it passes the rdepends check and then fails the real
-    removal. Only apt can settle that, so it is asked.
-
-    Individually safe implies safe together: a batch's removal closure is the union of the
-    single ones, so nothing here needs to rehearse the combination.
-    """
-    if not names:
-        return set()
-    quoted = " ".join(shlex.quote(name) for name in names)
-    result = await executor.run_command(
-        f'for p in {quoted}; do echo "{RDEPENDS_MARKER}$p"; '
-        'if apt-get --dry-run remove --assume-yes "$p" > /dev/null 2>&1; then echo SAFE; fi; done',
-        login_shell=False,
-        timeout=120.0,
-    )
-    safe: set[str] = set()
-    current = ""
-    for line in result.stdout.splitlines():
-        if line.startswith(RDEPENDS_MARKER):
-            current = line.removeprefix(RDEPENDS_MARKER)
-        elif line.strip() == "SAFE" and current:
-            safe.add(current)
-    return safe
-
-
-async def find_removable_candidates(
-    pc1_executor: BashLoginRemoteExecutor, pc2_executor: BashLoginRemoteExecutor, count: int = 1
-) -> list[str]:
-    """Query both VMs and pick up to `count` packages safe to remove from pc2 for a test
-    (see `pick_safe_removal_candidates`, then `apt_would_remove_these`). Returns fewer than
-    `count` -- possibly none -- when not enough candidates qualify.
-    """
-    # Three reads that write nothing and need nothing from each other, so they run at once.
-    pc1_manual_result, pc2_manual_result, pc2_dpkg_result = await asyncio.gather(
-        pc1_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0),
-        pc2_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0),
-        pc2_executor.run_command(
-            "dpkg-query --show --showformat='${Package}\\t${Status}\\n'", login_shell=False, timeout=20.0
-        ),
-    )
-
-    pc1_manual = nonblank_lines(pc1_manual_result.stdout)
-    pc2_manual = set(nonblank_lines(pc2_manual_result.stdout))
-    pc2_installed = parse_dpkg_installed(pc2_dpkg_result.stdout)
-
-    initial_candidates = sorted(set(pc1_manual) & pc2_installed)
-    if not initial_candidates:
-        return []
-
-    reverse_deps_by_candidate: dict[str, set[str]] = {}
-    probed: set[str] = set()
-    rehearsed: set[str] = set()
-    confirmed: list[str] = []
-    for start in range(0, min(len(initial_candidates), RDEPENDS_PROBE_LIMIT), RDEPENDS_PROBE_ROUND):
-        this_round = initial_candidates[start : start + RDEPENDS_PROBE_ROUND]
-        quoted = " ".join(shlex.quote(name) for name in this_round)
-        rdepends_result = await pc2_executor.run_command(
-            f'for p in {quoted}; do echo "{RDEPENDS_MARKER}$p"; apt-cache rdepends --installed "$p"; done',
-            login_shell=False,
-            timeout=120.0,
-        )
-        reverse_deps_by_candidate |= parse_batched_rdepends(rdepends_result.stdout)
-        probed |= set(this_round)
-
-        # `pick_safe_removal_candidates` walks the WHOLE intersection and reads an unprobed
-        # name as having no reverse dependency at all, so only probed names may be kept.
-        shortlist = [
-            name
-            for name in pick_safe_removal_candidates(
-                pc1_manual, pc2_installed, pc2_manual, reverse_deps_by_candidate, len(probed)
-            )
-            if name in probed and name not in rehearsed
-        ][: count - len(confirmed) + REMOVAL_REHEARSAL_HEADROOM]
-
-        # apt's own verdict on each, because the rdepends check cannot see a candidate that
-        # takes an essential package with it (`apt_would_remove_these`).
-        removable = await apt_would_remove_these(pc2_executor, shortlist)
-        rehearsed |= set(shortlist)
-        confirmed += [name for name in shortlist if name in removable]
-        if len(confirmed) >= count:
-            break
-
-    return confirmed[:count]
-
-
 @dataclass(frozen=True)
 class AptSubjects:
-    """The apt packages the package-sync tests operate on, selected ONCE per module by the
-    `apt_subjects` fixture (`tests/integration/conftest.py`).
+    """The apt packages the package-sync tests operate on, handed out by the `apt_subjects`
+    fixture (`tests/integration/conftest.py`) as the single pinned `FIXTURE_APT_SUBJECTS`.
 
-    Pinned rather than rediscovered per test, for two reasons that both cost real wall
-    clock (#216). Selecting one costs a round of `apt-cache rdepends` plus an
-    `apt-get --dry-run remove` for each survivor, and six tests were each paying it. And a
-    pinned name is what lets a test converge to its precondition instead of restoring
-    afterwards: with a fresh selection each time, a package left removed simply drops out of
-    the `apt-mark showmanual` intersection and the next test picks the NEXT one down the
-    alphabet, so nothing is reused and the pool drains.
-
-    Snap and flatpak subjects have always been pinned this way (`FIXTURE_SNAPS`,
-    `FIXTURE_FLATPAK_APP`); apt's were discovered only because any Debian system offers
-    hundreds, never because a test needed them to vary.
+    Pinned, never discovered. A candidate search asks apt what a removal would take with it,
+    and apt has no idea pc-switcher exists: `btrfs-progs` reads as a clean removal right up
+    until a LATER test's sync reports `btrfs: command not found`. Pinning also lets a test
+    converge to its precondition instead of restoring afterwards — with a fresh selection
+    each time, a package left removed drops out of the next selection and the pool drains.
     """
 
     #: Packages a test may remove from the TARGET so the run has an install to converge.
@@ -370,12 +139,52 @@ class AptSubjects:
     #: independent apt items.
     install_direction: tuple[str, str, str]
     #: A package a test may remove from the SOURCE, so the run has a removal to converge.
-    #: Vetted against pc2 like the others: the two VMs come from one baseline, so a package
-    #: safe to remove there is safe to remove here.
     removal_direction: str
     #: Installed at the same version on both machines and held on neither, so holding it on
     #: the source is a run's only apt work for it.
     hold: str
+
+
+# The apt packages `tests/integration/scripts/internal/vm-test-fixtures.sh` installs on BOTH
+# machines, the apt counterpart of `FIXTURE_SNAPS` and `FIXTURE_FLATPAK_APP`. Each is a
+# few dozen kB, has no reverse dependency on these VMs, pulls in nothing the baseline does
+# not already carry, and is needed by nothing pc-switcher does — measured on pc1 and pc2
+# with `apt-cache rdepends --installed`, `apt-get --dry-run install` and
+# `apt-get --dry-run remove`, which takes each of them and nothing else.
+#
+# Symmetric, unlike the flatpak app: which machine is missing which subject is what each
+# scenario seeds, so both machines start from the same state.
+FIXTURE_APT_SUBJECTS = AptSubjects(
+    install_direction=("cmatrix", "figlet", "rolldice"),
+    removal_direction="sysvbanner",
+    hold="nyancat",
+)
+FIXTURE_APT_PACKAGES = (
+    *FIXTURE_APT_SUBJECTS.install_direction,
+    FIXTURE_APT_SUBJECTS.removal_direction,
+    FIXTURE_APT_SUBJECTS.hold,
+)
+
+
+async def assert_apt_subjects_present(executor: BashLoginRemoteExecutor) -> None:
+    """Fail unless `executor`'s machine carries every `FIXTURE_APT_PACKAGES` entry, in ONE
+    command (testing-guide.md's command-grouping rule).
+
+    Verified rather than converged, exactly as a missing snap or flatpak subject fails: the
+    fixture script owns what is on the machine, so a subject that is not there is a machine
+    provisioned from a stale baseline rather than something a test should install behind
+    provisioning's back.
+    """
+    result = await executor.run_command(
+        "dpkg-query --show --showformat='${Package}\\t${Status}\\n' " + " ".join(FIXTURE_APT_PACKAGES),
+        login_shell=False,
+        timeout=20.0,
+    )
+    missing = sorted(set(FIXTURE_APT_PACKAGES) - parse_dpkg_installed(result.stdout))
+    assert not missing, (
+        f"The fixture apt subjects {missing} are not installed, so this module has no apt package to diverge. "
+        f"They are created by tests/integration/scripts/internal/vm-test-fixtures.sh.\n{result.stdout}"
+    )
 
 
 # Splits the two reads `ensure_installed_and_manual` issues as one command.
@@ -1656,72 +1465,6 @@ async def capture_machine_package_state(executor: BashLoginRemoteExecutor) -> Ma
         flatpak_refs=tuple(sorted(parse_flatpak_list_lines(flatpaks.stdout))),
         flatpak_remotes=tuple(sorted(nonblank_lines(remotes.stdout))),
     )
-
-
-# -- apt selection state, for the tests that read `apt-mark` rather than a transaction ---
-
-# Splits several reads issued as ONE command back into their own outputs
-# (testing-guide.md's command-grouping rule). Chosen so no apt or dpkg output can contain
-# it.
-SECTION_MARKER = "@@PCSWITCHER_IT_SECTION@@"
-
-
-async def apt_selection_snapshot(
-    executor: BashLoginRemoteExecutor,
-) -> tuple[set[str], set[str], dict[str, str]]:
-    """One machine's `(manual set, hold set, {package: installed version})`, read in ONE
-    command (testing-guide.md's command-grouping rule).
-    """
-    result = await executor.run_command(
-        f"apt-mark showmanual; echo {SECTION_MARKER}; apt-mark showhold; echo {SECTION_MARKER}; "
-        "dpkg-query --show --showformat='${Package}\\t${Version}\\n'",
-        login_shell=False,
-        timeout=30.0,
-    )
-    assert result.success, f"Failed to read the machine's apt selection state: {result.stderr}"
-    manual_block, hold_block, version_block = result.stdout.split(SECTION_MARKER)
-    versions: dict[str, str] = {}
-    for line in nonblank_lines(version_block):
-        name, _, version = line.partition("\t")
-        versions[name] = version
-    return set(nonblank_lines(manual_block)), set(nonblank_lines(hold_block)), versions
-
-
-async def a_package_both_machines_have_unheld(
-    pc1_executor: BashLoginRemoteExecutor,
-    pc2_executor: BashLoginRemoteExecutor,
-    exclude: frozenset[str] = frozenset(),
-) -> str:
-    """A package manually installed at the SAME version on both machines and held on
-    neither, so holding it on the source is the run's only apt work for it.
-
-    `exclude` keeps a scenario's other apt subjects out of the answer: a run that diverges
-    one package and holds another needs the two to be different packages, and every
-    selection in this module is alphabetical for determinism, so without this they collide.
-
-    `APT_SUBJECT_DENYLIST` is out too. A hold is not a removal, so nothing here would break
-    today — but a package this tool needs has no business being any scenario's subject, and
-    the next scenario to reach for the hold subject may not be holding it.
-    """
-    # One read-only snapshot per machine, taken at once.
-    (
-        (source_manual, source_held, source_versions),
-        (target_manual, target_held, target_versions),
-    ) = await asyncio.gather(apt_selection_snapshot(pc1_executor), apt_selection_snapshot(pc2_executor))
-    shared = sorted(
-        name
-        for name in (source_manual & target_manual) - APT_SUBJECT_DENYLIST
-        if name not in exclude
-        and name not in source_held
-        and name not in target_held
-        and name in source_versions
-        and source_versions[name] == target_versions.get(name)
-    )
-    assert shared, (
-        "No package is manually installed at the same version on both machines and held on neither. The two VMs "
-        "come from one baseline, so an empty result means the machines are not what these tests assume."
-    )
-    return shared[0]
 
 
 # Small archive packages a stock Ubuntu 24.04 does not install, for the hold that names a

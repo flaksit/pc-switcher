@@ -43,21 +43,20 @@ re-run to a fixed point -- is not here: it rides on the syncs `test_end_to_end_s
 `test_dry_run.py` already make.
 
 Every helper these tests seed, converge and assert with lives in
-`package_sync_scenario.py`. Its pure parsing/selection helpers (`nonblank_lines`,
-`parse_dpkg_installed`, `parse_reverse_depends`, `parse_batched_rdepends`,
-`pick_safe_removal_candidate`) have no I/O of their own and are unit-tested directly in
+`package_sync_scenario.py`. Its pure parsing helpers (`nonblank_lines`,
+`parse_dpkg_installed`) have no I/O of their own and are unit-tested directly in
 `tests/unit/jobs/test_package_sync_candidate_selection.py`, independent of VM access.
 
 Subjects: every test here needs a package it may hold, diverge, remove and reinstall, and
-a stock Ubuntu 24.04 VM offers none for snap (only `SNAP_REMOVAL_DENYLIST` members) and
-none at all for flatpak (which is not installed). Those subjects are therefore CREATED --
+a stock Ubuntu 24.04 VM offers none for snap (only `SNAP_REMOVAL_DENYLIST` members), none
+at all for flatpak (which is not installed), and no apt package that is not one the machine
+or pc-switcher itself needs. Those subjects are therefore CREATED --
 `tests/integration/scripts/internal/vm-test-fixtures.sh`, baked into the baseline snapshot
 by provisioning and re-applied by the module-scoped `vm_test_fixtures` fixture. No test in
 this module declines to run for want of a subject: a missing subject is a broken machine
-and fails naming what is missing and which script creates it. apt subjects are still
-selected by querying the machines (any Debian system has hundreds), but once for the whole
-module rather than per test (`apt_subjects`, `AptSubjects`), and an empty selection is
-likewise an assertion failure, never a skip.
+and fails naming what is missing and which script creates it. Which apt package plays which
+role is pinned in `FIXTURE_APT_SUBJECTS` and handed out once per module by `apt_subjects`,
+which only verifies both machines carry them.
 
 Preconditions, not teardown: a test states the package state it needs and converges to it
 (`ensure_absent`, `ensure_installed_and_manual` for apt, `ensure_snaps_installed` behind
