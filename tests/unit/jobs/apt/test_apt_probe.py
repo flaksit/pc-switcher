@@ -47,12 +47,12 @@ from tests.unit.jobs.apt.helpers import (
 from tests.unit.jobs.test_apt_policy import (
     POLICY_INSTALLED_AND_CANDIDATE_DIFFER,
 )
-from tests.unit.jobs.test_manual_installs_sync import (
-    _POLICY_AUTO_DEP,
-    _POLICY_HAND_DEB,
-    _POLICY_PINNED_NO_CANDIDATE,
-    _POLICY_REPO_INSTALLED,
-    _hand_deb_policy,
+from tests.unit.jobs.unreproducible_harness import (
+    POLICY_AUTO_DEP,
+    POLICY_HAND_DEB,
+    POLICY_PINNED_NO_CANDIDATE,
+    POLICY_REPO_INSTALLED,
+    hand_deb_policy,
 )
 
 
@@ -290,7 +290,7 @@ class TestBareDebPackagesAreNotAptSyncsBusiness:
             source_responses={
                 "apt-mark showmanual": CommandResult(0, "code\n", ""),
                 "dpkg-query": CommandResult(0, "code\t1.129.1-1784303641\n", ""),
-                "apt-cache policy": CommandResult(0, _POLICY_HAND_DEB, ""),
+                "apt-cache policy": CommandResult(0, POLICY_HAND_DEB, ""),
             },
             target_responses={"apt-mark showmanual": CommandResult(0, "", "")},
         )
@@ -308,7 +308,7 @@ class TestBareDebPackagesAreNotAptSyncsBusiness:
             source_responses={
                 "apt-mark showmanual": CommandResult(0, "code\n", ""),
                 "dpkg-query": CommandResult(0, "code\t1.129.1-1784303641\n", ""),
-                "apt-cache policy": CommandResult(0, _POLICY_HAND_DEB, ""),
+                "apt-cache policy": CommandResult(0, POLICY_HAND_DEB, ""),
             },
             target_responses={"apt-mark showmanual": CommandResult(0, "", "")},
         )
@@ -327,7 +327,7 @@ class TestBareDebPackagesAreNotAptSyncsBusiness:
             source_responses={
                 "apt-mark showmanual": CommandResult(0, "gh\n", ""),
                 "dpkg-query": CommandResult(0, "gh\t2.96.0\n", ""),
-                "apt-cache policy": CommandResult(0, _POLICY_REPO_INSTALLED, ""),
+                "apt-cache policy": CommandResult(0, POLICY_REPO_INSTALLED, ""),
                 _SOURCE_SCAN_CMD: CommandResult(0, _POLICY_FIXTURE_SCAN, ""),
             },
             target_responses={"apt-mark showmanual": CommandResult(0, "", "")},
@@ -343,7 +343,7 @@ class TestBareDebPackagesAreNotAptSyncsBusiness:
     async def test_one_source_policy_call_covers_the_whole_manual_set(self) -> None:
         """A10 — one batched call over a hand `.deb`, a vendor package, a pinned one and an
         auto dependency: only the hand `.deb` is dropped."""
-        policy = _POLICY_HAND_DEB + _POLICY_REPO_INSTALLED + _POLICY_PINNED_NO_CANDIDATE + _POLICY_AUTO_DEP
+        policy = POLICY_HAND_DEB + POLICY_REPO_INSTALLED + POLICY_PINNED_NO_CANDIDATE + POLICY_AUTO_DEP
         context, source, _target = make_context(
             source_responses={
                 "apt-mark showmanual": CommandResult(0, "code\ngh\ndocker.io\n7zip\n", ""),
@@ -377,7 +377,7 @@ class TestBareDebPackagesAreNotAptSyncsBusiness:
             source_responses={
                 "apt-mark showmanual": CommandResult(0, "code\ngh\n", ""),
                 "dpkg-query": CommandResult(0, "code\t1.0\ngh\t2.96.0\n", ""),
-                "apt-cache policy": CommandResult(0, _POLICY_HAND_DEB + _POLICY_REPO_INSTALLED, ""),
+                "apt-cache policy": CommandResult(0, POLICY_HAND_DEB + POLICY_REPO_INSTALLED, ""),
                 _SOURCE_SCAN_CMD: CommandResult(0, _POLICY_FIXTURE_SCAN, ""),
             },
             target_responses={
@@ -407,7 +407,7 @@ class TestBareDebPackagesAreNotAptSyncsBusiness:
             source_responses={
                 "apt-mark showmanual": CommandResult(0, "gh\n", ""),
                 "dpkg-query": CommandResult(0, "gh\t2.96.0\n", ""),
-                "apt-cache policy": CommandResult(0, _POLICY_REPO_INSTALLED, ""),
+                "apt-cache policy": CommandResult(0, POLICY_REPO_INSTALLED, ""),
                 _SOURCE_SCAN_CMD: CommandResult(0, _POLICY_FIXTURE_SCAN, ""),
             },
             target_responses={
@@ -497,7 +497,7 @@ class TestBareDebPackagesAreNotAptSyncsBusiness:
             source_responses={
                 "apt-mark showmanual": CommandResult(0, "code\ngh\n", ""),
                 "dpkg-query": CommandResult(0, "code\t1.0\ngh\t2.96.0\n", ""),
-                "apt-cache policy": CommandResult(0, _POLICY_HAND_DEB + _POLICY_REPO_INSTALLED, ""),
+                "apt-cache policy": CommandResult(0, POLICY_HAND_DEB + POLICY_REPO_INSTALLED, ""),
             },
             target_responses={
                 "apt-mark showmanual": CommandResult(0, "", ""),
@@ -520,12 +520,12 @@ class TestBareDebPackagesAreNotAptSyncsBusiness:
             source_responses={
                 "apt-mark showmanual": CommandResult(0, "code\n", ""),
                 "dpkg-query": CommandResult(0, "code\t1.129.1-1784303641\n", ""),
-                "apt-cache policy": CommandResult(0, _POLICY_HAND_DEB, ""),
+                "apt-cache policy": CommandResult(0, POLICY_HAND_DEB, ""),
             },
             target_responses={
                 "apt-mark showmanual": CommandResult(0, "code\n", ""),
                 "dpkg-query": CommandResult(0, "code\t1.129.1-1784303641\n", ""),
-                "apt-cache policy": CommandResult(0, _POLICY_HAND_DEB, ""),
+                "apt-cache policy": CommandResult(0, POLICY_HAND_DEB, ""),
             },
         )
 
@@ -545,7 +545,7 @@ class TestBareDebPackagesAreNotAptSyncsBusiness:
             target_responses={
                 "apt-mark showmanual": CommandResult(0, "code\n", ""),
                 "dpkg-query": CommandResult(0, "code\t1.129.1-1784303641\n", ""),
-                "apt-cache policy": CommandResult(0, _POLICY_HAND_DEB, ""),
+                "apt-cache policy": CommandResult(0, POLICY_HAND_DEB, ""),
             },
         )
         job = AptSyncJob(context)
@@ -568,13 +568,13 @@ class TestBareDebPackagesAreNotAptSyncsBusiness:
             source_responses={
                 "apt-mark showmanual": CommandResult(0, "gh\n", ""),
                 "dpkg-query": CommandResult(0, "gh\t2.96.0\n", ""),
-                "apt-cache policy": CommandResult(0, _POLICY_REPO_INSTALLED, ""),
+                "apt-cache policy": CommandResult(0, POLICY_REPO_INSTALLED, ""),
                 _SOURCE_SCAN_CMD: CommandResult(0, _POLICY_FIXTURE_SCAN, ""),
             },
             target_responses={
                 "apt-mark showmanual": CommandResult(0, "gh\n", ""),
                 "dpkg-query": CommandResult(0, "gh\t2.50.0\n", ""),
-                "apt-cache policy": CommandResult(0, _hand_deb_policy("gh", "2.50.0"), ""),
+                "apt-cache policy": CommandResult(0, hand_deb_policy("gh", "2.50.0"), ""),
             },
         )
 
@@ -594,13 +594,13 @@ class TestBareDebPackagesAreNotAptSyncsBusiness:
             source_responses={
                 "apt-mark showmanual": CommandResult(0, "gh\n", ""),
                 "dpkg-query": CommandResult(0, "gh\t2.96.0\n", ""),
-                "apt-cache policy": CommandResult(0, _POLICY_REPO_INSTALLED, ""),
+                "apt-cache policy": CommandResult(0, POLICY_REPO_INSTALLED, ""),
                 _SOURCE_SCAN_CMD: CommandResult(0, _POLICY_FIXTURE_SCAN, ""),
             },
             target_responses={
                 "apt-mark showmanual": CommandResult(0, "code\n", ""),
                 "dpkg-query": CommandResult(0, "code\t1.129.1-1784303641\n", ""),
-                "apt-cache policy": CommandResult(0, _POLICY_HAND_DEB, ""),
+                "apt-cache policy": CommandResult(0, POLICY_HAND_DEB, ""),
             },
         )
 
