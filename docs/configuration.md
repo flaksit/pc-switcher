@@ -54,7 +54,7 @@ Enables or disables optional sync jobs. Only job names listed here are discovere
 
 ```yaml
 sync_jobs:
-  dummy_success: true          # test job that completes successfully
+  dummy_success: false         # test job that completes successfully
   dummy_fail: false            # test job that fails at a configurable time
   folder_sync: true            # sync /home and /root via rsync — see jobs/folder-sync.md
   vscode_state_sync: true      # selective, SQLite-aware sync of VS Code state.vscdb — see jobs/vscode-state-sync.md
