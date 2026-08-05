@@ -1,0 +1,51 @@
+# Task: GitHub issue #246 — clean up ADR-020
+
+Repo: `/home/janfr/dev/pc-switcher`. Your working directory is an isolated git worktree; edit only files under it.
+
+**You have no shell.** Do not attempt git, `gh`, `uv` or any command. Read, Write, Edit, Grep and Glob only. Someone else runs the checks, commits and opens the PR. Produce the file edits and a report; nothing else.
+
+Read first: `CLAUDE.md`, `~/.claude/CLAUDE.md`, `docs/adr/adr-001-adr.md` (the project's own ADR instructions).
+
+**Terseness is the deliverable, not a side constraint.** `docs/adr/adr-020-declarative-package-convergence.md` is 323 lines of prose that says things three times. Cut hard. Any sentence that does not change what a reader concludes goes.
+
+## The problem
+
+ADR-020 is three documents in one:
+
+1. A decision record (`## Decision`, sections `D-01`..`D-43`) — what an ADR is for. It stays.
+2. An `## Implementation Rules` block (lines 11-41) of MUST / Forbidden clauses — a second normative rule set covering the same obligations as `docs/planning/package-sync-conformance-criteria.md`'s `PKG-FR-*` / `PKG-NG-*` articles, with no declared precedence between the two.
+3. Screen-copy rules (which words each answer key shows, that hostnames appear in every title and `source`/`target` never do, how a legend sentence reads) embedded in `D-07` and `D-24` — a UI specification.
+
+Plus measured third-party-tool evidence ("measured against apt 2.8.3", HTTP status codes, exit codes) inline in the decision prose.
+
+## Your input
+
+`/home/janfr/.claude/jobs/5545537a/tmp/adr-020-rule-audit.md` is a completed clause-by-clause audit of the Implementation Rules block: 53 clauses classified DUPLICATE (45), STRONGER (7), ORPHAN (1), each with its counterpart article and line. It also locates, per `D-nn` section, the measured evidence and the screen copy. **Read it before touching anything.** Spot-check a handful of its DUPLICATE claims against the two documents rather than trusting all 45 — if you find one misclassified, say so in your report.
+
+## What to do
+
+1. **Delete the `## Implementation Rules` block**, but not before every obligation in it has a home:
+   - DUPLICATE clauses: delete outright, the article already covers them.
+   - **STRONGER clauses (7): these say more than their article, so deleting them loses an obligation.** For each, either extend the existing `PKG-FR-*` article in `docs/planning/package-sync-conformance-criteria.md` to carry the extra force, or add a new article beside it.
+   - **Clause 11 is a live contradiction and the project owner has ruled on it.** The ADR says reviews SHOULD be batched; `PKG-FR-BATCHED` says MUST. **The ADR is right and the article is wrong.** Batching is a PREFERENCE, applied when the logic permits it — never a requirement. Rewrite `PKG-FR-BATCHED` so it can no longer be read as forbidding a second or third round of questions, and state the governing rule plainly: logic is never made complicated or wrong, and nothing is ever omitted, in order to avoid another round of questions. Correctness outranks batching, always. Check `docs/system/package-sync.md` and `docs/jobs/package-sync.md` for the same MUST-flavoured wording and fix it there too.
+   - **Clause 13 follows from that ruling.** It closes `PKG-FR-BATCHED`'s open "MAY be asked on its own" into a fixed list of four exceptions. With batching a preference, that list is illustrative, not exhaustive — reword so it reads as examples of when batching does not fit, and does not bar a case that is not on it.
+   - The single ORPHAN (F7b, no self-attach to Ubuntu Pro) becomes a new `PKG-NG-*` non-goal; the audit proposes wording, improve it if you can.
+   - House style there is: id, the MUST / MUST NOT clause, then a `Why:` line. Match it.
+2. **Move the screen-copy grammar out of `D-07` and `D-24`** into `docs/system/package-sync.md`. Each decision keeps the decision — `D-07`: three-way by default, two answers for the enumerated cases, report-only takes no answer; `D-24`: reviews are batched per manager per action, and when a job may ask again — and loses the paragraphs on wording. The audit's last table lists the exact line ranges of screen copy in other `D-nn` sections too; move those the same way.
+3. **Move measured evidence to `docs/adr/considerations/`.** `docs/adr/considerations/adr-020-flatpak-filter-and-trust-measurements.md` already exists; follow its shape for the rest. Link to it from the ADR. The audit's last table lists every measurement and where it sits.
+4. **Trim the surviving prose.** Target 150-180 lines total: TL;DR, Context, Decision, Consequences, Alternatives Considered, References.
+
+`D-04` (versions float) and `D-30` (collateral) are product rules rather than architecture. Keep them — they are why there is no version-pinning machinery — but at one or two sentences each, pointing at the section of `docs/planning/package-sync-user-requirements.md` that owns the intent.
+
+## Non-negotiable constraints
+
+- **Every `D-nn` id and its section heading stays in ADR-020.** `src/` and `tests/` carry 774 citations of the form `D-07`, `D-30`; each must still resolve to a section in this file. You may shorten a section to a sentence. You may not delete, renumber, merge or rehome one.
+- **Docs only.** Nothing under `src/` or `tests/`. If a code comment cites a `D-nn` whose meaning you changed, report it — do not edit it.
+- **No history, no archaeology.** Never write "previously", "moved from", "formerly", changelog notes or dated incidents. Fix the artifact and stop.
+- Markdown house rules: one paragraph = one line, no hard-wrapping mid-sentence; `---` only as frontmatter, never a separator; real heading levels, never bold as a pseudo-heading.
+- Where a fact would end up in two files, one of them is wrong. Pick the home, link from the other.
+- Do **not** touch `docs/dev/package-sync-scenario-coverage.md` — three other branches are appending rows to it and this change needs none. In `docs/planning/package-sync-conformance-criteria.md`, append new articles at the ends of their sections so a concurrent branch's additions merge cleanly.
+
+## Report back (terse)
+
+The ADR's line count before and after; which STRONGER clauses you turned into which article changes; how you resolved clause 11; any DUPLICATE you found misclassified; every file you changed; anything you deliberately left in place and why.
