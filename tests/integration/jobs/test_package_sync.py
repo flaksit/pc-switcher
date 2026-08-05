@@ -2225,12 +2225,21 @@ class TestOneManagerAtATime:
                 assert f"No {manager} changes to apply" in collapsed, (
                     f"{manager} did not report that it had nothing to apply.\n{collapsed}"
                 )
-            # `reviewed <label>` is the phrase the review's own decision pass logs per item,
-            # so the whole phrase is the witness -- `collapse_run_output` returns the run as
-            # ONE line, and asking whether a subject merely appears somewhere in it would
-            # match this test's own seeding just as readily as a review line.
-            for subject in (apt_candidate, snap_name, application, unowned_path):
-                assert f"reviewed {subject}" not in collapsed, (
+            # `reviewed <label> (` is the phrase the review's own decision pass logs per item,
+            # and the whole phrase is the witness on both counts. `collapse_run_output` returns
+            # the run as ONE line, so a bare subject name would match this test's own seeding;
+            # and the label has to end where the name does, or `hello` reads its verdict off
+            # `reviewed hello-world (…)` — a snap this scenario never touches, which another
+            # one leaves legitimately diverged. flatpak labels its items by REF, so the
+            # application id is only a witness with the ref's own separator after it.
+            presented = (
+                (apt_candidate, f"reviewed {apt_candidate} ("),
+                (snap_name, f"reviewed {snap_name} ("),
+                (application, f"reviewed {application}/"),
+                (unowned_path, f"reviewed {unowned_path} ("),
+            )
+            for subject, phrase in presented:
+                assert phrase not in collapsed, (
                     f"the run presented {subject}, which an earlier run of this sequence already converged"
                 )
         finally:
