@@ -1787,39 +1787,109 @@ class Orchestrator:
             return None
         return state
 
-    async def _settle_pending_apt_timer_restore(self, host: Host) -> None:
-        """Run and clear a restore a dead run left pending on `host`, before anything is read.
+    async def _pending_apt_timer_restore_exists(self, host: Host) -> bool:
+        """Whether a restore a dead run scheduled is still pending on `host`.
 
-        Two commands, in this order, and only when the unit is actually there:
-
-        1. `systemctl start <unit>.service` RUNS the recorded payload now. That payload is what
-           the dead run promised to put back, so triggering it restores the machine's real
-           prior state without this run having to infer it from anything.
-        2. `systemctl stop <unit>.timer` cancels the deferred firing, which the trigger does NOT
-           consume: measured, both units survive a manual start and the timer stays `waiting`.
-           Stopping the timer releases the transient service with it, so the `.service` is not
-           named too — doing so exits 5 with "Unit not loaded" and reads as a failure.
-
-        Triggering rather than merely cancelling is the point. Cancel alone and the capture that
-        follows reads both timers `loaded` but `inactive`, `_running_apt_timers` returns nothing,
-        the host is skipped, and the machine is left with its timers stopped and no restore
-        pending — on this run and on every later one, until it reboots.
-
-        A failed trigger leaves the timer ALONE: cancelling then would remove the machine's only
-        remaining way back. Both outcomes are WARNINGs, never a raise, like the rest of this
-        feature. Guarded on a read rather than issued blind, because `systemctl start` on an
-        absent unit exits 5 — which is the ordinary case, and must not warn or prompt.
+        Read-only, and the guard on every command below: `systemctl start`, `stop` and
+        `restart` all exit 5 on a unit that does not exist (measured), which is the ORDINARY
+        state of a machine no run ever died on. Issuing any of them blind would warn on every
+        run and prompt on every `--confirm-each-command` run.
         """
         probe = await self._run_apt_timer_command(
             host, f"systemctl show {_APT_TIMER_RESTORE_UNIT}.timer --property=Id --property=LoadState"
         )
+        if not probe.success:
+            return False
         pending = _parse_systemctl_show(probe.stdout).get(f"{_APT_TIMER_RESTORE_UNIT}.timer", {})
-        if not probe.success or pending.get("LoadState") != "loaded":
+        return pending.get("LoadState") == "loaded"
+
+    async def _defer_pending_apt_timer_restore(self, host: Host) -> None:
+        """Push a dead run's pending restore past this sync, without running it.
+
+        One command — `systemctl restart <unit>.timer` — which re-arms `OnActiveSec` from now
+        (measured: the next elapse moves forward by exactly the time that passed, the unit stays
+        `active`, and the payload does NOT run). That is the whole of it: a dead run's restore
+        can no longer fire inside this run, no apt timer is started, and nothing here needs to
+        know which timers that run stopped.
+
+        Deliberately NOT "run the restore now, then cancel it". Both apt timers ship
+        `Persistent=true` (`/usr/lib/systemd/system/apt-daily-upgrade.timer`: `OnCalendar=*-*-*
+        6:00`, `Persistent=true`), and a `Persistent` timer whose window elapsed while it was
+        inactive fires IMMEDIATELY on activation — measured directly. After a dead run of more
+        than a few hours, starting the apt timers would therefore provoke `apt-daily-upgrade`
+        at the very moment the sync begins: the collision this feature exists to prevent,
+        caused by the thing meant to prevent it.
+
+        The machine is not left stranded by deferring. The pending unit IS its restore, now
+        scheduled past this run, and `_restore_apt_timers` settles it at cleanup where the
+        immediate fire is harmless and wanted. A failure is a WARNING, never a raise.
+        """
+        if not await self._pending_apt_timer_restore_exists(host):
             return
 
         self._logger.info(
-            "Completing an apt update-timer restart left pending on %s by an earlier run, before this run reads "
-            "that machine's timers — it would otherwise have fired part-way through this sync",
+            "Deferring an apt update-timer restart left pending on %s by an earlier run past the end of this "
+            "sync; it is not run now, because these timers are Persistent and starting them would fire an "
+            "overdue upgrade straight into this run",
+            self._machine_name(host),
+            extra={"job": "orchestrator", "host": host.value},
+        )
+        deferred = await self._run_apt_timer_command(
+            host,
+            f"sudo systemctl restart {_APT_TIMER_RESTORE_UNIT}.timer",
+            mutates="push an earlier run's pending apt update-timer restart past the end of this sync",
+        )
+        if not deferred.success:
+            self._logger.warning(
+                "Could not defer the apt update-timer restart left pending on %s: %s. It may start that "
+                "machine's apt update timers during this sync.",
+                self._machine_name(host),
+                deferred.stderr.strip(),
+                extra={"job": "orchestrator", "host": host.value},
+            )
+
+    async def _settle_outstanding_apt_timer_restore(self, host: Host) -> None:
+        """At cleanup: run and clear a restore still pending on `host` from an earlier run.
+
+        Reached only after this run has restored what IT stopped, so a unit still loaded here
+        belongs to a run that died — its promise is outstanding and nothing else will keep it.
+        Without this, a successful run following a crashed one leaves that machine's automatic
+        updates off for up to the suspension window, for no reason.
+
+        Two commands, in this order: `systemctl start <unit>.service` runs the recorded restore,
+        then `systemctl stop <unit>.timer` cancels the schedule, which the trigger does not
+        consume (measured: both units survive it and the timer stays `waiting`). Trigger first,
+        cancel second, so an interruption between them leaves the schedule in place rather than
+        neither. A failed trigger therefore leaves the timer alone — it is the machine's only
+        remaining way back.
+
+        The `Persistent` immediate fire that makes this unsafe at suspend time is fine here, and
+        is the point: the sync is over, and an overdue upgrade is exactly what the machine wants.
+
+        Runs during teardown, so a dead connection must not derail it: everything below is
+        best-effort and logged at DEBUG when the machine is already unreachable — the unit stays
+        scheduled and fires on its own, so nothing is lost. A DECLINED gate still propagates.
+        """
+        try:
+            await self._settle_outstanding_apt_timer_restore_on(host)
+        except SyncAborted:
+            raise
+        except Exception as e:
+            self._logger.debug(
+                "Could not settle a pending apt update-timer restart on %s: %s. It stays scheduled and fires "
+                "on its own.",
+                self._machine_name(host),
+                e,
+                extra={"job": "orchestrator", "host": host.value},
+            )
+
+    async def _settle_outstanding_apt_timer_restore_on(self, host: Host) -> None:
+        """The commands behind `_settle_outstanding_apt_timer_restore`, without its guard."""
+        if not await self._pending_apt_timer_restore_exists(host):
+            return
+
+        self._logger.info(
+            "Completing an apt update-timer restart left pending on %s by an earlier run",
             self._machine_name(host),
             extra={"job": "orchestrator", "host": host.value},
         )
@@ -1831,7 +1901,7 @@ class Orchestrator:
         if not triggered.success:
             self._logger.warning(
                 "Could not finish the apt update-timer restart left pending on %s: %s. Leaving it scheduled — it "
-                "is that machine's only remaining way back — so it may fire during this sync.",
+                "is that machine's only remaining way back.",
                 self._machine_name(host),
                 triggered.stderr.strip(),
                 extra={"job": "orchestrator", "host": host.value},
@@ -1844,8 +1914,7 @@ class Orchestrator:
         )
         if not cancelled.success:
             self._logger.warning(
-                "Could not cancel the completed apt update-timer restart on %s: %s. It may start that machine's "
-                "apt update timers again during this sync.",
+                "Could not cancel the completed apt update-timer restart on %s: %s.",
                 self._machine_name(host),
                 cancelled.stderr.strip(),
                 extra={"job": "orchestrator", "host": host.value},
@@ -1925,10 +1994,14 @@ class Orchestrator:
         """Stop Ubuntu's own apt update timers on both hosts for the sync window (#248).
 
         Gated on `sync_jobs.apt_sync` being enabled and skipped in dry-run (stopping a system
-        timer is a system mutation; ADR-014/D-12). Settles any restore a dead run left pending
-        first (`_settle_pending_apt_timer_restore`), then captures each host's timer state so
+        timer is a system mutation; ADR-014/D-12). Defers any restore a dead run left pending
+        first (`_defer_pending_apt_timer_restore`), then captures each host's timer state so
         `_cleanup` can put back exactly what was taken away, then suspends each host WHOSE
         STATE IT COULD READ.
+
+        A host a dead run left with its timers stopped is correctly skipped by the flow below:
+        nothing is running, so nothing is stopped, and that machine's way back is the deferred
+        unit — now scheduled past this run and settled in `_cleanup`.
 
         A host whose capture failed is left untouched, on the same trade
         `_hold_snap_autorefresh` documents: without a pre-suspension reading there is nothing
@@ -1939,10 +2012,10 @@ class Orchestrator:
         if self._dry_run or not self._config.sync_jobs.get("apt_sync", False):
             return
 
-        # Before anything is read: finish and clear a restore a dead run left pending, so the
-        # capture below sees each machine's real state rather than that run's leftovers.
-        await self._settle_pending_apt_timer_restore(Host.SOURCE)
-        await self._settle_pending_apt_timer_restore(Host.TARGET)
+        # Push a dead run's pending restore past this sync, so it cannot fire inside it. The
+        # capture below is unaffected: deferring starts no apt timer and changes no timer state.
+        await self._defer_pending_apt_timer_restore(Host.SOURCE)
+        await self._defer_pending_apt_timer_restore(Host.TARGET)
 
         source_state = await self._capture_apt_timer_state(Host.SOURCE)
         target_state = await self._capture_apt_timer_state(Host.TARGET)
@@ -2037,12 +2110,18 @@ class Orchestrator:
         A no-op when nothing was suspended, and idempotent (clears the engaged flag first) so a
         second `_cleanup` entry cannot double-restore. Runs early in `_cleanup`, before the SSH
         connection the target restore needs is torn down.
+
+        Then settles anything a dead run left outstanding. It runs AFTER this run's own restore,
+        so a unit still loaded at that point is a promise no one else will keep — this run's own
+        was just cancelled by `_restore_apt_timers_on`.
         """
         if not self._apt_timers_engaged:
             return
         self._apt_timers_engaged = False
         await self._restore_apt_timers_on(Host.SOURCE, self._apt_timers_stopped_source)
         await self._restore_apt_timers_on(Host.TARGET, self._apt_timers_stopped_target)
+        await self._settle_outstanding_apt_timer_restore(Host.SOURCE)
+        await self._settle_outstanding_apt_timer_restore(Host.TARGET)
 
     async def _cleanup(self) -> None:
         """Clean up resources (connection, locks, executors)."""

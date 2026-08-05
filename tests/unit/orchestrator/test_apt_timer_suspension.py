@@ -12,8 +12,9 @@ Covers:
   machine's updates are off with nothing scheduled to turn them back on. Proven with
   `_cleanup` never running.
 - Cleanup restarts the timers and then cancels that scheduled unit, in that order.
-- A restore a dead run left pending is RUN and cleared before this run reads anything, so the
-  machine is back to its real prior state and that unit cannot fire part-way through this sync.
+- A restore a dead run left pending is DEFERRED past this sync at suspend time — never run
+  there, because the apt timers are `Persistent` and starting them would fire an overdue
+  upgrade straight into the run — and is carried out and cleared at cleanup instead.
 - Every warning names the machine it concerns by hostname (`PKG-FR-NAME-THE-MACHINES`).
 
 All executor interactions are mocked; no real systemctl/systemd-run commands run.
@@ -97,22 +98,19 @@ def make_executor(responses: dict[str, CommandResult] | None = None) -> MagicMoc
     return ex
 
 
-def make_host_with_pending_restore(state_after_trigger: str = RUNNING) -> MagicMock:
-    """A host a dead run left behind: timers stopped, its restore unit still pending.
+def make_host_with_pending_restore(timers: str = STOPPED) -> MagicMock:
+    """A host a dead run left behind: `timers` as it left them, its restore unit still pending.
 
-    Stateful because the behaviour under test is a sequence — the trigger RUNS the recorded
-    payload, and only then does the timer state read as it really is. A fixed response could
-    not tell "the machine was put back" from "the capture happened to say so".
+    Stateful because the behaviour under test is a sequence: the unit stays pending until it is
+    cancelled, and `_restore_apt_timers` reaches its settle step only after this run's own
+    restore. Defaults to STOPPED — a dead run's real leavings.
     """
-    state = {"timers": STOPPED, "pending": True}
+    state = {"timers": timers, "pending": True}
 
     def _side_effect(cmd: str, **_: object) -> CommandResult:
         if RESTORE_PROBE in cmd:
             load = "loaded" if state["pending"] else "not-found"
             return CommandResult(0, f"Id={RESTORE_UNIT}.timer\nLoadState={load}\n", "")
-        if f"systemctl start {RESTORE_UNIT}.service" in cmd:
-            state["timers"] = state_after_trigger
-            return CommandResult(exit_code=0, stdout="", stderr="")
         if f"systemctl stop {RESTORE_UNIT}.timer" in cmd:
             state["pending"] = False
             return CommandResult(exit_code=0, stdout="", stderr="")
@@ -405,23 +403,22 @@ class TestTheSuspensionUndoesItselfWithoutThisProcess:
         assert any("Could not pause the system apt update timers on" in w for w in warnings_of(orchestrator))
 
 
-class TestSettlingAPendingRestore:
-    """A run that died leaves its restore unit pending AND the timers stopped, so the next run
-    would read them inactive, skip that host, and let the dead run's unit fire part-way through
-    it — starting `apt-daily-upgrade.timer` against a converging apt, the exact race this
-    feature prevents.
+class TestADeadRunsPendingRestore:
+    """A run that died leaves its restore unit pending AND the timers stopped. Left alone that
+    unit fires 6h after the dead run began — which can be inside a LATER sync, starting
+    `apt-daily-upgrade.timer` against a converging apt.
 
-    Settling it RUNS the recorded payload and then cancels the schedule, before this run reads
-    anything. Running it rather than only cancelling is what matters: cancel alone and the
-    capture still sees stopped timers, the host is skipped again, and the machine keeps its
-    updates off on this run and every later one until it reboots.
+    It is DEFERRED at suspend, not run there. Both apt timers ship `Persistent=true`, and a
+    `Persistent` timer whose window elapsed while it was inactive fires immediately on
+    activation — so running the restore at the start of a sync would provoke the very upgrade
+    the suspension exists to keep out of it. Cleanup carries it out instead, where an overdue
+    upgrade is harmless and wanted.
     """
 
     @pytest.mark.asyncio
-    async def test_a_pending_restore_is_run_then_cleared_and_the_host_suspended_afresh(self) -> None:
-        """K121 — the machine ends the suspension owned by THIS run: the dead run's payload has
-        been executed, its schedule is gone, and the timers it had are stopped again behind a
-        restart this run scheduled.
+    async def test_a_pending_restore_is_deferred_and_no_apt_timer_is_started(self) -> None:
+        """K121 — the unit is re-armed past this run, and NOTHING starts an apt timer: the
+        `Persistent` immediate fire is exactly what must not happen at the start of a sync.
         """
         source = make_host_with_pending_restore()
         orchestrator, source, _target = make_orchestrator(apt_sync_enabled=True, source_executor=source)
@@ -429,73 +426,90 @@ class TestSettlingAPendingRestore:
         await orchestrator._suspend_apt_timers()  # pyright: ignore[reportPrivateUsage]
 
         cmds = all_calls(source)
-        assert any(f"systemctl start {RESTORE_UNIT}.service" in c for c in cmds), "the recorded payload never ran"
-        assert any(f"systemctl stop {RESTORE_UNIT}.timer" in c for c in cmds), "the old schedule was left pending"
-        assert source.host_state["pending"] is False
-        # The capture saw the restored truth, so this run suspended the host on its own terms.
-        assert len(stops_of(source)) == 1
-        assert any("systemd-run" in c for c in cmds)
-        assert orchestrator._apt_timers_stopped_source == APT_TIMERS  # pyright: ignore[reportPrivateUsage]
+        assert any(f"systemctl restart {RESTORE_UNIT}.timer" in c for c in cmds), "the restore was not deferred"
+        assert not any(f"systemctl start {RESTORE_UNIT}.service" in c for c in cmds), "the restore was RUN"
+        assert not any("systemctl start apt-daily" in c for c in cmds), "an apt timer was started mid-suspend"
+        assert source.host_state["pending"] is True
 
     @pytest.mark.asyncio
-    async def test_the_pending_restore_is_settled_before_the_state_is_read(self) -> None:
-        """K122 — the order is the point: reading first would capture the dead run's leftovers
-        as if they were the machine's own policy.
+    async def test_a_host_a_dead_run_left_stopped_is_still_skipped_by_the_normal_flow(self) -> None:
+        """K122 — deferring changes no timer state, so the capture still reads them inactive and
+        the host is correctly left alone: its way back is the deferred unit, not a new stop.
         """
         source = make_host_with_pending_restore()
         orchestrator, source, _target = make_orchestrator(apt_sync_enabled=True, source_executor=source)
 
         await orchestrator._suspend_apt_timers()  # pyright: ignore[reportPrivateUsage]
+
+        assert stops_of(source) == []
+        assert not any("systemd-run" in c for c in all_calls(source))
+        assert orchestrator._apt_timers_stopped_source == ()  # pyright: ignore[reportPrivateUsage]
+
+    @pytest.mark.asyncio
+    async def test_cleanup_runs_and_clears_an_outstanding_restore(self) -> None:
+        """K123 — a successful run following a crashed one settles the old promise, rather than
+        leaving that machine's automatic updates off for the rest of the suspension window.
+        """
+        source = make_host_with_pending_restore()
+        orchestrator, source, _target = make_orchestrator(apt_sync_enabled=True, source_executor=source)
+        await orchestrator._suspend_apt_timers()  # pyright: ignore[reportPrivateUsage]
+
+        await orchestrator._restore_apt_timers()  # pyright: ignore[reportPrivateUsage]
 
         cmds = all_calls(source)
         trigger_idx = next(i for i, c in enumerate(cmds) if f"systemctl start {RESTORE_UNIT}.service" in c)
-        capture_idx = next(i for i, c in enumerate(cmds) if "systemctl show" in c and "apt-daily.timer" in c)
-        assert trigger_idx < capture_idx
+        cancel_idx = next(i for i, c in enumerate(cmds) if f"systemctl stop {RESTORE_UNIT}.timer" in c)
+        # Trigger then cancel: an interruption between them leaves the schedule, not neither.
+        assert trigger_idx < cancel_idx
+        assert source.host_state["pending"] is False
 
     @pytest.mark.asyncio
-    async def test_no_pending_restore_is_a_silent_no_op(self) -> None:
-        """K123 — the ordinary case, and the first run on any machine. `systemctl start` on an
-        absent unit exits 5, so issuing it blind would warn on every run and prompt on every
-        `--confirm-each-command` run; it is guarded on a read instead.
+    async def test_cleanup_settles_nothing_when_nothing_is_outstanding(self) -> None:
+        """K124 — the ordinary run. This run's own unit was just cancelled by its restore, so the
+        probe finds nothing and no command is issued.
         """
         orchestrator, source, target = make_orchestrator(apt_sync_enabled=True)
-
         await orchestrator._suspend_apt_timers()  # pyright: ignore[reportPrivateUsage]
 
+        await orchestrator._restore_apt_timers()  # pyright: ignore[reportPrivateUsage]
+
         for ex in (source, target):
-            assert not any(f"systemctl start {RESTORE_UNIT}" in c for c in all_calls(ex))
-            assert not any(f"systemctl stop {RESTORE_UNIT}" in c for c in all_calls(ex))
+            assert not any(f"systemctl start {RESTORE_UNIT}.service" in c for c in all_calls(ex))
         assert warnings_of(orchestrator) == []
 
     @pytest.mark.asyncio
-    async def test_a_failed_trigger_leaves_the_pending_restore_in_place(self) -> None:
-        """K124 — cancelling after a failed trigger would take away the machine's only remaining
-        way back. The schedule stays, and the run says so.
-        """
-        responses = {
-            **PENDING,
-            f"systemctl start {RESTORE_UNIT}.service": CommandResult(1, "", "Failed to start"),
-        }
+    async def test_a_failed_defer_warns_and_the_sync_continues(self) -> None:
+        """K125 — the defer is best-effort like the rest: it names the machine and the run goes on."""
+        responses = {**PENDING, f"systemctl restart {RESTORE_UNIT}.timer": CommandResult(1, "", "Failed to restart")}
         orchestrator, source, _target = make_orchestrator(apt_sync_enabled=True, source_responses=responses)
 
         await orchestrator._suspend_apt_timers()  # pyright: ignore[reportPrivateUsage]
 
-        assert not any(f"systemctl stop {RESTORE_UNIT}.timer" in c for c in all_calls(source))
-        assert any("Leaving it scheduled" in w for w in warnings_of(orchestrator))
+        warnings = warnings_of(orchestrator)
+        expected = f"Could not defer the apt update-timer restart left pending on {SOURCE_MACHINE}"
+        assert any(expected in w for w in warnings)
+        # The run still suspended the host on its own terms.
+        assert len(stops_of(source)) == 1
 
     @pytest.mark.asyncio
-    async def test_settling_names_the_machine_and_says_what_it_is_doing(self) -> None:
-        """K125 — a restart firing mid-sync is the failure this prevents, so a run that found one
-        says so and names the machine (`PKG-FR-NAME-THE-MACHINES`).
-        """
+    async def test_a_failed_trigger_at_cleanup_leaves_the_restore_scheduled(self) -> None:
+        """K126 — cancelling after a failed trigger would take away the machine's last way back."""
         source = make_host_with_pending_restore()
-        orchestrator, _source, _target = make_orchestrator(apt_sync_enabled=True, source_executor=source)
-
+        orchestrator, source, _target = make_orchestrator(apt_sync_enabled=True, source_executor=source)
         await orchestrator._suspend_apt_timers()  # pyright: ignore[reportPrivateUsage]
+        source.run_command = AsyncMock(
+            side_effect=respond_to(
+                {
+                    **PENDING,
+                    f"systemctl start {RESTORE_UNIT}.service": CommandResult(1, "", "Failed to start"),
+                }
+            )
+        )
 
-        settled = [line for line in infos_of(orchestrator) if "Completing an apt update-timer restart" in line]
-        assert settled
-        assert all(SOURCE_MACHINE in line for line in settled)
+        await orchestrator._restore_apt_timers()  # pyright: ignore[reportPrivateUsage]
+
+        assert not any(f"systemctl stop {RESTORE_UNIT}.timer" in c for c in all_calls(source))
+        assert any("Leaving it scheduled" in w for w in warnings_of(orchestrator))
 
 
 class TestRestore:
