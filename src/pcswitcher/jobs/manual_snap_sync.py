@@ -1,0 +1,218 @@
+"""`manual_snap_sync`: sideloaded snaps — the snaps installed from a local `.snap` file
+rather than from the store, which no store can serve to the other machine (D-15, D-18,
+`PKG-FR-SNAP-SIDELOAD`).
+
+Detection is one question asked of `snap list --all`: which snaps snapd renders at an
+`x`-prefixed revision, the store-less revision it assigns to a `snap install --dangerous`
+or a `snap try`. On the target the question is only whether snapd reports the NAME
+installed at all: software that is there is there, whatever put it there.
+
+Its own job, on its own enable flag, for the reason D-15 gives every package job one: an
+independent failure surface, an independent review and an independent switch. It sits
+beside `manual_deb_sync` (hand-installed `.deb` packages) and `manual_installs_sync`
+(unowned software under `/usr/local` and `/opt`). All three subclass
+`UnreproducibleSyncJob` and share one install-snippet registry; none imports another, and
+none imports the package-manager job it is paired with (D-18).
+
+The snap handoff is capture-time exclusion, not a message: `snap_sync` withholds the same
+names from both its manifests using the shared `packages/snap_listing.py` predicate, and
+this job independently re-runs it. Two jobs, one predicate, no result passed between them
+(D-15/D-16). The consequence the user must know: this job's enable flag is its own, so
+enabling `snap_sync` while disabling this one leaves sideloaded snaps replicated by nobody
+— which is what the whole run did before this job existed.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Mapping, Sequence
+from typing import Any, ClassVar, override
+
+from pcswitcher.executor import Executor
+from pcswitcher.jobs.packages.probes import require_answer
+from pcswitcher.jobs.packages.snap_listing import SnapItem, is_sideloaded, parse_snap_list
+from pcswitcher.jobs.packages.state import DecisionEntry
+from pcswitcher.jobs.packages.unreproducible import UnreproducibleItem, UnreproducibleSyncJob
+from pcswitcher.models import FirstSyncScope, Host, ValidationError
+
+__all__ = ["ManualSnapSyncJob"]
+
+# The origin every item this job produces carries, and so the slice of an `item_id` space
+# that belongs to it. Named once: detection and the mark reconciliation key on the same
+# string.
+_ORIGIN = "snap-sideload"
+
+# No `AdoptedMarks`: unlike `manual_deb_sync`, this job inherits nothing. No code has ever
+# built an `UnreproducibleItem` with this origin, so no decision file on any machine can
+# hold an `unreproducible:snap-sideload:` id to adopt. The marks that DO name a sideloaded
+# snap are `snap_sync`'s own `snap:<name>` entries in `snap.decisions.yaml` — a different
+# id space, still live for that job, and answering a different question ("do not converge
+# this snap's revision"), not this one ("do not reproduce this snap on the other machine").
+
+
+class ManualSnapSyncJob(UnreproducibleSyncJob):
+    """Detect, review and reproduce sideloaded snaps, on this job's own enable flag
+    independent of `snap_sync`'s and of the other unreproducible jobs'.
+
+    Supplies the two detection hooks `UnreproducibleSyncJob` leaves abstract; everything
+    from the diff onwards — the snippet registry, its push and consent question, the
+    review grouping and the replay — is inherited.
+    """
+
+    name: ClassVar[str] = "manual_snap_sync"
+    manager_id: ClassVar[str] = "manual_snap"
+
+    # No configurable properties: mirrors SnapSyncJob's empty schema — only the enable flag
+    # in sync_jobs is needed. D-32 forbids an empty placeholder config SECTION, so there is
+    # no `manual_snap_sync:` block in default-config.yaml, but the in-code CONFIG_SCHEMA
+    # ClassVar still declares the empty object every job carries.
+    CONFIG_SCHEMA: ClassVar[dict[str, Any]] = {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": False,
+    }
+
+    # -- Detection (D-18), run on both machines (`PKG-FR-MANUAL-DIFF`) -------------------
+
+    async def _installed_snaps(self, executor: Executor, machine: str) -> list[SnapItem]:
+        """Every snap snapd reports on `machine`, sideloaded or not.
+
+        Guarded on the EXIT CODE ONLY (ADR-022), not additionally on emptiness the way
+        `manual_deb_sync` guards its `dpkg-query`: a machine with no packages installed
+        does not exist, but a machine with no snaps does, and `snap list --all` separates
+        the two cleanly — snapd unreachable exits 1, while zero snaps installed exits 0
+        with the hint on stderr and nothing on stdout (measured, see `packages/probes.py`).
+        So empty stdout at exit 0 is data here, and reading it as a failure would fail the
+        job on an ordinary machine.
+        """
+        command = "snap list --all"
+        result = await executor.run_command(command)
+        require_answer(command, result, machine)
+        return parse_snap_list(result.stdout)
+
+    @override
+    async def capture_source_items(self) -> Sequence[UnreproducibleItem]:
+        """The source's sideloaded snaps (`PKG-FR-SNAP-SIDELOAD`).
+
+        The identifier is the snap's NAME and never its revision, even though the revision
+        is exactly what makes the snap a sideload. A sideload's revision moves on every
+        reinstall from a newer `.snap` file (`x1` -> `x2`), so putting it in the identity
+        would make each reinstall a brand-new item: the user's install snippet would stop
+        resolving and their "never install this on the other machine" mark would be
+        orphaned, both silently, and the snap would be put back in front of them as if it
+        had never been answered about. The revision is carried in the LABEL instead, where
+        it tells the user which build they are being asked about without becoming part of
+        what the answer is filed under.
+        """
+        return [
+            UnreproducibleItem(
+                origin=_ORIGIN,
+                identifier=item.name,
+                label=f"{item.name} (sideloaded snap, revision {item.revision})",
+            )
+            for item in sorted(await self._installed_snaps(self.source, self.machines.source), key=lambda i: i.name)
+            if is_sideloaded(item)
+        ]
+
+    @override
+    async def query_target_items(self) -> Sequence[UnreproducibleItem]:
+        """What the TARGET already holds, in the source's own identities, so `plan()` can
+        drop a finding that is already there (`PKG-FR-MANUAL-DIFF`).
+
+        A snap is held when snapd reports the NAME installed at all — at any revision,
+        sideloaded or from the store. The two cases the target can present are exactly
+        those, and neither is a reason to offer the source's snippet:
+
+        - the target holds a SIDELOAD of that name, at its own `x<N>` revision. Which
+          `.snap` file each machine was fed is not knowable from either listing, and
+          comparing the two `x<N>` numbers would compare two machines' independent install
+          counters rather than two builds. Replaying the snippet would reinstall over a
+          working sideload to chase a difference nothing here can read.
+        - the target holds a STORE snap of that name. It is the same application, from a
+          route this tool did not need a snippet for, and `snap_sync` has withheld the
+          name on both machines (`PKG-FR-SNAP-SIDELOAD`), so nothing else in the run
+          touches it either. Replaying the snippet would sideload over the store copy and
+          take it off the update path it is on.
+
+        Update, drift and version comparison are out of scope for every unreproducible job
+        alike (#207) and are deliberately not smuggled in here: what this returns decides
+        presence and nothing else.
+        """
+        return [
+            UnreproducibleItem(origin=_ORIGIN, identifier=item.name, label=item.name)
+            for item in await self._installed_snaps(self.target, self.machines.target)
+        ]
+
+    @override
+    async def observe_absent_marks(self, entries: Mapping[str, DecisionEntry], *, on_source: bool) -> frozenset[str]:
+        """The marked snaps one machine no longer has installed.
+
+        Asked of BOTH machines, unlike `plan()`, which reads the source's file alone. The
+        two questions are different: which marks silence a FINDING is the source's business,
+        because a finding is something the source has and the target lacks, but whether a
+        marked item is still on the machine holding the mark is a question about that machine
+        and nothing else. Reconciling the source's file alone would leave a machine that is
+        only ever synced TO carrying its dead marks for good.
+
+        Presence is the whole test, exactly as it is in `query_target_items`: a marked snap
+        the user has since replaced with the store's copy of the same name is still
+        installed, and dropping its mark on the grounds that it stopped being a sideload
+        would re-offer software the user asked to be left alone — under a snippet that would
+        overwrite the store copy.
+
+        Entries this job cannot recognise are left exactly where they are. Its file holds
+        only its own, so that is only ever a hand-edited one.
+        """
+        executor = self.source if on_source else self.target
+        machine = self.machines.source if on_source else self.machines.target
+
+        prefix = UnreproducibleItem.id_prefix(_ORIGIN)
+        snaps = {item_id: item_id.removeprefix(prefix) for item_id in entries if item_id.startswith(prefix)}
+        if not snaps:
+            return frozenset()
+
+        installed = {item.name for item in await self._installed_snaps(executor, machine)}
+        return frozenset(item_id for item_id, name in snaps.items() if name not in installed)
+
+    @override
+    async def validate(self) -> list[ValidationError]:
+        """`snap version` on both machines — the target is read too, since a finding it
+        already holds is not presented (`PKG-FR-MANUAL-DIFF`).
+
+        No sudo on either machine, unlike `snap_sync`, which needs it on both: detection
+        here only lists, and `snap list --all` needs no privilege. A snippet's own sudo
+        needs are unpredictable (an opaque blob, D-20) — a sideload's snippet will usually
+        want it, since `snap install --dangerous` does — so this job does NOT pre-validate
+        target sudo either; a snippet that needs it and lacks it fails as a per-item
+        converge failure (D-27), reported like any other.
+
+        Sequential checks appending to `errors`, never raising mid-validate (matches
+        `SnapSyncJob.validate()`'s shape).
+        """
+        errors: list[ValidationError] = []
+
+        source_check = await self.source.run_command("snap version")
+        if not source_check.success:
+            errors.append(
+                self._validation_error(Host.SOURCE, "snap is not available on source (required to detect sideloads)")
+            )
+
+        target_check = await self.target.run_command("snap version", login_shell=False)
+        if not target_check.success:
+            errors.append(
+                self._validation_error(
+                    Host.TARGET, "snap is not available on target (required to tell what it already has)"
+                )
+            )
+
+        return errors
+
+    @classmethod
+    @override
+    def describe_first_sync_scope(cls, config: dict[str, Any]) -> FirstSyncScope | None:
+        """Name this job's destructive first-sync scope (ADR-015): replaying install
+        snippets for sideloaded snaps."""
+        return FirstSyncScope(
+            job_name=cls.name,
+            scope_items=["sideloaded snaps (via recorded install snippets)"],
+            mechanism="replay install snippet per item, after review",
+        )
