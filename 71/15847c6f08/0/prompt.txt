@@ -1,0 +1,9 @@
+phase 2 branch was merged. Any GSD bookkeeping to do to finalize phase 2 completely?
+
+---
+
+use the "/gsd-progress" command as well
+
+---
+
+UAT is done, per runbook. All passed. Go
