@@ -26,7 +26,6 @@ from uuid import uuid4
 from pcswitcher.executor import BashLoginRemoteExecutor
 from pcswitcher.jobs.apt_sync.items import AptPackageItem, collateral_item_id
 from pcswitcher.jobs.flatpak_sync import FlatpakItem
-from pcswitcher.jobs.manual_installs_sync import UnreproducibleItem
 from pcswitcher.jobs.packages.review import PACKAGE_REVIEW_AUTOMATION_ENV, Decision
 from pcswitcher.jobs.packages.state import (
     DECISION_FILE_RELPATH_TEMPLATE,
@@ -35,6 +34,7 @@ from pcswitcher.jobs.packages.state import (
     Snippet,
     SnippetRegistry,
 )
+from pcswitcher.jobs.packages.unreproducible import UnreproducibleItem
 from pcswitcher.models import CommandResult
 from tests.integration.conftest import write_pcswitcher_config
 

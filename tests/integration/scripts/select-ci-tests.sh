@@ -80,7 +80,8 @@ while IFS= read -r f; do
         # its own, so it is mapped here like a source file. A test module outside
         # area_package that imports it must add its own area to this branch.
         src/pcswitcher/jobs/apt_sync/* | src/pcswitcher/jobs/snap_sync.py | \
-        src/pcswitcher/jobs/flatpak_sync.py | src/pcswitcher/jobs/manual_installs_sync.py | \
+        src/pcswitcher/jobs/flatpak_sync.py | src/pcswitcher/jobs/manual_deb_sync.py | \
+        src/pcswitcher/jobs/manual_installs_sync.py | \
         src/pcswitcher/jobs/packages/* | tests/integration/jobs/package_sync_scenario.py)
             add_area area_package
             ;;
