@@ -157,10 +157,12 @@ __all__ = [
     "ReviewEntry",
     "ReviewGroup",
     "ReviewOutcome",
+    "ReviewPolicy",
     "Reviewer",
     "TerminalUIReviewer",
     "ask_gate",
     "asks_for_a_decision",
+    "policy_answers_any",
     "review_items",
 ]
 
@@ -492,6 +494,111 @@ def _default_decision(group: ReviewGroup) -> Decision:
     if _is_removal_direction(group.action) or _is_repo_conflict_group(group.action):
         return Decision.SKIP_ONCE
     return Decision.APPLY
+
+
+@dataclass(frozen=True)
+class ReviewPolicy:
+    """What the command line answers about a review before anyone is asked (issue #245).
+
+    `--apply-package-installs` and `--apply-package-removals` let an unattended run converge
+    the source's package state. Each answers ONE direction, so a run can converge what the
+    source has without also carrying out what it no longer has.
+
+    A flag answers as the SOURCE dictates, not as the screen's own pre-selection suggests
+    (`_default_decision`): a removal screen starts at skip-once because confirming it unread
+    would destroy something, and `--apply-package-removals` is the user saying that this run
+    they mean it. Neither flag ever produces `SKIP_ALWAYS`: a machine-specific mark is the
+    user's own statement about one machine, and a run nobody is watching may not make one
+    (`PKG-FR-APPLY-FLAGS-NO-MARK`).
+
+    Deliberately narrower than "answer everything". `policy_decision` names the groups no
+    flag answers, and each one is a question about THIS machine rather than about what the
+    source has, so the source cannot stand in for the answer.
+    """
+
+    apply_installs: bool = False
+    apply_removals: bool = False
+
+    @property
+    def answers_anything(self) -> bool:
+        """Whether any flag is in force at all — a run with neither takes today's path
+        untouched, prompt for prompt and warning for warning."""
+        return self.apply_installs or self.apply_removals
+
+
+def policy_decision(group: ReviewGroup, policy: ReviewPolicy) -> Decision | None:
+    """The answer `policy` gives every entry of `group`, or `None` where no flag answers it.
+
+    Whole groups, never single entries: a group IS one direction's question about one item
+    class, which is exactly the granularity the two flags are stated at.
+
+    The `None` cases are the issue's own out-of-scope list, and each is a question the
+    source's state cannot answer:
+
+    - report-only, which nobody answers at all (`asks_for_a_decision`);
+    - `overwrites_authored_content` — today an `/etc/apt/apt.conf.d` file the target already
+      holds, which states how the user's own apt behaves on that machine;
+    - a repository conflict (D-37), which moves where software the target recorded
+      machine-specific comes from;
+    - an unreproducible item (D-21), whose answer is an authored shell snippet rather than a
+      decision, and authoring one takes an editor.
+
+    Everything else is one of the two directions. Removal covers `remove`/`delete`/`disable`,
+    a repository or pin deletion, and the collateral question (D-30) — a protected package an
+    approved transaction would lose is a loss on the target, so it is the removal flag that
+    speaks for it. Install-direction is the remainder: `install`/`add`/`enable`, and `change`,
+    which converges an item both machines have to the source's version.
+    """
+    if not asks_for_a_decision(group):
+        return None
+    if group.overwrites_authored_content:
+        return None
+    if _is_repo_conflict_group(group.action) or _is_unreproducible_group(group.action):
+        return None
+    if _is_removal_direction(group.action) or _is_collateral_group(group.action):
+        return Decision.APPLY if policy.apply_removals else None
+    return Decision.APPLY if policy.apply_installs else None
+
+
+def policy_answers_any(groups: Sequence[ReviewGroup], policy: ReviewPolicy) -> bool:
+    """Whether `policy` answers at least one of `groups`.
+
+    The job's own test for "somebody answered this review" on a run with no terminal, where
+    `ReviewOutcome.was_interactive` says only whether a HUMAN did (`sync_core`). Pure, so a
+    job can ask it of groups it has not put to the reviewer yet.
+    """
+    return any(policy_decision(group, policy) is not None for group in groups)
+
+
+def _answer_by_policy(
+    groups: Sequence[ReviewGroup], policy: ReviewPolicy | None, log: logging.Logger
+) -> tuple[dict[str, Decision], Sequence[ReviewGroup]]:
+    """Split `groups` into the decisions `policy` supplies and the groups still to be put.
+
+    What is left over is handed to the ordinary path rather than declined here, so a flag
+    changes nothing about a group it does not answer: on a terminal the user is still asked,
+    and without one the entries are still named in a warning and skipped for this run (D-26).
+
+    A `policy` of `None`, or one with no flag in force, answers nothing and returns `groups`
+    untouched — which is what makes a run without the flags identical to one before they
+    existed.
+    """
+    if policy is None or not policy.answers_anything:
+        return {}, groups
+
+    decisions: dict[str, Decision] = {}
+    remaining: list[ReviewGroup] = []
+    for group in groups:
+        decision = policy_decision(group, policy)
+        if decision is None:
+            remaining.append(group)
+            continue
+        for entry in group.entries:
+            decisions[entry.item_id] = decision
+
+    if decisions:
+        _log_policy_answers(decisions, policy, log)
+    return decisions, tuple(remaining)
 
 
 def _skip_always_word(group: ReviewGroup) -> str:
@@ -1298,6 +1405,25 @@ async def _review_repo_conflict_group(
         )
 
 
+def _log_policy_answers(decisions: Mapping[str, Decision], policy: ReviewPolicy, log: logging.Logger) -> None:
+    """Say that the command line answered, and with which flag (`PKG-FR-LOG-DECISIONS`).
+
+    The per-item decision lines a job writes afterwards read the same whoever gave the
+    answer, so without this one line the log of an unattended run cannot be told from the log
+    of a run somebody sat through. A count and the flags, not the item names: each item is
+    named on its own line already.
+    """
+    flags = " ".join(
+        flag
+        for flag, enabled in (
+            ("--apply-package-installs", policy.apply_installs),
+            ("--apply-package-removals", policy.apply_removals),
+        )
+        if enabled
+    )
+    log.info("%d review item(s) answered by the command line, unasked: %s", len(decisions), flags)
+
+
 def _warn_every_item_unasked(groups: Sequence[ReviewGroup], log: logging.Logger) -> None:
     """Name every item a run with no terminal could not ask about (`PKG-FR-LOG-DECISIONS`).
 
@@ -1317,6 +1443,7 @@ async def review_items(  # noqa: PLR0913 - review surface plus both machine name
     source_hostname: str,
     target_hostname: str,
     logger: logging.Logger | None = None,
+    policy: ReviewPolicy | None = None,
 ) -> ReviewOutcome:
     """Present every group as one decision screen and return the user's decisions.
 
@@ -1324,6 +1451,15 @@ async def review_items(  # noqa: PLR0913 - review surface plus both machine name
     answer acts on, and "the target" is a word for the tool's own plumbing rather than for
     either of the user's computers. A caller that cannot name them has no business asking
     these questions.
+
+    `policy` is the command line's own answer to whole groups (`ReviewPolicy`, issue #245),
+    applied FIRST and to nothing else: the groups it answers are never put to anyone, and
+    every remaining group takes the path below unchanged. Answering here rather than in the
+    caller is what puts one flag in front of every review this module serves, the collateral
+    question `apt_sync` asks mid-apply included (`PKG-FR-ASK-AGAIN`). The returned
+    `was_interactive` stays a statement about a HUMAN — a policy-answered set was decided by
+    nobody, so a run whose every group the flags answered comes back False and records no
+    machine-specific mark (`sync_core._record_permanent_skips`).
 
     Non-interactive runs (`is_interactive(console)` is False) prompt for nothing: every
     item comes back `SKIP_ONCE`, nothing is recorded permanently, one warning NAMES each
@@ -1341,15 +1477,26 @@ async def review_items(  # noqa: PLR0913 - review surface plus both machine name
     """
     log = logger if logger is not None else _logger
 
+    by_policy, groups = _answer_by_policy(groups, policy, log)
+
+    # Whatever the flags left over goes through unchanged, the empty set included: a review
+    # the flags answered whole reaches the branches below with no groups, which is what an
+    # empty plan already does (a terminal still gets its pause/resume, and `was_interactive`
+    # still says only whether there was one).
     automation_raw = os.environ.get(PACKAGE_REVIEW_AUTOMATION_ENV)
     if automation_raw is not None:
-        return ReviewOutcome(decisions=_decisions_from_automation(groups, automation_raw), was_interactive=True)
+        return ReviewOutcome(
+            decisions={**by_policy, **_decisions_from_automation(groups, automation_raw)}, was_interactive=True
+        )
 
     if not is_interactive(console):
         _warn_every_item_unasked(groups, log)
         for group in groups:
             console.print(_render_group_panel(group))
-        decisions = {entry.item_id: Decision.SKIP_ONCE for group in groups for entry in group.entries}
+        decisions = {
+            **by_policy,
+            **{entry.item_id: Decision.SKIP_ONCE for group in groups for entry in group.entries},
+        }
         # D-26: no capture is ever offered without a TTY, so every unreproducible item
         # is unresolved by construction — never a snippet, never a recorded decision.
         non_interactive_unresolved = tuple(
@@ -1358,7 +1505,7 @@ async def review_items(  # noqa: PLR0913 - review surface plus both machine name
         return ReviewOutcome(decisions=decisions, was_interactive=False, unresolved=non_interactive_unresolved)
 
     ui.pause()
-    decisions: dict[str, Decision] = {}
+    decisions: dict[str, Decision] = dict(by_policy)
     snippets: dict[str, str] = {}
     try:
         for group in groups:
@@ -1513,13 +1660,16 @@ class TerminalUIReviewer:
     """`Reviewer` backed by the Rich console and the live `TerminalUI`.
 
     A thin adapter: `review()` forwards to `review_items`, which keeps every behaviour it
-    has — the automation-environment hook, the non-interactive path, and the pause/resume
-    `finally` that lets the blocking prompt run inside the job TaskGroup. Mirrors
-    `TerminalUIConfirmer`'s shape (console + UI + optional logger), constructed once by the
-    orchestrator.
+    has — the command line's own answers, the automation-environment hook, the
+    non-interactive path, and the pause/resume `finally` that lets the blocking prompt run
+    inside the job TaskGroup. Mirrors `TerminalUIConfirmer`'s shape (console + UI + optional
+    logger), constructed once by the orchestrator.
+
+    `policy` is held here rather than passed per call so every review this one object serves
+    is answered by the same flags, whichever job or round asks (issue #245).
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913 - one adapter's collaborators plus both machine names; all but the first two keyword-only
         self,
         console: Console,
         ui: PausableUI,
@@ -1527,12 +1677,14 @@ class TerminalUIReviewer:
         source_hostname: str,
         target_hostname: str,
         logger: logging.Logger | None = None,
+        policy: ReviewPolicy | None = None,
     ) -> None:
         self._console = console
         self._ui = ui
         self._source_hostname = source_hostname
         self._target_hostname = target_hostname
         self._logger = logger
+        self._policy = policy
 
     async def review(self, groups: Sequence[ReviewGroup]) -> ReviewOutcome:
         return await review_items(
@@ -1542,6 +1694,7 @@ class TerminalUIReviewer:
             source_hostname=self._source_hostname,
             target_hostname=self._target_hostname,
             logger=self._logger,
+            policy=self._policy,
         )
 
     async def ask_gate(self, *, title: str, message: str, proceed_label: str, stop_label: str) -> bool | None:

@@ -270,13 +270,41 @@ Only that job stops. The run continues with the others and reports the failed on
 
 ## Non-interactive runs
 
-A run without a TTY prompts for nothing, so every review item comes back skip-now and the job converges nothing. When the review had anything to **decide**, the job therefore reports **SKIPPED**, not SUCCESS, and the run continues with the remaining jobs. A run whose review had nothing to decide still reports SUCCESS — either because the target already matches the source for that package manager, or because everything the review held was a finding you are told about rather than asked about, such as a version difference. No answer of yours would have changed either outcome.
+A run without a TTY prompts for nothing, so every review item nothing else answered comes back skip-now and the job converges nothing. (The two options in [Converging packages unattended](#converging-packages-unattended) are the one way to answer without a terminal; the rest of this section is what happens when they were not passed, or did not cover what the review held.) When the review had anything to **decide** and nothing answered it, the job therefore reports **SKIPPED**, not SUCCESS, and the run continues with the remaining jobs. A run whose review had nothing to decide still reports SUCCESS — either because the target already matches the source for that package manager, or because everything the review held was a finding you are told about rather than asked about, such as a version difference. No answer of yours would have changed either outcome.
 
 `apt_sync` has a second reason to report SKIPPED, and it applies to interactive runs too: the target reports no Ubuntu Pro attachment and the source carries ESM sources that would otherwise be written to it. Attach the target and re-run, or answer the question's re-check once you have — see [Ubuntu Pro and ESM](#ubuntu-pro-and-esm).
 
 A skipped package job applies nothing, records no decision, and pushes no install-snippet registry. The session still completes and the exit code is unchanged, so a headless run says plainly that it converged nothing rather than reporting four successful package syncs.
 
-No run without a terminal pushes the registry, not even the one that reports SUCCESS because its review had nothing to decide. That says this run found nothing to ask you about; the registry on disk still holds every snippet you have ever authored, and sending it over the target's copy is a change nobody approved.
+No run without a terminal pushes the registry, not even the one that reports SUCCESS because its review had nothing to decide. That says this run found nothing to ask you about; the registry on disk still holds every snippet you have ever authored, and sending it over the other machine's copy is a change nobody approved. The one exception is a run where `--apply-package-installs` approved a hand-installed item: replaying its snippet reads the other machine's own copy of the registry, so the transfer is part of the install you asked for rather than a change nobody approved — and the guard on a transfer that would lose an entry still ends the run.
+
+## Converging packages unattended
+
+Two options answer a package review in advance, so a run with nobody watching can still bring the two machines' software into line. Each answers one direction:
+
+- `--apply-package-installs` applies everything that **adds** software: installs, repository and remote additions, enables, and converging an item both machines have to the version, channel or content the machine you sync from has.
+- `--apply-package-removals` applies everything that **takes software away**: removals, disables, repository and pin deletions, and the loss of a protected package an approved change would take with it.
+
+Pass both and the run replicates the package state of the machine you sync from. Pass one and the run converges that direction only — which is how you install what is new without also carrying out what you have since uninstalled.
+
+They answer as the machine you sync from dictates, not as the review screen's own starting position suggests: a removal screen starts at "skip now" precisely so that confirming it unread destroys nothing, and passing `--apply-package-removals` is you saying that this run you mean it.
+
+Four things neither option answers, because none of them is a question the other machine's package list can settle. Each is left exactly where a run with nobody to ask leaves it — named in a warning and skipped for this run:
+
+- a repository both machines hold with different content that feeds a package the machine you sync to recorded as its own;
+- an `/etc/apt/apt.conf.d` file that machine already holds, which states how its own apt behaves;
+- an item no package manager can install — the answer there is an install snippet you write, and no flag can write one;
+- the Ubuntu Pro question, which is about that machine's subscription rather than about software.
+
+A registry transfer that would lose one of that machine's snippet entries is the exception that does not skip: it still ends the run, so you can consolidate the two registries by hand. No option approves it.
+
+Neither option ever records a machine-specific mark, and neither writes a snippet. Both outlive the run that made them, and "this machine is different" is a statement only you can make. So a headless run converges software and records nothing about your preferences.
+
+Because a declined collateral question also leaves the changes causing it unapproved, `--apply-package-installs` **alone** will not install a package whose transaction would remove something you installed by hand on the other machine — that question belongs to the removal flag. Pass both if you want that install to land.
+
+`--yes` is unrelated and answers no package review; it is the configuration-sync prompt's option and nothing else.
+
+## The automation variable
 
 One environment variable overrides all of that, and it is not a feature: `PCSWITCHER_PACKAGE_REVIEW_AUTOMATION` carries a JSON map of item id to decision and answers a package review without asking. It exists so the integration tests can exercise a review with no terminal to answer at, and it appears in no help text and no configuration key. Its answers count as yours — a permanent one writes a machine-specific mark or an install snippet — so anything that sets it on a real run makes silent, unreviewed, permanent decisions on your machines.
 
@@ -376,7 +404,7 @@ The distribution's own source files are never offered for removal at all.
 
 Each enabled package job needs passwordless sudo for a handful of binaries:
 
-- **`apt_sync`** — on the source (to read `/etc/apt` configuration) and the target (to install packages, write and remove `/etc/apt` configuration including signing keys, and set or clear apt holds via `apt-mark`).
+- **`apt_sync`** — on the source (to read `/etc/apt` configuration) and the target (to install packages, write and remove `/etc/apt` configuration including signing keys, and set or clear apt holds via `apt-mark`). Both hosts additionally need it for the sync-window pause of the system's own apt update timers (`sudo systemctl stop/start` on `apt-daily.timer` and `apt-daily-upgrade.timer`, plus the `sudo systemd-run` that schedules their automatic restart). The runtime pause tolerates a failure without aborting the sync, but the sudo grant is checked up front on both machines.
 - **`snap_sync`** — on both the **source** and the **target**; validation fails if either lacks it. The target needs it to install, refresh and remove snaps, and both hosts need it to pause snapd's auto-refresh for the sync window (`sudo snap set system refresh.hold`, plus the matching `sudo snap get` — snapd requires admin rights to read snap configuration as well as to write it). The runtime pause itself tolerates a transient failure without aborting the sync, but the sudo grant is checked up front on both machines.
 - **`flatpak_sync`** — on the target only, and only when a system-scope ref, remote or mask is in play on either machine. A user-scope-only sync never asks for root.
 - **`manual_installs_sync`** — a snippet author decides its own privilege needs; the replay itself runs unprivileged, so the job requires no sudo beyond what a given snippet writes for itself.

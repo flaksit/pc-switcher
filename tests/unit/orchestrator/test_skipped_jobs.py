@@ -1,8 +1,9 @@
 """A job that did nothing is recorded SKIPPED, not SUCCESS (SPEC 02 S8a).
 
-Two orchestrator-level mechanisms: the `except JobSkipped` arm in the sequential job
-loop, and the SKIPPED result discovery builds for an enabled job name that resolves to
-no class — the one case with no job instance to raise from.
+Three orchestrator-level mechanisms: the `except JobSkipped` arm in the sequential job
+loop, the SKIPPED result discovery builds for an enabled job name that resolves to no class
+— the one case with no job instance to raise from — and the install-on-target step, which
+is not config-driven but runs on every sync and so records a result of its own.
 """
 
 from __future__ import annotations
@@ -83,3 +84,52 @@ class TestUnresolvableEnabledJob:
 
         assert unresolved == []
         assert [job.name for job in jobs] == ["dummy_success"]
+
+
+class _StubInstallJob:
+    """Stands in for InstallOnTargetJob: the orchestrator's bookkeeping is what is tested."""
+
+    name: ClassVar[str] = "install_on_target"
+    skip_reason: ClassVar[str | None] = None
+
+    def __init__(self, context: JobContext) -> None:
+        self.context = context
+
+    async def validate(self) -> list[ValidationError]:
+        return []
+
+    async def execute(self) -> None:
+        if self.skip_reason is not None:
+            raise JobSkipped(self.name, self.skip_reason)
+
+
+class TestTheInstallStepRecordsItsOwnOutcome:
+    """It runs on every sync, so it contributes a result like any other job that ran."""
+
+    @pytest.mark.asyncio
+    async def test_a_skipped_install_step_is_recorded_with_its_reason(
+        self, wired_orchestrator: Orchestrator, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        class _Skipping(_StubInstallJob):
+            skip_reason: ClassVar[str | None] = "install skipped by the integration harness"
+
+        monkeypatch.setattr("pcswitcher.orchestrator.InstallOnTargetJob", _Skipping)
+
+        await wired_orchestrator._install_on_target_job()  # pyright: ignore[reportPrivateUsage]
+
+        results = wired_orchestrator._job_results  # pyright: ignore[reportPrivateUsage]
+        assert [(r.job_name, r.status) for r in results] == [("install_on_target", JobStatus.SKIPPED)]
+        assert results[0].error_message == "install skipped by the integration harness"
+        assert _summarize_job_outcomes(results)[0] is SessionStatus.COMPLETED
+
+    @pytest.mark.asyncio
+    async def test_an_install_step_that_ran_is_recorded_successful(
+        self, wired_orchestrator: Orchestrator, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("pcswitcher.orchestrator.InstallOnTargetJob", _StubInstallJob)
+
+        await wired_orchestrator._install_on_target_job()  # pyright: ignore[reportPrivateUsage]
+
+        results = wired_orchestrator._job_results  # pyright: ignore[reportPrivateUsage]
+        assert [(r.job_name, r.status) for r in results] == [("install_on_target", JobStatus.SUCCESS)]
+        assert results[0].error_message is None

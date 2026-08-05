@@ -21,9 +21,18 @@ from pcswitcher.models import CommandResult
 
 # Binaries this job runs under sudo, quoted back to the user when the passwordless-sudo
 # check fails. A lower bound on what must be permitted, not an exact scope (ADR-013).
-# The source is only ever read, so it needs just the /etc/apt digest capture and the
-# conflict-review `cat` of a file the two machines disagree about.
-SOURCE_SUDO_COMMANDS = ("/usr/bin/find", "/usr/bin/sha256sum", "/usr/bin/test", "/usr/bin/cat")
+# The source's package state is never changed, so it needs just the /etc/apt digest capture
+# and the conflict-review `cat` of a file the two machines disagree about — plus `systemctl`
+# and `systemd-run`, which BOTH machines need: the orchestrator pauses each host's own apt
+# update timers for the sync window and schedules the transient unit that restarts them.
+SOURCE_SUDO_COMMANDS = (
+    "/usr/bin/find",
+    "/usr/bin/sha256sum",
+    "/usr/bin/test",
+    "/usr/bin/cat",
+    "/usr/bin/systemctl",
+    "/usr/bin/systemd-run",
+)
 TARGET_SUDO_COMMANDS = (
     "/usr/bin/apt-get",
     "/usr/bin/apt-mark",
@@ -35,6 +44,8 @@ TARGET_SUDO_COMMANDS = (
     "/usr/bin/cp",
     "/usr/bin/rm",
     "/usr/bin/fuser",
+    "/usr/bin/systemctl",
+    "/usr/bin/systemd-run",
 )
 
 # Matches one `apt-get --dry-run` transaction line: `Inst <name> [<old>] (<new> ...)` for an

@@ -60,7 +60,9 @@ from pcswitcher.jobs.packages.review import (
     ReviewEntry,
     ReviewGroup,
     ReviewOutcome,
+    ReviewPolicy,
     asks_for_a_decision,
+    policy_answers_any,
 )
 from pcswitcher.jobs.packages.state import DecisionEntry, DecisionFile
 from pcswitcher.models import CommandResult, Host, JobSkipped, LogLevel, ProgressUpdate
@@ -1008,8 +1010,8 @@ class PackageSyncJob(SyncJob):
         A `plan()` failure propagates unchanged, so the orchestrator's per-job exception
         handling attributes it to this job's own `JobResult`.
 
-        A non-interactive run whose review held something to DECIDE raises `JobSkipped`:
-        D-26 forces every such item to SKIP_ONCE with nobody present to answer, so
+        A run whose review held something to DECIDE and that NOBODY answered raises
+        `JobSkipped`: D-26 forces every such item to SKIP_ONCE with nobody present, so
         continuing would converge nothing and report SUCCESS. It is raised before any
         mutating command, as `JobSkipped` requires, and before the second round is put:
         asking a screen nobody can answer would print the same items twice for nothing.
@@ -1019,22 +1021,38 @@ class PackageSyncJob(SyncJob):
         absence changed its outcome and it stays SUCCESS, exactly as an empty plan does
         (`PKG-FR-NO-TERMINAL`).
 
-        `after_review()` runs only when a human answered (`PKG-FR-NO-TERMINAL`: a
-        non-interactive run transfers no registry). The two SUCCESS cases above are
-        exactly where that matters: `manual_installs_sync`'s hook pushes the SOURCE's
-        whole snippet registry, which carries entries from earlier runs, so "this run had
-        nothing to decide" is not "this run has nothing to transfer". Gated here rather
-        than in the hook so the rule holds for any job that ever needs the seam.
+        "Nobody answered" is two questions, not one. `ReviewOutcome.was_interactive` says
+        whether a HUMAN did, and it must stay that: `_record_permanent_skips` keys the
+        machine-specific mark on it, and a run the flags answered may not write one
+        (`PKG-FR-APPLY-FLAGS-NO-MARK`). Whether the COMMAND LINE answered is the second
+        question, and `review.policy_answers_any` asks it of this job's own groups — over
+        both rounds, so a job whose only answerable group is a second-round one still runs.
+        A run where the flags answer nothing they were given still skips, exactly as it
+        does with no flags at all (`PKG-FR-APPLY-FLAGS-SCOPE`).
+
+        `after_review()` runs when a human answered OR the command line did
+        (`PKG-FR-NO-TERMINAL`: a run nobody answered transfers no registry). It matters in
+        both directions here: `manual_installs_sync`'s hook pushes the SOURCE's whole
+        snippet registry, which carries entries from earlier runs, so "this run had nothing
+        to decide" is not "this run has nothing to transfer" — and an install the flags
+        approved is REPLAYED from the target's copy of that registry, so skipping the push
+        would converge it from a stale file or none. What the hook must NOT do on a
+        flag-answered run it already declines on its own: `_finalize_unreproducible` writes
+        nothing unless the outcome was interactive, so no snippet is authored and no mark is
+        recorded by a run nobody watched. Gated here rather than in the hook so the rule
+        holds for any job that ever needs the seam.
         """
         assert self.context.reviewer is not None, (
             f"{self.manager_id} sync has no reviewer; the orchestrator must inject one "
             "through JobContext.reviewer before execute()."
         )
+        policy = self.context.review_policy if self.context.review_policy is not None else ReviewPolicy()
         plan = await self.plan()
         outcome = await self.context.reviewer.review(plan.groups)
         second = await self.plan_second_round(plan, outcome)
         groups = (*plan.groups, *second.groups)
-        if any(asks_for_a_decision(group) for group in groups) and not outcome.was_interactive:
+        answered_by_policy = policy_answers_any(groups, policy)
+        if any(asks_for_a_decision(group) for group in groups) and not (outcome.was_interactive or answered_by_policy):
             raise JobSkipped(
                 self.name,
                 f"non-interactive run left every {self.manager_id} review item undecided",
@@ -1043,6 +1061,6 @@ class PackageSyncJob(SyncJob):
             outcome = _merge_rounds(outcome, await self.context.reviewer.review(second.groups))
         plan = PackagePlan(manager=plan.manager, diffs=second.diffs, groups=groups)
         self.accept_review(plan, outcome)
-        if outcome.was_interactive:
+        if outcome.was_interactive or answered_by_policy:
             await self.after_review()
         await self.apply()
