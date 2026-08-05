@@ -488,8 +488,8 @@ class TestUnownedValidate:
 
     @pytest.mark.asyncio
     async def test_dpkg_unavailable_on_source_yields_validation_error(self) -> None:
-        """Validation fails before anything runs, naming the source and the scan its missing
-        tool would have answered."""
+        """G119 — validation fails before anything runs, naming the source and the scan its
+        missing tool would have answered."""
         context, _source, _target = make_context(
             source_responses={"dpkg --version": CommandResult(127, "", "not found")}
         )
@@ -501,7 +501,7 @@ class TestUnownedValidate:
 
     @pytest.mark.asyncio
     async def test_dpkg_unavailable_on_target_yields_validation_error(self) -> None:
-        """The target is read too now that what it already holds decides what is presented,
+        """G120 — the target is read too now that what it already holds decides what is presented,
         so its missing tool is named before the run starts rather than as a dead probe
         halfway through."""
         context, _source, _target = make_context(
@@ -515,8 +515,8 @@ class TestUnownedValidate:
 
     @pytest.mark.asyncio
     async def test_valid_environment_yields_no_errors_and_asks_nothing_of_apt(self) -> None:
-        """With dpkg present on both machines nothing fails, and no apt tool is probed for at
-        all: what apt can or cannot supply is another job's question."""
+        """G121 — with dpkg present on both machines nothing fails, and no apt tool is probed
+        for at all: what apt can or cannot supply is another job's question."""
         context, source, target = make_context()
         job = ManualInstallsSyncJob(context)
 
