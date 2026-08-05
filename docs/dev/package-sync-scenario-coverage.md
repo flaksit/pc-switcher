@@ -1768,7 +1768,6 @@ Five exits, then the `userinfo` grammar boundary.
 | K2 | Same, for `snap_sync` | present and off | U | `unit/orchestrator/test_config_system:TestShippedDefaultConfig::test_package_jobs_ship_disabled` |
 | K3 | Same, for `flatpak_sync` | present and off | U | same test |
 | K4 | Same, for `manual_installs_sync` | present and off | U | same test |
-| K5 | The shipped `default-config.yaml` is loaded | It validates against the shipped schema and yields `folder_sync`/`vscode_state_sync` on | U | `unit/orchestrator/test_config_system:TestShippedDefaultConfig::test_shipped_default_config_loads` |
 | K6 | Read the shipped config for a per-job settings section | No top-level `apt_sync`/`snap_sync`/`flatpak_sync`/`manual_installs_sync` section ships; each job's resolved config is empty | U | `…:TestShippedDefaultConfig::test_shipped_config_omits_empty_package_sections` |
 | K7 | A hand-written config enables all four package jobs and writes no section for any of them | Loads without error; each job's config is empty | U | `…:TestShippedDefaultConfig::test_config_omitting_package_sections_validates` |
 | K8 | A config with no `sync_jobs` block at all | No package job is instantiated; nothing is installed or removed | U | `unit/orchestrator/test_config_system:TestJobDiscoveryFollowsTheConfig::test_a_config_with_no_sync_jobs_block_instantiates_nothing`, `TestEmptyConfig::test_core_empty_config_file` |
