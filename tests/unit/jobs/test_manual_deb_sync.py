@@ -1,6 +1,5 @@
 """Unit tests for `ManualDebSyncJob`: the hand-installed `.deb` half of what no package
-manager can reproduce (D-18) — the no-candidate detection, its validation, and the marks
-`manual_installs_sync` recorded about these items before the split.
+manager can reproduce (D-18) — the no-candidate detection, its diff and its validation.
 
 The shared half both unreproducible jobs inherit is covered in `test_unreproducible_jobs.py`.
 All executor interactions are mocked; no real dpkg/apt-cache/sudo commands run.
@@ -13,7 +12,6 @@ from unittest.mock import MagicMock
 import pytest
 
 from pcswitcher.config import Configuration
-from pcswitcher.jobs import JobContext
 from pcswitcher.jobs.manual_deb_sync import ManualDebSyncJob
 from pcswitcher.jobs.packages.apt_policy import installed_origins_by_package
 from pcswitcher.jobs.packages.items import DiffAction, DiffClass, ItemClass
@@ -303,7 +301,7 @@ class TestInertFiltering:
             source_responses={
                 STATUS_QUERY: installed_on("brscan3"),
                 "apt-cache policy": CommandResult(0, hand_deb_policy("brscan3"), ""),
-                "cat ~/.config/pc-switcher/manual.decisions.yaml": CommandResult(0, decisions_yaml, ""),
+                "cat ~/.config/pc-switcher/manual_deb.decisions.yaml": CommandResult(0, decisions_yaml, ""),
             }
         )
         job = ManualDebSyncJob(context)
@@ -330,7 +328,9 @@ class TestInertFiltering:
                 STATUS_QUERY: installed_on("brscan3"),
                 "apt-cache policy": CommandResult(0, hand_deb_policy("brscan3"), ""),
             },
-            target_responses={"cat ~/.config/pc-switcher/manual.decisions.yaml": CommandResult(0, decisions_yaml, "")},
+            target_responses={
+                "cat ~/.config/pc-switcher/manual_deb.decisions.yaml": CommandResult(0, decisions_yaml, "")
+            },
         )
         job = ManualDebSyncJob(context)
 
@@ -527,52 +527,6 @@ class TestMarksFollowWhatTheMachineHolds:
         rewrites = [cmd for cmd in all_calls(source) if "mv --force" in cmd]
         assert len(rewrites) == 1
         assert "brscan3" not in rewrites[0]
-
-
-class TestMarksRecordedBeforeTheSplit:
-    """The permanent answers `manual_installs_sync` recorded about hand-installed `.deb`
-    packages while it still owned their detection (`state.AdoptedMarks`): this job reads its
-    own slice of that file and leaves the rest of it alone.
-    """
-
-    @staticmethod
-    def _context(legacy_decisions: str) -> tuple[JobContext, MagicMock, MagicMock]:
-        """A source holding one hand-installed `.deb` (`code`), whose only decision file is
-        `manual_installs_sync`'s — this job's own has never been written."""
-        return make_context(
-            source_responses={
-                STATUS_QUERY: installed_on("code"),
-                "apt-cache policy": CommandResult(0, hand_deb_policy("code"), ""),
-                "manual.decisions.yaml": CommandResult(0, legacy_decisions, ""),
-            }
-        )
-
-    @pytest.mark.asyncio
-    async def test_a_mark_recorded_before_the_split_still_silences_its_finding(self) -> None:
-        """G117 — the answer was given when `manual_installs_sync` owned hand-`.deb`
-        detection, so it sits in that job's file; the finding it silenced stays silent rather
-        than being put to the user again under a new job's name."""
-        context, _source, _target = self._context(_manual_decisions("unreproducible:apt-no-candidate:code"))
-        job = ManualDebSyncJob(context)
-
-        plan = await job.plan()
-
-        assert plan.diffs == ()
-
-    @pytest.mark.asyncio
-    async def test_a_path_mark_in_the_same_file_is_not_adopted(self) -> None:
-        """G118 — that same file holds `manual_installs_sync`'s own path marks: this job takes
-        the `apt-no-candidate` slice and nothing else, so the other job's answers stay its
-        own."""
-        context, _source, _target = self._context(
-            _manual_decisions("unreproducible:apt-no-candidate:code", "unreproducible:unowned-path:/opt/thing")
-        )
-        job = ManualDebSyncJob(context)
-
-        entries = await job._decision_file(job.source).load()  # pyright: ignore[reportPrivateUsage]
-
-        assert "unreproducible:apt-no-candidate:code" in entries
-        assert "unreproducible:unowned-path:/opt/thing" not in entries
 
 
 class TestDebJobDiscovery:

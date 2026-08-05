@@ -413,9 +413,7 @@ class ManualInstallsSyncJob(UnreproducibleSyncJob):
         to `/opt` and `/usr/local`, so a marked path outside those roots is absent from every
         scan while sitting on disk. `test -e` asks the filesystem instead.
 
-        Entries this job cannot recognise — including the hand-`.deb` marks recorded in this
-        same file before `manual_deb_sync` was carved out of it, which that job now adopts —
-        are left exactly where they are.
+        Entries this job cannot recognise are left exactly where they are.
         """
         executor = self.source if on_source else self.target
         machine = self.machines.source if on_source else self.machines.target
