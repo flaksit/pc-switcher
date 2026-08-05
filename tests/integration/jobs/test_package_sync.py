@@ -94,6 +94,7 @@ import pytest
 
 from pcswitcher.executor import BashLoginRemoteExecutor
 from pcswitcher.jobs.apt_sync.items import AptPackageItem
+from pcswitcher.jobs.flatpak_sync import FlatpakItem
 from pcswitcher.jobs.packages.review import Decision
 from pcswitcher.jobs.packages.state import (
     DecisionFile,
@@ -128,6 +129,7 @@ from tests.integration.jobs.package_sync_scenario import (
     VENDOR_REPO_URI,
     AptSubjects,
     a_name_apt_knows_the_machine_does_not_have,
+    alternate_snap_revision,
     apt_get_update,
     apt_update_lines_naming,
     author_snippet,
@@ -882,13 +884,16 @@ class TestSkipAlwaysIsInertInBothRoles:
     what the hook can already express and the other is what the real UI already offers, and
     the same three runs settle both (#216).
 
-    The last of the three is this module's only run in which pc1 is the TARGET, which is the
-    premise a second, ordinary removal-direction item rides on: what a run does with an item
-    the user leaves undecided can only be read off the machine that would have lost the
-    package.
+    The last of the three is this module's only run in which pc1 is the TARGET, which is what
+    makes D-08's inertness observable from the other side of the same decision.
+
+    A second, ordinary removal-direction item rides on the first two runs: pc2 has a package
+    pc1 does not, declined in run 1 and approved in run 2. That is the same pair of runs,
+    answered differently for one more item, and it is the only place in this suite where a
+    run meets what the run before it declined.
     """
 
-    async def test_a_recorded_skip_always_survives_a_forced_apply_in_either_direction(
+    async def test_a_recorded_skip_always_survives_a_forced_apply_in_either_direction(  # noqa: PLR0915
         self,
         pc1_executor: BashLoginRemoteExecutor,
         pc2_executor: BashLoginRemoteExecutor,
@@ -897,9 +902,9 @@ class TestSkipAlwaysIsInertInBothRoles:
         pc2_with_pcswitcher: BashLoginRemoteExecutor,
         reset_pcswitcher_state: None,
     ) -> None:
-        """H125, H126, H166, N1, N2, G27, A54, H31 — D-08's permanent skip across three runs,
-        and the removal-direction item the last of them leaves undecided (D-07's own unticked
-        group).
+        """H125, H126, H166, N1, N2, G27, A54, H31, H114, N7 — D-08's permanent skip across
+        three runs, and a removal-direction item declined by the first of them and approved by
+        the second (D-07's own unticked group).
 
         Run 1 records SKIP_ALWAYS for both items and applies neither. The apt entry lands in
         pc1's apt decision file and the `.deb` entry in its manual one -- and that second
@@ -924,11 +929,18 @@ class TestSkipAlwaysIsInertInBothRoles:
         if a diff existed at all, would mean REMOVE, since pc1 genuinely still has the
         package) must still leave it untouched.
 
-        A second apt package, seeded onto pc1 and off pc2 and carrying no decision of any
-        kind, rides on that same run as an ordinary removal-direction item: it lands in its
-        own unticked group (D-07), so deciding it SKIP_ONCE must leave pc1's copy exactly
-        where it is. Read off pc1's own `apt-mark showmanual`, which is the only thing that
-        distinguishes "the item was offered and declined" from "the item was applied".
+        A second apt package, seeded onto pc2 and off pc1, rides on runs 1 and 2 as an
+        ordinary removal-direction item. Run 1 decides it SKIP_ONCE: it lands in its own
+        unticked group (D-07) and pc2 keeps the package, read off pc2's own `apt-mark
+        showmanual`, which is the only thing that distinguishes "the item was offered and
+        declined" from "the item was applied". Nothing is recorded for it either -- a
+        skip-once leaves no trace, so pc2's apt decision file, which is where a removal's
+        answer would be held (D-08a), names it nowhere.
+
+        Run 2 approves the same item and pc2 loses the package. Two things follow from one
+        outcome: the decline was a decision about that run rather than a deferral of the item
+        (H31), and the item was diffed and offered again unchanged, which it could only be
+        because run 1's decline left nothing behind to filter it out (H114, N7).
 
         `--allow-out-of-order` bypasses the unrelated W3 consecutive-push gate a second
         same-direction sync would otherwise trip (ADR-015) -- orthogonal to what this proves.
@@ -937,11 +949,10 @@ class TestSkipAlwaysIsInertInBothRoles:
 
         candidate = apt_subjects.install_direction[0]
         apt_item_id = AptPackageItem(name=candidate, version="").item_id
-        # A second subject, never decided in runs 1 and 2 -- the hook's default leaves every
-        # item it does not name SKIP_ONCE, so it stays absent from pc2 until run 3 reverses
-        # the roles and turns it into a removal-direction item on pc1.
-        undecided = apt_subjects.install_direction[1]
-        undecided_item_id = AptPackageItem(name=undecided, version="").item_id
+        # The pinned subject for the other direction: pc2 has it and pc1 does not, so pc2 is
+        # the machine that stands to lose it.
+        removal = apt_subjects.removal_direction
+        removal_item_id = AptPackageItem(name=removal, version="").item_id
 
         hand_deb = ""
         try:
@@ -953,12 +964,12 @@ class TestSkipAlwaysIsInertInBothRoles:
             async def seed_the_source() -> None:
                 nonlocal hand_deb
                 await ensure_installed_and_manual(pc1_executor, candidate)
-                await ensure_installed_and_manual(pc1_executor, undecided)
+                await ensure_absent(pc1_executor, removal)
                 hand_deb = await install_a_hand_downloaded_deb(pc1_executor)
 
             async def seed_the_target() -> None:
                 await ensure_absent(pc2_executor, candidate)
-                await ensure_absent(pc2_executor, undecided)
+                await ensure_installed_and_manual(pc2_executor, removal)
 
             _ = await finish_both(seed_the_source(), seed_the_target())
             deb_item_id = no_candidate_item_id(hand_deb)
@@ -978,8 +989,12 @@ class TestSkipAlwaysIsInertInBothRoles:
 
             await write_package_sync_config(pc1_executor, apt_sync=True, manual_installs_sync=True)
 
-            # -- run 1: record -----------------------------------------------------------
-            skip_always = {apt_item_id: Decision.SKIP_ALWAYS, deb_item_id: Decision.SKIP_ALWAYS}
+            # -- run 1: record, and decline the removal ----------------------------------
+            skip_always = {
+                apt_item_id: Decision.SKIP_ALWAYS,
+                deb_item_id: Decision.SKIP_ALWAYS,
+                removal_item_id: Decision.SKIP_ONCE,
+            }
             first = await pc1_executor.run_command(
                 f"{SKIP_INSTALL_ON_TARGET} {automation_env_assignment_multi(skip_always)}"
                 f" pc-switcher sync pc2 --yes --allow-first-sync",
@@ -1001,10 +1016,23 @@ class TestSkipAlwaysIsInertInBothRoles:
                 f"recorded: {sorted(manual_entries)}"
             )
             still_absent = await pc2_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0)
-            assert candidate not in nonblank_lines(still_absent.stdout), "skip-always must not itself install the item"
+            pc2_manual_after_first = nonblank_lines(still_absent.stdout)
+            assert candidate not in pc2_manual_after_first, "skip-always must not itself install the item"
+            assert removal in pc2_manual_after_first, (
+                f"{removal} was removed from pc2 although the run declined it -- a removal-direction item takes "
+                "effect only when the user ticks it (D-07)"
+            )
+            assert removal_item_id not in await DecisionFile("apt", pc2_executor).load(), (
+                f"declining {removal} for this run recorded something on pc2, the machine a removal's answer is held "
+                "on (D-08a) -- a skip-once must leave no trace at all"
+            )
 
-            # -- run 2: same direction, forced ------------------------------------------
-            force_apply = {apt_item_id: Decision.APPLY, deb_item_id: Decision.APPLY}
+            # -- run 2: same direction, forced, and the declined removal approved --------
+            force_apply = {
+                apt_item_id: Decision.APPLY,
+                deb_item_id: Decision.APPLY,
+                removal_item_id: Decision.APPLY,
+            }
             second = await pc1_executor.run_command(
                 f"{SKIP_INSTALL_ON_TARGET} {automation_env_assignment_multi(force_apply)} "
                 "pc-switcher sync pc2 --yes --allow-first-sync --allow-out-of-order",
@@ -1015,9 +1043,14 @@ class TestSkipAlwaysIsInertInBothRoles:
                 f"second sync unexpectedly failed.\nstdout: {second.stdout}\nstderr: {second.stderr}"
             )
             still_absent_2 = await pc2_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0)
-            assert candidate not in nonblank_lines(still_absent_2.stdout), (
+            pc2_manual_after_second = nonblank_lines(still_absent_2.stdout)
+            assert candidate not in pc2_manual_after_second, (
                 f"{candidate} was installed on pc2 despite a source-held skip-always decision -- "
                 "the item produced a diff when it should have been filtered out entirely (D-08)"
+            )
+            assert removal not in pc2_manual_after_second, (
+                f"{removal} is still on pc2 after being approved -- the item declined last run was not diffed and "
+                "offered again, so the decline left a trace that filtered it out"
             )
             # A decision file holds nothing but skip-always entries, so the entry being
             # BYTE-IDENTICAL to run 1's -- `recorded_at` included -- is what says nobody
@@ -1029,7 +1062,7 @@ class TestSkipAlwaysIsInertInBothRoles:
 
             # -- run 3: reversed roles ---------------------------------------------------
             await write_apt_sync_config(pc2_executor)
-            reversed_decisions = {apt_item_id: Decision.APPLY, undecided_item_id: Decision.SKIP_ONCE}
+            reversed_decisions = {apt_item_id: Decision.APPLY}
             reversed_result = await pc2_executor.run_command(
                 f"{SKIP_INSTALL_ON_TARGET} {automation_env_assignment_multi(reversed_decisions)} "
                 "pc-switcher sync pc1 --yes --allow-first-sync --allow-out-of-order",
@@ -1046,10 +1079,6 @@ class TestSkipAlwaysIsInertInBothRoles:
             assert candidate in pc1_manual_after, (
                 f"{candidate} was removed from pc1 despite a target-held skip-always decision -- "
                 "the item produced a diff when it should have been filtered out entirely (D-08)"
-            )
-            assert undecided in pc1_manual_after, (
-                f"{undecided} was removed from pc1 without being approved -- a removal-direction item must take "
-                "effect only when the user ticks it"
             )
         finally:
             if hand_deb:
@@ -1963,3 +1992,255 @@ class TestTheStockSkeletonTheScanRefusesToName:
             "base-files no longer creates the `/usr/local` skeleton the scan is built on; "
             f"it declares {sorted(created | symlinked)}.\n{postinst.stdout}"
         )
+
+
+class TestOneManagerAtATime:
+    """Four divergences standing side by side, converged one job at a time, and then the run
+    that has nothing left to do.
+
+    Nothing else can carry these five runs. Each of the first four enables exactly ONE package
+    job, which is the premise of the claim it settles: a run with a second job enabled cannot
+    say that the second manager's divergence survived because that job was never asked to
+    converge it. And the fifth is a fixed point that only exists once the other four have run
+    -- the pair reaches "everything approved has converged" by this scenario's own history, so
+    the run that observes it cannot be borrowed from anywhere.
+
+    The seeding is deliberately leaner than
+    `package_sync_scenario.seed_a_divergence_in_every_manager`: that one also builds a vendor
+    repository, an always-sync pin, a ref filter and a target-only remote, each of which is a
+    fifth thing for some run to converge and a sixth to clean up, and none of which any claim
+    here is about. What is seeded is exactly the four divergences the four jobs answer.
+
+    Both machines' snapd auto-refresh is paused throughout (the same timed `refresh.hold` a
+    sync engages), because the snap divergence is asserted to SURVIVE three runs and to be
+    identical across a fourth; a background refresh moving a revision would read as a job
+    doing something.
+    """
+
+    async def test_each_job_alone_converges_its_own_manager_and_the_fifth_run_moves_nothing(  # noqa: PLR0915
+        self,
+        pc1_executor: BashLoginRemoteExecutor,
+        pc2_executor: BashLoginRemoteExecutor,
+        apt_subjects: AptSubjects,
+        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
+        pc2_with_pcswitcher: BashLoginRemoteExecutor,
+        reset_pcswitcher_state: None,
+    ) -> None:
+        """K9, K10, K11, K12, G67, N8, J2 — one divergence per manager, five pc1 -> pc2 runs.
+
+        Runs 1 to 4 enable `apt_sync`, `snap_sync`, `flatpak_sync` and
+        `manual_installs_sync` respectively, and each approves its own manager's only item.
+        Every one of them settles TWO halves, both read off pc2's own package managers and
+        filesystem: the enabled job converged its manager, and the three disabled jobs left
+        their divergences exactly where they were. The second half is the whole point, so it
+        is asserted as pc2's state rather than as a log line that failed to appear.
+
+        No run enables `folder_sync` (G67): the registry reaching pc2 in run 4 is
+        `manual_installs_sync`'s own `send_file`, and a mirror of the directory it lives in
+        would be a second route to the same file.
+
+        Run 5 enables all four over the pair the first four converged, and answers nothing.
+        pc2's whole `MachinePackageState` -- both installed sets, `/etc/apt`'s digests, the
+        snap revisions, the refs and the remote table -- is byte-identical across it, every
+        manager reports that it has no change to apply, and no review line names any of the
+        four subjects.
+
+        That last assertion is scoped to the four subjects on purpose. The other scenarios in
+        this module leave packages, snaps and refs diverged between the two machines by
+        design (this module's own docstring: what one scenario leaves behind is the next
+        one's precondition), and an item that is still genuinely diverged is legitimately
+        presented again -- which is not what a fixed point promises about the items THIS
+        scenario converged.
+
+        The snippet authored for the unowned path creates that same path on pc2, so run 4
+        converges the manual-install divergence rather than merely replaying against it: a
+        finding the target already holds is subtracted before it becomes a diff
+        (`PKG-FR-MANUAL-DIFF`), which is what makes run 5 a fixed point for this manager too.
+
+        `--allow-out-of-order` bypasses the unrelated W3 consecutive-push gate every run
+        after the first would otherwise trip (ADR-015).
+        """
+        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
+
+        uniq = uuid4().hex[:12]
+        apt_candidate = apt_subjects.install_direction[0]
+        apt_item_id = AptPackageItem(name=apt_candidate, version="").item_id
+        unowned_path = f"/opt/pcswitcher-it-one-at-a-time-{uniq}"
+        manual_item_id = unowned_item_id(unowned_path)
+        # Mirrors `create_unowned_marker`: a directory holding a file is what the scan calls a
+        # finding, so pc2 ends run 4 holding the same one and run 5 has nothing to present.
+        snippet_body = (
+            f"sudo mkdir --parents {shlex.quote(unowned_path)} && sudo touch {shlex.quote(f'{unowned_path}/marker')}"
+        )
+
+        application, version, scope, remote_name, _url, ref = await flatpak_subject(pc1_executor)
+        ref_item_id = FlatpakItem(
+            application=application, version=version, origin=remote_name, scope=scope, ref=ref
+        ).item_id
+        scope_flag = "--user" if scope == "user" else "--system"
+        sudo = "sudo " if scope == "system" else ""
+
+        snap_name = (await snap_subjects(pc1_executor, pc2_executor, count=1))[0]
+        pc1_prior_hold, pc2_prior_hold = await asyncio.gather(
+            capture_system_refresh_hold(pc1_executor), capture_system_refresh_hold(pc2_executor)
+        )
+
+        async def what_pc2_has() -> tuple[bool, str | None, bool, bool]:
+            """pc2's four managers, one read each and all four at once: whether the apt
+            subject is installed, which revision the snap is on, whether the fixture app is
+            installed, and whether the unowned path exists.
+            """
+            installed, revision, apps, unowned = await asyncio.gather(
+                pc2_executor.run_command(
+                    "dpkg-query --show --showformat='${Package}\\t${Status}\\n'", login_shell=False, timeout=20.0
+                ),
+                snap_revision(pc2_executor, snap_name),
+                flatpak_app_rows(pc2_executor),
+                pc2_executor.run_command(f"sudo test -d {shlex.quote(unowned_path)}", login_shell=False, timeout=10.0),
+            )
+            return (
+                apt_candidate in parse_dpkg_installed(installed.stdout),
+                revision,
+                application in [row[0] for row in apps],
+                unowned.success,
+            )
+
+        async def sync_with(label: str, decisions: dict[str, Decision], *, flags: str) -> CommandResult:
+            """Run one sync against the config the caller has just written for it."""
+            result = await pc1_executor.run_command(
+                f"{SKIP_INSTALL_ON_TARGET} {automation_env_assignment_multi(decisions)} "
+                f"pc-switcher sync pc2 --yes {flags}",
+                timeout=600.0,
+                login_shell=True,
+            )
+            assert result.success, (
+                f"the {label} run exited {result.exit_code}.\nstdout: {result.stdout}\nstderr: {result.stderr}"
+            )
+            return result
+
+        repeat = "--allow-first-sync --allow-out-of-order"
+        try:
+            _ = await asyncio.gather(
+                engage_system_refresh_hold(pc1_executor), engage_system_refresh_hold(pc2_executor)
+            )
+
+            source_revision = await snap_revision(pc1_executor, snap_name)
+            assert source_revision, f"{snap_name} is not installed on pc1, so there is no revision to converge to"
+            alternate_revision = await alternate_snap_revision(pc2_executor, snap_name, source_revision)
+
+            # One chain per machine, run at once: the two machines' package managers and
+            # filesystems contend on nothing.
+            async def seed_the_source() -> None:
+                await ensure_installed_and_manual(pc1_executor, apt_candidate)
+                await create_unowned_marker(pc1_executor, unowned_path)
+                await author_snippet(pc1_executor, manual_item_id, unowned_path, snippet_body)
+
+            async def seed_the_target() -> None:
+                await ensure_absent(pc2_executor, apt_candidate)
+                diverged = await pc2_executor.run_command(
+                    f"sudo snap refresh --revision={shlex.quote(alternate_revision)} {shlex.quote(snap_name)}",
+                    login_shell=False,
+                    timeout=180.0,
+                )
+                assert diverged.success, (
+                    f"could not move pc2's {snap_name} to revision {alternate_revision}: {diverged.stderr}"
+                )
+                # Deleting the remote too is what makes run 3's remote a DERIVED write rather
+                # than one pc2 already had.
+                dropped = await pc2_executor.run_command(
+                    f"{sudo}flatpak uninstall {scope_flag} --assumeyes {shlex.quote(application)} || true; "
+                    f"{sudo}flatpak remote-delete {scope_flag} --force {shlex.quote(remote_name)} || true",
+                    login_shell=False,
+                    timeout=120.0,
+                )
+                assert dropped.success, f"could not take {application} and {remote_name} off pc2: {dropped.stderr}"
+
+            _ = await finish_both(seed_the_source(), seed_the_target())
+            assert await what_pc2_has() == (False, alternate_revision, False, False), (
+                "pc2 does not hold the four divergences this scenario seeded, so no run below converges anything"
+            )
+
+            # -- run 1: apt alone --------------------------------------------------------
+            await write_package_sync_config(pc1_executor, apt_sync=True)
+            first = await sync_with("apt-only", {apt_item_id: Decision.APPLY}, flags="--allow-first-sync")
+            assert await what_pc2_has() == (True, alternate_revision, False, False), (
+                f"the apt-only run did not converge {apt_candidate} on pc2, or it moved a manager whose job was "
+                f"never enabled.\nstdout: {first.stdout}\nstderr: {first.stderr}"
+            )
+
+            # -- run 2: snap alone -------------------------------------------------------
+            await write_package_sync_config(pc1_executor, snap_sync=True)
+            second = await sync_with("snap-only", {f"snap:{snap_name}": Decision.APPLY}, flags=repeat)
+            assert await what_pc2_has() == (True, source_revision, False, False), (
+                f"the snap-only run did not bring pc2's {snap_name} to revision {source_revision}, or it moved a "
+                f"manager whose job was never enabled.\nstdout: {second.stdout}\nstderr: {second.stderr}"
+            )
+
+            # -- run 3: flatpak alone ----------------------------------------------------
+            await write_package_sync_config(pc1_executor, flatpak_sync=True)
+            third = await sync_with("flatpak-only", {ref_item_id: Decision.APPLY}, flags=repeat)
+            assert await what_pc2_has() == (True, source_revision, True, False), (
+                f"the flatpak-only run did not install {ref} on pc2, or it moved a manager whose job was never "
+                f"enabled.\nstdout: {third.stdout}\nstderr: {third.stderr}"
+            )
+            after_remotes = nonblank_lines(
+                (
+                    await pc2_executor.run_command(
+                        f"flatpak remotes {scope_flag} --columns=name", login_shell=False, timeout=15.0
+                    )
+                ).stdout
+            )
+            assert remote_name in after_remotes, (
+                f"{application} is installed on pc2 but {remote_name} is not configured there, so the remote the "
+                f"approved ref derives was never written.\nstdout: {third.stdout}\nstderr: {third.stderr}"
+            )
+
+            # -- run 4: manual installs alone --------------------------------------------
+            await write_package_sync_config(pc1_executor, manual_installs_sync=True)
+            fourth = await sync_with("manual-only", {manual_item_id: Decision.APPLY}, flags=repeat)
+            assert await what_pc2_has() == (True, source_revision, True, True), (
+                f"the manual-only run did not replay the snippet for {unowned_path} on pc2, or it moved a manager "
+                f"whose job was never enabled.\nstdout: {fourth.stdout}\nstderr: {fourth.stderr}"
+            )
+            pushed = await SnippetRegistry(pc2_executor).load()
+            assert manual_item_id in pushed, (
+                f"pc2's registry holds {sorted(pushed)} rather than an entry for {unowned_path}: the snippet replayed "
+                "from a registry that never reached the target"
+            )
+
+            # -- run 5: all four, over a pair with nothing left to converge ---------------
+            await write_package_sync_config(
+                pc1_executor, apt_sync=True, snap_sync=True, flatpak_sync=True, manual_installs_sync=True
+            )
+            before = await capture_machine_package_state(pc2_executor)
+            fifth = await sync_with("fixed-point", {}, flags=repeat)
+            after = await capture_machine_package_state(pc2_executor)
+            assert after == before, (
+                f"the run changed pc2's package state although everything it was approved to converge already had.\n"
+                f"before: {before}\nafter: {after}"
+            )
+
+            collapsed = collapse_run_output(fifth.stdout + fifth.stderr)
+            for manager in ("apt", "snap", "flatpak", "manual"):
+                assert f"No {manager} changes to apply" in collapsed, (
+                    f"{manager} did not report that it had nothing to apply.\n{collapsed}"
+                )
+            subjects = (apt_candidate, snap_name, application, unowned_path)
+            named = [
+                line
+                for line in collapsed.splitlines()
+                if "reviewed " in line and any(subject in line for subject in subjects)
+            ]
+            assert not named, f"the run presented items it had already converged: {named}"
+        finally:
+
+            async def clean_the_source() -> None:
+                await remove_unowned_marker(pc1_executor, unowned_path)
+                await restore_system_refresh_hold(pc1_executor, pc1_prior_hold)
+
+            async def clean_the_target() -> None:
+                await remove_unowned_marker(pc2_executor, unowned_path)
+                await restore_flatpak_target_baseline(pc2_executor)
+                await restore_system_refresh_hold(pc2_executor, pc2_prior_hold)
+
+            await cleanup_in_parallel(clean_the_source(), clean_the_target())
