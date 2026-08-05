@@ -2225,13 +2225,14 @@ class TestOneManagerAtATime:
                 assert f"No {manager} changes to apply" in collapsed, (
                     f"{manager} did not report that it had nothing to apply.\n{collapsed}"
                 )
-            subjects = (apt_candidate, snap_name, application, unowned_path)
-            named = [
-                line
-                for line in collapsed.splitlines()
-                if "reviewed " in line and any(subject in line for subject in subjects)
-            ]
-            assert not named, f"the run presented items it had already converged: {named}"
+            # `reviewed <label>` is the phrase the review's own decision pass logs per item,
+            # so the whole phrase is the witness -- `collapse_run_output` returns the run as
+            # ONE line, and asking whether a subject merely appears somewhere in it would
+            # match this test's own seeding just as readily as a review line.
+            for subject in (apt_candidate, snap_name, application, unowned_path):
+                assert f"reviewed {subject}" not in collapsed, (
+                    f"the run presented {subject}, which an earlier run of this sequence already converged"
+                )
         finally:
 
             async def clean_the_source() -> None:
