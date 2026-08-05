@@ -53,7 +53,7 @@ def mock_config() -> MagicMock:
     return config
 
 
-def _make_orchestrator(
+def _make_orchestrator(  # noqa: PLR0913 - test knobs, all keyword-only
     mock_config: MagicMock,
     *,
     target: str = "target-host",

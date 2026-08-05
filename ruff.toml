@@ -23,7 +23,6 @@ select = [
     "FURB",   # refurb
 ]
 ignore = [
-    "PLR0913",  # Too many arguments (we have complex configs)
     "PLR2004",  # Magic value comparison (sometimes needed)
 ]
 
