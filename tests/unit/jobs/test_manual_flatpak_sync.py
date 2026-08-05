@@ -153,7 +153,9 @@ class TestNoRemoteDetection:
         """G140 — apps only, matching what `flatpak_sync` replicates: a runtime arrives with
         the app that needs it and is never installed on its own, so the detection listing is
         the `--app` one."""
-        context, source, _target = make_context(source_responses=source_with(apps=ref_line(BUNDLE_REF, "bundle-origin")))
+        context, source, _target = make_context(
+            source_responses=source_with(apps=ref_line(BUNDLE_REF, "bundle-origin"))
+        )
         job = ManualFlatpakSyncJob(context)
 
         await job.plan()

@@ -1099,9 +1099,7 @@ class TestRemotesAreDerivedFromApprovedRefs:
         becomes a flatpak item in the first place (F146), so what is left for this guard is the
         plan/apply race — the remote removed on the source while the review was on screen.
         """
-        context, _source, target = make_context(
-            source_responses=derivation_source(), fake_target=FakeFlatpakTarget()
-        )
+        context, _source, target = make_context(source_responses=derivation_source(), fake_target=FakeFlatpakTarget())
         job = FlatpakSyncJob(context)
         plan = await job.plan()
         job._source_remotes_by_id.pop("flatpak:remote:user:flathub")  # pyright: ignore[reportPrivateUsage]

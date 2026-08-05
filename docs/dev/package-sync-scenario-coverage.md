@@ -17,7 +17,7 @@ Some A–K rows span more than one run, still in that direction, and each says s
 ## Navigation
 
 - [Package sync — user requirements](../planning/package-sync-user-requirements.md) — the intent every scenario here comes from
-- [Package sync conformance criteria](../planning/package-sync-conformance-criteria.md) — the 137 articles each section decomposes
+- [Package sync conformance criteria](../planning/package-sync-conformance-criteria.md) — the 138 articles each section decomposes
 - [Package sync specification](../system/package-sync.md) — how the behaviour is built
 - [Package sync job behaviour](../jobs/package-sync.md) — what the user sees
 - [Testing guide](testing-guide.md) — how to write the tests named here
