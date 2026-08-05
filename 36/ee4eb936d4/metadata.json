@@ -3,7 +3,7 @@
   "checkpoint_id": "36ee4eb936d4",
   "strategy": "manual-commit",
   "branch": "main",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
     ".planning/phases/01-home-sync-mvp-user-data-sync/01-UAT.md"
   ],
@@ -14,13 +14,20 @@
       "compact_transcript": "/36/ee4eb936d4/0/transcript.jsonl",
       "content_hash": "/36/ee4eb936d4/0/content_hash.txt",
       "prompt": "/36/ee4eb936d4/0/prompt.txt"
+    },
+    {
+      "metadata": "/36/ee4eb936d4/1/metadata.json",
+      "transcript": "/36/ee4eb936d4/1/full.jsonl",
+      "compact_transcript": "/36/ee4eb936d4/1/transcript.jsonl",
+      "content_hash": "/36/ee4eb936d4/1/content_hash.txt",
+      "prompt": ""
     }
   ],
   "token_usage": {
-    "input_tokens": 21,
-    "cache_creation_tokens": 154918,
-    "cache_read_tokens": 1767854,
-    "output_tokens": 3900,
-    "api_call_count": 11
+    "input_tokens": 4444,
+    "cache_creation_tokens": 178760,
+    "cache_read_tokens": 1916567,
+    "output_tokens": 9404,
+    "api_call_count": 13
   }
 }
