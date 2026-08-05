@@ -189,9 +189,9 @@ class TestInertFiltering:
 
     @pytest.mark.asyncio
     async def test_a_snap_syncs_own_mark_on_the_same_snap_is_not_read(self) -> None:
-        """G130 — there is nothing to adopt: a `snap:<name>` mark is `snap_sync`'s answer
-        about converging that snap's revision, in that job's own file and id space, and it
-        neither silences this job's finding nor is read at all."""
+        """G130 — a `snap:<name>` mark is `snap_sync`'s answer about converging that snap's
+        revision, in that job's own file and id space, so it neither silences this job's
+        finding nor is read at all (D-09: one decision file per manager)."""
         context, source, _target = make_context(
             source_responses={
                 SNAP_LIST: snap_list(sideload("mytool")),

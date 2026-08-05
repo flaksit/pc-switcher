@@ -41,12 +41,10 @@ __all__ = ["ManualSnapSyncJob"]
 # string.
 _ORIGIN = "snap-sideload"
 
-# No `AdoptedMarks`: unlike `manual_deb_sync`, this job inherits nothing. No code has ever
-# built an `UnreproducibleItem` with this origin, so no decision file on any machine can
-# hold an `unreproducible:snap-sideload:` id to adopt. The marks that DO name a sideloaded
-# snap are `snap_sync`'s own `snap:<name>` entries in `snap.decisions.yaml` — a different
-# id space, still live for that job, and answering a different question ("do not converge
-# this snap's revision"), not this one ("do not reproduce this snap on the other machine").
+# This job reads its own `manual_snap.decisions.yaml` and nothing else (D-09: one file per
+# manager). A `snap:<name>` mark in `snap.decisions.yaml` names the same snap but answers
+# `snap_sync`'s question — "do not converge this snap's revision" — not this one, so it is
+# left where it is.
 
 
 class ManualSnapSyncJob(UnreproducibleSyncJob):
