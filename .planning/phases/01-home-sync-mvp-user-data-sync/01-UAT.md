@@ -118,10 +118,9 @@ skipped: 0
 
 blocked: 0
 
-<!-- All 8 tests passed. 9 minor findings (in Gaps) fixed in a gap-closure round
-     (commits 74bbe2a, 92a0455, d7ca229, e3b477e, f045218; integration-test fix
-     facad73), released as v0.1.0-alpha.15. Hands-on re-UAT of the fixes (esp. the
-     TUI visual ones #5/#8) pending on a real terminal. -->
+<!-- All 9 tests passed. The 9 minor findings in Gaps are resolved: fixed in the
+     gap-closure round (see "Fix status"), then re-UAT'd by hand on a real terminal
+     through v0.1.0-alpha.21. Nothing outstanding. -->
 
 ## Fix status (gap-closure round, 2026-07-07)
 
@@ -141,10 +140,10 @@ All 9 Gaps below are fixed and committed on 01-folder-sync; unit suite 489 green
      fix facad73) plus the confirm-boundary/dual-cause follow-ups (422e07f, 0274c1c,
      f7d6279, af8dce0, b4234a0) and hand-confirmed on the VMs through v0.1.0-alpha.20.
      The prior open finding (warnings scrolling past unread) is closed by Test 9
-     (commit 7823112, v0.1.0-alpha.21). status flipped failed → fixed. No open gaps. -->
+     (commit 7823112, v0.1.0-alpha.21). No open gaps. -->
 
 - truth: "`--dry-run` faithfully previews what a real sync would change"
-  status: fixed
+  status: resolved
   reason: "Dry-run reported 0 deletions; the real run deleted 1890 files, all under ~/.cache/uv/{git-v0,archive-v0} — exactly the uv install artifacts that install_on_target (phase 7) creates on the target. Dry-run skips install_on_target (install_on_target.py:91), so it never sees the files that folder_sync --delete then reconciles. Not a data-safety issue (only ~/.cache/uv, regenerable, only files the install job itself created; the sync never even invokes pc-switcher on the target — target ops are raw rsync/btrfs over SSH), but the preview is inaccurate."
   severity: minor
   test: 3
@@ -153,7 +152,7 @@ All 9 Gaps below are fixed and committed on 01-folder-sync; unit suite 489 green
     - "Optionally note (or avoid) that install_on_target's filesystem effects are not reflected in dry-run"
 
 - truth: "disk_space_monitor presents itself sensibly in the TUI"
-  status: fixed
+  status: resolved
   reason: "disk_space_monitor occupies a progress line pinned at 0%, which is meaningless — it's a check/monitor, not a unit of transfer progress."
   severity: minor
   test: 3
@@ -161,7 +160,7 @@ All 9 Gaps below are fixed and committed on 01-folder-sync; unit suite 489 green
     - "Don't render a progress bar for monitor-type jobs; stay silent and only surface output when relevant (e.g. warn — and stop — when free space is low)"
 
 - truth: "folder_sync progress bar reflects real progress and completes at 100%"
-  status: fixed
+  status: resolved
   reason: "The folder_sync bar flashes ~97% during /home, resets, and ends at 2% (from /root) instead of 100%. It is per-folder and never represents cumulative progress or reaches completion."
   severity: minor
   test: 3
@@ -169,7 +168,7 @@ All 9 Gaps below are fixed and committed on 01-folder-sync; unit suite 489 green
     - "Per-folder is acceptable, but show which folder is in progress, and the bar must end at 100% when the job completes"
 
 - truth: "install_on_target logs a WARNING only for genuinely unexpected failures"
-  status: fixed
+  status: resolved
   reason: "Every install-on-target logs '[WARNING] Installation with exact version v0.1.0a14 failed, falling back to release floor'. The exact-version attempt builds a PEP440 tag (0.1.0a14) that never matches the semver release tag (v0.1.0-alpha.14), so the fallback is the NORMAL path, not an error worth a WARNING."
   severity: minor
   test: 3
@@ -177,7 +176,7 @@ All 9 Gaps below are fixed and committed on 01-folder-sync; unit suite 489 green
     - "Treat the semver-tag path as the expected path (try it first, or demote the expected fallback to debug/info); only WARN on a genuinely unexpected install failure"
 
 - truth: "A confirmation prompt leaves a clean TUI — no duplicate stacked panels, warning panel intact"
-  status: fixed
+  status: resolved
   reason: "The confirm-around-Live flow leaves artifacts: ui.pause() = Live.stop() with transient=False (ui.py:135,146) leaves the pre-pause frame; the warning is printed as static text (confirmer.py:125); ui.resume() = Live.start() (ui.py:158) begins a fresh Live region below it and its Connection status line overwrites/truncates the warning panel's last line. Result: two stacked 'Recent Logs' panels + a truncated First Sync warning panel. Same class as the original Test-2 complaint; 01-17 fixed the flooding, step-skip and double-CRITICAL but not this confirmation-boundary duplication."
   severity: minor
   test: 2
@@ -185,7 +184,7 @@ All 9 Gaps below are fixed and committed on 01-folder-sync; unit suite 489 green
     - "Render the confirmation prompt inside the Live region (or clear/redraw the region on pause) instead of stop → static print → start, so the prompt neither leaves duplicate 'Recent Logs' panels nor truncates the warning panel"
 
 - truth: "The 'Apply this config to target?' prompt makes clear what declining does"
-  status: fixed
+  status: resolved
   reason: "Answering n — which is ALSO the default (config_sync.py:101 default=\"n\", so pressing Enter does the same) — makes _handle_no_target_config return False (config_sync.py:218), and the orchestrator raises SyncAbortedByUser (orchestrator.py:451-452), aborting the ENTIRE sync (no config, no folders transferred). The prompt 'Apply this config to target? [y/n] (n)' doesn't convey that declining aborts everything; a user reasonably reads n as 'skip config / keep target config and continue', and the safe-looking default (n) silently aborts the whole sync."
   severity: minor
   test: 3
@@ -193,7 +192,7 @@ All 9 Gaps below are fixed and committed on 01-folder-sync; unit suite 489 green
     - "Make the prompt state the consequence of declining (e.g. that it aborts the sync), and/or reconsider the n default; present 'apply config' vs 'abort sync' as an explicit, unambiguous choice"
 
 - truth: "Orchestrator-level warnings use job-agnostic language and point users to the actual preview location"
-  status: fixed
+  status: resolved
   reason: "The 'Run pc-switcher sync --dry-run to preview what would be deleted before committing to a live sync' line appears in the orchestrator's first-sync warning (orchestrator.py:552) and both out-of-order heads-ups — W2 (orchestrator.py:639-640) and W3 (orchestrator.py:651-652). (a) 'deleted' is FolderSync/rsync-specific, but these are orchestrator-level messages that will later coordinate packages/system-config jobs where a change isn't a file deletion — the wording should be generic (e.g. 'what would change on <target>'). (b) A --dry-run's per-item/deletion detail is only in the log file, not the TUI, so the line should point to ~/.local/share/pc-switcher/logs/ (or `pc-switcher logs`)."
   severity: minor
   test: 5
@@ -201,7 +200,7 @@ All 9 Gaps below are fixed and committed on 01-folder-sync; unit suite 489 green
     - "Make the dry-run-preview line job-agnostic ('preview what would change on <target>') and point to the log file for the per-item detail; applies to the first-sync warning and both W2/W3 out-of-order heads-ups"
 
 - truth: "A silent sync (no prompts shown) leaves a single clean Live region"
-  status: fixed
+  status: resolved
   reason: "config_sync pauses/resumes the Live even when no prompt is shown. sync_config_to_target sets should_pause = ui is not None and not auto_accept and not dry_run (config_sync.py:303) — true for ANY interactive sync — then ui.pause() (=Live.stop, leaves a stale frame) / ui.resume() (=Live.start, new region) around the whole config step (config_sync.py:306,317), regardless of whether a prompt actually fires. When the target config matches (common case, config_sync.py:188 just prints 'skipping'), no prompt occurs yet the Live is still stopped+restarted, leaving a stale 'Recent Logs' panel (observed frozen at Step 7/11) with a fresh region below. Same root mechanism as the Test-2 confirm-boundary finding, but this fires on every interactive sync with no user interaction at all."
   severity: minor
   test: 4
@@ -209,7 +208,7 @@ All 9 Gaps below are fixed and committed on 01-folder-sync; unit suite 489 green
     - "Pause the Live only when a prompt is actually about to be shown (pause lazily inside the prompt paths), not unconditionally around the config-sync step; combine with rendering prompts inside the Live / redraw-on-resume so no stale 'Recent Logs' panel is left"
 
 - truth: "A lock-conflict failure shows a single, appropriately-leveled message"
-  status: fixed
+  status: resolved
   reason: "The lock-conflict ('This machine is already involved in a sync (held by: …)') prints twice: once as a [CRITICAL] orchestrator log line in the panel (orchestrator.py:357 generic 'except Exception' → logger.critical('Sync failed: %s')) and once as the red 'Sync failed:' CLI line (cli.py generic exception handler re-print). The 01-16 single-message contract only covers SyncAbortedByUser (user decline, logged once at WARNING); a lock conflict is a different generic exception, so it still double-prints and at CRITICAL — even though 'another sync is already running' is an expected, retryable condition, not an unrecoverable crash. User: very low prio."
   severity: minor
   test: 6
