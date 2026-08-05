@@ -114,18 +114,24 @@ _APT_TIMERS = ("apt-daily.timer", "apt-daily-upgrade.timer")
 # security updates disabled indefinitely. The stop is therefore paired with a TRANSIENT
 # systemd timer, scheduled BEFORE the stop and owned by systemd rather than by this process,
 # that starts the timers again after `_APT_TIMER_SUSPENSION`. It survives the sync being
-# killed, the SSH connection dropping and the machine rebooting into a run that never
-# reached `_cleanup`; the normal path starts the timers itself and then cancels the timer
-# it no longer needs. Same duration as the snap hold, for the same reason: long enough to
-# outlast any sync, short enough that an abandoned suspension lapses the same day.
+# killed and the SSH connection dropping; the normal path starts the timers itself and then
+# cancels the timer it no longer needs. Same duration as the snap hold, for the same reason:
+# long enough to outlast any sync, short enough that an abandoned suspension lapses the same
+# day.
+#
+# It does NOT survive a reboot — a transient unit lives in `/run/systemd/transient`, which is
+# tmpfs — and does not need to: `systemctl stop` is runtime state too, written nowhere on
+# disk, so a timer that is still ENABLED is pulled back in by `timers.target` at the next
+# boot. The two mechanisms cover disjoint cases, which is why neither has to cover both.
 _APT_TIMER_SUSPENSION = "6h"
 # Fixed name so the deferred restore is greppable on the machine
 # (`systemctl list-timers 'pc-switcher-*'`) and cancellable by `_restore_apt_timers` without
 # having to parse a generated one back out of `systemd-run`'s output. `systemd-run` refuses a
-# name that already exists, which needs no special handling: the only way a unit of this name
-# outlives the run that scheduled it is a run that died, and such a run left the timers
-# STOPPED — so the next run reads them as inactive and skips that host before it ever
-# schedules anything. The machine stays covered by the pending unit either way.
+# name that already exists, and the collision is left to fail rather than cleared: it needs a
+# run that died with its unit still pending AND someone starting the timers again by hand, and
+# refusing then is the safe direction — `_apply_apt_timer_suspension` warns and leaves that
+# host unsuspended, while the predecessor's pending unit still covers the machine. Clearing
+# the name first would instead destroy that cover for as long as the new schedule takes.
 _APT_TIMER_RESTORE_UNIT = "pc-switcher-apt-timers"
 # The unit properties the capture reads. `Id` keys the block (`systemctl show` emits one
 # block per unit ASKED, in order, including for a unit that does not exist), `LoadState`
