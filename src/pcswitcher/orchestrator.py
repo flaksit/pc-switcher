@@ -124,53 +124,22 @@ _APT_TIMERS = ("apt-daily.timer", "apt-daily-upgrade.timer")
 # disk, so a timer that is still ENABLED is pulled back in by `timers.target` at the next
 # boot. The two mechanisms cover disjoint cases, which is why neither has to cover both.
 _APT_TIMER_SUSPENSION = "6h"
-# The restore unit is named per RUN (`<prefix>-<session id>`), never once for the tool. A
-# fixed name would make two runs collide, and the collision is not the rare case it looks
-# like: a run that died left its unit pending AND left the timers stopped, so the next run
-# reads them inactive and would otherwise walk straight past that host — scheduling nothing,
-# cancelling nothing, and leaving the dead run's unit to fire in the MIDDLE of it, starting
-# `apt-daily-upgrade.timer` against a converging apt. A per-run name lets a run always
-# schedule its own unit first and then ADOPT what it found (`_pending_apt_timer_restores`),
-# which is what closes that window. The prefix is what makes a predecessor findable, and
-# keeps the unit greppable by a human (`systemctl list-timers 'pc-switcher-apt-timers-*'`).
-_APT_TIMER_RESTORE_UNIT_PREFIX = "pc-switcher-apt-timers"
+# Fixed name so the deferred restore is greppable on the machine
+# (`systemctl list-timers 'pc-switcher-*'`) and cancellable by `_restore_apt_timers` without
+# having to parse a generated one back out of `systemd-run`'s output.
+#
+# A run that died leaves this unit pending AND the timers stopped, so every later run has to
+# settle it before reading anything (`_settle_pending_apt_timer_restore`). Left alone it fires
+# 6h after the dead run started — which can be part-way through a LATER sync, starting
+# `apt-daily-upgrade.timer` against a converging apt: the exact race this feature prevents.
+# `systemd-run` would also refuse the name while it exists.
+_APT_TIMER_RESTORE_UNIT = "pc-switcher-apt-timers"
 # The unit properties the capture reads. `Id` keys the block (`systemctl show` emits one
 # block per unit ASKED, in order, including for a unit that does not exist), `LoadState`
 # separates a real timer from a masked or absent one, `ActiveState` says whether it is
 # running, and `UnitFileState` is the enablement the machine would return to — recorded so a
 # host's prior policy is captured in full rather than inferred from whether it was running.
 _APT_TIMER_PROPERTIES = ("Id", "LoadState", "ActiveState", "UnitFileState")
-# Enumerating a predecessor takes two commands, because `systemctl show` does NOT accept a
-# glob (measured: it prints nothing at all for a pattern, rather than erroring). `list-units`
-# does glob and does list a transient unit that has not fired yet — it is `loaded`/`inactive`
-# until then — so the names come from there and are fed back to `show` as explicit arguments,
-# which emits the same blank-line-delimited blocks `_parse_systemctl_show` already reads. The
-# guard matters: `systemctl show` with no unit argument prints the MANAGER's properties, which
-# would parse as a nonsense block.
-_APT_TIMER_PENDING_RESTORES_CMD = (
-    f"units=$(systemctl list-units --all --no-legend --plain '{_APT_TIMER_RESTORE_UNIT_PREFIX}-*.service'"
-    " | awk '{print $1}');"
-    ' if [ -n "$units" ]; then systemctl show $units --property=Id --property=ExecStart; fi'
-)
-
-
-def _timers_named_by(exec_start: str) -> tuple[str, ...]:
-    """The apt timers a pending restore unit would start, read off its `ExecStart`.
-
-    `systemctl show` renders `ExecStart` as `{ path=… ; argv[]=<the command> ; … }`, so the
-    command is the segment between `argv[]=` and the next ` ; `. Only names in `_APT_TIMERS`
-    are returned: what a unit under our prefix will run is still input, and a run must not be
-    talked into starting an arbitrary unit by a hand-edited `ExecStart`.
-
-    Read from `ExecStart` and from nothing else — in particular not from `UnitFileState`.
-    An enabled timer may have been stopped deliberately, and treating "enabled" as "should be
-    running" would impose a policy the machine never had.
-    """
-    _, separator, rest = exec_start.partition("argv[]=")
-    if not separator:
-        return ()
-    argv = rest.split(" ; ", 1)[0].split()
-    return tuple(timer for timer in _APT_TIMERS if timer in argv)
 
 
 def _parse_systemctl_show(output: str) -> dict[str, dict[str, str]]:
@@ -448,15 +417,14 @@ class Orchestrator:
         self._snap_hold_readable_target = False
 
         # apt update-timer suspension state (#248). Engaged only when apt_sync is enabled on
-        # a non-dry-run. Each tuple holds the timers this run OWES that host at cleanup — the
-        # ones it stopped itself, plus any it adopted from a dead run's pending restore. An
-        # empty tuple therefore means "nothing to put back" for every reason at once: the host
-        # was skipped, its timers were already inactive with nothing inherited, or its state
-        # could not be read. `_apt_timers_engaged` gates the restore so it is a no-op on a run
-        # that suspended nothing, and idempotent if _cleanup were entered twice.
+        # a non-dry-run. Each tuple holds the timers actually stopped on that host, which is
+        # what `_cleanup` starts again — an empty tuple therefore means "nothing to put back"
+        # for every reason at once: the host was skipped, its timers were already inactive,
+        # or its state could not be read. `_apt_timers_engaged` gates the restore so it is a
+        # no-op on a run that suspended nothing, and idempotent if _cleanup were entered twice.
         self._apt_timers_engaged = False
-        self._apt_timers_owed_source: tuple[str, ...] = ()
-        self._apt_timers_owed_target: tuple[str, ...] = ()
+        self._apt_timers_stopped_source: tuple[str, ...] = ()
+        self._apt_timers_stopped_target: tuple[str, ...] = ()
 
         # Logging infrastructure (initialized in run())
         self._queue_listener: QueueListener | None = None
@@ -1819,37 +1787,69 @@ class Orchestrator:
             return None
         return state
 
-    @property
-    def _apt_timer_restore_unit(self) -> str:
-        """This run's own restore unit, named for the session so no two runs can collide."""
-        return f"{_APT_TIMER_RESTORE_UNIT_PREFIX}-{self._session_id}"
+    async def _settle_pending_apt_timer_restore(self, host: Host) -> None:
+        """Run and clear a restore a dead run left pending on `host`, before anything is read.
 
-    async def _pending_apt_timer_restores(self, host: Host) -> dict[str, tuple[str, ...]] | None:
-        """`{unit: timers it would start}` for every restore a dead run left pending on `host`.
+        Two commands, in this order, and only when the unit is actually there:
 
-        None when the enumeration itself failed, which callers must not read as "no
-        predecessor": an unseen pending unit is exactly the one that fires mid-run.
+        1. `systemctl start <unit>.service` RUNS the recorded payload now. That payload is what
+           the dead run promised to put back, so triggering it restores the machine's real
+           prior state without this run having to infer it from anything.
+        2. `systemctl stop <unit>.timer` cancels the deferred firing, which the trigger does NOT
+           consume: measured, both units survive a manual start and the timer stays `waiting`.
+           Stopping the timer releases the transient service with it, so the `.service` is not
+           named too — doing so exits 5 with "Unit not loaded" and reads as a failure.
 
-        Empty on the ordinary run, where nothing was left behind — the command prints nothing
-        and parses to no blocks.
+        Triggering rather than merely cancelling is the point. Cancel alone and the capture that
+        follows reads both timers `loaded` but `inactive`, `_running_apt_timers` returns nothing,
+        the host is skipped, and the machine is left with its timers stopped and no restore
+        pending — on this run and on every later one, until it reboots.
+
+        A failed trigger leaves the timer ALONE: cancelling then would remove the machine's only
+        remaining way back. Both outcomes are WARNINGs, never a raise, like the rest of this
+        feature. Guarded on a read rather than issued blind, because `systemctl start` on an
+        absent unit exits 5 — which is the ordinary case, and must not warn or prompt.
         """
-        result = await self._run_apt_timer_command(host, _APT_TIMER_PENDING_RESTORES_CMD)
-        if not result.success:
-            return None
-        return {
-            unit: _timers_named_by(properties.get("ExecStart", ""))
-            for unit, properties in _parse_systemctl_show(result.stdout).items()
-        }
+        probe = await self._run_apt_timer_command(
+            host, f"systemctl show {_APT_TIMER_RESTORE_UNIT}.timer --property=Id --property=LoadState"
+        )
+        pending = _parse_systemctl_show(probe.stdout).get(f"{_APT_TIMER_RESTORE_UNIT}.timer", {})
+        if not probe.success or pending.get("LoadState") != "loaded":
+            return
 
-    async def _cancel_apt_timer_restore(self, host: Host, unit: str, *, mutates: str) -> CommandResult:
-        """Cancel one pending restore unit on `host`, by stopping its `.timer`.
-
-        The `.timer` alone, never `<unit>.timer <unit>.service` together: stopping the timer
-        releases the transient service with it (`--collect`), so naming the service too makes
-        every ordinary cancel exit 5 with "Unit not loaded" and look like a failure (measured).
-        """
-        timer = f"{unit.removesuffix('.service').removesuffix('.timer')}.timer"
-        return await self._run_apt_timer_command(host, f"sudo systemctl stop {timer}", mutates=mutates)
+        self._logger.info(
+            "Completing an apt update-timer restart left pending on %s by an earlier run, before this run reads "
+            "that machine's timers — it would otherwise have fired part-way through this sync",
+            self._machine_name(host),
+            extra={"job": "orchestrator", "host": host.value},
+        )
+        triggered = await self._run_apt_timer_command(
+            host,
+            f"sudo systemctl start {_APT_TIMER_RESTORE_UNIT}.service",
+            mutates="finish restarting the apt update timers an earlier run paused and never restored",
+        )
+        if not triggered.success:
+            self._logger.warning(
+                "Could not finish the apt update-timer restart left pending on %s: %s. Leaving it scheduled — it "
+                "is that machine's only remaining way back — so it may fire during this sync.",
+                self._machine_name(host),
+                triggered.stderr.strip(),
+                extra={"job": "orchestrator", "host": host.value},
+            )
+            return
+        cancelled = await self._run_apt_timer_command(
+            host,
+            f"sudo systemctl stop {_APT_TIMER_RESTORE_UNIT}.timer",
+            mutates="cancel the now-completed apt update-timer restart an earlier run scheduled",
+        )
+        if not cancelled.success:
+            self._logger.warning(
+                "Could not cancel the completed apt update-timer restart on %s: %s. It may start that machine's "
+                "apt update timers again during this sync.",
+                self._machine_name(host),
+                cancelled.stderr.strip(),
+                extra={"job": "orchestrator", "host": host.value},
+            )
 
     async def _schedule_apt_timer_restore(self, host: Host, timers: tuple[str, ...]) -> CommandResult:
         """Hand `host`'s systemd a transient timer that starts `timers` again by itself.
@@ -1861,16 +1861,12 @@ class Orchestrator:
 
         `--collect` releases the transient units once the restore has run, so a machine that
         was never cleaned up is left with nothing of this run's beyond the restored timers.
-
-        `timers` is what this run OWES the host — the timers it is about to stop plus any
-        adopted from a predecessor — so a unit taking over from a dead run promises everything
-        that run promised as well as its own.
         """
         start = f"/usr/bin/systemctl start {' '.join(timers)}"
         description = f"pc-switcher: restart the system apt update timers after the sync window ({', '.join(timers)})"
         cmd = (
             f"sudo systemd-run --collect --on-active={_APT_TIMER_SUSPENSION} "
-            f"--unit={self._apt_timer_restore_unit} --description={shlex.quote(description)} {start}"
+            f"--unit={_APT_TIMER_RESTORE_UNIT} --description={shlex.quote(description)} {start}"
         )
         return await self._run_apt_timer_command(
             host,
@@ -1878,33 +1874,23 @@ class Orchestrator:
             mutates=f"schedule the automatic restart of the apt update timers in {_APT_TIMER_SUSPENSION}",
         )
 
-    async def _apply_apt_timer_suspension(
-        self, host: Host, running: tuple[str, ...], owed: tuple[str, ...], pending: Mapping[str, tuple[str, ...]]
-    ) -> None:
-        """Schedule this run's restore on `host`, cancel `pending` predecessors, stop `running`.
+    async def _apply_apt_timer_suspension(self, host: Host, timers: tuple[str, ...]) -> None:
+        """Schedule the deferred restore on `host`, then stop `timers` (best-effort).
 
-        The order is the whole guarantee, not an implementation detail:
+        The order is the guarantee, not an implementation detail: the safety net is placed
+        BEFORE the thing it catches, so there is no instant at which the timers are stopped
+        with no scheduled restore. A schedule that fails therefore cancels the suspension on
+        that host rather than proceeding without it — running one sync against a machine that
+        may patch itself mid-run is a race, while stopping a machine's security updates with
+        no way back is a lasting change to a machine the user did not ask us to make.
 
-        1. Schedule first. The safety net is placed BEFORE anything it catches, so no instant
-           exists where the machine has neither its timers nor a pending restore. A schedule
-           that fails therefore cancels the suspension on that host and touches nothing —
-           nothing is cancelled and nothing is stopped, so a predecessor's unit still covers
-           the machine. This is also why "a predecessor was cancelled and then scheduling
-           failed" is unreachable rather than handled.
-        2. Cancel the predecessors, now that this run's unit promises everything theirs did
-           (`owed` is the union). Left alone they would fire mid-run and start
-           `apt-daily-upgrade.timer` against a converging apt — the exact race this feature
-           exists to prevent. Cancelling BEFORE scheduling would instead strand the machine.
-        3. Stop what is running. Nothing to stop is normal here: a host whose timers a dead run
-           already stopped is suspended by adoption alone.
-
-        A failed cancel or stop is a WARNING, never a raise: the suspension is a race guard,
-        and failing the whole sync because it could not be applied would be worse than
-        proceeding without it. The host is recorded as owed before either is issued, so even a
-        command whose outcome is unknown (a connection that died mid-call) still gets its unit
+        A failed stop is a WARNING, never a raise: the suspension is a race guard, and failing
+        the whole sync because it could not be applied would be worse than proceeding without
+        it. The host is recorded as suspended before the stop is issued, so even a stop whose
+        outcome is unknown (a connection that died mid-command) still gets its scheduled unit
         cancelled and its timers started by `_cleanup`.
         """
-        scheduled = await self._schedule_apt_timer_restore(host, owed)
+        scheduled = await self._schedule_apt_timer_restore(host, timers)
         if not scheduled.success:
             self._logger.warning(
                 "Not pausing the system apt update timers on %s: the automatic restart could not be scheduled "
@@ -1917,34 +1903,13 @@ class Orchestrator:
             return
 
         if host is Host.SOURCE:
-            self._apt_timers_owed_source = owed
+            self._apt_timers_stopped_source = timers
         else:
-            self._apt_timers_owed_target = owed
+            self._apt_timers_stopped_target = timers
 
-        for unit in pending:
-            cancelled = await self._cancel_apt_timer_restore(
-                host,
-                unit,
-                mutates=(
-                    "cancel the apt update-timer restart an earlier run left pending, now that this run has "
-                    "taken it over"
-                ),
-            )
-            if not cancelled.success:
-                self._logger.warning(
-                    "Could not cancel the apt update-timer restart left pending on %s by an earlier run (%s): %s. "
-                    "It may start that machine's apt update timers before this sync finishes.",
-                    self._machine_name(host),
-                    unit,
-                    cancelled.stderr.strip(),
-                    extra={"job": "orchestrator", "host": host.value},
-                )
-
-        if not running:
-            return
         result = await self._run_apt_timer_command(
             host,
-            f"sudo systemctl stop {' '.join(running)}",
+            f"sudo systemctl stop {' '.join(timers)}",
             mutates="pause the system apt update timers for the sync window",
         )
         if not result.success:
@@ -1960,28 +1925,27 @@ class Orchestrator:
         """Stop Ubuntu's own apt update timers on both hosts for the sync window (#248).
 
         Gated on `sync_jobs.apt_sync` being enabled and skipped in dry-run (stopping a system
-        timer is a system mutation; ADR-014/D-12). Reads two things per host — the timers'
-        state, and any restore a dead run left pending — then suspends each host BOTH READS
-        SUCCEEDED ON.
+        timer is a system mutation; ADR-014/D-12). Settles any restore a dead run left pending
+        first (`_settle_pending_apt_timer_restore`), then captures each host's timer state so
+        `_cleanup` can put back exactly what was taken away, then suspends each host WHOSE
+        STATE IT COULD READ.
 
-        A host either read failed on is left untouched, on the same trade
+        A host whose capture failed is left untouched, on the same trade
         `_hold_snap_autorefresh` documents: without a pre-suspension reading there is nothing
-        to put back, so stopping the timers would replace an unknown policy. An unreadable
-        PENDING list is the same refusal for a different reason — a predecessor's unit that
-        was not seen is not cancelled, and it is the one that fires mid-run.
-
-        What this run owes the host at cleanup is the union of the timers it stops itself and
-        the timers a predecessor promised. That union is why a host with nothing running is
-        still suspended when something is pending: adopting the dead run's promise is the only
-        way its unit becomes safe to cancel.
+        to put back, so stopping the timers would replace an unknown policy. The cost is
+        running unguarded on that host; the alternative is disabling a machine's security
+        updates with no record of what it had.
         """
         if self._dry_run or not self._config.sync_jobs.get("apt_sync", False):
             return
 
+        # Before anything is read: finish and clear a restore a dead run left pending, so the
+        # capture below sees each machine's real state rather than that run's leftovers.
+        await self._settle_pending_apt_timer_restore(Host.SOURCE)
+        await self._settle_pending_apt_timer_restore(Host.TARGET)
+
         source_state = await self._capture_apt_timer_state(Host.SOURCE)
         target_state = await self._capture_apt_timer_state(Host.TARGET)
-        source_pending = await self._pending_apt_timer_restores(Host.SOURCE)
-        target_pending = await self._pending_apt_timer_restores(Host.TARGET)
         # Engage BEFORE applying so a partially-applied suspension is still restored in _cleanup.
         self._apt_timers_engaged = True
         # Announced once, not per host: every log line already carries the machine it happened
@@ -1995,11 +1959,8 @@ class Orchestrator:
             _APT_TIMER_SUSPENSION,
             extra={"job": "orchestrator", "host": "source"},
         )
-        for host, state, pending in (
-            (Host.SOURCE, source_state, source_pending),
-            (Host.TARGET, target_state, target_pending),
-        ):
-            if state is None or pending is None:
+        for host, state in ((Host.SOURCE, source_state), (Host.TARGET, target_state)):
+            if state is None:
                 self._logger.warning(
                     "Not pausing the system apt update timers on %s: their state could not be read, so timers "
                     "stopped here could not be put back. The sync continues with automatic updates enabled on "
@@ -2008,26 +1969,13 @@ class Orchestrator:
                     extra={"job": "orchestrator", "host": host.value},
                 )
                 continue
-            running = _running_apt_timers(state)
-            adopted = {timer for timers in pending.values() for timer in timers}
-            owed = tuple(timer for timer in _APT_TIMERS if timer in adopted or timer in running)
-            if not owed:
+            timers = _running_apt_timers(state)
+            if not timers:
                 continue
-            if adopted:
-                self._logger.info(
-                    "Taking over an apt update-timer restart left pending on %s by an earlier run (%s); it would "
-                    "otherwise have started those timers part-way through this sync",
-                    self._machine_name(host),
-                    ", ".join(sorted(pending)),
-                    extra={"job": "orchestrator", "host": host.value},
-                )
-            await self._apply_apt_timer_suspension(host, running, owed, pending)
+            await self._apply_apt_timer_suspension(host, timers)
 
     async def _restore_apt_timers_on(self, host: Host, timers: tuple[str, ...]) -> None:
-        """Start the timers `host` is owed and cancel this run's restore unit (best-effort).
-
-        `timers` is the owed set, so a run that adopted a dead run's promise honours it here:
-        the machine gets back everything either run took from it, in one place.
+        """Start `timers` again on `host` and cancel the deferred restore (best-effort).
 
         Starting comes first and cancelling second, so an interruption between the two leaves
         the machine with the scheduled restore still in place rather than with neither.
@@ -2057,9 +2005,11 @@ class Orchestrator:
                     extra={"job": "orchestrator", "host": host.value},
                 )
                 return
-            cancelled = await self._cancel_apt_timer_restore(
+            cancelled = await self._run_apt_timer_command(
                 host,
-                self._apt_timer_restore_unit,
+                # The `.timer` alone: stopping it releases the transient service with it
+                # (`--collect`), while naming the service too exits 5 with "Unit not loaded".
+                f"sudo systemctl stop {_APT_TIMER_RESTORE_UNIT}.timer",
                 mutates="cancel the scheduled restart of the apt update timers, now that they are running again",
             )
             if not cancelled.success:
@@ -2091,8 +2041,8 @@ class Orchestrator:
         if not self._apt_timers_engaged:
             return
         self._apt_timers_engaged = False
-        await self._restore_apt_timers_on(Host.SOURCE, self._apt_timers_owed_source)
-        await self._restore_apt_timers_on(Host.TARGET, self._apt_timers_owed_target)
+        await self._restore_apt_timers_on(Host.SOURCE, self._apt_timers_stopped_source)
+        await self._restore_apt_timers_on(Host.TARGET, self._apt_timers_stopped_target)
 
     async def _cleanup(self) -> None:
         """Clean up resources (connection, locks, executors)."""
