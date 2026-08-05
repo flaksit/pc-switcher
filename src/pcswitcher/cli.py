@@ -280,6 +280,30 @@ def sync(  # noqa: PLR0913, PLR0917 - typer builds the call from argv; params ar
             ),
         ),
     ] = False,
+    apply_package_installs: Annotated[
+        bool,
+        typer.Option(
+            "--apply-package-installs",
+            help=(
+                "Answer every package review item that ADDS software, without asking: "
+                "installs, repository and remote additions, and version or channel changes. "
+                "The machine you sync from decides. Records no permanent 'never ask again' "
+                "mark. Leaves removals alone unless --apply-package-removals is passed too."
+            ),
+        ),
+    ] = False,
+    apply_package_removals: Annotated[
+        bool,
+        typer.Option(
+            "--apply-package-removals",
+            help=(
+                "Answer every package review item that TAKES software away, without asking: "
+                "removals, disables, repository and pin deletions, and the loss of a "
+                "protected package an approved change would take with it. Records no "
+                "permanent 'never ask again' mark."
+            ),
+        ),
+    ] = False,
 ) -> None:
     """Sync to the machine named by HOSTNAME.
 
@@ -287,6 +311,7 @@ def sync(  # noqa: PLR0913, PLR0917 - typer builds the call from argv; params ar
     Use --allow-out-of-order to bypass the out-of-order topology check after manual review.
     Use --allow-first-sync to auto-approve the first-sync overwrite of a machine with no history.
     Use --confirm-each-command to step through every individual modification.
+    Use --apply-package-installs / --apply-package-removals to converge package state unattended.
     """
     # Refused here rather than mid-run: the gate has no non-interactive fallback by design
     # (a gate nobody can answer would have to auto-proceed, which is what it exists to
@@ -313,6 +338,8 @@ def sync(  # noqa: PLR0913, PLR0917 - typer builds the call from argv; params ar
         allow_first_sync=allow_first_sync,
         dry_run=dry_run,
         confirm_each_command=confirm_each_command,
+        apply_package_installs=apply_package_installs,
+        apply_package_removals=apply_package_removals,
     )
     sys.exit(exit_code)
 
@@ -326,6 +353,8 @@ def _run_sync(  # noqa: PLR0913 - CLI flags threaded to the orchestrator; all ke
     allow_first_sync: bool = False,
     dry_run: bool = False,
     confirm_each_command: bool = False,
+    apply_package_installs: bool = False,
+    apply_package_removals: bool = False,
 ) -> int:
     """Run the sync operation with asyncio and graceful interrupt handling.
 
@@ -337,6 +366,8 @@ def _run_sync(  # noqa: PLR0913 - CLI flags threaded to the orchestrator; all ke
         allow_first_sync: If True, auto-approve the first-sync overwrite confirmation
         dry_run: If True, preview sync without making changes
         confirm_each_command: If True, prompt before every individual modification
+        apply_package_installs: If True, answer every install-direction package review group
+        apply_package_removals: If True, answer every removal-direction package review group
 
     Returns:
         Exit code: 0=success, 1=error, 130=SIGINT
@@ -350,6 +381,8 @@ def _run_sync(  # noqa: PLR0913 - CLI flags threaded to the orchestrator; all ke
             allow_first_sync=allow_first_sync,
             dry_run=dry_run,
             confirm_each_command=confirm_each_command,
+            apply_package_installs=apply_package_installs,
+            apply_package_removals=apply_package_removals,
         )
     )
 
@@ -363,6 +396,8 @@ async def _async_run_sync(  # noqa: PLR0913 - CLI flags threaded to the orchestr
     allow_first_sync: bool = False,
     dry_run: bool = False,
     confirm_each_command: bool = False,
+    apply_package_installs: bool = False,
+    apply_package_removals: bool = False,
 ) -> int:
     """Async implementation of sync with interrupt handling.
 
@@ -374,6 +409,8 @@ async def _async_run_sync(  # noqa: PLR0913 - CLI flags threaded to the orchestr
         allow_first_sync: If True, auto-approve the first-sync overwrite confirmation
         dry_run: If True, preview sync without making changes
         confirm_each_command: If True, prompt before every individual modification
+        apply_package_installs: If True, answer every install-direction package review group
+        apply_package_removals: If True, answer every removal-direction package review group
 
     Interrupt behavior:
     - First SIGINT: Cancel sync task; cleanup runs in orchestrator's finally block
@@ -409,6 +446,8 @@ async def _async_run_sync(  # noqa: PLR0913 - CLI flags threaded to the orchestr
             allow_first_sync=allow_first_sync,
             dry_run=dry_run,
             confirm_each_command=confirm_each_command,
+            apply_package_installs=apply_package_installs,
+            apply_package_removals=apply_package_removals,
         )
         main_task = asyncio.create_task(orchestrator.run())
 

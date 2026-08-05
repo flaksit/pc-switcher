@@ -24,7 +24,14 @@ from pcswitcher.jobs.base import SyncJob
 from pcswitcher.jobs.context import JobContext
 from pcswitcher.jobs.manual_installs_sync import ManualInstallsSyncJob
 from pcswitcher.jobs.packages.items import DiffAction, DiffClass, ItemClass, ItemDiff
-from pcswitcher.jobs.packages.review import Decision, ReviewGroup, ReviewOutcome, TerminalUIReviewer
+from pcswitcher.jobs.packages.review import (
+    Decision,
+    ReviewGroup,
+    ReviewOutcome,
+    ReviewPolicy,
+    TerminalUIReviewer,
+    policy_decision,
+)
 from pcswitcher.jobs.packages.state import filter_inert, marks_on_either
 from pcswitcher.jobs.packages.sync_core import (  # pyright: ignore[reportPrivateUsage]
     _ACTION_VOCABULARY,
@@ -44,6 +51,7 @@ def make_context(
     dry_run: bool = False,
     reviewer: object | None = None,
     enabled_sync_jobs: dict[str, bool] | None = None,
+    review_policy: ReviewPolicy | None = None,
 ) -> JobContext:
     source = MagicMock()
     source.run_command = AsyncMock(return_value=CommandResult(0, "", ""))
@@ -60,6 +68,7 @@ def make_context(
         dry_run=dry_run,
         reviewer=reviewer,  # pyright: ignore[reportArgumentType]
         enabled_sync_jobs=enabled_sync_jobs,
+        review_policy=review_policy,
     )
 
 
@@ -1322,6 +1331,110 @@ class TestExecuteSelfContained:
         await job.execute()
 
         assert events == ["plan", "review", "accept_review", "after_review", "apply"]
+
+
+class _PolicyReviewer(_RecordingReviewer):
+    """A `Reviewer` that answers exactly as a run with no terminal and the flags in force
+    does: `policy_decision` settles the groups it covers, every other entry is declined for
+    this run, and `was_interactive` stays False because no human was asked anything.
+    """
+
+    def __init__(self, events: list[str], policy: ReviewPolicy) -> None:
+        super().__init__(events, was_interactive=False)
+        self._policy = policy
+
+    async def review(self, groups: Sequence[ReviewGroup]) -> ReviewOutcome:
+        self._events.append("review")
+        self.call_count += 1
+        self.groups_seen = tuple(groups)
+        decisions: dict[str, Decision] = {}
+        for group in groups:
+            answer = policy_decision(group, self._policy) or Decision.SKIP_ONCE
+            for entry in group.entries:
+                decisions[entry.item_id] = answer
+        return ReviewOutcome(decisions=decisions, was_interactive=False)
+
+
+class TestTheCommandLineAnswersTheReview:
+    """#245: the two apply flags answer whole review groups, so a run with nobody watching
+    converges what they cover — without being reported skipped, and without recording
+    anything permanent."""
+
+    @pytest.mark.asyncio
+    async def test_a_run_the_flags_answered_converges_and_is_not_reported_skipped(self) -> None:
+        """H234, H240 — the flags answered the one thing there was to decide, so the job did
+        its work: `JobSkipped` is for a review NOBODY answered, and the after-review seam
+        runs because an approved item may depend on what it transfers.
+        """
+        events: list[str] = []
+        policy = ReviewPolicy(apply_installs=True)
+        job = _OrderRecordingJob(
+            make_context(reviewer=_PolicyReviewer(events, policy), review_policy=policy),
+            events,
+            source_items=[FakeItem("pkg-a")],
+        )
+
+        await job.execute()
+
+        assert events == ["plan", "review", "accept_review", "after_review", "apply"]
+        assert [diff.item_id for diff in job.converge_calls] == ["fake:pkg-a"]
+
+    @pytest.mark.asyncio
+    async def test_a_run_whose_flags_answer_none_of_its_groups_still_skips(self) -> None:
+        """H235 — a flag that covers nothing this review holds leaves the review exactly as
+        unanswered as no flag at all, and the job reports skipped rather than converging
+        nothing under a success.
+        """
+        events: list[str] = []
+        policy = ReviewPolicy(apply_removals=True)
+        job = _OrderRecordingJob(
+            make_context(reviewer=_PolicyReviewer(events, policy), review_policy=policy),
+            events,
+            source_items=[FakeItem("pkg-a")],  # an INSTALL, which the removal flag does not answer
+        )
+
+        with pytest.raises(JobSkipped):
+            await job.execute()
+
+        assert events == ["plan", "review"]
+        assert job.converge_calls == []
+
+    @pytest.mark.asyncio
+    async def test_a_flag_answered_run_records_no_machine_specific_mark(self) -> None:
+        """H239 — `_record_permanent_skips` stays keyed to a human's answer, so the run that
+        converged an install unattended wrote no decision file on either machine.
+        """
+        events: list[str] = []
+        policy = ReviewPolicy(apply_installs=True, apply_removals=True)
+        context = make_context(reviewer=_PolicyReviewer(events, policy), review_policy=policy)
+        job = _OrderRecordingJob(context, events, source_items=[FakeItem("pkg-a")])
+
+        await job.execute()
+
+        written = [
+            call.args[0]
+            for call in (
+                *context.source.run_command.call_args_list,  # pyright: ignore[reportAttributeAccessIssue]
+                *context.target.run_command.call_args_list,  # pyright: ignore[reportAttributeAccessIssue]
+            )
+        ]
+        assert not [cmd for cmd in written if "fake.decisions" in cmd and "mv --force" in cmd]
+
+    @pytest.mark.asyncio
+    async def test_no_policy_on_the_context_leaves_the_job_exactly_as_it_was(self) -> None:
+        """H232 — `review_policy` defaults to `None`, and a job that gets none behaves as it
+        did before the flags existed: a review nobody answered still skips.
+        """
+        events: list[str] = []
+        job = _OrderRecordingJob(
+            make_context(reviewer=_RecordingReviewer(events, was_interactive=False)),
+            events,
+            source_items=[FakeItem("pkg-a")],
+        )
+
+        assert job.context.review_policy is None
+        with pytest.raises(JobSkipped):
+            await job.execute()
 
 
 class TestJobContextEnabledSyncJobs:

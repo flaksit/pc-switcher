@@ -30,6 +30,8 @@ from pcswitcher.jobs.packages.review import (
     Decision,
     ReviewGroup,
     ReviewOutcome,
+    ReviewPolicy,
+    policy_decision,
 )
 from pcswitcher.jobs.packages.state import SNIPPET_REGISTRY_RELPATH
 from pcswitcher.jobs.packages.sync_core import PackageItemFailures, PackagePlan
@@ -223,6 +225,7 @@ def make_context(  # noqa: PLR0913 - test builder knobs; all keyword-only
     reviewer: object | None = None,
     confirmer: object | None = None,
     enabled_sync_jobs: dict[str, bool] | None = None,
+    review_policy: ReviewPolicy | None = None,
 ) -> tuple[JobContext, MagicMock, MagicMock]:
     source = MagicMock()
     source.run_command = AsyncMock(side_effect=respond_to(source_responses or {}))
@@ -245,6 +248,7 @@ def make_context(  # noqa: PLR0913 - test builder knobs; all keyword-only
         confirmer=confirmer,  # pyright: ignore[reportArgumentType]
         reviewer=reviewer,  # pyright: ignore[reportArgumentType]
         enabled_sync_jobs=enabled_sync_jobs,
+        review_policy=review_policy,
     )
     return context, source, target
 
@@ -2949,3 +2953,143 @@ class TestMarksFollowWhatTheMachineHolds:
         rewrites = [cmd for cmd in all_calls(target) if "mv --force" in cmd]
         assert len(rewrites) == 1
         assert "brscan3" not in rewrites[0]
+
+
+class _PolicyReviewer:
+    """A `Reviewer` answering exactly as a run with no terminal and the apply flags in force
+    does: `policy_decision` settles the groups the flags cover, everything else is declined
+    for this run, and `was_interactive` stays False because no human was asked."""
+
+    def __init__(self, policy: ReviewPolicy) -> None:
+        self._policy = policy
+        self.groups_seen: tuple[ReviewGroup, ...] | None = None
+
+    async def ask_gate(self, *, title: str, message: str, proceed_label: str, stop_label: str) -> bool | None:
+        raise AssertionError(f"manual_installs_sync has no gate question; asked {title!r}")
+
+    async def review(self, groups: Sequence[ReviewGroup]) -> ReviewOutcome:
+        self.groups_seen = tuple(groups)
+        decisions = {
+            entry.item_id: policy_decision(group, self._policy) or Decision.SKIP_ONCE
+            for group in groups
+            for entry in group.entries
+        }
+        return ReviewOutcome(decisions=decisions, was_interactive=False)
+
+
+class TestTheCommandLineAnswersTheReview:
+    """#245: a run the apply flags answered must still transfer the registry its own
+    approved replays read — while writing nothing a human did not author."""
+
+    @staticmethod
+    def _write_source_registry(tmp_path: Path, content: str = BRSCAN3_REGISTRY_YAML) -> Path:
+        registry = tmp_path / SNIPPET_REGISTRY_RELPATH
+        registry.parent.mkdir(parents=True, exist_ok=True)
+        registry.write_text(content)
+        return registry
+
+    @pytest.mark.asyncio
+    async def test_the_registry_is_pushed_before_the_replay_on_a_flag_answered_run(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """H241 — `converge()` replays from the target's OWN copy of the registry, so a run
+        that approves a manual install without a terminal must still reach the after-review
+        seam: skipping the push would replay from a stale file or none at all.
+        """
+        self._write_source_registry(tmp_path)
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        policy = ReviewPolicy(apply_installs=True)
+        context, _source, target = make_context(
+            source_responses={
+                _STATUS_QUERY: installed_on("brscan3"),
+                "apt-cache policy": CommandResult(0, _hand_deb_policy("brscan3"), ""),
+                "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, BRSCAN3_REGISTRY_YAML, ""),
+            },
+            target_responses={
+                "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, BRSCAN3_REGISTRY_YAML, ""),
+                "echo $HOME": CommandResult(0, "/home/user\n", ""),
+                "bash -c 'sudo dpkg --install /tmp/brscan3.deb'": CommandResult(0, "installed\n", ""),
+            },
+            reviewer=_PolicyReviewer(policy),
+            review_policy=policy,
+        )
+        job = ManualInstallsSyncJob(context)
+
+        events: list[str] = []
+        base_run = target.run_command.side_effect
+
+        def _rec_run(cmd: str, **kw: object) -> CommandResult:
+            if cmd.startswith("bash -c"):
+                events.append("replay")
+            return base_run(cmd, **kw)
+
+        target.run_command = AsyncMock(side_effect=_rec_run)
+
+        async def _rec_send(_local: Path, _remote: str, **_: object) -> None:
+            events.append("push")
+
+        target.send_file = AsyncMock(side_effect=_rec_send)
+
+        await job.execute()
+
+        assert events == ["push", "replay"]
+
+    @pytest.mark.asyncio
+    async def test_a_lossy_registry_transfer_still_aborts_under_both_flags(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """H242 — the guard on a non-additive push is not a review item, so no apply flag
+        reaches it: the run ends so the two registries can be reconciled by hand, and nothing
+        is sent."""
+        self._write_source_registry(tmp_path)
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        policy = ReviewPolicy(apply_installs=True, apply_removals=True)
+        context, _source, target = make_context(
+            target_responses={
+                "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, TARGET_WITH_EXTRA_YAML, ""),
+            },
+            confirmer=FakeConfirmer(return_allow=True),
+            review_policy=policy,
+        )
+        job = ManualInstallsSyncJob(context)
+
+        with pytest.raises(SyncAborted, match="consolidate the two registries"):
+            await job._push_snippet_registry()  # pyright: ignore[reportPrivateUsage]
+
+        target.send_file.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_no_snippet_is_authored_and_the_registry_is_unchanged(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """H243 — the flags carry this run (brscan3 has a snippet, so its install is
+        answered), but the item beside it that has none is answered by nobody: the seam that
+        would stamp an authored snippet writes nothing, because it stays keyed to a human's
+        answer. A run nobody watched records neither a snippet nor a permanent mark.
+
+        It does not fail on the unresolved item either: `_unresolved_as_failures` fails one
+        only on an interactive run, which is unchanged — nobody was asked to resolve it.
+        """
+        self._write_source_registry(tmp_path)
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        policy = ReviewPolicy(apply_installs=True, apply_removals=True)
+        context, source, _target = make_context(
+            source_responses={
+                _STATUS_QUERY: installed_on("brscan3", "cnpg"),
+                "apt-cache policy": CommandResult(0, _hand_deb_policy("brscan3") + _hand_deb_policy("cnpg"), ""),
+                "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, BRSCAN3_REGISTRY_YAML, ""),
+            },
+            target_responses={
+                "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, BRSCAN3_REGISTRY_YAML, ""),
+                "echo $HOME": CommandResult(0, "/home/user\n", ""),
+                "bash -c 'sudo dpkg --install /tmp/brscan3.deb'": CommandResult(0, "installed\n", ""),
+            },
+            reviewer=_PolicyReviewer(policy),
+            review_policy=policy,
+        )
+        job = ManualInstallsSyncJob(context)
+
+        await job.execute()
+
+        assert not [cmd for cmd in all_calls(source) if "package-snippets" in cmd and "mv --force" in cmd]
+        assert not [cmd for cmd in all_calls(source) if "manual.decisions" in cmd and "mv --force" in cmd]

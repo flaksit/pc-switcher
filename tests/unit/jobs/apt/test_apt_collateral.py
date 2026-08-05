@@ -21,6 +21,8 @@ from pcswitcher.jobs.packages.review import (
     Decision,
     ReviewGroup,
     ReviewOutcome,
+    ReviewPolicy,
+    policy_decision,
 )
 from pcswitcher.models import CommandResult, LogLevel, SyncAbortedByUser
 from tests.unit.jobs.apt.helpers import (
@@ -1971,3 +1973,59 @@ class TestAMarkDiesWithItsPackage:
         await job.execute()
 
         assert not [cmd for cmd in all_calls(target) if "mv --force" in cmd and "apt.decisions.yaml" in cmd]
+
+
+class _PolicyReviewer:
+    """A `Reviewer` answering as a run with no terminal and the apply flags in force does:
+    `policy_decision` settles the groups the flags cover, everything else is declined for
+    this run."""
+
+    def __init__(self, policy: ReviewPolicy) -> None:
+        self._policy = policy
+
+    async def ask_gate(self, *, title: str, message: str, proceed_label: str, stop_label: str) -> bool | None:
+        return None
+
+    async def review(self, groups: Sequence[ReviewGroup]) -> ReviewOutcome:
+        decisions = {
+            entry.item_id: policy_decision(group, self._policy) or Decision.SKIP_ONCE
+            for group in groups
+            for entry in group.entries
+        }
+        return ReviewOutcome(decisions=decisions, was_interactive=False)
+
+
+def _with_policy(job: AptSyncJob, policy: ReviewPolicy) -> None:
+    job.context = dataclasses.replace(job.context, reviewer=_PolicyReviewer(policy), review_policy=policy)
+
+
+class TestTheCommandLineAnswersTheReview:
+    """#245: the collateral question is answered by `--apply-package-removals`, and an
+    install whose transaction would lose a protected package therefore needs BOTH flags."""
+
+    @pytest.mark.asyncio
+    async def test_the_install_flag_alone_leaves_the_install_unapproved(self) -> None:
+        """H244 — `--apply-package-installs` answers the install, but the collateral question
+        it provokes belongs to the removal flag; unanswered, it is declined for this run, and
+        a declined collateral cancels the changes that cause it. Nothing installs.
+        """
+        context, _source, target = _manual_collateral_context()
+        job = AptSyncJob(context)
+        _with_policy(job, ReviewPolicy(apply_installs=True))
+
+        await job.execute()
+
+        assert not [cmd for cmd in all_calls(target) if "sudo" in cmd and "apt-get install" in cmd]
+
+    @pytest.mark.asyncio
+    async def test_both_flags_converge_the_install_and_its_collateral(self) -> None:
+        """H244 — the same run with both flags answers the collateral too, so the install
+        proceeds and the protected package goes with it, which is what asking for both
+        directions means."""
+        context, _source, target = _manual_collateral_context()
+        job = AptSyncJob(context)
+        _with_policy(job, ReviewPolicy(apply_installs=True, apply_removals=True))
+
+        await job.execute()
+
+        assert [cmd for cmd in all_calls(target) if "sudo" in cmd and "apt-get install" in cmd and "pkg-a" in cmd]
