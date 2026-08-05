@@ -128,11 +128,14 @@ _APT_TIMER_SUSPENSION = "6h"
 # (`systemctl list-timers 'pc-switcher-*'`) and cancellable by `_restore_apt_timers` without
 # having to parse a generated one back out of `systemd-run`'s output.
 #
-# A run that died leaves this unit pending AND the timers stopped, so every later run has to
-# settle it before reading anything (`_settle_pending_apt_timer_restore`). Left alone it fires
-# 6h after the dead run started — which can be part-way through a LATER sync, starting
+# A run that died leaves this unit pending AND the timers stopped. Left alone it fires 6h after
+# the dead run started — which can be part-way through a LATER sync, starting
 # `apt-daily-upgrade.timer` against a converging apt: the exact race this feature prevents.
-# `systemd-run` would also refuse the name while it exists.
+# `systemd-run` would also refuse the name while it exists. So a later run pushes its deadline
+# out of the way at suspend (`_defer_pending_apt_timer_restore`) and runs it once the sync is
+# over (`_settle_outstanding_apt_timer_restore`). The restore is never triggered at suspend:
+# both apt timers are `Persistent=true`, so starting one whose window elapsed while it was
+# stopped fires the upgrade immediately — into the run this feature exists to protect.
 _APT_TIMER_RESTORE_UNIT = "pc-switcher-apt-timers"
 # The unit properties the capture reads. `Id` keys the block (`systemctl show` emits one
 # block per unit ASKED, in order, including for a unit that does not exist), `LoadState`
