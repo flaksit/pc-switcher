@@ -76,9 +76,12 @@ while IFS= read -r f; do
                 add_area "$marker"
             done <<< "$markers"
             ;;
+        # package_sync_scenario.py is a helper, not a test file: it carries no markers of
+        # its own, so it is mapped here like a source file. A test module outside
+        # area_package that imports it must add its own area to this branch.
         src/pcswitcher/jobs/apt_sync/* | src/pcswitcher/jobs/snap_sync.py | \
         src/pcswitcher/jobs/flatpak_sync.py | src/pcswitcher/jobs/manual_installs_sync.py | \
-        src/pcswitcher/jobs/packages/*)
+        src/pcswitcher/jobs/packages/* | tests/integration/jobs/package_sync_scenario.py)
             add_area area_package
             ;;
         install.sh | src/pcswitcher/install.py | src/pcswitcher/version.py | \

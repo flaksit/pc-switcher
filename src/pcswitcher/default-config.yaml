@@ -40,7 +40,7 @@ logging:
 
 sync_jobs:
   # Test jobs (for development/testing)
-  dummy_success: true    # Test job that completes successfully
+  dummy_success: false   # Test job that completes successfully
   dummy_fail: false      # Test job that fails at configurable progress
 
   # Package management jobs run BEFORE folder_sync (D-17): apps are provisioned first,

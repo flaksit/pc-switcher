@@ -8,19 +8,21 @@ Markers, one per area the single run actually reaches:
 - `area_core`: the spine the rehearsal exercises around the job — source and target locks,
   the first-sync gate, config sync, and the sync-history write the orchestrator must skip;
 - `area_install`: the run reaches a target with no pc-switcher, so install-on-target has an
-  install to preview and must not perform it.
+  install to preview and must not perform it;
+- `area_package`: the four package managers run too, each with one pending write, because
+  they are where a rehearsal has the most to write and the most to get wrong — a repository
+  file, a signing key, a pin, an `apt-get install`, a snap revision, a remote, a replayed
+  snippet — and none of it may reach the target.
 
 Not `smoke`: a full sync run is too expensive for every PR, but the contract it guards is
-cross-cutting, so it runs whenever any of the four areas is selected.
-
-Deliberately NOT `area_package`: the package managers' own rehearsal is asserted, with the
-subjects it needs, in `jobs/test_package_sync.py`; enabling those jobs here would cost VM
-fixtures and minutes for a claim already covered.
+cross-cutting, so it runs whenever any of the five areas is selected.
 
 Scope choice: the seeded tree is the small filter tree, not the rich ownership/permission
 matrix. Its value here is that a REAL sync would add files, overwrite one, and delete
 several within it — the three kinds of write a rehearsal must not perform — which the rich
-matrix would not prove any better while costing a much larger seed.
+matrix would not prove any better while costing a much larger seed. The package seeding
+follows the same rule (`package_sync_scenario.seed_a_pending_write_in_every_manager`): one
+pending write per manager, none of the machinery a CONVERGING run needs.
 """
 
 from __future__ import annotations
@@ -32,20 +34,23 @@ import pytest
 
 from pcswitcher.executor import BashLoginRemoteExecutor
 from tests.integration.conftest import write_pcswitcher_config
-from tests.integration.jobs import folder_sync_scenario
+from tests.integration.jobs import folder_sync_scenario, package_sync_scenario
+from tests.integration.jobs.package_sync_scenario import AptSubjects
 
 pytestmark = [
     pytest.mark.area_folder,
     pytest.mark.area_btrfs,
     pytest.mark.area_core,
     pytest.mark.area_install,
+    pytest.mark.area_package,
 ]
 
 
 def _dry_run_config(scope: str) -> str:
-    """Source config for the rehearsal: one folder_sync scope and nothing else.
+    """Source config for the rehearsal: the four package managers and one folder_sync scope.
 
-    DEBUG file logging because the preview's own summary line is read back out of the log.
+    DEBUG file logging because the preview's own summary line is read back out of the log,
+    and DEBUG on the tui because the package jobs' previews are read off the run's own output.
     No `filter_file`: filter semantics are `test_end_to_end_sync.py`'s subject, and leaving
     the seeded tree unfiltered maximises what the rehearsal would have written.
     """
@@ -53,8 +58,13 @@ def _dry_run_config(scope: str) -> str:
 
 logging:
   file: DEBUG
+  tui: DEBUG
 
 sync_jobs:
+  apt_sync: true
+  snap_sync: true
+  flatpak_sync: true
+  manual_installs_sync: true
   folder_sync: true
 
 disk_space_monitor:
@@ -133,43 +143,57 @@ class TestDryRunContract:
         pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
         pc2_without_pcswitcher_fn: BashLoginRemoteExecutor,
         reset_pcswitcher_state: None,
+        package_sync_subjects: None,
+        apt_subjects: AptSubjects,
     ) -> None:
-        """ADR-014 / D-12: one rehearsal, every forbidden write asserted absent.
+        """J53, J58, J59, C165, C168, C169, C2, A65 — ADR-014 / D-12, one rehearsal, every
+        forbidden write asserted absent.
 
         pc2 is seeded so a real sync would add files, overwrite one and delete several
-        inside the synced scope, has no sync history — so the run also passes the W1
-        first-sync gate, which a rehearsal logs and proceeds through instead of aborting —
-        and carries no pc-switcher, so install-on-target has a real install to withhold.
-        The run therefore does NOT set the install-on-target skip that every other sync test
-        carries: the step it would skip is one of this test's subjects.
+        inside the synced scope, would install a package, a flatpak ref and a snippet, and
+        would take a repository, a signing key and a pin into its `/etc/apt`. It has no sync
+        history — so the run also passes the W1 first-sync gate, which a rehearsal logs and
+        proceeds through instead of aborting — and carries no pc-switcher, so
+        install-on-target has a real install to withhold. The run therefore does NOT set the
+        install-on-target skip that every other sync test carries: the step it would skip is
+        one of this test's subjects.
 
         Forbidden and asserted absent, on BOTH machines: any change to the target payload,
-        any btrfs snapshot, any sync-history update, any config written to the target, and
-        any pc-switcher installed on the target. Required and asserted present: exit 0, the
-        locks, the gate and the withheld install in the log, and a folder_sync preview
-        reporting a non-zero number of would-be transfers AND deletions.
+        any change to the target's whole package-manager state, any btrfs snapshot, any
+        sync-history update, any config written to the target, and any pc-switcher installed
+        on the target. Required and asserted present: exit 0, the locks, the gate and the
+        withheld install in the log, a folder_sync preview reporting a non-zero number of
+        would-be transfers AND deletions, and the always-sync pin previewed as a derived
+        write while the repository that feeds no approved package is previewed not at all.
 
         Run without `--yes`: a rehearsal must reach the end without a single prompt, so
         every gate it passes is one the dry-run path itself waved through, not one the
-        flag answered.
+        flag answered. The package reviews ARE answered, through the automation hook: a run
+        nobody attends leaves every decidable item SKIP_ONCE and each package job raises
+        `JobSkipped` before it previews anything (`PKG-FR-NO-TERMINAL`), so an unanswered
+        rehearsal would assert the absence of writes no run was ever going to make.
         """
-        _ = reset_pcswitcher_state  # Wipes config, history and snapshots on both VMs
+        _ = (reset_pcswitcher_state, package_sync_subjects)  # Wipes config, history and snapshots on both VMs
         pc1 = pc1_with_pcswitcher_mod
         pc2 = pc2_without_pcswitcher_fn  # Same VM as pc2_executor, with pc-switcher removed
         scope = folder_sync_scenario.filter_tree_path()
+        package_seed = None
 
         try:
             await write_pcswitcher_config(pc1, _dry_run_config(scope))
             await folder_sync_scenario.seed_filter_source(pc1)
             await folder_sync_scenario.seed_filter_target(pc2)
+            package_seed = await package_sync_scenario.seed_a_pending_write_in_every_manager(pc1, pc2, apt_subjects)
 
             payload_before = await folder_sync_scenario.capture_manifests(pc2, scope)
+            packages_before = await package_sync_scenario.capture_machine_package_state(pc2)
             source_before = await _capture_machine_state(pc1)
             target_before = await _capture_machine_state(pc2)
 
+            approve = package_sync_scenario.automation_env_assignment_multi(package_seed.approve_everything())
             rehearsal = await pc1.run_command(
-                "pc-switcher sync pc2 --dry-run",
-                timeout=300.0,
+                f"{approve} pc-switcher sync pc2 --dry-run",
+                timeout=600.0,
                 login_shell=True,
             )
             assert rehearsal.success, (
@@ -180,6 +204,15 @@ class TestDryRunContract:
             # 1. The target payload a real sync would have rewritten.
             await folder_sync_scenario.assert_manifests_unchanged(
                 pc2, scope, payload_before, "--dry-run wrote to the target payload (ADR-014)."
+            )
+
+            # 1b. The target's whole package-manager state, and what the preview says it
+            # would have written to `/etc/apt`.
+            package_sync_scenario.assert_the_rehearsal_wrote_nothing(
+                package_seed,
+                packages_before,
+                await package_sync_scenario.capture_machine_package_state(pc2),
+                rehearsal.stdout + rehearsal.stderr,
             )
 
             # 2-5. Snapshots, sync history, target config, and the install withheld.
@@ -226,4 +259,6 @@ class TestDryRunContract:
             )
 
         finally:
+            if package_seed is not None:
+                await package_sync_scenario.restore_after_the_pending_writes(pc1, pc2, package_seed)
             await folder_sync_scenario.remove_test_artifacts(pc1, pc2, scope)

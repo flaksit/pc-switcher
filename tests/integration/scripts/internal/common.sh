@@ -149,12 +149,12 @@ acquire_lock() {
 # =============================================================================
 
 # The package-manager state the integration suite requires — the subjects it operates on
-# (snaps, flatpak, a local flatpak repository) present, and the machine's own automatic
+# (apt packages, snaps, a flatpak remote and app) present, and the machine's own automatic
 # apt updater gone — is established by internal/vm-test-fixtures.sh and baked into the
 # baseline snapshot. Keep this number in sync with FIXTURES_VERSION in that script:
 # a mismatch between the number here and the marker file on a VM is what tells
 # provisioning the baseline has to be rebuilt.
-readonly PCSWITCHER_TEST_FIXTURES_VERSION=5
+readonly PCSWITCHER_TEST_FIXTURES_VERSION=6
 readonly PCSWITCHER_TEST_FIXTURES_MARKER=/etc/pcswitcher-test-fixtures
 
 # Whether <user@host> already carries this version of the test fixtures.

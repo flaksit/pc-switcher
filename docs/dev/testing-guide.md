@@ -77,6 +77,17 @@ success_result, failed_result # Bare CommandResults
 
 Use `mock_job_context` rather than building a `JobContext` by hand.
 
+### Asserting On What Was Printed
+
+Build the console with `captured_console()` from `tests/unit/console_capture.py`, never `Console(file=StringIO())`:
+
+```python
+console, buffer = captured_console()          # add terminal=True for the is_terminal branches
+assert "Sync finished with failures:" in buffer.getvalue()
+```
+
+It pins width and terminal-ness, and turns styling off at the source. A hand-built console honours `FORCE_COLOR` even when it writes to a buffer, so the buffer holds `\x1b[1mSync finished…` and the assertion fails only for the developers whose environment sets it (#250). `no_color=True` is not enough — it drops colour and keeps bold.
+
 ### Mocking Patterns
 
 **Basic command mocking**:
@@ -261,7 +272,8 @@ tests/integration/
 ├── test_installation_script.py, test_self_update.py, test_version_resolution.py
 ├── jobs/                        # Per-job integration tests
 │   ├── test_install_on_target_job.py
-│   └── test_package_sync.py
+│   ├── test_package_sync.py
+│   └── folder_sync_scenario.py, package_sync_scenario.py   # Helpers, no tests of their own
 ├── benchmarks/                  # Performance benchmarks (excluded from CI)
 └── scripts/                     # VM provisioning, reset, lock, CI selection
 ```

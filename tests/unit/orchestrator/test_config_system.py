@@ -759,7 +759,7 @@ class TestShippedDefaultConfig:
         return Path(pcswitcher.__file__).parent / "default-config.yaml"
 
     def test_shipped_default_config_loads(self) -> None:
-        """K5 — `pc-switcher init` ships this file; it must load without a schema error."""
+        """`pc-switcher init` ships this file; it must load without a schema error."""
         config = Configuration.from_yaml(self._default_config_path())
         assert config.sync_jobs["folder_sync"] is True
         assert config.sync_jobs["vscode_state_sync"] is True

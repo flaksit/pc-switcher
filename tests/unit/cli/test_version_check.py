@@ -12,7 +12,6 @@ process and silently kills the run.
 
 from __future__ import annotations
 
-import io
 import os
 import subprocess
 import sys
@@ -26,6 +25,7 @@ from typer.testing import CliRunner
 
 from pcswitcher import cli
 from pcswitcher.version import Release, Version
+from tests.unit.console_capture import captured_console
 
 runner = CliRunner()
 
@@ -54,14 +54,13 @@ def _isolate_skip_env_var() -> Generator[None]:  # pyright: ignore[reportUnusedF
 
 
 def _capture_console() -> Console:
-    """Build a Rich console that force-renders into an in-memory buffer.
+    """A console reporting itself as a terminal, writing into an in-memory buffer.
 
-    force_terminal ensures Rich's own markup renders, not `console.is_terminal`
-    for the TTY gate - that gate is controlled separately via
-    `patch("pcswitcher.cli.is_interactive", ...)` so tests are deterministic
-    regardless of StringIO's own terminal detection.
+    `terminal=True` covers only the code that asks `console.is_terminal`; the TTY gate is
+    controlled separately via `patch("pcswitcher.cli.is_interactive", ...)`.
     """
-    return Console(file=io.StringIO(), force_terminal=True)
+    console, _ = captured_console(terminal=True)
+    return console
 
 
 def _subprocess_side_effect(version_stdout: str) -> Callable[..., subprocess.CompletedProcess[str]]:
