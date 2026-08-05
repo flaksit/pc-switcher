@@ -57,7 +57,7 @@ graph TD
 
     BtrfsSnapshotJob["<b>BtrfsSnapshotJob</b><br/>SystemJob<br/>- pre/post phase<br/>- Both machines<br/>- Direct btrfs commands"]
 
-    SyncJobs["<b>SyncJobs</b><br/>- apt_sync, snap_sync, flatpak_sync<br/>- manual_installs_sync<br/>- folder_sync, vscode_state_sync<br/>- dummy_success, dummy_fail<br/>[configurable]"]
+    SyncJobs["<b>SyncJobs</b><br/>- apt_sync, snap_sync, flatpak_sync<br/>- manual_deb_sync, manual_installs_sync<br/>- folder_sync, vscode_state_sync<br/>- dummy_success, dummy_fail<br/>[configurable]"]
 
     DiskSpaceMonitorJob["<b>DiskSpaceMonitorJob</b><br/>BackgroundJob<br/>- Periodic check<br/>- One instance per host<br/>[concurrent]"]
 
@@ -383,7 +383,7 @@ Every executor call that is not purely read-only passes `mutates="<phrase>"`, wh
 
 ### Sequential Execution
 
-Sync jobs run one at a time, in config order, with no dependency graph. The one ordering rule is validated rather than resolved: the four package jobs must be listed before `folder_sync` (D-17), otherwise config validation fails.
+Sync jobs run one at a time, in config order, with no dependency graph. The one ordering rule is validated rather than resolved: the five package jobs must be listed before `folder_sync` (D-17), otherwise config validation fails.
 
 The two `DiskSpaceMonitorJob`s run concurrently in the same `TaskGroup` and are cancelled when the job loop ends.
 
