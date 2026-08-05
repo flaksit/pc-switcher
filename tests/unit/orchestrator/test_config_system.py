@@ -23,12 +23,16 @@ Test Coverage:
 from __future__ import annotations
 
 from pathlib import Path
+from typing import ClassVar
+from unittest.mock import MagicMock
 
 import pytest
 
 import pcswitcher
 from pcswitcher.config import Configuration, ConfigurationError
-from pcswitcher.models import LogLevel
+from pcswitcher.jobs.base import SyncJob
+from pcswitcher.models import Host, LogLevel, ValidationError
+from pcswitcher.orchestrator import Orchestrator
 
 
 class TestConfigLoading:
@@ -388,8 +392,24 @@ sync_jobs:
         # dummy_fail should be disabled
         assert config.sync_jobs.get("dummy_fail") is False
 
+    def test_manual_installs_sync_is_an_accepted_job_name(self, tmp_path: Path) -> None:
+        """The schema accepts `manual_installs_sync` as a valid sync_jobs key (D-15/D-18):
+        the fourth package job has its own independent enable flag."""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            """
+sync_jobs:
+  manual_installs_sync: true
+  folder_sync: true
+"""
+        )
+
+        config = Configuration.from_yaml(config_file)
+
+        assert config.sync_jobs["manual_installs_sync"] is True
+
     def test_core_edge_unknown_job_in_config(self, tmp_path: Path) -> None:
-        """Edge case: Unknown job name in sync_jobs is rejected.
+        """K13 — Edge case: Unknown job name in sync_jobs is rejected.
 
         Verifies that the schema's additionalProperties: false for sync_jobs
         prevents unknown job names from being accepted.
@@ -629,7 +649,7 @@ class TestEmptyConfig:
     """Tests for empty or minimal configuration files."""
 
     def test_core_empty_config_file(self, tmp_path: Path) -> None:
-        """Test that empty config file uses all defaults.
+        """K8 — Test that empty config file uses all defaults.
 
         Verifies that an empty config file is valid and uses defaults
         for all settings.
@@ -749,3 +769,290 @@ class TestShippedDefaultConfig:
         config = Configuration.from_yaml(self._default_config_path())
         order = list(config.sync_jobs)
         assert order.index("folder_sync") < order.index("vscode_state_sync")
+
+    def test_package_jobs_ship_disabled(self) -> None:
+        """K1, K2, K3, K4 — all four package jobs are valid sync_jobs keys, shipped
+        opted-out by default: no sync installs or removes a package until the user says so."""
+        config = Configuration.from_yaml(self._default_config_path())
+        assert config.sync_jobs["apt_sync"] is False
+        assert config.sync_jobs["snap_sync"] is False
+        assert config.sync_jobs["flatpak_sync"] is False
+        assert config.sync_jobs["manual_installs_sync"] is False
+
+    def test_package_jobs_precede_folder_sync(self) -> None:
+        """K24 — D-17: all four package jobs (apt_sync, snap_sync, flatpak_sync,
+        manual_installs_sync) resolve before folder_sync in sync_jobs insertion order —
+        the order both _discover_and_validate_jobs and _first_sync_scopes iterate
+        directly, so apps land before folder_sync's data does.
+        """
+        config = Configuration.from_yaml(self._default_config_path())
+        order = list(config.sync_jobs)
+        folder_sync_index = order.index("folder_sync")
+        for job_name in ("apt_sync", "snap_sync", "flatpak_sync", "manual_installs_sync"):
+            assert order.index(job_name) < folder_sync_index
+
+    def test_shipped_config_omits_empty_package_sections(self) -> None:
+        """K6 — D-32: no top-level apt_sync/snap_sync/flatpak_sync/manual_installs_sync section
+        ships; a job earns a section only when it has a real key, and its resolved config
+        defaults to an empty mapping."""
+        config = Configuration.from_yaml(self._default_config_path())
+        for job_name in ("apt_sync", "snap_sync", "flatpak_sync", "manual_installs_sync"):
+            assert config.get_job_config(job_name) == {}
+
+    def test_config_omitting_package_sections_validates(self, tmp_path: Path) -> None:
+        """K7 — D-32: a config that enables every package job via sync_jobs but ships no
+        top-level section for them still validates (root additionalProperties: false
+        rejects unknown keys, but an absent section is not one), and each job's resolved
+        config is an empty mapping."""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            """
+sync_jobs:
+  apt_sync: true
+  snap_sync: true
+  flatpak_sync: true
+  manual_installs_sync: true
+  folder_sync: true
+"""
+        )
+
+        config = Configuration.from_yaml(config_file)
+
+        for job_name in ("apt_sync", "snap_sync", "flatpak_sync", "manual_installs_sync"):
+            assert config.get_job_config(job_name) == {}
+
+
+class TestPackageJobsBeforeFolderSyncStructuralCheck:
+    """WR-02 regression: D-17 ordering must be a structural `ConfigError`, not just a
+    convention the shipped `default-config.yaml`'s key order happens to satisfy — a
+    user who hand-edits their own `config.yaml` (e.g. appending a newly-enabled
+    `flatpak_sync: true` after an existing `folder_sync: true` line) must get a loud
+    error instead of a silent flatpak-data-race.
+    """
+
+    def _mock_config(self, sync_jobs: dict[str, bool]) -> MagicMock:
+        config = MagicMock(spec=Configuration)
+        config.sync_jobs = sync_jobs
+        return config
+
+    def _orchestrator(self, sync_jobs: dict[str, bool]) -> Orchestrator:
+        return Orchestrator(target="target-host", config=self._mock_config(sync_jobs))
+
+    def test_package_job_after_folder_sync_yields_config_error(self) -> None:
+        """K25 — flatpak_sync listed after folder_sync."""
+        orchestrator = self._orchestrator({"folder_sync": True, "flatpak_sync": True})
+
+        errors = orchestrator._check_package_jobs_precede_folder_sync()  # pyright: ignore[reportPrivateUsage]
+
+        assert len(errors) == 1
+        assert errors[0].job == "flatpak_sync"
+        assert "folder_sync" in errors[0].message
+
+    def test_apt_sync_after_folder_sync_yields_a_config_error(self) -> None:
+        """K27 — the rule is per job, not only a property of the four-job set."""
+        orchestrator = self._orchestrator({"folder_sync": True, "apt_sync": True})
+
+        errors = orchestrator._check_package_jobs_precede_folder_sync()  # pyright: ignore[reportPrivateUsage]
+
+        assert [e.job for e in errors] == ["apt_sync"]
+        assert "folder_sync" in errors[0].message
+
+    def test_snap_sync_after_folder_sync_yields_a_config_error(self) -> None:
+        """K28 — the snap half of the same per-job rule."""
+        orchestrator = self._orchestrator({"folder_sync": True, "snap_sync": True})
+
+        errors = orchestrator._check_package_jobs_precede_folder_sync()  # pyright: ignore[reportPrivateUsage]
+
+        assert [e.job for e in errors] == ["snap_sync"]
+        assert "folder_sync" in errors[0].message
+
+    def test_all_four_package_jobs_after_folder_sync_yield_four_errors(self) -> None:
+        """K29 — one error per misordered job."""
+        orchestrator = self._orchestrator(
+            {
+                "folder_sync": True,
+                "apt_sync": True,
+                "snap_sync": True,
+                "flatpak_sync": True,
+                "manual_installs_sync": True,
+            }
+        )
+
+        errors = orchestrator._check_package_jobs_precede_folder_sync()  # pyright: ignore[reportPrivateUsage]
+
+        assert {e.job for e in errors} == {"apt_sync", "snap_sync", "flatpak_sync", "manual_installs_sync"}
+
+    def test_manual_installs_after_folder_sync_yields_a_config_error(self) -> None:
+        """K26 — Replaying an install snippet puts software on the target, and that software
+        writes its own stock defaults exactly as a package's postinst does — so the
+        ordering rule covers all four package jobs, not only the three managers.
+        """
+        orchestrator = self._orchestrator({"folder_sync": True, "manual_installs_sync": True})
+
+        errors = orchestrator._check_package_jobs_precede_folder_sync()  # pyright: ignore[reportPrivateUsage]
+
+        assert [e.job for e in errors] == ["manual_installs_sync"]
+
+    def test_package_jobs_before_folder_sync_yields_no_error(self) -> None:
+        """K30 — the correct order passes."""
+        orchestrator = self._orchestrator(
+            {
+                "apt_sync": True,
+                "snap_sync": True,
+                "flatpak_sync": True,
+                "manual_installs_sync": True,
+                "folder_sync": True,
+            }
+        )
+
+        errors = orchestrator._check_package_jobs_precede_folder_sync()  # pyright: ignore[reportPrivateUsage]
+
+        assert errors == []
+
+    def test_disabled_package_job_after_folder_sync_yields_no_error(self) -> None:
+        """K31 — a disabled job's position is irrelevant: only enabled jobs can race."""
+        orchestrator = self._orchestrator({"folder_sync": True, "flatpak_sync": False})
+
+        errors = orchestrator._check_package_jobs_precede_folder_sync()  # pyright: ignore[reportPrivateUsage]
+
+        assert errors == []
+
+    def test_folder_sync_disabled_yields_no_error_regardless_of_order(self) -> None:
+        """K32 — nothing to race against."""
+        orchestrator = self._orchestrator({"folder_sync": False, "flatpak_sync": True})
+
+        errors = orchestrator._check_package_jobs_precede_folder_sync()  # pyright: ignore[reportPrivateUsage]
+
+        assert errors == []
+
+
+def _stub_job_class(job_name: str, journal: list[str], *, fails_validation: bool = False) -> type[SyncJob]:
+    """A hermetic stand-in for `job_name` that records every phase it reaches.
+
+    What these tests are about is which classes discovery builds, in what order, and
+    how far the run gets before it refuses — the real job classes would only add their
+    own command traffic to that. The journal is what makes a refusal provable: it stays
+    empty exactly when nothing was validated and nothing was executed.
+    """
+
+    class _StubJob(SyncJob):
+        name: ClassVar[str] = job_name
+
+        async def validate(self) -> list[ValidationError]:
+            journal.append(f"validate:{job_name}")
+            if fails_validation:
+                return [ValidationError(job=job_name, host=Host.TARGET, message=f"{job_name} cannot run here")]
+            return []
+
+        async def execute(self) -> None:
+            journal.append(f"execute:{job_name}")
+
+    return _StubJob
+
+
+class TestJobDiscoveryFollowsTheConfig:
+    """`_discover_and_validate_jobs` is where opting in becomes a job list: which names
+    are resolved, in which order, and whether the run starts at all.
+    """
+
+    def _stub_resolution(
+        self,
+        orchestrator: Orchestrator,
+        monkeypatch: pytest.MonkeyPatch,
+        sync_jobs: dict[str, bool],
+        *,
+        failing_validation: str | None = None,
+    ) -> tuple[list[str], list[str]]:
+        """Point discovery at stubs; return its phase journal and the names it resolved."""
+        orchestrator._config.sync_jobs = sync_jobs  # pyright: ignore[reportPrivateUsage]
+        orchestrator._config.job_configs = {}  # pyright: ignore[reportPrivateUsage]
+        journal: list[str] = []
+        resolved: list[str] = []
+
+        def resolve(job_name: str) -> type[SyncJob] | None:
+            resolved.append(job_name)
+            return _stub_job_class(job_name, journal, fails_validation=job_name == failing_validation)
+
+        monkeypatch.setattr(orchestrator, "_resolve_sync_job_class", resolve)
+        return journal, resolved
+
+    @pytest.mark.asyncio
+    async def test_a_config_with_no_sync_jobs_block_instantiates_nothing(
+        self, wired_orchestrator: Orchestrator, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """K8 — no sync_jobs block at all: no job is resolved, so none can install or remove."""
+        journal, resolved = self._stub_resolution(wired_orchestrator, monkeypatch, {})
+
+        jobs, unresolved = await wired_orchestrator._discover_and_validate_jobs()  # pyright: ignore[reportPrivateUsage]
+
+        assert jobs == []
+        assert unresolved == []
+        assert resolved == []
+        assert journal == []
+
+    @pytest.mark.asyncio
+    async def test_only_the_enabled_package_job_is_resolved_and_run(
+        self, wired_orchestrator: Orchestrator, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """K14 — one package job on, the other three absent from the config: only that
+        name is ever resolved, so the absent three are never instantiated and never run."""
+        journal, resolved = self._stub_resolution(wired_orchestrator, monkeypatch, {"snap_sync": True})
+
+        jobs, _ = await wired_orchestrator._discover_and_validate_jobs()  # pyright: ignore[reportPrivateUsage]
+        await wired_orchestrator._execute_jobs(jobs)  # pyright: ignore[reportPrivateUsage]
+
+        assert resolved == ["snap_sync"]
+        assert [job.name for job in jobs] == ["snap_sync"]
+        assert journal == ["validate:snap_sync", "execute:snap_sync"]
+
+    @pytest.mark.asyncio
+    async def test_a_misordered_config_refuses_to_start_before_any_job_is_touched(
+        self, wired_orchestrator: Orchestrator, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """K33 — a package job listed after folder_sync stops the run at discovery: the
+        error names both jobs, and no job is validated or executed, so neither machine
+        is touched."""
+        journal, _ = self._stub_resolution(wired_orchestrator, monkeypatch, {"folder_sync": True, "apt_sync": True})
+
+        with pytest.raises(RuntimeError) as exc_info:
+            await wired_orchestrator._discover_and_validate_jobs()  # pyright: ignore[reportPrivateUsage]
+
+        assert "apt_sync" in str(exc_info.value)
+        assert "folder_sync" in str(exc_info.value)
+        assert journal == []
+
+    @pytest.mark.asyncio
+    async def test_jobs_execute_in_the_configured_key_order(
+        self, wired_orchestrator: Orchestrator, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """K34 — execution order is the config's key order, not an order the orchestrator
+        imposes: reversing the two keys reverses the run."""
+        for order in (["apt_sync", "folder_sync"], ["snap_sync", "apt_sync"]):
+            journal, _ = self._stub_resolution(wired_orchestrator, monkeypatch, dict.fromkeys(order, True))
+
+            jobs, _ = await wired_orchestrator._discover_and_validate_jobs()  # pyright: ignore[reportPrivateUsage]
+            await wired_orchestrator._execute_jobs(jobs)  # pyright: ignore[reportPrivateUsage]
+
+            assert [job.name for job in jobs] == order
+            assert [entry for entry in journal if entry.startswith("execute:")] == [
+                f"execute:{name}" for name in order
+            ]
+
+    @pytest.mark.asyncio
+    async def test_one_jobs_validation_error_stops_the_whole_run(
+        self, wired_orchestrator: Orchestrator, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """K68 — one enabled job's validation error refuses the run naming that job, even
+        though the other job would have passed; nothing executes on either machine."""
+        journal, _ = self._stub_resolution(
+            wired_orchestrator,
+            monkeypatch,
+            {"apt_sync": True, "snap_sync": True},
+            failing_validation="snap_sync",
+        )
+
+        with pytest.raises(RuntimeError) as exc_info:
+            await wired_orchestrator._discover_and_validate_jobs()  # pyright: ignore[reportPrivateUsage]
+
+        assert "snap_sync cannot run here" in str(exc_info.value)
+        assert not [entry for entry in journal if entry.startswith("execute:")]

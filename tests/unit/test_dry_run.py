@@ -3,7 +3,12 @@
 Tests verify that --dry-run mode:
 - Propagates through the system (CLI -> Orchestrator -> Jobs)
 - Skips state-modifying operations while keeping logging
-- Returns SUCCESS/FAILED as expected (not SKIPPED)
+- Returns SUCCESS/FAILED for the jobs covered here, never SKIPPED as a dry-run artefact
+
+A dry run is NOT globally exempt from SKIPPED. A package job whose plan is non-empty raises
+`JobSkipped` on a non-interactive run whatever `--dry-run` says (`packages/sync_core.py`
+`execute()`): D-26 forces every item to skip-once when nobody is present to decide, so the
+run has nothing to preview and says so rather than reporting a success it did not rehearse.
 
 Reference: GitHub issue #37
 """

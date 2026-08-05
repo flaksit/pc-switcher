@@ -5,7 +5,7 @@
 ## File Classification
 
 | New/Modified File | Role | Data Flow | Closest Analog | Match Quality |
-|-------------------|------|-----------|----------------|---------------|
+| ----------------- | ---- | --------- | -------------- | ------------- |
 | `src/pcswitcher/jobs/folder_sync.py` | service / sync-job | streaming + request-response | `src/pcswitcher/jobs/btrfs.py` (BtrfsSnapshotJob) + `src/pcswitcher/jobs/install_on_target.py` | exact (same base class, same validate/execute contract) |
 | `src/pcswitcher/sync_history.py` | utility / state | file-I/O | self (existing module, extend in-place) | self |
 | `src/pcswitcher/config.py` | config | transform | self (existing module, extend in-place) | self |

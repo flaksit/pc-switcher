@@ -14,13 +14,14 @@ from docs/system/spec.md.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from pcswitcher.btrfs_snapshots import (
     cleanup_snapshots,
     create_snapshot,
+    delete_all_snapshots,
     list_snapshots,
     snapshot_name,
     validate_snapshots_directory,
@@ -28,6 +29,10 @@ from pcswitcher.btrfs_snapshots import (
 )
 from pcswitcher.executor import RemoteExecutor
 from pcswitcher.models import Host, SnapshotPhase
+
+from .conftest import purge_subvolume_script
+
+pytestmark = pytest.mark.area_btrfs
 
 
 @pytest.fixture(scope="module")
@@ -42,31 +47,17 @@ async def test_subvolume(pc1_executor: RemoteExecutor) -> AsyncIterator[str]:
     """
     subvolume_path = "/test-snapshots-vol"
 
-    # Clean slate: remove any leftover from previous runs
-    await pc1_executor.run_command(
-        "sudo sh -c '"
-        f"btrfs subvolume list -o {subvolume_path} 2>/dev/null | "
-        'awk "{print \\$NF}" | '
-        "xargs -r -I {} btrfs subvolume delete /{}"
-        "'",
+    # Clean slate (leftovers from previous runs), then create fresh: one command, so
+    # `result` carries the create's own status.
+    result = await pc1_executor.run_command(
+        f"sudo sh -c '{purge_subvolume_script(subvolume_path)}; btrfs subvolume create {subvolume_path}'",
     )
-    await pc1_executor.run_command(f"sudo btrfs subvolume delete {subvolume_path} 2>/dev/null || true")
-
-    # Create fresh test subvolume
-    result = await pc1_executor.run_command(f"sudo btrfs subvolume create {subvolume_path}")
     assert result.success, f"Failed to create test subvolume: {result.stderr}"
 
     yield subvolume_path
 
     # Cleanup: delete all nested snapshots first, then the subvolume
-    await pc1_executor.run_command(
-        "sudo sh -c '"
-        f"btrfs subvolume list -o {subvolume_path} 2>/dev/null | "
-        'awk "{print \\$NF}" | '
-        "xargs -r -I {} btrfs subvolume delete /{}"
-        "'",
-    )
-    await pc1_executor.run_command(f"sudo btrfs subvolume delete {subvolume_path}")
+    await pc1_executor.run_command(f"sudo sh -c '{purge_subvolume_script(subvolume_path)}'")
 
 
 @pytest.mark.parametrize("phase", [SnapshotPhase.PRE, SnapshotPhase.POST])
@@ -84,7 +75,7 @@ async def test_core_us_btrfs_create_snapshots(
     """
     phase_name = "pre" if phase == SnapshotPhase.PRE else "post"
     session_id = f"test-{phase_name}sync-001"
-    timestamp = datetime.now().strftime("%Y%m%dT%H%M%S")
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
     session_folder = f"{timestamp}-{session_id}"
     session_path = f"/.snapshots/pc-switcher/{session_folder}"
     snap_path = ""  # Initialize to avoid type checker warning
@@ -95,7 +86,7 @@ async def test_core_us_btrfs_create_snapshots(
         assert success, f"Failed to validate snapshots directory: {error_msg}"
 
         # Create session folder
-        mkdir_result = await pc1_executor.run_command(f"sudo mkdir -p {session_path}")
+        mkdir_result = await pc1_executor.run_command(f"sudo mkdir --parents {session_path}")
         assert mkdir_result.success, f"Failed to create session folder: {mkdir_result.stderr}"
 
         # Create snapshot with appropriate phase
@@ -123,9 +114,11 @@ async def test_core_us_btrfs_create_snapshots(
         assert session_id in snap_path, "Snapshot not in session-specific folder"
 
     finally:
-        # Cleanup
-        await pc1_executor.run_command(f"sudo btrfs subvolume delete {snap_path} 2>/dev/null || true", timeout=10.0)
-        await pc1_executor.run_command(f"sudo rmdir {session_path} 2>/dev/null || true")
+        # Cleanup: the snapshot, then the session folder that held it
+        await pc1_executor.run_command(
+            f"sudo btrfs subvolume delete {snap_path} 2>/dev/null; sudo rmdir {session_path} 2>/dev/null || true",
+            timeout=10.0,
+        )
 
 
 async def test_core_us_btrfs_as4_create_snapshots_subvolume(
@@ -146,19 +139,13 @@ async def test_core_us_btrfs_as4_create_snapshots_subvolume(
     test_snapshots_path = "/test-snapshots-creation"
 
     try:
-        # Clean up any existing test directory
-        await pc1_executor.run_command(
-            "sudo sh -c '"
-            f"btrfs subvolume list -o {test_snapshots_path} 2>/dev/null | "
-            'awk "{print \\$NF}" | '
-            "xargs -r -I {} btrfs subvolume delete /{}"
-            "'"
+        # Clean up any existing test directory, then report whether it is really gone -- the
+        # trailing `test` is what the command exits on, so `check_result` answers that.
+        check_result = await pc1_executor.run_command(
+            f"sudo sh -c '{purge_subvolume_script(test_snapshots_path)}; "
+            f"rm --recursive --force {test_snapshots_path}'; "
+            f"test -e {test_snapshots_path}"
         )
-        await pc1_executor.run_command(f"sudo btrfs subvolume delete {test_snapshots_path} 2>/dev/null || true")
-        await pc1_executor.run_command(f"sudo rm -rf {test_snapshots_path}")
-
-        # Verify test path doesn't exist
-        check_result = await pc1_executor.run_command(f"test -e {test_snapshots_path}")
         assert not check_result.success, f"{test_snapshots_path} should not exist before test"
 
         # Create a subvolume (simulating what validate_snapshots_directory would do)
@@ -174,7 +161,7 @@ async def test_core_us_btrfs_as4_create_snapshots_subvolume(
 
         # Create pc-switcher subdirectory (regular directory inside subvolume)
         pc_switcher_dir = f"{test_snapshots_path}/pc-switcher"
-        mkdir_result = await pc1_executor.run_command(f"sudo mkdir -p {pc_switcher_dir}")
+        mkdir_result = await pc1_executor.run_command(f"sudo mkdir --parents {pc_switcher_dir}")
         assert mkdir_result.success, f"Failed to create {pc_switcher_dir}"
 
         # Verify directory exists
@@ -184,14 +171,8 @@ async def test_core_us_btrfs_as4_create_snapshots_subvolume(
     finally:
         # Cleanup test directory
         await pc1_executor.run_command(
-            "sudo sh -c '"
-            f"btrfs subvolume list -o {test_snapshots_path} 2>/dev/null | "
-            'awk "{print \\$NF}" | '
-            "xargs -r -I {} btrfs subvolume delete /{}"
-            "'"
+            f"sudo sh -c '{purge_subvolume_script(test_snapshots_path)}; rm --recursive --force {test_snapshots_path}'"
         )
-        await pc1_executor.run_command(f"sudo btrfs subvolume delete {test_snapshots_path} 2>/dev/null || true")
-        await pc1_executor.run_command(f"sudo rm -rf {test_snapshots_path}")
 
 
 async def test_core_us_btrfs_as7_cleanup_snapshots_with_retention(
@@ -214,24 +195,18 @@ async def test_core_us_btrfs_as7_cleanup_snapshots_with_retention(
         success, error_msg = await validate_snapshots_directory(pc1_executor, Host.SOURCE)
         assert success, f"Failed to validate snapshots directory: {error_msg}"
 
-        # Clean up ALL existing pc-switcher snapshots to ensure test isolation.
-        # Other tests (like test_end_to_end_sync) may leave behind snapshots that
-        # would interfere with keep_recent counting.
-        pre_existing_snapshots = await list_snapshots(pc1_executor, Host.SOURCE)
-        for snap in pre_existing_snapshots:
-            await pc1_executor.run_command(
-                f"sudo btrfs subvolume delete {snap.path} 2>/dev/null || true",
-                timeout=10.0,
-            )
-        # Clean up empty session folders
-        session_folders = {"/".join(s.path.split("/")[:-1]) for s in pre_existing_snapshots}
-        for folder in session_folders:
-            await pc1_executor.run_command(f"sudo rmdir {folder} 2>/dev/null || true")
+        # Clean up ALL existing pc-switcher snapshots (and their session folders) to
+        # ensure test isolation. Other tests (like test_end_to_end_sync) may leave
+        # behind snapshots that would interfere with keep_recent counting.
+        await delete_all_snapshots(pc1_executor)
 
         # Create 5 test sessions (we'll keep 3 most recent)
         # Use hex session IDs to match the expected pattern (8 hex chars)
         # Use fake timestamps (1 minute apart) to ensure ordering without sleeping
-        base_time = datetime.now()
+        # UTC, matching what pc-switcher stamps into a real snapshot name: these fake
+        # sessions are ranked against whatever else is on the machine, and a local-time
+        # stamp would sort them by the runner's offset rather than by their age.
+        base_time = datetime.now(UTC)
         for i in range(5):
             # Generate 8-char hex session ID (like real session IDs)
             session_id = f"c1ea{i:04x}"  # e.g., c1ea0000, c1ea0001, etc.
@@ -243,7 +218,7 @@ async def test_core_us_btrfs_as7_cleanup_snapshots_with_retention(
             session_paths.append(session_path)
 
             # Create session folder
-            await pc1_executor.run_command(f"sudo mkdir -p {session_path}")
+            await pc1_executor.run_command(f"sudo mkdir --parents {session_path}")
 
             # Create both pre and post snapshots for this session
             # Use fake timestamps in snapshot names (cleanup uses these for ordering)
@@ -349,7 +324,7 @@ async def test_core_edge_btrfs_not_available(
     # We simulate this by trying to validate a path that can't be a btrfs subvolume
     # Note: On actual test VMs this will succeed since they have btrfs
     # The test verifies the error handling path exists
-    await pc1_executor.run_command("sudo mkdir -p /tmp/fake-snapshots-test")
+    await pc1_executor.run_command("sudo mkdir --parents /tmp/fake-snapshots-test")
     try:
         # Try to show it as a subvolume (will fail if not btrfs)
         show_result = await pc1_executor.run_command("sudo btrfs subvolume show /tmp/fake-snapshots-test 2>&1")

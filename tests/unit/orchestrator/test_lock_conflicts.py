@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from pcswitcher.config import Configuration
+from pcswitcher.executor import LocalExecutor
 from pcswitcher.lock import SyncLock
 from pcswitcher.models import SessionStatus, SyncLockedError, SyncSession
 from pcswitcher.orchestrator import Orchestrator
@@ -64,6 +65,8 @@ class TestSourceLockConflictMessages:
             # Patch get_lock_path to use our test path
             with patch("pcswitcher.orchestrator.get_lock_path", return_value=lock_path):
                 orchestrator = Orchestrator(target="test-target", config=mock_config)
+                # `execute()` builds this before SyncStep 1; the lock announces through it.
+                orchestrator._local_executor = LocalExecutor()  # pyright: ignore[reportPrivateUsage]
 
                 with pytest.raises(SyncLockedError) as exc_info:
                     await orchestrator._acquire_source_lock()  # pyright: ignore[reportPrivateUsage]
@@ -92,6 +95,8 @@ class TestSourceLockConflictMessages:
         try:
             with patch("pcswitcher.orchestrator.get_lock_path", return_value=lock_path):
                 orchestrator = Orchestrator(target="test-target", config=mock_config)
+                # `execute()` builds this before SyncStep 1; the lock announces through it.
+                orchestrator._local_executor = LocalExecutor()  # pyright: ignore[reportPrivateUsage]
 
                 with pytest.raises(SyncLockedError) as exc_info:
                     await orchestrator._acquire_source_lock()  # pyright: ignore[reportPrivateUsage]
@@ -103,7 +108,7 @@ class TestSourceLockConflictMessages:
                 assert ")" in error_msg
                 # Remediation guidance is present and points at killing the holder, not rm.
                 assert "releases automatically" in error_msg
-                assert "pkill -f pc-switcher.lock" in error_msg
+                assert "pkill --full pc-switcher.lock" in error_msg
         finally:
             existing_lock.release()
 
@@ -159,10 +164,10 @@ class TestTargetLockConflictMessages:
                 await orchestrator._acquire_target_lock()  # pyright: ignore[reportPrivateUsage]
 
             error_msg = str(exc_info.value)
-            assert error_msg.startswith(f"Target {target_hostname} is already involved in a sync")
+            assert error_msg.startswith(f"{target_hostname} is already involved in a sync")
             # Remediation guidance is present and points at killing the holder, not rm.
             assert "releases automatically" in error_msg
-            assert "pkill -f pc-switcher.lock" in error_msg
+            assert "pkill --full pc-switcher.lock" in error_msg
 
 
 class TestLockErrorMessageClarity:
@@ -183,6 +188,8 @@ class TestLockErrorMessageClarity:
         try:
             with patch("pcswitcher.orchestrator.get_lock_path", return_value=lock_path):
                 orchestrator = Orchestrator(target="test-target", config=mock_config)
+                # `execute()` builds this before SyncStep 1; the lock announces through it.
+                orchestrator._local_executor = LocalExecutor()  # pyright: ignore[reportPrivateUsage]
 
                 with pytest.raises(SyncLockedError) as exc_info:
                     await orchestrator._acquire_source_lock()  # pyright: ignore[reportPrivateUsage]

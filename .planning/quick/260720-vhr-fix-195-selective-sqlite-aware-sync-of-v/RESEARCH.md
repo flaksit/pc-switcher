@@ -225,7 +225,7 @@ Integration: `tests/integration/conftest.py` provides `pc1_executor`/`pc2_execut
 ## Assumptions Log
 
 | # | Claim | Section | Risk if wrong |
-|---|-------|---------|---------------|
+| - | ----- | ------- | ------------- |
 | A1 | Cursor dir `~/.config/Cursor/User/globalStorage/`, VSCodium `~/.config/VSCodium/User/globalStorage/` | §5 | Wrong exclude relpath → that editor's DB not excluded from folder_sync / not synced. Low: Code+Antigravity confirmed on-disk; job skips absent editors anyway. Verify casing on a machine that has them. |
 | A2 | `describe_first_sync_scope` override is optional for this job | §1 | If planner wants the first-sync warning to enumerate the editor DBs, must implement it; functional correctness unaffected either way. |
 

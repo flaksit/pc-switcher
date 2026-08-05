@@ -25,8 +25,8 @@ uv run ruff check . && uv run ruff format .
 # Spell checking
 uv run codespell
 
-# Unit and contract tests
-uv run pytest tests/unit tests/contract -v
+# Unit and contract tests (every test except integration; the pytest config excludes those)
+uv run pytest
 
 # Integration tests (requires VM infrastructure)
 tests/run-integration-tests.sh
@@ -62,6 +62,16 @@ A GitHub Action enforces this rule:
 
 **Always create PRs as draft** initially. Integration tests only run on ready (non-draft) PRs to save CI resources.
 
+## Design Principles
+
+These principles guide every design and implementation decision, in priority order:
+
+1. **Reliability**: No data loss, conflict detection, consistent state, full auditability
+2. **Smooth UX**: Single command to launch entire sync; minimal manual intervention
+3. **Use standard tools**: Well-supported, maintainable approach
+4. **Minimize disk wear**: NVMe SSDs — avoid unnecessary writes
+5. **Simplicity**: Easy to understand, modify, and maintain
+
 ## Code Expectations
 
 ### Follow Existing Patterns
@@ -82,6 +92,7 @@ This means:
 - Handle errors explicitly
 - Use btrfs snapshots for safety
 - Test edge cases
+- Pass `mutates="<short phrase>"` on every executor call — `run_command`, `start_process`, `send_file` — unless it is PURELY read-only. It is what `--confirm-each-command` gates on and what labels the command in the debug trace, so a call without it is a change the user was never shown. Omit it only when the call can change no state at all: no file content, no process state, no lock or advisory state, no package-manager database. "Changes no file content" is not enough — starting a background process and taking a lock both need `mutates=`. Running a read under `sudo` does not make it a write: `sudo <read-only command>` is read-only. For a change that is neither a command nor a transfer (an in-process file rewrite), announce it with `executor.declare_modification(...)`.
 
 ### Keep It Simple
 

@@ -28,7 +28,7 @@ ensure_ssh_key() {
     if hcloud ssh-key describe "$SSH_KEY_NAME" &> /dev/null; then
         # Key exists, check if fingerprint matches
         local remote_fingerprint
-        remote_fingerprint=$(hcloud ssh-key describe "$SSH_KEY_NAME" -o json | jq -r '.fingerprint')
+        remote_fingerprint=$(hcloud ssh-key describe "$SSH_KEY_NAME" --output json | jq --raw-output '.fingerprint')
         log_info "Remote key fingerprint: $remote_fingerprint"
 
         if [[ "$local_fingerprint" == "$remote_fingerprint" ]]; then
@@ -56,7 +56,8 @@ Provisions the complete pc-switcher test infrastructure:
 1. Creates two VMs (pc1, pc2) in parallel
 2. Configures both VMs in parallel
 3. Sets up inter-VM networking
-4. Creates baseline snapshots
+4. Installs the test fixtures (internal/vm-test-fixtures.sh)
+5. Creates baseline snapshots
 
 Prerequisites:
   - HCLOUD_TOKEN environment variable must be set
@@ -65,7 +66,9 @@ Prerequisites:
   - ssh available
   - Must be run from GitHub CI (CI environment variable set)
 
-The script is idempotent - skips if VMs already exist and are configured.
+The script is idempotent - skips if VMs already exist, are configured, and carry the
+current test fixtures. A baseline that predates the fixtures (or carries an older
+version of them) is refreshed in place: reset, install fixtures, re-snapshot.
 
 Example (CI only):
   export HCLOUD_TOKEN=your_token_here
@@ -92,7 +95,7 @@ check_vm_ready() {
 check_vm_has_btrfs() {
     local vm_ip="$1"
     local fs_type
-    fs_type=$(ssh_first "root@$vm_ip" "df -T / 2>/dev/null | tail -n1 | awk '{print \$2}'" 2>/dev/null) || return 1
+    fs_type=$(ssh_first "root@$vm_ip" "df --print-type / 2>/dev/null | tail --lines=1 | awk '{print \$2}'" 2>/dev/null) || return 1
     [[ "$fs_type" == "btrfs" ]]
 }
 
@@ -117,7 +120,43 @@ if [[ -n "$PC1_IP" && -n "$PC2_IP" ]]; then
     wait $pid2 && pc2_ready=true || pc2_ready=false
 
     if [[ "$pc1_ready" == "true" && "$pc2_ready" == "true" ]]; then
-        log_info "VMs have baseline snapshots. Skipping provisioning."
+        log_info "VMs have baseline snapshots. Checking test fixtures..."
+
+        # The baseline must also carry the package-manager subjects the suite operates
+        # on (internal/vm-test-fixtures.sh). A baseline predating them — or built from
+        # an older fixture version — is refreshed in place here rather than requiring
+        # the VMs to be deleted and rebuilt from scratch.
+        if vm_test_fixtures_current "testuser@$PC1_IP" && vm_test_fixtures_current "testuser@$PC2_IP"; then
+            log_info "Test fixtures are current. Skipping provisioning."
+            log_step "VMs ready for testing"
+            exit 0
+        fi
+
+        log_info "Test fixtures missing or outdated; refreshing them into the baseline."
+        acquire_lock "provision-test-infra"
+
+        # Reset first: the baseline must capture a clean machine plus the fixtures, not
+        # whatever the previous test run left behind.
+        log_step "Resetting VMs to baseline before refreshing fixtures..."
+        LOG_PREFIX="pc1:" "$SCRIPT_DIR/reset-vm.sh" "$PC1_IP" &
+        RESET_PID1=$!
+        LOG_PREFIX="pc2:" "$SCRIPT_DIR/reset-vm.sh" "$PC2_IP" &
+        RESET_PID2=$!
+        wait $RESET_PID1
+        wait $RESET_PID2
+
+        log_step "Installing test fixtures..."
+        # --with-app for pc1 only (the sync source) — see the call at the end of this file.
+        install_vm_test_fixtures "$PC1_IP" --with-app &
+        FIXTURE_PID1=$!
+        install_vm_test_fixtures "$PC2_IP" &
+        FIXTURE_PID2=$!
+        wait $FIXTURE_PID1
+        wait $FIXTURE_PID2
+
+        log_step "Recreating baseline snapshots with the test fixtures..."
+        "$SCRIPT_DIR/internal/create-baseline-snapshots.sh"
+
         log_step "VMs ready for testing"
         exit 0
     fi
@@ -197,7 +236,7 @@ if ! command -v jq >/dev/null 2>&1; then
 fi
 
 # Count authorized keys
-KEY_COUNT=$(echo "$SSH_AUTHORIZED_KEYS" | grep -c '^ssh-' || true)
+KEY_COUNT=$(echo "$SSH_AUTHORIZED_KEYS" | grep --count '^ssh-' || true)
 log_info "Found $KEY_COUNT authorized SSH key(s)"
 
 # Determine SSH public key path for Hetzner Cloud key
@@ -268,6 +307,19 @@ log_info "VM configuration completed"
 log_step "Configuring inter-VM networking..."
 "$SCRIPT_DIR/internal/configure-hosts.sh"
 log_info "Inter-VM networking configured"
+
+# Create the package-manager subjects the integration suite operates on, BEFORE the
+# baseline snapshot, so every test run gets them for free (internal/vm-test-fixtures.sh).
+# --with-app for pc1 only: the flatpak APPLICATION belongs on the sync source alone, so a
+# real source->target ref divergence exists without a test manufacturing one.
+log_step "Installing test fixtures on both VMs..."
+install_vm_test_fixtures "$PC1_IP" --with-app &
+PID1=$!
+install_vm_test_fixtures "$PC2_IP" &
+PID2=$!
+wait $PID1
+wait $PID2
+log_info "Test fixtures installed"
 
 # Create baseline snapshots
 log_step "Creating baseline snapshots..."

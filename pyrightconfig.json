@@ -18,6 +18,9 @@
     "executionEnvironments": [
         {
             "root": "tests",
+            "extraPaths": [
+                "."
+            ],
             "reportPrivateUsage": false
         }
     ]

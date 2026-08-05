@@ -15,7 +15,7 @@ This document defines the key entities for pc-switcher's logging infrastructure 
 Configuration entity holding log level settings from config file.
 
 | Field | Type | Default | Description |
-|-------|------|---------|-------------|
+| ----- | ---- | ------- | ----------- |
 | `file` | `int` | `10` (DEBUG) | Floor log level for file output. |
 | `tui` | `int` | `20` (INFO) | Floor log level for TUI output. |
 | `external` | `int` | `30` (WARNING) | Additional floor for non-pcswitcher loggers, applies to both file and TUI. |
@@ -40,7 +40,7 @@ logging:
 The existing `LogLevel` IntEnum from `models.py` aligned with stdlib logging values.
 
 | Level | Value | stdlib Equivalent | Description |
-|-------|-------|-------------------|-------------|
+| ----- | ----- | ----------------- | ----------- |
 | `DEBUG` | `10` | `logging.DEBUG` | Internal diagnostics |
 | `FULL` | `15` | Custom | Operational details (file-level) |
 | `INFO` | `20` | `logging.INFO` | High-level operations |
@@ -82,7 +82,7 @@ logging.addLevelName(15, "FULL")
 Structured context added to log records from pcswitcher code via `extra` dict.
 
 | Field | Type | Required | Description |
-|-------|------|----------|-------------|
+| ----- | ---- | -------- | ----------- |
 | `job` | `str` | No | Job name (e.g., `"btrfs"`, `"orchestrator"`). Omitted during startup/shutdown. |
 | `host` | `str` | No | Logical role (`"source"` or `"target"`). Omitted during startup/shutdown. |
 | `**context` | `dict[str, Any]` | No | Additional key=value pairs |
@@ -111,7 +111,7 @@ logger.info("Configuration loaded")
 Custom `logging.Formatter` for JSON lines file output.
 
 | Output Field | Source | Description |
-|--------------|--------|-------------|
+| ------------ | ------ | ----------- |
 | `timestamp` | `record.created` | ISO format timestamp |
 | `level` | `record.levelname` | Log level name |
 | `job` | `record.job` | Job name from extra |
@@ -130,7 +130,7 @@ Custom `logging.Formatter` for Rich-colored TUI output.
 **Implementation**: Uses `rich.text.Text` to build styled output, then exports to ANSI escape codes. This ensures colors render correctly when written to stderr via `StreamHandler`.
 
 | Component | Source | Style |
-|-----------|--------|-------|
+| --------- | ------ | ----- |
 | Timestamp | `record.created` | `dim` |
 | Level | `record.levelname` | Level-specific color |
 | Job | `record.job` | `blue` |
@@ -140,7 +140,7 @@ Custom `logging.Formatter` for Rich-colored TUI output.
 
 **Level Colors**:
 | Level | Color |
-|-------|-------|
+| ----- | ----- |
 | DEBUG | `dim` |
 | FULL | `cyan` |
 | INFO | `green` |
@@ -155,7 +155,7 @@ Custom `logging.Formatter` for Rich-colored TUI output.
 Configuration for each log output handler.
 
 | Handler | Type | Level | Formatter |
-|---------|------|-------|-----------|
+| ------- | ---- | ----- | --------- |
 | File | `FileHandler` | `LogConfig.file` | `JsonFormatter` |
 | TUI | `StreamHandler` | `LogConfig.tui` | `RichFormatter` |
 
@@ -303,7 +303,7 @@ LogContext ───────────────► Attached to LogRecor
 ### Modified Entities
 
 | Entity | File | Change |
-|--------|------|--------|
+| ------ | ---- | ------ |
 | `LogLevel` | `models.py` | Update values from 0-5 to 10-50 scale |
 | `Configuration` | `config.py` | Add `logging: LogConfig` field |
 | `LogEvent` | `events.py` | Deprecated (replaced by stdlib LogRecord) |
@@ -314,7 +314,7 @@ LogContext ───────────────► Attached to LogRecor
 ### Preserved Entities
 
 | Entity | File | Reason |
-|--------|------|--------|
+| ------ | ---- | ------ |
 | `EventBus` | `events.py` | Still used for ProgressEvent, ConnectionEvent (non-logging) |
 | `ProgressEvent` | `events.py` | Unchanged - separate from logging |
 | `ConnectionEvent` | `events.py` | Unchanged - separate from logging |

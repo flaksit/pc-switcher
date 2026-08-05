@@ -86,6 +86,26 @@ class Job(ABC):
 
         Called after SSH connection established, before any state modifications.
 
+        Every environmental assumption a job makes MUST be checked here, unless it is
+        already an explicit project-wide convention (matching architecture, OS, user
+        ids). Required binaries, passwordless sudo for the commands this job runs,
+        required packages, filesystem features, reachable paths, free locks — if the
+        job would misbehave without it, `validate()` is where that is caught.
+
+        The reason is that validation runs before any state changes, so a failure here
+        costs the user nothing. The same assumption discovered mid-`execute()` fails
+        against a half-modified target, and some of them do not fail loudly at all: a
+        missing sudo right can degrade a capture to an empty result, and the sync then
+        reports success having replicated nothing.
+
+        A validation error MUST tell the user how to fix it, concretely enough to act
+        on without further research — the offending host, what is missing, and the
+        command or configuration that resolves it.
+
+        Checks run sequentially and append to a list; never raise mid-validate, so the
+        user sees every problem at once rather than fixing them one round-trip at a
+        time.
+
         Returns:
             List of ValidationError for any issues found.
             Empty list if system state is valid.

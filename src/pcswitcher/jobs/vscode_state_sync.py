@@ -17,7 +17,7 @@ SCOPE: this job covers ONLY the invoking user (whoever runs ``pc-switcher``) —
 one whose ``Path.home()`` this process resolves. Other users' VS Code state DBs under a
 synced ``/home`` are deliberately NOT handled (YAGNI; multi-user selective merge would
 need root on both ends, like ``folder_sync``, and is out of scope). This is a property
-of THIS job, not a system-wide single-user assumption — user-data sync itself spans all
+of THIS job, not a system-wide single-user assumption — ``folder_sync`` itself spans all
 users.
 
 This job (a normal-user ``SyncJob``, no sudo) rebuilds each target DB by mirroring
@@ -57,7 +57,7 @@ from pathlib import Path
 from typing import Any, ClassVar, override
 
 from pcswitcher.jobs.base import SyncJob
-from pcswitcher.models import FirstSyncScope, Host, LogLevel, ProgressUpdate, ValidationError
+from pcswitcher.models import FirstSyncScope, Host, JobSkipped, LogLevel, ProgressUpdate, ValidationError
 
 # Home-relative paths of each covered editor's global state.vscdb. Code and Antigravity
 # are confirmed on-disk; Cursor and VSCodium directory casing is [ASSUMED] from the
@@ -287,6 +287,9 @@ class VscodeStateSyncJob(SyncJob):
 
         Logging follows the project convention: per-file detail at FULL, only the
         start line and the final count at INFO.
+
+        Raises `JobSkipped` when the source has none of the handled DBs — the job is not
+        applicable, which is not the same as having synced.
         """
         # A DB's absolute path is identical on source and target: the invoking (real)
         # user has the same uid and home path on every machine, and pc-switcher does no
@@ -297,9 +300,10 @@ class VscodeStateSyncJob(SyncJob):
 
         present = [rel for rel in VSCODE_STATE_HANDLED_RELPATHS if (home / rel).exists()]
         if not present:
-            self._log(Host.SOURCE, LogLevel.INFO, f"{prefix}No VS Code state DBs found on source; nothing to sync")
+            # Not applicable is not synced: no state DB exists to merge, so the job did
+            # nothing rather than converging anything.
             self._report_progress(ProgressUpdate(percent=100))
-            return
+            raise JobSkipped(self.name, f"no VS Code state DBs found on {self.context.source_hostname}")
 
         total = len(present)
         self._log(Host.SOURCE, LogLevel.INFO, f"{prefix}Syncing VS Code state DBs")
@@ -342,7 +346,7 @@ class VscodeStateSyncJob(SyncJob):
         Handles either a main ``state.vscdb`` or its ``.backup`` sidecar (same schema);
         ``label`` names which. The neutral DB is transferred to
         ``<target_db>.pcswitcher-tmp`` — same directory as the live file — so the final
-        ``mv -f`` is atomic and preserves ownership/perms.
+        ``mv --force`` is atomic and preserves ownership/perms.
         """
         remote_tmp = target_db + ".pcswitcher-tmp"
         tmp_dir = Path(tempfile.mkdtemp(prefix="pcswitcher-vscode-"))
@@ -354,32 +358,39 @@ class VscodeStateSyncJob(SyncJob):
             try:
                 _run_sql(local_tmp, source_strip_sql(globs))
             except sqlite3.Error as error:
-                self._raise(Host.SOURCE, label, "source-strip", str(error))
+                self._raise(Host.SOURCE, label, "preserved-key strip", str(error))
 
             # Step B — transfer the neutral DB into the target live DB's directory.
             # Ensure that directory exists first: folder_sync normally creates it, but
             # jobs are independently toggleable, so `folder_sync: false` + this job on a
             # target that never ran the editor would otherwise leave the SFTP put with no
-            # parent directory. mkdir -p is a no-op when it already exists.
+            # parent directory. mkdir --parents is a no-op when it already exists.
             mkdir = await self.target.run_command(
-                f"mkdir -p {shlex.quote(Path(target_db).parent.as_posix())}", login_shell=False
+                f"mkdir --parents {shlex.quote(Path(target_db).parent.as_posix())}",
+                login_shell=False,
+                mutates=f"create the editor state directory for {label}",
             )
             if not mkdir.success:
-                self._raise(Host.TARGET, label, "mkdir target dir", mkdir.stderr)
-            await self.target.send_file(local_tmp, remote_tmp)
+                self._raise(Host.TARGET, label, "state-directory creation", mkdir.stderr)
+            await self.target.send_file(
+                local_tmp, remote_tmp, mutates=f"upload this machine's {label} to a staging file beside the live one"
+            )
 
             # Step C — target-inject the target's own preserved rows, only when it has a live DB.
             if target_exists:
                 inject = await self.target.run_command(
                     target_sql_command(remote_tmp, target_inject_sql(target_db, globs)),
                     login_shell=False,
+                    mutates=f"write this machine's own preserved {label} keys into the staged copy",
                 )
                 if not inject.success:
-                    self._raise(Host.TARGET, label, "target-inject", inject.stderr)
+                    self._raise(Host.TARGET, label, "preserved-key merge", inject.stderr)
 
             # Atomic replace within the same directory.
             move = await self.target.run_command(
-                f"mv -f {shlex.quote(remote_tmp)} {shlex.quote(target_db)}", login_shell=False
+                f"mv --force {shlex.quote(remote_tmp)} {shlex.quote(target_db)}",
+                login_shell=False,
+                mutates=f"replace the live {label} with the merged database, discarding the current file",
             )
             if not move.success:
                 self._raise(Host.TARGET, label, "atomic mv", move.stderr)

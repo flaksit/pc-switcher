@@ -21,7 +21,7 @@
   ],
   "cross_refs": [
     "docs/README.md",
-    "docs/planning/High level requirements.md",
+    "docs/planning/high-level-requirements.md",
     "docs/system/architecture.md",
     "docs/adr/_index.md",
     "docs/dev/development-guide.md",

@@ -15,7 +15,7 @@ approved: 2026-06-30
 ## Test Infrastructure
 
 | Property | Value |
-|----------|-------|
+| -------- | ----- |
 | **Framework** | pytest + pytest-asyncio (asyncio_mode = "auto") — verified in codebase |
 | **Config table** | `pyproject.toml` `[tool.pytest]` (pytest 9 canonical table; `testpaths = ["tests"]`, default `addopts` excludes integration via `-m "not integration"`) |
 | **Quick run command** | `uv run pytest tests/unit/jobs/test_folder_sync.py tests/contract/ -x` |
@@ -35,7 +35,7 @@ approved: 2026-06-30
 Task IDs follow `phase-plan-task`. Threat refs point at each plan's STRIDE Threat Register. "File Exists" describes the test/artifact the verify touches: `W0` = created during execution (Wave 0 scaffolding, absent today), `extend` = existing file extended, `doc` = documentation artifact authored by the task.
 
 | Task ID | Plan | Wave | Requirement(s) | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
-|---------|------|------|----------------|------------|-----------------|-----------|-------------------|-------------|--------|
+| ------- | ---- | ---- | -------------- | ---------- | --------------- | --------- | ----------------- | ----------- | ------ |
 | 1-01-01 | 01 | 1 | REQ-sync-scope-user-data · REQ-manual-sync-workflow | T-01-01 / T-01-02 | Transport model mandates sudo scoped to the rsync binary; root SSH login forbidden | structural (doc) | `test -f docs/adr/adr-013-rsync-over-ssh-user-data-transport.md && grep -q "^Status: Accepted" … && grep -q "rsync-path" …` | doc | ⬜ pending |
 | 1-01-02 | 01 | 1 | REQ-manual-sync-workflow | T-01-02 | Tool-wide dry-run contract recorded as an immutable ADR | structural (doc) | `test -f docs/adr/adr-014-unified-dry-run-contract.md && grep -q "ADR-013" docs/adr/_index.md && grep -q "ADR-014" docs/adr/_index.md` | doc | ⬜ pending |
 | 1-02-01 | 02 | 1 | REQ-machine-specific-exclusions · REQ-sync-scope-user-data | T-02-02 | Schema constrains `path`/`excludes` to strings (injection guard); `folder_sync` registered top-level and under `sync_jobs` | unit (schema assert) | `uv run python -c "…assert 'folder_sync' in schema.properties and sync_jobs.folder_sync and required==['folders']"` | created here | ⬜ pending |
@@ -58,7 +58,7 @@ Plans 01-06 carry their `<automated>` verify as a `--collect-only` gate so the e
 Nyquist core: each of the five Phase-1 requirements is sampled by more than one automated test, so no requirement is under-sampled.
 
 | Requirement | Sampling tasks | Sampled |
-|-------------|----------------|---------|
+| ----------- | -------------- | ------- |
 | REQ-sync-scope-user-data | 1-02-02 (unit), 1-04-01 (unit), 1-05-02 (unit), 1-06-01 (integration) | ✅ |
 | REQ-machine-specific-exclusions | 1-02-01 / 1-02-02 (unit), 1-05-01 (unit), 1-06-01 (integration) | ✅ |
 | REQ-sync-scope-file-metadata | 1-04-01 (acl preflight, unit), 1-05-01 (rsync flags, unit), 1-06-01 (integration metadata) | ✅ |

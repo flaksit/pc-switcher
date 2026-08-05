@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -19,6 +19,11 @@ from pcswitcher.config_sync import (
     sync_config_to_target,
 )
 from pcswitcher.models import CommandResult
+
+# Both machines are named by hostname in everything this module prints
+# (`PKG-FR-NAME-THE-MACHINES`), so every call has to supply them.
+ATLAS = "Atlas"
+NOMAD = "Nomad"
 
 
 class TestConfigSyncAction:
@@ -75,10 +80,10 @@ class TestGenerateDiff:
         source = "line1\nline2\nline3"
         target = "line1\nmodified\nline3"
 
-        diff = _generate_diff(source, target)
+        diff = _generate_diff(source, target, ATLAS, NOMAD)
 
-        assert "--- target config" in diff
-        assert "+++ source config" in diff
+        assert f"--- {NOMAD} config" in diff
+        assert f"+++ {ATLAS} config" in diff
         assert "-modified" in diff
         assert "+line2" in diff
 
@@ -86,7 +91,7 @@ class TestGenerateDiff:
         """Should generate minimal diff for identical content."""
         content = "same\ncontent"
 
-        diff = _generate_diff(content, content)
+        diff = _generate_diff(content, content, ATLAS, NOMAD)
 
         # Identical content produces empty diff (no changes)
         assert diff == ""
@@ -96,7 +101,7 @@ class TestGenerateDiff:
         source = "a\nb\nc\nd"
         target = "a\nx\ny\nd"
 
-        diff = _generate_diff(source, target)
+        diff = _generate_diff(source, target, ATLAS, NOMAD)
 
         assert "-x" in diff
         assert "-y" in diff
@@ -111,7 +116,7 @@ class TestPromptNewConfig:
         """Should return True when user enters 'y'."""
         console = MagicMock()
         with patch("pcswitcher.config_sync.Prompt.ask", return_value="y"):
-            result = _prompt_new_config(console, "config: value")
+            result = _prompt_new_config(console, "config: value", ATLAS, NOMAD)
 
         assert result is True
 
@@ -119,7 +124,7 @@ class TestPromptNewConfig:
         """Should return False when user enters 'n'."""
         console = MagicMock()
         with patch("pcswitcher.config_sync.Prompt.ask", return_value="n"):
-            result = _prompt_new_config(console, "config: value")
+            result = _prompt_new_config(console, "config: value", ATLAS, NOMAD)
 
         assert result is False
 
@@ -129,7 +134,7 @@ class TestPromptNewConfig:
         config_content = "log_level: DEBUG"
 
         with patch("pcswitcher.config_sync.Prompt.ask", return_value="n"):
-            _prompt_new_config(console, config_content)
+            _prompt_new_config(console, config_content, ATLAS, NOMAD)
 
         # Verify console.print was called multiple times
         assert console.print.call_count >= 3
@@ -142,7 +147,7 @@ class TestPromptConfigDiff:
         """Should return ACCEPT_SOURCE when user enters 'a'."""
         console = MagicMock()
         with patch("pcswitcher.config_sync.Prompt.ask", return_value="a"):
-            result = _prompt_config_diff(console, "diff")
+            result = _prompt_config_diff(console, "diff", ATLAS, NOMAD)
 
         assert result == ConfigSyncAction.ACCEPT_SOURCE
 
@@ -150,7 +155,7 @@ class TestPromptConfigDiff:
         """Should return KEEP_TARGET when user enters 'k'."""
         console = MagicMock()
         with patch("pcswitcher.config_sync.Prompt.ask", return_value="k"):
-            result = _prompt_config_diff(console, "diff")
+            result = _prompt_config_diff(console, "diff", ATLAS, NOMAD)
 
         assert result == ConfigSyncAction.KEEP_TARGET
 
@@ -158,7 +163,7 @@ class TestPromptConfigDiff:
         """Should return ABORT when user enters 'x'."""
         console = MagicMock()
         with patch("pcswitcher.config_sync.Prompt.ask", return_value="x"):
-            result = _prompt_config_diff(console, "diff")
+            result = _prompt_config_diff(console, "diff", ATLAS, NOMAD)
 
         assert result == ConfigSyncAction.ABORT
 
@@ -167,7 +172,7 @@ class TestPromptConfigDiff:
         console = MagicMock()
 
         with patch("pcswitcher.config_sync.Prompt.ask", return_value="x"):
-            _prompt_config_diff(console, "--- diff ---")
+            _prompt_config_diff(console, "--- diff ---", ATLAS, NOMAD)
 
         # Verify console.print was called with options
         assert console.print.call_count >= 5  # Panel, diff, options
@@ -189,15 +194,40 @@ class TestCopyConfigToTarget:
         )
         mock_remote_executor.send_file = AsyncMock()
 
-        await _copy_config_to_target(mock_remote_executor, config_file)
+        await _copy_config_to_target(mock_remote_executor, config_file, NOMAD)
 
         # Verify mkdir was called
         mkdir_call = mock_remote_executor.run_command.call_args_list[0]
-        assert "mkdir -p ~/.config/pc-switcher" in mkdir_call[0][0]
+        assert "mkdir --parents ~/.config/pc-switcher" in mkdir_call[0][0]
 
         # Verify send_file was called with correct paths
         mock_remote_executor.send_file.assert_called_once_with(
-            config_file, "/home/user/.config/pc-switcher/config.yaml"
+            config_file, "/home/user/.config/pc-switcher/config.yaml", mutates=ANY
+        )
+
+    async def test_copies_the_caller_supplied_file_even_when_not_named_config_yaml(
+        self, mock_remote_executor: MagicMock, tmp_path: Path
+    ) -> None:
+        """Hard constraint 5: config_sync copies the caller's own file, not a re-derived
+        `config.yaml`. Every other fixture happens to name the source `config.yaml`, which
+        hid exactly the bug where a caller whose config was named otherwise had a sibling
+        transferred (or a `config not found`). The remote name is always config.yaml — only
+        the SOURCE file the caller passed is what gets sent."""
+        source_file = tmp_path / "pc-switcher-config-abc123.yaml"
+        source_file.write_text("log_level: INFO\n")
+
+        mock_remote_executor.run_command = AsyncMock(
+            side_effect=[
+                CommandResult(exit_code=0, stdout="", stderr=""),  # mkdir
+                CommandResult(exit_code=0, stdout="/home/user\n", stderr=""),  # echo $HOME
+            ]
+        )
+        mock_remote_executor.send_file = AsyncMock()
+
+        await _copy_config_to_target(mock_remote_executor, source_file, NOMAD)
+
+        mock_remote_executor.send_file.assert_called_once_with(
+            source_file, "/home/user/.config/pc-switcher/config.yaml", mutates=ANY
         )
 
     async def test_raises_on_mkdir_failure(self, mock_remote_executor: MagicMock, tmp_path: Path) -> None:
@@ -209,8 +239,8 @@ class TestCopyConfigToTarget:
             return_value=CommandResult(exit_code=1, stdout="", stderr="Permission denied")
         )
 
-        with pytest.raises(RuntimeError, match="Failed to create config directory"):
-            await _copy_config_to_target(mock_remote_executor, config_file)
+        with pytest.raises(RuntimeError, match=f"Failed to create the config directory on {NOMAD}"):
+            await _copy_config_to_target(mock_remote_executor, config_file, NOMAD)
 
     async def test_raises_on_home_dir_failure(self, mock_remote_executor: MagicMock, tmp_path: Path) -> None:
         """Should raise RuntimeError if getting home directory fails."""
@@ -224,8 +254,8 @@ class TestCopyConfigToTarget:
             ]
         )
 
-        with pytest.raises(RuntimeError, match="Failed to get home directory"):
-            await _copy_config_to_target(mock_remote_executor, config_file)
+        with pytest.raises(RuntimeError, match=f"Failed to read the home directory on {NOMAD}"):
+            await _copy_config_to_target(mock_remote_executor, config_file, NOMAD)
 
 
 class TestSyncConfigToTarget:
@@ -236,8 +266,35 @@ class TestSyncConfigToTarget:
         console = MagicMock()
         non_existent_path = Path("/nonexistent/config.yaml")
 
-        with pytest.raises(RuntimeError, match="Source config not found"):
-            await sync_config_to_target(mock_remote_executor, non_existent_path, None, console)
+        with pytest.raises(RuntimeError, match=f"No pc-switcher config on {ATLAS}"):
+            await sync_config_to_target(
+                mock_remote_executor, non_existent_path, None, console, source_hostname=ATLAS, target_hostname=NOMAD
+            )
+
+    async def test_reads_the_source_path_the_caller_passed_whatever_its_name(
+        self, mock_remote_executor: MagicMock, tmp_path: Path
+    ) -> None:
+        """The main config is read from the caller's own path, not `<parent>/config.yaml`.
+
+        Every other test here happens to name the file `config.yaml`, so deriving the
+        path from the parent directory instead of using the caller's own passes them
+        all while breaking any caller whose config is named something else — which is
+        how this reached the VM suite as `Source config not found: /tmp/config.yaml`
+        for a file no caller ever named.
+        """
+        config_content = "log_level: INFO\n"
+        config_file = tmp_path / "pc-switcher-config-abc123.yaml"
+        config_file.write_text(config_content)
+
+        mock_remote_executor.run_command = AsyncMock(
+            return_value=CommandResult(exit_code=0, stdout=config_content, stderr="")
+        )
+
+        result = await sync_config_to_target(
+            mock_remote_executor, config_file, None, MagicMock(), source_hostname=ATLAS, target_hostname=NOMAD
+        )
+
+        assert result is True
 
     async def test_scenario_configs_match_skips_silently(
         self, mock_remote_executor: MagicMock, tmp_path: Path
@@ -253,7 +310,9 @@ class TestSyncConfigToTarget:
 
         console = MagicMock()
 
-        result = await sync_config_to_target(mock_remote_executor, config_file, None, console)
+        result = await sync_config_to_target(
+            mock_remote_executor, config_file, None, console, source_hostname=ATLAS, target_hostname=NOMAD
+        )
 
         assert result is True
         # Verify "skipping" message was printed
@@ -283,7 +342,9 @@ class TestSyncConfigToTarget:
         console = MagicMock()
 
         with patch("pcswitcher.config_sync._prompt_new_config", return_value=True):
-            result = await sync_config_to_target(mock_remote_executor, config_file, None, console)
+            result = await sync_config_to_target(
+                mock_remote_executor, config_file, None, console, source_hostname=ATLAS, target_hostname=NOMAD
+            )
 
         assert result is True
         mock_remote_executor.send_file.assert_called_once()
@@ -302,7 +363,9 @@ class TestSyncConfigToTarget:
         console = MagicMock()
 
         with patch("pcswitcher.config_sync._prompt_new_config", return_value=False):
-            result = await sync_config_to_target(mock_remote_executor, config_file, None, console)
+            result = await sync_config_to_target(
+                mock_remote_executor, config_file, None, console, source_hostname=ATLAS, target_hostname=NOMAD
+            )
 
         assert result is False
 
@@ -328,7 +391,9 @@ class TestSyncConfigToTarget:
             "pcswitcher.config_sync._prompt_config_diff",
             return_value=ConfigSyncAction.ACCEPT_SOURCE,
         ):
-            result = await sync_config_to_target(mock_remote_executor, config_file, None, console)
+            result = await sync_config_to_target(
+                mock_remote_executor, config_file, None, console, source_hostname=ATLAS, target_hostname=NOMAD
+            )
 
         assert result is True
         mock_remote_executor.send_file.assert_called_once()
@@ -350,7 +415,9 @@ class TestSyncConfigToTarget:
             "pcswitcher.config_sync._prompt_config_diff",
             return_value=ConfigSyncAction.KEEP_TARGET,
         ):
-            result = await sync_config_to_target(mock_remote_executor, config_file, None, console)
+            result = await sync_config_to_target(
+                mock_remote_executor, config_file, None, console, source_hostname=ATLAS, target_hostname=NOMAD
+            )
 
         assert result is True
 
@@ -366,7 +433,9 @@ class TestSyncConfigToTarget:
         console = MagicMock()
 
         with patch("pcswitcher.config_sync._prompt_config_diff", return_value=ConfigSyncAction.ABORT):
-            result = await sync_config_to_target(mock_remote_executor, config_file, None, console)
+            result = await sync_config_to_target(
+                mock_remote_executor, config_file, None, console, source_hostname=ATLAS, target_hostname=NOMAD
+            )
 
         assert result is False
 
@@ -386,7 +455,9 @@ class TestSyncConfigToTarget:
         console = MagicMock()
         ui = MagicMock()
 
-        await sync_config_to_target(mock_remote_executor, config_file, ui, console)
+        await sync_config_to_target(
+            mock_remote_executor, config_file, ui, console, source_hostname=ATLAS, target_hostname=NOMAD
+        )
 
         ui.pause.assert_not_called()
         ui.resume.assert_not_called()
@@ -404,7 +475,9 @@ class TestSyncConfigToTarget:
         ui = MagicMock()
 
         with patch("pcswitcher.config_sync._prompt_new_config", return_value=False):
-            await sync_config_to_target(mock_remote_executor, config_file, ui, console)
+            await sync_config_to_target(
+                mock_remote_executor, config_file, ui, console, source_hostname=ATLAS, target_hostname=NOMAD
+            )
 
         ui.pause.assert_called_once()
         ui.resume.assert_called_once()
@@ -428,7 +501,9 @@ class TestSyncConfigToTarget:
             patch("pcswitcher.config_sync._prompt_new_config", side_effect=KeyboardInterrupt),
             pytest.raises(KeyboardInterrupt),
         ):
-            await sync_config_to_target(mock_remote_executor, config_file, ui, console)
+            await sync_config_to_target(
+                mock_remote_executor, config_file, ui, console, source_hostname=ATLAS, target_hostname=NOMAD
+            )
 
         # UI should still be resumed in finally block
         ui.pause.assert_called_once()
@@ -446,7 +521,9 @@ class TestSyncConfigToTarget:
 
         console = MagicMock()
 
-        result = await sync_config_to_target(mock_remote_executor, config_file, None, console)
+        result = await sync_config_to_target(
+            mock_remote_executor, config_file, None, console, source_hostname=ATLAS, target_hostname=NOMAD
+        )
 
         assert result is True
         # Should skip without prompting
@@ -476,7 +553,9 @@ class TestSyncConfigToTarget:
 
         # User accepts config
         with patch("pcswitcher.config_sync._prompt_new_config", return_value=True):
-            result = await sync_config_to_target(mock_remote_executor, config_file, None, console)
+            result = await sync_config_to_target(
+                mock_remote_executor, config_file, None, console, source_hostname=ATLAS, target_hostname=NOMAD
+            )
 
         assert result is True
         mock_remote_executor.send_file.assert_called_once()
@@ -507,7 +586,9 @@ class TestSyncConfigToTarget:
             "pcswitcher.config_sync._prompt_config_diff",
             return_value=ConfigSyncAction.ACCEPT_SOURCE,
         ):
-            result = await sync_config_to_target(mock_remote_executor, config_file, None, console)
+            result = await sync_config_to_target(
+                mock_remote_executor, config_file, None, console, source_hostname=ATLAS, target_hostname=NOMAD
+            )
 
         assert result is True
         mock_remote_executor.send_file.assert_called_once()
@@ -529,7 +610,9 @@ class TestSyncConfigToTarget:
 
         console = MagicMock()
 
-        result = await sync_config_to_target(mock_remote_executor, config_file, None, console)
+        result = await sync_config_to_target(
+            mock_remote_executor, config_file, None, console, source_hostname=ATLAS, target_hostname=NOMAD
+        )
 
         assert result is True
         # Verify skipping message was printed
@@ -558,7 +641,9 @@ class TestSyncConfigToTarget:
 
         console = MagicMock()
 
-        result = await sync_config_to_target(mock_remote_executor, config_file, None, console)
+        result = await sync_config_to_target(
+            mock_remote_executor, config_file, None, console, source_hostname=ATLAS, target_hostname=NOMAD
+        )
 
         assert result is True
         # Should not copy config when it matches
@@ -578,7 +663,14 @@ class TestDryRunSkipsPrompting:
 
         with patch("pcswitcher.config_sync._prompt_new_config") as mock_prompt:
             result = await _handle_no_target_config(
-                mock_remote_executor, config_file, "log_level: INFO", console, auto_accept=False, dry_run=True
+                mock_remote_executor,
+                config_file,
+                "log_level: INFO",
+                console,
+                auto_accept=False,
+                dry_run=True,
+                source_hostname=ATLAS,
+                target_hostname=NOMAD,
             )
 
         assert result is True
@@ -602,6 +694,8 @@ class TestDryRunSkipsPrompting:
                 console,
                 auto_accept=False,
                 dry_run=True,
+                source_hostname=ATLAS,
+                target_hostname=NOMAD,
             )
 
         assert result is True
@@ -622,7 +716,9 @@ class TestDryRunSkipsPrompting:
         console = MagicMock()
         ui = MagicMock()
 
-        result = await sync_config_to_target(mock_remote_executor, config_file, ui, console, dry_run=True)
+        result = await sync_config_to_target(
+            mock_remote_executor, config_file, ui, console, dry_run=True, source_hostname=ATLAS, target_hostname=NOMAD
+        )
 
         assert result is True
         ui.pause.assert_not_called()

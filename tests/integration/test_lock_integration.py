@@ -17,22 +17,23 @@ from __future__ import annotations
 import asyncio
 import contextlib
 
+import pytest
+
 from pcswitcher.executor import BashLoginRemoteExecutor
+from tests.integration.conftest import write_pcswitcher_config
+
+pytestmark = pytest.mark.area_core
 
 _LOCK = "$HOME/.local/share/pc-switcher/pc-switcher.lock"
 
-# Minimal valid config. The sync must fail at the target-lock phase (before job
-# discovery/execution). We deliberately use only the harmless dummy_success job and
-# NO folder_sync: if the target lock ever regresses and the sync proceeds, it must
-# not mirror real /home (a /home --delete mirror would clobber the target's
+# Minimal valid config. The sync must fail at the target-lock phase (SyncStep 3),
+# before job discovery/execution (SyncStep 5), so no sync job ever runs. `sync_jobs`
+# is deliberately empty — Configuration reads it as-is with no schema defaults, so
+# nothing is enabled: if the target lock ever regresses and the sync proceeds, it
+# cannot mirror real /home (a /home --delete mirror would clobber the target's
 # .ssh/known_hosts and break subsequent tests — the very bug this test guards).
 _MIN_CONFIG = """\
-logging:
-  file: DEBUG
-  tui: INFO
-  external: WARNING
-sync_jobs:
-  dummy_success: true
+sync_jobs: {}
 disk_space_monitor:
   preflight_minimum: "5%"
   runtime_minimum: "3%"
@@ -43,9 +44,6 @@ btrfs_snapshots:
     - "@"
     - "@home"
   keep_recent: 2
-dummy_success:
-  source_duration: 2
-  target_duration: 2
 """
 
 
@@ -68,19 +66,21 @@ class TestTargetLockConflict:
 
         holder: asyncio.Task[object] | None = None
         try:
-            await _write_config(pc1_executor, _MIN_CONFIG)
-            await pc2_executor.run_command(f'mkdir -p "$(dirname "{_LOCK}")"', timeout=10.0)
+            await write_pcswitcher_config(pc1_executor, _MIN_CONFIG)
+            await pc2_executor.run_command(f'mkdir --parents "$(dirname "{_LOCK}")"', timeout=10.0)
 
             # Hold pc2's unified lock for the duration of the sync via a CONCURRENT,
             # still-running command. Keeping the SSH channel open keeps the remote
             # flock process alive (a detached background process would be reaped when
             # its channel closed, freeing the lock before the sync reached it).
-            holder = asyncio.create_task(pc2_executor.run_command(f'flock -n "{_LOCK}" -c "sleep 45"', timeout=60.0))
+            holder = asyncio.create_task(
+                pc2_executor.run_command(f'flock --nonblock "{_LOCK}" --command "sleep 45"', timeout=60.0)
+            )
             await asyncio.sleep(2.0)  # let flock acquire
 
             # Verify the lock is actually held (a non-blocking flock on another channel fails).
             check = await pc2_executor.run_command(
-                f'if flock -n "{_LOCK}" -c true; then echo FREE; else echo HELD; fi',
+                f'if flock --nonblock "{_LOCK}" --command true; then echo FREE; else echo HELD; fi',
                 timeout=10.0,
             )
             assert "HELD" in check.stdout, (
@@ -102,7 +102,7 @@ class TestTargetLockConflict:
             assert "already involved in a sync" in out, (
                 f"Target-lock failure message missing.\nstdout: {sync.stdout}\nstderr: {sync.stderr}"
             )
-            assert "releases automatically" in out and "pkill -f pc-switcher.lock" in out, (
+            assert "releases automatically" in out and "pkill --full pc-switcher.lock" in out, (
                 f"How-to-unblock guidance missing from target-lock error.\n{out}"
             )
 
@@ -113,16 +113,7 @@ class TestTargetLockConflict:
                     await holder
             # Belt-and-braces: kill any lingering holder and remove the lock file.
             await pc2_executor.run_command(
-                f'pkill -f "pc-switcher.lock" || true; rm -f "{_LOCK}"',
+                f'pkill --full "pc-switcher.lock" || true; rm --force "{_LOCK}"',
                 timeout=15.0,
             )
-            await pc1_executor.run_command("rm -f ~/.config/pc-switcher/config.yaml", timeout=10.0)
-
-
-async def _write_config(executor: BashLoginRemoteExecutor, config: str) -> None:
-    """Write the pc-switcher config to the remote VM."""
-    result = await executor.run_command(
-        f"mkdir -p ~/.config/pc-switcher && cat > ~/.config/pc-switcher/config.yaml << 'CONF_EOF'\n{config}CONF_EOF",
-        timeout=10.0,
-    )
-    assert result.success, f"Failed to write config: {result.stderr}"
+            await pc1_executor.run_command("rm --force ~/.config/pc-switcher/config.yaml", timeout=10.0)

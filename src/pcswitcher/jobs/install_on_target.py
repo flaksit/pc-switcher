@@ -2,16 +2,31 @@
 
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING, ClassVar
 
 from pcswitcher.install import get_install_with_script_command_line
 from pcswitcher.jobs.base import SystemJob
 from pcswitcher.jobs.context import JobContext
-from pcswitcher.models import CommandResult, Host, LogLevel
+from pcswitcher.models import CommandResult, Host, JobSkipped, LogLevel
 from pcswitcher.version import Release, Version, find_one_version, get_this_version
 
 if TYPE_CHECKING:
     from pcswitcher.models import ValidationError
+
+# Undocumented on purpose: an escape hatch for integration tests, never a way of running
+# the tool. Set to any value (even empty), it makes this job do nothing and report itself
+# SKIPPED, which buys back the `pc-switcher --version` login shell this job otherwise runs
+# on the target once per sync. Only a suite that is not itself testing self-installation
+# may set it. Never named in --help, the config schema, or docs/.
+INSTALL_ON_TARGET_SKIP_ENV = "PCSWITCHER_SKIP_INSTALL_ON_TARGET"
+
+
+def _skip_reason() -> str | None:
+    """The reason this job does nothing, or None for the shipped path."""
+    if os.environ.get(INSTALL_ON_TARGET_SKIP_ENV) is None:
+        return None
+    return f"{INSTALL_ON_TARGET_SKIP_ENV} is set in the environment"
 
 
 class InstallOnTargetJob(SystemJob):
@@ -44,6 +59,11 @@ class InstallOnTargetJob(SystemJob):
         Returns:
             List of ValidationError if version check fails, empty list otherwise
         """
+        # The version check IS the cost this hook exists to remove, so the skip has to be
+        # decided here too, not only in execute().
+        if _skip_reason() is not None:
+            return []
+
         # Check target version (login_shell ensures PATH includes ~/.local/bin and GITHUB_TOKEN is available)
         result = await self.target.run_command("pc-switcher --version 2>/dev/null", login_shell=True)
         if result.success:
@@ -62,10 +82,31 @@ class InstallOnTargetJob(SystemJob):
     async def _run_install(self, v: Release | Version | str | None = None, /) -> CommandResult:
         """Run install script on target."""
         cmd = get_install_with_script_command_line(v)
-        return await self.target.run_command(cmd, login_shell=False)
+        if isinstance(v, Release):
+            label = v.tag
+        elif isinstance(v, Version):
+            label = f"v{v.semver_str()}"
+        else:
+            label = v or "main"
+        return await self.target.run_command(
+            cmd,
+            login_shell=False,
+            mutates=(
+                f"install pc-switcher {label} on {self.context.target_hostname}, replacing any existing installation"
+            ),
+        )
 
     async def execute(self) -> None:
-        """Install or upgrade pc-switcher on target if needed."""
+        """Install or upgrade pc-switcher on target if needed.
+
+        Raises:
+            JobSkipped: If `INSTALL_ON_TARGET_SKIP_ENV` is set, so the step is recorded as
+                skipped with its reason instead of appearing to have run.
+        """
+        skip_reason = _skip_reason()
+        if skip_reason is not None:
+            raise JobSkipped(self.name, skip_reason)
+
         # Check target version (already validated in validate phase)
         if self.target_version:
             if self.target_version == self.source_version:
@@ -117,7 +158,7 @@ class InstallOnTargetJob(SystemJob):
             )
             result = await self._run_install(source_release)
             if not result.success:
-                raise RuntimeError(f"Failed to install pc-switcher on target: {result.stderr}")
+                raise RuntimeError(f"Failed to install pc-switcher on {self.context.target_hostname}: {result.stderr}")
             installed_version_str = source_release.tag
 
         # Verify installation (login_shell ensures PATH includes ~/.local/bin)

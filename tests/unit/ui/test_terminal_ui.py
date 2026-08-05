@@ -426,6 +426,43 @@ async def test_resume_forces_redraw_of_state_mutated_while_paused() -> None:
         ui.stop()
 
 
+async def test_pause_leaves_the_last_frame_on_screen() -> None:
+    """pause() must stop non-transiently so the frame stays above the question (#225).
+
+    A transient stop erased the whole display before the caller printed its
+    prompt, so the user answered on a blank screen with no idea where the run
+    was. The frozen frame is the run's context; keeping it costs one stale
+    duplicate per prompt, which resume() then draws below rather than over.
+    """
+    output = StringIO()
+    console = Console(file=output, force_terminal=True, width=120)
+
+    ui = TerminalUI(console=console, max_log_lines=5, total_steps=5)
+
+    ui.start()
+    try:
+        ui.set_current_step(4, "Package sync")
+        ui.add_log_message("12:00:00 [INFO] [apt] resolving packages")
+        await _wait_for_render(output, "Step 4/5")
+
+        # Capture only what pause() itself emits.
+        output.truncate(0)
+        output.seek(0)
+        ui.pause()
+        frozen = output.getvalue()
+
+        assert "Step 4/5" in frozen and "Package sync" in frozen, "status bar must survive the pause"
+        assert "Recent Logs" in frozen and "resolving packages" in frozen, "log panel must survive the pause"
+
+        # Rich's transient teardown emits show-cursor followed by a run of
+        # cursor-up/erase-line controls that wipe the frame just drawn. Nothing
+        # may follow the show-cursor, or the frame the assertions above found in
+        # the buffer would not actually be on the user's screen.
+        assert frozen.rsplit("\x1b[?25h", 1)[-1].strip() == "", "pause() must not erase the frame it just drew"
+    finally:
+        ui.stop()
+
+
 async def test_core_us_tui_as3_progress_and_connection_events() -> None:
     """Test progress and connection event handling via EventBus.
 
@@ -579,6 +616,60 @@ async def test_no_warning_counter_when_none_captured() -> None:
     ui = TerminalUI(console=console, max_log_lines=5, total_steps=3)
 
     assert "⚠" not in _render_to_str(ui)
+
+
+def _log_panel_body_rows(ui: TerminalUI, width: int = 120) -> list[str]:
+    """Return the Recent Logs box's interior rows with borders and padding stripped.
+
+    Rendered without colour so the box-drawing characters can be matched
+    directly; `width` must match the UI console's, since the row budget is
+    measured against that width.
+    """
+    buf = StringIO()
+    Console(file=buf, width=width, no_color=True).print(ui._render())
+    return [line[1:-1].strip() for line in buf.getvalue().splitlines() if line.startswith("│")]
+
+
+async def test_log_panel_keeps_newest_message_whole_by_dropping_older_ones() -> None:
+    """A wrapping message must render in full; the oldest messages give up the rows (#223).
+
+    The panel's height is fixed in rows, so budgeting by message count let a
+    long line overflow the box and Rich cropped the overflow off the bottom —
+    eating the tail of the newest line, the one the user is waiting on.
+    """
+    output = StringIO()
+    console = Console(file=output, force_terminal=True, width=120)
+
+    ui = TerminalUI(console=console, max_log_lines=5, total_steps=1)
+    for i in range(4):
+        ui.add_log_message(f"12:00:0{i} [INFO] [folder_sync] short message {i}")
+    long_message = "12:00:09 [INFO] [folder_sync] " + "wrapping " * 40 + "TAIL-MARKER"
+    ui.add_log_message(long_message)
+
+    rows = _log_panel_body_rows(ui)
+
+    # Wrapping breaks on spaces, so re-joining the rows with a single space
+    # reconstructs the original text exactly.
+    body = " ".join(row for row in rows if row)
+    assert long_message in body, "the newest message must render in full, wrapped across rows"
+    assert "short message 0" not in body, "older messages must be dropped to make room"
+    assert len(rows) == 5, "the box height must stay at max_log_lines when the content fits"
+
+
+async def test_log_panel_grows_only_for_a_newest_message_that_alone_overflows() -> None:
+    """A single message longer than the whole budget grows the box instead of being cut."""
+    output = StringIO()
+    console = Console(file=output, force_terminal=True, width=120)
+
+    ui = TerminalUI(console=console, max_log_lines=3, total_steps=1)
+    ui.add_log_message("12:00:00 [INFO] [folder_sync] short message")
+    huge = "12:00:09 [INFO] [folder_sync] " + "overflowing " * 60 + "TAIL-MARKER"
+    ui.add_log_message(huge)
+
+    rows = _log_panel_body_rows(ui)
+
+    assert len(rows) > 3, "the box must grow rather than truncate the newest message"
+    assert " ".join(rows) == huge, "the oversized message is shown alone and whole"
 
 
 async def test_collected_warnings_returns_captured_lines_in_order() -> None:

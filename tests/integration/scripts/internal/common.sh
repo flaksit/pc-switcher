@@ -145,6 +145,45 @@ acquire_lock() {
 
 
 # =============================================================================
+# Test Fixture Helpers
+# =============================================================================
+
+# The package-manager state the integration suite requires — the subjects it operates on
+# (apt packages, snaps, a flatpak remote and app) present, and the machine's own automatic
+# apt updater gone — is established by internal/vm-test-fixtures.sh and baked into the
+# baseline snapshot. Keep this number in sync with FIXTURES_VERSION in that script:
+# a mismatch between the number here and the marker file on a VM is what tells
+# provisioning the baseline has to be rebuilt.
+readonly PCSWITCHER_TEST_FIXTURES_VERSION=6
+readonly PCSWITCHER_TEST_FIXTURES_MARKER=/etc/pcswitcher-test-fixtures
+
+# Whether <user@host> already carries this version of the test fixtures.
+# Uses ssh_verified: by the time this is called the VM is provisioned and its key
+# trusted, so an unexpected key is an error rather than something to accept.
+vm_test_fixtures_current() {
+    local userhost="$1"
+    local remote_version
+    remote_version=$(ssh_verified "$userhost" "cat $PCSWITCHER_TEST_FIXTURES_MARKER 2>/dev/null" 2>/dev/null) || return 1
+    [[ "$remote_version" == "$PCSWITCHER_TEST_FIXTURES_VERSION" ]]
+}
+
+# Create (or refresh) the test fixtures on <host>.
+# Idempotent: the remote script's own presence checks make a satisfied VM a no-op.
+#
+# Usage: install_vm_test_fixtures <host> [--with-app]
+#   --with-app is for the SOURCE machine (pc1) only — see vm-test-fixtures.sh's header.
+# The SSH user comes from PC_SWITCHER_TEST_USER (default testuser); every call site uses
+# that default, so it is not a positional argument (the trailing ones are the script's).
+install_vm_test_fixtures() {
+    local host="$1"
+    shift
+    local user="${PC_SWITCHER_TEST_USER:-testuser}"
+    local script
+    script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/vm-test-fixtures.sh"
+    ssh_run "${user}@${host}" "bash -s -- $*" < "$script"
+}
+
+# =============================================================================
 # SSH Helper Functions
 # =============================================================================
 

@@ -7,7 +7,7 @@ Date: 2025-12-02
 Use Python's `asyncio` library for all concurrency, I/O operations, and job execution to ensure responsiveness and proper resource cleanup.
 
 ## Implementation Rules
-- All `Job` interface methods (`validate`, `pre_sync`, `sync`, `post_sync`) must be `async def`.
+- All `Job` interface methods (`validate`, `execute`) must be `async def`.
 - Use `asyncssh` for all remote SSH operations.
 - Use `asyncio.create_subprocess_exec` (or similar async wrappers) for local subprocesses.
 - Use `asyncio.TaskGroup` for managing concurrent tasks to ensure structured concurrency.

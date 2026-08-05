@@ -123,6 +123,45 @@ class TestFirstSyncScopesFolderSync:
         assert scopes == []
 
 
+class TestFirstSyncScopesPackageJobsOrdering:
+    """D-17: package job scopes precede folder_sync's scope, one entry per enabled job."""
+
+    def test_all_package_jobs_and_folder_sync_each_contribute_one_scope_in_order(self, mock_config: MagicMock) -> None:
+        """All four package jobs and folder_sync each resolve to a real job class and
+        contribute exactly one FirstSyncScope, in sync_jobs order."""
+        mock_config.sync_jobs = {
+            "apt_sync": True,
+            "snap_sync": True,
+            "flatpak_sync": True,
+            "manual_installs_sync": True,
+            "folder_sync": True,
+        }
+        mock_config.job_configs = {"folder_sync": {"folders": [{"path": "/home"}]}}
+        orchestrator, _ = _make_orchestrator(mock_config)
+
+        scopes = orchestrator._first_sync_scopes()  # pyright: ignore[reportPrivateUsage]
+
+        assert [scope.job_name for scope in scopes] == [
+            "apt_sync",
+            "snap_sync",
+            "flatpak_sync",
+            "manual_installs_sync",
+            "folder_sync",
+        ]
+
+    def test_manual_installs_sync_announces_snippet_replay_as_its_mechanism(self, mock_config: MagicMock) -> None:
+        """G92 — the scope this job announces names it and the mechanism by which it
+        overwrites the target: replaying recorded install snippets."""
+        mock_config.sync_jobs = {"manual_installs_sync": True}
+        orchestrator, _ = _make_orchestrator(mock_config)
+
+        scopes = orchestrator._first_sync_scopes()  # pyright: ignore[reportPrivateUsage]
+
+        assert [scope.job_name for scope in scopes] == ["manual_installs_sync"]
+        assert "snippet" in scopes[0].mechanism
+        assert any("install" in item for item in scopes[0].scope_items)
+
+
 class TestFirstSyncScopesEmptyFallback:
     """With no enabled sync jobs, the warning falls back to generic phrasing."""
 

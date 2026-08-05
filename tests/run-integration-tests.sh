@@ -210,6 +210,16 @@ check_vm_ready() {
     local exit_code=$?
 
     if [[ $exit_code -eq 0 ]]; then
+        # A baseline alone is not enough: the suite operates on package-manager
+        # subjects the baseline must already carry (internal/vm-test-fixtures.sh).
+        # Checked here rather than discovered mid-test, so a stale baseline reports
+        # itself once with a fix instead of failing tests one by one.
+        if ! vm_test_fixtures_current "${user}@${vm_host}"; then
+            log_error "${vm_host} has a baseline snapshot but not the current test fixtures"
+            log_error "Refresh them (resets the VMs and rebuilds the baseline):"
+            log_error "  tests/integration/scripts/provision-test-infra.sh"
+            return 1
+        fi
         return 0
     fi
 
@@ -291,8 +301,24 @@ fi
 # We disable errexit temporarily to capture pytest's exit code.
 log_info "Running pytest..."
 cd "$PROJECT_ROOT"
+
+# CI pipes this script's output through `tee`, which makes Python's stdout a PIPE and
+# therefore block-buffered: up to 8 kB of pytest's most recent output would sit in a
+# buffer that a killed step never flushes. This suite runs under a wall-clock CI step
+# timeout, so that lost tail is exactly the part worth having.
+export PYTHONUNBUFFERED=1
+
+# -ra        : end-of-run summary of everything that was not a plain pass. Unlike -rA it
+#              adds no line per passing test.
+# --durations: which tests cost the wall clock. Per-test timings also stream live from
+#              tests/integration/conftest.py, which is what survives a killed step.
+# `-v` is already in pyproject's addopts, so the nodeid is written before each test runs.
+# Placed before "${PYTEST_ARGS[@]}" so a caller's own flags win.
 set +e
-uv run pytest -m "integration and not benchmark" -s "${PYTEST_ARGS[@]}"
+# The marker expression is overridable so CI can additionally deselect `ci_skip`
+# (PC_SWITCHER_TEST_MARKERS in integration-tests.yml). A later -m in PYTEST_ARGS
+# still wins, so local ad-hoc selection is unaffected.
+uv run pytest -m "${PC_SWITCHER_TEST_MARKERS:-integration and not benchmark}" --capture=no -ra --durations=25 "${PYTEST_ARGS[@]}"
 pytest_exit_code=$?
 set -e
 

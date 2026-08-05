@@ -26,7 +26,7 @@ Job (ABC)
 ## Required Class Attributes
 
 | Attribute | Type | Description |
-|-----------|------|-------------|
+| --------- | ---- | ----------- |
 | `name` | `ClassVar[str]` | Unique identifier (e.g., `"packages"`, `"docker"`) |
 | `CONFIG_SCHEMA` | `ClassVar[dict[str, Any]]` | JSON Schema (draft-07) for job-specific config |
 
@@ -197,7 +197,7 @@ async def execute(self) -> None:
 ## Error Handling
 
 | Exception Type | When to Raise | Orchestrator Action |
-|---------------|---------------|---------------------|
+| ------------- | ------------- | ------------------- |
 | Any `Exception` | Sync failure | Log CRITICAL, halt sync |
 | `asyncio.CancelledError` | User interrupt (Ctrl+C) | Wait for cleanup, exit 130 |
 

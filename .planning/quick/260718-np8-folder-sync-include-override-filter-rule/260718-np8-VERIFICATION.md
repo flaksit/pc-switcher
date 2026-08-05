@@ -22,7 +22,7 @@ overrides_applied: 0
 ### Observable Truths
 
 | # | Truth | Status | Evidence |
-|---|-------|--------|----------|
+| - | ----- | ------ | -------- |
 | 1 | `pc-switcher init` on a fresh machine writes config.yaml plus home.filter and root.filter, and the first sync passes validate() with no missing-filter_file error | VERIFIED | `cli.py:461-491` init writes `config.yaml`, then reads `home.filter`/`root.filter` via `files("pcswitcher")` and writes both into `config_path.parent`, honoring `--force` gate above. `default-config.yaml` folder entries point at `~/.config/pc-switcher/home.filter` and `~/.config/pc-switcher/root.filter` — exact match to what init writes. `tests/unit/cli/test_commands.py::TestInitCommand` (2 tests) pass. |
 | 2 | A central home.filter that excludes .cache but re-includes .cache/uv and .cache/pip makes a real rsync --dry-run transfer .cache/uv while dropping the rest of .cache (acceptance #1) | VERIFIED | `tests/local_rsync/test_folder_sync_filters.py::TestCentralMergeCacheIncludeOverride` reads the real shipped `home.filter` and runs it through actual `rsync --dry-run`; ran it myself — PASSED (`.cache/uv`/`.cache/pip` transferred, `.cache/nvidia`/`.cache/fontconfig`/`.ssh/id_rsa` dropped, `docs/keep.txt` transferred). |
 | 3 | A `.pcswitcher-filter` placed in a subdirectory takes effect for that subtree, inherits into deeper directories, and the filter file itself transfers to the target (acceptance #2) | VERIFIED | `TestPerDirDirMerge::test_dir_merge_inherits_and_transfers_itself` — ran, PASSED. Confirms exclusion in `proj/` and inherited `proj/sub/`, plus `.pcswitcher-filter` itself transfers (no `e` modifier in `_build_rsync_cmd`). |
@@ -35,7 +35,7 @@ overrides_applied: 0
 ### Required Artifacts
 
 | Artifact | Expected | Status | Details |
-|----------|----------|--------|---------|
+| -------- | -------- | ------ | ------- |
 | `src/pcswitcher/jobs/folder_sync.py` | FolderEntry.filter_file, expanded_filter_file(), GLOBAL-FIRST emission, validate() filter_file check | VERIFIED | Read in full; matches must-haves exactly (lines 46-74, 235-261, 282-390). |
 | `src/pcswitcher/schemas/config-schema.yaml` | `excludes` dropped, `filter_file` string property added | VERIFIED | Lines 199-201; `excludes` gone from schema. |
 | `src/pcswitcher/home.filter` | Floating patterns, cache include-override block | VERIFIED | Read in full; exact rule set matches plan spec (machine-identity excludes, `.nv`, VS Code caches, `+ .cache/` / `+ .cache/uv/***` / `+ .cache/pip/***` / `- .cache/*`). |
@@ -50,7 +50,7 @@ overrides_applied: 0
 ### Key Link Verification
 
 | From | To | Via | Status | Details |
-|------|-----|-----|--------|---------|
+| ---- | --- | --- | ------ | ------- |
 | `_build_rsync_cmd` | rsync `--filter` args | runtime excludes -> `merge <filter_file>` (when set) -> `dir-merge /.pcswitcher-filter` (always) | WIRED | Confirmed by direct code read (lines 373-378) and `test_merge_arg_ordering`/`test_dir_merge_always_present` (ran, both pass). Never emits `-F`/`-FF`/`-C`/`--cvs-exclude` — grepped, confirmed absent, and asserted by `test_no_built_in_per_dir_flags`. |
 | `init` | `home.filter`/`root.filter` package data | `files("pcswitcher").joinpath(name).read_text()` written to `config_path.parent`, honoring `--force` | WIRED | Code read (cli.py:484-491); `TestInitCommand` (2 tests, ran, pass) confirm files exist post-init and post-`--force`, and that `home.filter` content includes `+ .cache/uv/***`. |
 | `validate()` | filter_file existence check | expand `~`/env vars before `test -f` on source, before use in merge directive | WIRED | Code read (folder_sync.py:247-259, 375-377); same `expanded_filter_file()` call site feeds both the validate() check and the `_build_rsync_cmd` merge arg — single source of truth for expansion. `test_filter_file_check_uses_expanded_path` (ran, pass) confirms no literal `~` reaches the shell command. |
@@ -59,7 +59,7 @@ overrides_applied: 0
 ### Behavioral Spot-Checks
 
 | Behavior | Command | Result | Status |
-|----------|---------|--------|--------|
+| -------- | ------- | ------ | ------ |
 | local_rsync acceptance tests run (not skip) and pass | `uv run pytest tests/local_rsync/ -v` | 4 passed in 0.19s (all 4: TestCentralMergeCacheIncludeOverride, TestPerDirDirMerge, TestHostileRsyncFilterNoOp, TestGlobalFirstEnforcement) | PASS |
 | unit tests for folder_sync + cli pass | `uv run pytest tests/unit/jobs/test_folder_sync.py tests/unit/cli/test_commands.py -q` | 73 passed | PASS |
 | No `excludes` config field remains | `grep -rn "excludes" src/pcswitcher/` | Only comment prose in ADR wording and `.filter` file header comments (`` `+` includes, `-` excludes ``) — no config field | PASS |
@@ -72,7 +72,7 @@ overrides_applied: 0
 ### Requirements Coverage
 
 | Requirement | Source Plan | Description | Status | Evidence |
-|-------------|------------|-------------|--------|----------|
+| ----------- | ---------- | ----------- | ------ | -------- |
 | #166 | 260718-np8-PLAN.md | Include-override filter rules for folder_sync | SATISFIED | All 6 must-have truths verified above; all 3 issue acceptance criteria plus GLOBAL-FIRST enforcement proven against real rsync. |
 
 ### Anti-Patterns Found

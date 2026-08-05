@@ -247,7 +247,7 @@ mkdir -p /.snapshots/pc-switcher
 
 ### Error Conditions
 | Exit Code | Meaning | Action |
-|-----------|---------|--------|
+| --------- | ------- | ------ |
 | 0 | Success | Continue |
 | 1 | General error (e.g., path not found) | Log CRITICAL, abort |
 | 28 | No space left | Log CRITICAL with df output, abort |
@@ -490,7 +490,7 @@ async def get_target_lock_holder(executor: RemoteExecutor) -> str | None:
 The target lock uses `flock` via the SSH session. Lock release happens automatically in these scenarios:
 
 | Scenario | Release Mechanism |
-|----------|-------------------|
+| -------- | ----------------- |
 | **Sync completes normally** | SSH session ends → file descriptor closes → `flock` releases |
 | **Sync aborts (error)** | SSH connection closes → same as above |
 | **Source crashes** | SSH keepalive timeout (45s max) → connection terminates → lock released |
@@ -633,7 +633,7 @@ def compare_versions(source: str, target: str) -> int:
 ## Summary of Technology Decisions
 
 | Component | Technology | Rationale |
-|-----------|------------|-----------|
+| --------- | ---------- | --------- |
 | SSH | asyncssh | Async-native, mature, respects SSH config |
 | Logging | structlog | Dual output, structured context, processors |
 | Terminal UI | Rich Live | Smooth updates, layout composition |

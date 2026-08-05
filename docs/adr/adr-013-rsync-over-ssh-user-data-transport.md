@@ -12,7 +12,7 @@ Use rsync-over-SSH as the user-data transport, running rsync as root on both end
 **Required:**
 - Run rsync as root on the source: `sudo rsync ...`
 - Run rsync as root on the target: pass `--rsync-path='sudo rsync'` in the local rsync invocation, over the existing normal-user SSH connection
-- Both endpoints require a passwordless sudoers entry scoped to the rsync binary path: `username ALL=(ALL) NOPASSWD: /usr/bin/rsync`
+- Both endpoints require a passwordless sudoers entry that grants at least the rsync binary path, e.g. `username ALL=(ALL) NOPASSWD: /usr/bin/rsync`. A broader grant is equally acceptable — this is a lower bound on what must be permitted, not a requirement that the entry be scoped to exactly this one binary. Other jobs need their own binaries, and a machine may legitimately grant the user wider sudo rights for unrelated reasons
 - Always pass `--numeric-ids` to preserve raw UID/GID numbers across machines. rsync's default maps ownership by *name* — it rewrites each file's UID/GID to whatever the target's account table assigns that name. For exact machine-state replication that is wrong: it produces target-table-dependent, non-deterministic ownership and silently diverges from the source's numeric layout. `--numeric-ids` makes ownership a pure function of the source (see RESEARCH Pitfall 3)
 - Use the flag baseline `-aAXHS` (archive + ACLs + xattrs + hard links + sparse) per D-13
 - Drive rsync via asyncio subprocess (`asyncio.create_subprocess_exec` or equivalent) — never a blocking call (ADR-005)
@@ -44,7 +44,7 @@ The asyncssh connection (ADR-002) handles orchestration only; rsync spawns its o
 - Normal-user SSH login is preserved; privilege escalation is narrowly scoped to the rsync binary path
 
 **Negative:**
-- Requires a passwordless sudoers entry on both machines scoped to `/usr/bin/rsync` — a system configuration prerequisite users must apply before first sync; `validate()` must check and fail fast if absent
+- Requires a passwordless sudoers entry on both machines granting at least `/usr/bin/rsync` — a system configuration prerequisite users must apply before first sync; `validate()` must check and fail fast if absent, and say concretely how to configure it
 - Shared-extent (reflink/CoW) topology is NOT preserved: rsync copies file data but does not replicate btrfs reflink relationships (accepted tradeoff, D-13)
 - SSH identity under sudo requires explicit configuration to avoid authentication failures when root's SSH environment lacks the user's agent or config (RESEARCH Pitfall 1)
 

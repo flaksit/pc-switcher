@@ -8,7 +8,7 @@
 ## Current State Summary
 
 | Item | Value |
-|------|-------|
+| ---- | ----- |
 | Existing release | `v0.1.0-alpha.1` (prerelease, does NOT have self-update) |
 | Branch with self-update feature | `32-self-update` |
 | Main branch | Does NOT have self-update command yet |
@@ -25,7 +25,7 @@ These tests can be run before the feature is merged and released.
 
 ```bash
 # 1. Install the existing release (v0.1.0-alpha.1)
-curl -sSL https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh | VERSION=0.1.0-alpha.1 bash
+curl --silent --show-error --location https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh | VERSION=0.1.0-alpha.1 bash
 
 # 2. Verify installation
 pc-switcher --version
@@ -36,7 +36,7 @@ pc-switcher self update --help
 # Expected: Error - "No such command 'self'" (v0.1.0-alpha.1 doesn't have it)
 
 # 4. Upgrade to the 32-self-update branch (which has the self update command)
-curl -sSL https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh | bash -s -- --ref 32-self-update
+curl --silent --show-error --location https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh | bash -s -- --ref 32-self-update
 
 # 5. Verify upgraded version
 pc-switcher --version
@@ -95,14 +95,14 @@ pc-switcher self update --help
 # The self update command should accept both version formats
 
 # 1. Reinstall from branch
-curl -sSL https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh | bash -s -- --ref 32-self-update
+curl --silent --show-error --location https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh | bash -s -- --ref 32-self-update
 
 # 2. Test SemVer format
 pc-switcher self update 0.1.0-alpha.1
 # Expected: Installs v0.1.0-alpha.1
 
 # 3. Reinstall from branch again
-curl -sSL https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh | bash -s -- --ref 32-self-update
+curl --silent --show-error --location https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh | bash -s -- --ref 32-self-update
 
 # 4. Test PEP 440 format
 pc-switcher self update 0.1.0a1
@@ -115,7 +115,7 @@ pc-switcher self update 0.1.0a1
 
 ```bash
 # 1. Ensure you have self update command
-curl -sSL https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh | bash -s -- --ref 32-self-update
+curl --silent --show-error --location https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh | bash -s -- --ref 32-self-update
 
 # 2. Try invalid version format
 pc-switcher self update not-a-version
@@ -169,7 +169,7 @@ Execute these scenarios AFTER a new release containing the self-update feature i
 uv tool uninstall pcswitcher 2>/dev/null || true
 
 # 2. Install the new release
-curl -sSL https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh | VERSION=0.1.0-alpha.2 bash
+curl --silent --show-error --location https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh | VERSION=0.1.0-alpha.2 bash
 
 # 3. Verify installation
 pc-switcher --version
@@ -187,7 +187,7 @@ pc-switcher self update --help
 uv tool uninstall pcswitcher 2>/dev/null || true
 
 # 2. Install the OLD release (which does NOT have self-update)
-curl -sSL https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh | VERSION=0.1.0-alpha.1 bash
+curl --silent --show-error --location https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh | VERSION=0.1.0-alpha.1 bash
 
 # 3. Verify old version
 pc-switcher --version
@@ -198,7 +198,7 @@ pc-switcher self update
 # Expected: Error - "No such command 'self'"
 
 # 5. Use install script to upgrade
-curl -sSL https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh | VERSION=0.1.0-alpha.2 bash
+curl --silent --show-error --location https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh | VERSION=0.1.0-alpha.2 bash
 
 # 6. Verify upgrade
 pc-switcher --version
@@ -215,7 +215,7 @@ pc-switcher self update --help
 
 ```bash
 # 1. Install the release with self-update
-curl -sSL https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh | VERSION=0.1.0-alpha.2 bash
+curl --silent --show-error --location https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh | VERSION=0.1.0-alpha.2 bash
 
 # 2. Verify version
 pc-switcher --version
@@ -240,7 +240,7 @@ Requires TWO releases that both have self-update (e.g., `v0.1.0-alpha.2` and `v0
 
 ```bash
 # 1. Install older release with self-update
-curl -sSL https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh | VERSION=0.1.0-alpha.2 bash
+curl --silent --show-error --location https://raw.githubusercontent.com/flaksit/pc-switcher/refs/heads/main/install.sh | VERSION=0.1.0-alpha.2 bash
 
 # 2. Verify
 pc-switcher --version
@@ -297,8 +297,8 @@ which pc-switcher
 # Expected: no output (command not found)
 
 # Optional: Remove config and data
-rm -rf ~/.config/pc-switcher
-rm -rf ~/.local/share/pc-switcher
+rm --recursive --force ~/.config/pc-switcher
+rm --recursive --force ~/.local/share/pc-switcher
 ```
 
 ### Check available releases
@@ -314,7 +314,7 @@ gh release list --repo flaksit/pc-switcher
 ### Phase 1: Pre-Merge
 
 | # | Scenario | Result | Notes |
-|---|----------|--------|-------|
+| - | -------- | ------ | ----- |
 | 1.1 | Install old, upgrade to branch | ☐ | |
 | 1.2 | Self update finds latest release | ☐ | |
 | 1.3 | Explicit version downgrade | ☐ | |
@@ -324,7 +324,7 @@ gh release list --repo flaksit/pc-switcher
 ### Phase 2: Merge & Release
 
 | Task | Done | Details |
-|------|------|---------|
+| ---- | ---- | ------- |
 | PR created | ☐ | PR #___ |
 | PR merged | ☐ | |
 | New release created | ☐ | Version: v_______ |
@@ -332,7 +332,7 @@ gh release list --repo flaksit/pc-switcher
 ### Phase 3: Post-Release
 
 | # | Scenario | Result | Notes |
-|---|----------|--------|-------|
+| - | -------- | ------ | ----- |
 | 3.1 | Fresh install of new release | ☐ | |
 | 3.2 | Upgrade from old release via install script | ☐ | |
 | 3.3 | Self update to get latest (no args) | ☐ | |

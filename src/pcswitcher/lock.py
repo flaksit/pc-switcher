@@ -17,6 +17,7 @@ import socket
 from pathlib import Path
 
 from pcswitcher.executor import RemoteExecutor, RemoteProcess
+from pcswitcher.models import SyncAborted
 
 __all__ = [
     "LOCK_FILE_NAME",
@@ -136,20 +137,24 @@ async def start_persistent_remote_lock(
     # First create directory and write holder info to lock file
     # Note: Use $HOME instead of ~ because ~ doesn't expand inside double quotes
     setup_result = await executor.run_command(
-        f'mkdir -p "$HOME/.local/share/pc-switcher" && echo "{holder_info}" > "{lock_path}"'
+        f'mkdir --parents "$HOME/.local/share/pc-switcher" && echo "{holder_info}" > "{lock_path}"',
+        mutates="claim the sync lock file, overwriting any previous holder record",
     )
     if not setup_result.success:
         return None
 
     # Start persistent process that holds the lock.
-    # flock -n = non-blocking attempt; if the lock is already held it exits
+    # flock --nonblock = non-blocking attempt; if the lock is already held it exits
     # immediately (non-zero). -c "read" otherwise blocks forever on stdin (which
     # never receives input), keeping the process — and the lock — alive until
     # terminated.
-    cmd = f'flock -n "{lock_path}" -c "read"'
+    cmd = f'flock --nonblock "{lock_path}" --command "read"'
 
     try:
-        process = await executor.start_process(cmd)
+        process = await executor.start_process(
+            cmd,
+            mutates="take the exclusive sync lock, so no other sync can run on this machine",
+        )
         # Give flock time to either acquire the lock (and block on read) or
         # fail-fast. A process that has already exited means flock could NOT
         # acquire the lock — the target is already involved in another sync.
@@ -158,6 +163,11 @@ async def start_persistent_remote_lock(
             await process.wait()  # reap the exited process
             return None
         return process
+    except SyncAborted:
+        # Declining the lock's confirmation is not "the target is busy": swallowing it here
+        # would surface a deliberate abort as `SyncLockedError`, sending the user to look
+        # for a stuck lock that does not exist.
+        raise
     except Exception:
         return None
 

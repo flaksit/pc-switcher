@@ -19,14 +19,18 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+from typing import Any, ClassVar, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from pcswitcher.config import Configuration
+from pcswitcher.jobs.base import SyncJob
+from pcswitcher.jobs.context import JobContext
 from pcswitcher.logger import generate_log_filename
-from pcswitcher.models import LogLevel, SyncAbortedByUser
+from pcswitcher.models import LogLevel, SyncAborted, ValidationError
 from pcswitcher.orchestrator import Orchestrator
+from tests.unit.jobs.test_package_sync_core import make_context
 
 
 class TestLogLevelOrdering:
@@ -134,7 +138,7 @@ class TestOrchestratorCreatesUiBeforeLogging:
         """setup_logging is called with the orchestrator's own ui/console, not None.
 
         Drives the real run() with lock/connection phases stubbed and
-        _check_out_of_order patched to decline, so the fast SyncAbortedByUser
+        _check_out_of_order patched to decline, so the fast SyncAborted
         path is reached right after the UI-before-logging wiring runs,
         without needing SSH, snapshots, or jobs.
         """
@@ -154,7 +158,7 @@ class TestOrchestratorCreatesUiBeforeLogging:
         with (
             patch("pcswitcher.orchestrator.setup_logging", setup_logging_mock),
             patch("pcswitcher.orchestrator.TerminalUI", return_value=no_op_ui),
-            pytest.raises(SyncAbortedByUser),
+            pytest.raises(SyncAborted),
         ):
             await orchestrator.run()
 
@@ -165,3 +169,45 @@ class TestOrchestratorCreatesUiBeforeLogging:
         assert kwargs["console"] is orchestrator._console  # pyright: ignore[reportPrivateUsage]
         assert orchestrator._console is not None  # pyright: ignore[reportPrivateUsage]
         assert orchestrator._confirmer is not None  # pyright: ignore[reportPrivateUsage]
+
+
+class _StartLogRecordingJob(SyncJob):
+    """Captures the orchestrator's INFO calls made before its own execute() ran."""
+
+    name: ClassVar[str] = "stub_start_log"
+
+    def __init__(self, context: JobContext, logger: MagicMock) -> None:
+        super().__init__(context)
+        self._logger = logger
+        self.info_calls_before_execute: list[Any] = []
+
+    async def validate(self) -> list[ValidationError]:
+        return []
+
+    async def execute(self) -> None:
+        self.info_calls_before_execute = list(self._logger.info.call_args_list)
+
+
+class TestJobStartIsLogged:
+    """#243 — every job announces its start at INFO, so the log shows where a job's
+    output begins instead of only where it ended."""
+
+    @pytest.mark.asyncio
+    async def test_the_start_is_logged_before_the_job_runs(self, wired_orchestrator: Orchestrator) -> None:
+        logger = cast(MagicMock, wired_orchestrator._logger)  # pyright: ignore[reportPrivateUsage]
+        job = _StartLogRecordingJob(make_context(), logger)
+
+        await wired_orchestrator._execute_jobs([job])  # pyright: ignore[reportPrivateUsage]
+
+        assert [call.args for call in job.info_calls_before_execute] == [("Job %s started", "stub_start_log")]
+
+    @pytest.mark.asyncio
+    async def test_the_start_line_is_tagged_with_the_job_and_the_source(
+        self, wired_orchestrator: Orchestrator
+    ) -> None:
+        logger = cast(MagicMock, wired_orchestrator._logger)  # pyright: ignore[reportPrivateUsage]
+        job = _StartLogRecordingJob(make_context(), logger)
+
+        await wired_orchestrator._execute_jobs([job])  # pyright: ignore[reportPrivateUsage]
+
+        assert logger.info.call_args_list[0].kwargs["extra"] == {"job": "stub_start_log", "host": "source"}

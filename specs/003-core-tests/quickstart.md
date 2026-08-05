@@ -537,7 +537,7 @@ If unit tests exceed 30s budget, consider:
 **CRITICAL**: These tests must ONLY run on dedicated test VMs, never on development machines.
 
 | Test | Risk | Potential Damage | Mitigation |
-|------|------|------------------|------------|
+| ---- | ---- | ---------------- | ---------- |
 | `test_snapshot_infrastructure.py` | **HIGH** | Could corrupt btrfs filesystem if snapshot commands fail unexpectedly | Run only on dedicated test VMs; reset VMs after each session |
 | `test_cleanup_snapshots.py` | **HIGH** | Deletes btrfs subvolumes; could delete wrong snapshots if path logic is buggy | Use unique test session IDs; verify paths before deletion; test only on VMs |
 | `test_installation_script.py` | **MEDIUM** | Installs packages via apt; could leave system in inconsistent state | Run only on VMs; reset after tests |

@@ -101,7 +101,7 @@ Based on similar tools (rsync, borg backup, duplicity, lsyncd):
 ### Blocking Operations Requiring Interrupt Capability
 
 | Operation | Typical Duration | Interrupt Requirement |
-|-----------|------------------|----------------------|
+| --------- | ---------------- | -------------------- |
 | `time.sleep()` | 1-30 seconds | Must be interruptible |
 | `subprocess.run()` local | Minutes to hours | Must track PID, kill on abort |
 | `remote.run()` SSH | Seconds to minutes | Must timeout, kill remote process |
@@ -741,7 +741,7 @@ flowchart TD
 #### What Changes for Option C
 
 | Component | Current | After (Async) |
-|-----------|---------|---------------|
+| --------- | ------- | ------------- |
 | `SyncJob` | Synchronous methods | All methods are `async def` |
 | `Orchestrator` | Synchronous, main thread | Async, runs in event loop |
 | `TargetConnection` | Fabric/Paramiko | asyncssh |
@@ -1193,7 +1193,7 @@ flowchart TD
 #### What Changes for Option D
 
 | Component | Current | After |
-|-----------|---------|-------|
+| --------- | ------- | ----- |
 | `SyncJob` | No process tracking | `ProcessRegistry` injected, helper methods |
 | `subprocess.run()` | Direct call, untracked | Use `self.run_subprocess()` (tracked) |
 | `time.sleep()` | Blocking, uninterruptible | Use `self._interruptible_sleep()` |
@@ -1267,7 +1267,7 @@ flowchart TD
 ## Comparison Summary
 
 | Aspect | Option C (Async) | Option D (Hybrid) |
-|--------|------------------|-------------------|
+| ------ | ---------------- | ----------------- |
 | **Abort responsiveness** | EXCELLENT (immediate at any await) | GOOD for signals, MODERATE for disk monitor |
 | **Implementation effort** | HIGH (full rewrite) | MODERATE (incremental) |
 | **Code complexity** | Simpler once done (no locks) | More complex (threading + locks) |

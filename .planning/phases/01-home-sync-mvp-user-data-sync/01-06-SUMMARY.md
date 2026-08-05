@@ -172,7 +172,7 @@ None. The integration test is fully wired: all assertions make real SSH calls to
 ## Threat Flags
 
 | Mitigation | Status |
-|-----------|--------|
+| --------- | ------ |
 | T-06-01 (secret exclusion, both directions) | Applied: test asserts `.ssh/id_rsa` absent after A→B and that `.ssh/id_rsa` added on pc2 does NOT appear on pc1 after B→A |
 | T-06-02 (mirror-delete on test data only) | Applied: folder_sync config points to dedicated test dir; try/finally cleanup prevents data accumulation |
 | T-06-03 (divergence-guard regression) | Applied: test asserts blocked sync + divergence message AND that a normal round-trip does NOT trigger false divergence (D-07) |

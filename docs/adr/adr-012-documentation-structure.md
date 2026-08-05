@@ -3,6 +3,8 @@
 Status: Accepted
 Date: 2026-01-03
 
+Updated 2026-07-31 to fit the current state: the Folder Structure and Document Purposes below were extended with the user-facing surface that shipped after this ADR. The audience-based strategy itself is unchanged.
+
 ## TL;DR
 Organize documentation by audience in subfolders, maintain CLAUDE.md and AGENTS.md as lean AI context with pointers.
 
@@ -11,6 +13,10 @@ Organize documentation by audience in subfolders, maintain CLAUDE.md and AGENTS.
 ### Folder Structure
 ```text
 docs/
+├── README.md                     # Documentation index
+├── jobs/                         # User-facing: what each sync job does (folder-sync, package-sync, …)
+├── configuration.md              # User-facing: config-file reference
+├── reading-sync-logs.md          # User-facing: how to read sync-log output
 ├── dev/                          # AI agent instructions
 │   ├── testing-guide.md          # Expectations for writing tests
 │   └── development-guide.md      # Expectations for development
@@ -19,8 +25,9 @@ docs/
 │   ├── testing-ops.md            # Runbooks, troubleshooting
 │   └── ci-setup.md               # CI/CD configuration
 ├── planning/                     # Planning & scope
-│   ├── High level requirements.md
+│   ├── high-level-requirements.md
 │   └── [other planning docs]
+├── premature-analysis/           # Early exploration only — not authoritative (see CLAUDE.md)
 ├── system/                       # Golden Copy specs (per ADR-011)
 └── adr/                          # Decisions
 
@@ -43,7 +50,12 @@ tests/
 
 | Location | Audience | Purpose |
 | -------- | -------- | ------- |
+| `docs/README.md` | All | Documentation index |
 | `docs/adr/` | All | Architectural decisions |
+| `docs/jobs/` | Users | What each sync job does and shows |
+| `docs/configuration.md` | Users | Config-file reference |
+| `docs/reading-sync-logs.md` | Users | How to read sync-log output |
+| `docs/premature-analysis/` | — | Early exploration only; not authoritative (see CLAUDE.md) |
 | `docs/dev/` | AI agents | Instructions and expectations for code/test writing |
 | `docs/ops/` | Developers, DevOps | Setup, architecture understanding, troubleshooting |
 | `docs/planning/` | Project owner | Scope, requirements, planning artifacts |
@@ -54,7 +66,7 @@ tests/
 | `tests/manual-playbook.md` | Project owner | Manual verification procedures for releases |
 
 ### CLAUDE.md and AGENTS.md Strategy
-- Brief summary of sync scope with link to `docs/planning/High level requirements.md`
+- Brief summary of sync scope with link to `docs/planning/high-level-requirements.md`
 - Pointers to `docs/dev/` for agent instructions
 - Essential commands, constraints, and patterns inline
 - Avoid duplicating content that agents can load on-demand

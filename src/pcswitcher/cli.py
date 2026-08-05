@@ -21,7 +21,7 @@ from rich.text import Text
 from pcswitcher.btrfs_snapshots import parse_older_than, run_snapshot_cleanup
 from pcswitcher.config import Configuration, ConfigurationError
 from pcswitcher.logger import get_latest_log_file, get_logs_directory
-from pcswitcher.models import SyncAbortedByUser, SyncLockedError, SyncSession
+from pcswitcher.models import SessionStatus, SyncAborted, SyncAbortedByUser, SyncLockedError, SyncSession
 from pcswitcher.orchestrator import Orchestrator
 from pcswitcher.terminal import is_interactive
 from pcswitcher.version import Release, Version, find_one_version, get_highest_release, get_this_version
@@ -44,6 +44,39 @@ app.add_typer(self_app, name="self")
 console = Console()
 
 
+def _print_labeled(
+    out: Console, label: str, detail: str, *, label_style: str = "bold red", detail_style: str = ""
+) -> None:
+    """Print `label` in `label_style`, then `detail` rendered literally.
+
+    `detail` carries text pc-switcher did not author — package-manager stderr, `uv`
+    output, OSError text, log-file content, arguments the user typed. In a Rich markup
+    string a `[...]`-shaped substring is consumed as a style tag: `[installed]` silently
+    vanishes from the message and `[/usr/bin/apt]` raises MarkupError, which at the
+    end-of-run summary crashes the run after all its work is done. A `Text` never parses
+    markup, so every such value goes through here instead of an f-string.
+
+    `out` is explicit rather than defaulting to the module-level `console`, because
+    `_maybe_check_for_update` renders to the console it is handed, not to that global.
+    """
+    out.print(Text.assemble((label, label_style), " ", (detail, detail_style)))
+
+
+def _print_labeled_list(out: Console, label: str, detail: str, *, label_style: str = "bold red") -> None:
+    """Print `label` on its own line, then each line of `detail` indented under it.
+
+    For a `detail` holding one entry per line: printed beside the label the first entry
+    would sit on the label line and the rest below it, which does not read as a list.
+
+    Each line goes out as a `Text` for the reason `_print_labeled` does — the entries quote
+    text pc-switcher did not author, where a `[...]`-shaped substring would be eaten as a
+    Rich style tag or raise MarkupError.
+    """
+    out.print(Text(label, style=label_style))
+    for line in detail.splitlines():
+        out.print(Text(f"  {line}"))
+
+
 def _load_configuration(config_path: Path) -> Configuration:
     """Load configuration with helpful error messages.
 
@@ -64,19 +97,19 @@ def _load_configuration(config_path: Path) -> Configuration:
         # Check if this is a missing config file error
         config_missing = any("not found" in error.message.lower() for error in e.errors)
         if config_missing:
-            console.print(f"  {config_path}: Configuration file not found")
+            console.print(Text(f"  {config_path}: Configuration file not found"))
             console.print("\nTo initialize configuration, run:")
             console.print("  [cyan]pc-switcher init[/cyan]")
         else:
             for error in e.errors:
                 if error.job:
-                    console.print(f"  [yellow]{error.job}[/yellow].{error.path}: {error.message}")
+                    console.print(Text.assemble("  ", (error.job, "yellow"), f".{error.path}: {error.message}"))
                 else:
-                    console.print(f"  {error.path}: {error.message}")
+                    console.print(Text(f"  {error.path}: {error.message}"))
 
         raise typer.Exit(1) from e
     except Exception as e:
-        console.print(f"[bold red]Error loading configuration:[/bold red] {e}")
+        _print_labeled(console, "Error loading configuration:", str(e))
         raise typer.Exit(1) from e
 
 
@@ -180,16 +213,16 @@ def _display_log_file(log_file: Path) -> None:
 
                 except json.JSONDecodeError:
                     # Handle malformed lines gracefully
-                    console.print(f"[dim]Line {line_num}:[/dim] {line}")
+                    _print_labeled(console, f"Line {line_num}:", line, label_style="dim")
 
     except OSError as e:
-        console.print(f"[bold red]Error reading log file:[/bold red] {e}")
+        _print_labeled(console, "Error reading log file:", str(e))
         sys.exit(1)
 
 
 @app.command()
 def sync(  # noqa: PLR0913, PLR0917 - typer builds the call from argv; params are named flags, never positional
-    target: Annotated[str, typer.Argument(help="Target hostname to sync to")],
+    target: Annotated[str, typer.Argument(metavar="HOSTNAME", help="Hostname of the machine to sync to")],
     config: Annotated[
         Path | None,
         typer.Option(
@@ -219,8 +252,8 @@ def sync(  # noqa: PLR0913, PLR0917 - typer builds the call from argv; params ar
             "--allow-out-of-order",
             help=(
                 "Proceed even if this sync is out of the normal back-and-forth order. "
-                "Skips the target-state confirmation prompt. Use after manually reviewing "
-                "the target machine's current state."
+                "Skips the confirmation about that machine's state. Use after reviewing "
+                "by hand what it currently holds."
             ),
         ),
     ] = False,
@@ -230,19 +263,41 @@ def sync(  # noqa: PLR0913, PLR0917 - typer builds the call from argv; params ar
             "--allow-first-sync",
             help=(
                 "Proceed with a first-ever sync without interactive confirmation. "
-                "WARNING: everything on the target within the scope of the configured "
-                "sync jobs will be overwritten, except configured exclusions. "
+                "WARNING: everything on the machine you sync to, within the scope of the "
+                "configured sync jobs, will be overwritten, except configured exclusions. "
                 "Run with --dry-run first to preview."
             ),
         ),
     ] = False,
+    confirm_each_command: Annotated[
+        bool,
+        typer.Option(
+            "--confirm-each-command",
+            help=(
+                "Show the exact command or file transfer before EVERY modification a package "
+                "sync job makes, and require an explicit proceed or abort for each one. "
+                "Requires an interactive terminal. Slow by design — for auditing a risky sync."
+            ),
+        ),
+    ] = False,
 ) -> None:
-    """Sync to target machine.
+    """Sync to the machine named by HOSTNAME.
 
     Loads configuration, creates orchestrator, and runs the complete sync workflow.
     Use --allow-out-of-order to bypass the out-of-order topology check after manual review.
-    Use --allow-first-sync to auto-approve the first-sync overwrite of a target with no history.
+    Use --allow-first-sync to auto-approve the first-sync overwrite of a machine with no history.
+    Use --confirm-each-command to step through every individual modification.
     """
+    # Refused here rather than mid-run: the gate has no non-interactive fallback by design
+    # (a gate nobody can answer would have to auto-proceed, which is what it exists to
+    # prevent), so a run that could never prompt must fail before it touches anything.
+    if confirm_each_command and not is_interactive(console):
+        console.print(
+            "[red]--confirm-each-command requires an interactive terminal[/red] (both stdin and stdout must be TTYs)."
+        )
+        console.print("Re-run it attached to a terminal, or drop the flag.")
+        raise typer.Exit(1)
+
     # Determine config path
     config_path = config or Configuration.get_default_config_path()
 
@@ -257,6 +312,7 @@ def sync(  # noqa: PLR0913, PLR0917 - typer builds the call from argv; params ar
         allow_out_of_order=allow_out_of_order,
         allow_first_sync=allow_first_sync,
         dry_run=dry_run,
+        confirm_each_command=confirm_each_command,
     )
     sys.exit(exit_code)
 
@@ -269,6 +325,7 @@ def _run_sync(  # noqa: PLR0913 - CLI flags threaded to the orchestrator; all ke
     allow_out_of_order: bool = False,
     allow_first_sync: bool = False,
     dry_run: bool = False,
+    confirm_each_command: bool = False,
 ) -> int:
     """Run the sync operation with asyncio and graceful interrupt handling.
 
@@ -279,6 +336,7 @@ def _run_sync(  # noqa: PLR0913 - CLI flags threaded to the orchestrator; all ke
         allow_out_of_order: If True, skip the out-of-order target-state confirmation
         allow_first_sync: If True, auto-approve the first-sync overwrite confirmation
         dry_run: If True, preview sync without making changes
+        confirm_each_command: If True, prompt before every individual modification
 
     Returns:
         Exit code: 0=success, 1=error, 130=SIGINT
@@ -291,6 +349,7 @@ def _run_sync(  # noqa: PLR0913 - CLI flags threaded to the orchestrator; all ke
             allow_out_of_order=allow_out_of_order,
             allow_first_sync=allow_first_sync,
             dry_run=dry_run,
+            confirm_each_command=confirm_each_command,
         )
     )
 
@@ -303,6 +362,7 @@ async def _async_run_sync(  # noqa: PLR0913 - CLI flags threaded to the orchestr
     allow_out_of_order: bool = False,
     allow_first_sync: bool = False,
     dry_run: bool = False,
+    confirm_each_command: bool = False,
 ) -> int:
     """Async implementation of sync with interrupt handling.
 
@@ -313,6 +373,7 @@ async def _async_run_sync(  # noqa: PLR0913 - CLI flags threaded to the orchestr
         allow_out_of_order: If True, skip the out-of-order target-state confirmation
         allow_first_sync: If True, auto-approve the first-sync overwrite confirmation
         dry_run: If True, preview sync without making changes
+        confirm_each_command: If True, prompt before every individual modification
 
     Interrupt behavior:
     - First SIGINT: Cancel sync task; cleanup runs in orchestrator's finally block
@@ -347,11 +408,23 @@ async def _async_run_sync(  # noqa: PLR0913 - CLI flags threaded to the orchestr
             allow_out_of_order=allow_out_of_order,
             allow_first_sync=allow_first_sync,
             dry_run=dry_run,
+            confirm_each_command=confirm_each_command,
         )
         main_task = asyncio.create_task(orchestrator.run())
 
         try:
-            await main_task
+            session = await main_task
+            # A completed run is not automatically a clean one: per-item job failures are
+            # collected rather than raised (D-27), so the exit code comes from the session
+            # status the orchestrator derived from job_results, not from "nothing raised".
+            if session.status is SessionStatus.FAILED:
+                console.print()
+                # One failed job per line: the message carries a reason per job (see
+                # `_summarize_job_outcomes`), and a run can end with several.
+                _print_labeled_list(
+                    console, "Sync finished with failures:", session.error_message or "no reason recorded"
+                )
+                return 1
             return 0
 
         except asyncio.CancelledError:
@@ -360,22 +433,26 @@ async def _async_run_sync(  # noqa: PLR0913 - CLI flags threaded to the orchestr
             console.print("[yellow]Sync interrupted by user[/yellow]")
             return 130
 
-    except SyncAbortedByUser as e:
+    except SyncAborted as e:
         # The orchestrator already logged this once at WARNING; print a single
         # calm summary here instead of falling through to the red "Sync failed"
         # message, which would duplicate what the user just declined.
-        console.print(f"[yellow]Sync aborted:[/yellow] {e}")
+        # The label says "by user" only when the exception's own type says a human
+        # answered; pc-switcher's own decision to stop stays unattributed (#224).
+        label = "Sync aborted by user:" if isinstance(e, SyncAbortedByUser) else "Sync aborted:"
+        _print_labeled(console, label, str(e), label_style="yellow")
         return 1
 
     except SyncLockedError as e:
         # The orchestrator already logged this once at WARNING; print a single
         # calm summary (with the how-to-unblock guidance carried in the message)
         # instead of the red "Sync failed" path — a lock conflict is retryable.
-        console.print(f"[yellow]Sync blocked:[/yellow] {e}")
+        _print_labeled(console, "Sync blocked:", str(e), label_style="yellow")
         return 1
 
     except Exception as e:
-        console.print(f"\n[bold red]Sync failed:[/bold red] {e}")
+        console.print()
+        _print_labeled(console, "Sync failed:", str(e))
         return 1
 
     finally:
@@ -456,7 +533,7 @@ def cleanup_snapshots(
         try:
             max_age_days = parse_older_than(older_than)
         except ValueError as e:
-            console.print(f"[bold red]Error:[/bold red] {e}")
+            _print_labeled(console, "Error:", str(e))
             sys.exit(1)
     else:
         max_age_days = cfg.btrfs_snapshots.max_age_days
@@ -508,7 +585,7 @@ def init(
         for name in filter_file_names:
             (config_path.parent / name).write_text(files("pcswitcher").joinpath(name).read_text())
     except OSError as e:
-        console.print(f"[bold red]Error writing configuration:[/bold red] {e}")
+        _print_labeled(console, "Error writing configuration:", str(e))
         raise typer.Exit(1) from e
 
     console.print(f"[green]Created configuration file:[/green] {config_path}")
@@ -655,11 +732,11 @@ def _resolve_target_version(version: str | None, prerelease: bool) -> Release:
             parsed_version = Version.parse(version)
             release = parsed_version.get_release()
             if release is None:
-                console.print(f"[bold red]Error:[/bold red] Version {version} is not a GitHub release")
+                _print_labeled(console, "Error:", f"Version {version} is not a GitHub release")
                 sys.exit(1)
             return release
         except ValueError:
-            console.print(f"[bold red]Error:[/bold red] Invalid version format: {version}")
+            _print_labeled(console, "Error:", f"Invalid version format: {version}")
             sys.exit(1)
 
     console.print("[dim]Checking for latest version...[/dim]")
@@ -672,7 +749,7 @@ def _resolve_target_version(version: str | None, prerelease: bool) -> Release:
                 "Use --prerelease to install a pre-release version."
             )
         else:
-            console.print(f"[bold red]Error:[/bold red] {e}")
+            _print_labeled(console, "Error:", str(e))
         sys.exit(1)
 
 
@@ -716,12 +793,12 @@ def update(
     except UpgradeNotStartedError as e:
         # `uv` missing from PATH or otherwise unspawnable — surface a clean error
         # instead of a raw traceback. Nothing was installed.
-        console.print(f"[bold red]Error:[/bold red] Could not run the upgrade: {e}")
+        _print_labeled(console, "Error:", f"Could not run the upgrade: {e}")
         sys.exit(1)
     except UpdateFailedError as e:
-        console.print(f"[bold red]Error:[/bold red] {e}")
+        _print_labeled(console, "Error:", str(e))
         if e.detail:
-            console.print(f"[dim]{e.detail}[/dim]")
+            console.print(Text(e.detail, style="dim"))
         sys.exit(1)
 
     console.print(f"[green]Successfully updated to version {target_display}[/green]")
@@ -767,7 +844,7 @@ def _maybe_check_for_update(console: Console, *, no_version_check: bool) -> None
         current = get_this_version()
         latest = get_highest_release(include_prereleases=False)
     except Exception as e:
-        console.print(f"[yellow]Warning:[/yellow] Could not check for updates: {e}")
+        _print_labeled(console, "Warning:", f"Could not check for updates: {e}", label_style="yellow")
         return
 
     if latest.version <= current:
@@ -786,15 +863,20 @@ def _maybe_check_for_update(console: Console, *, no_version_check: bool) -> None
     except UpgradeNotStartedError as e:
         # `uv` never ran (e.g. not on PATH): the on-disk install is untouched, so
         # the current process is not stale — warn and let the command proceed.
-        console.print(f"[yellow]Warning:[/yellow] Could not run the upgrade: {e}. Continuing on the current version.")
+        _print_labeled(
+            console,
+            "Warning:",
+            f"Could not run the upgrade: {e}. Continuing on the current version.",
+            label_style="yellow",
+        )
         return
     except UpdateFailedError as e:
         # uv already modified the on-disk install but it did not end verified-good.
         # The running process may now be stale, so we must NOT continue: exit and
         # point the user at a clean recovery.
-        console.print(f"[bold red]Error:[/bold red] Upgrade failed: {e}")
+        _print_labeled(console, "Error:", f"Upgrade failed: {e}")
         if e.detail:
-            console.print(f"[dim]{e.detail}[/dim]")
+            console.print(Text(e.detail, style="dim"))
         console.print(
             "The installation may be in an inconsistent state. Run "
             "[cyan]pc-switcher self update[/cyan] to restore a known-good version, then retry."
@@ -816,9 +898,11 @@ def _maybe_check_for_update(console: Console, *, no_version_check: bool) -> None
         # is already installed and verified on disk, making the current in-memory
         # process stale. Do not continue it (a later lazy import could load the new,
         # mismatched code); exit and let the user re-run under the new binary.
-        console.print(
-            f"[bold red]Error:[/bold red] Upgraded to {installed.semver_str()}, but could not restart "
-            f"automatically ({e}). Please re-run your command."
+        _print_labeled(
+            console,
+            "Error:",
+            f"Upgraded to {installed.semver_str()}, but could not restart automatically ({e}). "
+            "Please re-run your command.",
         )
         raise typer.Exit(1) from e
 

@@ -6,15 +6,19 @@ accept the correct arguments as specified in docs/system/core.md.
 
 from __future__ import annotations
 
+import subprocess
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from typer.testing import CliRunner
 
-from pcswitcher.cli import _async_run_sync, app
+from pcswitcher.cli import _async_run_sync, app, update
 from pcswitcher.config import Configuration
-from pcswitcher.models import SyncAbortedByUser
+from pcswitcher.models import SessionStatus, SyncAborted, SyncAbortedByUser, SyncSession
+from pcswitcher.version import Release, Version
+from tests.unit.console_capture import captured_console
 
 runner = CliRunner()
 
@@ -104,17 +108,17 @@ class TestSyncCommand:
             mock_load.assert_called_once_with(custom_config_path)
 
 
-class TestSyncAbortedByUserHandling:
-    """_async_run_sync must surface a user abort once, calmly, distinct from a failure.
+class TestSyncAbortedHandling:
+    """_async_run_sync must surface an abort once, calmly, distinct from a failure.
 
     UAT gap 2 / plan 01-16: previously a declined confirmation fell through to
     the generic except Exception handler and printed the same red "Sync
     failed" text the orchestrator's own CRITICAL log already implied.
     """
 
-    @pytest.mark.asyncio
-    async def test_user_abort_prints_single_calm_message_and_nonzero_exit(self) -> None:
-        """Orchestrator.run() raising SyncAbortedByUser -> one calm 'aborted' line."""
+    @staticmethod
+    async def _printed(abort: SyncAborted) -> tuple[int, str]:
+        """What the CLI prints, and its exit code, for a run that ended in `abort`."""
         mock_config = MagicMock(spec=Configuration)
 
         with (
@@ -122,16 +126,158 @@ class TestSyncAbortedByUserHandling:
             patch("pcswitcher.cli.console") as mock_console,
         ):
             mock_orchestrator = MagicMock()
-            mock_orchestrator.run = AsyncMock(side_effect=SyncAbortedByUser("Config sync aborted by user"))
+            mock_orchestrator.run = AsyncMock(side_effect=abort)
             mock_orchestrator_cls.return_value = mock_orchestrator
 
             exit_code = await _async_run_sync("target-host", mock_config)
 
-        assert exit_code != 0
+        return exit_code, " ".join(str(call.args[0]) for call in mock_console.print.call_args_list)
 
-        printed = " ".join(str(call.args[0]) for call in mock_console.print.call_args_list)
-        assert "aborted" in printed.lower()
+    @pytest.mark.asyncio
+    async def test_user_abort_prints_single_calm_message_and_nonzero_exit(self) -> None:
+        """Orchestrator.run() raising SyncAbortedByUser -> one calm 'aborted' line."""
+        exit_code, printed = await self._printed(SyncAbortedByUser("the config sync was declined at its prompt"))
+
+        assert exit_code != 0
+        assert "aborted by user" in printed.lower()
         assert "failed" not in printed.lower()
+
+    @pytest.mark.asyncio
+    async def test_a_tool_decided_abort_is_not_reported_as_the_users(self) -> None:
+        """#224 — nobody was asked about an unreadable registry, so the line must not say
+        the user aborted; it stays the neutral label and carries the repair instead."""
+        exit_code, printed = await self._printed(SyncAborted("package-snippets.yaml on nomad cannot be read"))
+
+        assert exit_code != 0
+        assert "aborted" in printed.lower()
+        assert "user" not in printed.lower()
+        assert "failed" not in printed.lower()
+
+
+class TestToolOutputIsNotRichMarkup:
+    """Text pc-switcher did not author must reach Rich as `Text`, never as markup.
+
+    The end-of-run summary quotes each failed job's own reason, which carries a package
+    manager's stderr. Rich reads a `[...]`-shaped substring in a markup string as a style
+    tag: `[installed]` is swallowed and `[/usr/bin/apt]` raises MarkupError — a crash at
+    the final summary, after every job has already done its work.
+    """
+
+    @pytest.mark.parametrize(
+        "stderr",
+        [
+            "dpkg: error processing archive [/usr/bin/apt] (--unpack)",  # raises MarkupError as markup
+            "E: Sub-process returned an error code [installed]",  # silently swallowed as markup
+            "snap [core22/stable] is not available",
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_failed_session_summary_renders_bracketed_stderr(self, stderr: str) -> None:
+        """A failed run's summary prints its reason verbatim instead of crashing."""
+        console, buffer = captured_console()
+        session = SyncSession(
+            session_id="s1",
+            started_at=datetime.now(UTC),
+            source_hostname="source",
+            target_hostname="target-host",
+            config={},
+            status=SessionStatus.FAILED,
+            error_message=f"apt_sync — {stderr}",
+        )
+
+        with (
+            patch("pcswitcher.cli.Orchestrator") as mock_orchestrator_cls,
+            patch("pcswitcher.cli.console", console),
+        ):
+            mock_orchestrator = MagicMock()
+            mock_orchestrator.run = AsyncMock(return_value=session)
+            mock_orchestrator_cls.return_value = mock_orchestrator
+
+            exit_code = await _async_run_sync("target-host", MagicMock(spec=Configuration))
+
+        assert exit_code == 1
+        assert stderr in buffer.getvalue(), f"stderr must survive rendering.\nOutput: {buffer.getvalue()!r}"
+
+    @pytest.mark.asyncio
+    async def test_crashing_job_message_renders_bracketed_stderr(self) -> None:
+        """The generic failure path quotes the exception text, which also carries stderr."""
+        console, buffer = captured_console()
+        detail = "flatpak: remote [/var/lib/flatpak] is unreachable"
+
+        with (
+            patch("pcswitcher.cli.Orchestrator") as mock_orchestrator_cls,
+            patch("pcswitcher.cli.console", console),
+        ):
+            mock_orchestrator = MagicMock()
+            mock_orchestrator.run = AsyncMock(side_effect=RuntimeError(detail))
+            mock_orchestrator_cls.return_value = mock_orchestrator
+
+            exit_code = await _async_run_sync("target-host", MagicMock(spec=Configuration))
+
+        assert exit_code == 1
+        assert detail in buffer.getvalue(), f"Exception text must survive rendering.\nOutput: {buffer.getvalue()!r}"
+
+    def test_self_update_renders_bracketed_install_stderr(self) -> None:
+        """`self update` prints `uv`'s own stderr, which is equally unsanitized."""
+        console, buffer = captured_console()
+        stderr = "error: Failed to install [pc-switcher]"
+
+        with (
+            patch("pcswitcher.cli.console", console),
+            patch("pcswitcher.cli.get_this_version", return_value=Version.parse("0.9.0")),
+            patch("pcswitcher.cli._resolve_target_version", return_value=_STUB_RELEASE),
+            patch(
+                "pcswitcher.cli._run_uv_tool_install",
+                return_value=subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr=stderr),
+            ),
+            pytest.raises(SystemExit) as exit_info,
+        ):
+            update()
+
+        assert exit_info.value.code == 1
+        assert stderr in buffer.getvalue(), f"uv stderr must survive rendering.\nOutput: {buffer.getvalue()!r}"
+
+
+class TestFailureSummaryReadsAsAList:
+    """A run that ends with several failed jobs lists one per line, under the label.
+
+    `_summarize_job_outcomes` returns a reason per failed job; printed beside the label the
+    first reason would sit on the label line and the rest below it, so the list of failures
+    has no shape.
+    """
+
+    @pytest.mark.asyncio
+    async def test_each_failed_job_gets_its_own_line_under_the_label(self) -> None:
+        console, buffer = captured_console()
+        reasons = [
+            "apt_sync — could not install vim on Nomad: E: Unable to fetch archives",
+            "snap_sync — could not refresh firefox on Nomad: snap has running apps",
+        ]
+        session = SyncSession(
+            session_id="s1",
+            started_at=datetime.now(UTC),
+            source_hostname="Atlas",
+            target_hostname="Nomad",
+            config={},
+            status=SessionStatus.FAILED,
+            error_message="\n".join(reasons),
+        )
+
+        with (
+            patch("pcswitcher.cli.Orchestrator") as mock_orchestrator_cls,
+            patch("pcswitcher.cli.console", console),
+        ):
+            mock_orchestrator = MagicMock()
+            mock_orchestrator.run = AsyncMock(return_value=session)
+            mock_orchestrator_cls.return_value = mock_orchestrator
+
+            exit_code = await _async_run_sync("Nomad", MagicMock(spec=Configuration))
+
+        assert exit_code == 1
+        printed = [line.rstrip() for line in buffer.getvalue().splitlines() if line.strip()]
+        assert "Sync finished with failures:" in printed, f"the label shares its line.\nOutput: {printed}"
+        label_at = printed.index("Sync finished with failures:")
+        assert printed[label_at + 1 : label_at + 3] == [f"  {reason}" for reason in reasons]
 
 
 class TestLogsCommand:
@@ -211,3 +357,67 @@ class TestInitCommand:
         assert result.exit_code == 0, f"init --force failed: {result.stdout}"
         assert "+ .cache/uv/***" in (tmp_path / "home.filter").read_text()
         assert "stale root filter" not in (tmp_path / "root.filter").read_text()
+
+
+# Pins both sides of the startup update check to one version, so no test here depends on
+# the live GitHub API or on which release is current (`test_version_check.py` covers the
+# check itself).
+_STUB_VERSION = Version.parse("1.0.0")
+_STUB_RELEASE = Release(_STUB_VERSION, is_prerelease=False, tag="v1.0.0")
+
+
+class TestConfirmEachCommandFlag:
+    """`--confirm-each-command` has no non-interactive fallback, by design.
+
+    Every other gate degrades when nobody is watching: the confirmer falls back to an
+    `--allow-*` flag, the review auto-declines. This one cannot — auto-proceeding on a
+    prompt nobody can answer is precisely the failure it exists to prevent — so a run that
+    could never ask must be refused before it loads config, connects or touches anything.
+    """
+
+    def test_refused_without_a_tty(self) -> None:
+        """J166 — refused before config is loaded or anything is connected, naming the flag."""
+        with (
+            patch("pcswitcher.cli.is_interactive", return_value=False),
+            patch("pcswitcher.cli._load_configuration") as load_config,
+            patch("pcswitcher.cli._run_sync") as run_sync,
+        ):
+            result = runner.invoke(app, ["sync", "test-target", "--confirm-each-command"])
+
+        assert result.exit_code == 1, f"Expected exit code 1, got {result.exit_code}\n{result.output}"
+        assert "--confirm-each-command" in result.output, f"Error must name the flag.\nOutput: {result.output}"
+        # Refused before the run begins: nothing is loaded and no sync is started.
+        load_config.assert_not_called()
+        run_sync.assert_not_called()
+
+    def test_accepted_and_forwarded_on_a_tty(self) -> None:
+        """J166 — the flag must actually reach the orchestrator, not be validated and dropped.
+
+        The two version functions are stubbed for the same reason every TTY-faking test in
+        `test_version_check.py` stubs them: faking a TTY also arms the startup update check,
+        and a unit test must not depend on the live GitHub API or on which release happens
+        to be current. Pinning both sides to the same version means no upgrade is offered.
+        """
+        with (
+            patch("pcswitcher.cli.get_this_version", return_value=_STUB_VERSION),
+            patch("pcswitcher.cli.get_highest_release", return_value=_STUB_RELEASE),
+            patch("pcswitcher.cli.is_interactive", return_value=True),
+            patch("pcswitcher.cli._load_configuration", return_value=MagicMock(spec=Configuration)),
+            patch("pcswitcher.cli._run_sync", return_value=0) as run_sync,
+        ):
+            result = runner.invoke(app, ["sync", "test-target", "--confirm-each-command"])
+
+        assert result.exit_code == 0, f"Expected exit code 0, got {result.exit_code}\n{result.output}"
+        assert run_sync.call_args.kwargs["confirm_each_command"] is True
+
+    def test_a_non_interactive_run_without_the_flag_is_not_refused(self) -> None:
+        """J166 — the refusal is scoped to the flag: ordinary non-interactive syncs still run."""
+        with (
+            patch("pcswitcher.cli.is_interactive", return_value=False),
+            patch("pcswitcher.cli._load_configuration", return_value=MagicMock(spec=Configuration)),
+            patch("pcswitcher.cli._run_sync", return_value=0) as run_sync,
+        ):
+            result = runner.invoke(app, ["sync", "test-target"])
+
+        assert result.exit_code == 0, f"Expected exit code 0, got {result.exit_code}\n{result.output}"
+        assert run_sync.call_args.kwargs["confirm_each_command"] is False

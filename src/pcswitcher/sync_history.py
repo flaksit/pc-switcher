@@ -209,13 +209,13 @@ def get_record_role_command(role: SyncRole, peer: str | None = None) -> str:
         ]
     )
     script = "\n".join(lines)
-    return f'mkdir -p {HISTORY_DIR} && python3 -c "{script}"'
+    return f'mkdir --parents {HISTORY_DIR} && python3 -c "{script}"'
 
 
 def hostnames_equal(a: str | None, b: str | None) -> bool:
     """Compare two hostnames case-insensitively for the topology safety checks.
 
-    DNS hostnames are case-insensitive, so `P17` and `p17` denote the same machine.
+    DNS hostnames are case-insensitive, so `Atlas` and `atlas` denote the same machine.
     History recorded before hostnames were acquired uniformly (or a target reached
     via a differently-cased SSH alias) can hold either casing; matching case-folded
     prevents a spurious "synced with a different machine" warning on a clean

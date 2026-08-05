@@ -16,6 +16,7 @@ dependencies = [
     "pygithub>=2.9.1",
     "pytimeparse2>=1.7.1",
     "pyyaml>=6.0.3",
+    "questionary>=2.1.1",
     "rich>=15.0.0",
     "semver>=3.0.4",
     "typer>=0.27.0",
@@ -47,6 +48,9 @@ dev = [
 [tool.hatch.version]
 source = "uv-dynamic-versioning"
 
+[tool.uv]
+reinstall-package = ["pcswitcher"]
+
 [tool.uv-dynamic-versioning]
 enable = true
 vcs = "git"
@@ -65,8 +69,14 @@ addopts = [
 markers = [
     "integration: Integration tests (require VM infrastructure)",
     "local_rsync: Tests that shell out to a real local rsync binary (no VM/SSH; skipped if rsync is absent)",
-    "slow: Tests that take >5 seconds",
     "benchmark: Performance benchmarks (not run by default)",
+    "ci_skip: Integration tests excluded from CI runs (still run in local/manual integration runs)",
+    "smoke: Fast sanity tests included in every CI integration selection",
+    "area_package: Package-manager sync tests (apt/snap/flatpak); topic-selected by select-ci-tests.sh",
+    "area_install: Install and self-update tests; topic-selected by select-ci-tests.sh",
+    "area_btrfs: Btrfs snapshot tests; topic-selected by select-ci-tests.sh",
+    "area_folder: Folder-sync end-to-end tests; topic-selected by select-ci-tests.sh",
+    "area_core: Core sync-spine tests (locking, sync history, logging, init, interrupts); topic-selected by select-ci-tests.sh",
 ]
 log_cli = true
 # Here, set log level to the level we want from logs from our code.

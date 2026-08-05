@@ -15,9 +15,9 @@ None.
 None.
 
 No competing acceptance variants detected. The PRD-tier docs cover distinct features/scopes rather than redefining the same requirement with divergent acceptance:
-  - docs/planning/High level requirements.md and docs/planning/Feature breakdown.md are complementary (vision vs decomposition), not contradictory.
+  - docs/planning/high-level-requirements.md and docs/planning/feature-breakdown.md are complementary (vision vs decomposition), not contradictory.
   - specs/001-core, 002-testing-framework, 003-core-tests, 004-python-logging target different features. 003-core-tests tests 001-core (dependency, not competition).
-  - "Ideas for later" in High level requirements.md are explicitly out-of-scope future ideas, not current acceptance variants.
+  - "Ideas for later" in high-level-requirements.md are explicitly out-of-scope future ideas, not current acceptance variants.
 
 ### INFO (3)
 

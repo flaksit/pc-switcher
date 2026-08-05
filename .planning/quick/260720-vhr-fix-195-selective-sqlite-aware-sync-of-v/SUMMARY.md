@@ -14,7 +14,7 @@ New toggleable `vscode_state_sync` `SyncJob` (default on, runs after `folder_syn
 ## Commits
 
 | Hash | Subject |
-|------|---------|
+| ---- | ------- |
 | `e9f6142` | feat(vscode_state_sync): SQLite-aware selective sync of VS Code state.vscdb |
 | `11d8871` | feat(folder_sync): hardcode-exclude editor state.vscdb from the mirror |
 | `3482f7d` | feat(config): enable vscode_state_sync by default with preserve_key_globs |

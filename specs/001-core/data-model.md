@@ -8,7 +8,7 @@ This document defines the core entities, their relationships, and validation rul
 ## Navigation
 
 **Documentation Hierarchy:**
-- [High level requirements](../../docs/High%20level%20requirements.md) - Project vision and scope
+- [High level requirements](../../docs/high-level-requirements.md) - Project vision and scope
 - [Architecture Decision Records](../../docs/adr/_index.md) - Cross-cutting architectural decisions
 - [Feature spec](spec.md) - Detailed requirements for this feature
 - [Architecture](architecture.md) - Component design and interactions
@@ -601,7 +601,7 @@ stateDiagram-v2
 ## Validation Rules Summary
 
 | Entity | Field | Rule |
-|--------|-------|------|
+| ------ | ----- | ---- |
 | ProgressUpdate | percent | 0-100 if set |
 | SyncSession | session_id | Exactly 8 hex characters |
 | Configuration | log_*_level | Valid LogLevel enum |

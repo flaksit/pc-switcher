@@ -59,7 +59,7 @@
 ## Phase Requirements
 
 | ID | Description | Research Support |
-|----|-------------|------------------|
+| -- | ----------- | ---------------- |
 | REQ-sync-scope-user-data | Sync `/home` and `/root` via generic per-folder include/exclude mechanism | rsync -aAXHS with configurable folder entries; default-config.yaml update |
 | REQ-machine-specific-exclusions | Never sync `.ssh/id_*`, `.config/tailscale`, GPU caches, fontconfig, VS Code cache dirs | rsync filter rules with first-match-wins ordering; default exclude list in config |
 | REQ-sync-scope-file-metadata | Preserve owner, group, permissions, POSIX ACLs, timestamps | `-aAXH` flags; `--numeric-ids` for cross-machine uid/gid; `acl` package on both ends |
@@ -80,7 +80,7 @@ Everything builds on proven existing infrastructure: BtrfsSnapshotJob already cr
 ## Architectural Responsibility Map
 
 | Capability | Primary Tier | Secondary Tier | Rationale |
-|------------|-------------|----------------|-----------|
+| ---------- | ----------- | -------------- | --------- |
 | Folder sync (rsync invocation) | Source machine (local subprocess) | Target machine (rsync server via sudo) | rsync forks its own SSH subprocess; source orchestrates the transfer |
 | SSH connection for orchestration | Source machine (asyncssh) | Target machine (stateless SSH commands) | ADR-002: orchestration over asyncssh; rsync uses its own SSH transport |
 | Divergence detection | Target machine (btrfs query) | Source machine (generation storage) | Generation numbers live on the target; marker stored on source |
@@ -97,7 +97,7 @@ Everything builds on proven existing infrastructure: BtrfsSnapshotJob already cr
 ### Core
 
 | Library/Tool | Version | Purpose | Why Standard |
-|---------|---------|---------|--------------|
+| ------- | ------- | ------- | ------------ |
 | rsync | 3.2.7 (on Ubuntu 24.04) [VERIFIED: local] | File sync engine | Industry standard; handles metadata, ACLs, xattrs, hard links, filter rules, --delete, and transfer verification natively |
 | Python asyncio | stdlib (Python 3.14) [VERIFIED: codebase] | Async subprocess for rsync | ADR-005 mandates asyncio; LocalExecutor already uses create_subprocess_shell |
 | acl (Linux package) | pre-installed on Ubuntu 24.04 | Required for POSIX ACL support with rsync -A | Without this package, -A is silently degraded on some filesystems |
@@ -106,7 +106,7 @@ Everything builds on proven existing infrastructure: BtrfsSnapshotJob already cr
 ### Supporting
 
 | Library/Tool | Version | Purpose | When to Use |
-|---------|---------|---------|-------------|
+| ------- | ------- | ------- | ----------- |
 | sudoers (system config) | N/A | Allow sync user to run rsync without password | Required on both source and target; entry: `username ALL=(ALL) NOPASSWD: /usr/bin/rsync` |
 | jsonschema | already in pyproject.toml [VERIFIED: codebase] | Validate folder_sync CONFIG_SCHEMA | Used by base Job.validate_config() |
 | PyYAML | already in pyproject.toml [VERIFIED: codebase] | Load default-config.yaml and config-schema.yaml | Used by existing Configuration loader |
@@ -114,7 +114,7 @@ Everything builds on proven existing infrastructure: BtrfsSnapshotJob already cr
 ### Alternatives Considered
 
 | Instead of | Could Use | Tradeoff |
-|------------|-----------|----------|
+| ---------- | --------- | -------- |
 | rsync subprocess | asyncssh native SFTP | rsync has filter rules, --delete, metadata preservation, transfer verification, hard-link detection built in; SFTP would require hand-rolling all of this |
 | btrfs generation comparison | `find -newer` or file hash | btrfs generation is O(1) and filesystem-level; `find -newer` is O(N files) |
 | `--out-format` for per-file logging | `--itemize-changes` | `--out-format` gives structured output; `--itemize-changes` is similar but less configurable |
@@ -126,7 +126,7 @@ Everything builds on proven existing infrastructure: BtrfsSnapshotJob already cr
 No new Python packages are introduced in this phase. rsync and acl are standard Ubuntu 24.04 system packages.
 
 | Package | Source | Verdict | Disposition |
-|---------|--------|---------|-------------|
+| ------- | ------ | ------- | ----------- |
 | rsync | Ubuntu 24.04 apt | OK | System package, already installed |
 | acl | Ubuntu 24.04 apt | OK | System package, validate presence in job |
 
@@ -451,7 +451,7 @@ The `excludes` list maps to `--filter='- PATTERN'` arguments in the rsync invoca
 ## Don't Hand-Roll
 
 | Problem | Don't Build | Use Instead | Why |
-|---------|-------------|-------------|-----|
+| ------- | ----------- | ----------- | --- |
 | File transfer with metadata | Custom SFTP loop | rsync | Transfer verification, hard-link detection, sparse file handling, ACLs, xattrs, filter rules, --delete — all built in |
 | Checksum verification | Custom hash walk after sync | Trust rsync's built-in (D-14) | rsync checksums every block during transfer; a post-hoc walk would double the I/O |
 | Filter rule engine | Custom pattern matching | rsync --filter/--exclude/--include | First-match-wins rule engine with directory matching already implemented |
@@ -642,7 +642,7 @@ if self.context.dry_run:
 ## State of the Art
 
 | Old Approach | Current Approach | When Changed | Impact |
-|--------------|------------------|--------------|--------|
+| ------------ | ---------------- | ------------ | ------ |
 | rsync `-a` only | `-aAXHS` | When POSIX ACLs became relevant | Without -A and -X, extended permissions and custom namespace attributes are lost |
 | `--progress` (per-file) | `--info=progress2` (overall) | rsync 3.1.0 | Overall progress is more useful for large trees; per-file still available via --out-format |
 | UID/GID name mapping | `--numeric-ids` | Always recommended for cross-machine | Prevents ownership corruption when UID allocations differ between machines |
@@ -656,7 +656,7 @@ if self.context.dry_run:
 ## Assumptions Log
 
 | # | Claim | Section | Risk if Wrong |
-|---|-------|---------|---------------|
+| - | ----- | ------- | ------------- |
 | A1 | `acl` package is pre-installed on Ubuntu 24.04 LTS systems, or at least available via apt | Standard Stack | If absent and not validated, -A silently fails; validate() must check explicitly |
 | A2 | asyncssh does not create an OpenSSH ControlMaster socket that rsync could reuse; rsync spawns a separate SSH connection | Pattern 1 | If asyncssh does support ControlMaster socket export, rsync could reuse the existing connection — a minor optimization but not a correctness issue |
 | A3 | The target's btrfs subvolume at the folder path (e.g. `/home`) has a `@home` subvolume that the `btrfs subvolume show` command can query | Divergence detection | If `/home` is not a btrfs subvolume (e.g. a plain directory on the root subvolume), generation tracking doesn't work; validate() must check explicitly |
@@ -689,7 +689,7 @@ All three are RESOLVED in the Phase 1 plans (closing plan refs noted per item); 
 ## Environment Availability
 
 | Dependency | Required By | Available | Version | Fallback |
-|------------|------------|-----------|---------|----------|
+| ---------- | ---------- | --------- | ------- | -------- |
 | rsync | FolderSyncJob transport | ✓ | 3.2.7 [VERIFIED: local] | None — must be installed |
 | sudo | Root escalation | ✓ | (system) | None — must have NOPASSWD entry |
 | btrfs-progs (btrfs subvolume show) | Divergence detection | ✓ (assumed, same requirement as BtrfsSnapshotJob) | (system) | None — btrfs is project requirement |
@@ -704,7 +704,7 @@ All three are RESOLVED in the Phase 1 plans (closing plan refs noted per item); 
 ### Test Framework
 
 | Property | Value |
-|----------|-------|
+| -------- | ----- |
 | Framework | pytest + pytest-asyncio [VERIFIED: codebase] |
 | Config file | pyproject.toml `[tool.pytest]` asyncio_mode = "auto" (pytest 9 canonical table) [VERIFIED: codebase] |
 | Quick run command | `uv run pytest tests/unit/jobs/test_folder_sync.py tests/contract/ -x` |
@@ -714,7 +714,7 @@ All three are RESOLVED in the Phase 1 plans (closing plan refs noted per item); 
 ### Phase Requirements → Test Map
 
 | Req ID | Behavior | Test Type | Automated Command | File Exists? |
-|--------|----------|-----------|-------------------|-------------|
+| ------ | -------- | --------- | ----------------- | ----------- |
 | REQ-sync-scope-user-data | FolderSyncJob syncs /home contents to target; files byte-identical | Integration | `run-integration-tests.sh tests/integration/test_folder_sync.py::TestFolderSyncRoundTrip::test_a_to_b` | ❌ Wave 0 |
 | REQ-sync-scope-user-data | FolderSyncJob default config includes /home and /root | Unit | `pytest tests/unit/jobs/test_folder_sync.py::test_default_folders` | ❌ Wave 0 |
 | REQ-machine-specific-exclusions | .ssh/id_* never appears on target after sync | Integration | `run-integration-tests.sh tests/integration/test_folder_sync.py::TestExclusions::test_ssh_keys_excluded` | ❌ Wave 0 |
@@ -761,7 +761,7 @@ Use `md5sum` for checksum comparison, `stat -c "%a %U %G"` for permissions/owner
 ### Applicable ASVS Categories
 
 | ASVS Category | Applies | Standard Control |
-|---------------|---------|-----------------|
+| ------------- | ------- | --------------- |
 | V2 Authentication | no | SSH key auth is handled by asyncssh and OpenSSH config |
 | V3 Session Management | no | Sync session uses existing lock mechanism |
 | V4 Access Control | yes | rsync must only run with root privs; sudoers entry must be scoped to `/usr/bin/rsync` only |
@@ -771,7 +771,7 @@ Use `md5sum` for checksum comparison, `stat -c "%a %U %G"` for permissions/owner
 ### Known Threat Patterns for This Stack
 
 | Pattern | STRIDE | Standard Mitigation |
-|---------|--------|---------------------|
+| ------- | ------ | ------------------- |
 | Shell injection via config (folder path or exclude pattern) | Tampering | Use `shlex.quote()` or explicit argument arrays (not shell interpolation) for all rsync arguments derived from config values |
 | Overly broad sudoers entry | Elevation of privilege | Scope to `/usr/bin/rsync` only; do NOT use `ALL` or wildcards |
 | Divergence guard bypass (user force-accepts) | Integrity | Log all explicit user confirmations at WARNING level; audit trail in JSON log file |

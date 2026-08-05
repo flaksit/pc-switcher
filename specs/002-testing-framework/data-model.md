@@ -16,7 +16,7 @@ This feature is primarily infrastructure and configuration-focused. The data mod
 Represents a Hetzner Cloud VM used for integration testing.
 
 | Field | Type | Description |
-|-------|------|-------------|
+| ----- | ---- | ----------- |
 | name | string | VM name (e.g., "pc1") |
 | ipv4_address | string | Public IPv4 address |
 | server_type | string | Hetzner server type (e.g., "cx23") |
@@ -48,7 +48,7 @@ stateDiagram-v2
 Represents the concurrency control mechanism preventing simultaneous test runs.
 
 | Field | Type | Description |
-|-------|------|-------------|
+| ----- | ---- | ----------- |
 | holder | string | Lock holder identity (CI job ID or username) |
 | acquired | datetime | ISO 8601 timestamp when lock was acquired |
 | hostname | string | Machine that acquired the lock |
@@ -80,7 +80,7 @@ stateDiagram-v2
 Represents a single integration test run.
 
 | Field | Type | Description |
-|-------|------|-------------|
+| ----- | ---- | ----------- |
 | session_id | string | Unique identifier (CI job ID or local timestamp) |
 | holder | string | Same as TestLock.holder |
 | vm_reset_status | enum | pending, in_progress, completed, failed |
@@ -110,7 +110,7 @@ stateDiagram-v2
 Represents a btrfs subvolume snapshot on a test VM.
 
 | Field | Type | Description |
-|-------|------|-------------|
+| ----- | ---- | ----------- |
 | path | string | Absolute path (e.g., `/.snapshots/baseline/@`) |
 | subvol_id | integer | btrfs subvolume ID |
 | readonly | boolean | Whether snapshot is read-only |
@@ -129,7 +129,7 @@ Represents a btrfs subvolume snapshot on a test VM.
 Represents a GitHub Actions workflow configuration.
 
 | Field | Type | Description |
-|-------|------|-------------|
+| ----- | ---- | ----------- |
 | name | string | Workflow file name (e.g., "test.yml") |
 | trigger | enum | push, pull_request, workflow_dispatch |
 | target_branches | string[] | Branches that trigger the workflow |
@@ -157,7 +157,7 @@ Represents a GitHub Actions workflow configuration.
 ### Required for Integration Tests
 
 | Variable | Description | Default |
-|----------|-------------|---------|
+| -------- | ----------- | ------- |
 | PC_SWITCHER_TEST_PC1_HOST | PC1 VM hostname/IP | - |
 | PC_SWITCHER_TEST_PC2_HOST | PC2 VM hostname/IP | - |
 | PC_SWITCHER_TEST_USER | SSH user on VMs | testuser |
@@ -165,14 +165,14 @@ Represents a GitHub Actions workflow configuration.
 ### Required for Infrastructure Management
 
 | Variable | Description | Default |
-|----------|-------------|---------|
+| -------- | ----------- | ------- |
 | HCLOUD_TOKEN | Hetzner Cloud API token | - |
 | SSH_PUBLIC_KEY | Path to SSH public key | ~/.ssh/id_ed25519.pub |
 
 ### CI-Specific
 
 | Variable | Description | Default |
-|----------|-------------|---------|
+| -------- | ----------- | ------- |
 | CI_JOB_ID | CI job identifier for lock | $USER |
 | CI | Indicates CI environment | - |
 
@@ -183,7 +183,7 @@ Represents a GitHub Actions workflow configuration.
 ### Test Artifacts
 
 | File | Location | Purpose |
-|------|----------|---------|
+| ---- | -------- | ------- |
 | pytest output | CI artifacts | Test logs for debugging |
 | coverage reports | tests/htmlcov/ | Coverage HTML report (gitignored) |
 

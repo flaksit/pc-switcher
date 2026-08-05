@@ -7,6 +7,7 @@ import importlib
 import logging
 import os
 import secrets
+import shlex
 from datetime import UTC, datetime
 from enum import IntEnum
 from logging.handlers import QueueListener
@@ -22,12 +23,15 @@ from pcswitcher.confirmer import Confirmer, TerminalUIConfirmer
 from pcswitcher.connection import Connection
 from pcswitcher.disk import DiskSpace, check_disk_space, format_bytes, parse_threshold
 from pcswitcher.events import EventBus
-from pcswitcher.executor import LocalExecutor, RemoteExecutor, RemoteProcess
+from pcswitcher.executor import LocalExecutor, RemoteExecutor, RemoteProcess, active_job
 from pcswitcher.jobs.base import Job, SyncJob
 from pcswitcher.jobs.btrfs import BtrfsSnapshotJob
 from pcswitcher.jobs.context import JobContext
 from pcswitcher.jobs.disk_space_monitor import DiskSpaceMonitorJob
 from pcswitcher.jobs.install_on_target import InstallOnTargetJob
+from pcswitcher.jobs.packages.probes import ProbeFailed
+from pcswitcher.jobs.packages.review import Reviewer, TerminalUIReviewer
+from pcswitcher.jobs.packages.sync_core import PackageItemFailures, PackageSyncJob
 from pcswitcher.lock import (
     SyncLock,
     get_hostname_command,
@@ -42,18 +46,22 @@ from pcswitcher.logger import (
     setup_logging,
 )
 from pcswitcher.models import (
+    CommandResult,
     ConfigError,
     FirstSyncScope,
     Host,
     JobResult,
+    JobSkipped,
     JobStatus,
     SessionStatus,
     SnapshotPhase,
+    SyncAborted,
     SyncAbortedByUser,
     SyncLockedError,
     SyncSession,
     ValidationError,
 )
+from pcswitcher.step_gate import StepGate, TerminalUIStepGate
 from pcswitcher.sync_history import (
     HISTORY_PATH,
     SyncRole,
@@ -66,6 +74,31 @@ from pcswitcher.sync_history import (
 from pcswitcher.ui import TerminalUI
 
 __all__ = ["Orchestrator"]
+
+# Transient snapd auto-refresh hold applied around the RUN_JOBS window (decision 4,
+# 02-UAT-REVIEW-FIXES). snapd auto-refreshes ~4x/day even for closed apps; an auto-refresh
+# landing between snap_sync's revision convergence and folder_sync mirroring the matching
+# ~/snap/<app>/<current-rev> data dir would desync the two machines. Pausing it closes that
+# window on BOTH hosts. Mechanism: write the system-wide `refresh.hold` option (the same one
+# snap_sync.validate reads read-only), which gates ONLY the auto-refresh manager — the manual
+# `snap install/refresh --revision=N` convergence is unaffected (verified against snapd
+# overlord/snapstate/autorefresh.go: EffectiveRefreshHold is consumed only by autoRefresh).
+# It is written as a TIMED timestamp (now + _SNAP_AUTOREFRESH_HOLD_DURATION) so a crashed sync
+# self-heals when the hold expires; the prior refresh.hold is captured and restored exactly in
+# _cleanup (D-06: no standing block left behind). Deliberately NOT the `snap refresh --hold`
+# verb, whose no-snap form sets an INDEFINITE global hold (snap_sync module docstring, Pitfall
+# 1) and whose `--unhold` would also clear unrelated per-snap holds; `snap set system
+# refresh.hold` touches only the general option and is fully symmetric with `snap get` —
+# including its privilege, since snapd admin-gates reading snap config too (_capture_snap_hold).
+_SNAP_AUTOREFRESH_HOLD_DURATION = "+6 hours"
+# Shell snippet computing an RFC3339-UTC "now + hold duration" timestamp ON THE HOST (correct
+# against each host's own clock, and parseable by snapd's refresh.hold RFC3339 validator).
+_SNAP_HOLD_TIMESTAMP_CMD = f"date --utc --date='{_SNAP_AUTOREFRESH_HOLD_DURATION}' +%Y-%m-%dT%H:%M:%SZ"
+# snapd's error for an option that was never set (`snap "core" has no "refresh.hold"
+# configuration option`), as opposed to any other `snap get` failure. It is what separates
+# "there is no hold" from "the hold could not be read" — a distinction the value alone cannot
+# carry, and the one that decides whether the option may be cleared (`_restore_snap_hold`).
+_SNAP_HOLD_UNSET_MARKER = 'has no "refresh.hold"'
 
 
 class SyncStep(IntEnum):
@@ -111,7 +144,7 @@ def _stuck_lock_hint(machine: str, lock_path: str) -> str:
     return (
         f"Wait for the other sync to finish — the lock releases automatically when it exits. "
         f"If no sync is running, a previous run left a stuck lock on {machine}; clear it by "
-        f"terminating the holder process (e.g. `fuser -k {lock_path}` or `pkill -f pc-switcher.lock`), "
+        f"terminating the holder process (e.g. `fuser --kill {lock_path}` or `pkill --full pc-switcher.lock`), "
         f"not by deleting the lock file."
     )
 
@@ -124,7 +157,7 @@ def _unwrap_taskgroup_error(exc: BaseException) -> BaseException:
     sub-exceptions)" — is meaningless to users and developers alike. Jobs run
     sequentially, so a failed sync normally has a single underlying cause; this
     returns it so callers can report the real reason. Expected control-flow
-    exceptions (an aborted-by-user or lock conflict raised from within a job)
+    exceptions (an abort or a lock conflict raised from within a job)
     are preferred over other leaves so they still reach their dedicated WARNING
     handlers instead of the generic CRITICAL "Sync failed" path. A non-group
     exception is returned unchanged.
@@ -142,7 +175,7 @@ def _unwrap_taskgroup_error(exc: BaseException) -> BaseException:
             leaves.append(current)
 
     for leaf in leaves:
-        if isinstance(leaf, (SyncAbortedByUser, SyncLockedError)):
+        if isinstance(leaf, (SyncAborted, SyncLockedError)):
             return leaf
     return leaves[0] if leaves else exc
 
@@ -169,6 +202,56 @@ def _failure_already_logged(exc: BaseException) -> bool:
     return getattr(exc, _FAILURE_LOGGED_ATTR, False)
 
 
+def _failure_stays_in_its_job(job: Job, exc: Exception) -> bool:
+    """Whether `exc` fails only `job` and leaves the remaining jobs to run.
+
+    What isolates a failure is the JOB it came out of, not the exception class. The rule
+    package sync states is unqualified — one failed job does not stop the others
+    (`PKG-FR-JOB-INDEPENDENCE`, `PKG-FR-OUTCOME-FAILED`) — and a package job can fail in
+    ways that are not a converge failure or a dead read: a registry transfer, a filesystem
+    error, a parser defect. Each package job plans, reviews and applies its own work with
+    nothing coordinating them (D-15/D-16), so none of those say anything about the consent
+    the user already gave to another manager; cancelling it would discard approved work for
+    a job that is still fine. `PackageItemFailures` and `ProbeFailed` isolate wherever they
+    are raised, because both are by construction one manager's trouble (D-27, ADR-022).
+
+    A lock conflict is the exception to the exception: it means this machine is no longer
+    entitled to be syncing at all, so it ends the run whichever job surfaced it.
+
+    Jobs outside package sync — `folder_sync`, `vscode_state_sync`, the core jobs — still
+    abort the run. Which of those may survive a failure is GitHub issue #220.
+    """
+    if isinstance(exc, SyncLockedError):
+        return False
+    return isinstance(job, PackageSyncJob) or isinstance(exc, (PackageItemFailures, ProbeFailed))
+
+
+def _summarize_job_outcomes(job_results: list[JobResult]) -> tuple[SessionStatus, str | None]:
+    """Derive the session outcome from the collected job results.
+
+    Reaching the end of the job loop without an exception is not the same as success:
+    per-item package failures are collected and recorded as FAILED ``JobResult``s rather
+    than raised, so that one manager's item failures cannot cancel another manager's
+    already-approved work (D-27). The outcome therefore has to come from the results
+    themselves, or a sync where every item failed would still exit 0.
+
+    ``SKIPPED`` is a normal outcome for a disabled or not-applicable job, not a failure.
+
+    Each failed job contributes its own recorded reason, not just its name: the end-of-run
+    message is what the user reads once the review screens are gone, and a failure has to
+    name the item, package or file it concerns wherever it is reported
+    (``PKG-FR-OUTCOME-FAILED``, ``PKG-FR-FAIL-NAMED``). The reasons are already one line
+    each — ``PackageItemFailures`` names every failed item on a single line — so a job with
+    forty failed items adds one line here, not forty, and the message stays as long as the
+    number of failed jobs.
+    """
+    failures = [r for r in job_results if r.status is JobStatus.FAILED]
+    if not failures:
+        return SessionStatus.COMPLETED, None
+    lines = [f"{r.job_name} — {r.error_message or 'no reason recorded'}" for r in failures]
+    return SessionStatus.FAILED, "\n".join(lines)
+
+
 class Orchestrator:
     """Main orchestrator coordinating the complete sync workflow.
 
@@ -192,6 +275,7 @@ class Orchestrator:
         allow_out_of_order: bool = False,
         allow_first_sync: bool = False,
         dry_run: bool = False,
+        confirm_each_command: bool = False,
     ) -> None:
         """Initialize orchestrator with target and validated configuration.
 
@@ -203,12 +287,16 @@ class Orchestrator:
             allow_first_sync: If True, auto-approve the first-sync overwrite confirmation
                 issued by FolderSyncJob when the target has no sync history (ADR-015)
             dry_run: If True, preview sync without making changes
+            confirm_each_command: If True, prompt before every individual modification a job
+                makes (`--confirm-each-command`). Requires a TTY; `cli.sync` refuses the flag
+                without one, so the orchestrator can assume the prompt is answerable.
         """
         self._config = config
         self._auto_accept = auto_accept
         self._allow_out_of_order = allow_out_of_order
         self._allow_first_sync = allow_first_sync
         self._dry_run = dry_run
+        self._confirm_each_command = confirm_each_command
         self._session_id = secrets.token_hex(4)
         self._session_folder = session_folder_name(self._session_id)
         self._source_hostname = get_local_hostname()
@@ -236,12 +324,29 @@ class Orchestrator:
         self._task_group: asyncio.TaskGroup | None = None
         self._cleanup_in_progress = False
 
+        # Snap auto-refresh hold state (decision 4). Engaged only when snap_sync is enabled
+        # on a non-dry-run; the captured prior `refresh.hold` per host is restored (or unset)
+        # in _cleanup. `_snap_hold_engaged` gates the restore so it is a no-op on runs that
+        # never set a hold, and idempotent if _cleanup were entered twice. `_readable_` records
+        # whether the pre-sync READ succeeded, which "no prior hold" (None) alone cannot express;
+        # it defaults False so an unread host is neither written (`_hold_snap_autorefresh`) nor
+        # cleared (`_restore_snap_hold`).
+        self._snap_hold_engaged = False
+        self._snap_hold_prior_source: str | None = None
+        self._snap_hold_prior_target: str | None = None
+        self._snap_hold_readable_source = False
+        self._snap_hold_readable_target = False
+
         # Logging infrastructure (initialized in run())
         self._queue_listener: QueueListener | None = None
         self._ui: TerminalUI | None = None
         self._console: Console | None = None
         self._ui_task: asyncio.Task[None] | None = None
         self._confirmer: Confirmer | None = None
+        self._reviewer: Reviewer | None = None
+        # Stays None unless --confirm-each-command was passed; a None gate on the executors
+        # is what makes every `mutates=` call site a plain pass-through.
+        self._step_gate: StepGate | None = None
 
     def _create_job_context(self, config: dict[str, Any]) -> JobContext:
         """Create JobContext with current orchestrator state.
@@ -262,11 +367,26 @@ class Orchestrator:
             dry_run=self._dry_run,
             allow_first_sync=self._allow_first_sync,
             confirmer=self._confirmer,
+            reviewer=self._reviewer,
             # Connection is always set when _create_job_context is called in
             # production (SyncStep.CONNECT onward), but unit tests mock executors
             # without a real connection, so fall back to None (JobContext accepts it).
             target_username=self._connection.username if self._connection is not None else None,
+            # The full sync_jobs enablement map, not just this job's own section — see
+            # JobContext.enabled_sync_jobs docstring.
+            enabled_sync_jobs=dict(self._config.sync_jobs),
         )
+
+    def _log_sync_outcome(self, session: SyncSession) -> None:
+        """Log the end-of-run outcome at the severity the session status warrants."""
+        if session.status is SessionStatus.FAILED:
+            self._logger.warning(
+                "Sync finished with job failures: %s",
+                session.error_message,
+                extra={"job": "orchestrator", "host": "source"},
+            )
+        else:
+            self._logger.info("Sync completed successfully", extra={"job": "orchestrator", "host": "source"})
 
     async def run(self) -> SyncSession:  # noqa: PLR0915
         """Execute the complete sync workflow.
@@ -308,6 +428,30 @@ class Orchestrator:
         # Shared interactive confirmation gate for the orchestrator's out-of-order check
         # and any job-level prompt (e.g. FolderSyncJob first-sync overwrite, ADR-015).
         self._confirmer = TerminalUIConfirmer(self._console, self._ui, logger=self._logger)
+        # Both machine names, because every review screen — and the per-command
+        # confirmation, which is also a question the user answers — names the machine an
+        # answer acts on rather than its source/target role. The target's is the CLI
+        # argument, the same string `JobContext.target_hostname` carries.
+        self._reviewer = TerminalUIReviewer(
+            self._console,
+            self._ui,
+            source_hostname=self._source_hostname,
+            target_hostname=self._target_hostname,
+            logger=self._logger,
+        )
+        if self._confirm_each_command:
+            self._step_gate = TerminalUIStepGate(
+                self._console,
+                self._ui,
+                source_hostname=self._source_hostname,
+                target_hostname=self._target_hostname,
+                logger=self._logger,
+            )
+
+        # Built here rather than beside its remote counterpart in `_establish_connection`,
+        # because it needs no connection and the very first thing the run does — taking the
+        # source lock (SyncStep 1) — is a modification that has to reach the gate.
+        self._local_executor = LocalExecutor(self._step_gate)
 
         # Create log file path and set up stdlib logging infrastructure.
         # Passing ui + console lets setup_logging pick the UI-routed TUI
@@ -350,29 +494,32 @@ class Orchestrator:
             # SyncStep 1: Acquire source lock
             self._logger.info("Acquiring source lock", extra={"job": "orchestrator", "host": "source"})
             await self._acquire_source_lock()
-            self._ui.set_current_step(SyncStep.SOURCE_LOCK, "Source lock")
+            self._ui.set_current_step(SyncStep.SOURCE_LOCK, f"Lock {self._source_hostname}")
 
             # SyncStep 2: Establish SSH connection
             self._logger.info("Connecting to target", extra={"job": "orchestrator", "host": "source"})
             await self._establish_connection()
             assert self._remote_executor is not None
-            self._ui.set_current_step(SyncStep.CONNECT, "Connect to target")
+            self._ui.set_current_step(SyncStep.CONNECT, f"Connect to {self._target_hostname}")
 
             # SyncStep 3: Acquire target lock
             self._logger.info("Acquiring target lock", extra={"job": "orchestrator", "host": "target"})
             await self._acquire_target_lock()
-            self._ui.set_current_step(SyncStep.TARGET_LOCK, "Target lock")
+            self._ui.set_current_step(SyncStep.TARGET_LOCK, f"Lock {self._target_hostname}")
 
             # SyncStep 4: Out-of-order / target-state check. Runs after the target lock
             # so we can read the target's sync-history over SSH. Always executes;
             # --allow-out-of-order only bypasses the W2/W3 confirmation, not the read.
             if not await self._check_out_of_order():
-                raise SyncAbortedByUser("Sync aborted at the out-of-order / target-state check")
+                # Not `SyncAbortedByUser`: the confirmer returns False both for a user
+                # typing "n" and for a non-interactive run it refused without asking
+                # anyone, and this site cannot tell the two apart (#224).
+                raise SyncAborted(f"Sync aborted at the sync-order check on {self._target_hostname}")
             self._ui.set_current_step(SyncStep.OUT_OF_ORDER_CHECK, "Out-of-order check")
 
             # SyncStep 5: Discover and validate jobs
             self._logger.info("Discovering and validating jobs", extra={"job": "orchestrator", "host": "source"})
-            jobs = await self._discover_and_validate_jobs()
+            jobs, unresolved_job_results = await self._discover_and_validate_jobs()
             self._ui.set_current_step(SyncStep.DISCOVER_JOBS, "Discover jobs")
 
             # SyncStep 6: Disk-space preflight check
@@ -390,7 +537,7 @@ class Orchestrator:
                 extra={"job": "orchestrator", "host": "target"},
             )
             await self._install_on_target_job()
-            self._ui.set_current_step(SyncStep.INSTALL_ON_TARGET, "Install on target")
+            self._ui.set_current_step(SyncStep.INSTALL_ON_TARGET, f"Install on {self._target_hostname}")
 
             # SyncStep 9: Sync config from source to target
             self._logger.info("Syncing configuration to target", extra={"job": "orchestrator", "host": "target"})
@@ -399,7 +546,10 @@ class Orchestrator:
 
             # SyncStep 10: Run sync jobs — _execute_jobs sets the 10a/10b sub-steps per job
             self._logger.info("Starting sync operations", extra={"job": "orchestrator", "host": "source"})
-            job_results = await self._execute_jobs(jobs)
+            # Pause snapd auto-refresh on both hosts across the whole RUN_JOBS window
+            # (snap convergence → folder_sync); released in _cleanup (decision 4).
+            await self._hold_snap_autorefresh()
+            job_results = await self._execute_jobs(jobs, unresolved_job_results)
             session.job_results = job_results
 
             # SyncStep 11: Post-sync snapshots
@@ -407,13 +557,16 @@ class Orchestrator:
             await self._create_snapshots(SnapshotPhase.POST)
             self._ui.set_current_step(SyncStep.POST_SNAPSHOT, "Post-sync snapshots")
 
+            # Reaching here only means nothing propagated, which is weaker than success —
+            # see _summarize_job_outcomes for why the outcome comes from job_results.
+            session.status, session.error_message = _summarize_job_outcomes(job_results)
+
             # SyncStep 12: Record sync history on both machines (this machine was SOURCE,
             # target was TARGET). The write is skipped in dry-run mode (D-12: dry-run must
             # not write any state), but the counter still advances so it reaches 100% on
             # both real and dry-run paths — matching the snapshot steps.
-            session.status = SessionStatus.COMPLETED
             session.ended_at = datetime.now(UTC)
-            self._logger.info("Sync completed successfully", extra={"job": "orchestrator", "host": "source"})
+            self._log_sync_outcome(session)
             if not self._dry_run:
                 await self._update_sync_history()
             self._ui.set_current_step(SyncStep.RECORD_HISTORY, "Record sync history")
@@ -427,14 +580,18 @@ class Orchestrator:
             self._logger.warning("Sync interrupted by user", extra={"job": "orchestrator", "host": "source"})
             raise
 
-        except SyncAbortedByUser as e:
-            # A declined confirmation is expected control flow, not a failure:
-            # log once at WARNING (never CRITICAL) and re-raise so the CLI can
-            # set a non-zero exit code without re-printing a "failed" message.
+        except SyncAborted as e:
+            # A deliberate stop is expected control flow, not a failure: log once at
+            # WARNING (never CRITICAL) and re-raise so the CLI can set a non-zero exit
+            # code without re-printing a "failed" message. Only the ByUser subclass may
+            # say the user did it — pc-switcher stopping on its own (an unreadable
+            # registry, a prompt nobody could answer) must not be reported as their
+            # decision (#224).
             session.status = SessionStatus.ABORTED
             session.ended_at = datetime.now(UTC)
             session.error_message = str(e)
-            self._logger.warning("Sync aborted by user: %s", e, extra={"job": "orchestrator", "host": "source"})
+            what = "Sync aborted by user" if isinstance(e, SyncAbortedByUser) else "Sync aborted"
+            self._logger.warning("%s: %s", what, e, extra={"job": "orchestrator", "host": "source"})
             raise
 
         except SyncLockedError as e:
@@ -468,10 +625,21 @@ class Orchestrator:
 
         Uses unified lock file that prevents this machine from participating
         in any other sync (as source or target) while this sync is running.
+
+        Announced through the executor rather than gated inside `SyncLock`, which stays a
+        plain synchronous primitive: the orchestrator owns the gate, and this is the
+        counterpart of the target's lock, which travels as a command and is gated where it
+        is issued. The RELEASE is deliberately not announced — it runs in `_cleanup`, where
+        an abort has nowhere to go and would leak the very lock it was declining to free.
         """
         self._source_lock = SyncLock(get_lock_path())
 
         holder_info = f"source:{self._source_hostname}:{self._session_id}:pid={os.getpid()}"
+        assert self._local_executor is not None
+        await self._local_executor.declare_modification(
+            f"flock {get_lock_path()}  (held for the whole run, holder record: {holder_info})",
+            mutates="take the exclusive sync lock, so no other sync can run on this machine",
+        )
         if not self._source_lock.acquire(holder_info):
             existing_holder = self._source_lock.get_holder_info()
             raise SyncLockedError(
@@ -484,9 +652,10 @@ class Orchestrator:
         self._connection = Connection(self._target_hostname, event_bus=self._event_bus)
         await self._connection.connect()
 
-        # Create executors
-        self._local_executor = LocalExecutor()
-        self._remote_executor = RemoteExecutor(self._connection.ssh_connection)
+        # The step gate rides on the executors (`executor.py`), which is what makes every
+        # mutating call site — job, orchestrator or helper — gate through one funnel. The
+        # local one already exists; this is the half that needed the connection.
+        self._remote_executor = RemoteExecutor(self._connection.ssh_connection, self._step_gate)
 
         self._logger.info("Connected to target", extra={"job": "orchestrator", "host": "target"})
 
@@ -497,7 +666,7 @@ class Orchestrator:
 
         The source records its peer using `get_local_hostname()`; without this the
         target would be recorded under the user-typed CLI argument instead, so the
-        two ends store the same machine under different names (e.g. `p17` vs `P17`)
+        two ends store the same machine under different names (e.g. `atlas` vs `Atlas`)
         and the topology check misreads a clean back-sync as a foreign one. On any
         failure (non-zero exit, empty output) the CLI-argument fallback set in
         __init__ is kept — a resolved hostname is a refinement, not a hard gate.
@@ -533,7 +702,7 @@ class Orchestrator:
         )
         if self._target_lock_process is None:
             raise SyncLockedError(
-                f"Target {self._target_hostname} is already involved in a sync.\n"
+                f"{self._target_hostname} is already involved in a sync.\n"
                 f"{_stuck_lock_hint(self._target_hostname, '~/.local/share/pc-switcher/pc-switcher.lock')}"
             )
 
@@ -552,7 +721,18 @@ class Orchestrator:
             raise RuntimeError("Installation validation failed:\n" + "\n".join(error_msgs))
 
         # Execute
-        await install_job.execute()
+        try:
+            await install_job.execute()
+        except JobSkipped as e:
+            # This step is not one of the config-driven jobs, so it has no JobResult to
+            # carry a SKIPPED status; the WARNING the job loop logs for a skip is the whole
+            # record here. Not re-raised — a skip is not a failure of the run.
+            self._logger.warning(
+                "Job %s skipped: %s",
+                e.job_name,
+                e.reason,
+                extra={"job": "orchestrator", "host": "target"},
+            )
 
     async def _sync_config_to_target(self) -> None:
         """Sync configuration from source to target machine.
@@ -563,7 +743,9 @@ class Orchestrator:
         3. Target config matches: Skip silently
 
         Raises:
-            SyncAbortedByUser: If the user declines the config sync confirmation.
+            SyncAbortedByUser: If the user declines the config sync confirmation. Only
+                a human's answer reaches that branch, so it is never the plain
+                `SyncAborted`.
             RuntimeError: If config sync fails for a reason other than user decline.
         """
         assert self._remote_executor is not None
@@ -576,12 +758,17 @@ class Orchestrator:
             source_config_path=source_config_path,
             ui=self._ui,
             console=self._console,
+            source_hostname=self._source_hostname,
+            target_hostname=self._target_hostname,
             auto_accept=self._auto_accept,
             dry_run=self._dry_run,
         )
 
         if not should_continue:
-            raise SyncAbortedByUser("Config sync aborted by user")
+            # Every path to False here is a prompt a human answered (`--yes` and
+            # `--dry-run` both return True without asking), so this one IS the user's.
+            # The sentence does not repeat that: the renderer prefixes "by user".
+            raise SyncAbortedByUser("the config sync was declined at its prompt")
 
         self._logger.info("Configuration sync completed", extra={"job": "orchestrator", "host": "target"})
 
@@ -690,10 +877,10 @@ class Orchestrator:
             )
         else:
             scope_line = "  (all data configured for sync)"
-        warn_title = "First Sync — Target Will Be Overwritten"
+        warn_title = f"First Sync — {tgt} Will Be Overwritten"
         warning = (
             f"[bold]{tgt}[/bold] has never been synced by pc-switcher (no sync history).\n\n"
-            "This first-ever sync will overwrite everything on the target that is in scope of "
+            f"This first-ever sync will overwrite everything on {tgt} that is in scope of "
             "the configured sync jobs, except configured exclusions. In scope:\n\n"
             f"{scope_line}\n\n"
             f"Any independent data on [bold]{tgt}[/bold] within that scope will be lost.\n\n"
@@ -780,7 +967,7 @@ class Orchestrator:
         if target_peer is not None and not hostnames_equal(target_peer, src):
             # W2: machine-C — target last synced with a third machine
             direction = "received a sync from" if target_role == SyncRole.TARGET else "sent a sync to"
-            warn_title = "Target Last Synced with a Different Machine"
+            warn_title = f"{tgt} Last Synced with a Different Machine"
             warning = (
                 f"[bold]{tgt}[/bold] most recently {direction} [bold]{target_peer}[/bold], "
                 f"not this machine ([bold]{src}[/bold]).\n\n"
@@ -832,31 +1019,46 @@ class Orchestrator:
         Raises:
             RuntimeError: If history update fails on either machine.
         """
-        # Update local (source) history
+        # Update local (source) history. The write itself is in-process (atomic temp +
+        # rename in `sync_history`), so unlike its target twin below there is no command
+        # for the executor to trace — `declare_modification` announces it explicitly so the
+        # two ends of the same logical change are equally visible (#210) and equally gated.
+        if self._local_executor is not None:
+            await self._local_executor.declare_modification(
+                f"write {HISTORY_PATH} (last_role=source, last_peer={self._target_canonical_hostname})",
+                mutates="record this machine's role in the sync history",
+            )
         record_role(SyncRole.SOURCE, peer=self._target_canonical_hostname)
         self._logger.debug("Updated sync history: role=source", extra={"job": "orchestrator", "host": "source"})
 
         # Update remote (target) history via SSH
         if self._remote_executor is not None:
             cmd = get_record_role_command(SyncRole.TARGET, peer=self._source_hostname)
-            result = await self._remote_executor.run_command(cmd)
+            result = await self._remote_executor.run_command(
+                cmd, mutates=f"record this run's role in {self._target_hostname}'s sync history"
+            )
             if not result.success:
-                raise RuntimeError(f"Failed to update sync history on target: {result.stderr}")
+                raise RuntimeError(f"Failed to update the sync history on {self._target_hostname}: {result.stderr}")
             self._logger.debug("Updated sync history: role=target", extra={"job": "orchestrator", "host": "target"})
 
-    async def _discover_and_validate_jobs(self) -> list[Job]:
+    async def _discover_and_validate_jobs(self) -> tuple[list[Job], list[JobResult]]:
         """Discover enabled jobs from config and validate their configuration.
 
         Dynamically imports job modules based on enabled jobs in config.
         Convention: job_name == module_name (e.g., "dummy_success" → pcswitcher.jobs.dummy_success)
 
         Returns:
-            List of job instances ready for execution
+            The job instances ready for execution, and a SKIPPED `JobResult` for every
+            enabled job name that resolved to no class. Those never become job instances,
+            so there is nothing to raise `JobSkipped` from; the result is built here
+            instead and seeded into the run's results, rather than the job the user
+            enabled leaving no record at all.
 
         Raises:
             RuntimeError: If any job config validation fails
         """
         jobs: list[Job] = []
+        unresolved: list[JobResult] = []
         config_errors: list[ConfigError] = []
 
         # Log entire config at DEBUG level
@@ -891,6 +1093,17 @@ class Orchestrator:
 
             job_class = self._resolve_sync_job_class(job_name)
             if job_class is None:
+                # _resolve_sync_job_class already logged why, at WARNING.
+                now = datetime.now(UTC)
+                unresolved.append(
+                    JobResult(
+                        job_name=job_name,
+                        status=JobStatus.SKIPPED,
+                        started_at=now,
+                        ended_at=now,
+                        error_message=f"No SyncJob class resolved for enabled job {job_name}",
+                    )
+                )
                 continue
 
             # Validate job config (Phase 2)
@@ -901,6 +1114,8 @@ class Orchestrator:
             else:
                 context = self._create_job_context(job_config)
                 jobs.append(job_class(context))
+
+        config_errors.extend(self._check_package_jobs_precede_folder_sync())
 
         # Check for config errors
         if config_errors:
@@ -918,7 +1133,43 @@ class Orchestrator:
             error_msgs = [f"  - {e.job} ({e.host.value}): {e.message}" for e in validation_errors]
             raise RuntimeError("System state validation failed:\n" + "\n".join(error_msgs))
 
-        return jobs
+        return jobs, unresolved
+
+    def _check_package_jobs_precede_folder_sync(self) -> list[ConfigError]:
+        """D-17: all four package jobs must run before folder_sync — apps are provisioned
+        first, then their data lands on top (decisive for flatpak, where `flatpak install`
+        must create `~/.local/share/flatpak` before folder_sync would otherwise land
+        `~/.var/app` on top).
+
+        `manual_installs_sync` is in the rule for the same reason as the three package
+        managers: replaying an install snippet puts software on the target, and that
+        software writes its own stock defaults on first appearance exactly as a package's
+        postinst does.
+
+        The shipped `default-config.yaml` encodes this ordering only by key order
+        (jobs run in `self._config.sync_jobs.items()` order) — a user who hand-edits
+        their own `config.yaml`, e.g. appending a newly-enabled `flatpak_sync: true`
+        after an existing `folder_sync: true` line, silently inverts it with no error.
+        This validates the RESOLVED, enabled order and turns that silent inversion into
+        a loud `ConfigError` instead (WR-02) — every other ordering (jobs disabled,
+        jobs absent, folder_sync disabled) is unaffected.
+        """
+        enabled_order = [job_name for job_name, enabled in self._config.sync_jobs.items() if enabled]
+        if "folder_sync" not in enabled_order:
+            return []
+        folder_sync_index = enabled_order.index("folder_sync")
+        return [
+            ConfigError(
+                job=job_name,
+                path="sync_jobs",
+                message=(
+                    f"{job_name} must be listed before folder_sync in sync_jobs (D-17): package jobs "
+                    "provision apps before folder_sync lands their data on top. Move it above folder_sync."
+                ),
+            )
+            for job_name in ("apt_sync", "snap_sync", "flatpak_sync", "manual_installs_sync")
+            if job_name in enabled_order and enabled_order.index(job_name) > folder_sync_index
+        ]
 
     async def _check_disk_space_preflight(self) -> None:
         """Check disk space on both source and target before creating snapshots.
@@ -968,7 +1219,7 @@ class Orchestrator:
         if not is_sufficient(source_disk, threshold_type, threshold_value):
             free_space_desc = format_free_space(source_disk)
             threshold_desc = format_threshold(threshold_type, threshold_value)
-            error_msg = f"Source disk space {free_space_desc} below threshold {threshold_desc}"
+            error_msg = f"Disk space on {self._source_hostname} {free_space_desc} below threshold {threshold_desc}"
             self._logger.critical(error_msg, extra={"job": "orchestrator", "host": "source"})
             raise RuntimeError(error_msg)
 
@@ -976,7 +1227,7 @@ class Orchestrator:
         if not is_sufficient(target_disk, threshold_type, threshold_value):
             free_space_desc = format_free_space(target_disk)
             threshold_desc = format_threshold(threshold_type, threshold_value)
-            error_msg = f"Target disk space {free_space_desc} below threshold {threshold_desc}"
+            error_msg = f"Disk space on {self._target_hostname} {free_space_desc} below threshold {threshold_desc}"
             self._logger.critical(error_msg, extra={"job": "orchestrator", "host": "target"})
             raise RuntimeError(error_msg)
 
@@ -1017,16 +1268,25 @@ class Orchestrator:
         # Execute
         await snapshot_job.execute()
 
-    async def _execute_jobs(self, jobs: list[Job]) -> list[JobResult]:
+    async def _execute_jobs(self, jobs: list[Job], seed_results: list[JobResult] | None = None) -> list[JobResult]:
         """Execute sync jobs sequentially with background disk monitoring.
+
+        Each package job reviews its own diffs inside its own ``execute()`` (D-24): it
+        plans, prompts through the injected ``JobContext.reviewer``, then converges. The
+        review's blocking prompt runs inside the job TaskGroup alongside the disk-space
+        monitors — ``review_items`` pauses the Live display before prompting and resumes
+        it in a ``finally``, the same mechanism ``TerminalUIConfirmer`` already uses from
+        ``FolderSyncJob.execute()`` — so no coordination outside the TaskGroup is needed.
 
         Args:
             jobs: List of validated jobs to execute
+            seed_results: Results decided before the loop — the SKIPPED entries discovery
+                produced for enabled job names that resolved to no class.
 
         Returns:
-            List of JobResult for each executed job
+            List of JobResult for each executed job, `seed_results` first
         """
-        results: list[JobResult] = []
+        results: list[JobResult] = list(seed_results) if seed_results else []
 
         try:
             await self._run_jobs_in_task_group(jobs, results)
@@ -1035,7 +1295,7 @@ class Orchestrator:
             # own message ("unhandled errors in a TaskGroup (N sub-exceptions)")
             # is useless. Re-raise the underlying cause so run()'s handlers and
             # the CLI report the real reason — and so a job-raised
-            # SyncAbortedByUser/SyncLockedError still reaches its WARNING handler.
+            # SyncAborted/SyncLockedError still reaches its WARNING handler.
             raise _unwrap_taskgroup_error(eg) from None
 
         return results
@@ -1077,7 +1337,19 @@ class Orchestrator:
                     self._ui.set_current_step(SyncStep.RUN_JOBS, job.name, substep=substep)
                     started_at = datetime.now(UTC)
                     try:
-                        await job.execute()
+                        # Tagged with the job's own name, not "orchestrator": this line opens
+                        # the run of log lines the job itself emits, so it reads as the first
+                        # of them rather than as a separate orchestrator remark.
+                        self._logger.info(
+                            "Job %s started",
+                            job.name,
+                            extra={"job": job.name, "host": "source"},
+                        )
+                        # Labels this job's executor traffic in the debug trace (#210) and
+                        # in the --confirm-each-command prompt. Set per job rather than per
+                        # executor because the executors are shared by every job.
+                        with active_job(job.name):
+                            await job.execute()
                         ended_at = datetime.now(UTC)
                         results.append(
                             JobResult(
@@ -1093,7 +1365,7 @@ class Orchestrator:
                             extra={"job": "orchestrator", "host": "source"},
                         )
 
-                    except SyncAbortedByUser:
+                    except SyncAborted:
                         # A job-level declined confirmation (e.g. FolderSyncJob's
                         # first-sync overwrite gate via the shared confirmer) is
                         # expected control flow, not a job failure. Let it pass
@@ -1101,6 +1373,27 @@ class Orchestrator:
                         # records an ABORTED session, rather than a spurious
                         # FAILED job result plus a duplicate CRITICAL log.
                         raise
+                    except JobSkipped as e:
+                        # The job did nothing and said so before touching anything
+                        # (see JobSkipped). Record the honest status and carry on with
+                        # the next job — deliberately NOT re-raised, like an isolated failure
+                        # below, because a skip is not a failure of the run.
+                        ended_at = datetime.now(UTC)
+                        results.append(
+                            JobResult(
+                                job_name=job.name,
+                                status=JobStatus.SKIPPED,
+                                started_at=started_at,
+                                ended_at=ended_at,
+                                error_message=e.reason,
+                            )
+                        )
+                        self._logger.warning(
+                            "Job %s skipped: %s",
+                            job.name,
+                            e.reason,
+                            extra={"job": "orchestrator", "host": "source"},
+                        )
                     except Exception as e:
                         ended_at = datetime.now(UTC)
                         results.append(
@@ -1118,6 +1411,8 @@ class Orchestrator:
                             e,
                             extra={"job": "orchestrator", "host": "source"},
                         )
+                        if _failure_stays_in_its_job(job, e):
+                            continue
                         # Already reported with the job name; stop run()'s top-level
                         # handler from logging the identical cause a second time.
                         _mark_failure_logged(e)
@@ -1128,9 +1423,263 @@ class Orchestrator:
                 source_monitor_task.cancel()
                 target_monitor_task.cancel()
 
+    def _machine_name(self, host: Host) -> str:
+        """Name `host` as the user knows it: its hostname, never its role in this run.
+
+        The source is this machine's own hostname, the target the CLI argument — the same
+        two strings `JobContext` carries and the confirmation heading prints, so one machine
+        reads the same wherever it is named (`PKG-FR-NAME-THE-MACHINES`).
+
+        For the message a user reads. The `host` field of a log record keeps the role, which
+        is what the file's structured queries and the session-start hostname mapping expect.
+        """
+        return self._source_hostname if host is Host.SOURCE else self._target_hostname
+
+    async def _run_snap_hold_command(self, host: Host, cmd: str, *, mutates: str | None = None) -> CommandResult:
+        """Run a snap-hold command on `host`, honoring each executor's shell contract.
+
+        The source is the local executor (no login-shell notion — its `run_command` takes
+        no `login_shell`); the target is the remote executor, invoked with
+        `login_shell=False` to match snap_sync's own target calls. Callers only reach here
+        after the hold is engaged, which happens post-connect, so both executors are set.
+
+        `mutates` is passed straight through: the capture and the post-apply read-back are
+        reads and leave it None, while applying and restoring the hold are system writes on
+        both machines and name themselves, so `--confirm-each-command` shows them like any
+        other change. Privilege is orthogonal — the reads run under sudo too (see
+        `_capture_snap_hold`) and still declare nothing, because they change nothing.
+        """
+        if host is Host.SOURCE:
+            assert self._local_executor is not None
+            return await self._local_executor.run_command(cmd, mutates=mutates)
+        assert self._remote_executor is not None
+        return await self._remote_executor.run_command(cmd, login_shell=False, mutates=mutates)
+
+    async def _capture_snap_hold(self, host: Host) -> tuple[str | None, bool]:
+        """Read `host`'s system-wide snap `refresh.hold` as `(value, readable)`.
+
+        `value` is the raw hold — an RFC3339 timestamp or the literal `forever` — or None
+        when no hold is set: snap exits 0 printing nothing for an option set empty, and
+        non-zero with `_SNAP_HOLD_UNSET_MARKER` for one never set. `readable` is False when
+        the READ ITSELF failed, a state None cannot express and which callers must not treat
+        as "no hold" (`_restore_snap_hold`).
+
+        Runs under sudo because reading snap configuration is admin-gated: snapd serves
+        `/v2/snaps/{name}/conf` behind `io.snapcraft.snapd.manage-configuration`, which the
+        shipped polkit policy sets to `auth_admin_keep`, so an unprivileged `snap get system
+        refresh.hold` does not return empty — it fails with "access denied" on every machine.
+        Still a read, so no `mutates=`: it inspects the option and changes nothing.
+        """
+        result = await self._run_snap_hold_command(host, "sudo snap get system refresh.hold")
+        if result.success:
+            return (result.stdout.strip() or None, True)
+        return (None, _SNAP_HOLD_UNSET_MARKER in result.stderr)
+
+    async def _apply_snap_hold(self, host: Host, prior: str | None) -> None:
+        """Set a timed system-wide `refresh.hold` on `host` and confirm it took (best-effort).
+
+        Writes `now + _SNAP_AUTOREFRESH_HOLD_DURATION` (computed on the host) via
+        `sudo snap set system refresh.hold=...`. A failure is logged, not raised: pausing
+        auto-refresh is a best-effort race guard, and failing the whole sync because it could
+        not be set would be worse than proceeding without it (validate() has already
+        confirmed snap + passwordless sudo on both hosts).
+        """
+        cmd = f'sudo snap set system refresh.hold="$({_SNAP_HOLD_TIMESTAMP_CMD})"'
+        result = await self._run_snap_hold_command(host, cmd, mutates="pause snapd auto-refresh for the sync window")
+        if not result.success:
+            self._logger.warning(
+                "Could not pause snapd auto-refresh on %s: %s",
+                self._machine_name(host),
+                result.stderr.strip(),
+                extra={"job": "orchestrator", "host": host.value},
+            )
+            return
+        await self._verify_snap_hold(host, prior)
+
+    async def _verify_snap_hold(self, host: Host, prior: str | None) -> None:
+        """Read the hold back on `host` and warn when it did not stick.
+
+        `snap set` exiting 0 says the command ran, not that the option changed — so an exit
+        code alone cannot catch a hold that was never applied. The read-back can: the value
+        must now be present and different from `prior`, which the freshly computed
+        "now + duration" timestamp always is.
+
+        Diagnostic only. Every outcome is a WARNING and errors from the read are absorbed,
+        because the sync is correct without the pause (it is a race guard against snapd
+        auto-refreshing mid-run), and a check on a best-effort measure must not be able to
+        end the run. The warning points at `snap refresh --time`, which works unprivileged
+        and shows the hold to a human; its value is localized prose rather than RFC3339, so
+        it is useful in a log line and useless as a capture value.
+        """
+        try:
+            observed, readable = await self._capture_snap_hold(host)
+        except Exception as e:
+            self._logger.warning(
+                "Could not confirm snapd auto-refresh is paused on %s: %s",
+                self._machine_name(host),
+                e,
+                extra={"job": "orchestrator", "host": host.value},
+            )
+            return
+        if not readable:
+            self._logger.warning(
+                "Could not confirm snapd auto-refresh is paused on %s: refresh.hold is unreadable "
+                "(check `snap refresh --time` on that machine)",
+                self._machine_name(host),
+                extra={"job": "orchestrator", "host": host.value},
+            )
+        elif observed is None or observed == prior:
+            self._logger.warning(
+                "snapd auto-refresh is NOT paused on %s: refresh.hold still reads %s after being set "
+                "(check `snap refresh --time` on that machine). The sync continues unpaused.",
+                self._machine_name(host),
+                observed if observed is not None else "(unset)",
+                extra={"job": "orchestrator", "host": host.value},
+            )
+
+    async def _hold_snap_autorefresh(self) -> None:
+        """Pause snapd AUTOMATIC refreshes on both hosts for the sync window (decision 4).
+
+        Gated on `sync_jobs.snap_sync` being enabled and skipped in dry-run (writing
+        `refresh.hold` is a system mutation; ADR-014/D-12). Captures each host's prior
+        `refresh.hold` first so `_cleanup` can restore it exactly, marks the hold engaged,
+        then applies a timed hold on each host WHOSE PRIOR POLICY IT COULD READ. Only touches
+        the system-wide `refresh.hold` option — never per-snap holds — and never blocks the
+        manual `--revision` convergence snap_sync performs.
+
+        A host whose capture failed is left untouched (`PKG-FR-SNAP-REFRESH-PAUSE`). The
+        capture is what makes the write reversible: without a pre-sync value there is nothing
+        to put back, so setting the option would replace an unknown policy — possibly the
+        user's own indefinite hold — with a timed one that expires into "no hold at all". The
+        cost is running unpaused on that host, which risks a mid-run auto-refresh; that trade
+        is the criterion's, and it is the same one `_restore_snap_hold` makes on the way out.
+        """
+        if self._dry_run or not self._config.sync_jobs.get("snap_sync", False):
+            return
+
+        self._snap_hold_prior_source, self._snap_hold_readable_source = await self._capture_snap_hold(Host.SOURCE)
+        self._snap_hold_prior_target, self._snap_hold_readable_target = await self._capture_snap_hold(Host.TARGET)
+        # Engage BEFORE applying so a partially-applied hold is still restored in _cleanup.
+        self._snap_hold_engaged = True
+        # Announced once, not per host: every log line already carries the machine it
+        # happened on. The line states its owner and its span (#233), because the pause
+        # fires before the first job and otherwise reads as an unexplained stop.
+        self._logger.info(
+            "Pausing snapd auto-refresh on both hosts for the whole run — held by the orchestrator, not by "
+            "snap_sync alone, because snap_sync converges each snap's revision and folder_sync then mirrors "
+            "that revision's data directory; a refresh between the two drops it from the mirror",
+            extra={"job": "orchestrator", "host": "source"},
+        )
+        for host, prior, readable in (
+            (Host.SOURCE, self._snap_hold_prior_source, self._snap_hold_readable_source),
+            (Host.TARGET, self._snap_hold_prior_target, self._snap_hold_readable_target),
+        ):
+            if not readable:
+                self._logger.warning(
+                    "Not pausing snapd auto-refresh on %s: its refresh.hold could not be read, so a hold "
+                    "written here could not be put back. The sync continues unpaused on that machine.",
+                    self._machine_name(host),
+                    extra={"job": "orchestrator", "host": host.value},
+                )
+                continue
+            await self._apply_snap_hold(host, prior)
+
+    async def _restore_snap_hold(self, host: Host, prior: str | None, *, readable: bool) -> None:
+        """Restore `host`'s `refresh.hold` to its pre-sync value, or unset it (best-effort).
+
+        When a prior hold was captured it is written back verbatim (an RFC3339 timestamp or
+        `forever`); when there was none, `refresh.hold` is set empty, which snapd treats as
+        no hold — leaving any unrelated per-snap holds untouched.
+
+        A failed capture (`readable=False`) is NOT treated as "there was no hold": the option
+        is left alone instead of cleared. `_hold_snap_autorefresh` never wrote it on such a
+        host, so there is nothing to undo, and clearing an option whose pre-sync value is
+        unknown would destroy a hold the user may have set (including `forever`).
+
+        Gated by `--confirm-each-command` like every other modification. Restoring is not
+        merely lifting: when a prior hold was captured, skipping this write means the timed
+        hold pc-switcher set expires and the user's OWN hold is gone with it — which is why
+        the gate description names the value being written back.
+
+        Swallows a FAILED restore (teardown must complete every step regardless — the timed
+        hold self-expires) but never a DECLINED one: `SyncAborted` is re-raised ahead
+        of the broad handler, because a user answering "abort" is a decision to honor, not
+        an error to absorb. `_cleanup` decides how far that abort travels.
+        """
+        if prior is not None:
+            cmd = f"sudo snap set system refresh.hold={shlex.quote(prior)}"
+            description = f"restore this machine's own snapd refresh.hold ({prior}), which this run overwrote"
+        elif not readable:
+            self._logger.warning(
+                "Leaving snapd refresh.hold alone on %s: its pre-sync value could not be read, so this run "
+                "never paused auto-refresh there and clearing it now could destroy a hold set on that machine.",
+                self._machine_name(host),
+                extra={"job": "orchestrator", "host": host.value},
+            )
+            return
+        else:
+            cmd = 'sudo snap set system refresh.hold=""'
+            description = "clear the snapd refresh.hold this run set"
+        try:
+            result = await self._run_snap_hold_command(host, cmd, mutates=description)
+            if not result.success:
+                self._logger.warning(
+                    "Could not restore snapd refresh.hold on %s: %s",
+                    self._machine_name(host),
+                    result.stderr.strip(),
+                    extra={"job": "orchestrator", "host": host.value},
+                )
+        except SyncAborted:
+            raise
+        except Exception as e:
+            # Teardown must not be derailed by a failed restore (e.g. the connection is
+            # already tearing down). The timed hold self-expires regardless.
+            self._logger.warning(
+                "Error restoring snapd refresh.hold on %s: %s",
+                self._machine_name(host),
+                e,
+                extra={"job": "orchestrator", "host": host.value},
+            )
+
+    async def _restore_snap_autorefresh(self) -> None:
+        """Restore both hosts' snap auto-refresh policy captured by `_hold_snap_autorefresh`.
+
+        A no-op when no hold was engaged, and idempotent (clears the engaged flag first) so a
+        second `_cleanup` entry cannot double-restore. Runs early in `_cleanup`, before the
+        SSH connection the target restore needs is torn down.
+        """
+        if not self._snap_hold_engaged:
+            return
+        self._snap_hold_engaged = False
+        await self._restore_snap_hold(
+            Host.SOURCE, self._snap_hold_prior_source, readable=self._snap_hold_readable_source
+        )
+        await self._restore_snap_hold(
+            Host.TARGET, self._snap_hold_prior_target, readable=self._snap_hold_readable_target
+        )
+
     async def _cleanup(self) -> None:
         """Clean up resources (connection, locks, executors)."""
         self._cleanup_in_progress = True
+
+        # Restore snapd auto-refresh FIRST, while the connection the target restore needs is
+        # still up (decision 4). Best-effort and idempotent — a no-op when no hold was set.
+        try:
+            await self._restore_snap_autorefresh()
+        except SyncAborted as e:
+            # Declining the restore at the --confirm-each-command gate is honored: the write
+            # does not happen. It stops there and nowhere else — everything below this point
+            # RELEASES resources (target lock, SSH connection, source lock, event bus, UI)
+            # rather than modifying either machine, and no confirmation prompt should be
+            # able to leak a lock or a connection. Logged at WARNING so the end-of-run
+            # summary resurfaces what was left in place.
+            self._logger.warning(
+                "snapd auto-refresh not restored (%s). The timed hold set by this run expires %s "
+                "after it was applied; any pre-existing hold of your own was not written back.",
+                e,
+                _SNAP_AUTOREFRESH_HOLD_DURATION.lstrip("+"),
+                extra={"job": "orchestrator", "host": "source"},
+            )
 
         # Release target lock first (before terminating other processes)
         if self._target_lock_process is not None:

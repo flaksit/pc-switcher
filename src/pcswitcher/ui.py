@@ -18,6 +18,11 @@ from pcswitcher.models import ProgressUpdate
 
 __all__ = ["TerminalUI"]
 
+# Columns the Recent Logs box itself consumes: one border column plus one
+# padding column on each side (Rich's Panel default padding is (0, 1)). Log text
+# wraps at `console.width - this`, which is what the row budget is measured against.
+_LOG_PANEL_CHROME_WIDTH = 4
+
 
 class TerminalUI:
     """Rich terminal UI with progress bars, log panel, and status display.
@@ -89,6 +94,37 @@ class TerminalUI:
         # "UI never started, stay silent" now that pause() discards the instance.
         self._paused = False
 
+    def _fit_log_messages(self) -> tuple[list[str], int]:
+        """Pick the newest log messages that fit the panel's row budget, oldest dropped first.
+
+        The panel's height is fixed in *rows*, but a long message wraps over
+        several rows, so budgeting by message count overflows the box and Rich
+        crops the overflow off the bottom — silently eating the tail of the
+        newest line, the one the user is actually waiting on (#223). Measuring
+        the wrapped height of each message instead keeps the box the same size
+        while showing fewer, longer messages.
+
+        The newest message is always kept, even when it alone exceeds the
+        budget: the panel grows to fit it rather than truncating it. That is the
+        only case where the box height moves, so the Live display stays steady.
+
+        Returns:
+            The messages to render (oldest first) and the rows they occupy.
+        """
+        width = max(self._console.width - _LOG_PANEL_CHROME_WIDTH, 1)
+        kept: list[str] = []
+        rows = 0
+        for message in reversed(self._log_panel):
+            # Same wrapping Text applies when the panel renders it, so this height
+            # is exact rather than an estimate.
+            height = len(Text(message).wrap(self._console, width))
+            if kept and rows + height > self._max_log_lines:
+                break
+            kept.append(message)
+            rows += height
+        kept.reverse()
+        return kept, rows
+
     def _render(self) -> RenderableType:
         """Render the complete UI layout.
 
@@ -139,14 +175,16 @@ class TerminalUI:
         # MarkupError on `[/...]`. That crash fires on the Live auto-refresh
         # thread and again during Live.stop() teardown. The "No logs yet"
         # placeholder is trusted literal markup, so it is parsed via from_markup.
+        visible_logs, log_rows = self._fit_log_messages()
         log_body: RenderableType = (
-            Text("\n".join(self._log_panel)) if self._log_panel else Text.from_markup("[dim]No logs yet[/dim]")
+            Text("\n".join(visible_logs)) if visible_logs else Text.from_markup("[dim]No logs yet[/dim]")
         )
         log_panel = Panel(
             log_body,
             title="Recent Logs",
             border_style="blue",
-            height=self._max_log_lines + 2,  # +2 for borders
+            # Budgeted in rendered rows, not messages — see _fit_log_messages.
+            height=max(self._max_log_lines, log_rows) + 2,  # +2 for borders
         )
 
         return Group(status, self._progress, log_panel)
@@ -166,6 +204,8 @@ class TerminalUI:
             self._render(),
             console=self._console,
             refresh_per_second=10,  # 10 Hz refresh rate
+            # Load-bearing for pause(): a non-transient stop leaves the last frame
+            # on screen as context above a prompt.
             transient=False,
         )
 
@@ -177,17 +217,27 @@ class TerminalUI:
         self._live.start()
 
     def pause(self) -> None:
-        """Stop and erase the live region around a blocking prompt, discarding the instance.
+        """Stop the live region around a blocking prompt, leaving its last frame on screen.
 
         Used around confirmation prompts: the live region is handed back to a
-        blocking `Prompt.ask()` call, then reclaimed by resume(). The stop is
-        transient so the pre-pause frame is erased (not left behind as a stale
-        duplicate panel) before the prompt's warning is printed into the freed
-        space. The instance is then discarded so resume() rebuilds a fresh one —
-        see _build_live for why reuse corrupts the post-resume cursor position.
+        blocking prompt, then reclaimed by resume(). The stop is deliberately
+        NOT transient — the final frame (status bar, progress bars, Recent Logs)
+        stays in the scrollback directly above the question, so the user can see
+        where the run is while answering. Erasing it, as this used to, left them
+        answering on a blank screen with no context at all; the cost is one
+        stale frame per prompt, which resume() draws a fresh live region below
+        rather than over.
+
+        Keeping the display *live* through the prompt is not an option: Rich's
+        Live anchors its region at the cursor and rewrites upward on every
+        refresh tick, so it erases the prompt line and the characters the user
+        types into it (verified against a pty). questionary/prompt_toolkit
+        prompts, which seize the terminal outright, fare worse.
+
+        The instance is discarded so resume() rebuilds a fresh one — see
+        _build_live for why reuse corrupts the post-resume cursor position.
         """
         if self._live is not None:
-            self._live.transient = True
             self._live.stop()
             self._live = None
             self._paused = True

@@ -85,7 +85,7 @@ The reset script restores VMs to their baseline snapshots (`/.snapshots/baseline
 ### GitHub Actions Secrets Required
 
 | Secret | Description |
-|--------|-------------|
+| ------ | ----------- |
 | `HCLOUD_TOKEN` | Hetzner Cloud API token |
 | `HETZNER_SSH_PRIVATE_KEY` | SSH private key for VM access (ed25519 format) |
 

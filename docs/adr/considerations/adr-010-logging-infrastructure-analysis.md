@@ -184,7 +184,7 @@ This is the main code reduction - available regardless of structlog choice.
 ## Decision Matrix
 
 | Criterion               | structlog                               | stdlib-only               |
-|-------------------------|------------------------------------------|---------------------------|
+| ----------------------- | ---------------------------------------- | ------------------------- |
 | Lines of code           | ~90                                      | ~105                      |
 | Mental model complexity | Higher (processors, formatters, chains) | Lower (standard patterns) |
 | External lib capture    | Via ProcessorFormatter                   | Native                    |

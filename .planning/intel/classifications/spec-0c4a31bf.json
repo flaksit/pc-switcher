@@ -21,7 +21,7 @@
     "cost constraints under EUR 10/month"
   ],
   "cross_refs": [
-    "../../High%20level%20requirements.md",
+    "../../high-level-requirements.md",
     "../../docs/adr/_index.md",
     "../../docs/adr/adr-006-testing-framework.md",
     "../../docs/testing-framework.md",

@@ -44,10 +44,10 @@ class DiskSpace:
 
 
 def parse_df_output(output: str, mount_point: str) -> DiskSpace | None:
-    """Parse `df -B1` output for a specific mount point.
+    """Parse `df --block-size=1` output for a specific mount point.
 
     Args:
-        output: Raw stdout from `df -B1` command
+        output: Raw stdout from `df --block-size=1` command
         mount_point: Mount point to search for (e.g., "/home")
 
     Returns:
@@ -112,7 +112,7 @@ async def check_disk_space(
     Raises:
         RuntimeError: If df command fails or mount point not found
     """
-    result: CommandResult = await executor.run_command(f"df -B1 {mount_point}")
+    result: CommandResult = await executor.run_command(f"df --block-size=1 {mount_point}")
 
     if not result.success:
         raise RuntimeError(f"df command failed: {result.stderr}")

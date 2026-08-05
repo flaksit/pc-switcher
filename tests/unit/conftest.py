@@ -16,9 +16,12 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from freezegun import freeze_time
 
+from pcswitcher.config import Configuration
 from pcswitcher.events import EventBus
 from pcswitcher.jobs import JobContext
 from pcswitcher.models import CommandResult
+from pcswitcher.orchestrator import Orchestrator
+from tests.unit.console_capture import captured_console
 
 
 @pytest.fixture
@@ -146,3 +149,47 @@ def success_result() -> CommandResult:
 def failed_result() -> CommandResult:
     """A failed command result with error message."""
     return CommandResult(exit_code=1, stdout="", stderr="error occurred")
+
+
+# Enough Orchestrator wiring for the real job loop to run
+_DF_OUTPUT = (
+    "Filesystem     1B-blocks       Used  Available Use% Mounted on\n"
+    "/dev/sda1  1000000000000 500000000000 500000000000  50% /\n"
+)
+
+
+@pytest.fixture
+def wired_orchestrator() -> Orchestrator:
+    """A narrowly-constructed Orchestrator with enough wiring for `_execute_jobs` /
+    `_run_jobs_in_task_group` to run: mocked local/remote executors returning valid `df`
+    output for the background disk-space monitors, a non-interactive Console, and a
+    silenced logger/UI.
+    """
+    config = MagicMock(spec=Configuration)
+    config.logging = MagicMock()
+    config.logging.file = 10
+    config.logging.tui = 20
+    config.logging.external = 30
+    config.sync_jobs = {}
+    config.job_configs = {}
+    config.disk = MagicMock()
+    config.disk.preflight_minimum = "20%"
+    config.disk.runtime_minimum = "15%"
+    config.disk.warning_threshold = "25%"
+    config.disk.check_interval = 30
+    config.btrfs_snapshots = MagicMock()
+    config.btrfs_snapshots.subvolumes = []
+    config.btrfs_snapshots.keep_recent = 5
+    config.btrfs_snapshots.max_age_days = 30
+
+    orchestrator = Orchestrator(target="target-host", config=config)
+    orchestrator._console = captured_console()[0]  # pyright: ignore[reportPrivateUsage]
+    orchestrator._ui = MagicMock()  # pyright: ignore[reportPrivateUsage]
+    orchestrator._logger = MagicMock()  # pyright: ignore[reportPrivateUsage]
+    local_executor = MagicMock()
+    local_executor.run_command = AsyncMock(return_value=CommandResult(0, _DF_OUTPUT, ""))
+    remote_executor = MagicMock()
+    remote_executor.run_command = AsyncMock(return_value=CommandResult(0, _DF_OUTPUT, ""))
+    orchestrator._local_executor = local_executor  # pyright: ignore[reportPrivateUsage]
+    orchestrator._remote_executor = remote_executor  # pyright: ignore[reportPrivateUsage]
+    return orchestrator

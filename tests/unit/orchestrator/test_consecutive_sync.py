@@ -472,6 +472,34 @@ class TestCheckFirstSync:
         cast(MagicMock, orchestrator._ui).pause.assert_not_called()  # pyright: ignore[reportPrivateUsage]
 
     @pytest.mark.asyncio
+    async def test_first_sync_interactive_with_flag_does_not_prompt(
+        self,
+        mock_config: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """First sync ON A TTY with --allow-first-sync → no prompt (#231): the flag is the answer."""
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        orchestrator = _make_orchestrator(
+            mock_config,
+            target="target-host",
+            allow_first_sync=True,
+            remote_stdout="",
+            remote_exit_code=1,
+        )
+        orchestrator._source_hostname = "source-host"  # pyright: ignore[reportPrivateUsage]
+
+        with (
+            patch("rich.prompt.Prompt.ask", side_effect=AssertionError("must not prompt")),
+            patch.object(sys, "stdin", _mock_isatty(True)),
+        ):
+            result = await orchestrator._check_out_of_order()  # pyright: ignore[reportPrivateUsage]
+
+        assert result is True
+        cast(MagicMock, orchestrator._ui).pause.assert_not_called()  # pyright: ignore[reportPrivateUsage]
+
+    @pytest.mark.asyncio
     async def test_first_sync_not_gated_by_allow_out_of_order(
         self,
         mock_config: MagicMock,
@@ -554,6 +582,39 @@ class TestCheckOutOfOrderBypass:
         # History IS read (needed to distinguish first-sync from out-of-order),
         # but no prompt is shown for the bypassed W2/W3 case.
         cast(MagicMock, orchestrator._remote_executor).run_command.assert_called()  # pyright: ignore[reportPrivateUsage]
+        cast(MagicMock, orchestrator._ui).pause.assert_not_called()  # pyright: ignore[reportPrivateUsage]
+
+    @pytest.mark.parametrize("interactive", [True, False])
+    @pytest.mark.asyncio
+    async def test_allow_out_of_order_never_prompts(
+        self,
+        interactive: bool,
+        mock_config: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """W3 (consecutive push) with the flag proceeds unprompted on a TTY as well as off one (#231)."""
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        # Local history: this machine was SOURCE to this same target → consecutive push (W3).
+        history_path = tmp_path / ".local/share/pc-switcher/sync-history.json"
+        history_path.parent.mkdir(parents=True, exist_ok=True)
+        history_path.write_text(_history_json("source", "target-host"))
+
+        orchestrator = _make_orchestrator(
+            mock_config,
+            target="target-host",
+            allow_out_of_order=True,
+            remote_stdout=_history_json("target", "source-host"),
+        )
+        orchestrator._source_hostname = "source-host"  # pyright: ignore[reportPrivateUsage]
+
+        with (
+            patch("rich.prompt.Prompt.ask", side_effect=AssertionError("must not prompt")),
+            patch.object(sys, "stdin", _mock_isatty(interactive)),
+        ):
+            result = await orchestrator._check_out_of_order()  # pyright: ignore[reportPrivateUsage]
+
+        assert result is True
         cast(MagicMock, orchestrator._ui).pause.assert_not_called()  # pyright: ignore[reportPrivateUsage]
 
     def test_orchestrator_accepts_allow_out_of_order(self, mock_config: MagicMock) -> None:
@@ -664,8 +725,8 @@ class TestCheckOutOfOrderHostnameCasing:
 
     Regression for the spurious "Target Last Synced with a Different Machine"
     warning: the target recorded this machine's peer under a differently-cased
-    name (e.g. the user typed `sync fleksi` on the target, so it stored `fleksi`,
-    while this machine's own hostname is `Fleksi`). The topology comparison is
+    name (e.g. the user typed `sync nomad` on the target, so it stored `nomad`,
+    while this machine's own hostname is `Nomad`). The topology comparison is
     case-insensitive, so the clean A→B / B→A pattern still proceeds silently.
     """
 
@@ -680,21 +741,21 @@ class TestCheckOutOfOrderHostnameCasing:
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
         # This machine's real hostname (capitalised).
-        source_name = "Fleksi"
-        target_name = "p17"
+        source_name = "Nomad"
+        target_name = "atlas"
 
         # Local: this machine last synced as TARGET, peer recorded as the target's
-        # own hostname "P17" (capitalised) — differs in case from the CLI arg "p17".
+        # own hostname "Atlas" (capitalised) — differs in case from the CLI arg "atlas".
         history_path = tmp_path / ".local/share/pc-switcher/sync-history.json"
         history_path.parent.mkdir(parents=True, exist_ok=True)
-        history_path.write_text(_history_json("target", "P17"))
+        history_path.write_text(_history_json("target", "Atlas"))
 
-        # Target (p17): last synced as SOURCE, peer recorded as "fleksi" (lowercase,
-        # the CLI arg the user typed on p17) — differs in case from "Fleksi".
+        # Target (atlas): last synced as SOURCE, peer recorded as "nomad" (lowercase,
+        # the CLI arg the user typed on atlas) — differs in case from "Nomad".
         orchestrator = _make_orchestrator(
             mock_config,
             target=target_name,
-            remote_stdout=_history_json("source", "fleksi"),
+            remote_stdout=_history_json("source", "nomad"),
         )
         orchestrator._source_hostname = source_name  # pyright: ignore[reportPrivateUsage]
 
@@ -720,20 +781,20 @@ class TestCheckOutOfOrderHostnameCasing:
 
         source_name = "source-host"
 
-        # Local: this machine was SOURCE, peer recorded as "P17".
+        # Local: this machine was SOURCE, peer recorded as "Atlas".
         history_path = tmp_path / ".local/share/pc-switcher/sync-history.json"
         history_path.parent.mkdir(parents=True, exist_ok=True)
-        history_path.write_text(_history_json("source", "P17"))
+        history_path.write_text(_history_json("source", "Atlas"))
 
-        # Target resolves its own hostname as "p17" (lowercase); target history shows
+        # Target resolves its own hostname as "atlas" (lowercase); target history shows
         # it last synced with this source (clean-looking), but we are pushing again.
         orchestrator = _make_orchestrator(
             mock_config,
-            target="p17",
+            target="atlas",
             remote_stdout=_history_json("target", source_name),
         )
         orchestrator._source_hostname = source_name  # pyright: ignore[reportPrivateUsage]
-        orchestrator._target_canonical_hostname = "p17"  # pyright: ignore[reportPrivateUsage]
+        orchestrator._target_canonical_hostname = "atlas"  # pyright: ignore[reportPrivateUsage]
 
         with patch.object(sys, "stdin", _mock_isatty(False)):
             result = await orchestrator._check_out_of_order()  # pyright: ignore[reportPrivateUsage]
@@ -752,30 +813,30 @@ class TestResolveTargetCanonicalHostname:
         """A successful query overwrites the CLI-argument fallback with the real hostname."""
         orchestrator = _make_orchestrator(
             mock_config,
-            target="p17",
-            remote_stdout="P17\n",
+            target="atlas",
+            remote_stdout="Atlas\n",
         )
-        assert orchestrator._target_canonical_hostname == "p17"  # pyright: ignore[reportPrivateUsage]
+        assert orchestrator._target_canonical_hostname == "atlas"  # pyright: ignore[reportPrivateUsage]
 
         await orchestrator._resolve_target_canonical_hostname()  # pyright: ignore[reportPrivateUsage]
 
-        assert orchestrator._target_canonical_hostname == "P17"  # pyright: ignore[reportPrivateUsage]
+        assert orchestrator._target_canonical_hostname == "Atlas"  # pyright: ignore[reportPrivateUsage]
         # The SSH-connectable name is untouched (rsync/SSH destination).
-        assert orchestrator._target_hostname == "p17"  # pyright: ignore[reportPrivateUsage]
+        assert orchestrator._target_hostname == "atlas"  # pyright: ignore[reportPrivateUsage]
 
     @pytest.mark.asyncio
     async def test_falls_back_to_cli_arg_on_failure(self, mock_config: MagicMock) -> None:
         """A failed/empty query keeps the CLI-argument fallback."""
         orchestrator = _make_orchestrator(
             mock_config,
-            target="p17",
+            target="atlas",
             remote_stdout="",
             remote_exit_code=1,
         )
 
         await orchestrator._resolve_target_canonical_hostname()  # pyright: ignore[reportPrivateUsage]
 
-        assert orchestrator._target_canonical_hostname == "p17"  # pyright: ignore[reportPrivateUsage]
+        assert orchestrator._target_canonical_hostname == "atlas"  # pyright: ignore[reportPrivateUsage]
 
 
 class TestUpdateSyncHistoryWithPeer:
@@ -813,15 +874,15 @@ class TestUpdateSyncHistoryWithPeer:
         """last_peer is the target's resolved hostname, not the (possibly aliased) CLI arg."""
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
-        orchestrator = Orchestrator(target="p17.lan", config=mock_config)
-        orchestrator._target_canonical_hostname = "P17"  # pyright: ignore[reportPrivateUsage]
+        orchestrator = Orchestrator(target="atlas.lan", config=mock_config)
+        orchestrator._target_canonical_hostname = "Atlas"  # pyright: ignore[reportPrivateUsage]
         orchestrator._remote_executor = None  # pyright: ignore[reportPrivateUsage]
         orchestrator._logger = MagicMock()  # pyright: ignore[reportPrivateUsage]
 
         await orchestrator._update_sync_history()  # pyright: ignore[reportPrivateUsage]
 
         data = json.loads((tmp_path / ".local/share/pc-switcher/sync-history.json").read_text())
-        assert data["last_peer"] == "P17"
+        assert data["last_peer"] == "Atlas"
 
     @pytest.mark.asyncio
     async def test_remote_history_command_includes_peer(
@@ -872,5 +933,5 @@ class TestUpdateSyncHistoryWithPeer:
         mock_executor.run_command.return_value = mock_result
         orchestrator._remote_executor = mock_executor  # pyright: ignore[reportPrivateUsage]
 
-        with pytest.raises(RuntimeError, match="Failed to update sync history on target"):
+        with pytest.raises(RuntimeError, match="Failed to update the sync history on"):
             await orchestrator._update_sync_history()  # pyright: ignore[reportPrivateUsage]

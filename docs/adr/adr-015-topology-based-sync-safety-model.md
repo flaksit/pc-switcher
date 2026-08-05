@@ -67,7 +67,7 @@ Decisions:
 - On a first sync the orchestrator issues an explicit "this overwrites the target" confirmation naming the in-scope folders (read from the folder_sync job config). Non-first syncs skip it.
 - First-sync (W1) and out-of-order (W2/W3) are distinct gates with distinct flags, both in the orchestrator's pre-flight (`_check_out_of_order`, which reads the target history once and dispatches): W1 is gated by the new `--allow-first-sync`; W2/W3 remain gated by `--allow-out-of-order`. `--allow-out-of-order` does not bypass the first-sync gate, and vice versa.
 - Under `--dry-run`, both gates log their warning and proceed without prompting (ADR-014: dry-run is a read-only rehearsal).
-- A reusable `Confirmer` abstraction (`pcswitcher.confirmer.TerminalUIConfirmer`) backs both gates. Interactive runs pause the live TUI, show a yellow Rich panel, and prompt `Continue anyway? [y/n]`; non-interactive runs fall back to the caller's `--allow-*` flag. It is injected via `JobContext.confirmer` so future interactive jobs can reuse the same mechanism instead of reaching into the console/TUI directly. `FolderSyncJob` itself does not read sync-history or issue the first-sync confirmation.
+- A reusable `Confirmer` abstraction (`pcswitcher.confirmer.TerminalUIConfirmer`) backs both gates. The matching `--allow-*` flag answers the gate outright — passing it is the answer, so nothing is asked, on a terminal or off one. Without it, an interactive run pauses the live TUI, shows a yellow Rich panel, and prompts `Continue anyway? [y/n]`, while a non-interactive one refuses (nobody can both see and answer the prompt). It is injected via `JobContext.confirmer` so future interactive jobs can reuse the same mechanism instead of reaching into the console/TUI directly. `FolderSyncJob` itself does not read sync-history or issue the first-sync confirmation.
 
 This supersedes the Consequences note "first-ever sync … treat absent history as in-order": absent history is now handled by the first-sync confirmation, not silently treated as in-order.
 
@@ -78,7 +78,7 @@ This section refines the Decision above; where they differ, this section takes p
 The topology check compares recorded `last_peer` values against the machines involved. For that comparison to be reliable, both peers must name the same machine the same way. Two rules make this hold:
 
 - Both ends record a machine's *own* hostname. The source records its peer as the target's `socket.gethostname()` queried over SSH (not the user-typed CLI argument, which may be an SSH alias or IP), the same way the source obtains its own hostname locally. This keeps the SSH/rsync connection address (the CLI argument) separate from the recorded identity.
-- Peer comparisons are case-insensitive. DNS hostnames are case-insensitive, and history written before symmetric acquisition (or via a differently-cased alias) can hold either casing. Matching case-folded prevents a clean back-sync from being misread as a machine-C (W2) sync — e.g. a target that recorded its peer as `fleksi` still matches a source whose hostname is `Fleksi`.
+- Peer comparisons are case-insensitive. DNS hostnames are case-insensitive, and history written before symmetric acquisition (or via a differently-cased alias) can hold either casing. Matching case-folded prevents a clean back-sync from being misread as a machine-C (W2) sync — e.g. a target that recorded its peer as `nomad` still matches a source whose hostname is `Nomad`.
 
 ## References
 

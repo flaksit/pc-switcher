@@ -7,7 +7,8 @@ for btrfs subvolumes during the sync process.
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timedelta
+import shlex
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 from pytimeparse2 import parse as parse_duration_seconds
@@ -45,8 +46,7 @@ def snapshot_name(subvolume: str, phase: SnapshotPhase) -> str:
     Returns:
         Snapshot name like "pre-@home-20251129T143022"
     """
-    timestamp = datetime.now().strftime("%Y%m%dT%H%M%S")
-    return f"{phase.value}-{subvolume}-{timestamp}"
+    return f"{phase.value}-{subvolume}-{_snapshot_timestamp()}"
 
 
 def session_folder_name(session_id: str) -> str:
@@ -58,8 +58,20 @@ def session_folder_name(session_id: str) -> str:
     Returns:
         Folder name like "20251129T143022-abc12345"
     """
-    timestamp = datetime.now().strftime("%Y%m%dT%H%M%S")
-    return f"{timestamp}-{session_id}"
+    return f"{_snapshot_timestamp()}-{session_id}"
+
+
+def _snapshot_timestamp() -> str:
+    """Now, as the `%Y%m%dT%H%M%S` stamp every snapshot and session folder is named by.
+
+    UTC, not local time. The stamp is the only ordering key retention has — `list_snapshots`
+    parses it back out of the path and `cleanup_snapshots` ranks sessions by it — so it has
+    to mean the same instant wherever it was written. Local time makes two machines in
+    different zones, or one machine either side of a DST change, produce names that sort
+    against each other by their offset instead of by when they happened, and the older
+    session then outranks the newer one.
+    """
+    return datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
 
 
 async def create_snapshot(
@@ -78,7 +90,7 @@ async def create_snapshot(
         CommandResult with exit code, stdout, stderr
     """
     cmd = f"sudo btrfs subvolume snapshot -r {source_path} {snapshot_path}"
-    return await executor.run_command(cmd)
+    return await executor.run_command(cmd, mutates=f"create read-only snapshot {snapshot_path} of {source_path}")
 
 
 async def validate_snapshots_directory(
@@ -103,7 +115,8 @@ async def validate_snapshots_directory(
 
     # /.snapshots doesn't exist or isn't a subvolume - try to create it
     create_result = await executor.run_command(
-        "sudo btrfs subvolume create /.snapshots && sudo mkdir -p /.snapshots/pc-switcher"
+        "sudo btrfs subvolume create /.snapshots && sudo mkdir --parents /.snapshots/pc-switcher",
+        mutates="create the /.snapshots subvolume and its pc-switcher folder on this machine",
     )
 
     if create_result.exit_code != 0:
@@ -165,31 +178,22 @@ async def list_snapshots(
     """
     snapshots: list[Snapshot] = []
 
-    # List all session folders
-    list_result = await executor.run_command("ls -1 /.snapshots/pc-switcher/ 2>/dev/null || true")
-    if not list_result.stdout.strip():
-        return []
+    # One command for the whole tree, not one per session folder: each command is a
+    # full SSH round trip, and session folders can number in the hundreds (empty ones
+    # included), which once turned this listing into minutes of wall time.
+    list_result = await executor.run_command(
+        "find /.snapshots/pc-switcher -mindepth 2 -maxdepth 2 2>/dev/null || true"
+    )
 
-    session_folders = [name.strip() for name in list_result.stdout.strip().split("\n") if name.strip()]
-
-    for folder_name in session_folders:
-        folder_path = f"/.snapshots/pc-switcher/{folder_name}"
-
-        # List snapshots in this folder
-        snap_result = await executor.run_command(f"ls -1 {folder_path} 2>/dev/null || true")
-        if not snap_result.stdout.strip():
+    for line in list_result.stdout.splitlines():
+        snap_path = line.strip()
+        if not snap_path:
             continue
-
-        snap_names = [name.strip() for name in snap_result.stdout.strip().split("\n") if name.strip()]
-
-        for snap_name in snap_names:
-            snap_path = f"{folder_path}/{snap_name}"
-            try:
-                snapshot = Snapshot.from_path(snap_path, host)
-                snapshots.append(snapshot)
-            except ValueError:
-                # Skip snapshots that don't match our naming convention
-                continue
+        try:
+            snapshots.append(Snapshot.from_path(snap_path, host))
+        except ValueError:
+            # Skip snapshots that don't match our naming convention
+            continue
 
     # Sort by timestamp, newest first
     snapshots.sort(key=lambda s: s.timestamp, reverse=True)
@@ -243,7 +247,7 @@ async def cleanup_snapshots(
     snapshots_to_delete: list[Snapshot] = []
 
     if max_age_days is not None:
-        cutoff_date = datetime.now() - timedelta(days=max_age_days)
+        cutoff_date = datetime.now(UTC) - timedelta(days=max_age_days)
 
         for session_id, session_snaps in sorted_sessions:
             if session_id in protected_session_ids:
@@ -263,7 +267,10 @@ async def cleanup_snapshots(
     deleted_session_ids: set[str] = set()
 
     for snap in snapshots_to_delete:
-        delete_result = await executor.run_command(f"sudo btrfs subvolume delete {snap.path}")
+        delete_result = await executor.run_command(
+            f"sudo btrfs subvolume delete {snap.path}",
+            mutates=f"permanently delete snapshot {snap.path} and everything it preserves",
+        )
         if delete_result.exit_code == 0:
             deleted.append(snap)
             deleted_session_ids.add(snap.session_id)
@@ -275,13 +282,16 @@ async def cleanup_snapshots(
         if all(s in deleted for s in session_snaps):
             # Extract folder path from first snapshot path
             folder_path = "/".join(session_snaps[0].path.split("/")[:-1])
-            await executor.run_command(f"rmdir {folder_path} 2>/dev/null || true")
+            await executor.run_command(
+                f"rmdir {folder_path} 2>/dev/null || true",
+                mutates=f"remove the emptied snapshot session folder {folder_path}",
+            )
 
     return deleted
 
 
 # Shell script to delete all pc-switcher btrfs subvolumes recursively.
-# Uses btrfs subvolume delete (fast) instead of rm -rf (slow for subvolumes).
+# Uses btrfs subvolume delete (fast) instead of rm --recursive --force (slow for subvolumes).
 # Must delete children before parents since btrfs subvolume delete is not recursive
 # in btrfs-progs < 6.12.
 # Based on pattern from tests/integration/scripts/reset-vm.sh
@@ -313,6 +323,12 @@ btrfs subvolume list / 2>/dev/null | awk '{print $NF}' | grep '^@snapshots/pc-sw
     | while read -r abs_path; do
     delete_subvol_recursive "$abs_path"
 done
+
+# Remove the now-empty session folders (plain directories, nested ones included:
+# -delete implies depth-first, so a folder emptied during the same sweep goes
+# too). Leaving them behind makes /.snapshots/pc-switcher grow without bound,
+# and everything that scans it pays for the clutter.
+find /.snapshots/pc-switcher -mindepth 1 -type d -empty -delete 2>/dev/null || true
 """
 
 
@@ -321,7 +337,9 @@ async def delete_all_snapshots(executor: Executor) -> CommandResult:
 
     This function forcefully deletes ALL snapshots under /.snapshots/pc-switcher/,
     handling nested subvolumes by deleting children before parents. It uses
-    `btrfs subvolume delete` which is much faster than `rm -rf` for subvolumes.
+    `btrfs subvolume delete` which is much faster than `rm --recursive --force` for subvolumes.
+    Emptied session folders are removed as well so the directory does not
+    accumulate stale entries across runs.
 
     Use cases:
     - Test cleanup between test runs
@@ -335,7 +353,13 @@ async def delete_all_snapshots(executor: Executor) -> CommandResult:
     Returns:
         CommandResult with exit code, stdout, stderr
     """
-    return await executor.run_command(f"sudo bash -c {_DELETE_ALL_SNAPSHOTS_SCRIPT!r}")
+    # `shlex.quote`, never `!r`: Python's repr escapes newlines to the two characters
+    # `\` and `n`, which collapses the whole script onto one line and hands bash a
+    # syntax error it swallows into `|| true`. That made this function a silent no-op.
+    return await executor.run_command(
+        f"sudo bash -c {shlex.quote(_DELETE_ALL_SNAPSHOTS_SCRIPT)}",
+        mutates="permanently delete EVERY pc-switcher snapshot on this machine, losing all rollback points",
+    )
 
 
 def parse_older_than(value: str) -> int:

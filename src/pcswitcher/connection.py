@@ -61,7 +61,7 @@ class Connection:
             RuntimeError: If not connected (mirrors the ssh_connection property).
         """
         if self._conn is None:
-            raise RuntimeError("Not connected to target")
+            raise RuntimeError(f"Not connected to {self._target}")
         user: str | None = self._conn.get_extra_info("username")
         return user if user is not None else getpass.getuser()
 
@@ -76,7 +76,7 @@ class Connection:
             RuntimeError: If not connected
         """
         if self._conn is None:
-            raise RuntimeError("Not connected to target")
+            raise RuntimeError(f"Not connected to {self._target}")
         return self._conn
 
     async def connect(self) -> None:
@@ -117,7 +117,7 @@ class Connection:
             RuntimeError: If not connected
         """
         if self._conn is None:
-            raise RuntimeError("Not connected to target")
+            raise RuntimeError(f"Not connected to {self._target}")
         async with self._session_semaphore:
             return await self._conn.create_process(cmd)
 
@@ -134,7 +134,7 @@ class Connection:
             RuntimeError: If not connected
         """
         if self._conn is None:
-            raise RuntimeError("Not connected to target")
+            raise RuntimeError(f"Not connected to {self._target}")
         async with self._session_semaphore:
             return await self._conn.run(cmd)
 
@@ -148,7 +148,7 @@ class Connection:
             RuntimeError: If not connected
         """
         if self._conn is None:
-            raise RuntimeError("Not connected to target")
+            raise RuntimeError(f"Not connected to {self._target}")
         return await self._conn.start_sftp_client()
 
     async def kill_all_remote_processes(self, pattern: str = "pc-switcher") -> None:
@@ -162,4 +162,4 @@ class Connection:
         if self._conn is None:
             return
         # Use pkill with pattern matching, ignore if no processes found
-        await self._conn.run(f"pkill -f '{pattern}' || true")
+        await self._conn.run(f"pkill --full '{pattern}' || true")

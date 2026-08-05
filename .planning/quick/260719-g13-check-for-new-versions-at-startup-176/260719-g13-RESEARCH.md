@@ -41,7 +41,7 @@ A verified CliRunner probe (see Pitfall 1 below) confirms `console.is_terminal` 
 ## Architectural Responsibility Map
 
 | Capability | Primary Tier | Secondary Tier | Rationale |
-|------------|-------------|----------------|-----------|
+| ---------- | ----------- | -------------- | --------- |
 | Version comparison / GitHub query | CLI (app callback) | `pcswitcher.version` module | `main()` orchestrates *when* to check; `version.py` already owns *how* to fetch/compare |
 | Install + verify upgrade | CLI (`cli.py`) | — | Subprocess orchestration is already colocated with `self update`; no separate service layer exists in this codebase |
 | Interactive prompt | CLI (`cli.py`, via `rich.prompt`) | — | No TUI/Live display exists at startup — this is plain synchronous stdout/stdin, same tier as `config_sync.py`'s prompts |
@@ -144,7 +144,7 @@ Note `Prompt.ask` in this codebase is called **without** passing `console=` — 
 
 **Mocking recipe for the new test file** (recommend `tests/unit/cli/test_version_check.py`, mirroring `test_self_update.py`'s naming):
 | What to mock | Patch target | Why |
-|---|---|---|
+| - | - | - |
 | Latest release / current version | `patch("pcswitcher.cli.get_highest_release", return_value=...)`, `patch("pcswitcher.cli.get_this_version", return_value=...)` | avoid live GitHub calls |
 | Install/verify subprocess calls | `patch("pcswitcher.cli.subprocess.run", ...)` (same as `test_self_update.py`) | avoid real `uv tool install` |
 | TTY | `patch("pcswitcher.cli.is_interactive", return_value=True)` | force the interactive branch in tests (CliRunner can't fake a real TTY) |
@@ -227,7 +227,7 @@ Note `Prompt.ask` in this codebase is called **without** passing `console=` — 
 ## Assumptions Log
 
 | # | Claim | Section | Risk if Wrong |
-|---|-------|---------|---------------|
+| - | ----- | ------- | ------------- |
 | A1 | `sys.stdout.flush()`/`sys.stderr.flush()` before `execvp` is necessary to avoid losing the pre-exec "restarting" message | Focus Q3 | Low — worst case a cosmetic message is dropped; upgrade itself is unaffected |
 | A2 | ADR-004 should NOT be amended for this feature | Focus Q7 / Docs | Low — a doc-placement judgment call, easily corrected in review if the planner disagrees |
 

@@ -23,7 +23,7 @@
     "install.sh installation script"
   ],
   "cross_refs": [
-    "../../docs/High%20level%20requirements.md",
+    "../../docs/high-level-requirements.md",
     "../../docs/adr/_index.md",
     "architecture.md",
     "data-model.md",

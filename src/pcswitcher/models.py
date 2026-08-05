@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import IntEnum, StrEnum
 from typing import Any
 
@@ -21,6 +21,7 @@ __all__ = [
     "SessionStatus",
     "Snapshot",
     "SnapshotPhase",
+    "SyncAborted",
     "SyncAbortedByUser",
     "SyncSession",
     "ValidationError",
@@ -128,18 +129,54 @@ class DiskSpaceCriticalError(Exception):
         super().__init__(f"{hostname}: Disk space {free_space} below threshold {threshold}")
 
 
-class SyncAbortedByUser(Exception):
-    """Raised when the user declines a confirmation prompt during sync.
+class SyncAborted(Exception):
+    """Raised when the run ends before it finished, deliberately and cleanly.
 
-    Represents expected control flow, not an unrecoverable error: a user
-    answering "no" to a confirmation is not a failure of the tool. Callers
-    MUST NOT log this at CRITICAL (see LogLevel.CRITICAL docstring); it is
-    caught separately from the generic exception path in both
-    Orchestrator.run() and the CLI so it is reported once, at WARNING.
+    Represents expected control flow, not an unrecoverable error: callers MUST NOT log
+    this at CRITICAL (see LogLevel.CRITICAL docstring); it is caught separately from the
+    generic exception path in both Orchestrator.run() and the CLI so it is reported once,
+    at WARNING.
+
+    This class is the TOOL's own decision to stop — a snippet registry that cannot be
+    parsed, an apt hold naming a package the machine does not have, a flatpak remote
+    filter that excludes an installed ref, a prompt nobody could answer. Nothing rendered
+    from it may say the user stopped the sync, because nobody was asked. Also the honest
+    choice where the site cannot tell: a `Confirmer` returns False both for a human
+    typing "n" and for a non-interactive run refused without anyone being asked.
+
+    Raise `SyncAbortedByUser` instead wherever a human actually answered something.
     """
 
     def __init__(self, message: str) -> None:
         super().__init__(message)
+
+
+class SyncAbortedByUser(SyncAborted):
+    """The user chose to stop: a declined confirmation, a "stop the sync" answer at a
+    review screen, or Ctrl-C at one.
+
+    A subclass rather than a sibling so every `except SyncAborted` catches both — the two
+    end the run identically and differ only in what may be SAID about them (#224).
+    """
+
+
+class JobSkipped(Exception):
+    """Raised by a job that did nothing, so the run records SKIPPED instead of SUCCESS.
+
+    "Nothing to do because the target already matches the source" is success; this is
+    for the other kind of nothing — nobody was present to decide, or the job had
+    nothing applicable to work on. The orchestrator catches it beside
+    PackageItemFailures: it records a SKIPPED JobResult, logs once at WARNING and does
+    NOT re-raise, so the remaining jobs still run and the session stays COMPLETED.
+
+    MUST only be raised BEFORE the job's first mutating command — raised later, the
+    partial state the job already wrote would go unreported.
+    """
+
+    def __init__(self, job_name: str, reason: str) -> None:
+        self.job_name = job_name
+        self.reason = reason
+        super().__init__(f"{job_name}: {reason}")
 
 
 class SyncLockedError(Exception):
@@ -147,7 +184,7 @@ class SyncLockedError(Exception):
 
     Represents an expected, retryable condition (another sync is in progress, or
     an orphaned holder left a stuck lock), not an unrecoverable crash. Like
-    SyncAbortedByUser, callers MUST NOT log this at CRITICAL; it is caught
+    SyncAborted, callers MUST NOT log this at CRITICAL; it is caught
     separately from the generic exception path in both Orchestrator.run() and the
     CLI so it is reported once, at WARNING, with its how-to-unblock guidance.
     """
@@ -189,7 +226,7 @@ class Snapshot:
 
     subvolume: str  # e.g., "@home"
     phase: SnapshotPhase  # PRE or POST
-    timestamp: datetime  # When the snapshot was created
+    timestamp: datetime  # When the snapshot was created (UTC, from the name)
     session_id: str  # 8-char hex session identifier
     host: Host  # SOURCE or TARGET
     path: str  # Full filesystem path
@@ -231,8 +268,10 @@ class Snapshot:
         except ValueError as e:
             raise ValueError(f"Invalid phase '{phase_str}' in path: {path}") from e
 
-        # Parse timestamp
-        timestamp = datetime.strptime(snap_ts, "%Y%m%dT%H%M%S")
+        # Names are stamped in UTC (`btrfs_snapshots._snapshot_timestamp`), so the parsed
+        # value is UTC too -- kept aware rather than naive so it cannot be compared
+        # against a local-time `now()` without the mismatch being an error.
+        timestamp = datetime.strptime(snap_ts, "%Y%m%dT%H%M%S").replace(tzinfo=UTC)
 
         return cls(
             subvolume=subvolume,
@@ -255,7 +294,14 @@ class SessionStatus(StrEnum):
 
 
 class JobStatus(StrEnum):
-    """Result status for an individual job execution."""
+    """Result status for an individual job execution.
+
+    SKIPPED means the job did nothing because nobody could decide or nothing was
+    applicable — never because the target already matched the source, which is the
+    goal met and therefore SUCCESS. Jobs signal it by raising `JobSkipped`; the
+    orchestrator also records it directly for an enabled job whose class will not
+    resolve. `_summarize_job_outcomes` treats it as a non-failure.
+    """
 
     SUCCESS = "success"
     SKIPPED = "skipped"

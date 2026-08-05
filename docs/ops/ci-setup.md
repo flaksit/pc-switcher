@@ -6,7 +6,7 @@ This document describes the Continuous Integration setup for pc-switcher.
 
 The CI pipeline uses GitHub Actions with a tiered approach:
 - **Fast checks** (Lint, Unit Tests) run on every push, but only when relevant files change
-- **Slow checks** (Integration Tests) run only on non-draft PRs to main, when relevant files change
+- **Slow checks** (Integration Tests) run only on non-draft PRs to main, when relevant files change, and only for the areas the PR touches
 
 Both workflows use path filtering to skip checks when only unrelated files change (e.g., documentation-only changes skip all tests).
 
@@ -21,9 +21,11 @@ Both workflows use path filtering to skip checks when only unrelated files chang
 | Job | Purpose | Duration |
 | ----- | -------- | ---------- |
 | check-changes | Determines if lint/tests should run based on changed files | ~5s |
-| Lint | basedpyright, ruff check, ruff format, codespell | ~30s |
-| Unit Tests | pytest tests/unit tests/contract | ~30s |
+| Lint | `basedpyright`, `ruff check`, `ruff format --check`, `codespell` | ~30s |
+| Unit Tests | `uv run pytest tests/unit tests/contract -v` | ~30s |
 | CI Status | Reports final status (pass/skip/fail) - this is the required check | ~5s |
+
+`tests/local_rsync/` and `tests/unit_jobs/` are outside both the path filter and the pytest selection, so CI never runs them.
 
 **Conditions for running lint and unit tests**:
 
@@ -40,41 +42,44 @@ If no relevant files changed, the `CI Status` check reports success with "skippe
 
 ### Integration Tests Workflow (`integration-tests.yml`)
 
-**Trigger**: Pull requests to `main`
+**Triggers**:
+- `pull_request` targeting `main`, on `opened`, `synchronize`, `reopened`, `ready_for_review` and `labeled`
+- `workflow_dispatch`
+- `schedule`, nightly at 02:30 UTC
+
+PRs targeting any branch other than `main` never trigger this workflow — a stacked PR based on another branch gets no integration coverage.
 
 **Jobs**:
-1. **check-changes**: Determines if integration tests should run based on changed files
+1. **check-changes**: Decides whether the run is needed. On a PR, from the path filter; on a schedule, skipped when `main` is unchanged since the previous nightly; otherwise always true.
 2. **wait-for-ci**: Blocks on CI's `CI Status` check (lint + unit tests) for the PR head commit, so integration never starts on a red build. Uses `lewagon/wait-on-check-action`; there is no native cross-workflow `needs:` because lint/unit run in `ci.yml` on `push`.
-3. **integration**: Runs actual tests (conditional on check-changes + non-draft PR; needs `wait-for-ci`)
+3. **integration**: Provisions if needed, then runs the tests. Needs `wait-for-ci`.
 4. **status**: Always runs and reports final status (this is the required check)
 
 **Conditions for running tests**:
-- PR must not be a draft (`if: github.event.pull_request.draft == false`)
+- PR must not be a draft (`github.event.pull_request.draft == false`)
+- If the event is `labeled`, the label must be `ci: full` — any other label is ignored, so labelling a PR never burns a CI cycle or the VM lock
 - Relevant files must have changed:
   - `.github/workflows/integration-tests.yml`
   - `src/**`
-  - `tests/integration/**`
+  - `tests/run-integration-tests.sh`
+  - `tests/integration/**` except `upgrade-vms.sh`
   - `install.sh`
   - `pyproject.toml`
   - `uv.lock`
 
-**Events**:
-- `opened` - New PR created
-- `synchronize` - New commits pushed
-- `reopened` - PR reopened
-- `ready_for_review` - Draft marked as ready
+**Test selection**: PR runs are topic-scoped — `select-ci-tests.sh` maps the PR's changed files to a pytest `-m` expression over the `smoke`/`area_*` markers, erring toward the full suite when a file matches no area. The full suite runs on the `ci: full` label, the nightly schedule, and `workflow_dispatch`. CI additionally deselects `ci_skip`. See [Testing Guide](../dev/testing-guide.md#ci-test-selection-topic-based).
 
-**Concurrency**: Only one integration test run at a time (`cancel-in-progress: false`)
+**Concurrency**: Only one integration test run at a time (`cancel-in-progress: false`, on the `integration` job)
 
-**Duration**: 5-30 minutes depending on VM state (when tests run); <1 minute (when skipped)
+**Timeouts**: 50 minutes for provisioning, 60 for the test run.
 
 ### Other Workflows
 
 | Workflow | Trigger | Purpose |
 | -------- | ------- | ------- |
-| `claude.yml` | @claude mentions | AI assistant |
-| `pr-requires-issue-closing.yml` | PR opened/edited/synchronized | Enforce that issues are closed via PR description/title |
-| `vm-updates.yml` | Daily (2 AM UTC) | Upgrade test VMs |
+| `claude.yml` | @claude mentions in issues, comments and reviews | AI assistant |
+| `pr-requires-issue-closing.yml` | PR opened/edited/synchronize/reopened/ready_for_review | Enforce that issues are closed via PR description/title |
+| `vm-updates.yml` | Daily at 02:00 UTC, plus `workflow_dispatch` | Upgrade test VMs and retake the baseline snapshots |
 
 The VM Updates workflow runs daily to incorporate security updates into the baseline snapshots within a reasonable delay.
 
@@ -82,15 +87,17 @@ The VM Updates workflow runs daily to incorporate security updates into the base
 
 ### Required Status Checks
 
-All must pass before merge:
-- `CI / CI Status` - Reports lint and unit test results (passes if tests pass OR are skipped due to no relevant changes)
-- `Integration Tests / Integration Tests Status` - Reports integration test results (passes if tests pass OR are skipped)
-- `PR metadata / Requires issue closing keyword (pull_request)`
+Both must pass before merge:
+- `CI Status` — lint and unit test results (passes if tests pass OR are skipped due to no relevant changes)
+- `Integration Tests Status` — integration test results (passes if tests pass OR are skipped, including on a draft PR)
+
+The issue-closing check is not a required check; it reports but does not block.
 
 ### Settings
 
-- **Require branches to be up to date**: Recommended (ensures tests run against latest main)
+- **Require branches to be up to date**: enabled
 - **Merge queue**: Disabled (not needed with PR-triggered integration tests)
+- **Enforce for administrators**: disabled
 
 ## Draft PR Workflow
 
@@ -134,13 +141,7 @@ flowchart TD
 
 ## Required Secrets
 
-| Secret | Purpose |
-| ------ | ------- |
-| `HCLOUD_TOKEN` | Hetzner Cloud API for VM provisioning |
-| `HETZNER_SSH_PRIVATE_KEY` | SSH access to test VMs |
-| `SSH_AUTHORIZED_KEY_CI` | Public key for CI runner |
-| `SSH_AUTHORIZED_KEY_*` | Developer SSH keys for VM access |
-| `GH_API_TOKEN_RO` | Long-lived read-only PAT (Contents: read) baked into test VMs for GitHub API rate limiting; must outlive the CI job, so the ephemeral auto-provided `GITHUB_TOKEN` is not used (issue #163) |
+See [Testing Ops](testing-ops.md#required-secrets) for the full list, formats, and how to generate them.
 
 ## Local Development
 
@@ -151,10 +152,13 @@ Run checks locally before pushing:
 uv run basedpyright
 uv run ruff check && uv run ruff format --check
 uv run codespell
-uv run pytest tests/unit tests/contract -v
+uv run pytest tests/unit tests/contract --verbose
 
 # Integration tests (requires VM access)
-./tests/local-pytest.sh tests/integration
+./tests/run-integration-tests.sh
+
+# Print the marker expression CI would use for this branch
+tests/integration/scripts/select-ci-tests.sh origin/main
 ```
 
 ## Troubleshooting
@@ -174,7 +178,8 @@ The `Integration Tests Status` check will always complete, but the actual integr
 
 1. **Tests skipped with ✓** - No relevant files changed (this is normal and expected)
 2. **PR is draft** - Mark as ready for review to run tests
-3. **Targeting wrong branch** - Must target `main`
+3. **Targeting wrong branch** - Must target `main`; a PR stacked on another branch is never covered
+4. **Only some areas ran** - Expected: PR runs are topic-scoped. Add the `ci: full` label for the whole suite.
 
 To check if tests ran or were skipped, view the workflow run details.
 
@@ -186,8 +191,7 @@ To check if tests ran or were skipped, view the workflow run details.
 
 ### Merge Blocked
 
-All required checks must pass:
+Both required checks must pass, and the branch must be up to date with `main`:
 - If CI Status fails due to Lint: Run `uv run ruff check --fix && uv run ruff format`
 - If CI Status fails due to Unit Tests: Check test output, run locally to debug
 - If Integration Tests Status fails: Check logs artifact, may need VM reset
-- If Issue closing keyword fails: Add "Fixes #123" or similar to PR description

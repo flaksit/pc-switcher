@@ -5,13 +5,16 @@ FolderSyncJob's first-sync overwrite gate need the same "pause the TUI, show a
 yellow warning panel, ask the user to continue" behaviour. Rather than duplicate
 that block, both go through a `Confirmer`:
 
+The caller's ``--allow-*`` flag is answered first, regardless of interactivity: passing
+it on the command line IS the answer, so the question is not asked at all (GitHub #231).
+Only when no flag was passed does interactivity decide:
+
 - interactive (both stdin and stdout are TTYs, per ``is_interactive``): pause the live
   TUI, print a Rich ``Panel`` with the warning, prompt ``Continue anyway? [y/n]``
   (default ``n``), resume the TUI, and return whether the user chose ``y``.
 - non-interactive (either end is not a TTY): there is nobody who can both see and answer
-  the prompt, so the decision falls back to the caller's ``--allow-*`` flag. When
-  ``allow`` is True the action is auto-approved (logged); otherwise it is refused
-  (logged, with a hint to pass the flag) and False is returned.
+  the prompt, so the action is refused (logged, with a hint to pass the flag) and False
+  is returned.
 
 Dry-run is intentionally NOT handled here: callers decide how a rehearsal should
 behave (ADR-014) and short-circuit before calling ``confirm``.
@@ -57,8 +60,8 @@ class Confirmer(Protocol):
         Args:
             title: Short heading for the warning (panel title / log prefix).
             message: Rich-markup body explaining the risk.
-            allow: The caller's ``--allow-*`` flag value; used only in non-interactive
-                mode to decide auto-approve (True) vs refuse (False).
+            allow: The caller's ``--allow-*`` flag value. True auto-approves without
+                prompting, on a terminal as well as off one.
             allow_flag: The flag name (e.g. ``--allow-first-sync``) surfaced in messages
                 so the user knows how to proceed non-interactively.
             log_extra: Structured logging context (``job``/``host``) for the caller.
@@ -98,15 +101,21 @@ class TerminalUIConfirmer:
     ) -> bool:
         extra: dict[str, Any] = {"job": "confirmer", "host": "source", **(log_extra or {})}
 
+        if allow:
+            # The flag is the answer (#231). Asking anyway would make ``--allow-*`` mean
+            # "warn me and ask", which is what the user passed it to avoid. Checked ahead
+            # of interactivity so a terminal run behaves like a piped one. WARNING, like
+            # the orchestrator's dry-run short-circuit: a destructive-action gate was
+            # passed without anyone looking, so the end-of-run summary must resurface it.
+            self._logger.warning("%s — auto-approved by %s", title, allow_flag, extra=extra)
+            return True
+
         if not is_interactive(self._console):
             # Not fully interactive (stdin and/or stdout is not a TTY): there is
-            # nobody who can both see the prompt and answer it, so the
-            # ``--allow-*`` flag is the only way to express intent. Shares
+            # nobody who can both see the prompt and answer it, and no flag was
+            # passed to express intent, so the action is refused. Shares
             # ``is_interactive`` with setup_logging so the live UI and the
             # prompt agree about interactivity under mixed redirection.
-            if allow:
-                self._logger.info("%s — auto-approved by %s", title, allow_flag, extra=extra)
-                return True
             self._logger.warning(
                 "%s — refused in non-interactive mode; pass %s to proceed",
                 title,

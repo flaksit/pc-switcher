@@ -11,7 +11,9 @@ User Stories covered:
 - CORE-US-SELF-INSTALL-AS2: Upgrade outdated target
 
 **What these tests cover:**
-- InstallOnTargetJob validation and execution logic
+- InstallOnTargetJob validation and execution logic, driven directly (TestSelfInstallation)
+- The same install and upgrade, reached through a real `pc-switcher sync`
+  (TestInstallOnTargetIntegration)
 - Error handling (missing pc-switcher, version mismatches, etc.)
 
 **What these tests do NOT cover:**
@@ -23,13 +25,26 @@ User Stories covered:
 
 from __future__ import annotations
 
+import pytest
+
 from pcswitcher.events import EventBus
 from pcswitcher.executor import BashLoginRemoteExecutor, LocalExecutor
 from pcswitcher.jobs.context import JobContext
 from pcswitcher.jobs.install_on_target import InstallOnTargetJob
 from pcswitcher.version import Release, find_one_version, get_this_version
 
-from ..conftest import get_installed_version
+from ..conftest import get_installed_version, write_pcswitcher_config
+
+pytestmark = pytest.mark.area_install
+
+
+# The sync these tests run is a vehicle for the install-on-target step, which runs before any
+# sync job: none is enabled, so the run installs on the target and finishes.
+_SYNC_CONFIG = """logging:
+  file: DEBUG
+  tui: DEBUG
+  external: DEBUG
+"""
 
 
 async def _create_integration_job_context(
@@ -151,3 +166,125 @@ class TestSelfInstallation:
         assert target_version_new == this_release_floor, (
             f"Target version {target_version_new} should match source {this_release_floor} after upgrade"
         )
+
+
+class TestInstallOnTargetIntegration:
+    """Integration tests verifying InstallOnTargetJob effects through full sync."""
+
+    async def test_install_on_target_fresh_machine(
+        self,
+        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
+        pc2_without_pcswitcher_fn: BashLoginRemoteExecutor,
+        reset_pcswitcher_state: None,
+    ) -> None:
+        """Verify InstallOnTargetJob installs pc-switcher on fresh target.
+
+        This test runs a full pc-switcher sync to a target that has no pc-switcher
+        installed, verifying that the InstallOnTargetJob correctly:
+        1. Detects missing pc-switcher on target
+        2. Installs the same version as source
+        3. Verifies installation succeeded
+
+        Unlike test_install_on_target_job.py which tests the job in isolation,
+        this test verifies the job works correctly within the full sync pipeline.
+        """
+        _ = reset_pcswitcher_state  # Ensures test isolation
+        pc1_executor = pc1_with_pcswitcher_mod
+
+        await write_pcswitcher_config(pc1_executor, _SYNC_CONFIG)
+
+        try:
+            # Run sync - this should install pc-switcher on target.
+            # --allow-first-sync: pc2 has no sync history (W1 gate, ADR-015); required in CI
+            # (no TTY) to bypass the first-sync overwrite confirmation.
+            sync_result = await pc1_executor.run_command(
+                "pc-switcher sync pc2 --yes --allow-first-sync",
+                timeout=300.0,  # Allow more time for fresh install
+                login_shell=True,
+            )
+
+            # Check exit code
+            assert sync_result.success, (
+                f"Sync should succeed.\n"
+                f"Exit code: {sync_result.exit_code}\n"
+                f"Stdout: {sync_result.stdout}\n"
+                f"Stderr: {sync_result.stderr}"
+            )
+
+            # Verify pc-switcher is now installed on target
+            post_check = await pc2_without_pcswitcher_fn.run_command(
+                "pc-switcher --version",
+                timeout=10.0,
+                login_shell=True,
+            )
+            assert post_check.success, (
+                f"pc-switcher should be installed on target after sync.\n"
+                f"Output: {post_check.stdout}\n"
+                f"Error: {post_check.stderr}"
+            )
+
+            # Verify version matches source floor release (dev versions install the floor release)
+            source_release = get_this_version().get_release_floor()
+            assert source_release.version.semver_str() in post_check.stdout, (
+                f"Target version should match source floor release {source_release.version.semver_str()}.\n"
+                f"Target output: {post_check.stdout}"
+            )
+
+        finally:
+            # Clean up config
+            await pc1_executor.run_command("rm --force ~/.config/pc-switcher/config.yaml", timeout=10.0)
+
+    async def test_install_on_target_upgrade_older_version(
+        self,
+        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
+        pc2_with_old_pcswitcher_fn: BashLoginRemoteExecutor,
+        reset_pcswitcher_state: None,
+    ) -> None:
+        """Verify InstallOnTargetJob upgrades older pc-switcher on target.
+
+        This test runs a full pc-switcher sync to a target that has an older
+        version installed, verifying that the InstallOnTargetJob:
+        1. Detects version mismatch
+        2. Upgrades to source version
+        3. Verifies upgrade succeeded
+        """
+        _ = reset_pcswitcher_state  # Ensures test isolation
+
+        await write_pcswitcher_config(pc1_with_pcswitcher_mod, _SYNC_CONFIG)
+
+        try:
+            # Run sync - this should upgrade pc-switcher on target.
+            # --allow-first-sync: pc2 has no sync history even when it has an old pc-switcher
+            # installed (install ≠ sync history); W1 gate fires in non-interactive CI.
+            sync_result = await pc1_with_pcswitcher_mod.run_command(
+                "pc-switcher sync pc2 --yes --allow-first-sync",
+                timeout=300.0,
+                login_shell=True,
+            )
+
+            # Check exit code
+            assert sync_result.success, (
+                f"Sync should succeed.\n"
+                f"Exit code: {sync_result.exit_code}\n"
+                f"Stdout: {sync_result.stdout}\n"
+                f"Stderr: {sync_result.stderr}"
+            )
+
+            # Verify pc-switcher was upgraded on target
+            post_check = await pc2_with_old_pcswitcher_fn.run_command(
+                "pc-switcher --version",
+                timeout=10.0,
+                login_shell=True,
+            )
+            assert post_check.success, f"pc-switcher should work on target after sync.\nError: {post_check.stderr}"
+
+            # Verify version matches source floor release (not old version)
+            source_release = get_this_version().get_release_floor()
+            assert source_release.version.semver_str() in post_check.stdout, (
+                f"Target version should match source floor release {source_release.version.semver_str()}.\n"
+                f"Target output: {post_check.stdout}"
+            )
+
+        finally:
+            # Clean up config
+            await pc1_with_pcswitcher_mod.run_command("rm --force ~/.config/pc-switcher/config.yaml", timeout=10.0)

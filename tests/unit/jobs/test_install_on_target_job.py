@@ -11,14 +11,22 @@ Tests cover CORE-US-SELF-INSTALL (Self-Installation) requirements:
 from __future__ import annotations
 
 import re
+import subprocess
+from dataclasses import fields
+from pathlib import Path
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from pcswitcher.config import Configuration
 from pcswitcher.jobs.context import JobContext
-from pcswitcher.jobs.install_on_target import InstallOnTargetJob
-from pcswitcher.models import CommandResult, Host
+from pcswitcher.jobs.install_on_target import INSTALL_ON_TARGET_SKIP_ENV, InstallOnTargetJob
+from pcswitcher.models import CommandResult, Host, JobSkipped
+from pcswitcher.orchestrator import Orchestrator
 from pcswitcher.version import Release, Version
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 @pytest.fixture
@@ -424,3 +432,99 @@ class TestInstallOnTargetJobUS7AS2:
 
             # Should use the same curl | bash pattern as user installation
             assert "bash" in install_call, f"Should pipe to bash like user installation. Got: {install_call}"
+
+
+class TestInstallOnTargetSkipHook:
+    """`INSTALL_ON_TARGET_SKIP_ENV` — the undocumented, test-only escape hatch.
+
+    Set, the step does nothing and says so; unset, the shipped path is untouched. The
+    invisibility tests are the ones that keep it undocumented: a hook nobody can find in
+    `--help`, the config schema or the docs is not a supported way of running the tool.
+    """
+
+    @pytest.mark.asyncio
+    async def test_the_step_is_skipped_and_the_sync_continues(
+        self, wired_orchestrator: Orchestrator, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Nothing reaches the target, and the run carries on past the step."""
+        monkeypatch.setenv(INSTALL_ON_TARGET_SKIP_ENV, "1")
+        remote = cast(MagicMock, wired_orchestrator._remote_executor)  # pyright: ignore[reportPrivateUsage]
+
+        await wired_orchestrator._install_on_target_job()  # pyright: ignore[reportPrivateUsage]
+
+        remote.run_command.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_the_skip_reason_names_the_variable(
+        self, wired_orchestrator: Orchestrator, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A reader of a test log can find out why the step did nothing."""
+        monkeypatch.setenv(INSTALL_ON_TARGET_SKIP_ENV, "1")
+
+        await wired_orchestrator._install_on_target_job()  # pyright: ignore[reportPrivateUsage]
+
+        logger = cast(MagicMock, wired_orchestrator._logger)  # pyright: ignore[reportPrivateUsage]
+        warnings = [call for call in logger.warning.call_args_list if "skipped" in call[0][0]]
+        assert len(warnings) == 1
+        assert INSTALL_ON_TARGET_SKIP_ENV in warnings[0][0][2]
+
+    @pytest.mark.asyncio
+    async def test_the_job_reports_itself_skipped(
+        self, mock_install_context: JobContext, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The job raises `JobSkipped`, the codebase's one way of saying "did nothing"."""
+        monkeypatch.setenv(INSTALL_ON_TARGET_SKIP_ENV, "1")
+        job = InstallOnTargetJob(mock_install_context)
+
+        assert await job.validate() == []
+        with pytest.raises(JobSkipped) as exc:
+            await job.execute()
+
+        assert exc.value.job_name == InstallOnTargetJob.name
+        assert INSTALL_ON_TARGET_SKIP_ENV in exc.value.reason
+
+    @pytest.mark.asyncio
+    async def test_the_step_runs_when_the_variable_is_unset(
+        self, wired_orchestrator: Orchestrator, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The shipped path: the target's version is still read over SSH."""
+        monkeypatch.delenv(INSTALL_ON_TARGET_SKIP_ENV, raising=False)
+        remote = cast(MagicMock, wired_orchestrator._remote_executor)  # pyright: ignore[reportPrivateUsage]
+        remote.run_command = AsyncMock(return_value=CommandResult(exit_code=0, stdout="pc-switcher 0.4.0", stderr=""))
+
+        with patch("pcswitcher.jobs.install_on_target.get_this_version", return_value=Version.parse("0.4.0")):
+            await wired_orchestrator._install_on_target_job()  # pyright: ignore[reportPrivateUsage]
+
+        calls = remote.run_command.call_args_list
+        assert len(calls) == 1
+        assert "pc-switcher --version" in calls[0][0][0]
+
+    def test_the_variable_is_not_mentioned_in_cli_help(self) -> None:
+        """A hidden hook stays hidden: nothing in `sync --help` names it."""
+        result = subprocess.run(
+            ["uv", "run", "pc-switcher", "sync", "--help"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert INSTALL_ON_TARGET_SKIP_ENV not in result.stdout
+        assert INSTALL_ON_TARGET_SKIP_ENV not in result.stderr
+
+    def test_no_configuration_key_stands_in_for_the_variable(self) -> None:
+        """Skipping the install step is not a configurable mode: no schema key, no field."""
+        schemas = [
+            *(_REPO_ROOT / "src").rglob("config-schema.yaml"),
+            *(_REPO_ROOT / "specs").rglob("config-schema.yaml"),
+        ]
+        assert schemas, "no config schema found to assert the absence against"
+        named_in = [path for path in schemas if INSTALL_ON_TARGET_SKIP_ENV.lower() in path.read_text().lower()]
+        assert named_in == []
+
+        field_names = {f.name for f in fields(Configuration)}
+        assert INSTALL_ON_TARGET_SKIP_ENV.lower() not in field_names
+
+    def test_the_variable_is_absent_from_the_documentation(self) -> None:
+        """Documented behaviour is behaviour users may rely on; this is not."""
+        documents = [*(_REPO_ROOT / "docs").rglob("*.md"), _REPO_ROOT / "README.md"]
+        named_in = [path for path in documents if INSTALL_ON_TARGET_SKIP_ENV in path.read_text()]
+        assert named_in == []

@@ -17,7 +17,7 @@ logging:
 ### Log Levels
 
 | Level | Value | When to Use |
-|-------|-------|-------------|
+| ----- | ----- | ----------- |
 | `DEBUG` | 10 | Internal diagnostics, development only |
 | `FULL` | 15 | Operational details (file-level sync info) |
 | `INFO` | 20 | High-level operations (job start/complete) |
