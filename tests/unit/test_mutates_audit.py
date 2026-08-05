@@ -453,7 +453,7 @@ _PACKAGE_SYNC_MODULES = frozenset(
     {"jobs/snap_sync.py", "jobs/flatpak_sync.py", "jobs/manual_deb_sync.py", "jobs/manual_installs_sync.py"}
 )
 
-# `PKG-FR-SOURCE-INTENT`: the writes a sync makes on the source are exactly three, each
+# `PKG-FR-SOURCE-INTENT`: the writes a sync makes on the source are exactly four, each
 # required by an article of its own. The value is that article and why the write exists.
 _SOURCE_WRITES: dict[str, str] = {
     # Written through whichever machine holds the item, which is the source whenever the
@@ -470,6 +470,12 @@ _SOURCE_WRITES: dict[str, str] = {
     # branch the target's. Both are the same write, applied on both machines.
     "orchestrator.py::Orchestrator._run_snap_hold_command::run_command": (
         "PKG-FR-SNAP-REFRESH-PAUSE — the auto-refresh pause and its restore, which both machines take"
+    ),
+    # Same shape as the snap pause above: one key, a local branch and a remote one, one
+    # write applied on both machines. Three commands travel through it — the deferred
+    # restart is scheduled, the timers are stopped, and both are undone at cleanup.
+    "orchestrator.py::Orchestrator._run_apt_timer_command::run_command": (
+        "PKG-FR-APT-TIMER-PAUSE — the apt update-timer pause and its restart, which both machines take"
     ),
 }
 
@@ -570,10 +576,10 @@ def _is_package_sync(relpath: str) -> bool:
 
 class TestSourceWrites:
     """`PKG-FR-SOURCE-INTENT`: a sync changes what software the TARGET has, and makes
-    exactly three writes on the source.
+    exactly four writes on the source.
 
     The `mutates=` audit above classifies a call as read or write and stops there, so a
-    fourth source write would pass it unnoticed. This one asks the other question — which
+    fifth source write would pass it unnoticed. This one asks the other question — which
     machine does the write land on — by the handle the call goes through: `self.target` and
     a parameter typed `RemoteExecutor` are the machine being synced to, everything else can
     be the source and has to be named.
@@ -591,7 +597,7 @@ class TestSourceWrites:
         """J149 — a new write through a handle that is not the target's lands here.
 
         Its author must either route it through the target, or name it — and naming a new
-        one inside a package job means adding a fourth entry to `_SOURCE_WRITES`, which the
+        one inside a package job means adding a fifth entry to `_SOURCE_WRITES`, which the
         test below refuses.
         """
         gated = _collect_gated()
@@ -617,14 +623,15 @@ class TestSourceWrites:
 
         assert not problems, "source-write audit failed:\n\n" + "\n\n".join(problems)
 
-    def test_a_package_sync_writes_exactly_three_things_on_the_source(self) -> None:
+    def test_a_package_sync_writes_exactly_four_things_on_the_source(self) -> None:
         """J149 — the requirement itself, spelled out here as well as in the table so that neither
-        can be changed alone: the mark, the snippet, the refresh pause.
+        can be changed alone: the mark, the snippet, the refresh pause, the apt-timer pause.
         """
         assert set(_SOURCE_WRITES) == {
             "jobs/packages/state.py::DecisionFile._write::run_command",
             "jobs/packages/state.py::SnippetRegistry.add::run_command",
             "orchestrator.py::Orchestrator._run_snap_hold_command::run_command",
+            "orchestrator.py::Orchestrator._run_apt_timer_command::run_command",
         }
 
 

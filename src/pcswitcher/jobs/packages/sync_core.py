@@ -48,15 +48,27 @@ from abc import abstractmethod
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 from pcswitcher.jobs.base import SyncJob
 from pcswitcher.jobs.context import JobContext
 from pcswitcher.jobs.packages.items import DiffAction, DiffClass, ItemClass, ItemDiff, Machines
 from pcswitcher.jobs.packages.probes import ProbeFailed
-from pcswitcher.jobs.packages.review import Decision, ReviewEntry, ReviewGroup, ReviewOutcome, asks_for_a_decision
+from pcswitcher.jobs.packages.review import (
+    Decision,
+    MarkSide,
+    ReviewEntry,
+    ReviewGroup,
+    ReviewOutcome,
+    ReviewPolicy,
+    asks_for_a_decision,
+    policy_answers_any,
+)
 from pcswitcher.jobs.packages.state import DecisionEntry, DecisionFile
 from pcswitcher.models import CommandResult, Host, JobSkipped, LogLevel, ProgressUpdate
+
+if TYPE_CHECKING:
+    from pcswitcher.executor import Executor
 
 __all__ = [
     "SNAP_CHANGE_REVIEW_ACTION",
@@ -265,6 +277,7 @@ def _merge_rounds(first: ReviewOutcome, second: ReviewOutcome) -> ReviewOutcome:
         was_interactive=first.was_interactive and second.was_interactive,
         snippets={**first.snippets, **second.snippets},
         unresolved=(*first.unresolved, *second.unresolved),
+        mark_sides={**first.mark_sides, **second.mark_sides},
     )
 
 
@@ -447,33 +460,55 @@ class PackageSyncJob(SyncJob):
 
     @staticmethod
     def _mark_holders(action: DiffAction) -> tuple[bool, ...]:
-        """The machines a machine-specific mark on a diff of this action can sit on, as
-        "is it the source" flags, THE RECORDING MACHINE FIRST (D-08a,
-        `PKG-FR-MACHINE-SPECIFIC`).
+        """Every machine a machine-specific mark on a diff of this action can sit on, as
+        "is it the source" flags (D-08a, `PKG-FR-MACHINE-SPECIFIC`).
 
-        One definition serving both halves, and the ordering is what makes them agree by
-        construction: the WRITE path (`_record_permanent_skips`) takes the first flag to
-        pick the executor whose file gets the entry, and the READ path
-        (`_drop_inert_diffs`) looks in every file the tuple names, which always includes
-        the one the write used.
+        The READ path's definition (`_drop_inert_diffs` looks the item up in every file
+        this names), and the superset the WRITE path chooses from: whatever
+        `_mark_recipients` picks for one diff is a machine listed here, so a mark can never
+        land in a file a later run does not read.
 
         The holding machine is "the one whose state the mark describes", and the action
         states which machines have the item at all:
 
         - `INSTALL` — only the source has it, so only the source can describe it.
         - `REMOVE` — only the target has it.
-        - `CHANGE` — BOTH have it, with different content, and the answer keeps the
-          TARGET's copy: what the user refused permanently is the overwrite of the machine
-          they are syncing TO, which is the machine the review names in the same words
-          ("it is <target>'s own", `review._hints`). But which machine that was depends on
-          the direction the run that recorded the mark was launched in, and the direction
-          of a later run says nothing about it — so a change is read back from either
-          machine's file. Reading only one of them makes the mark hold in the direction it
-          was given and evaporate in the other.
+        - `CHANGE` — BOTH have it, with different content, so EITHER can be the holder and
+          the user is the one who says which (`PKG-FR-MARK-SIDE`, `_mark_recipients`).
+          Which machine that was also depends on the direction the run that recorded the
+          mark was launched in, and the direction of a later run says nothing about it — so
+          a change is read back from either machine's file whichever side it was written
+          on. Reading only one of them makes the mark hold in the direction it was given
+          and evaporate in the other.
         """
         if action is DiffAction.CHANGE:
             return (False, True)
         return (action is DiffAction.INSTALL,)
+
+    def _mark_recipients(self, action: DiffAction, side: MarkSide | None) -> tuple[Executor, ...]:
+        """The machines whose decision file gets the entry for one `SKIP_ALWAYS` answer —
+        the WRITE half of `_mark_holders` (D-08a, `PKG-FR-MARK-SIDE`).
+
+        An `INSTALL` is on the source alone and a `REMOVE` on the target alone, so the
+        action names the holder and `side` is not consulted. A `CHANGE` is on both, so the
+        review's follow-up answer decides, and `BOTH` writes two entries: each is about that
+        machine's own copy, and each dies with it (`PKG-FR-MARK-LIFETIME`).
+
+        `side` is `None` for a `CHANGE` nobody was asked about — an outcome assembled
+        without the follow-up: the automation environment, or a caller building a
+        `ReviewOutcome` by hand. That falls back to the target, which is the copy the batch
+        screen's own permanent answer names ("it is <target>'s own") and what this recorded
+        before the follow-up existed.
+        """
+        if action is DiffAction.INSTALL:
+            return (self.source,)
+        if action is DiffAction.REMOVE:
+            return (self.target,)
+        if side is MarkSide.SOURCE:
+            return (self.source,)
+        if side is MarkSide.BOTH:
+            return (self.source, self.target)
+        return (self.target,)
 
     def _drop_inert_diffs(
         self,
@@ -861,13 +896,13 @@ class PackageSyncJob(SyncJob):
     async def _record_permanent_skips(self, plan: PackagePlan, decisions: Mapping[str, Decision]) -> None:
         """Persist a `DecisionEntry` for every `SKIP_ALWAYS`-decided, actionable diff.
 
-        D-08a decides WHICH machine's file gets the entry by which machine HOLDS the item
-        (`_mark_holders`, whose first flag is exactly this choice): an `INSTALL` diff is
-        source-held, since only the source has the item, so it records on `self.source`;
-        `REMOVE` and `CHANGE` diffs are target-held — the target is the only machine that
-        has a removal's item, and a change's answer keeps the target's own copy of an item
-        both machines have — so they record on `self.target`, through the remote executor,
-        never a local write (ADR-002).
+        D-08a decides WHICH machine's file gets the entry by which machine HOLDS the item,
+        and `_mark_recipients` is that choice: an `INSTALL` diff is source-held, since only
+        the source has the item, and a `REMOVE` is target-held for the same reason. A
+        `CHANGE` is on both machines, so the review's own follow-up says whose copy the
+        answer was about and the entry lands on that machine — or on both, which is two
+        entries (`PKG-FR-MARK-SIDE`). Every write goes through the machine's own executor,
+        the target's remotely, never a local write (ADR-002).
 
         `REPORT_ONLY` diffs are skipped: they carry no converge verb (version-mismatch,
         repo-unavailable, origin-mismatch and unreproducible are informational only), so
@@ -887,6 +922,8 @@ class PackageSyncJob(SyncJob):
         if self.context.dry_run or not self._accepted_outcome_was_interactive():
             return
 
+        assert self._accepted_outcome is not None
+        mark_sides = self._accepted_outcome.mark_sides
         recorded_at = datetime.now(UTC).isoformat()
         for diff in plan.diffs:
             if decisions.get(diff.item_id) != Decision.SKIP_ALWAYS:
@@ -898,16 +935,15 @@ class PackageSyncJob(SyncJob):
             if diff.action not in (DiffAction.INSTALL, DiffAction.CHANGE, DiffAction.REMOVE):
                 continue
 
-            executor = self.source if self._mark_holders(diff.action)[0] else self.target
-            await DecisionFile(self.manager_id, executor).record(
-                DecisionEntry(
-                    item_id=diff.item_id,
-                    item_class=diff.item_class,
-                    label=diff.label,
-                    reason=None,
-                    recorded_at=recorded_at,
-                )
+            entry = DecisionEntry(
+                item_id=diff.item_id,
+                item_class=diff.item_class,
+                label=diff.label,
+                reason=None,
+                recorded_at=recorded_at,
             )
+            for executor in self._mark_recipients(diff.action, mark_sides.get(diff.item_id)):
+                await DecisionFile(self.manager_id, executor).record(entry)
 
     def _accepted_outcome_was_interactive(self) -> bool:
         assert self._accepted_outcome is not None
@@ -976,8 +1012,8 @@ class PackageSyncJob(SyncJob):
         A `plan()` failure propagates unchanged, so the orchestrator's per-job exception
         handling attributes it to this job's own `JobResult`.
 
-        A non-interactive run whose review held something to DECIDE raises `JobSkipped`:
-        D-26 forces every such item to SKIP_ONCE with nobody present to answer, so
+        A run whose review held something to DECIDE and that NOBODY answered raises
+        `JobSkipped`: D-26 forces every such item to SKIP_ONCE with nobody present, so
         continuing would converge nothing and report SUCCESS. It is raised before any
         mutating command, as `JobSkipped` requires, and before the second round is put:
         asking a screen nobody can answer would print the same items twice for nothing.
@@ -987,22 +1023,38 @@ class PackageSyncJob(SyncJob):
         absence changed its outcome and it stays SUCCESS, exactly as an empty plan does
         (`PKG-FR-NO-TERMINAL`).
 
-        `after_review()` runs only when a human answered (`PKG-FR-NO-TERMINAL`: a
-        non-interactive run transfers no registry). The two SUCCESS cases above are
-        exactly where that matters: an unreproducible job's hook pushes the SOURCE's
-        whole snippet registry, which carries entries from earlier runs, so "this run had
-        nothing to decide" is not "this run has nothing to transfer". Gated here rather
-        than in the hook so the rule holds for any job that ever needs the seam.
+        "Nobody answered" is two questions, not one. `ReviewOutcome.was_interactive` says
+        whether a HUMAN did, and it must stay that: `_record_permanent_skips` keys the
+        machine-specific mark on it, and a run the flags answered may not write one
+        (`PKG-FR-APPLY-FLAGS-NO-MARK`). Whether the COMMAND LINE answered is the second
+        question, and `review.policy_answers_any` asks it of this job's own groups — over
+        both rounds, so a job whose only answerable group is a second-round one still runs.
+        A run where the flags answer nothing they were given still skips, exactly as it
+        does with no flags at all (`PKG-FR-APPLY-FLAGS-SCOPE`).
+
+        `after_review()` runs when a human answered OR the command line did
+        (`PKG-FR-NO-TERMINAL`: a run nobody answered transfers no registry). It matters in
+        both directions here: an unreproducible job's hook pushes the SOURCE's whole
+        snippet registry, which carries entries from earlier runs, so "this run had nothing
+        to decide" is not "this run has nothing to transfer" — and an install the flags
+        approved is REPLAYED from the target's copy of that registry, so skipping the push
+        would converge it from a stale file or none. What the hook must NOT do on a
+        flag-answered run it already declines on its own: `_finalize_unreproducible` writes
+        nothing unless the outcome was interactive, so no snippet is authored and no mark is
+        recorded by a run nobody watched. Gated here rather than in the hook so the rule
+        holds for any job that ever needs the seam.
         """
         assert self.context.reviewer is not None, (
             f"{self.manager_id} sync has no reviewer; the orchestrator must inject one "
             "through JobContext.reviewer before execute()."
         )
+        policy = self.context.review_policy if self.context.review_policy is not None else ReviewPolicy()
         plan = await self.plan()
         outcome = await self.context.reviewer.review(plan.groups)
         second = await self.plan_second_round(plan, outcome)
         groups = (*plan.groups, *second.groups)
-        if any(asks_for_a_decision(group) for group in groups) and not outcome.was_interactive:
+        answered_by_policy = policy_answers_any(groups, policy)
+        if any(asks_for_a_decision(group) for group in groups) and not (outcome.was_interactive or answered_by_policy):
             raise JobSkipped(
                 self.name,
                 f"non-interactive run left every {self.manager_id} review item undecided",
@@ -1011,6 +1063,6 @@ class PackageSyncJob(SyncJob):
             outcome = _merge_rounds(outcome, await self.context.reviewer.review(second.groups))
         plan = PackagePlan(manager=plan.manager, diffs=second.diffs, groups=groups)
         self.accept_review(plan, outcome)
-        if outcome.was_interactive:
+        if outcome.was_interactive or answered_by_policy:
             await self.after_review()
         await self.apply()
