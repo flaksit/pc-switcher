@@ -62,21 +62,6 @@ def _print_labeled(
     out.print(Text.assemble((label, label_style), " ", (detail, detail_style)))
 
 
-def _print_labeled_list(out: Console, label: str, detail: str, *, label_style: str = "bold red") -> None:
-    """Print `label` on its own line, then each line of `detail` indented under it.
-
-    For a `detail` holding one entry per line: printed beside the label the first entry
-    would sit on the label line and the rest below it, which does not read as a list.
-
-    Each line goes out as a `Text` for the reason `_print_labeled` does — the entries quote
-    text pc-switcher did not author, where a `[...]`-shaped substring would be eaten as a
-    Rich style tag or raise MarkupError.
-    """
-    out.print(Text(label, style=label_style))
-    for line in detail.splitlines():
-        out.print(Text(f"  {line}"))
-
-
 def _load_configuration(config_path: Path) -> Configuration:
     """Load configuration with helpful error messages.
 
@@ -417,15 +402,12 @@ async def _async_run_sync(  # noqa: PLR0913 - CLI flags threaded to the orchestr
             # A completed run is not automatically a clean one: per-item job failures are
             # collected rather than raised (D-27), so the exit code comes from the session
             # status the orchestrator derived from job_results, not from "nothing raised".
-            if session.status is SessionStatus.FAILED:
-                console.print()
-                # One failed job per line: the message carries a reason per job (see
-                # `_summarize_job_outcomes`), and a run can end with several.
-                _print_labeled_list(
-                    console, "Sync finished with failures:", session.error_message or "no reason recorded"
-                )
-                return 1
-            return 0
+            #
+            # Nothing is printed here: the orchestrator's end-of-run block has already named
+            # every job and, for each failed one, the reason it recorded. Printing the
+            # failures again in a second shape would read as a second thing having gone
+            # wrong.
+            return 1 if session.status is SessionStatus.FAILED else 0
 
         except asyncio.CancelledError:
             # Cleanup runs in the orchestrator's finally block before CancelledError

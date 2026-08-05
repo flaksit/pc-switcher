@@ -15,6 +15,7 @@ from logging.handlers import QueueListener
 from typing import Any
 
 from rich.console import Console
+from rich.table import Table
 from rich.text import Text
 
 from pcswitcher.btrfs_snapshots import session_folder_name
@@ -308,6 +309,16 @@ def _failure_stays_in_its_job(job: Job, exc: Exception) -> bool:
     return isinstance(job, PackageSyncJob) or isinstance(exc, (PackageItemFailures, ProbeFailed))
 
 
+#: How each status is marked in the end-of-run block: glyph, then the colour it and the
+#: status word are printed in. The three read apart at a glance and in monochrome, which a
+#: colour alone would not.
+_JOB_OUTCOME_MARKS: dict[JobStatus, tuple[str, str]] = {
+    JobStatus.SUCCESS: ("✔", "green"),
+    JobStatus.SKIPPED: ("⏭", "yellow"),
+    JobStatus.FAILED: ("✖", "bold red"),
+}
+
+
 def _summarize_job_outcomes(job_results: list[JobResult]) -> tuple[SessionStatus, str | None]:
     """Derive the session outcome from the collected job results.
 
@@ -319,13 +330,16 @@ def _summarize_job_outcomes(job_results: list[JobResult]) -> tuple[SessionStatus
 
     ``SKIPPED`` is a normal outcome for a disabled or not-applicable job, not a failure.
 
-    Each failed job contributes its own recorded reason, not just its name: the end-of-run
-    message is what the user reads once the review screens are gone, and a failure has to
-    name the item, package or file it concerns wherever it is reported
-    (``PKG-FR-OUTCOME-FAILED``, ``PKG-FR-FAIL-NAMED``). The reasons are already one line
-    each — ``PackageItemFailures`` names every failed item on a single line — so a job with
-    forty failed items adds one line here, not forty, and the message stays as long as the
-    number of failed jobs.
+    Each failed job contributes its own recorded reason, not just its name: this message is
+    the session's own account of the run — logged at WARNING and stored on the
+    ``SyncSession`` — and a failure has to name the item, package or file it concerns
+    wherever it is reported (``PKG-FR-OUTCOME-FAILED``, ``PKG-FR-FAIL-NAMED``). The reasons
+    are already one line each — ``PackageItemFailures`` names every failed item on a single
+    line — so a job with forty failed items adds one line here, not forty, and the message
+    stays as long as the number of failed jobs.
+
+    What the user reads is the same set of reasons rendered by ``_print_job_summary``,
+    beside every job that did not fail.
     """
     failures = [r for r in job_results if r.status is JobStatus.FAILED]
     if not failures:
@@ -405,6 +419,12 @@ class Orchestrator:
         # Background tasks
         self._task_group: asyncio.TaskGroup | None = None
         self._cleanup_in_progress = False
+
+        # Every job outcome this run recorded, in execution order. Held on the orchestrator
+        # rather than only returned from `_execute_jobs` so `_cleanup` can print the
+        # end-of-run block (`CORE-FR-SUMMARY`) on the paths where no session is returned:
+        # a run aborted at the third job still reports what the first two did.
+        self._job_results: list[JobResult] = []
 
         # Snap auto-refresh hold state (decision 4). Engaged only when snap_sync is enabled
         # on a non-dry-run; the captured prior `refresh.hold` per host is restored (or unset)
@@ -805,6 +825,15 @@ class Orchestrator:
         """Execute InstallOnTargetJob to ensure pc-switcher is on target.
 
         Runs AFTER pre-sync snapshots for rollback safety if installation fails.
+
+        Records its own `JobResult` even though it is a fixed step rather than a
+        config-driven job: `CORE-FR-SUMMARY` is about every job that RAN, and this one runs
+        on every sync. Without it the end-of-run block would name the step only when it was
+        skipped, which reads as an anomaly rather than as one line of the run's record.
+
+        Failure is the exception: `execute()` raising anything else ends the whole run, and
+        `run()`'s handler reports the cause — there is no continuation for a result to
+        inform.
         """
         context = self._create_job_context({})
         install_job = InstallOnTargetJob(context)
@@ -816,17 +845,34 @@ class Orchestrator:
             raise RuntimeError("Installation validation failed:\n" + "\n".join(error_msgs))
 
         # Execute
+        started_at = datetime.now(UTC)
         try:
             await install_job.execute()
         except JobSkipped as e:
-            # This step is not one of the config-driven jobs, so it has no JobResult to
-            # carry a SKIPPED status; the WARNING the job loop logs for a skip is the whole
-            # record here. Not re-raised — a skip is not a failure of the run.
+            # Not re-raised — a skip is not a failure of the run.
+            self._job_results.append(
+                JobResult(
+                    job_name=install_job.name,
+                    status=JobStatus.SKIPPED,
+                    started_at=started_at,
+                    ended_at=datetime.now(UTC),
+                    error_message=e.reason,
+                )
+            )
             self._logger.warning(
                 "Job %s skipped: %s",
                 e.job_name,
                 e.reason,
                 extra={"job": "orchestrator", "host": "target"},
+            )
+        else:
+            self._job_results.append(
+                JobResult(
+                    job_name=install_job.name,
+                    status=JobStatus.SUCCESS,
+                    started_at=started_at,
+                    ended_at=datetime.now(UTC),
+                )
             )
 
     async def _sync_config_to_target(self) -> None:
@@ -1379,9 +1425,14 @@ class Orchestrator:
                 produced for enabled job names that resolved to no class.
 
         Returns:
-            List of JobResult for each executed job, `seed_results` first
+            Every JobResult this run has recorded: what ran before the loop (the
+            install-on-target step), then `seed_results`, then one per executed job. It is
+            the orchestrator's own list, not a copy, so results survive an exception out of
+            the loop and reach the end-of-run block.
         """
-        results: list[JobResult] = list(seed_results) if seed_results else []
+        results = self._job_results
+        if seed_results:
+            results.extend(seed_results)
 
         try:
             await self._run_jobs_in_task_group(jobs, results)
@@ -2206,7 +2257,54 @@ class Orchestrator:
         # rolling Recent Logs panel are still seen — on success as well as
         # failure. Naturally a no-op outside the interactive path (nothing is
         # captured there; warnings already went to stderr).
+        self._print_job_summary()
         self._print_warning_summary()
+
+    def _print_job_summary(self) -> None:
+        """Print a static end-of-run block naming every job that ran and how it ended.
+
+        `CORE-FR-SUMMARY`: until this exists, a `JobResult` reaches the user only as an
+        exit code, so SKIPPED is invisible and a failure is a sentence with no list. One
+        line per job, in execution order, carrying the recorded reason for the two statuses
+        that have one — a status word alone answers "did it work" but not "why not".
+
+        This is the only place failures are printed. The CLI prints no second list of them:
+        the same failures in two shapes read as two different things having gone wrong.
+
+        Printed for every ending, not only a clean one: an aborted or interrupted run still
+        did whatever it did before it stopped, and `self._job_results` holds that much.
+
+        Each reason is a Rich `Text` rather than part of a markup string — reasons quote
+        package-manager stderr and file paths, where `[installed]` would silently vanish and
+        `[/usr/bin/apt]` would raise MarkupError and crash the run after all its work was
+        done.
+
+        A grid rather than plain lines because a reason is the one field with no bound on
+        its length: in the grid a reason too long for the terminal wraps within its own
+        column, under itself, instead of continuing in the left margin where it reads as a
+        line of its own.
+        """
+        if self._console is None or not self._job_results:
+            return
+
+        grid = Table.grid(padding=(0, 1))
+        grid.add_column(no_wrap=True)  # indent + mark
+        grid.add_column(no_wrap=True)  # job name
+        grid.add_column(no_wrap=True)  # status
+        grid.add_column(overflow="fold")  # reason
+        for result in self._job_results:
+            glyph, style = _JOB_OUTCOME_MARKS[result.status]
+            reason = result.error_message if result.status is not JobStatus.SUCCESS else None
+            grid.add_row(
+                Text(f"  {glyph}", style=style),
+                Text(result.job_name),
+                Text(result.status.value, style=style),
+                Text(reason, style="dim") if reason else "",
+            )
+
+        self._console.print()
+        self._console.print(Text("Job outcomes:", style="bold"))
+        self._console.print(grid)
 
     def _print_warning_summary(self) -> None:
         """Print a static end-of-run block listing every captured `>=WARNING` line.
