@@ -136,6 +136,9 @@ pc-switcher sync <hostname> [--config PATH]
 # Step through every individual modification, confirming each one (needs a terminal)
 pc-switcher sync <hostname> --confirm-each-command
 
+# Converge package state without a terminal to answer the review at; one flag per direction
+pc-switcher sync <hostname> --apply-package-installs --apply-package-removals
+
 # View logs
 pc-switcher logs              # Show logs directory and list recent logs
 pc-switcher logs --last       # Show path to most recent log file
