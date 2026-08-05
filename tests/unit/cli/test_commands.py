@@ -8,18 +8,17 @@ from __future__ import annotations
 
 import subprocess
 from datetime import UTC, datetime
-from io import StringIO
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from rich.console import Console
 from typer.testing import CliRunner
 
 from pcswitcher.cli import _async_run_sync, app, update
 from pcswitcher.config import Configuration
 from pcswitcher.models import SessionStatus, SyncAborted, SyncAbortedByUser, SyncSession
 from pcswitcher.version import Release, Version
+from tests.unit.console_capture import captured_console
 
 runner = CliRunner()
 
@@ -153,17 +152,6 @@ class TestSyncAbortedHandling:
         assert "aborted" in printed.lower()
         assert "user" not in printed.lower()
         assert "failed" not in printed.lower()
-
-
-def captured_console() -> tuple[Console, StringIO]:
-    """A real `Console` writing to a buffer: a `MagicMock` accepts any string and would
-    pass no matter how the message was built.
-
-    Width pinned so no assertion depends on the terminal running the suite, and
-    no_color/highlight off so the buffer holds the literal characters printed.
-    """
-    buffer = StringIO()
-    return Console(file=buffer, width=200, no_color=True, highlight=False), buffer
 
 
 class TestToolOutputIsNotRichMarkup:

@@ -9,7 +9,6 @@ and snippet-replay coverage that previously lived against `AptSyncJob` in
 
 from __future__ import annotations
 
-import io
 import logging
 import re
 import shlex
@@ -18,7 +17,6 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from rich.console import Console
 from rich.panel import Panel
 
 from pcswitcher.config import Configuration
@@ -37,6 +35,7 @@ from pcswitcher.jobs.packages.state import SNIPPET_REGISTRY_RELPATH
 from pcswitcher.jobs.packages.sync_core import PackageItemFailures, PackagePlan
 from pcswitcher.models import CommandResult, Host, JobSkipped, SyncAborted, ValidationError
 from pcswitcher.orchestrator import Orchestrator
+from tests.unit.console_capture import captured_console
 
 # -- Real `apt-cache policy` output, verbatim ------------------------------------------
 #
@@ -2621,9 +2620,9 @@ class TestSnippetRegistryOverwriteGuard:
 
         message = str(confirmer.calls[0]["message"])
         # Rendered the way the real confirmer renders it: unescaped markup raises here.
-        console = Console(file=io.StringIO(), width=200, force_terminal=False, no_color=True)
+        console, buffer = captured_console()
         console.print(Panel(message))
-        rendered = console.file.getvalue()  # pyright: ignore[reportAttributeAccessIssue]
+        rendered = buffer.getvalue()
         assert "[bold]tool (unowned in /opt)" in rendered
         assert "--mode=[red]fast" in rendered
 

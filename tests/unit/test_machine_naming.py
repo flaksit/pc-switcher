@@ -42,6 +42,7 @@ from pcswitcher.jobs.context import JobContext
 from pcswitcher.jobs.packages.probes import ProbeFailed, require_answer
 from pcswitcher.models import CommandResult, Host
 from pcswitcher.orchestrator import Orchestrator
+from tests.unit.console_capture import captured_console
 
 _SRC = Path(pcswitcher.__file__).parent
 
@@ -323,8 +324,7 @@ class TestConfigSyncQuestions:
     def _console() -> tuple[Console, io.StringIO]:
         """A real console, not a mock: the machine names live inside Rich panels, which a
         mock records as object addresses."""
-        sink = io.StringIO()
-        return Console(file=sink, width=200, no_color=True, legacy_windows=False), sink
+        return captured_console()
 
     def test_new_config_question_names_both_machines(self) -> None:
         """H77."""

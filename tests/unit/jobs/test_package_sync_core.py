@@ -11,7 +11,6 @@ reasons that have nothing to do with the shared pipeline.
 
 from __future__ import annotations
 
-import io
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -19,7 +18,6 @@ from typing import Any, ClassVar
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from rich.console import Console
 
 from pcswitcher.events import ProgressEvent
 from pcswitcher.jobs.base import SyncJob
@@ -38,6 +36,7 @@ from pcswitcher.jobs.packages.sync_core import (  # pyright: ignore[reportPrivat
 )
 from pcswitcher.models import CommandResult, JobSkipped, JobStatus, LogLevel, SyncAbortedByUser, ValidationError
 from pcswitcher.orchestrator import Orchestrator
+from tests.unit.console_capture import captured_console
 
 
 def make_context(
@@ -805,7 +804,7 @@ class TestNoWorkBetweenTheQuestionsOfOneRound:
     @pytest.mark.asyncio
     async def test_no_executor_command_is_issued_between_the_screens_of_one_round(self) -> None:
         """H35."""
-        console = Console(file=io.StringIO(), force_terminal=True)
+        console, _ = captured_console(terminal=True)
         reviewer = TerminalUIReviewer(console, MagicMock(), source_hostname="atlas", target_hostname="nomad")
         context = make_context(reviewer=reviewer)
         job = _ThreeScreenJob(context)
