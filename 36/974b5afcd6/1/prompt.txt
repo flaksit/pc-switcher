@@ -1,0 +1,97 @@
+<task-notification>
+<task-id>ad788828e461868e2</task-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-216/8cd933bd-864c-491e-aad2-58b31010e394/tasks/ad788828e461868e2.output</output-file>
+<status>completed</status>
+<summary>Agent "Pin dedicated apt test subjects" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done. Commit `495f7732`.
+
+## Subjects chosen and what I measured
+
+Five Ubuntu 24.04 archive packages, installed on **both** machines by `vm-test-fixtures.sh`:
+
+| Role | Package | Version (identical on pc1/pc2) | Installed size |
+| --- | --- | --- | --- |
+| `install_direction` | cmatrix, figlet, rolldice | 2.0-6, 2.2.5-3, 1.16-1build3 | 74 / 734 / 29 kB |
+| `removal_direction` | sysvbanner | 1:1.0-18fakesync1 | 36 kB |
+| `hold` | nyancat | 1.5.2-0.2 | 77 kB |
+
+Measured live on pc1 (91.99.178.190) and pc2 (138.199.146.229), same results on both:
+- `apt-get --dry-run install` lists only the package itself — no new dependency on either VM.
+- `apt-cache rdepends --installed &lt;p&gt;` — empty `Reverse Depends:` for all five.
+- `apt-get --dry-run remove &lt;p&gt;` — exactly one `Remv` line each; removing all five together removes exactly those five.
+- `apt-mark showhold` empty on both, so the hold subject starts unheld; `apt-get install` leaves all five in the manual set.
+- I also rejected `boxes` (pulls `libpcre2-32-0`), `toilet` (pulls `libcaca0` + `toilet-fonts`), `fortune-mod`, `pi`, `bb` — all pull new dependencies. `hello` excluded per brief (snap-fixture name clash); `cowsay`/`sl` deliberately avoided because `UNINSTALLED_ARCHIVE_CANDIDATES` needs packages apt knows and dpkg does **not** have.
+- Ran the new `install_apt_subjects` on pc1 twice: first run installs, second prints `apt subjects already installed` (cheap satisfied path). Both VMs put back — all five purged, `apt-get autoremove --dry-run` reports nothing.
+
+## Deleted
+
+`package_sync_scenario.py`: `find_removable_candidates`, `apt_would_remove_these`, `pick_safe_removal_candidates`, `pick_safe_removal_candidate`, `no_apt_candidate_message`, `parse_reverse_depends`, `parse_batched_rdepends`, `RDEPENDS_MARKER`, `RDEPENDS_PROBE_ROUND/LIMIT`, `REMOVAL_REHEARSAL_HEADROOM`, `a_package_both_machines_have_unheld`, `APT_SUBJECT_DENYLIST` — **plus** `apt_selection_snapshot` and `SECTION_MARKER`, which were used only by `a_package_both_machines_have_unheld` and would have been left dead.
+
+`tests/unit/jobs/test_package_sync_candidate_selection.py` keeps `TestNonblankLines` and `TestParseDpkgInstalled` (both helpers survive); the three rdepends/pick classes including `test_never_picks_a_package_pc_switcher_itself_needs` are gone. Module not empty, so not deleted.
+
+## Still probing
+
+Nothing for apt subject *selection*. `create_extra_on_target_apt_package` still queries both machines — it picks an *auto-installed* package to flip to manual, which is a different subject and was not in scope.
+
+## Notes
+
+- `FIXTURES_VERSION` / `PCSWITCHER_TEST_FIXTURES_VERSION` bumped 5 → 6.
+- `package_sync_scenario.py` had uncommitted changes at session start; they sat entirely inside the denylist/discovery regions this task removes, so they are superseded rather than carried forward.
+- `uv run pytest tests/unit tests/contract` has 3 pre-existing failures (Rich rendering/terminal-width in `test_package_review.py` and `test_commands.py`) — confirmed identical on a detached worktree at `HEAD`, unrelated to this change. Everything else green: ruff, codespell, basedpyright (0 errors), integration collect-only (73 items, no errors).</result>
+<usage><subagent_tokens>152814</subagent_tokens><tool_uses>24</tool_uses><duration_ms>747229</duration_ms></usage>
+</task-notification>
+
+---
+
+continue
+
+---
+
+Explain what you are doing about/for "local provioning", "marker", "fixture" and why
+
+---
+
+Will baseline automatically catch up when integration tests run on CI (i.e. on push to PR 206)? Or need to do something special?
+
+"~seconds per run forever until someone reprovisions" is not a problem. I'm more concerned about code for a temporary fix lingering around forever.
+
+---
+
+are you actively polling?
+
+---
+
+so you just blew up 17k tokens busy waiting? Thank you!
+
+---
+
+when successful, merge into gsd/phase-02-package-management-sync
+
+---
+
+<task-notification>
+<task-id>bqaqv6vv8</task-id>
+<tool-use-id>toolu_0114L3kAyK9yC5Av35e3bMsG</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-216/8cd933bd-864c-491e-aad2-58b31010e394/tasks/bqaqv6vv8.output</output-file>
+<status>completed</status>
+<summary>Background command "Re-run the package module" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bst8uj7rw</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-216/8cd933bd-864c-491e-aad2-58b31010e394/tasks/bst8uj7rw.output</output-file>
+<status>completed</status>
+<summary>Background command "Re-run all three modules" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+Can we declare #216 as closed?
+
+---
+
+put this status as comment on #216
