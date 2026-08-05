@@ -144,12 +144,12 @@ class UnreproducibleSyncJob(PackageSyncJob):
     # -- Detection, supplied per job ----------------------------------------------------
 
     @abstractmethod
-    async def capture_source_items(self) -> Sequence[UnreproducibleItem]:  # pyright: ignore[reportIncompatibleMethodOverride]
+    async def capture_source_items(self) -> Sequence[UnreproducibleItem]:
         """This job's findings on the SOURCE — the candidates `plan()` works from."""
         ...
 
     @abstractmethod
-    async def query_target_items(self) -> Sequence[UnreproducibleItem]:  # pyright: ignore[reportIncompatibleMethodOverride]
+    async def query_target_items(self) -> Sequence[UnreproducibleItem]:
         """What the TARGET already holds, in the source's own identities, so `plan()` can
         drop a finding that is already there (`PKG-FR-MANUAL-DIFF`).
 
