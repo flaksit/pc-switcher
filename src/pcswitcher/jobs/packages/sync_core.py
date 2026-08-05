@@ -48,7 +48,7 @@ from abc import abstractmethod
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, ClassVar
+from typing import ClassVar
 
 from pcswitcher.jobs.base import SyncJob
 from pcswitcher.jobs.context import JobContext
@@ -57,9 +57,6 @@ from pcswitcher.jobs.packages.probes import ProbeFailed
 from pcswitcher.jobs.packages.review import Decision, ReviewEntry, ReviewGroup, ReviewOutcome, asks_for_a_decision
 from pcswitcher.jobs.packages.state import DecisionEntry, DecisionFile
 from pcswitcher.models import CommandResult, Host, JobSkipped, LogLevel, ProgressUpdate
-
-if TYPE_CHECKING:
-    from pcswitcher.executor import Executor
 
 __all__ = [
     "SNAP_CHANGE_REVIEW_ACTION",
@@ -384,16 +381,6 @@ class PackageSyncJob(SyncJob):
             return frozenset()
         return absent & frozenset(entries)
 
-    def _decision_file(self, executor: Executor) -> DecisionFile:
-        """This job's machine-local decision file on `executor`'s machine.
-
-        A hook, and the single construction site every read and write in this class goes
-        through, so a job carved out of an older one can also read the marks recorded under
-        that older manager id (`state.AdoptedMarks`) without the split silently orphaning
-        every permanent answer the user gave about the items it took with it.
-        """
-        return DecisionFile(self.manager_id, executor)
-
     async def _load_live_decisions_on(self, *, on_source: bool) -> dict[str, DecisionEntry]:
         """One machine's decision file with the entries that machine no longer has anything
         to say about left out. Read-only — the file itself is rewritten by
@@ -404,7 +391,7 @@ class PackageSyncJob(SyncJob):
         `_drop_inert_diffs` call consults, so the item it named is diffed and reviewed
         normally instead of being silenced by an entry nothing stands behind.
         """
-        entries = await self._decision_file(self.source if on_source else self.target).load()
+        entries = await DecisionFile(self.manager_id, self.source if on_source else self.target).load()
         absent = await self._absent_marks(entries, on_source=on_source)
         return {item_id: entry for item_id, entry in entries.items() if item_id not in absent}
 
@@ -441,7 +428,7 @@ class PackageSyncJob(SyncJob):
             return
 
         for on_source in (True, False):
-            decision_file = self._decision_file(self.source if on_source else self.target)
+            decision_file = DecisionFile(self.manager_id, self.source if on_source else self.target)
             entries = await decision_file.load()
             absent = await self._absent_marks(entries, on_source=on_source)
             for item_id in sorted(absent):
@@ -912,7 +899,7 @@ class PackageSyncJob(SyncJob):
                 continue
 
             executor = self.source if self._mark_holders(diff.action)[0] else self.target
-            await self._decision_file(executor).record(
+            await DecisionFile(self.manager_id, executor).record(
                 DecisionEntry(
                     item_id=diff.item_id,
                     item_class=diff.item_class,

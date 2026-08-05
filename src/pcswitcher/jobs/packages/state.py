@@ -31,9 +31,7 @@ Decision files live at `~/.config/pc-switcher/<manager>.decisions.yaml`, next to
 `config.yaml` (D-09) — one file per manager, so `apt_sync`'s decisions never collide
 with `snap_sync`'s. The directory portion is derived from `config_sync.CONFIG_REMOTE_DIR`
 rather than a second hardcoded literal (the CR-01 precedent `folder_sync` already
-follows for its own tool-state filter token). One manager may ADOPT a slice of another's
-file (`AdoptedMarks`), which is how a job carved out of an older one keeps the answers the
-user already gave about the items it took with it.
+follows for its own tool-state filter token).
 
 This module also owns `SnippetRegistry` (D-20, D-23): the SHARED, synced counterpart to
 the machine-local decision store above. Where a `DecisionEntry` says "never touch this
@@ -68,7 +66,6 @@ __all__ = [
     "DECISION_FILE_GLOB_RELPATH",
     "DECISION_FILE_RELPATH_TEMPLATE",
     "SNIPPET_REGISTRY_RELPATH",
-    "AdoptedMarks",
     "DecisionEntry",
     "DecisionFile",
     "Snippet",
@@ -126,28 +123,6 @@ class DecisionEntry:
     label: str
     reason: str | None
     recorded_at: str  # ISO-8601 UTC
-
-
-@dataclass(frozen=True)
-class AdoptedMarks:
-    """The marks one manager takes over from ANOTHER manager's decision file, for a job
-    carved out of an older, wider one.
-
-    A decision file is per manager (D-09) while an `item_id` names the finding and not the
-    job that found it, so splitting a job moves the items without moving the entries the
-    user already recorded about them. Left alone those entries are orphaned, and D-08's
-    promise — a finding produces noise exactly once, then never again — silently breaks for
-    exactly the items the user cared enough about to answer permanently.
-
-    `manager` is the file to look in and `item_id_prefix` is the slice of it that belongs
-    to the adopting job; the two jobs partition one legacy file by prefix, so neither ever
-    reads the other's entries. Adoption is permanent rather than a one-shot copy: reading
-    is the only thing a plan may do (`PackageSyncJob.plan` is read-only), and a migration
-    that writes could never run before the first plan that needs its result.
-    """
-
-    manager: str
-    item_id_prefix: str
 
 
 class _HasItemId(Protocol):
@@ -249,10 +224,9 @@ class DecisionFile:
     ever talks to the executor it was given.
     """
 
-    def __init__(self, manager: str, executor: Executor, adopts: AdoptedMarks | None = None) -> None:
+    def __init__(self, manager: str, executor: Executor) -> None:
         self._manager = manager
         self._executor = executor
-        self._adopts = adopts
         # shlex.quote() is a no-op for this fixed, already-shell-safe relpath (only
         # word chars, '.', '/'), but is applied anyway per T-02-01 (ASVS V5) rather
         # than assuming a future manager name stays that safe. Left OUTSIDE the `~/`
@@ -264,24 +238,7 @@ class DecisionFile:
         self._display_path = f"~/{relpath}"
 
     async def load(self) -> dict[str, DecisionEntry]:
-        """Read this manager's decisions, plus any it adopts from an older manager's file
-        (`AdoptedMarks`), or an empty mapping (D-08's degrade rule).
-
-        This file wins on a shared `item_id`: an answer given since the split is the
-        current one.
-        """
-        entries = await self._load_own()
-        if self._adopts is None:
-            return entries
-        adopted = {
-            item_id: entry
-            for item_id, entry in (await DecisionFile(self._adopts.manager, self._executor)._load_own()).items()
-            if item_id.startswith(self._adopts.item_id_prefix)
-        }
-        return {**adopted, **entries}
-
-    async def _load_own(self) -> dict[str, DecisionEntry]:
-        """This file's own entries alone.
+        """Read this manager's decisions, or an empty mapping (D-08's degrade rule).
 
         Absent, empty and malformed all degrade to "no permanent decisions" rather
         than aborting the sync; only the malformed case logs a WARNING (naming the
@@ -309,11 +266,8 @@ class DecisionFile:
         `self._executor` — never a local filesystem write — so this identical method
         is correct whether `self._executor` is the source's `LocalExecutor` or the
         target's `RemoteExecutor`.
-
-        Own entries only: an adopted entry (`AdoptedMarks`) stays in the file that holds
-        it, so recording one answer never rewrites another manager's file wholesale.
         """
-        entries = await self._load_own()
+        entries = await self.load()
         entries[entry.item_id] = entry
         await self._write(
             _serialize(entries),
@@ -338,28 +292,11 @@ class DecisionFile:
         Writes nothing at all when the file holds none of `item_ids`, so a run over a file
         with nothing dead in it issues no command and needs no confirmation — and reads
         nothing either when `item_ids` is empty, which is every run that found no dead mark.
-
-        Covers the adopted file too (`AdoptedMarks`): an entry `load` returns is one this
-        job acts on, so a dead one has to leave the file it actually lives in. Dropping it
-        from this file alone would leave `load` adopting it again on the next run, which is
-        the mark outliving its item — the exact thing this method exists to prevent.
         """
         if not item_ids:
             return frozenset()
 
-        removed = await self._drop_from_own_file(item_ids)
-        if self._adopts is not None:
-            adopted_ids = [item_id for item_id in item_ids if item_id.startswith(self._adopts.item_id_prefix)]
-            legacy = DecisionFile(self._adopts.manager, self._executor)
-            removed |= await legacy._drop_from_own_file(adopted_ids)
-        return removed
-
-    async def _drop_from_own_file(self, item_ids: Collection[str]) -> frozenset[str]:
-        """`drop`, over this file's own entries alone."""
-        if not item_ids:
-            return frozenset()
-
-        entries = await self._load_own()
+        entries = await self.load()
         removed = frozenset(item_id for item_id in item_ids if item_id in entries)
         if not removed:
             return frozenset()
