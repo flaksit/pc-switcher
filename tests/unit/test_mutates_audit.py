@@ -230,6 +230,11 @@ _READ_ONLY_CALLS: dict[str, int] = {
     "jobs/manual_deb_sync.py::ManualDebSyncJob._scan_no_candidate_apt_packages::run_command": 1,
     "jobs/manual_deb_sync.py::ManualDebSyncJob._installed_names::run_command": 1,
     "jobs/manual_deb_sync.py::ManualDebSyncJob.validate::run_command": 3,
+    # manual_snap_sync: one `snap list --all` per machine — the source's sideloads and what
+    # the target already holds (`PKG-FR-MANUAL-DIFF`); validate checks `snap version` on both.
+    # No sudo on either machine, unlike snap_sync: listing snaps needs none.
+    "jobs/manual_snap_sync.py::ManualSnapSyncJob._installed_snaps::run_command": 1,
+    "jobs/manual_snap_sync.py::ManualSnapSyncJob.validate::run_command": 2,
     # manual_installs_sync: the unowned-file scan's four steps, each on whichever machine it
     # is handed; validate checks dpkg on both.
     "jobs/manual_installs_sync.py::ManualInstallsSyncJob._list_scan_entries::run_command": 1,
@@ -450,7 +455,13 @@ _TARGET_HANDLES = frozenset({"self.target", "self._target", "target", "self._rem
 # a path here — only the one function named in `_SOURCE_WRITES` belongs to this article.
 _PACKAGE_SYNC_PATHS = ("jobs/apt_sync/", "jobs/packages/")
 _PACKAGE_SYNC_MODULES = frozenset(
-    {"jobs/snap_sync.py", "jobs/flatpak_sync.py", "jobs/manual_deb_sync.py", "jobs/manual_installs_sync.py"}
+    {
+        "jobs/snap_sync.py",
+        "jobs/flatpak_sync.py",
+        "jobs/manual_deb_sync.py",
+        "jobs/manual_snap_sync.py",
+        "jobs/manual_installs_sync.py",
+    }
 )
 
 # `PKG-FR-SOURCE-INTENT`: the writes a sync makes on the source are exactly three, each
