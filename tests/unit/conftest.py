@@ -8,7 +8,6 @@ Provides:
 
 from __future__ import annotations
 
-import io
 from collections.abc import Callable
 from datetime import datetime
 from typing import Any
@@ -16,13 +15,13 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from freezegun import freeze_time
-from rich.console import Console
 
 from pcswitcher.config import Configuration
 from pcswitcher.events import EventBus
 from pcswitcher.jobs import JobContext
 from pcswitcher.models import CommandResult
 from pcswitcher.orchestrator import Orchestrator
+from tests.unit.console_capture import captured_console
 
 
 @pytest.fixture
@@ -184,7 +183,7 @@ def wired_orchestrator() -> Orchestrator:
     config.btrfs_snapshots.max_age_days = 30
 
     orchestrator = Orchestrator(target="target-host", config=config)
-    orchestrator._console = Console(file=io.StringIO())  # pyright: ignore[reportPrivateUsage]
+    orchestrator._console = captured_console()[0]  # pyright: ignore[reportPrivateUsage]
     orchestrator._ui = MagicMock()  # pyright: ignore[reportPrivateUsage]
     orchestrator._logger = MagicMock()  # pyright: ignore[reportPrivateUsage]
     local_executor = MagicMock()

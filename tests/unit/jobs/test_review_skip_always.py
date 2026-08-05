@@ -8,7 +8,6 @@ what the screen calls it, and what answering it produces.
 
 from __future__ import annotations
 
-import io
 import sys
 from collections.abc import Sequence
 from typing import Any, TypedDict
@@ -28,6 +27,7 @@ from pcswitcher.jobs.packages.review import (
     review_items,
 )
 from pcswitcher.models import SyncAbortedByUser
+from tests.unit.console_capture import captured_console
 
 
 class _Hosts(TypedDict):
@@ -49,7 +49,8 @@ def _mock_isatty(interactive: bool) -> MagicMock:
 
 
 def _interactive_console() -> Console:
-    return Console(file=io.StringIO(), force_terminal=True)
+    console, _ = captured_console(terminal=True)
+    return console
 
 
 def _entry(item_id: str, label: str = "pkg", action_label: str = "install") -> ReviewEntry:
@@ -246,7 +247,7 @@ class TestGroupsNeverOfferedPermanence:
 
     async def test_non_interactive_run_prompts_nothing(self) -> None:
         """H135, H160 — D-26: no TTY -> no screen at all, everything skip-once, nothing permanent."""
-        console = Console(file=io.StringIO())
+        console, _ = captured_console()
         ui = MagicMock()
         group = _group("install", [_entry("a"), _entry("b")])
 
