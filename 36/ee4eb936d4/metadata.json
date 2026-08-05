@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "36ee4eb936d4",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/01-home-sync-mvp-user-data-sync/01-UAT.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/36/ee4eb936d4/0/metadata.json",
+      "transcript": "/36/ee4eb936d4/0/full.jsonl",
+      "compact_transcript": "/36/ee4eb936d4/0/transcript.jsonl",
+      "content_hash": "/36/ee4eb936d4/0/content_hash.txt",
+      "prompt": "/36/ee4eb936d4/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 21,
+    "cache_creation_tokens": 154918,
+    "cache_read_tokens": 1767854,
+    "output_tokens": 3900,
+    "api_call_count": 11
+  }
+}
