@@ -153,7 +153,9 @@ class TestThePermanentAnswer:
         console = _interactive_console()
         ui = MagicMock()
         group = _group(action, [_entry("a", action_label=action)], title=f"{action} things")
-        screen = _fake_prompt(ask_return={"a": "skip_always"})
+        # The second answer is the follow-up's, which only the "change" direction reaches;
+        # an unused side effect is harmless for the other six.
+        screen = _fake_prompt(ask_side_effect=[{"a": "skip_always"}, {"a": "target"}])
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
@@ -161,7 +163,7 @@ class TestThePermanentAnswer:
         ):
             outcome = await review_items([group], console=console, ui=ui, **HOSTS)
 
-        assert _values(decision_list.call_args) == [Decision.APPLY, Decision.SKIP_ONCE, Decision.SKIP_ALWAYS]
+        assert _values(decision_list.call_args_list[0]) == [Decision.APPLY, Decision.SKIP_ONCE, Decision.SKIP_ALWAYS]
         assert outcome.decisions == {"a": Decision.SKIP_ALWAYS}
 
 
