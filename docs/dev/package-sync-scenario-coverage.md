@@ -1923,6 +1923,13 @@ Driven by the orchestrator around the whole job window; listed here because the 
 | K117 | The restart command fails on a machine | The run says so, names the machine, and says the machine restarts by itself anyway | U | `test_apt_timer_suspension:TestWarningsNameTheMachines::test_a_failed_restart_names_the_machine_and_says_it_still_comes_back` |
 | K118 | The restart raises because the connection is already gone | The run says so, names the machine, and finishes tearing down | U | `test_apt_timer_suspension:TestWarningsNameTheMachines::test_a_restart_that_raises_names_the_machine` |
 | K119 | `apt_sync` enabled; a machine cannot run privileged commands without a password | Validation fails naming that machine, and says the timer pause is part of why it needs it | U | `test_apt_job:TestValidate::test_source_without_passwordless_sudo_yields_validation_error`, `::test_target_without_passwordless_sudo_yields_validation_error_naming_the_binaries` |
+| K121 | A machine still carries the pending restart of a run that died, and its timers are still stopped | The run takes that restart over instead of walking past the machine, cancels it so it cannot fire mid-sync, and restarts the timers itself at the end | U | `test_apt_timer_suspension:TestAdoptingAPredecessor::test_a_predecessor_on_a_stopped_host_is_adopted_cancelled_and_honoured` |
+| K122 | Same, but someone started that machine's timers again by hand after the dead run | The machine is suspended normally — the pending restart costs it nothing | U | `::test_a_predecessor_on_a_manually_restarted_host_does_not_cost_the_suspension` |
+| K123 | A pending restart is taken over | This run's own is in place before the old one is cancelled, so the machine is never left with neither | U | `::test_this_runs_restore_is_scheduled_before_any_predecessor_is_cancelled` |
+| K124 | Scheduling fails on a machine that carries a pending restart | Nothing is cancelled and nothing is stopped; the old restart still covers that machine | U | `::test_a_failed_schedule_cancels_nothing_so_the_machine_is_never_stranded` |
+| K125 | A pending restart names something other than the two apt timers | Only the apt timers are taken over from it | U | `::test_the_adopted_set_comes_off_exec_start_and_holds_only_apt_timers` |
+| K126 | A machine's pending restarts cannot be listed | It is left untouched, like a machine whose timer state could not be read | U | `::test_a_host_whose_pending_restores_cannot_be_listed_is_left_untouched` |
+| K127 | A pending restart is taken over | The run says so and names the unit it took over | U | `::test_the_takeover_is_announced_with_the_unit_it_took_over` |
 
 ## N. Across runs, and across the two roles
 
