@@ -1,0 +1,39 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "b1dcb0555ad1",
+  "session_id": "8cd933bd-864c-491e-aad2-58b31010e394",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-05T08:38:35.614110372Z",
+  "branch": "pc-216",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    "docs/dev/package-sync-scenario-coverage.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "69f547e4ae9b",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 700,
+    "cache_creation_tokens": 1528971,
+    "cache_read_tokens": 114307128,
+    "output_tokens": 231623,
+    "api_call_count": 353
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-05T08:38:35.454424888Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 13,
+    "human_removed": 2,
+    "total_committed": 0,
+    "total_lines_changed": 15,
+    "agent_percentage": 0,
+    "metric_version": 2
+  }
+}
