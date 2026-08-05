@@ -17,7 +17,7 @@ Some A–K rows span more than one run, still in that direction, and each says s
 ## Navigation
 
 - [Package sync — user requirements](../planning/package-sync-user-requirements.md) — the intent every scenario here comes from
-- [Package sync conformance criteria](../planning/package-sync-conformance-criteria.md) — the 137 articles each section decomposes
+- [Package sync conformance criteria](../planning/package-sync-conformance-criteria.md) — the 138 articles each section decomposes
 - [Package sync specification](../system/package-sync.md) — how the behaviour is built
 - [Package sync job behaviour](../jobs/package-sync.md) — what the user sees
 - [Testing guide](testing-guide.md) — how to write the tests named here
@@ -1403,7 +1403,7 @@ Rows H49–H52 assert an absence: the machinery derived from an approved package
 | # | Scenario | Expected | Cov | Test |
 | --- | --- | --- | --- | --- |
 | H118 | An install-direction item is marked machine-specific. | The mark is written on Atlas, the machine that holds the item; Nomad's file is untouched. | U | `package_state:TestPipelineWiring::test_skip_always_on_install_writes_to_source_not_target` |
-| H119 | A change-direction item is marked machine-specific. | The mark is written on Nomad — both machines have the item, and what the answer keeps is Nomad's copy. | U | `package_state:TestPipelineWiring::test_skip_always_on_change_writes_to_target_not_source` |
+| H119 | A change-direction item is marked machine-specific and no side answer reaches the write. | The mark is written on Nomad, the copy the batch screen's own permanent answer names. | U | `package_state:TestPipelineWiring::test_skip_always_on_change_writes_to_target_not_source` |
 | H120 | A removal-direction item is marked machine-specific. | The mark is written on Nomad, the only machine holding it. | U | `package_state:TestPipelineWiring::test_skip_always_on_remove_writes_to_target_not_source` |
 | H121 | A permanent answer is forced onto an apt hold, in either direction. | Neither machine's decision file is written. | U | `block_state_decisions:TestABlockCanNeverBeRecorded::test_a_forced_permanent_answer_on_an_apt_hold_records_nothing` |
 | H122 | The same forced onto a snap refresh hold. | Neither machine's snap decision file is written. | U | `block_state_decisions:TestABlockCanNeverBeRecorded::test_a_forced_permanent_answer_on_a_snap_hold_records_nothing` |
@@ -1471,6 +1471,15 @@ Rows H49–H52 assert an absence: the machinery derived from an approved package
 | H215 | A marked hand-installed package is still installed, and a repository can now supply it. | The mark stays: the check is whether the machine has it, not whether it is still unreproducible. | U | `manual_installs_sync:TestMarksFollowWhatTheMachineHolds::test_a_marked_package_still_installed_keeps_its_mark` |
 | H216 | dpkg no longer reports a marked hand-installed package. | The mark is dropped. | U | `manual_installs_sync:TestMarksFollowWhatTheMachineHolds::test_a_marked_package_dpkg_no_longer_reports_is_dropped` |
 | H217 | Nomad holds an unreproducible mark whose item it no longer has, and every sync runs Atlas to Nomad. | Nomad's own file is reconciled: whose marks silence a finding is a different question from which machine still holds a marked item. | U | `manual_installs_sync:TestMarksFollowWhatTheMachineHolds::test_the_machine_being_synced_to_has_its_own_file_reconciled` |
+| H218 | Several items both machines have with differing copies are kept for good on one review. | One further screen follows the batch, a row per item, offering Atlas, Nomad and both — never a screen per item and never a fourth answer on the batch. | U | `review_skip_always:TestWhichMachineKeepsItsCopy::test_a_conflicting_item_kept_for_good_is_asked_about_on_one_further_screen`, `::test_every_conflicting_item_is_on_that_one_screen` |
+| H219 | That question is answered "Atlas". | The mark is written on Atlas alone; Nomad's file is untouched. | U | `review_skip_always:TestWhichMachineKeepsItsCopy::test_each_answer_comes_back_as_the_side_it_names`; `package_state:TestPipelineWiring::test_a_conflicting_items_mark_lands_on_the_side_the_user_named` |
+| H220 | The same answered "Nomad". | The mark is written on Nomad alone. | U | same as H219 |
+| H221 | The same answered "both". | An entry is written in each machine's file, so the answer outlives either machine losing its copy. | U | same as H219 |
+| H222 | An install- or removal-direction item is kept for good. | It is never asked about: only one machine has it, so its action already names the holder, and a side reaching the write cannot move that mark. | U | `review_skip_always:TestWhichMachineKeepsItsCopy::test_an_arriving_or_leaving_item_is_never_asked_which_machine`; `package_state:TestPipelineWiring::test_a_side_answer_cannot_move_an_installs_mark` |
+| H223 | A conflict screen is answered with applies and one-sync skips only. | No follow-up screen is built — the question exists only for the rows kept for good. | U | `review_skip_always:TestWhichMachineKeepsItsCopy::test_a_conflict_screen_nobody_answered_permanently_gets_no_follow_up`, `::test_only_the_items_kept_for_good_are_on_it` |
+| H224 | A permanent answer is forced onto a snap's revision change. | It reaches no follow-up: a snap revision can be marked on no machine, so there is no side to choose. | U | `review_skip_always:TestWhichMachineKeepsItsCopy::test_a_snap_revision_change_never_reaches_it` |
+| H225 | A run with no terminal, or one answered by the automation variable, produces a permanent answer on a conflicting item. | No follow-up screen is built and no side is recorded — a side is chosen by a person or not at all. | U | `review_skip_always:TestWhichMachineKeepsItsCopy::test_a_run_with_no_terminal_reaches_no_follow_up`, `::test_the_automation_variable_answers_no_side` |
+| H226 | Ctrl-C at that follow-up screen. | The whole sync aborts; no mark lands on a machine nobody named. | U | `review_skip_always:TestAbortAndTeardown::test_ctrl_c_at_the_machine_specific_follow_up_aborts_the_whole_sync` |
 
 ### H.11 Abort (articles: PKG-FR-ABORT)
 
