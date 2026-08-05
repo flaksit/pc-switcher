@@ -2,6 +2,9 @@
 
 target-version = "py314"
 line-length = 119
+# Ruff 0.16 formats Python code blocks inside Markdown. Our docs use illustrative,
+# deliberately-abridged snippets that must not be rewritten to match source style.
+extend-exclude = ["*.md"]
 
 [lint]
 select = [
