@@ -1,7 +1,7 @@
 ---
 phase: 02-package-management-sync
-verified: 2026-07-24T11:13:19Z
-status: human_needed
+verified: 2026-08-05T00:00:00Z
+status: passed
 score: 3/3 must-haves verified
 behavior_unverified: 0
 overrides_applied: 0
@@ -15,11 +15,17 @@ re_verification:
   regressions: []
   notes:
     - "Architecture corrected between the two verifications: the cross-manager PackagePhaseCoordinator (package_phase.py) was removed (D-15/02-15); review now happens per-manager inside each job's execute() via accept_review(). package_*.py moved into jobs/packages/ (D-31/02-19). New fourth job manual_installs_sync.py owns unreproducible detection + snippet registry, self-pushes package-snippets.yaml, and applies authored snippets the SAME run (corrected D-23/02-22, 02-23). config_sync reverted to config.yaml only. The prior VERIFICATION.md referenced the pre-delta paths."
+human_verification_status: complete
+human_verification_closed: 2026-08-05
 human_verification:
-  - test: "Real-TTY interactive batched review (02-02 Task 3): run a real sync with packages diverged in both directions on an actual terminal; confirm the questionary checkbox list composes cleanly with the paused Rich Live display, groups installs and removals separately, starts removal items unticked, and that ticking/unticking then apply/skip/skip-always each produce the recorded outcome. Also exercise the on-the-fly multi-line snippet capture editor (02-07 Task 2)."
+  - result: passed
+    closed_by: "02-UAT.md tests 1, 2 (02-UAT-01-RUNBOOK.md) and test 3"
+    test: "Real-TTY interactive batched review (02-02 Task 3): run a real sync with packages diverged in both directions on an actual terminal; confirm the questionary checkbox list composes cleanly with the paused Rich Live display, groups installs and removals separately, starts removal items unticked, and that ticking/unticking then apply/skip/skip-always each produce the recorded outcome. Also exercise the on-the-fly multi-line snippet capture editor (02-07 Task 2)."
     expected: "Prompt renders and hands the terminal back to Live cleanly; decisions match what was ticked; an authored snippet lands in ~/.config/pc-switcher/package-snippets.yaml"
     why_human: "CI answers reviews via PCSWITCHER_PACKAGE_REVIEW_AUTOMATION and unit tests stub questionary.checkbox()/select()/text(); real prompt_toolkit rendering, keybindings, and terminal-mode handoff with a live TTY are never exercised by any automated or CI check (RESEARCH Assumption A2; 02-02-SUMMARY.md Task 3 partly deferred to human; 02-VALIDATION.md Manual-Only Verifications)"
-  - test: "Physical two-machine end-to-end walkthrough (02-12 Task 3, type=checkpoint:human-verify, gate=blocking, deferred for the autonomous run): on two real machines, confirm all three roadmap success criteria hold end-to-end — package replication, before-any-change conflict/version-mismatch reporting, and machine-specific packages never forced — and manually inspect ~/.config/pc-switcher/*.decisions.yaml and package-snippets.yaml on both ends"
+  - result: passed
+    closed_by: "02-UAT.md test 2 (02-UAT-01-RUNBOOK.md §6, §7)"
+    test: "Physical two-machine end-to-end walkthrough (02-12 Task 3, type=checkpoint:human-verify, gate=blocking, deferred for the autonomous run): on two real machines, confirm all three roadmap success criteria hold end-to-end — package replication, before-any-change conflict/version-mismatch reporting, and machine-specific packages never forced — and manually inspect ~/.config/pc-switcher/*.decisions.yaml and package-snippets.yaml on both ends"
     expected: "Packages replicate; conflicts/version mismatches are reported (never silently converged); machine-specific/skip-always items stay inert; decision and snippet files on both machines reflect the run"
     why_human: "Requires two physical machines plus interactive TUI access; the VM CI suite proves the mechanical convergence and control-flow but drives reviews non-interactively, so a human-driven physical walkthrough with real interactive decisions is not covered by CI (02-12-SUMMARY.md 'Deferred Human Verification')"
 ---
@@ -28,9 +34,9 @@ human_verification:
 
 **Phase Goal:** A user can replicate installed packages from source to target across all package sources (apt, snap, flatpak, and manual/unreproducible installs), with conflicts and version mismatches detected and reported rather than silently overwritten.
 
-**Verified:** 2026-07-24T11:13:19Z
+**Verified:** 2026-08-05
 
-**Status:** human_needed
+**Status:** passed
 
 **Re-verification:** Yes — supersedes the 2026-07-23 report (1/3 human_needed), which predated the green VM integration run and the delta/correction replans.
 
@@ -44,7 +50,7 @@ human_verification:
 | 2 | Manually-installed .debs, custom PPAs, and install-script-sourced packages are reproduced on the target. | ✓ VERIFIED | New fourth job `manual_installs_sync.py`: `_scan_no_candidate_apt_packages` + `_scan_unowned_installs` detect unreproducible items; `SnippetRegistry` (`packages/state.py`) holds install snippets; `after_review()` runs finalize→`_push_snippet_registry` (self-pushes `package-snippets.yaml` via `send_file`)→`_promote_authored_snippets_to_install`, so an authored snippet is APPLIED (not merely transported) the SAME run (corrected D-23). Custom-PPA / repo state (sources/keyrings/pins/apt-config) delivered as apt items in `apt_sync.py`. Behaviorally proven live: `test_manual_installs_sync_pushes_registry_and_replays_snippet` and `test_apt_repository_state_dry_run_reviews_source_and_key_separately` (synthetic repo+key divergence, no longer skipped — closes ledger #2) both GREEN in CI on PR #206. |
 | 3 | Package conflicts and version mismatches are detected and reported before any destructive change; machine-specific packages are not forced onto the target. | ✓ VERIFIED | Version mismatches plan as `DiffClass.VERSION_MISMATCH`/`DiffAction.REPORT_ONLY` (D-04, `sync_core.py:297-301`) and `apply()` structurally excludes every REPORT_ONLY diff regardless of decision (`sync_core.py:441`: `decisions[...] == APPLY and action != REPORT_ONLY`) — a mismatch can never be force-converged. apt transaction simulation refuses downgrades/collateral removals by name; machine-local `DecisionFile` + `filter_inert` keep skip-always items inert. Proven by real behavioral unit tests AND live in CI: `test_apt_sync_dry_run_changes_nothing`, `test_non_interactive_skip_all`, `test_skip_always_is_inert_in_both_roles`, `test_each_manager_reviews_before_its_own_mutation`, `test_continue_on_item_failure` (D-27 exit-code) all GREEN on PR #206. |
 
-**Score:** 3/3 truths verified. `behavior_unverified: 0` — every success criterion is behaviorally proven, not present-only. Status is `human_needed` solely because two genuine human-only UAT checkpoints (interactive-TTY rendering and a physical two-machine walkthrough) remain that no automated or CI check can cover; these are distinct from the VM-behavior criteria CI already proves.
+**Score:** 3/3 truths verified. `behavior_unverified: 0` — every success criterion is behaviorally proven, not present-only. The two human-only UAT checkpoints (interactive-TTY rendering and a physical two-machine walkthrough) that previously held this report at `human_needed` were run by hand and passed; see `02-UAT.md` (3/3 passed).
 
 ### Required Artifacts
 
@@ -99,20 +105,22 @@ No orphaned requirements — both IDs REQUIREMENTS.md maps to Phase 2 appear in 
 
 None. Scanned `apt_sync.py`, `snap_sync.py`, `flatpak_sync.py`, `manual_installs_sync.py`, and `packages/{items,review,state,sync_core}.py` for `TBD`/`FIXME`/`XXX`/`TODO`/`HACK`/`PLACEHOLDER`/"not implemented" — zero hits. Broken-window ledger fully closed: `WINDOWS.md` `open_count: 0`, all three recorded entries `status: fixed`.
 
-### Human Verification Required
+### Human Verification — Complete
 
-Two genuinely human-only checkpoints remain. Both are UX/physical checks no automated or CI path can cover; neither reopens a success criterion (all three are CI-proven).
+Both human-only checkpoints were run by hand on two real machines and passed. Results recorded in `02-UAT.md` (3/3 passed); hand procedure in `02-UAT-01-RUNBOOK.md`.
 
-1. **Real-TTY interactive review (02-02 Task 3 + 02-07 Task 2)** — Run a real sync on an actual terminal with packages diverged both directions; confirm the questionary checkbox review composes with the paused Rich Live display, installs/removals grouped separately with removals unticked, decisions match ticks, and the multi-line snippet editor produces a snippet in `~/.config/pc-switcher/package-snippets.yaml`. CI answers reviews non-interactively via `PCSWITCHER_PACKAGE_REVIEW_AUTOMATION`, so live prompt_toolkit rendering/keybindings/terminal handoff are never exercised.
+1. **Real-TTY interactive review (02-02 Task 3 + 02-07 Task 2)** — ✓ PASSED. Covered by UAT tests 1 and 2: the review question composes with the paused Rich Live display, groups are asked once each with per-item answers, decisions land in the machine-local `*.decisions.yaml`, and the snippet editor rejects a whitespace-only body while an accepted snippet lands in `~/.config/pc-switcher/package-snippets.yaml` and replays on the target the same run. This is the coverage CI cannot provide — it answers reviews non-interactively via `PCSWITCHER_PACKAGE_REVIEW_AUTOMATION`.
 
-2. **Physical two-machine end-to-end walkthrough (02-12 Task 3, gate=blocking, deferred)** — On two real machines, confirm all three success criteria hold end-to-end and manually inspect `*.decisions.yaml` and `package-snippets.yaml` on both ends. Requires two physical machines + interactive TUI; the VM suite proves mechanical convergence but drives reviews non-interactively.
+2. **Physical two-machine end-to-end walkthrough (02-12 Task 3, gate=blocking)** — ✓ PASSED. Covered by UAT test 2 (runbook §6, §7): all three success criteria hold end-to-end on real hardware, both machines' `*.decisions.yaml` and `package-snippets.yaml` were inspected, and the three planning-time bookkeeping failures ended their runs before any write.
+
+UAT test 3 additionally exercised `--confirm-each-command` on a real terminal — the gate fires for every source and target write and never for reads, and the DEBUG trace carries each command verbatim with its description.
 
 ### Gaps Summary
 
-No gaps. All three roadmap success criteria are behaviorally verified — apt/snap/flatpak convergence, manual/PPA/script reproduction (with same-run snippet application), and conflict/version-mismatch report-before-destroy — via passing unit tests locally and the green VM integration suite in CI on PR #206 (ADR-008 pattern). The delta replan (02-14..02-21) and the snippet-application correction (02-22, 02-23) are reflected in the current code: per-manager review with no coordinator, four jobs, `manual_installs_sync` self-pushing and applying snippets the same run, and `config_sync` reverted to `config.yaml` only. The phase goal is achieved in code and behavior; the two residual items are interactive/physical UAT sign-offs, not code gaps.
+No gaps. All three roadmap success criteria are behaviorally verified — apt/snap/flatpak convergence, manual/PPA/script reproduction (with same-run snippet application), and conflict/version-mismatch report-before-destroy — via passing unit tests locally and the green VM integration suite in CI on PR #206 (ADR-008 pattern). The delta replan (02-14..02-21) and the snippet-application correction (02-22, 02-23) are reflected in the current code: per-manager review with no coordinator, four jobs, `manual_installs_sync` self-pushing and applying snippets the same run, and `config_sync` reverted to `config.yaml` only. The phase goal is achieved in code and behavior, and the two interactive/physical UAT sign-offs that remained are now done and passed.
 
 ---
 
-_Verified: 2026-07-24T11:13:19Z_
+_Verified: 2026-08-05_
 
 _Verifier: Claude (gsd-verifier)_
