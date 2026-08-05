@@ -32,7 +32,7 @@ from pcswitcher.jobs.packages.items import (
     ItemDiff,
 )
 from pcswitcher.jobs.packages.probes import ProbeFailed
-from pcswitcher.jobs.packages.review import COLLATERAL_REVIEW_ACTION, Decision, ReviewOutcome
+from pcswitcher.jobs.packages.review import COLLATERAL_REVIEW_ACTION, Decision, MarkSide, ReviewOutcome
 from pcswitcher.jobs.packages.state import (
     DECISION_FILE_GLOB_RELPATH,
     DECISION_FILE_RELPATH_TEMPLATE,
@@ -509,9 +509,9 @@ class TestPipelineWiring:
 
     @pytest.mark.asyncio
     async def test_skip_always_on_change_writes_to_target_not_source(self) -> None:
-        """H119, J4 — D-08a routes CHANGE with REMOVE, not with INSTALL: both machines have
-        the item, and the answer keeps the TARGET's copy — the overwrite is what it
-        permanently refused. Sibling of the INSTALL and REMOVE cases above.
+        """H119, J4 — an outcome carrying no side answer records on the TARGET, which is the
+        copy the batch screen's own permanent answer names. Sibling of the INSTALL and
+        REMOVE cases above; the answered sides are the three tests below.
         """
         context = make_context()
         job = FakeSyncJob(context)
@@ -525,6 +525,67 @@ class TestPipelineWiring:
         source_cmds = [call.args[0] for call in context.source.run_command.call_args_list]  # pyright: ignore[reportAttributeAccessIssue]
         assert any("mv --force" in cmd for cmd in target_cmds)
         assert not any("mv --force" in cmd for cmd in source_cmds)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("side", "writes_on_source", "writes_on_target"),
+        [
+            (MarkSide.SOURCE, True, False),
+            (MarkSide.TARGET, False, True),
+            (MarkSide.BOTH, True, True),
+        ],
+    )
+    async def test_a_conflicting_items_mark_lands_on_the_side_the_user_named(
+        self, side: MarkSide, writes_on_source: bool, writes_on_target: bool
+    ) -> None:
+        """H219, H220, H221 — both machines have the item, so the review's follow-up decides
+        whose file gets the entry; "both" writes one on each, and each dies with its own
+        machine's copy (`PKG-FR-MARK-LIFETIME`).
+        """
+        context = make_context()
+        job = FakeSyncJob(context)
+        diff = _change_diff("fake:drifting-tool")
+        plan = PackagePlan(manager="fake", diffs=(diff,), groups=())
+        job.accept_review(
+            plan,
+            ReviewOutcome(
+                decisions={diff.item_id: Decision.SKIP_ALWAYS},
+                was_interactive=True,
+                mark_sides={diff.item_id: side},
+            ),
+        )
+
+        await job.apply()
+
+        target_cmds = [call.args[0] for call in context.target.run_command.call_args_list]  # pyright: ignore[reportAttributeAccessIssue]
+        source_cmds = [call.args[0] for call in context.source.run_command.call_args_list]  # pyright: ignore[reportAttributeAccessIssue]
+        assert any("mv --force" in cmd for cmd in source_cmds) is writes_on_source
+        assert any("mv --force" in cmd for cmd in target_cmds) is writes_on_target
+
+    @pytest.mark.asyncio
+    async def test_a_side_answer_cannot_move_an_installs_mark(self) -> None:
+        """H222 — only the source has an install's item, so no answer relocates its mark; a
+        side reaching one is an id the follow-up never offered.
+        """
+        context = make_context()
+        job = FakeSyncJob(context)
+        diff = _install_diff("fake:brscan3")
+        plan = PackagePlan(manager="fake", diffs=(diff,), groups=())
+        job.accept_review(
+            plan,
+            ReviewOutcome(
+                decisions={diff.item_id: Decision.SKIP_ALWAYS},
+                was_interactive=True,
+                mark_sides={diff.item_id: MarkSide.BOTH},
+            ),
+        )
+
+        await job.apply()
+
+        target_cmds = [call.args[0] for call in context.target.run_command.call_args_list]  # pyright: ignore[reportAttributeAccessIssue]
+        source_cmds = [call.args[0] for call in context.source.run_command.call_args_list]  # pyright: ignore[reportAttributeAccessIssue]
+        assert any("mv --force" in cmd for cmd in source_cmds)
+        assert not any("mv --force" in cmd for cmd in target_cmds)
 
     @pytest.mark.asyncio
     async def test_a_marked_change_is_inert_whichever_machine_the_next_run_reads(self) -> None:

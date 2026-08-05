@@ -201,7 +201,11 @@ One thing never reaches any of it. A private PPA or a commercial repository carr
 
 Choosing the permanent answer — `<x>`, `keep for good` or `never <verb>` — marks that package as belonging to *this specific machine*, the one running as source or target right now. A machine-specific package is never synced out to peers when this machine is the source, and never installed or removed here by a sync arriving from another machine. Use it for things tied to one box: a hardware driver, a tool for an attached peripheral.
 
-Which of the two machines it is written on is the one whose copy your answer keeps: an install you never want here is recorded on the machine that has it, and both a removal you refuse and an overwrite you refuse are recorded on the machine you are syncing *to* — its copy is the one the answer protects. An item both machines have is the case where that is not the machine the sync was launched from, so the mark still counts when a later sync is launched the other way round.
+Which of the two machines it is written on is the one whose copy your answer keeps: an install you never want here is recorded on the machine that has it, and a removal you refuse on the machine you are syncing *to* — its copy is the one the answer protects.
+
+Where both machines have the item and their copies differ, neither is the holder by right, so the review asks. Once the screens are answered, every conflicting item you kept for good comes back on one more screen with three answers: this machine, the other one, or both. Naming one machine records the mark there; naming both records one on each, so the answer outlives either machine losing its copy. Either way the item stops travelling in both directions — what you are choosing is whose copy the decision is about, and therefore how long it lasts. Today the only items that reach this question are apt's own configuration files: nothing else that differs on both machines can be marked. A run with nobody at the keyboard never asks it and records nothing at all.
+
+A mark still counts when a later sync is launched the other way round, whichever machine it sits on.
 
 The mark is recorded in that machine's own decision file at `~/.config/pc-switcher/<manager>.decisions.yaml` (one per manager: `apt.decisions.yaml`, `snap.decisions.yaml`, `flatpak.decisions.yaml`, `manual.decisions.yaml`). That file is **never synced** — it stays local to the machine it describes.
 
