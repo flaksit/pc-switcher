@@ -23,3 +23,13 @@ result: Draft PR #261 (https://github.com/flaksit/pc-switcher/pull/261, branch `
 <usage><subagent_tokens>309780</subagent_tokens><tool_uses>184</tool_uses><duration_ms>1726091</duration_ms></usage>
 <worktree><worktreePath>/home/janfr/dev/pc-switcher/.claude/worktrees/agent-a0f13f57ef69375db</worktreePath><worktreeBranch>worktree-agent-a0f13f57ef69375db</worktreeBranch></worktree>
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>b925taddj</task-id>
+<tool-use-id>toolu_01HokTuoZwDxEUXenU7qq9J1</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/5545537a-0090-4c4f-a06a-15352f4ecf1d/tasks/b925taddj.output</output-file>
+<status>completed</status>
+<summary>Background command "Relaunch ADR-020 cleanup on Opus 4.8" completed (exit code 0)</summary>
+</task-notification>
