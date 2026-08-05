@@ -109,6 +109,18 @@ pc-switcher logs --last
 - [ ] Log entries are color-coded (same colors as TUI)
 - [ ] Timestamps and context fields readable
 
+### 4b. End-of-Run Job Outcomes
+
+```bash
+pc-switcher sync pc2
+```
+
+Printed after the live display stops, above the warning summary:
+- [ ] "Job outcomes:" in bold, then one line per job in the order they ran
+- [ ] Green ✔ / yellow ⏭ / red ✖ match success / skipped / failed
+- [ ] Job names line up; skipped and failed lines carry their reason in dim text
+- [ ] A reason too long for the terminal wraps under the reason column, not into the margin
+
 ### 5. Config Sync UI
 
 To test config sync display, ensure pc2 config differs from pc1:
@@ -163,6 +175,7 @@ Before release, verify all pass:
 - [ ] Version displays correctly
 - [ ] Error messages are formatted and helpful
 - [ ] Logs command output is readable
+- [ ] Job outcome block names every job with its status and reason
 
 **Adaptability:**
 - [ ] Works on small terminals (80×24)

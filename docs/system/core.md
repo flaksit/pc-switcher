@@ -331,7 +331,7 @@ Lineage: 001-core edge cases, 003-core-tests edge cases
 - **CORE-FR-LOCK** `[Reliability Without Compromise]`: A single unified lock per machine MUST prevent it from taking part in two syncs at once, in either role
   Lineage: 001-FR-047
 
-- **CORE-FR-SUMMARY**: Every job that ran MUST contribute one `JobResult` with SUCCESS, SKIPPED or FAILED and its start/end timestamps; the session status MUST be derived from those results, the outcome message MUST name each failed job together with the reason it recorded, and the exit code MUST be non-zero when any job failed
+- **CORE-FR-SUMMARY**: Every job that ran MUST contribute one `JobResult` with SUCCESS, SKIPPED or FAILED and its start/end timestamps; the session status MUST be derived from those results, the outcome message MUST name each failed job together with the reason it recorded, the run MUST end by printing one line per job giving its name, its status and — for SKIPPED and FAILED — the reason it recorded, and the exit code MUST be non-zero when any job failed
   Lineage: 001-FR-048
 
 ### Core Test Requirements
@@ -437,7 +437,7 @@ The same seam carries the verbatim `DEBUG` trace of every executor operation —
 
 ## Job outcomes
 
-Every job that ran contributes one `JobResult` with a status of SUCCESS, SKIPPED or FAILED (`CORE-FR-SUMMARY`).
+Every job that ran contributes one `JobResult` with a status of SUCCESS, SKIPPED or FAILED (`CORE-FR-SUMMARY`). That includes the fixed install-on-target step, which runs on every sync and is a job like any other; only the phases that are not jobs at all — locking, snapshots, config sync, history — stay out of the record.
 
 The dividing line between the first two is what the job's inaction means. "Nothing to do because the target already matches the source" is the goal met, so it is SUCCESS — an empty package plan, a mirror that finds nothing to transfer. "Nothing done because nobody could decide, or nothing was applicable" is SKIPPED. Per-item exclusions inside an otherwise-working job are neither: a job-level status cannot express them, and the review and the run's warnings already do.
 
@@ -455,7 +455,9 @@ FAILED behaves the same way for every failure of a package job (`apt_sync`, `sna
 
 Two things still end the run: a `SyncLockedError`, because the machine is no longer entitled to sync at all, and any failure of a job outside package sync (`folder_sync`, `vscode_state_sync`, the core jobs). Which of those may survive a failure is GitHub issue #220.
 
-The end-of-run message names each failed job with the reason it recorded, not the job names alone — one line per failed job, so a job that names forty failed items still costs one line.
+The end-of-run message names each failed job with the reason it recorded, not the job names alone — one line per failed job, so a job that names forty failed items still costs one line. That message is the session's own record: it is logged and stored on the session, and it is what the exit code is derived from.
+
+What the user reads is the outcome block the run prints last, beside the warning summary and after the live display has stopped. It gives one line per job in execution order — a mark, the job name, its status, and for SKIPPED and FAILED the reason that job recorded. It is the only place outcomes are printed: the same failures rendered twice in two shapes read as two different things having gone wrong. It is printed for every ending, not only a clean one, because an aborted or interrupted run still did whatever it did before it stopped. Reasons quote text pc-switcher did not author — package-manager stderr, file paths — so they are rendered literally rather than as Rich markup, where `[installed]` would silently vanish and `[/usr/bin/apt]` would crash the run after all its work was done.
 
 Dry-run is not a reason to report SKIPPED on its own: a rehearsal that completes did succeed. A rehearsal that hits one of the situations above is skipped like any other run.
 

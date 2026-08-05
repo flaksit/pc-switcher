@@ -21,9 +21,9 @@ class TestStylingCannotComeFromTheEnvironment:
         monkeypatch.setenv("FORCE_COLOR", force_color)
         console, buffer = captured_console()
 
-        console.print("[bold]Sync finished with failures:[/bold] [dim]apt_sync[/dim]")
+        console.print("[bold]Job outcomes:[/bold] [dim]apt_sync[/dim]")
 
-        assert buffer.getvalue() == "Sync finished with failures: apt_sync\n"
+        assert buffer.getvalue() == "Job outcomes: apt_sync\n"
 
     def test_a_terminal_console_is_styled_no_more_than_the_others(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """`terminal=True` buys the is_terminal branches, not escape sequences."""
@@ -39,7 +39,7 @@ class TestStylingCannotComeFromTheEnvironment:
         """The guard names the cause; an assertion on the message alone would report only
         that some expected text was missing."""
         buffer = PlainBuffer()
-        buffer.write("\x1b[1mSync finished with failures:\x1b[0m")
+        buffer.write("\x1b[1mJob outcomes:\x1b[0m")
 
         with pytest.raises(AssertionError, match="captured_console"):
             _ = buffer.getvalue()
