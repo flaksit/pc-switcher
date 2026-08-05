@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "6830c68260c3",
+  "strategy": "manual-commit",
+  "branch": "docs/adr-020-cleanup",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "docs/adr/adr-020-declarative-package-convergence.md",
+    "docs/planning/package-sync-conformance-criteria.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/68/30c68260c3/0/metadata.json",
+      "transcript": "/68/30c68260c3/0/full.jsonl",
+      "compact_transcript": "/68/30c68260c3/0/transcript.jsonl",
+      "content_hash": "/68/30c68260c3/0/content_hash.txt",
+      "prompt": "/68/30c68260c3/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 4506,
+    "cache_creation_tokens": 233319,
+    "cache_read_tokens": 6604896,
+    "output_tokens": 83853,
+    "api_call_count": 47
+  }
+}

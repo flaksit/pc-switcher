@@ -1,0 +1,25 @@
+<task-notification>
+<task-id>a0f13f57ef69375db</task-id>
+<tool-use-id>toolu_01J1mktF3LWteCZZb9VbrMsc</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/5545537a-0090-4c4f-a06a-15352f4ecf1d/tasks/a0f13f57ef69375db.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement #245 package apply flags" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>CI is green on PR #261 — Lint, Unit Tests (4742) and the issue-keyword check all pass; Integration Tests skipped as expected on a draft. Local gate was clean before pushing (`ruff check`, `ruff format`, `codespell`, `basedpyright` 0 errors, `pytest` 4742 passed). Constraints re-verified against the diff: ADR-020 untouched, zero files changed under `src/pcswitcher/jobs/apt_sync/`, zero new executor calls, `cli.py`/`orchestrator.py` hunks confined to flag declaration, plumbing kwargs, `JobContext` construction and the reviewer construction.
+
+**PR #261** — https://github.com/flaksit/pc-switcher/pull/261 (draft, base `main`), branch `feat/apply-package-flags`.
+
+**`was_interactive` overload.** Left it meaning "a human could be asked" — `_record_permanent_skips` and `_finalize_unreproducible` stay keyed to it, so no flag writes a mark or a snippet (the policy emits only `APPLY`, so it couldn't anyway). Added a second, pure question instead: `review.policy_answers_any(groups, policy)` over both rounds. It drives exactly two sites — the `JobSkipped` raise (a converging flag-answered run isn't reported skipped) and the `after_review()` call. A run whose flags answer none of its groups fails both tests and still skips. I did **not** add a field to `ReviewOutcome`: three construction sites live in `apt_sync/`, which the constraints ruled out. I also dropped an early return I'd first written in `review_items` — letting a fully-answered review fall through with an empty group list keeps `was_interactive` sourced from `is_interactive(console)` alone, so `_merge_rounds`' `and` can't spuriously erase a human's round-1 interactivity.
+
+Policy lives on `TerminalUIReviewer`, not in the job — one seam then covers every review including the collateral question `apt_sync` puts mid-apply, which a job-level filter would have missed, and it kept `apt_sync/` untouched. Rationale for not reusing the automation env var (it returns `was_interactive=True` by design, which is precisely the claim the flags must not make) is in the PR body.
+
+**`after_review` / registry push — verified.** Gate is now `was_interactive or answered_by_policy`. Test asserts `events == ["push", "replay"]` on a no-TTY flag-answered `execute()`. Nothing permanent rides along: `_finalize_unreproducible`'s own `was_interactive` guard returns early, and the non-additive abort still fires with both flags passed. Incidental finding: a flag-answered run holding an unresolved unreproducible item does not fail, because `_unresolved_as_failures` only fails those on an interactive run — recorded in the test docstring.
+
+**Collateral coupling — measured, issue's claim holds.** Against a real `AptSyncJob.execute()` over the existing `_manual_collateral_context()`: with `--apply-package-installs` alone, no `apt-get install` is issued at all — the collateral group belongs to the removal flag, comes back `SKIP_ONCE`, and `Collateral.resolve` propagates that onto the triggering install. With both flags, `apt-get install pkg-a` runs.
+
+**Left out:** no integration test — every new row is `U`. A VM run over a real `--apply-package-installs` sync is worth adding once the in-flight branches land. ADR-020 wording is listed under "ADR follow-up needed" in the PR body (D-26, D-30, D-23 plus a new decision).
+
+result: Draft PR #261 (https://github.com/flaksit/pc-switcher/pull/261, branch `feat/apply-package-flags`) adds `--apply-package-installs`/`--apply-package-removals` to pc-switcher's package sync jobs with 29 new scenario rows, 4 new conformance articles and green CI.</result>
+<usage><subagent_tokens>309780</subagent_tokens><tool_uses>184</tool_uses><duration_ms>1726091</duration_ms></usage>
+<worktree><worktreePath>/home/janfr/dev/pc-switcher/.claude/worktrees/agent-a0f13f57ef69375db</worktreePath><worktreeBranch>worktree-agent-a0f13f57ef69375db</worktreeBranch></worktree>
+</task-notification>
