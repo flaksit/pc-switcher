@@ -1,0 +1,62 @@
+Go over all open issue in gh that are not yet taken up in a PR and don't have label "status:done":
+- Label the ones that are about package sync but don't have the label "comp:sync:packages" yet
+- Triage:
+  - propose a priority/order and, if relevant, to bundle some together to
+
+---
+
+Go over all open issue in gh that are not yet taken up in a PR and don't have label "status:done":
+- Label the ones that are about package sync but don't have the label "comp:sync:packages" yet
+- Triage:
+  - propose a priority/order
+  - tell if there are duplicates
+  - if relevant, propose to bundle some together to tackle together
+
+Don't change anything to the issues. Just report to me.
+
+---
+
+Go over all open issue in gh that are not yet taken up in a PR and don't have label "status:done" or "status:working":
+- Label the ones that are about package sync but don't have the label "comp:sync:packages" yet
+- Triage:
+  - propose a priority/order
+  - tell if there are duplicates
+  - if relevant, propose to bundle some together to tackle together
+
+Don't change anything to the issues. Just report to me.
+
+---
+
+FYI I retitled 244
+
+---
+
+Close #65.
+FYI I retitled 244.
+Isn't the last plan of #79 (https://github.com/flaksit/pc-switcher/issues/79#issuecomment-3671425590) or something similar already implemented for testing?
+#207 does NOT belong under #254.
+Merge #207 + #247. Thes issues is not about the artefact (that is just a possible part of the solution; should not be stated as requirement of the issue), but about update/removal/folder-diff/snippet-diff.
+Declare #217 as part of the scope of #126
+Check which commit and PR included the implementation of #210, link them and close #210.
+#211 not implemented yet? I think it is implemented somewhere in PR 206. If so, link them.
+
+Do/investigate the things I mentioned. Delegate to subagents at your discretion.
+Then, refresh your above report.
+Give proposed order for all package-sync related issues as first part of the "proposed order"
+
+---
+
+#210 should not be closed if it is still part of unmerged PR206. Link it to that PR then ("Closes #210" in PR body and link the issue to the PR)
+
+---
+
+y
+
+---
+
+add label "status:done" to issues that are already implemented (in an open PR) but not yet closed (because not yet in main)
+
+---
+
+#118 and #216 not done yet; working.
+Write report to docs/planning/issue-triage-20260805.md
