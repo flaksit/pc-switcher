@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import subprocess
 import sys
 import time
@@ -40,11 +41,13 @@ from pcswitcher.jobs.packages.review import (
     ReviewEntry,
     ReviewGroup,
     ReviewOutcome,
+    ReviewPolicy,
     TerminalUIReviewer,
     ask_gate,
+    policy_decision,
     review_items,
 )
-from pcswitcher.jobs.packages.sync_core import PackagePlan
+from pcswitcher.jobs.packages.sync_core import SNAP_CHANGE_REVIEW_ACTION, PackagePlan
 from pcswitcher.models import CommandResult, SyncAbortedByUser
 from pcswitcher.orchestrator import Orchestrator
 from tests.unit.console_capture import captured_console
@@ -590,7 +593,8 @@ class TestInteractive:
 @pytest.mark.asyncio
 class TestTerminalUIReviewer:
     """`TerminalUIReviewer` is a thin adapter: it forwards to `review_items` with the
-    console, ui and logger it was constructed with, and returns the outcome unchanged.
+    console, ui, logger and review policy it was constructed with, and returns the outcome
+    unchanged.
     """
 
     async def test_review_forwards_console_ui_logger_and_returns_outcome_unchanged(self) -> None:
@@ -608,7 +612,24 @@ class TestTerminalUIReviewer:
             result = await reviewer.review(groups)
 
         assert result is sentinel_outcome
-        review_mock.assert_awaited_once_with(groups, console=console, ui=ui, logger=logger, **HOSTS)
+        review_mock.assert_awaited_once_with(groups, console=console, ui=ui, logger=logger, policy=None, **HOSTS)
+
+    async def test_the_policy_it_was_built_with_reaches_every_review(self) -> None:
+        """H218 — one object answers every review this adapter serves, whichever job or
+        round asks."""
+        console = _interactive_console()
+        policy = ReviewPolicy(apply_installs=True)
+        reviewer = TerminalUIReviewer(console, MagicMock(), policy=policy, **HOSTS)
+        groups = [ReviewGroup(manager="apt", action="install", title="Install packages", entries=[_entry("a")])]
+
+        with patch(
+            "pcswitcher.jobs.packages.review.review_items",
+            AsyncMock(return_value=ReviewOutcome(decisions={}, was_interactive=True)),
+        ) as review_mock:
+            await reviewer.review(groups)
+            await reviewer.review(groups)
+
+        assert [call.kwargs["policy"] for call in review_mock.await_args_list] == [policy, policy]
 
     async def test_pause_and_resume_both_run_when_the_underlying_prompt_raises(self) -> None:
         """H156 — The adapter keeps `review_items`'s pause/resume `finally`: even when the
@@ -785,6 +806,167 @@ class TestBlockingPromptOffLoop:
         # If .ask() had run on the event loop, the ticker could not have advanced at all
         # during the 0.2s sleep; it must have made meaningful progress concurrently.
         assert ticks > 0
+
+
+def _group(action: str, *, item_id: str = "a", overwrites_authored_content: bool = False) -> ReviewGroup:
+    """One group of one entry, carrying only the two fields the policy classifies on."""
+    return ReviewGroup(
+        manager="apt",
+        action=action,
+        title=f"{action.capitalize()} apt packages",
+        entries=(_entry(item_id, action_label=action),),
+        overwrites_authored_content=overwrites_authored_content,
+    )
+
+
+_INSTALLS_ONLY = ReviewPolicy(apply_installs=True)
+_REMOVALS_ONLY = ReviewPolicy(apply_removals=True)
+_BOTH = ReviewPolicy(apply_installs=True, apply_removals=True)
+
+
+class TestWhichGroupsAFlagAnswers:
+    """#245: each flag answers one direction, named by the group's own action."""
+
+    @pytest.mark.parametrize("action", ["install", "add", "enable", "change", SNAP_CHANGE_REVIEW_ACTION])
+    def test_the_install_flag_answers_every_adding_direction(self, action: str) -> None:
+        """H219, H223, H224 — installs, additions, enables and a convergence to the source's
+        version or channel are all one direction, and one flag answers them.
+        """
+        assert policy_decision(_group(action), _INSTALLS_ONLY) is Decision.APPLY
+        assert policy_decision(_group(action), _REMOVALS_ONLY) is None
+
+    @pytest.mark.parametrize(
+        "action", ["remove", "delete", "disable", REPO_REMOVAL_REVIEW_ACTION, COLLATERAL_REVIEW_ACTION]
+    )
+    def test_the_removal_flag_answers_every_taking_away_direction(self, action: str) -> None:
+        """H221, H225, H226 — removals, deletions, disables, a repository or pin deletion and
+        the loss of a protected package are one direction, and the other flag answers them.
+        """
+        assert policy_decision(_group(action), _REMOVALS_ONLY) is Decision.APPLY
+        assert policy_decision(_group(action), _INSTALLS_ONLY) is None
+
+    def test_both_flags_answer_both_directions(self) -> None:
+        """H222 — passing both replicates the whole of one machine's package state."""
+        assert policy_decision(_group("install"), _BOTH) is Decision.APPLY
+        assert policy_decision(_group("remove"), _BOTH) is Decision.APPLY
+
+    @pytest.mark.parametrize("action", [REPO_CONFLICT_REVIEW_ACTION, UNREPRODUCIBLE_REVIEW_ACTION])
+    def test_no_flag_answers_a_question_the_source_cannot_settle(self, action: str) -> None:
+        """H227, H229 — a repository conflict moves where machine-specific software comes
+        from, and an unreproducible item's answer is an authored snippet; neither flag
+        answers either.
+        """
+        assert policy_decision(_group(action), _BOTH) is None
+
+    def test_no_flag_overwrites_content_the_other_machine_authored(self) -> None:
+        """H228 — an `/etc/apt/apt.conf.d` file already there states how that machine's own
+        apt behaves, so the flag that answers changes does not answer this one.
+        """
+        assert policy_decision(_group("change", overwrites_authored_content=True), _BOTH) is None
+
+    def test_a_reported_finding_is_answered_by_nobody(self) -> None:
+        """H230 — report-only converges in neither direction, so there is nothing for a flag
+        to answer."""
+        assert policy_decision(_group("report_only"), _BOTH) is None
+
+    def test_no_flag_answers_anything_when_none_was_passed(self) -> None:
+        """H232 — with no flag in force every group is left to be asked about."""
+        for action in ("install", "remove", COLLATERAL_REVIEW_ACTION):
+            assert policy_decision(_group(action), ReviewPolicy()) is None
+
+
+@pytest.mark.asyncio
+class TestTheCommandLineAnswersAReview:
+    """#245: a flag answers its own groups before anyone is asked, and changes nothing about
+    the groups it does not answer."""
+
+    async def test_an_answered_group_is_applied_and_never_put_to_anyone(self) -> None:
+        """H219, H231 — with no terminal the install group comes back applied rather than
+        declined, no screen is built, and a removal group's own skip-once start is no
+        obstacle to the flag that answers it.
+        """
+        console = _non_interactive_console()
+        groups = [_group("install", item_id="i"), _group("remove", item_id="r")]
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(False)),
+            patch("pcswitcher.jobs.packages.review.decision_list") as decision_list,
+        ):
+            outcome = await review_items(groups, console=console, ui=MagicMock(), policy=_BOTH, **HOSTS)
+
+        decision_list.assert_not_called()
+        assert outcome.decisions == {"i": Decision.APPLY, "r": Decision.APPLY}
+
+    async def test_an_unanswered_group_is_still_named_and_skipped_for_this_run(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """H220 — one flag leaves the other direction exactly where a run with no terminal
+        leaves it: declined for this run, and named in a warning."""
+        console = _non_interactive_console()
+        groups = [_group("install", item_id="i"), _group("remove", item_id="r")]
+
+        with caplog.at_level(logging.WARNING), patch.object(sys, "stdin", _mock_isatty(False)):
+            outcome = await review_items(groups, console=console, ui=MagicMock(), policy=_INSTALLS_ONLY, **HOSTS)
+
+        assert outcome.decisions == {"i": Decision.APPLY, "r": Decision.SKIP_ONCE}
+        assert any("not asked, declined for this run" in record.message for record in caplog.records)
+
+    async def test_a_terminal_still_gets_asked_about_what_no_flag_answers(self) -> None:
+        """H237 — the flag suppresses its own groups' screens and nothing else: the user is
+        still asked about the rest."""
+        console = _interactive_console()
+        prompt = _fake_prompt(ask_return={"c": Decision.SKIP_ONCE.value})
+        groups = [_group("install", item_id="i"), _group(REPO_CONFLICT_REVIEW_ACTION, item_id="c")]
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=prompt) as decision_list,
+        ):
+            outcome = await review_items(groups, console=console, ui=MagicMock(), policy=_INSTALLS_ONLY, **HOSTS)
+
+        assert [call.kwargs["rows"][0].row_id for call in decision_list.call_args_list] == ["c"]
+        assert outcome.decisions == {"i": Decision.APPLY, "c": Decision.SKIP_ONCE}
+
+    async def test_a_flag_never_answers_permanently(self) -> None:
+        """H233 — no answer a flag gives is the permanent one: a machine-specific mark is the
+        user's own statement about one machine, and an unattended run may not make one.
+        """
+        console = _non_interactive_console()
+        groups = [_group(action, item_id=action) for action in ("install", "remove", COLLATERAL_REVIEW_ACTION)]
+
+        with patch.object(sys, "stdin", _mock_isatty(False)):
+            outcome = await review_items(groups, console=console, ui=MagicMock(), policy=_BOTH, **HOSTS)
+
+        assert Decision.SKIP_ALWAYS not in outcome.decisions.values()
+        assert outcome.was_interactive is False
+
+    async def test_the_log_says_the_command_line_answered_and_names_the_flags(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """H238 — the per-item decision lines read the same whoever answered, so one line
+        says nobody was asked and which flag stood in."""
+        console = _non_interactive_console()
+
+        with caplog.at_level(logging.INFO), patch.object(sys, "stdin", _mock_isatty(False)):
+            await review_items([_group("install")], console=console, ui=MagicMock(), policy=_INSTALLS_ONLY, **HOSTS)
+
+        answered = [r.message for r in caplog.records if "answered by the command line" in r.message]
+        assert answered and "--apply-package-installs" in answered[0]
+        assert "--apply-package-removals" not in answered[0]
+
+    async def test_a_review_with_no_flag_takes_the_path_it_always_did(self) -> None:
+        """H232 — a run without the flags is the run that existed before them: every item is
+        put to the user."""
+        console = _interactive_console()
+        prompt = _fake_prompt(ask_return={"a": Decision.APPLY.value})
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=prompt) as decision_list,
+        ):
+            await review_items([_group("install")], console=console, ui=MagicMock(), policy=ReviewPolicy(), **HOSTS)
+
+        decision_list.assert_called_once()
 
 
 class TestAutomationEnv:

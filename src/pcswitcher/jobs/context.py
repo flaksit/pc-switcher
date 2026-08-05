@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     from pcswitcher.confirmer import Confirmer
     from pcswitcher.events import EventBus
     from pcswitcher.executor import LocalExecutor, RemoteExecutor
-    from pcswitcher.jobs.packages.review import Reviewer
+    from pcswitcher.jobs.packages.review import Reviewer, ReviewPolicy
 
 
 @dataclass(frozen=True)
@@ -35,6 +35,13 @@ class JobContext:
     # tests that never reach a review keep working; a `PackageSyncJob.execute()` that does
     # reach one asserts it is set rather than silently applying unreviewed diffs.
     reviewer: Reviewer | None = None
+    # What `--apply-package-installs` / `--apply-package-removals` answer for this run (issue
+    # #245). The SAME object the orchestrator gave the reviewer, which is what actually
+    # answers the groups; a package job reads it to tell "the command line answered this
+    # review" from "nobody did" — two cases `ReviewOutcome.was_interactive` cannot separate,
+    # since it stays a statement about a human (`sync_core.PackageSyncJob.execute`). `None`
+    # means no flag was passed, which is what every lightweight test context wants.
+    review_policy: ReviewPolicy | None = None
     # SSH username on the target, resolved from the live asyncssh connection.
     # Optional so existing lightweight test contexts (which don't set up a real connection)
     # keep working; jobs that need it fall back to getpass.getuser() when None.

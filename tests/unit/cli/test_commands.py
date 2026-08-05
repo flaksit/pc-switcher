@@ -17,6 +17,7 @@ from typer.testing import CliRunner
 from pcswitcher.cli import _async_run_sync, app, update
 from pcswitcher.config import Configuration
 from pcswitcher.models import SessionStatus, SyncAborted, SyncAbortedByUser, SyncSession
+from pcswitcher.orchestrator import Orchestrator
 from pcswitcher.version import Release, Version
 from tests.unit.console_capture import captured_console
 
@@ -386,3 +387,57 @@ class TestConfirmEachCommandFlag:
 
         assert result.exit_code == 0, f"Expected exit code 0, got {result.exit_code}\n{result.output}"
         assert run_sync.call_args.kwargs["confirm_each_command"] is False
+
+
+class TestApplyPackageFlags:
+    """#245: `--apply-package-installs` / `--apply-package-removals` answer package reviews,
+    and nothing else does."""
+
+    def test_both_flags_reach_the_run(self) -> None:
+        """H245 — the flags must actually reach the orchestrator, not be parsed and dropped."""
+        with (
+            patch("pcswitcher.cli._load_configuration", return_value=MagicMock(spec=Configuration)),
+            patch("pcswitcher.cli._run_sync", return_value=0) as run_sync,
+        ):
+            result = runner.invoke(
+                app, ["sync", "test-target", "--apply-package-installs", "--apply-package-removals"]
+            )
+
+        assert result.exit_code == 0, result.output
+        assert run_sync.call_args.kwargs["apply_package_installs"] is True
+        assert run_sync.call_args.kwargs["apply_package_removals"] is True
+
+    def test_neither_flag_is_the_default(self) -> None:
+        """H232 — an ordinary sync answers no review by itself."""
+        with (
+            patch("pcswitcher.cli._load_configuration", return_value=MagicMock(spec=Configuration)),
+            patch("pcswitcher.cli._run_sync", return_value=0) as run_sync,
+        ):
+            result = runner.invoke(app, ["sync", "test-target"])
+
+        assert result.exit_code == 0, result.output
+        assert run_sync.call_args.kwargs["apply_package_installs"] is False
+        assert run_sync.call_args.kwargs["apply_package_removals"] is False
+
+    def test_yes_alone_answers_no_package_review(self) -> None:
+        """H236, H162 — `--yes` keeps its own meaning (the configuration-sync prompt): the
+        policy a run with only `--yes` builds answers nothing."""
+        orchestrator = Orchestrator(target="nomad", config=MagicMock(spec=Configuration), auto_accept=True)
+
+        assert orchestrator._review_policy.answers_anything is False  # pyright: ignore[reportPrivateUsage]
+
+    def test_one_policy_reaches_both_the_reviewer_and_every_job_context(self) -> None:
+        """H246 — the flags become one `ReviewPolicy` the orchestrator holds; the review
+        surface answers with it and every package job reads that same object, so the two can
+        never disagree about what this run was told to apply."""
+        config = MagicMock(spec=Configuration)
+        config.sync_jobs = {"apt_sync": True}
+        orchestrator = Orchestrator(target="nomad", config=config, apply_package_installs=True)
+        orchestrator._local_executor = MagicMock()  # pyright: ignore[reportPrivateUsage]
+        orchestrator._remote_executor = MagicMock()  # pyright: ignore[reportPrivateUsage]
+
+        context = orchestrator._create_job_context({})  # pyright: ignore[reportPrivateUsage]
+
+        assert context.review_policy is orchestrator._review_policy  # pyright: ignore[reportPrivateUsage]
+        assert context.review_policy is not None
+        assert (context.review_policy.apply_installs, context.review_policy.apply_removals) == (True, False)

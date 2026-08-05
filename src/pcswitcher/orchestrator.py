@@ -32,7 +32,7 @@ from pcswitcher.jobs.context import JobContext
 from pcswitcher.jobs.disk_space_monitor import DiskSpaceMonitorJob
 from pcswitcher.jobs.install_on_target import InstallOnTargetJob
 from pcswitcher.jobs.packages.probes import ProbeFailed
-from pcswitcher.jobs.packages.review import Reviewer, TerminalUIReviewer
+from pcswitcher.jobs.packages.review import Reviewer, ReviewPolicy, TerminalUIReviewer
 from pcswitcher.jobs.packages.sync_core import PackageItemFailures, PackageSyncJob
 from pcswitcher.lock import (
     SyncLock,
@@ -372,6 +372,8 @@ class Orchestrator:
         allow_first_sync: bool = False,
         dry_run: bool = False,
         confirm_each_command: bool = False,
+        apply_package_installs: bool = False,
+        apply_package_removals: bool = False,
     ) -> None:
         """Initialize orchestrator with target and validated configuration.
 
@@ -386,6 +388,10 @@ class Orchestrator:
             confirm_each_command: If True, prompt before every individual modification a job
                 makes (`--confirm-each-command`). Requires a TTY; `cli.sync` refuses the flag
                 without one, so the orchestrator can assume the prompt is answerable.
+            apply_package_installs: If True, every install-direction package review group is
+                answered "apply" without asking (`--apply-package-installs`, issue #245)
+            apply_package_removals: If True, every removal-direction package review group is
+                answered "apply" without asking (`--apply-package-removals`)
         """
         self._config = config
         self._auto_accept = auto_accept
@@ -393,6 +399,13 @@ class Orchestrator:
         self._allow_first_sync = allow_first_sync
         self._dry_run = dry_run
         self._confirm_each_command = confirm_each_command
+        # One object, handed to both the reviewer (which answers the groups with it) and every
+        # JobContext (whose job reads it to tell a run the command line answered from one
+        # nobody answered). Built even when neither flag was passed, so both consumers always
+        # have a policy to consult and "answers nothing" is a value rather than a None branch.
+        self._review_policy = ReviewPolicy(
+            apply_installs=apply_package_installs, apply_removals=apply_package_removals
+        )
         self._session_id = secrets.token_hex(4)
         self._session_folder = session_folder_name(self._session_id)
         self._source_hostname = get_local_hostname()
@@ -480,6 +493,7 @@ class Orchestrator:
             allow_first_sync=self._allow_first_sync,
             confirmer=self._confirmer,
             reviewer=self._reviewer,
+            review_policy=self._review_policy,
             # Connection is always set when _create_job_context is called in
             # production (SyncStep.CONNECT onward), but unit tests mock executors
             # without a real connection, so fall back to None (JobContext accepts it).
@@ -550,6 +564,7 @@ class Orchestrator:
             source_hostname=self._source_hostname,
             target_hostname=self._target_hostname,
             logger=self._logger,
+            policy=self._review_policy,
         )
         if self._confirm_each_command:
             self._step_gate = TerminalUIStepGate(

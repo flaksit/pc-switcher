@@ -325,7 +325,7 @@ Lineage: 001-core edge cases, 003-core-tests edge cases
 
 #### Core Orchestration
 
-- **CORE-FR-SYNC-CMD** `[Frictionless Command UX]`: `pc-switcher sync <hostname>` MUST run the complete workflow. Flags: `--config`, `--dry-run`, `--yes`, `--allow-out-of-order`, `--allow-first-sync`, `--confirm-each-command`
+- **CORE-FR-SYNC-CMD** `[Frictionless Command UX]`: `pc-switcher sync <hostname>` MUST run the complete workflow. Flags: `--config`, `--dry-run`, `--yes`, `--allow-out-of-order`, `--allow-first-sync`, `--confirm-each-command`, `--apply-package-installs`, `--apply-package-removals`
   Lineage: 001-FR-046
 
 - **CORE-FR-LOCK** `[Reliability Without Compromise]`: A single unified lock per machine MUST prevent it from taking part in two syncs at once, in either role
