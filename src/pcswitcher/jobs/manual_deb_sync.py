@@ -33,23 +33,16 @@ from typing import Any, ClassVar, override
 from pcswitcher.executor import Executor
 from pcswitcher.jobs.packages.apt_policy import installed_origins_by_package, packages_installed_from_no_repository
 from pcswitcher.jobs.packages.probes import require_answer
-from pcswitcher.jobs.packages.state import AdoptedMarks, DecisionEntry, DecisionFile
+from pcswitcher.jobs.packages.state import DecisionEntry
 from pcswitcher.jobs.packages.unreproducible import UnreproducibleItem, UnreproducibleSyncJob, lines_of
 from pcswitcher.models import FirstSyncScope, Host, ValidationError
 
 __all__ = ["ManualDebSyncJob"]
 
 # The origin every item this job produces carries, and so the slice of an `item_id` space
-# that belongs to it. Named once: detection, the mark reconciliation and the adoption of
-# marks recorded before this job existed all key on the same string.
+# that belongs to it. Named once: detection and the mark reconciliation key on the same
+# string.
 _ORIGIN = "apt-no-candidate"
-
-# Where this job's machine-specific marks were recorded before it was a job of its own:
-# `manual_installs_sync` owned hand-`.deb` detection, so its decision file holds every
-# "never install this on the other machine" answer the user gave about one. `item_id` is
-# unchanged by the split, so adopting that slice is all the migration there is — and the
-# shared snippet registry, keyed on the same ids, needs none at all.
-_MARKS_BEFORE_THE_SPLIT = AdoptedMarks(manager="manual", item_id_prefix=UnreproducibleItem.id_prefix(_ORIGIN))
 
 
 class ManualDebSyncJob(UnreproducibleSyncJob):
@@ -74,12 +67,6 @@ class ManualDebSyncJob(UnreproducibleSyncJob):
         "properties": {},
         "additionalProperties": False,
     }
-
-    @override
-    def _decision_file(self, executor: Executor) -> DecisionFile:
-        """This job's decision file, plus the marks `manual_installs_sync` recorded about
-        these same items before the split (`_MARKS_BEFORE_THE_SPLIT`)."""
-        return DecisionFile(self.manager_id, executor, _MARKS_BEFORE_THE_SPLIT)
 
     # -- Detection (D-18), run on both machines (`PKG-FR-MANUAL-DIFF`) -------------------
 
@@ -199,8 +186,7 @@ class ManualDebSyncJob(UnreproducibleSyncJob):
         installed, and dropping its mark on those grounds would re-offer software the user
         asked to be left alone.
 
-        Entries this job cannot recognise — including `manual_installs_sync`'s path marks,
-        which share the file it adopts from — are left exactly where they are.
+        Entries this job cannot recognise are left exactly where they are.
         """
         executor = self.source if on_source else self.target
         machine = self.machines.source if on_source else self.machines.target

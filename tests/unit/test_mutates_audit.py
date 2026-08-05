@@ -249,7 +249,7 @@ _READ_ONLY_CALLS: dict[str, int] = {
     # The shared unreproducible half: the target's $HOME, read to place the pushed registry.
     "jobs/packages/unreproducible.py::UnreproducibleSyncJob._push_snippet_registry::run_command": 1,
     # The decision file and snippet registry are read with `cat`; their writes are gated.
-    "jobs/packages/state.py::DecisionFile._load_own::run_command": 1,
+    "jobs/packages/state.py::DecisionFile.load::run_command": 1,
     "jobs/packages/state.py::SnippetRegistry.load::run_command": 1,
     # The target's own `snap list`, read by folder_sync after the package jobs ran, deciding
     # which `~/snap/<app>/<revision>` data dirs may be mirrored (`PKG-FR-SNAP-DATA-BOUNDARY`).

@@ -54,6 +54,7 @@ from pcswitcher.jobs.packages.review import (
 from pcswitcher.jobs.packages.state import (
     SNIPPET_REGISTRY_RELPATH,
     DecisionEntry,
+    DecisionFile,
     Snippet,
     SnippetRegistry,
     filter_inert,
@@ -563,7 +564,7 @@ class UnreproducibleSyncJob(PackageSyncJob):
                 continue
             if outcome.decisions.get(diff.item_id) != Decision.SKIP_ALWAYS:
                 continue
-            await self._decision_file(self.source).record(
+            await DecisionFile(self.manager_id, self.source).record(
                 DecisionEntry(
                     item_id=diff.item_id,
                     item_class=diff.item_class,
