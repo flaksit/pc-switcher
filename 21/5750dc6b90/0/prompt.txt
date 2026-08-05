@@ -1,0 +1,38 @@
+"same-direction fixed-point re-run disappeared:" that was not the intention. Coverage MUST stay complete. You decide how to do that best; you know the considerations.
+
+Explain bug Product: what has folder_sync to do with "held package"?
+Test infra: pin the exact packages to work with. If needed, even install tiny ones to work with (with no or tiny dependencies), in the most efficient place.
+
+K9-K12:
+- scenario description doesn't really cover what it should test: in each scenario, it should start with diffs for all four syncs, so that we clearly can test that K9 converges the apt diff and leaves the other three in place, and similar for K10-K12.
+- This actually tests
+  - K9: that apt-sync doesn't touch snaps, flatpaks or manual-installs. And similar for K10-K12.
+  - if the orchestrator loads only executes the jobs that are enabled.
+- Quite low value, but if we want complete coverage, we need them. And they need each their pc-switcher sync. Could maybe be intertleaved in other, completely distinct pc-switcher syncs? (Ones that only use a single package-sync job.)
+
+K5 seems not the scope of package-sync. If you agree, remove K5.
+
+Set dummy_success false in default-config.yaml
+
+---
+
+"same-direction fixed-point re-run disappeared:" that was not the intention. Coverage MUST stay complete. You decide how to do that best; you know the considerations. If J2 or others are completely reliably covered by a unit test alone and actually don't need integration test to prove correctness (= don't depend on the behavior of tools or infra), then it is ok to not have integration test.
+
+Explain "Product" bug: what has folder_sync to do with "held package"?
+
+"Test infra" bug: pin the exact packages to work with. If needed, even install tiny ones to work with (with no or tiny dependencies), in the most efficient place.
+
+K9-K12:
+- scenario description doesn't really cover what it should test: in each scenario, it should start with diffs for all four syncs, so that we clearly can test that K9 converges the apt diff and leaves the other three in place, and similar for K10-K12.
+- This actually tests
+  - K9: that apt-sync doesn't touch snaps, flatpaks or manual-installs. And similar for K10-K12.
+  - if the orchestrator loads only executes the jobs that are enabled.
+- Quite low value, but if we want complete coverage, we need them. And they need each their pc-switcher sync. Could maybe be interleaved in other, completely distinct pc-switcher syncs? (Ones that only use a single package-sync job.)
+
+G67 needs a job with only package-sync jobs. folder_sync must not be enabled. So interleave that test in a pc-switcher sync without folder_sync. Doesn't require that only manual_installls_sync is enabled. Other package-sync jobs are allowed, too.
+
+K5 seems not the scope of package-sync. If you agree, remove K5.
+
+Set dummy_success false in default-config.yaml.
+
+Use todo list. Delegate at your discretion. Tell me if you better do this in fresh session.
