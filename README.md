@@ -10,14 +10,14 @@ PC-switcher enables a simple workflow: work on one machine, sync before switchin
 Work on source machine → Sync → Resume on target machine
 ```
 
-**Status**: Core infrastructure complete. Package sync (apt, snap, flatpak, manual installs) and folder sync are implemented and under active hardening. Application and system-configuration sync are on the roadmap.
+**Status**: Core infrastructure complete. Package sync (apt, snap, flatpak, hand-installed `.deb`s, manual installs) and folder sync are implemented and under active hardening. Application and system-configuration sync are on the roadmap.
 
 ## What Gets Synced
 
 ### Implemented
 
 - **User data**: `/home`, `/root` with all documents, code, configs, and selective caches
-- **Packages**: apt, snap, flatpak, PPAs, manual installs
+- **Packages**: apt, snap, flatpak, PPAs, hand-installed `.deb`s, manual installs under `/usr/local` and `/opt`
 
 ### Roadmap
 
@@ -188,7 +188,7 @@ Key documents:
 - **[Architecture](docs/system/architecture.md)** - System architecture and design
 - **[Architecture Decision Records](docs/adr/_index.md)** - Design decisions and rationale
 - **[Configuration Reference](docs/configuration.md)** - Every config option, defaults, filter-rule syntax
-- **[Package Sync](docs/jobs/package-sync.md)** - How apt, snap, flatpak, and manual installs are synced
+- **[Package Sync](docs/jobs/package-sync.md)** - How apt, snap, flatpak, hand-installed `.deb`s and manual installs are synced
 - **[Folder Sync](docs/jobs/folder-sync.md)** - How folders are mirrored via rsync and filtered
 - **[VS Code State Sync](docs/jobs/vscode-state-sync.md)** - How VS Code state is synced
 - **[Reading Sync Logs](docs/reading-sync-logs.md)** - How to read and interpret sync logs

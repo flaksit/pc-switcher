@@ -19,7 +19,7 @@ Package sync replicates *what software is installed*. Application data belongs t
 
 It replicates by **convergence, not by copying**. Both machines' package managers are asked what they have, and the difference is what the sync acts on; no package database, store or installed file is copied between machines. What is synced is a decision — install this, remove that — plus the configuration the target's own package manager needs to carry it out.
 
-Package sync is one job per package manager — apt, snap, flatpak — plus a job for software no package manager can reproduce. Each is enabled separately, reviewed separately, and can fail without stopping the others. Enabling one authorises pc-switcher to install and remove software on the target.
+Package sync is one job per package manager — apt, snap, flatpak — plus one job per kind of software no package manager can reproduce: hand-installed `.deb` packages, and unowned software under `/usr/local` and `/opt`. Each is enabled separately, reviewed separately, and can fail without stopping the others. Enabling one authorises pc-switcher to install and remove software on the target.
 
 ## Vocabulary
 
@@ -282,9 +282,9 @@ A flatpak installation that is neither the user nor the system one is skipped. R
 
 ## Software no manager can reproduce
 
-Software that arrived on the source by a route nothing can replay automatically. Several kinds, one mechanism: the **install snippet**, a shell recipe written once that is synced with the software.
+Software that arrived on the source by a route nothing can replay automatically. Several kinds, one mechanism: the **install snippet**, a shell recipe written once that is synced with the software. Each kind in scope is a job of its own, enabled and reviewed on its own, and the kinds share the one snippet registry — how to install something is knowledge about the software, so one recipe file answers for all of them.
 
-- **A hand-downloaded `.deb`** — apt knows the name, but no configured repository offers that version.
+- **A hand-downloaded `.deb`** — apt knows the name, but no configured repository offers that version. Its own job is the only one that offers it: apt drops these packages on both machines whatever else is enabled, so with apt synced and this job off they are replicated by nobody.
 - **Unowned software under `/usr/local` or `/opt`** — dropped there by an install script or a tarball. The scan looks in `/opt`, directly under `/usr/local`, and inside `/usr/local`'s `bin`, `sbin`, `lib`, `games` and `src`. It never looks in `etc`, `include`, `man` or `share`: whatever is installed there arrives with an application the scan finds elsewhere. A finding — a file, a directory or a symlink — is named where it is found and never opened, or one application under `/opt` would arrive as thousands of findings. The directories the distribution itself creates under `/usr/local` are not findings, and neither is a directory with no file anywhere beneath it.
 - **A sideloaded snap**, and **a flatpak from a local bundle or a dead remote** — out of scope for now (#221).
 
