@@ -164,7 +164,7 @@ def _prompt_config_diff(console: Console, diff: str) -> ConfigSyncAction:
         return ConfigSyncAction.ABORT
 
 
-async def _handle_config_sync(
+async def _handle_config_sync(  # noqa: PLR0913 - config state + flags; flags keyword-only
     target: RemoteExecutor,
     source_config_path: Path,
     source_content: str,
@@ -194,7 +194,7 @@ async def _handle_config_sync(
     )
 
 
-async def _handle_no_target_config(
+async def _handle_no_target_config(  # noqa: PLR0913 - config state + flags; flags keyword-only
     target: RemoteExecutor,
     source_config_path: Path,
     source_content: str,
@@ -218,7 +218,7 @@ async def _handle_no_target_config(
     return False
 
 
-async def _handle_config_diff(
+async def _handle_config_diff(  # noqa: PLR0913 - config state + flags; flags keyword-only
     target: RemoteExecutor,
     source_config_path: Path,
     source_content: str,
@@ -259,7 +259,7 @@ async def _handle_config_diff(
     return False
 
 
-async def sync_config_to_target(
+async def sync_config_to_target(  # noqa: PLR0913 - config state + flags; flags keyword-only
     target: RemoteExecutor,
     source_config_path: Path,
     ui: TerminalUI | None,

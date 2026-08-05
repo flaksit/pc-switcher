@@ -188,7 +188,7 @@ def _display_log_file(log_file: Path) -> None:
 
 
 @app.command()
-def sync(
+def sync(  # noqa: PLR0913 - typer builds the call from argv; params are named flags, never positional
     target: Annotated[str, typer.Argument(help="Target hostname to sync to")],
     config: Annotated[
         Path | None,
@@ -261,7 +261,7 @@ def sync(
     sys.exit(exit_code)
 
 
-def _run_sync(
+def _run_sync(  # noqa: PLR0913 - CLI flags threaded to the orchestrator; all keyword-only
     target: str,
     cfg: Configuration,
     *,
@@ -295,7 +295,7 @@ def _run_sync(
     )
 
 
-async def _async_run_sync(
+async def _async_run_sync(  # noqa: PLR0913 - CLI flags threaded to the orchestrator; all keyword-only
     target: str,
     cfg: Configuration,
     *,
