@@ -1,0 +1,10 @@
+Tackle all remaining package sync issues. Delegate to other agents at your discretion. Ask questions where needed! Ensure parallel work doesn't collide into each other.
+
+1. #248 apt timers and an actionable busy-dpkg abort. The only issue with an observed aborted run; it hits real desktops and CI alike.
+2. #207 update/upgrade, removal, payload drift, snippet drift. Silent divergence: a `/opt` payload can differ on both machines forever with no job that would notice, and nothing propagates a removal.
+3. #245 `--apply-package-installs` / `--apply-package-removals`. Unblocks unattended convergence and sets the pattern for #48.
+4. #255 which side a machine-specific mark lands on for a conflicting item. The read path already tolerates a mark on either side; only the write path and the review question are missing.
+5. #254 umbrella: #253 (move .debs out of `manual_installs_sync`) first, since it extracts code that already works, then #251 sideloaded snaps and #252 manual flatpaks reuse its shape. All three inherit the update and removal semantics #207 defines, so they follow it.
+6. #246 ADR-020 cleanup. Cheap, and ADR-020 is the document every item above cites — worth doing before it is edited further.
+
+Package-motivated but labelled `comp:core`, best slotted between 3 and 4: #219 and #218 together. Every headless run currently reports SUCCESS for four package jobs that converged nothing.
