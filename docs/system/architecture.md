@@ -57,7 +57,7 @@ graph TD
 
     BtrfsSnapshotJob["<b>BtrfsSnapshotJob</b><br/>SystemJob<br/>- pre/post phase<br/>- Both machines<br/>- Direct btrfs commands"]
 
-    SyncJobs["<b>SyncJobs</b><br/>- apt_sync, snap_sync, flatpak_sync<br/>- manual_deb_sync, manual_installs_sync<br/>- folder_sync, vscode_state_sync<br/>- dummy_success, dummy_fail<br/>[configurable]"]
+    SyncJobs["<b>SyncJobs</b><br/>- apt_sync, snap_sync, flatpak_sync<br/>- manual_deb_sync, manual_snap_sync<br/>- manual_installs_sync<br/>- folder_sync, vscode_state_sync<br/>- dummy_success, dummy_fail<br/>[configurable]"]
 
     DiskSpaceMonitorJob["<b>DiskSpaceMonitorJob</b><br/>BackgroundJob<br/>- Periodic check<br/>- One instance per host<br/>[concurrent]"]
 

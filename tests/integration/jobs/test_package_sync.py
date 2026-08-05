@@ -1894,7 +1894,7 @@ class TestSnapHoldCaptureTiming:
     i.e. inside the window in which the orchestrator has a system-wide `refresh.hold`
     engaged on both hosts. D9 assumes those are separate snapstate -- that a system-wide
     hold neither sets nor clears an individual snap's `held` note -- and says so in a
-    comment in `snap_sync._parse_snap_list`. Nothing had ever checked it against a real
+    comment in `packages/snap_listing.parse_snap_list`. Nothing had ever checked it against a real
     snapd.
 
     The end-to-end half of the same assumption, where a hold set on the source reaches the
