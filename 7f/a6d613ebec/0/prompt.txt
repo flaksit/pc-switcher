@@ -1,0 +1,46 @@
+undo the blahblah you added to ruff.toml. CONCISE
+
+---
+
+remove that commit, instead of adding another commit on top
+
+---
+
+Now on PLR0913: I know it is different than 917. I asked: better to add specific in-line exceptions than silence the guard globally?
+
+---
+
+<task-notification>
+<task-id>b67akdi3d</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/443d7a0f-9d6b-45ed-a51a-92269e7d50c5/tasks/b67akdi3d.output</output-file>
+<status>failed</status>
+<summary>Background command "Wait for CI after refactor push" failed with exit code 1</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bobr5ozob</task-id>
+<tool-use-id>toolu_01Vp8pyEfM1gnTskuowKde2f</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/443d7a0f-9d6b-45ed-a51a-92269e7d50c5/tasks/bobr5ozob.output</output-file>
+<status>failed</status>
+<summary>Background command "Wait for CI on e8ea42e6" failed with exit code 1</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b930sofg5</task-id>
+<tool-use-id>toolu_01TCkPoNYj6W77xV6K7p91AJ</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/443d7a0f-9d6b-45ed-a51a-92269e7d50c5/tasks/b930sofg5.output</output-file>
+<status>failed</status>
+<summary>Background command "Wait for CI on PR 213" failed with exit code 1</summary>
+</task-notification>
+
+---
+
+Integration tests not relevant here.
+
+Not C, this is almost the same as silencing completely.
+"Every future CLI-flag needs another"? Does every CLI-flag adds a new function with ALL cmd-line flags as argument?
