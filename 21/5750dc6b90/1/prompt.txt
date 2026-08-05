@@ -1,0 +1,10 @@
+Create gh issue for the following:
+"machine-specific" questions that are about conflicting items that exist on both source and target: user should be able to choose which side to mark version-specific: source or target or both, because there is no reason that it always is the target that needs a freeze, or the source.
+
+---
+
+it is not core at all, it is specifically about package-sync!
+
+---
+
+it is not core at all, it is specifically about package-sync! "machine-specific" is a feature of package-sync

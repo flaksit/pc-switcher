@@ -3,11 +3,13 @@
   "checkpoint_id": "215750dc6b90",
   "strategy": "manual-commit",
   "branch": "pc-216",
-  "checkpoints_count": 1,
+  "checkpoints_count": 3,
   "files_touched": [
     "tests/integration/conftest.py",
     "tests/integration/jobs/package_sync_scenario.py",
     "tests/integration/jobs/test_package_sync.py",
+    "tests/integration/scripts/internal/common.sh",
+    "tests/integration/scripts/internal/vm-test-fixtures.sh",
     "tests/unit/jobs/test_package_sync_candidate_selection.py"
   ],
   "sessions": [
@@ -17,13 +19,20 @@
       "compact_transcript": "/21/5750dc6b90/0/transcript.jsonl",
       "content_hash": "/21/5750dc6b90/0/content_hash.txt",
       "prompt": "/21/5750dc6b90/0/prompt.txt"
+    },
+    {
+      "metadata": "/21/5750dc6b90/1/metadata.json",
+      "transcript": "/21/5750dc6b90/1/full.jsonl",
+      "compact_transcript": "/21/5750dc6b90/1/transcript.jsonl",
+      "content_hash": "/21/5750dc6b90/1/content_hash.txt",
+      "prompt": "/21/5750dc6b90/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 605,
-    "cache_creation_tokens": 1018341,
-    "cache_read_tokens": 91414947,
-    "output_tokens": 205466,
-    "api_call_count": 305
+    "input_tokens": 625,
+    "cache_creation_tokens": 1105280,
+    "cache_read_tokens": 91960004,
+    "output_tokens": 209505,
+    "api_call_count": 316
   }
 }
