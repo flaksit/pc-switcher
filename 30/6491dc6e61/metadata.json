@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "306491dc6e61",
+  "strategy": "manual-commit",
+  "branch": "dependabot/uv/python-minor-patch-c784f51798",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "ruff.toml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/30/6491dc6e61/0/metadata.json",
+      "transcript": "/30/6491dc6e61/0/full.jsonl",
+      "compact_transcript": "/30/6491dc6e61/0/transcript.jsonl",
+      "content_hash": "/30/6491dc6e61/0/content_hash.txt",
+      "prompt": "/30/6491dc6e61/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 11,
+    "cache_creation_tokens": 5059,
+    "cache_read_tokens": 435895,
+    "output_tokens": 3316,
+    "api_call_count": 6
+  }
+}

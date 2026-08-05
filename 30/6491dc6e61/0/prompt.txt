@@ -1,0 +1,1 @@
+Would the disabled PLR0913 fire a lot? Follow same reasoning: add a few exceptions rather than killing the guard?
