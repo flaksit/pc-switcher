@@ -120,10 +120,12 @@ _APT_TIMERS = ("apt-daily.timer", "apt-daily-upgrade.timer")
 # outlast any sync, short enough that an abandoned suspension lapses the same day.
 _APT_TIMER_SUSPENSION = "6h"
 # Fixed name so the deferred restore is greppable on the machine
-# (`systemctl list-timers 'pc-switcher-*'`) and cancellable by `_restore_apt_timers`.
-# Scheduling stops any unit of this name left by an earlier run first: `systemd-run --unit`
-# refuses a name that already exists, and a run that inherited a crashed predecessor's unit
-# would otherwise get no safety net of its own.
+# (`systemctl list-timers 'pc-switcher-*'`) and cancellable by `_restore_apt_timers` without
+# having to parse a generated one back out of `systemd-run`'s output. `systemd-run` refuses a
+# name that already exists, which needs no special handling: the only way a unit of this name
+# outlives the run that scheduled it is a run that died, and such a run left the timers
+# STOPPED — so the next run reads them as inactive and skips that host before it ever
+# schedules anything. The machine stays covered by the pending unit either way.
 _APT_TIMER_RESTORE_UNIT = "pc-switcher-apt-timers"
 # The unit properties the capture reads. `Id` keys the block (`systemctl show` emits one
 # block per unit ASKED, in order, including for a unit that does not exist), `LoadState`
@@ -1786,17 +1788,12 @@ class Orchestrator:
         connection or never reaches `_cleanup` at all. Its payload names the exact timers
         being stopped, so a machine gets back what it had and nothing more.
 
-        `--collect` releases the transient units once the restore has run, and stopping any
-        unit of the same name first is what lets a run inherit a crashed predecessor's leftover
-        without `systemd-run` refusing the name. That stop is a cancel, never a restore: it
-        removes a scheduled unit whose payload has not run, and the timers it names are, on
-        this path, still running.
+        `--collect` releases the transient units once the restore has run, so a machine that
+        was never cleaned up is left with nothing of this run's beyond the restored timers.
         """
         start = f"/usr/bin/systemctl start {' '.join(timers)}"
         description = f"pc-switcher: restart the system apt update timers after the sync window ({', '.join(timers)})"
         cmd = (
-            f"sudo systemctl stop {_APT_TIMER_RESTORE_UNIT}.timer {_APT_TIMER_RESTORE_UNIT}.service "
-            f">/dev/null 2>&1; "
             f"sudo systemd-run --collect --on-active={_APT_TIMER_SUSPENSION} "
             f"--unit={_APT_TIMER_RESTORE_UNIT} --description={shlex.quote(description)} {start}"
         )
