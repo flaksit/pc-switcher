@@ -45,7 +45,7 @@ jobs:
       # checks attach to the head commit. "CI Status" always runs (even when
       # lint/unit are path-filtered out), so it is safe to wait on by name.
       - name: Wait for CI Status
-        uses: lewagon/wait-on-check-action@v1.8.1
+        uses: lewagon/wait-on-check-action@v1.9.0
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           check-name: CI Status
@@ -66,7 +66,7 @@ jobs:
           fetch-depth: 0
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v8.3.2
+        uses: astral-sh/setup-uv@v9.0.0
 
       - name: Check secrets
         run: |
