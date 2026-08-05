@@ -188,7 +188,7 @@ def _display_log_file(log_file: Path) -> None:
 
 
 @app.command()
-def sync(
+def sync(  # noqa: PLR0917 - typer builds the call from argv; every parameter is a named CLI flag, never passed positionally
     target: Annotated[str, typer.Argument(help="Target hostname to sync to")],
     config: Annotated[
         Path | None,
