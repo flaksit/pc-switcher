@@ -52,7 +52,7 @@ from __future__ import annotations
 import logging
 import shlex
 from collections.abc import Collection, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
 import yaml
@@ -144,36 +144,10 @@ class AdoptedMarks:
     reads the other's entries. Adoption is permanent rather than a one-shot copy: reading
     is the only thing a plan may do (`PackageSyncJob.plan` is read-only), and a migration
     that writes could never run before the first plan that needs its result.
-
-    `adopted_as` covers the split where the two jobs do NOT share an `item_id` namespace.
-    A job carved out of an older one that already used `unreproducible:` ids inherits them
-    verbatim and leaves this `None`; a job carved out of a PACKAGE MANAGER's job does not,
-    because the same finding is `flatpak:ref:<scope>:<ref>` there and
-    `unreproducible:<origin>:<scope>:<ref>` here. Then `adopted_as` is this job's prefix and
-    the legacy prefix is swapped for it on the way in — and back again on the way out, so
-    `drop()` still reaches the entry in the file that actually holds it.
     """
 
     manager: str
     item_id_prefix: str
-    adopted_as: str | None = None
-
-    def owns(self, item_id: str) -> bool:
-        """Whether `item_id`, in the ADOPTING job's namespace, names an adoptable entry."""
-        return item_id.startswith(self.adopted_as if self.adopted_as is not None else self.item_id_prefix)
-
-    def adopt(self, legacy_item_id: str) -> str:
-        """A legacy file's `item_id`, in the adopting job's namespace."""
-        if self.adopted_as is None:
-            return legacy_item_id
-        return self.adopted_as + legacy_item_id.removeprefix(self.item_id_prefix)
-
-    def legacy_id(self, item_id: str) -> str:
-        """The inverse of `adopt`: where the adopting job's `item_id` lives in the legacy
-        file, so a `drop()` reaches the entry rather than silently missing it."""
-        if self.adopted_as is None:
-            return item_id
-        return self.item_id_prefix + item_id.removeprefix(self.adopted_as)
 
 
 class _HasItemId(Protocol):
@@ -300,7 +274,7 @@ class DecisionFile:
         if self._adopts is None:
             return entries
         adopted = {
-            self._adopts.adopt(item_id): replace(entry, item_id=self._adopts.adopt(item_id))
+            item_id: entry
             for item_id, entry in (await DecisionFile(self._adopts.manager, self._executor)._load_own()).items()
             if item_id.startswith(self._adopts.item_id_prefix)
         }
@@ -375,12 +349,9 @@ class DecisionFile:
 
         removed = await self._drop_from_own_file(item_ids)
         if self._adopts is not None:
-            adopted_ids = [self._adopts.legacy_id(item_id) for item_id in item_ids if self._adopts.owns(item_id)]
+            adopted_ids = [item_id for item_id in item_ids if item_id.startswith(self._adopts.item_id_prefix)]
             legacy = DecisionFile(self._adopts.manager, self._executor)
-            # Reported in THIS job's namespace: the caller asked about its own ids and a
-            # legacy id would match none of them, so a translated-away entry would read as
-            # "not dropped" and be re-offered every run.
-            removed |= {self._adopts.adopt(item_id) for item_id in await legacy._drop_from_own_file(adopted_ids)}
+            removed |= await legacy._drop_from_own_file(adopted_ids)
         return removed
 
     async def _drop_from_own_file(self, item_ids: Collection[str]) -> frozenset[str]:

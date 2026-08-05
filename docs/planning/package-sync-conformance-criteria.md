@@ -55,7 +55,7 @@ Decomposes [The model](package-sync-user-requirements.md#the-model).
 - **PKG-FR-SNAP-IDENTITY**: A snap MUST be identified by name alone, and the system MUST NOT ask the user anything about where a snap comes from.
   Why: one store, and a name resolves to one publisher through an assertion snapd validates itself, so no second build of a name exists to install by mistake.
 - **PKG-FR-FLATPAK-IDENTITY**: A flatpak application MUST be identified by its installation scope and its full reference including branch. The same application in two scopes, or on two branches, MUST be treated as two independent items — one install and one removal — and the system MUST NOT normalise the difference away. This identity MUST hold for an application no remote can reproduce as well, so `manual_flatpak_sync` MUST identify one by scope and full reference exactly as `flatpak_sync` does.
-  Why the second sentence: an application moves between the two jobs when a remote is deleted or re-added, and an identity that changed with it would orphan the answer the user already gave about that application.
+  Why the last sentence: user and system are separate installations that can hold the same application from different origins at different versions, so a job that dropped scope would fold two distinct applications into one item.
   Why: two branches of one application can be installed side by side, and the two scopes are configured separately.
 - **PKG-FR-FLATPAK-ORIGIN-NOT-IDENTITY**: A flatpak application's origin remote MUST NOT be part of its identity.
 - **PKG-FR-VERSION-FLOAT**: For apt and flatpak the system MUST install by name and accept whatever the target's own repositories offer. A version difference MUST be reported and MUST NOT be forced, upgraded or downgraded.

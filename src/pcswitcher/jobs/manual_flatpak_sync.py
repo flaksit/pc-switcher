@@ -38,15 +38,15 @@ from pcswitcher.jobs.packages.flatpak_policy import (
     scope_flag,
 )
 from pcswitcher.jobs.packages.probes import require_answer
-from pcswitcher.jobs.packages.state import AdoptedMarks, DecisionEntry, DecisionFile
+from pcswitcher.jobs.packages.state import DecisionEntry
 from pcswitcher.jobs.packages.unreproducible import UnreproducibleItem, UnreproducibleSyncJob, lines_of
 from pcswitcher.models import FirstSyncScope, Host, ValidationError
 
 __all__ = ["ManualFlatpakSyncJob"]
 
 # The origin every item this job produces carries, and so the slice of an `item_id` space
-# that belongs to it. Named once: detection, the mark reconciliation and the adoption of
-# marks recorded before this job existed all key on the same string.
+# that belongs to it. Named once: detection and the mark reconciliation key on the same
+# string.
 _ORIGIN = "flatpak-no-remote"
 
 # Apps only, matching what `flatpak_sync` replicates: a runtime is pulled in by the app that
@@ -60,27 +60,6 @@ _LIST_APPS_CMD = "flatpak list --app --columns=origin,installation,ref"
 # reconciliation. Narrowing a "does this machine still have it" question to a subset is how
 # a mark on something still installed gets dropped (`flatpak_sync.observe_absent_marks`).
 _LIST_ALL_REFS_CMD = "flatpak list --columns=origin,installation,ref"
-
-# Where this job's machine-specific marks were recorded before it existed: `flatpak_sync`
-# had no exclusion at all, so a bundle-installed ref was an ordinary flatpak item and every
-# "never install this on the other machine" answer about one went into `flatpak`'s decision
-# file under a `flatpak:ref:` id. Adding the exclusion orphans exactly those entries, so
-# they are adopted — and, unlike `manual_deb_sync`'s adoption, RENAMED on the way in, since
-# the two managers do not share an id namespace: `flatpak:ref:<scope>:<ref>` becomes
-# `unreproducible:flatpak-no-remote:<scope>:<ref>`, which is a pure prefix swap because this
-# job's identifier is deliberately `<scope>:<ref>` (see `_item`).
-#
-# The prefix cannot be narrowed to the unreproducible refs alone — which ones those are is
-# not knowable when a decision file is read — so a mark on an ordinary flathub app is
-# adopted too. That is harmless where it matters and correct where it shows: such a mark
-# never matches an item this job produces, so it silences nothing; and the one place it is
-# visible, `observe_absent_marks`, reaches the same verdict `flatpak_sync` would, because a
-# mark naming a ref the machine no longer has is dead whichever job notices (`DecisionFile.drop`).
-_MARKS_BEFORE_THE_EXCLUSION = AdoptedMarks(
-    manager="flatpak",
-    item_id_prefix="flatpak:ref:",
-    adopted_as=UnreproducibleItem.id_prefix(_ORIGIN),
-)
 
 
 @dataclass(frozen=True)
@@ -122,9 +101,7 @@ def _item(row: _InstalledRef) -> UnreproducibleItem:
     a ref's identity its full ref WITHIN its installation scope — user and system are
     separate installations and the same application can be in both, from different origins,
     at different versions — so scope has to be inside the identifier rather than a field
-    beside it, exactly as it is inside `FlatpakItem.item_id`. Keeping the two in the same
-    order (`<scope>:<ref>`) is also what makes adopting `flatpak_sync`'s marks a prefix
-    swap rather than a re-parse (`_MARKS_BEFORE_THE_EXCLUSION`).
+    beside it, exactly as it is inside `FlatpakItem.item_id`.
     """
     return UnreproducibleItem(
         origin=_ORIGIN,
@@ -154,12 +131,6 @@ class ManualFlatpakSyncJob(UnreproducibleSyncJob):
         "properties": {},
         "additionalProperties": False,
     }
-
-    @override
-    def _decision_file(self, executor: Executor) -> DecisionFile:
-        """This job's decision file, plus the marks `flatpak_sync` recorded about these same
-        refs before they were excluded from it (`_MARKS_BEFORE_THE_EXCLUSION`)."""
-        return DecisionFile(self.manager_id, executor, _MARKS_BEFORE_THE_EXCLUSION)
 
     # -- Detection (D-18), run on both machines (`PKG-FR-MANUAL-DIFF`) -------------------
 
@@ -233,9 +204,7 @@ class ManualFlatpakSyncJob(UnreproducibleSyncJob):
         and dropping its mark on those grounds would re-offer software the user asked to be
         left alone.
 
-        Entries this job cannot recognise — including `manual_deb_sync`'s and
-        `manual_installs_sync`'s, which share the registry but not the file — are left
-        exactly where they are.
+        Entries this job cannot recognise are left exactly where they are.
         """
         executor = self.source if on_source else self.target
         machine = self.machines.source if on_source else self.machines.target

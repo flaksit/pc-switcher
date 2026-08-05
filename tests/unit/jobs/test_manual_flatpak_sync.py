@@ -1,6 +1,6 @@
 """Unit tests for `ManualFlatpakSyncJob`: the flatpak half of what no package manager can
-reproduce (#252, D-18) — the no-remote detection, its validation, and the marks
-`flatpak_sync` recorded about these refs before they were excluded from it.
+reproduce (#252, D-18) — the no-remote detection, its validation, and its own
+machine-specific marks.
 
 The shared half every unreproducible job inherits is covered in `test_unreproducible_jobs.py`.
 All executor interactions are mocked; no real flatpak commands run.
@@ -13,7 +13,6 @@ from unittest.mock import MagicMock
 import pytest
 
 from pcswitcher.config import Configuration
-from pcswitcher.jobs import JobContext
 from pcswitcher.jobs.manual_flatpak_sync import ManualFlatpakSyncJob
 from pcswitcher.jobs.packages.items import DiffAction, DiffClass, ItemClass
 from pcswitcher.jobs.packages.probes import ProbeFailed
@@ -150,7 +149,7 @@ class TestNoRemoteDetection:
 
     @pytest.mark.asyncio
     async def test_a_runtime_is_never_an_item(self) -> None:
-        """G140 — apps only, matching what `flatpak_sync` replicates: a runtime arrives with
+        """G139 — apps only, matching what `flatpak_sync` replicates: a runtime arrives with
         the app that needs it and is never installed on its own, so the detection listing is
         the `--app` one."""
         context, source, _target = make_context(
@@ -164,7 +163,7 @@ class TestNoRemoteDetection:
 
     @pytest.mark.asyncio
     async def test_a_machine_with_no_flatpak_apps_asks_no_remote_question(self) -> None:
-        """G141 — nothing installed is an ordinary answer, and a machine with no app has no
+        """G140 — nothing installed is an ordinary answer, and a machine with no app has no
         origin to judge, so the two `flatpak remotes` reads are not issued at all."""
         context, source, _target = make_context(source_responses={LIST_APPS: CommandResult(0, "", "")})
         job = ManualFlatpakSyncJob(context)
@@ -210,7 +209,7 @@ class TestAProbeThatDidNotAnswer:
 
     @pytest.mark.asyncio
     async def test_a_scope_configuring_no_remote_at_all_is_data_not_a_failure(self) -> None:
-        """G142 — a machine that configures no remote in one scope is ordinary; every ref in
+        """G141 — a machine that configures no remote in one scope is ordinary; every ref in
         that scope really is unreproducible, and that is the answer, not a probe failure."""
         context, _source, _target = make_context(
             source_responses=source_with(apps=ref_line(FLATHUB_REF, "flathub"), user_remotes=())
@@ -245,7 +244,7 @@ class TestWhatTheTargetAlreadyHolds:
 
     @pytest.mark.asyncio
     async def test_the_same_ref_in_the_other_scope_is_not_held(self) -> None:
-        """G143 — identity carries the scope, so a user-scope finding is not answered by a
+        """G142 — identity carries the scope, so a user-scope finding is not answered by a
         system-scope copy: the two are separate installations."""
         context, _source, _target = make_context(
             source_responses=source_with(apps=ref_line(BUNDLE_REF, "bundle-origin", "user")),
@@ -304,64 +303,25 @@ def _decisions(*item_ids: str) -> str:
     return f"machine_specific:\n{body}"
 
 
-class TestMarksRecordedBeforeTheExclusion:
-    """`flatpak_sync` had no exclusion, so a bundle-installed ref was an ordinary flatpak
-    item and an answer about one went into `flatpak`'s decision file under a `flatpak:ref:`
-    id. Adding the exclusion orphans exactly those entries unless they are adopted — and the
-    two managers do not share an id namespace, so adoption renames as well as reads
-    (`state.AdoptedMarks`).
-
-    The stubs list this job's own file FIRST: `flatpak.decisions.yaml` is a substring of
-    `manual_flatpak.decisions.yaml`, so the narrower key has to match first or both reads
-    answer with the legacy content.
+class TestInertFiltering:
+    """An item recorded machine-specific on the source produces no diff (D-08/D-19). The
+    file is this job's own — `manual_flatpak.decisions.yaml` — and starts empty.
     """
 
-    @staticmethod
-    def _context(legacy_decisions: str) -> tuple[JobContext, MagicMock, MagicMock]:
-        return make_context(
+    @pytest.mark.asyncio
+    async def test_a_marked_finding_produces_no_diff(self) -> None:
+        """G136 — the answer silences the finding rather than putting it to the user again."""
+        context, _source, _target = make_context(
             source_responses={
-                "manual_flatpak.decisions.yaml": CommandResult(0, "", ""),
-                "flatpak.decisions.yaml": CommandResult(0, legacy_decisions, ""),
+                "manual_flatpak.decisions.yaml": CommandResult(0, _decisions(item_id(BUNDLE_REF)), ""),
                 **source_with(apps=ref_line(BUNDLE_REF, "bundle-origin")),
             }
         )
-
-    @pytest.mark.asyncio
-    async def test_a_mark_recorded_before_the_exclusion_still_silences_its_finding(self) -> None:
-        """G136 — the answer was given while `flatpak_sync` owned the ref, so it sits in that
-        job's file under that job's id; the finding it silenced stays silent rather than
-        being put to the user again under a new job's name."""
-        context, _source, _target = self._context(_decisions(f"flatpak:ref:user:{BUNDLE_REF}"))
         job = ManualFlatpakSyncJob(context)
 
         plan = await job.plan()
 
         assert plan.diffs == ()
-
-    @pytest.mark.asyncio
-    async def test_the_adopted_mark_is_read_under_this_job_s_own_identity(self) -> None:
-        """G137 — the rename is a prefix swap, which is why this job's identifier is
-        `<scope>:<ref>`: the legacy id and this job's differ only in what precedes it."""
-        context, _source, _target = self._context(_decisions(f"flatpak:ref:user:{BUNDLE_REF}"))
-        job = ManualFlatpakSyncJob(context)
-
-        entries = await job._decision_file(job.source).load()  # pyright: ignore[reportPrivateUsage]
-
-        assert set(entries) == {item_id(BUNDLE_REF)}
-        assert entries[item_id(BUNDLE_REF)].item_id == item_id(BUNDLE_REF)
-
-    @pytest.mark.asyncio
-    async def test_a_remote_mark_in_the_same_file_is_not_adopted(self) -> None:
-        """G138 — that file can also hold `flatpak:remote:` and `flatpak:mask:` entries; this
-        job takes the `flatpak:ref:` slice and nothing else."""
-        context, _source, _target = self._context(
-            _decisions(f"flatpak:ref:user:{BUNDLE_REF}", "flatpak:remote:user:flathub")
-        )
-        job = ManualFlatpakSyncJob(context)
-
-        entries = await job._decision_file(job.source).load()  # pyright: ignore[reportPrivateUsage]
-
-        assert set(entries) == {item_id(BUNDLE_REF)}
 
 
 class TestMarksFollowWhatTheMachineHolds:
@@ -382,13 +342,12 @@ class TestMarksFollowWhatTheMachineHolds:
 
     @pytest.mark.asyncio
     async def test_a_marked_ref_still_installed_keeps_its_mark(self) -> None:
-        """G139 — presence answers this, not reproducibility: a marked ref whose remote the
+        """G138 — presence answers this, not reproducibility: a marked ref whose remote the
         user re-added is still installed, and dropping its mark would re-offer software the
         user asked to be left alone."""
         source = await self._run(
             source_responses={
                 "manual_flatpak.decisions.yaml": CommandResult(0, _decisions(item_id(BUNDLE_REF)), ""),
-                "flatpak.decisions.yaml": CommandResult(0, "", ""),
                 **source_with(apps=ref_line(BUNDLE_REF, "flathub")),
             }
         )
@@ -397,12 +356,11 @@ class TestMarksFollowWhatTheMachineHolds:
 
     @pytest.mark.asyncio
     async def test_a_marked_ref_the_machine_no_longer_has_is_dropped(self) -> None:
-        """G144 — the other answer: the mark keeps this machine's copy, and there is no copy
+        """G137 — the other answer: the mark keeps this machine's copy, and there is no copy
         left for it to keep."""
         source = await self._run(
             source_responses={
                 "manual_flatpak.decisions.yaml": CommandResult(0, _decisions(item_id(BUNDLE_REF)), ""),
-                "flatpak.decisions.yaml": CommandResult(0, "", ""),
                 **source_with(apps=ref_line(FLATHUB_REF, "flathub")),
             }
         )
@@ -411,29 +369,13 @@ class TestMarksFollowWhatTheMachineHolds:
         assert len(rewrites) == 1
         assert "manual_flatpak.decisions.yaml" in rewrites[0]
 
-    @pytest.mark.asyncio
-    async def test_a_dead_adopted_mark_leaves_the_file_that_holds_it(self) -> None:
-        """G145 — an adopted entry lives in `flatpak`'s file, so dropping it from this job's
-        file alone would leave `load()` adopting it again on the next run — the mark
-        outliving its item."""
-        source = await self._run(
-            source_responses={
-                "manual_flatpak.decisions.yaml": CommandResult(0, "", ""),
-                "flatpak.decisions.yaml": CommandResult(0, _decisions(f"flatpak:ref:user:{BUNDLE_REF}"), ""),
-                **source_with(apps=ref_line(FLATHUB_REF, "flathub")),
-            }
-        )
-
-        rewrites = [cmd for cmd in all_calls(source) if "mv --force" in cmd]
-        assert [cmd for cmd in rewrites if "manual_flatpak.decisions.yaml" not in cmd]
-
 
 class TestExecuteIndependentOfFlatpakSync:
     """The job runs on its own enable flag, independent of `flatpak_sync` (D-15/D-18)."""
 
     @pytest.mark.asyncio
     async def test_plan_runs_with_flatpak_sync_absent_from_config(self) -> None:
-        """G146 — the finding is still detected and presented; this job asks flatpak its own
+        """G143 — the finding is still detected and presented; this job asks flatpak its own
         questions and imports nothing from `flatpak_sync`."""
         context, _source, _target = make_context(
             source_responses=source_with(apps=ref_line(BUNDLE_REF, "bundle-origin")),
