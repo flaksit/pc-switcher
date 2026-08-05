@@ -1,0 +1,9 @@
+Analyze/profile where time really is spent in integration tests and how many times per run. So we see the concrete hotspots. Aggregate/report numbers based on full, smoke and per area runs
+
+---
+
+Still running after an hour or so?
+
+---
+
+go go go
