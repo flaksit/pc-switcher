@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "4961e3262f64",
+  "strategy": "manual-commit",
+  "branch": "pc-216",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "docs/dev/testing-guide.md",
+    "docs/planning/pc216-profile.md",
+    "tests/integration/conftest.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/49/61e3262f64/0/metadata.json",
+      "transcript": "/49/61e3262f64/0/full.jsonl",
+      "compact_transcript": "/49/61e3262f64/0/transcript.jsonl",
+      "content_hash": "/49/61e3262f64/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 134,
+    "cache_creation_tokens": 88328,
+    "cache_read_tokens": 14287257,
+    "output_tokens": 44242,
+    "api_call_count": 71
+  }
+}
