@@ -1,0 +1,1 @@
+Why not specific exceptions for the 4 cases, instead of removing the full guard?
