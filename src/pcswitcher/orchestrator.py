@@ -8,6 +8,7 @@ import logging
 import os
 import secrets
 import shlex
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from enum import IntEnum
 from logging.handlers import QueueListener
@@ -99,6 +100,75 @@ _SNAP_HOLD_TIMESTAMP_CMD = f"date --utc --date='{_SNAP_AUTOREFRESH_HOLD_DURATION
 # "there is no hold" from "the hold could not be read" — a distinction the value alone cannot
 # carry, and the one that decides whether the option may be cleared (`_restore_snap_hold`).
 _SNAP_HOLD_UNSET_MARKER = 'has no "refresh.hold"'
+
+# Transient suspension of Ubuntu's own apt updater across the RUN_JOBS window (#248).
+# `apt-daily-upgrade.timer` fires roughly twice a day and takes the dpkg frontend lock;
+# firing while apt_sync is converging collides with its transaction, and apt_sync's
+# validate() can only refuse a run whose lock is ALREADY held — it cannot stop one that
+# starts mid-run. Stopping the two timers on BOTH hosts closes that window. It gates only
+# the SYSTEM updater: a human's `apt install` and PackageKit are untouched and remain the
+# fail-fast case (`PKG-FR-APT-DPKG-LOCK`).
+_APT_TIMERS = ("apt-daily.timer", "apt-daily-upgrade.timer")
+# `systemctl stop` has no expiry, so — unlike snapd's timestamp-valued `refresh.hold` —
+# the stop cannot self-heal on its own, and a killed run would leave a user's machine with
+# security updates disabled indefinitely. The stop is therefore paired with a TRANSIENT
+# systemd timer, scheduled BEFORE the stop and owned by systemd rather than by this process,
+# that starts the timers again after `_APT_TIMER_SUSPENSION`. It survives the sync being
+# killed, the SSH connection dropping and the machine rebooting into a run that never
+# reached `_cleanup`; the normal path starts the timers itself and then cancels the timer
+# it no longer needs. Same duration as the snap hold, for the same reason: long enough to
+# outlast any sync, short enough that an abandoned suspension lapses the same day.
+_APT_TIMER_SUSPENSION = "6h"
+# Fixed name so the deferred restore is greppable on the machine
+# (`systemctl list-timers 'pc-switcher-*'`) and cancellable by `_restore_apt_timers`.
+# Scheduling stops any unit of this name left by an earlier run first: `systemd-run --unit`
+# refuses a name that already exists, and a run that inherited a crashed predecessor's unit
+# would otherwise get no safety net of its own.
+_APT_TIMER_RESTORE_UNIT = "pc-switcher-apt-timers"
+# The unit properties the capture reads. `Id` keys the block (`systemctl show` emits one
+# block per unit ASKED, in order, including for a unit that does not exist), `LoadState`
+# separates a real timer from a masked or absent one, `ActiveState` says whether it is
+# running, and `UnitFileState` is the enablement the machine would return to — recorded so a
+# host's prior policy is captured in full rather than inferred from whether it was running.
+_APT_TIMER_PROPERTIES = ("Id", "LoadState", "ActiveState", "UnitFileState")
+
+
+def _parse_systemctl_show(output: str) -> dict[str, dict[str, str]]:
+    """Parse `systemctl show`'s `Key=Value` blocks into `{unit id: {key: value}}`.
+
+    Blocks are separated by a blank line and each carries its own `Id`, which is what makes
+    the output safe to read for several units at once: a unit that does not exist still gets
+    a block (`LoadState=not-found`), so nothing is matched positionally. A block without an
+    `Id` is dropped rather than guessed at.
+    """
+    blocks: dict[str, dict[str, str]] = {}
+    current: dict[str, str] = {}
+    for line in (*output.splitlines(), ""):
+        if not line.strip():
+            unit = current.get("Id")
+            if unit:
+                blocks[unit] = current
+            current = {}
+            continue
+        key, _, value = line.partition("=")
+        current[key.strip()] = value.strip()
+    return blocks
+
+
+def _running_apt_timers(state: Mapping[str, Mapping[str, str]]) -> tuple[str, ...]:
+    """The apt timers that are loaded AND active on a host — the only ones worth stopping.
+
+    A timer that is masked, absent or already inactive needs no stop, and starting it back
+    afterwards would impose a policy the machine did not have: masking the apt timers is
+    exactly how a machine says it does not want the automatic updater (the integration VMs
+    do it). Restricting the suspension to running timers is what makes the restore exact —
+    the set put back is the set taken away, and nothing else.
+    """
+    return tuple(
+        timer
+        for timer in _APT_TIMERS
+        if state.get(timer, {}).get("LoadState") == "loaded" and state.get(timer, {}).get("ActiveState") == "active"
+    )
 
 
 class SyncStep(IntEnum):
@@ -337,6 +407,16 @@ class Orchestrator:
         self._snap_hold_readable_source = False
         self._snap_hold_readable_target = False
 
+        # apt update-timer suspension state (#248). Engaged only when apt_sync is enabled on
+        # a non-dry-run. Each tuple holds the timers actually stopped on that host, which is
+        # what `_cleanup` starts again — an empty tuple therefore means "nothing to put back"
+        # for every reason at once: the host was skipped, its timers were already inactive,
+        # or its state could not be read. `_apt_timers_engaged` gates the restore so it is a
+        # no-op on a run that suspended nothing, and idempotent if _cleanup were entered twice.
+        self._apt_timers_engaged = False
+        self._apt_timers_stopped_source: tuple[str, ...] = ()
+        self._apt_timers_stopped_target: tuple[str, ...] = ()
+
         # Logging infrastructure (initialized in run())
         self._queue_listener: QueueListener | None = None
         self._ui: TerminalUI | None = None
@@ -549,6 +629,9 @@ class Orchestrator:
             # Pause snapd auto-refresh on both hosts across the whole RUN_JOBS window
             # (snap convergence → folder_sync); released in _cleanup (decision 4).
             await self._hold_snap_autorefresh()
+            # Same window for Ubuntu's own apt updater, which takes the dpkg lock apt_sync
+            # converges under; restarted in _cleanup, and by systemd itself if this run dies.
+            await self._suspend_apt_timers()
             job_results = await self._execute_jobs(jobs, unresolved_job_results)
             session.job_results = job_results
 
@@ -1658,6 +1741,233 @@ class Orchestrator:
             Host.TARGET, self._snap_hold_prior_target, readable=self._snap_hold_readable_target
         )
 
+    async def _run_apt_timer_command(self, host: Host, cmd: str, *, mutates: str | None = None) -> CommandResult:
+        """Run an apt-timer command on `host`, honoring each executor's shell contract.
+
+        The counterpart of `_run_snap_hold_command`, and the same contract: the source is the
+        local executor, the target the remote one invoked with `login_shell=False`, and
+        `mutates` is passed straight through — the `systemctl show` capture is a read and
+        leaves it None, while stopping, scheduling and starting are system writes on both
+        machines and name themselves.
+        """
+        if host is Host.SOURCE:
+            assert self._local_executor is not None
+            return await self._local_executor.run_command(cmd, mutates=mutates)
+        assert self._remote_executor is not None
+        return await self._remote_executor.run_command(cmd, login_shell=False, mutates=mutates)
+
+    async def _capture_apt_timer_state(self, host: Host) -> dict[str, dict[str, str]] | None:
+        """Read `host`'s apt timer units, or None when the read itself failed.
+
+        One `systemctl show` over both timers: it exits 0 whatever the units' state — absent,
+        masked, disabled, running — so a non-zero exit means the READ failed rather than that
+        a timer is missing, and None is what tells `_suspend_apt_timers` to leave that host
+        alone. Unprivileged: reading unit properties needs no rights, and a read is not a
+        write however it is run.
+
+        Returns None as well when either timer is missing from the output, which
+        `systemctl show` does not do for a unit it was asked about; an answer that short is
+        not this machine's timer state.
+        """
+        properties = " ".join(f"--property={name}" for name in _APT_TIMER_PROPERTIES)
+        result = await self._run_apt_timer_command(host, f"systemctl show {properties} {' '.join(_APT_TIMERS)}")
+        if not result.success:
+            return None
+        state = _parse_systemctl_show(result.stdout)
+        if not all(timer in state for timer in _APT_TIMERS):
+            return None
+        return state
+
+    async def _schedule_apt_timer_restore(self, host: Host, timers: tuple[str, ...]) -> CommandResult:
+        """Hand `host`'s systemd a transient timer that starts `timers` again by itself.
+
+        This is what makes the suspension reversible without this process: the restore is a
+        unit systemd owns, so it fires whether the sync exits cleanly, is killed, loses its
+        connection or never reaches `_cleanup` at all. Its payload names the exact timers
+        being stopped, so a machine gets back what it had and nothing more.
+
+        `--collect` releases the transient units once the restore has run, and stopping any
+        unit of the same name first is what lets a run inherit a crashed predecessor's leftover
+        without `systemd-run` refusing the name. That stop is a cancel, never a restore: it
+        removes a scheduled unit whose payload has not run, and the timers it names are, on
+        this path, still running.
+        """
+        start = f"/usr/bin/systemctl start {' '.join(timers)}"
+        description = f"pc-switcher: restart the system apt update timers after the sync window ({', '.join(timers)})"
+        cmd = (
+            f"sudo systemctl stop {_APT_TIMER_RESTORE_UNIT}.timer {_APT_TIMER_RESTORE_UNIT}.service "
+            f">/dev/null 2>&1; "
+            f"sudo systemd-run --collect --on-active={_APT_TIMER_SUSPENSION} "
+            f"--unit={_APT_TIMER_RESTORE_UNIT} --description={shlex.quote(description)} {start}"
+        )
+        return await self._run_apt_timer_command(
+            host,
+            cmd,
+            mutates=f"schedule the automatic restart of the apt update timers in {_APT_TIMER_SUSPENSION}",
+        )
+
+    async def _apply_apt_timer_suspension(self, host: Host, timers: tuple[str, ...]) -> None:
+        """Schedule the deferred restore on `host`, then stop `timers` (best-effort).
+
+        The order is the guarantee, not an implementation detail: the safety net is placed
+        BEFORE the thing it catches, so there is no instant at which the timers are stopped
+        with no scheduled restore. A schedule that fails therefore cancels the suspension on
+        that host rather than proceeding without it — running one sync against a machine that
+        may patch itself mid-run is a race, while stopping a machine's security updates with
+        no way back is a lasting change to a machine the user did not ask us to make.
+
+        A failed stop is a WARNING, never a raise: the suspension is a race guard, and failing
+        the whole sync because it could not be applied would be worse than proceeding without
+        it. The host is recorded as suspended before the stop is issued, so even a stop whose
+        outcome is unknown (a connection that died mid-command) still gets its scheduled unit
+        cancelled and its timers started by `_cleanup`.
+        """
+        scheduled = await self._schedule_apt_timer_restore(host, timers)
+        if not scheduled.success:
+            self._logger.warning(
+                "Not pausing the system apt update timers on %s: the automatic restart could not be scheduled "
+                "there (%s), and stopping them without one could leave that machine's automatic updates off. "
+                "The sync continues with automatic updates enabled on that machine.",
+                self._machine_name(host),
+                scheduled.stderr.strip(),
+                extra={"job": "orchestrator", "host": host.value},
+            )
+            return
+
+        if host is Host.SOURCE:
+            self._apt_timers_stopped_source = timers
+        else:
+            self._apt_timers_stopped_target = timers
+
+        result = await self._run_apt_timer_command(
+            host,
+            f"sudo systemctl stop {' '.join(timers)}",
+            mutates="pause the system apt update timers for the sync window",
+        )
+        if not result.success:
+            self._logger.warning(
+                "Could not pause the system apt update timers on %s: %s. The sync continues; that machine may "
+                "run its automatic updates during the run.",
+                self._machine_name(host),
+                result.stderr.strip(),
+                extra={"job": "orchestrator", "host": host.value},
+            )
+
+    async def _suspend_apt_timers(self) -> None:
+        """Stop Ubuntu's own apt update timers on both hosts for the sync window (#248).
+
+        Gated on `sync_jobs.apt_sync` being enabled and skipped in dry-run (stopping a system
+        timer is a system mutation; ADR-014/D-12). Captures each host's timer state first so
+        `_cleanup` can put back exactly what was taken away, then suspends each host WHOSE
+        STATE IT COULD READ.
+
+        A host whose capture failed is left untouched, on the same trade
+        `_hold_snap_autorefresh` documents: without a pre-suspension reading there is nothing
+        to put back, so stopping the timers would replace an unknown policy. The cost is
+        running unguarded on that host; the alternative is disabling a machine's security
+        updates with no record of what it had.
+        """
+        if self._dry_run or not self._config.sync_jobs.get("apt_sync", False):
+            return
+
+        source_state = await self._capture_apt_timer_state(Host.SOURCE)
+        target_state = await self._capture_apt_timer_state(Host.TARGET)
+        # Engage BEFORE applying so a partially-applied suspension is still restored in _cleanup.
+        self._apt_timers_engaged = True
+        # Announced once, not per host: every log line already carries the machine it happened
+        # on. The line states its owner and its span, because the pause fires before the first
+        # job and otherwise reads as an unexplained stop.
+        self._logger.info(
+            "Pausing the system apt update timers (%s) on both hosts for the whole run — held by the "
+            "orchestrator, because Ubuntu's automatic updater takes the same dpkg lock apt_sync converges "
+            "under; each machine's timers restart by themselves within %s even if this run never finishes",
+            ", ".join(_APT_TIMERS),
+            _APT_TIMER_SUSPENSION,
+            extra={"job": "orchestrator", "host": "source"},
+        )
+        for host, state in ((Host.SOURCE, source_state), (Host.TARGET, target_state)):
+            if state is None:
+                self._logger.warning(
+                    "Not pausing the system apt update timers on %s: their state could not be read, so timers "
+                    "stopped here could not be put back. The sync continues with automatic updates enabled on "
+                    "that machine.",
+                    self._machine_name(host),
+                    extra={"job": "orchestrator", "host": host.value},
+                )
+                continue
+            timers = _running_apt_timers(state)
+            if not timers:
+                continue
+            await self._apply_apt_timer_suspension(host, timers)
+
+    async def _restore_apt_timers_on(self, host: Host, timers: tuple[str, ...]) -> None:
+        """Start `timers` again on `host` and cancel the deferred restore (best-effort).
+
+        Starting comes first and cancelling second, so an interruption between the two leaves
+        the machine with the scheduled restore still in place rather than with neither.
+        Cancelling a unit that already fired fails, which is not worth a warning — on a run
+        longer than `_APT_TIMER_SUSPENSION` it is the expected outcome — so it is logged at
+        DEBUG and the run finishes tearing down.
+
+        Swallows a FAILED start (teardown must complete every step regardless — the scheduled
+        restore is still pending) but never a DECLINED one: `SyncAborted` is re-raised ahead of
+        the broad handler, because a user answering "abort" is a decision to honor.
+        """
+        if not timers:
+            return
+        try:
+            started = await self._run_apt_timer_command(
+                host,
+                f"sudo systemctl start {' '.join(timers)}",
+                mutates=f"restart the apt update timers this run paused ({', '.join(timers)})",
+            )
+            if not started.success:
+                self._logger.warning(
+                    "Could not restart the system apt update timers on %s: %s. They restart by themselves "
+                    "within %s of being paused.",
+                    self._machine_name(host),
+                    started.stderr.strip(),
+                    _APT_TIMER_SUSPENSION,
+                    extra={"job": "orchestrator", "host": host.value},
+                )
+                return
+            cancelled = await self._run_apt_timer_command(
+                host,
+                f"sudo systemctl stop {_APT_TIMER_RESTORE_UNIT}.timer {_APT_TIMER_RESTORE_UNIT}.service",
+                mutates="cancel the scheduled restart of the apt update timers, now that they are running again",
+            )
+            if not cancelled.success:
+                self._logger.debug(
+                    "No scheduled apt-timer restart left to cancel on %s: %s",
+                    self._machine_name(host),
+                    cancelled.stderr.strip(),
+                    extra={"job": "orchestrator", "host": host.value},
+                )
+        except SyncAborted:
+            raise
+        except Exception as e:
+            self._logger.warning(
+                "Error restarting the system apt update timers on %s: %s. They restart by themselves within %s "
+                "of being paused.",
+                self._machine_name(host),
+                e,
+                _APT_TIMER_SUSPENSION,
+                extra={"job": "orchestrator", "host": host.value},
+            )
+
+    async def _restore_apt_timers(self) -> None:
+        """Start both hosts' apt update timers again, as captured by `_suspend_apt_timers`.
+
+        A no-op when nothing was suspended, and idempotent (clears the engaged flag first) so a
+        second `_cleanup` entry cannot double-restore. Runs early in `_cleanup`, before the SSH
+        connection the target restore needs is torn down.
+        """
+        if not self._apt_timers_engaged:
+            return
+        self._apt_timers_engaged = False
+        await self._restore_apt_timers_on(Host.SOURCE, self._apt_timers_stopped_source)
+        await self._restore_apt_timers_on(Host.TARGET, self._apt_timers_stopped_target)
+
     async def _cleanup(self) -> None:
         """Clean up resources (connection, locks, executors)."""
         self._cleanup_in_progress = True
@@ -1678,6 +1988,20 @@ class Orchestrator:
                 "after it was applied; any pre-existing hold of your own was not written back.",
                 e,
                 _SNAP_AUTOREFRESH_HOLD_DURATION.lstrip("+"),
+                extra={"job": "orchestrator", "host": "source"},
+            )
+
+        # Restart the apt update timers, for the same reason and in the same window as above.
+        try:
+            await self._restore_apt_timers()
+        except SyncAborted as e:
+            # Declining at the gate is honored; the scheduled restart is what still puts the
+            # machine right, which is why nothing below this point is skipped.
+            self._logger.warning(
+                "The system apt update timers were not restarted (%s). Each machine restarts its own within "
+                "%s of being paused, from the timer this run scheduled there.",
+                e,
+                _APT_TIMER_SUSPENSION,
                 extra={"job": "orchestrator", "host": "source"},
             )
 
