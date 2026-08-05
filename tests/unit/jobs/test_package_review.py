@@ -28,7 +28,7 @@ from pcswitcher.config import (  # pyright: ignore[reportPrivateUsage]
     _load_schema,
 )
 from pcswitcher.jobs.context import JobContext
-from pcswitcher.jobs.manual_installs_sync import ManualInstallsSyncJob
+from pcswitcher.jobs.manual_deb_sync import ManualDebSyncJob
 from pcswitcher.jobs.packages.items import DiffAction, DiffClass, ItemClass, ItemDiff
 from pcswitcher.jobs.packages.review import (
     COLLATERAL_REVIEW_ACTION,
@@ -1716,14 +1716,14 @@ class TestAnswerSentencesNameTheMachineAsASet:
 
 # ---------------------------------------------------------------------------------
 # Decision 10: `unresolved` is unrepresentable in an interactive flow, so
-# `ManualInstallsSyncJob` no longer overrides `_unresolved_as_failures` — an interactive
+# `UnreproducibleSyncJob` no longer overrides `_unresolved_as_failures` — an interactive
 # review always resolves every item (or aborts the whole sync). These apply()-only tests
 # pin that a `ReviewOutcome` carrying `unresolved` (only ever produced non-interactively
 # now) never fails the job on that basis. A thin subclass fixes name/manager_id.
 # ---------------------------------------------------------------------------------
 
 
-class _FakeUnreproducibleJob(ManualInstallsSyncJob):
+class _FakeUnreproducibleJob(ManualDebSyncJob):
     name: ClassVar[str] = "fake_unrepro"
     manager_id: ClassVar[str] = "fake"
 

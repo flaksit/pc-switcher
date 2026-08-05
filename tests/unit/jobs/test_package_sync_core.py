@@ -22,7 +22,7 @@ import pytest
 from pcswitcher.events import ProgressEvent
 from pcswitcher.jobs.base import SyncJob
 from pcswitcher.jobs.context import JobContext
-from pcswitcher.jobs.manual_installs_sync import ManualInstallsSyncJob
+from pcswitcher.jobs.manual_deb_sync import ManualDebSyncJob
 from pcswitcher.jobs.packages.items import DiffAction, DiffClass, ItemClass, ItemDiff
 from pcswitcher.jobs.packages.review import Decision, ReviewGroup, ReviewOutcome, TerminalUIReviewer
 from pcswitcher.jobs.packages.state import filter_inert, marks_on_either
@@ -949,8 +949,8 @@ def _unreproducible_diff(item_id: str, action: DiffAction = DiffAction.REPORT_ON
     )
 
 
-class _FakeManualJob(ManualInstallsSyncJob):
-    """A `ManualInstallsSyncJob` with `manager_id="fake"` so the moved finalize hook's
+class _FakeManualJob(ManualDebSyncJob):
+    """An unreproducible job with `manager_id="fake"` so the moved finalize hook's
     decision-file assertions keep reading `fake.decisions` (D-18: finalize/unresolved
     now live on this job, not the base)."""
 
@@ -960,7 +960,7 @@ class _FakeManualJob(ManualInstallsSyncJob):
 
 class TestFinalizeUnreproducible:
     """D-20/D-21/D-23: the `_finalize_unreproducible` hook (owned by
-    `ManualInstallsSyncJob`, D-18) writes this run's snippet authoring and
+    `UnreproducibleSyncJob`, D-18) writes this run's snippet authoring and
     unreproducible-item skip-always decisions, both to the SOURCE — never the target, and
     never during a dry run or a non-interactive outcome.
     """
