@@ -170,6 +170,7 @@ async def _handle_config_sync(
     source_content: str,
     target_content: str | None,
     console: Console,
+    *,
     auto_accept: bool,
     dry_run: bool,
 ) -> bool:
@@ -180,7 +181,7 @@ async def _handle_config_sync(
     # Scenario 1: No config on target
     if target_content is None:
         return await _handle_no_target_config(
-            target, source_config_path, source_content, console, auto_accept, dry_run
+            target, source_config_path, source_content, console, auto_accept=auto_accept, dry_run=dry_run
         )
 
     # Scenario 2: Configs match
@@ -190,7 +191,7 @@ async def _handle_config_sync(
 
     # Scenario 3: Configs differ
     return await _handle_config_diff(
-        target, source_config_path, source_content, target_content, console, auto_accept, dry_run
+        target, source_config_path, source_content, target_content, console, auto_accept=auto_accept, dry_run=dry_run
     )
 
 
@@ -199,6 +200,7 @@ async def _handle_no_target_config(
     source_config_path: Path,
     source_content: str,
     console: Console,
+    *,
     auto_accept: bool,
     dry_run: bool,
 ) -> bool:
@@ -224,6 +226,7 @@ async def _handle_config_diff(
     source_content: str,
     target_content: str,
     console: Console,
+    *,
     auto_accept: bool,
     dry_run: bool,
 ) -> bool:
@@ -311,7 +314,13 @@ async def sync_config_to_target(
 
     try:
         should_continue = await _handle_config_sync(
-            target, source_config_path, source_content, target_content, console, auto_accept, dry_run
+            target,
+            source_config_path,
+            source_content,
+            target_content,
+            console,
+            auto_accept=auto_accept,
+            dry_run=dry_run,
         )
         return should_continue
     finally:
