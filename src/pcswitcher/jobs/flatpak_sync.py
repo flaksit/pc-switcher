@@ -193,6 +193,7 @@ from pathlib import Path
 from typing import Any, ClassVar, Literal, override
 
 from pcswitcher.jobs.context import JobContext
+from pcswitcher.jobs.packages.flatpak_policy import SCOPES, partition_unreproducible, scope_flag
 from pcswitcher.jobs.packages.items import (
     DiffAction,
     DiffClass,
@@ -378,8 +379,6 @@ _ANCHOR_FILES_LIBOSTREE_IGNORES = frozenset({"trustdb.gpg", "secring.gpg"})
 # so this always names its scope explicitly, once per scope like remotes.
 _FLATPAK_MASK_CMD_TEMPLATE = "flatpak {flag} mask"
 
-# Both scopes this item model and flatpak's own --user/--system flags recognise.
-_SCOPES: tuple[Literal["user", "system"], ...] = ("user", "system")
 
 # Every id a remote can carry, in every direction. `_record_permanent_skips` filters on it
 # so "a remote is never recorded machine-specific" holds even for a decision that arrives
@@ -612,10 +611,6 @@ def _lines(output: str) -> list[str]:
     name or URL never carries leading/trailing whitespace of its own.
     """
     return [line for line in output.splitlines() if line.strip()]
-
-
-def _scope_flag(scope: str) -> str:
-    return "--user" if scope == "user" else "--system"
 
 
 def _sudo_prefix(scope: str) -> str:
@@ -943,6 +938,20 @@ def _origin_mismatch_ref_diff(  # noqa: PLR0913 - sibling of _version_mismatch_r
             source_item.origin, source_url, target_item.origin, target_url, machines
         ),
     )
+
+
+def _remote_names_by_scope(remotes: Sequence[FlatpakRemoteItem]) -> dict[str, frozenset[str]]:
+    """`scope -> the remote names configured in it`, the input the shared reproducibility
+    predicate reads (`packages/flatpak_policy.py`).
+
+    Built from the remotes this job already captured rather than from a read of its own, so
+    the remotes it provisions and the remotes it judges refs against are the same set by
+    construction.
+    """
+    names: dict[str, set[str]] = {scope: set() for scope in SCOPES}
+    for item in remotes:
+        names.setdefault(item.scope, set()).add(item.name)
+    return {scope: frozenset(values) for scope, values in names.items()}
 
 
 def _remote_urls_by_scope_and_name(remotes: Sequence[FlatpakRemoteItem]) -> dict[tuple[str, str], str]:
@@ -1443,7 +1452,7 @@ class FlatpakSyncJob(PackageSyncJob):
         """
         keys = await self.source.run_command(_keyring_digests_cmd(scope))
         config = await self.source.run_command(_repo_config_cmd(scope))
-        command = _FLATPAK_REMOTES_CMD_TEMPLATE.format(flag=_scope_flag(scope))
+        command = _FLATPAK_REMOTES_CMD_TEMPLATE.format(flag=scope_flag(scope))
         result = await self.source.run_command(command)
         require_answer(command, result, self.machines.source)
         return _parse_flatpak_remotes(
@@ -1460,7 +1469,7 @@ class FlatpakSyncJob(PackageSyncJob):
         (`FlatpakRemoteItem.key_paths`).
         """
         keys = await self.target.run_command(_keyring_digests_cmd(scope), login_shell=False)
-        command = _FLATPAK_REMOTES_CMD_TEMPLATE.format(flag=_scope_flag(scope))
+        command = _FLATPAK_REMOTES_CMD_TEMPLATE.format(flag=scope_flag(scope))
         result = await self.target.run_command(command, login_shell=False)
         require_answer(command, result, self.machines.target)
         return _parse_flatpak_remotes(result.stdout, scope, _parse_keyring_digests(keys.stdout))
@@ -1470,24 +1479,24 @@ class FlatpakSyncJob(PackageSyncJob):
         even when the URL is identical, so `flathub` in both scopes needs two reads.
         """
         remotes: list[FlatpakRemoteItem] = []
-        for scope in _SCOPES:
+        for scope in SCOPES:
             remotes.extend(await self._capture_source_remotes(scope))
         return remotes
 
     async def _query_all_target_remotes(self) -> list[FlatpakRemoteItem]:
         remotes: list[FlatpakRemoteItem] = []
-        for scope in _SCOPES:
+        for scope in SCOPES:
             remotes.extend(await self._query_target_remotes(scope))
         return remotes
 
     async def _capture_source_masks(self, scope: Literal["user", "system"]) -> list[FlatpakMaskItem]:
-        cmd = _FLATPAK_MASK_CMD_TEMPLATE.format(flag=_scope_flag(scope))
+        cmd = _FLATPAK_MASK_CMD_TEMPLATE.format(flag=scope_flag(scope))
         result = await self.source.run_command(cmd)
         require_answer(cmd, result, self.machines.source)
         return _parse_flatpak_masks(result.stdout, scope)
 
     async def _query_target_masks(self, scope: Literal["user", "system"]) -> list[FlatpakMaskItem]:
-        cmd = _FLATPAK_MASK_CMD_TEMPLATE.format(flag=_scope_flag(scope))
+        cmd = _FLATPAK_MASK_CMD_TEMPLATE.format(flag=scope_flag(scope))
         result = await self.target.run_command(cmd, login_shell=False)
         require_answer(cmd, result, self.machines.target)
         return _parse_flatpak_masks(result.stdout, scope)
@@ -1497,26 +1506,36 @@ class FlatpakSyncJob(PackageSyncJob):
         so a pattern masked in both scopes is two independent reads.
         """
         masks: list[FlatpakMaskItem] = []
-        for scope in _SCOPES:
+        for scope in SCOPES:
             masks.extend(await self._capture_source_masks(scope))
         return masks
 
     async def _query_all_target_masks(self) -> list[FlatpakMaskItem]:
         masks: list[FlatpakMaskItem] = []
-        for scope in _SCOPES:
+        for scope in SCOPES:
             masks.extend(await self._query_target_masks(scope))
         return masks
 
-    async def _capture_source_ref_origins(self) -> dict[tuple[str, str], str]:
-        """`(scope, ref) -> origin` over EVERY installed source ref, runtimes included.
+    async def _capture_source_ref_origins(
+        self, configured_remotes: Mapping[str, frozenset[str]]
+    ) -> dict[tuple[str, str], str]:
+        """`(scope, ref) -> origin` over every installed source ref no remote can reproduce,
+        runtimes included.
 
         The `--app` listing cannot serve this: a runtime is exactly what it filters out, and
         the runtime's own origin is the second input to remote derivation. Guarded on the
         exit code for the same measured reason `capture_source_items` is.
+
+        Refs whose origin no configured remote matches are dropped here too, not only from
+        the manifests: this map is the RUNTIME half of remote derivation, so a runtime
+        pulled in from a bundle would otherwise turn its url-less pseudo-remote into a
+        `flatpak remote-add` the target cannot honour — the same failure the ref half is
+        excluded to prevent.
         """
         result = await self.source.run_command(_FLATPAK_ALL_REFS_CMD)
         require_answer(_FLATPAK_ALL_REFS_CMD, result, self.machines.source)
-        return {(item.scope, item.ref): item.origin for item in _parse_flatpak_list(result.stdout)}
+        reproducible, _ = partition_unreproducible(_parse_flatpak_list(result.stdout), configured_remotes)
+        return {(item.scope, item.ref): item.origin for item in reproducible}
 
     async def _capture_source_runtimes(self, source_refs: Sequence[FlatpakItem]) -> dict[str, str]:
         """`ref item_id -> the runtime ref it is built against`, one local read per app.
@@ -1531,7 +1550,7 @@ class FlatpakSyncJob(PackageSyncJob):
         """
         runtimes: dict[str, str] = {}
         for item in source_refs:
-            cmd = _FLATPAK_RUNTIME_CMD_TEMPLATE.format(flag=_scope_flag(item.scope), ref=shlex.quote(item.ref))
+            cmd = _FLATPAK_RUNTIME_CMD_TEMPLATE.format(flag=scope_flag(item.scope), ref=shlex.quote(item.ref))
             result = await self.source.run_command(cmd)
             require_answer(cmd, result, self.machines.source)
             runtime = result.stdout.strip()
@@ -1647,15 +1666,50 @@ class FlatpakSyncJob(PackageSyncJob):
         # unmatched — which is an install of an application the target already has, or a
         # removal of one the source still has.
         marked = marks_on_either(source_decisions, target_decisions)
-        source_refs = await filter_inert(await self.capture_source_items(), marked)
-        installed_target_refs = await self.query_target_items()
-        target_refs = await filter_inert(installed_target_refs, marked)
         source_remotes = await self._capture_all_source_remotes()
         # No `filter_inert` pass on either side's remotes: a remote is never a review item in
         # any direction, so a decision file has nothing to withhold — and withholding one
         # would hide the URL an origin comparison runs on or keep a dead remote configured
         # for good.
         installed_target_remotes = await self._query_all_target_remotes()
+
+        # Refs no remote can reproduce leave this job (`PKG-FR-FLATPAK-UNREPRODUCIBLE`),
+        # partitioned off the RAW listings BEFORE the machine-specific filter for the reason
+        # `snap_sync` partitions sideloads first: filtering by the marks first would drop a
+        # marked one before `withheld` below could see it, leaving the other machine's copy
+        # of that ref unmatched — and an unmatched entry is a diff.
+        all_source_refs = await self.capture_source_items()
+        all_target_refs = await self.query_target_items()
+        source_refs, source_unreproducible = partition_unreproducible(
+            all_source_refs, _remote_names_by_scope(source_remotes)
+        )
+        _, target_unreproducible = partition_unreproducible(
+            all_target_refs, _remote_names_by_scope(installed_target_remotes)
+        )
+        # Withheld are exactly the refs whose survival would produce a diff this job cannot
+        # honour, and no more:
+        #
+        # - The SOURCE's own unreproducible refs, in both manifests. They are
+        #   `manual_flatpak_sync`'s items now, and dropping only the source's copy would
+        #   leave the target's unmatched — a removal of software nothing can put back.
+        # - A ref ONLY the target has, unreproducible there. The one diff it can produce is
+        #   that same irreversible removal.
+        #
+        # A ref BOTH machines have that is unreproducible on the target ALONE deliberately
+        # stays: a pair produces no install and no removal, only the report
+        # `PKG-FR-FLATPAK-ORIGIN-DIFF` asks for — and an origin the target can no longer
+        # resolve is the very divergence that article exists to name, so withholding it
+        # would hide a real finding while converging nothing. This is where the rule departs
+        # from `PKG-FR-SNAP-SIDELOAD`'s flat "say nothing at all": snap has no report-only
+        # counterpart to lose.
+        source_ids = {item.item_id for item in source_refs}
+        withheld = {item.item_id for item in source_unreproducible}
+        withheld |= {item.item_id for item in target_unreproducible if item.item_id not in source_ids}
+        source_refs = [item for item in source_refs if item.item_id not in withheld]
+        installed_target_refs = [item for item in all_target_refs if item.item_id not in withheld]
+
+        source_refs = await filter_inert(source_refs, marked)
+        target_refs = await filter_inert(installed_target_refs, marked)
         # No `filter_inert` pass on either side's masks either: a mask is derived and no
         # answer about one can be recorded (`PKG-FR-BLOCKS-DERIVED`), so an entry naming one
         # — left by an older version of the tool, or written by hand — must not silence a
@@ -1669,7 +1723,7 @@ class FlatpakSyncJob(PackageSyncJob):
         self._source_remotes_by_id = {item.item_id: item for item in source_remotes}
         self._target_remotes_by_id = {item.item_id: item for item in installed_target_remotes}
         self._target_remotes_now_by_id = None
-        self._source_ref_origins = await self._capture_source_ref_origins()
+        self._source_ref_origins = await self._capture_source_ref_origins(_remote_names_by_scope(source_remotes))
         self._source_runtime_by_ref_id = await self._capture_source_runtimes(source_refs)
         await self._capture_trust_anchors()
         await self._abort_on_a_source_filter_that_denies_its_own_apps(source_refs, source_remotes)
@@ -1710,7 +1764,7 @@ class FlatpakSyncJob(PackageSyncJob):
         under the invoking user's own `~/.cache/flatpak` (measured), so it carries no
         `mutates=` phrase.
         """
-        command = _FLATPAK_REMOTE_LS_CMD_TEMPLATE.format(flag=_scope_flag(scope), remote=shlex.quote(remote))
+        command = _FLATPAK_REMOTE_LS_CMD_TEMPLATE.format(flag=scope_flag(scope), remote=shlex.quote(remote))
         result = await self.source.run_command(command)
         if result.exit_code != 0:
             return None
@@ -2063,7 +2117,7 @@ class FlatpakSyncJob(PackageSyncJob):
         if target_item == source_item and not self._anchors_to_import(source_item) and not source_item.key_paths:
             return
 
-        scope_flag = _scope_flag(derived.scope)
+        flag = scope_flag(derived.scope)
         sudo = _sudo_prefix(derived.scope)
         try:
             staged_keys = await self._stage_source_keys(source_item, derived.remote_id)
@@ -2074,7 +2128,7 @@ class FlatpakSyncJob(PackageSyncJob):
             trust = _remote_trust_flags(source_item, staged_keys, restore_verification=target_item is not None)
             if target_item is None:
                 cmd = (
-                    f"{sudo}flatpak remote-add --if-not-exists {scope_flag}{trust} "
+                    f"{sudo}flatpak remote-add --if-not-exists {flag}{trust} "
                     f"{shlex.quote(derived.name)} {shlex.quote(source_item.url)}"
                 )
                 phrase = f"add {derived.scope} flatpak remote {derived.name} ({source_item.url})"
@@ -2082,7 +2136,7 @@ class FlatpakSyncJob(PackageSyncJob):
                 # `remote-modify` edits the existing entry in place, preserving its other
                 # config and avoiding the ref-origin disruption a delete+re-add would cause.
                 cmd = (
-                    f"{sudo}flatpak remote-modify {scope_flag} --url={shlex.quote(source_item.url)}"
+                    f"{sudo}flatpak remote-modify {flag} --url={shlex.quote(source_item.url)}"
                     f"{trust} {shlex.quote(derived.name)}"
                 )
                 phrase = f"repoint {derived.scope} flatpak remote {derived.name} at {source_item.url}"
@@ -2205,7 +2259,7 @@ class FlatpakSyncJob(PackageSyncJob):
             )
             return
         result = await self.target.run_command(
-            f"{_sudo_prefix(derived.scope)}flatpak remote-modify {_scope_flag(derived.scope)} --no-filter "
+            f"{_sudo_prefix(derived.scope)}flatpak remote-modify {scope_flag(derived.scope)} --no-filter "
             f"{shlex.quote(derived.name)}",
             login_shell=False,
             mutates=(
@@ -2268,7 +2322,7 @@ class FlatpakSyncJob(PackageSyncJob):
             if not write.success:
                 return write.stderr.strip() or "the file could not be written"
             modify = await self.target.run_command(
-                f"{sudo}flatpak remote-modify {_scope_flag(derived.scope)} --filter={shlex.quote(filter_path)} "
+                f"{sudo}flatpak remote-modify {scope_flag(derived.scope)} --filter={shlex.quote(filter_path)} "
                 f"{shlex.quote(derived.name)}",
                 login_shell=False,
                 mutates=f"filter the {derived.scope} flatpak remote {derived.name} with {filter_path}",
@@ -2342,7 +2396,7 @@ class FlatpakSyncJob(PackageSyncJob):
             # Takes the remote's per-remote keyring with it (verified live): trust is not
             # separable from the remote on the delete side.
             result = await self.target.run_command(
-                f"{_sudo_prefix(item.scope)}flatpak remote-delete {_scope_flag(item.scope)} {shlex.quote(item.name)}",
+                f"{_sudo_prefix(item.scope)}flatpak remote-delete {scope_flag(item.scope)} {shlex.quote(item.name)}",
                 login_shell=False,
                 mutates=(
                     f"delete {item.scope} flatpak remote {item.name}, which {self.machines.source} does not have "
@@ -2403,11 +2457,11 @@ class FlatpakSyncJob(PackageSyncJob):
         subject.
         """
         scope, ref = _split_flatpak_item_id(diff.item_id, "ref")
-        scope_flag = _scope_flag(scope)
+        flag = scope_flag(scope)
         sudo = _sudo_prefix(scope)
 
         if diff.action == DiffAction.REMOVE:
-            cmd = f"{sudo}flatpak uninstall --assumeyes {scope_flag} {shlex.quote(ref)}"
+            cmd = f"{sudo}flatpak uninstall --assumeyes {flag} {shlex.quote(ref)}"
             return await self.target.run_command(cmd, login_shell=False, mutates=f"uninstall {scope} flatpak {ref}")
 
         if diff.action == DiffAction.INSTALL:
@@ -2427,9 +2481,7 @@ class FlatpakSyncJob(PackageSyncJob):
                 # T-02-24: refuse rather than issue an install that would land the wrong
                 # vendor's bytes, or one flatpak will reject outright.
                 raise ConvergeItemFailed(f"install of {ref} refused: {refusal}")
-            cmd = (
-                f"{sudo}flatpak install --assumeyes {scope_flag} {shlex.quote(source_item.origin)} {shlex.quote(ref)}"
-            )
+            cmd = f"{sudo}flatpak install --assumeyes {flag} {shlex.quote(source_item.origin)} {shlex.quote(ref)}"
             result = await self.target.run_command(
                 cmd, login_shell=False, mutates=f"install {scope} flatpak {ref} from {source_item.origin}"
             )
@@ -2457,17 +2509,17 @@ class FlatpakSyncJob(PackageSyncJob):
         decides pass/fail (D-27).
         """
         scope, pattern = _split_flatpak_item_id(diff.item_id, "mask")
-        scope_flag = _scope_flag(scope)
+        flag = scope_flag(scope)
         sudo = _sudo_prefix(scope)
 
         if diff.action == DiffAction.INSTALL:
-            cmd = f"{sudo}flatpak {scope_flag} mask {shlex.quote(pattern)}"
+            cmd = f"{sudo}flatpak {flag} mask {shlex.quote(pattern)}"
             return await self.target.run_command(
                 cmd, login_shell=False, mutates=f"mask {scope} flatpak pattern {pattern}"
             )
 
         if diff.action == DiffAction.REMOVE:
-            cmd = f"{sudo}flatpak {scope_flag} mask --remove {shlex.quote(pattern)}"
+            cmd = f"{sudo}flatpak {flag} mask --remove {shlex.quote(pattern)}"
             return await self.target.run_command(
                 cmd, login_shell=False, mutates=f"unmask {scope} flatpak pattern {pattern}"
             )

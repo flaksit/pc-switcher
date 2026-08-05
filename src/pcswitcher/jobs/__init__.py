@@ -11,6 +11,7 @@ from .dummy_success import DummySuccessJob
 from .folder_sync import FolderEntry, FolderSyncJob
 from .install_on_target import InstallOnTargetJob
 from .manual_deb_sync import ManualDebSyncJob
+from .manual_flatpak_sync import ManualFlatpakSyncJob
 from .manual_installs_sync import ManualInstallsSyncJob
 from .vscode_state_sync import VscodeStateSyncJob
 
@@ -26,6 +27,7 @@ __all__ = [
     "Job",
     "JobContext",
     "ManualDebSyncJob",
+    "ManualFlatpakSyncJob",
     "ManualInstallsSyncJob",
     "SyncJob",
     "SystemJob",

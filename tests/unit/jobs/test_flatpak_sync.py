@@ -108,7 +108,11 @@ TARGET_RESPONSES = {
         0, FLATPAK_LIST_TARGET, ""
     ),
     "flatpak remotes --user --columns=name,url": CommandResult(0, _FLATHUB_REMOTE_LINE, ""),
-    "flatpak remotes --system --columns=name,url": CommandResult(0, "", ""),
+    # flathub in BOTH scopes: the target holds a system-scope ref whose origin is flathub,
+    # and a ref naming a remote its own machine does not configure is a ref no remote can
+    # reproduce — out of this job entirely (`packages/flatpak_policy.py`), which is not what
+    # this fixture is for.
+    "flatpak remotes --system --columns=name,url": CommandResult(0, _FLATHUB_REMOTE_LINE, ""),
 }
 
 
@@ -462,7 +466,10 @@ class TestRefIdentityCarriesTheBranch:
             target_responses={
                 "flatpak list --app": CommandResult(0, _STABLE_REF_LINE, ""),
                 "flatpak remotes --user": CommandResult(
-                    0, remote_row("flathub-beta", "https://dl.flathub.org/beta-repo/"), ""
+                    0,
+                    remote_row("flathub-beta", "https://dl.flathub.org/beta-repo/")
+                    + remote_row("flathub", "https://dl.flathub.org/repo/"),
+                    "",
                 ),
             },
         )
@@ -501,7 +508,12 @@ class TestRefIdentityCarriesTheBranch:
     async def test_uninstall_names_the_full_ref(self) -> None:
         """F12 — the uninstall names the full reference and its scope."""
         context, _source, target = make_context(
-            target_responses={"flatpak list --app": CommandResult(0, _BETA_REF_LINE, "")},
+            target_responses={
+                "flatpak list --app": CommandResult(0, _BETA_REF_LINE, ""),
+                "flatpak remotes --user": CommandResult(
+                    0, remote_row("flathub-beta", "https://dl.flathub.org/beta-repo/"), ""
+                ),
+            },
         )
         job = FlatpakSyncJob(context)
         plan = await job.plan()
@@ -520,15 +532,15 @@ class TestPlanDiff:
 
     @pytest.mark.asyncio
     async def test_full_diff_taxonomy(self) -> None:
-        """F1, F9, F15, F16, F17, F18 — source-only installs, target-only removals, a version report
-        and the silent identical pair, in one plan.
+        """F1, F9, F15, F16, F17, F18, F146 — source-only installs, target-only removals, a version
+        report and the silent identical pair, in one plan.
         """
         context, _source, _target = make_context(source_responses=SOURCE_RESPONSES, target_responses=TARGET_RESPONSES)
         job = FlatpakSyncJob(context)
 
         plan = await job.plan()
 
-        assert len(plan.diffs) == 6
+        assert len(plan.diffs) == 5
         by_id = {diff.item_id: diff for diff in plan.diffs}
 
         # Missing on target -> install.
@@ -558,8 +570,12 @@ class TestPlanDiff:
         # Identical application/version/scope on both -> no diff at all.
         assert "flatpak:ref:user:org.gnome.Podcasts/x86_64/stable" not in by_id
 
-        # The target lacks the system-scope flathub the source has. That is no longer a
-        # review line at all: it travels because a ref approved this run comes from it.
+        # An origin naming no remote the source configures is a ref no remote can reproduce:
+        # out of this job entirely, in either direction, and `manual_flatpak_sync`'s item.
+        assert "flatpak:ref:user:org.example.NeedsRemote/x86_64/stable" not in by_id
+
+        # A remote is never a review line at all: it travels because a ref approved this run
+        # comes from it.
         assert not any(d.item_class == ItemClass.FLATPAK_REMOTE for d in plan.diffs)
 
 
@@ -1071,16 +1087,21 @@ class TestRemotesAreDerivedFromApprovedRefs:
 
     @pytest.mark.asyncio
     async def test_a_remote_the_source_does_not_report_fails_the_refs_that_named_it(self) -> None:
-        """F98 — the source's ref names an origin the source's own remote list does not carry, so the
-        write has nothing to replicate: the failure is recorded against the remote and charged to the
-        approved refs, never raised as an item of its own.
+        """F98, F147 — the source's ref names an origin the source's own remote list does not carry,
+        so the write has nothing to replicate: the failure is recorded against the remote and charged
+        to the approved refs, never raised as an item of its own.
+
+        Reached by deleting the remote from the plan's own record AFTER `plan()`, because that is the
+        only way this state now arises: a ref whose origin the source does not configure never
+        becomes a flatpak item in the first place (F146), so what is left for this guard is the
+        plan/apply race — the remote removed on the source while the review was on screen.
         """
-        app = "org.example.NeedsRemote\t1.0\tcustomremote\tuser\torg.example.NeedsRemote/x86_64/stable\n"
         context, _source, target = make_context(
-            source_responses=derivation_source(apps=app), fake_target=FakeFlatpakTarget()
+            source_responses=derivation_source(), fake_target=FakeFlatpakTarget()
         )
         job = FlatpakSyncJob(context)
         plan = await job.plan()
+        job._source_remotes_by_id.pop("flatpak:remote:user:flathub")  # pyright: ignore[reportPrivateUsage]
         job.accept_review(
             plan, ReviewOutcome(decisions={d.item_id: Decision.APPLY for d in plan.diffs}, was_interactive=True)
         )
@@ -1088,10 +1109,8 @@ class TestRemotesAreDerivedFromApprovedRefs:
         with pytest.raises(PackageItemFailures) as raised:
             await job.apply()
 
-        assert [diff.item_id for diff, _reason in raised.value.failures] == [
-            "flatpak:ref:user:org.example.NeedsRemote/x86_64/stable"
-        ]
-        assert "source-host reports no user-scope remote named 'customremote'" in raised.value.failures[0][1]
+        assert [diff.item_id for diff, _reason in raised.value.failures] == [_APP_ID]
+        assert "source-host reports no user-scope remote named 'flathub'" in raised.value.failures[0][1]
         assert not any("remote-add" in cmd for cmd in all_calls(target))
 
     @pytest.mark.asyncio
@@ -2226,7 +2245,7 @@ def converge_target() -> FakeFlatpakTarget:
     real remote and its own landed origin rather than trusting the plan.
     """
     return FakeFlatpakTarget(
-        remotes={"user": {"flathub": _FLATHUB_URL}},
+        remotes={"user": {"flathub": _FLATHUB_URL}, "system": {"flathub": _FLATHUB_URL}},
         refs={
             ("user", "org.gnome.Podcasts/x86_64/stable"): "flathub",
             ("user", "org.gimp.GIMP/x86_64/stable"): "flathub",
@@ -2313,16 +2332,23 @@ class TestConverge:
 
     @pytest.mark.asyncio
     async def test_ref_with_missing_origin_remote_is_skipped_with_named_failure(self) -> None:
-        """F85 — an origin remote neither machine has refuses the application, naming it, and installs nothing."""
+        """F85, F147 — an origin remote neither machine has refuses the application, naming it, and
+        installs nothing.
+
+        The remote is dropped from the plan's own record after `plan()`: a ref whose origin the
+        source does not configure is no longer a flatpak item at all (F146), so the state this guard
+        answers is the plan/apply race rather than an ordinary listing.
+        """
         context, _source, target = make_context(source_responses=SOURCE_RESPONSES, fake_target=converge_target())
         job = FlatpakSyncJob(context)
         plan = await job.plan()
-        diff = next(d for d in plan.diffs if d.item_id == "flatpak:ref:user:org.example.NeedsRemote/x86_64/stable")
+        job._source_remotes_by_id.pop("flatpak:remote:system:flathub")  # pyright: ignore[reportPrivateUsage]
+        diff = next(d for d in plan.diffs if d.item_id == "flatpak:ref:system:com.slack.Slack/x86_64/stable")
 
-        with pytest.raises(ConvergeItemFailed, match="customremote"):
+        with pytest.raises(ConvergeItemFailed, match="flathub"):
             await job.converge(diff)
 
-        assert not any("customremote" in c for c in all_calls(target) if "flatpak install" in c)
+        assert not any("com.slack.Slack" in c for c in all_calls(target) if "flatpak install" in c)
 
 
 _REAL_FLATHUB = "https://dl.flathub.org/repo/"

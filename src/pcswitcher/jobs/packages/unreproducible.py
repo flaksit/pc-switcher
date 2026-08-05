@@ -6,8 +6,9 @@ Here rather than in one job's module because the registry is ONE shared file
 (`SNIPPET_REGISTRY_RELPATH`) serving every such job, and because the pipeline around it is
 identical whatever the detector found: a job supplies `capture_source_items()` and
 `query_target_items()` and inherits everything else. `manual_deb_sync` (hand-installed
-`.deb` packages) and `manual_installs_sync` (unowned software under `/usr/local` and
-`/opt`) are the two today.
+`.deb` packages), `manual_flatpak_sync` (refs no remote can supply) and
+`manual_installs_sync` (unowned software under `/usr/local` and `/opt`) are the three
+today.
 
 Not on `PackageSyncJob` itself: the three package-manager jobs (apt, snap, flatpak) produce
 no unreproducible item at all, and a base holding this would make them inherit a registry,
@@ -66,7 +67,7 @@ __all__ = ["UnreproducibleItem", "UnreproducibleSyncJob", "lines_of"]
 
 #: The origins an `UnreproducibleItem` can be found under. One per detector, and part of
 #: identity rather than a field alongside it — see `UnreproducibleItem`.
-UnreproducibleOrigin = Literal["apt-no-candidate", "unowned-path"]
+UnreproducibleOrigin = Literal["apt-no-candidate", "flatpak-no-remote", "unowned-path"]
 
 
 def lines_of(output: str) -> list[str]:
@@ -77,11 +78,13 @@ def lines_of(output: str) -> list[str]:
 @dataclass(frozen=True)
 class UnreproducibleItem:
     """One item no package manager can reproduce (D-18): an apt package installed from no
-    configured repository, or an unowned install under `/usr/local`/`/opt`.
+    configured repository, a flatpak ref installed from no configured remote, or an unowned
+    install under `/usr/local`/`/opt`.
 
     `origin` distinguishes how the item was found — `apt-no-candidate` (an installed
-    package no repository can supply) versus `unowned-path` (a filesystem path dpkg does
-    not claim) — and lives inside `item_id` for the same reason `scope`
+    package no repository can supply), `flatpak-no-remote` (an installed ref whose origin
+    names no remote configured in its scope) versus `unowned-path` (a filesystem path dpkg
+    does not claim) — and lives inside `item_id` for the same reason `scope`
     lives inside the two flatpak identities: the same `identifier` value can appear
     under both origins with no relation to each other (e.g. a package name that is
     also, coincidentally, a path component), so origin has to be part of identity, not
