@@ -9,7 +9,6 @@ answers become.
 from __future__ import annotations
 
 import asyncio
-import io
 import json
 import subprocess
 import sys
@@ -48,6 +47,7 @@ from pcswitcher.jobs.packages.review import (
 from pcswitcher.jobs.packages.sync_core import PackagePlan
 from pcswitcher.models import CommandResult, SyncAbortedByUser
 from pcswitcher.orchestrator import Orchestrator
+from tests.unit.console_capture import captured_console
 
 
 class _Hosts(TypedDict):
@@ -71,11 +71,13 @@ def _mock_isatty(interactive: bool) -> MagicMock:
 
 def _interactive_console() -> Console:
     """A Console that reports itself as a terminal (paired with a mocked isatty stdin)."""
-    return Console(file=io.StringIO(), force_terminal=True)
+    console, _ = captured_console(terminal=True)
+    return console
 
 
 def _non_interactive_console() -> Console:
-    return Console(file=io.StringIO())
+    console, _ = captured_console()
+    return console
 
 
 def _entry(item_id: str, label: str = "pkg", action_label: str = "install") -> ReviewEntry:
@@ -146,8 +148,7 @@ class TestNonInteractive:
 
     async def test_warns_naming_every_item_and_reports_groups(self) -> None:
         """H161 — `PKG-FR-LOG-DECISIONS`: a count says which items were declined to nobody."""
-        buffer = io.StringIO()
-        console = Console(file=buffer)
+        console, buffer = captured_console()
         ui = MagicMock()
         groups = [
             ReviewGroup(manager="apt", action="install", title="Install packages", entries=[_entry("a"), _entry("b")])
@@ -165,8 +166,7 @@ class TestNonInteractive:
 
     async def test_the_report_panel_ends_on_its_last_item(self) -> None:
         """A newline after the last entry renders as an empty final line inside the border."""
-        buffer = io.StringIO()
-        console = Console(file=buffer, no_color=True, width=60)
+        console, buffer = captured_console(width=60)
         groups = [
             ReviewGroup(manager="apt", action="install", title="Install packages", entries=[_entry("a"), _entry("b")])
         ]
@@ -182,8 +182,7 @@ class TestNonInteractive:
         """#226 — nothing acts on a reported condition, so the line carries no verb, and the
         version its label repeats is the one the finding attributes to each machine.
         """
-        out = io.StringIO()
-        console = Console(file=out, no_color=True, width=100)
+        console, out = captured_console(width=100)
         group = ReviewGroup(
             manager="apt",
             action="report_only",
@@ -208,8 +207,7 @@ class TestNonInteractive:
         """#226 changed the REPORT lines only: the report path a non-interactive run prints
         for a group that WOULD have acted still names the verb and the whole label.
         """
-        out = io.StringIO()
-        console = Console(file=out, no_color=True, width=100)
+        console, out = captured_console(width=100)
         group = ReviewGroup(
             manager="apt",
             action="install",
@@ -275,8 +273,7 @@ class TestInteractive:
 
     async def test_an_interactive_group_prints_no_panel_above_its_screen(self) -> None:
         """The screen lists the items itself; a panel above it said everything twice."""
-        buffer = io.StringIO()
-        console = Console(file=buffer, force_terminal=True, no_color=True, width=200)
+        console, buffer = captured_console(terminal=True)
         ui = MagicMock()
         groups = [
             ReviewGroup(
@@ -569,8 +566,7 @@ class TestInteractive:
         machine and recorded nothing, so the condition came back next sync whichever was
         chosen. A report is printed and the review moves on.
         """
-        out = io.StringIO()
-        console = Console(file=out, force_terminal=True)
+        console, out = captured_console(terminal=True)
         ui = MagicMock()
         group = ReviewGroup(
             manager="apt",
@@ -721,8 +717,7 @@ class TestAskGate:
         """T-02-02: a bracketed token in the body must reach the console verbatim rather
         than being parsed as a Rich style.
         """
-        buffer = io.StringIO()
-        console = Console(file=buffer, force_terminal=True, width=200)
+        console, buffer = captured_console(terminal=True)
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
             patch(
@@ -965,8 +960,7 @@ class TestUnreproducibleGroupResolution:
         header on prompt_toolkit's final `is_done` render, and everything printed to the
         console around the editor (its scrollback).
         """
-        sink = io.StringIO()
-        console = Console(file=sink, force_terminal=True, no_color=True, width=200)
+        console, sink = captured_console(terminal=True)
         group = _unreproducible_group([_entry("u1", label="brscan3")])
         screen = _fake_prompt(ask_return={"u1": "add_snippet"})
         text_prompt = _fake_prompt(ask_return="sudo dpkg --install /tmp/x.deb")
@@ -1515,8 +1509,7 @@ class TestRepoConflictGroupResolution:
         """C29, H94 — The user's own words: a diff of two repository definitions is not readable. The
         target's current file comes first, then the source's, each whole.
         """
-        out = io.StringIO()
-        console = Console(file=out, force_terminal=True, no_color=True, width=200)
+        console, out = captured_console(terminal=True)
         ui = MagicMock()
         entry = _conflict_entry(
             target_version="deb https://old.example.com stable main\n",
@@ -1541,8 +1534,7 @@ class TestRepoConflictGroupResolution:
         two machines' own names, and the target's says "now" because it is the one an
         overwrite would replace.
         """
-        out = io.StringIO()
-        console = Console(file=out, force_terminal=True, no_color=True, width=200)
+        console, out = captured_console(terminal=True)
         ui = MagicMock()
         screen = _fake_prompt(ask_return={"apt:conflict:vendor.list": "skip_once"})
 
@@ -1562,8 +1554,7 @@ class TestRepoConflictGroupResolution:
         """A file body's own trailing newline renders as an empty last line inside the
         panel border — every other panel in the review had the same trailing gap.
         """
-        out = io.StringIO()
-        console = Console(file=out, force_terminal=True, no_color=True, width=60)
+        console, out = captured_console(terminal=True, width=60)
         ui = MagicMock()
         entry = _conflict_entry(target_version="deb https://old.example.com stable main\n", source_version="x\n")
         screen = _fake_prompt(ask_return={"apt:conflict:vendor.list": "skip_once"})
@@ -1860,25 +1851,25 @@ class TestRemovalGroupContent:
     """A deletion screen shows the file it offers to delete, not only its name."""
 
     @staticmethod
-    def _run(group: ReviewGroup, out: io.StringIO) -> Any:
-        console = Console(file=out, force_terminal=True, no_color=True, width=200)
+    def _run(group: ReviewGroup) -> Any:
+        console, out = captured_console(terminal=True)
         screen = _fake_prompt(ask_return={entry.item_id: "skip_once" for entry in group.entries})
         return (
             patch.object(sys, "stdin", _mock_isatty(True)),
             patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen),
             console,
+            out,
         )
 
     async def test_a_pin_file_is_printed_whole_under_the_machine_that_holds_it(self) -> None:
         """H37, H66 — a pin offered for deletion is printed whole, titled with the machine that holds it."""
-        out = io.StringIO()
         entry = ReviewEntry(
             item_id="apt:pin:99-vendor.pref",
             label="99-vendor.pref",
             action_label="delete pin file",
             content="Package: *\nPin: origin vendor.example.com\nPin-Priority: 900\n",
         )
-        isatty, screen, console = self._run(_pin_removal_group([entry]), out)
+        isatty, screen, console, out = self._run(_pin_removal_group([entry]))
 
         with isatty, screen:
             await review_items([_pin_removal_group([entry])], console=console, ui=MagicMock(), **HOSTS)
@@ -1892,10 +1883,9 @@ class TestRemovalGroupContent:
     async def test_an_entry_with_no_content_prints_no_panel(self) -> None:
         """A repository deletion carries its URLs in the detail line, so the screen it shares
         with the pin files must not grow an empty block for it."""
-        out = io.StringIO()
         entry = ReviewEntry(item_id="apt:source:vendor.list", label="vendor.list (list)", action_label="delete")
         group = _pin_removal_group([entry])
-        isatty, screen, console = self._run(group, out)
+        isatty, screen, console, out = self._run(group)
 
         with isatty, screen:
             await review_items([group], console=console, ui=MagicMock(), **HOSTS)
@@ -1905,7 +1895,6 @@ class TestRemovalGroupContent:
         assert "╭" not in out.getvalue()
 
     async def test_a_bracketed_pin_body_renders_without_markup_error(self) -> None:
-        out = io.StringIO()
         entry = ReviewEntry(
             item_id="apt:pin:99-vendor.pref",
             label="99-vendor.pref",
@@ -1913,7 +1902,7 @@ class TestRemovalGroupContent:
             content="Package: [bold red]not-markup[/]\n",
         )
         group = _pin_removal_group([entry])
-        isatty, screen, console = self._run(group, out)
+        isatty, screen, console, out = self._run(group)
 
         with isatty, screen:
             await review_items([group], console=console, ui=MagicMock(), **HOSTS)
@@ -1925,8 +1914,7 @@ class TestRemovalGroupContent:
         collateral one, so Ctrl-C here must end the sync and name the file rather than be
         read as declining this one deletion and moving on to the next file.
         """
-        out = io.StringIO()
-        console = Console(file=out, force_terminal=True, no_color=True, width=200)
+        console, out = captured_console(terminal=True)
         group = _pin_removal_group(
             [
                 ReviewEntry(
@@ -1969,8 +1957,7 @@ class TestCredentialsInPrintedFileBodies:
 
     @staticmethod
     async def _printed(group: ReviewGroup) -> str:
-        out = io.StringIO()
-        console = Console(file=out, force_terminal=True, no_color=True, width=200)
+        console, out = captured_console(terminal=True)
         screen = _fake_prompt(ask_return={entry.item_id: "skip_once" for entry in group.entries})
 
         with (
@@ -2019,8 +2006,7 @@ class TestCredentialsInAReviewLine:
 
     @staticmethod
     async def _printed(group: ReviewGroup) -> str:
-        out = io.StringIO()
-        console = Console(file=out, no_color=True, width=200)
+        console, out = captured_console(width=200)
 
         with (
             patch.object(sys, "stdin", _mock_isatty(False)),
@@ -2071,8 +2057,7 @@ class TestCollateralPromptWording:
 
     @staticmethod
     async def _titles(selected: str = "skip_once") -> tuple[MagicMock, str]:
-        out = io.StringIO()
-        console = Console(file=out, force_terminal=True, no_color=True, width=200)
+        console, out = captured_console(terminal=True)
         group = _collateral_group(
             [
                 ReviewEntry(
