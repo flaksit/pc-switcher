@@ -93,7 +93,7 @@ class PackageConverger:
     consulted.
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913 - collaborators for the package convergence; all keyword-only
         self,
         *,
         target: RemoteExecutor,

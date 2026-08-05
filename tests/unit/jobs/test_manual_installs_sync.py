@@ -215,7 +215,7 @@ def respond_to(mapping: dict[str, _Answer], default: CommandResult | None = None
     return _side_effect
 
 
-def make_context(
+def make_context(  # noqa: PLR0913 - test builder knobs; all keyword-only
     *,
     source_responses: dict[str, _Answer] | None = None,
     target_responses: dict[str, _Answer] | None = None,

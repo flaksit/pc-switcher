@@ -150,7 +150,7 @@ class TestDiffEngine:
         source_items = [AptPackageItem(name="pkg-a", version="1.0")]
         target_items = [AptPackageItem(name="pkg-a", version="1.0")]
 
-        diffs = diff_apt_packages(source_items, target_items, {}, MACHINES, frozenset({"pkg-a"}), frozenset())
+        diffs = diff_apt_packages(source_items, target_items, {}, MACHINES, source_hold_names=frozenset({"pkg-a"}))
 
         assert len(diffs) == 1
         assert diffs[0].item_class == ItemClass.APT_HOLD
@@ -167,7 +167,7 @@ class TestDiffEngine:
         source_items = [AptPackageItem(name="pkg-a", version="2.0")]
         target_items = [AptPackageItem(name="pkg-a", version="1.0")]
 
-        diffs = diff_apt_packages(source_items, target_items, {}, MACHINES, frozenset(), frozenset({"pkg-a"}))
+        diffs = diff_apt_packages(source_items, target_items, {}, MACHINES, target_hold_names=frozenset({"pkg-a"}))
 
         assert len(diffs) == 1
         assert diffs[0].item_class == ItemClass.APT_HOLD
@@ -181,7 +181,7 @@ class TestDiffEngine:
         """
         source_items = [AptPackageItem(name="pkg-a", version="1.0")]
 
-        diffs = diff_apt_packages(source_items, [], {}, MACHINES, frozenset(), frozenset({"pkg-a"}))
+        diffs = diff_apt_packages(source_items, [], {}, MACHINES, target_hold_names=frozenset({"pkg-a"}))
 
         assert [(diff.item_id, diff.action) for diff in diffs] == [("apt:hold:pkg-a", DiffAction.REMOVE)]
 
@@ -190,7 +190,14 @@ class TestDiffEngine:
         source_items = [AptPackageItem(name="pkg-a", version="1.0")]
         target_items = [AptPackageItem(name="pkg-a", version="1.0")]
 
-        diffs = diff_apt_packages(source_items, target_items, {}, MACHINES, frozenset({"pkg-a"}), frozenset({"pkg-a"}))
+        diffs = diff_apt_packages(
+            source_items,
+            target_items,
+            {},
+            MACHINES,
+            source_hold_names=frozenset({"pkg-a"}),
+            target_hold_names=frozenset({"pkg-a"}),
+        )
 
         assert diffs == []
 
@@ -202,7 +209,7 @@ class TestDiffEngine:
         """
         target_items = [AptPackageItem(name="pkg-a", version="1.0")]
 
-        diffs = diff_apt_packages([], target_items, {}, MACHINES, frozenset(), frozenset({"pkg-a"}))
+        diffs = diff_apt_packages([], target_items, {}, MACHINES, target_hold_names=frozenset({"pkg-a"}))
 
         assert [(diff.item_id, diff.action) for diff in diffs] == [("apt:hold:pkg-a", DiffAction.REMOVE)]
 

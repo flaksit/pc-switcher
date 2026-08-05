@@ -276,7 +276,7 @@ class TestUnusedKeyringCollection:
     """
 
     @staticmethod
-    def _context(
+    def _context(  # noqa: PLR0913 - test builder knobs; all keyword-only
         *,
         target_sources: dict[str, str],
         target_source_digests: str,
@@ -616,7 +616,7 @@ def _owned_by(package: str, origin: str) -> dict[str, CommandResult]:
     }
 
 
-def _shared_key_context(
+def _shared_key_context(  # noqa: PLR0913 - test builder knobs; all keyword-only
     *,
     filename: str = "vendor.sources",
     content: str = _SHARED_SOURCES,

@@ -214,7 +214,7 @@ class TestTheAptOriginModelOnRealRepositories:
     target's own arithmetic and in nothing else.
     """
 
-    async def test_the_vendor_repository_travels_and_then_loses_to_a_rival_on_the_target(
+    async def test_the_vendor_repository_travels_and_then_loses_to_a_rival_on_the_target(  # noqa: PLR0913, PLR0917 - pytest fixtures, injected by name
         self,
         pc1_executor: BashLoginRemoteExecutor,
         pc2_executor: BashLoginRemoteExecutor,
@@ -400,7 +400,7 @@ class TestARunWithNobodyToAsk:
     the substitution.
     """
 
-    async def test_a_non_interactive_run_names_every_item_applies_none_and_mirrors_only_what_it_may(  # noqa: PLR0915
+    async def test_a_non_interactive_run_names_every_item_applies_none_and_mirrors_only_what_it_may(  # noqa: PLR0913, PLR0915, PLR0917 - pytest fixtures, injected by name
         self,
         pc1_executor: BashLoginRemoteExecutor,
         pc2_executor: BashLoginRemoteExecutor,
@@ -893,7 +893,7 @@ class TestSkipAlwaysIsInertInBothRoles:
     run meets what the run before it declined.
     """
 
-    async def test_a_recorded_skip_always_survives_a_forced_apply_in_either_direction(  # noqa: PLR0915
+    async def test_a_recorded_skip_always_survives_a_forced_apply_in_either_direction(  # noqa: PLR0913, PLR0915, PLR0917 - pytest fixtures, injected by name
         self,
         pc1_executor: BashLoginRemoteExecutor,
         pc2_executor: BashLoginRemoteExecutor,
@@ -1365,7 +1365,7 @@ class TestAFailureCostsItsOwnItemAndNothingElse:
     and a removal does not.
     """
 
-    async def test_the_item_after_a_failure_and_the_jobs_after_its_job_all_still_land(  # noqa: PLR0915
+    async def test_the_item_after_a_failure_and_the_jobs_after_its_job_all_still_land(  # noqa: PLR0913, PLR0915, PLR0917 - pytest fixtures, injected by name
         self,
         pc1_executor: BashLoginRemoteExecutor,
         pc2_executor: BashLoginRemoteExecutor,
@@ -1686,7 +1686,7 @@ class TestAStrayAptHoldEndsTheRun:
     that ABORTS, and no converging run can be that.
     """
 
-    async def test_a_hold_naming_a_package_the_machine_does_not_have_ends_the_run(
+    async def test_a_hold_naming_a_package_the_machine_does_not_have_ends_the_run(  # noqa: PLR0913, PLR0917 - pytest fixtures, injected by name
         self,
         pc1_executor: BashLoginRemoteExecutor,
         pc2_executor: BashLoginRemoteExecutor,
@@ -2017,7 +2017,7 @@ class TestOneManagerAtATime:
     doing something.
     """
 
-    async def test_each_job_alone_converges_its_own_manager_and_the_fifth_run_moves_nothing(  # noqa: PLR0915
+    async def test_each_job_alone_converges_its_own_manager_and_the_fifth_run_moves_nothing(  # noqa: PLR0913, PLR0915, PLR0917 - pytest fixtures, injected by name
         self,
         pc1_executor: BashLoginRemoteExecutor,
         pc2_executor: BashLoginRemoteExecutor,

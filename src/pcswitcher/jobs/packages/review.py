@@ -735,7 +735,7 @@ def _unreproducible_options(source_hostname: str, target_hostname: str) -> tuple
     )
 
 
-async def _ask_about_one_item(
+async def _ask_about_one_item(  # noqa: PLR0913 - one decision screen's content; all but the entry keyword-only
     entry: ReviewEntry,
     *,
     title: str,
@@ -779,7 +779,7 @@ async def _ask_about_one_item(
     return answered[entry.item_id]
 
 
-async def _review_unreproducible_group(
+async def _review_unreproducible_group(  # noqa: PLR0913 - screen content plus the two dicts it fills; all but the group keyword-only
     group: ReviewGroup,
     *,
     console: Console,
@@ -1130,7 +1130,7 @@ def _warn_every_item_unasked(groups: Sequence[ReviewGroup], log: logging.Logger)
             log.warning("%s — not asked, declined for this run (no TTY): %s", group.title, entry.label)
 
 
-async def review_items(
+async def review_items(  # noqa: PLR0913 - review surface plus both machine names; all but the groups keyword-only
     groups: Sequence[ReviewGroup],
     *,
     console: Console,
@@ -1240,7 +1240,7 @@ async def review_items(
     return ReviewOutcome(decisions=decisions, was_interactive=True, snippets=snippets, unresolved=())
 
 
-async def ask_gate(
+async def ask_gate(  # noqa: PLR0913 - one two-answer screen's content; all keyword-only
     *,
     title: str,
     message: str,

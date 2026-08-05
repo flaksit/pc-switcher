@@ -914,13 +914,14 @@ def _version_mismatch_ref_diff(
     )
 
 
-def _origin_mismatch_ref_diff(
+def _origin_mismatch_ref_diff(  # noqa: PLR0913 - sibling of _version_mismatch_ref_diff plus both remote URLs
     item_id: str,
     source_item: FlatpakItem,
     target_item: FlatpakItem,
+    machines: Machines,
+    *,
     source_url: str | None,
     target_url: str | None,
-    machines: Machines,
 ) -> ItemDiff:
     """ADR-020 D-41: a ref present on both machines from different remotes is reported and
     never converged.
@@ -1025,9 +1026,9 @@ def _diff_flatpak_refs(
                         item_id,
                         source_item,
                         target_item,
-                        source_remote_urls.get((source_item.scope, source_item.origin)),
-                        target_remote_urls.get((target_item.scope, target_item.origin)),
                         machines,
+                        source_url=source_remote_urls.get((source_item.scope, source_item.origin)),
+                        target_url=target_remote_urls.get((target_item.scope, target_item.origin)),
                     )
                 )
             elif source_item.version != target_item.version:

@@ -120,7 +120,7 @@ SOURCE_MACHINE = "Atlas"
 TARGET_MACHINE = "Nomad"
 
 
-def make_orchestrator(
+def make_orchestrator(  # noqa: PLR0913 - test builder knobs; all keyword-only
     *,
     snap_sync_enabled: bool,
     dry_run: bool = False,

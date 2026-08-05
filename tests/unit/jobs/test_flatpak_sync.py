@@ -143,7 +143,7 @@ class FakeFlatpakTarget:
     origin. Everything else falls through to `responses`.
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913 - test builder knobs; all keyword-only
         self,
         *,
         remotes: dict[str, dict[str, str]] | None = None,
@@ -578,7 +578,7 @@ def _remote_lines(*remotes: tuple[str, str]) -> str:
     return "".join(remote_row(name, url) for name, url in remotes)
 
 
-def origin_pair_context(
+def origin_pair_context(  # noqa: PLR0913 - test builder knobs; all keyword-only
     *,
     source_origin: str = "flathub",
     target_origin: str = "flathub",
@@ -1606,7 +1606,7 @@ class TestRemoteTrustCapture:
         assert target["flatpak:remote:system:flathub"].key_digest == _TARGET_KEY_DIGEST
 
 
-def trust_responses(
+def trust_responses(  # noqa: PLR0913 - test builder knobs; all keyword-only
     *,
     remote_line: str,
     key_digest: str | None,
@@ -1641,7 +1641,7 @@ _TRUST_APP = {
 }
 
 
-def trust_job(
+def trust_job(  # noqa: PLR0913 - test builder knobs; all keyword-only
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     *,

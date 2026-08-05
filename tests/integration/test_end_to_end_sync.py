@@ -111,7 +111,7 @@ class TestEndToEndSync:
     # Exercises every kind of job the pipeline coordinates, in both directions, for two syncs.
     @pytest.mark.area_folder
     @pytest.mark.area_package
-    async def test_full_sync_pipeline_both_directions(
+    async def test_full_sync_pipeline_both_directions(  # noqa: PLR0913, PLR0917 - pytest fixtures, injected by name
         self,
         pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
         pc2_with_pcswitcher: BashLoginRemoteExecutor,

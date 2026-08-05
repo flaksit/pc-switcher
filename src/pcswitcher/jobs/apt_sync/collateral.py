@@ -105,7 +105,7 @@ class Collateral:
     the review asked about something other than what the guard enforces.
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913 - collaborators injected for the collateral question; all keyword-only
         self,
         *,
         target: RemoteExecutor,
@@ -646,7 +646,7 @@ class LateCollateral:
     stay. `_report_stranded` names them instead of rolling them back.
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913 - collaborators injected for the late-collateral pass; all keyword-only
         self,
         *,
         collateral: Collateral,

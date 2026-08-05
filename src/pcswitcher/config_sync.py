@@ -167,12 +167,13 @@ def _prompt_config_diff(console: Console, diff: str, source_hostname: str, targe
         return ConfigSyncAction.ABORT
 
 
-async def _handle_config_sync(
+async def _handle_config_sync(  # noqa: PLR0913 - config state + flags; flags keyword-only
     target: RemoteExecutor,
     source_config_path: Path,
     source_content: str,
     target_content: str | None,
     console: Console,
+    *,
     auto_accept: bool,
     dry_run: bool,
     source_hostname: str,
@@ -185,7 +186,14 @@ async def _handle_config_sync(
     # Scenario 1: no config there yet
     if target_content is None:
         return await _handle_no_target_config(
-            target, source_config_path, source_content, console, auto_accept, dry_run, source_hostname, target_hostname
+            target,
+            source_config_path,
+            source_content,
+            console,
+            auto_accept=auto_accept,
+            dry_run=dry_run,
+            source_hostname=source_hostname,
+            target_hostname=target_hostname,
         )
 
     # Scenario 2: Configs match
@@ -200,18 +208,19 @@ async def _handle_config_sync(
         source_content,
         target_content,
         console,
-        auto_accept,
-        dry_run,
-        source_hostname,
-        target_hostname,
+        auto_accept=auto_accept,
+        dry_run=dry_run,
+        source_hostname=source_hostname,
+        target_hostname=target_hostname,
     )
 
 
-async def _handle_no_target_config(
+async def _handle_no_target_config(  # noqa: PLR0913 - config state + flags; flags keyword-only
     target: RemoteExecutor,
     source_config_path: Path,
     source_content: str,
     console: Console,
+    *,
     auto_accept: bool,
     dry_run: bool,
     source_hostname: str,
@@ -236,12 +245,13 @@ async def _handle_no_target_config(
     return False
 
 
-async def _handle_config_diff(
+async def _handle_config_diff(  # noqa: PLR0913 - config state + flags; flags keyword-only
     target: RemoteExecutor,
     source_config_path: Path,
     source_content: str,
     target_content: str,
     console: Console,
+    *,
     auto_accept: bool,
     dry_run: bool,
     source_hostname: str,
@@ -279,7 +289,7 @@ async def _handle_config_diff(
     return False
 
 
-async def sync_config_to_target(
+async def sync_config_to_target(  # noqa: PLR0913 - config state + flags; flags keyword-only
     target: RemoteExecutor,
     source_config_path: Path,
     ui: TerminalUI | None,
@@ -346,10 +356,10 @@ async def sync_config_to_target(
             source_content,
             target_content,
             console,
-            auto_accept,
-            dry_run,
-            source_hostname,
-            target_hostname,
+            auto_accept=auto_accept,
+            dry_run=dry_run,
+            source_hostname=source_hostname,
+            target_hostname=target_hostname,
         )
         return should_continue
     finally:

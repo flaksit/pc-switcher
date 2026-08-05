@@ -160,7 +160,7 @@ class AptSyncJob(PackageSyncJob):
             collateral=None,
         )
 
-    def _assemble_work(
+    def _assemble_work(  # noqa: PLR0913 - one set of captured facts wired into the collaborators; all keyword-only
         self,
         *,
         source_facts: OriginFacts,
@@ -371,10 +371,10 @@ class AptSyncJob(PackageSyncJob):
                 target_items,
                 origin_plan,
                 self.machines,
-                source_hold_names,
-                target_hold_names,
-                self._marked_packages(source_decisions),
-                self._marked_packages(target_decisions),
+                source_hold_names=source_hold_names,
+                target_hold_names=target_hold_names,
+                source_marked_packages=self._marked_packages(source_decisions),
+                target_marked_packages=self._marked_packages(target_decisions),
             ),
             source_decisions,
             target_decisions,

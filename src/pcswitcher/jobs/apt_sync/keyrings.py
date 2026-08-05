@@ -65,7 +65,7 @@ class Keyrings:
     has from one it dropped.
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913 - both machines' keys and refs plus collaborators; all keyword-only
         self,
         *,
         source_keys: KeyDigests,

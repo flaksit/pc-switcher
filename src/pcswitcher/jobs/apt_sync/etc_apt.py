@@ -48,7 +48,7 @@ from pcswitcher.models import CommandResult, Host, LogLevel
 class EtcApt:
     """The repository unit, converged exactly once per run."""
 
-    def __init__(
+    def __init__(  # noqa: PLR0913 - collaborators for the /etc/apt writes; all keyword-only
         self,
         *,
         target: RemoteExecutor,

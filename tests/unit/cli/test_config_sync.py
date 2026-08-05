@@ -663,7 +663,14 @@ class TestDryRunSkipsPrompting:
 
         with patch("pcswitcher.config_sync._prompt_new_config") as mock_prompt:
             result = await _handle_no_target_config(
-                mock_remote_executor, config_file, "log_level: INFO", console, False, True, ATLAS, NOMAD
+                mock_remote_executor,
+                config_file,
+                "log_level: INFO",
+                console,
+                auto_accept=False,
+                dry_run=True,
+                source_hostname=ATLAS,
+                target_hostname=NOMAD,
             )
 
         assert result is True
@@ -685,10 +692,10 @@ class TestDryRunSkipsPrompting:
                 "log_level: DEBUG\n",
                 "log_level: INFO\n",
                 console,
-                False,
-                True,
-                ATLAS,
-                NOMAD,
+                auto_accept=False,
+                dry_run=True,
+                source_hostname=ATLAS,
+                target_hostname=NOMAD,
             )
 
         assert result is True

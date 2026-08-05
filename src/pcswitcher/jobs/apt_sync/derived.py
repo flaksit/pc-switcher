@@ -56,7 +56,7 @@ class StrandedRepository(NamedTuple):
 class DerivedWrites:
     """The `/etc/apt` write set the accepted decisions imply, and its failure bookkeeping."""
 
-    def __init__(
+    def __init__(  # noqa: PLR0913 - both machines' origin and repo facts; all keyword-only
         self,
         *,
         source_origin_facts: OriginFacts,

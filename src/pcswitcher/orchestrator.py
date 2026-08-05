@@ -266,7 +266,7 @@ class Orchestrator:
     - Sync summary and session tracking
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913 - CLI flags threaded to the orchestrator; all keyword-only
         self,
         target: str,
         config: Configuration,

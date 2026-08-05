@@ -63,11 +63,12 @@ def diff_filenames(source_digests: Mapping[str, str], target_digests: Mapping[st
     return FilenameDiff(missing=source_names - target_names, extra=target_names - source_names, changed=changed)
 
 
-def diff_apt_packages(
+def diff_apt_packages(  # noqa: PLR0913 - both sides' items plus their hold and mark sets; sets keyword-only
     source_items: Sequence[AptPackageItem],
     target_items: Sequence[AptPackageItem],
     origin_plan: Mapping[str, OriginPlan],
     machines: Machines,
+    *,
     source_hold_names: frozenset[str] = frozenset(),
     target_hold_names: frozenset[str] = frozenset(),
     source_marked_packages: frozenset[str] = frozenset(),
