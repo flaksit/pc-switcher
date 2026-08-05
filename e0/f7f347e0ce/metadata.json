@@ -3,7 +3,7 @@
   "checkpoint_id": "e0f7f347e0ce",
   "strategy": "manual-commit",
   "branch": "pc-216",
-  "checkpoints_count": 6,
+  "checkpoints_count": 7,
   "files_touched": [
     "docs/planning/issue-triage-20260805.md"
   ],
@@ -14,13 +14,20 @@
       "compact_transcript": "/e0/f7f347e0ce/0/transcript.jsonl",
       "content_hash": "/e0/f7f347e0ce/0/content_hash.txt",
       "prompt": "/e0/f7f347e0ce/0/prompt.txt"
+    },
+    {
+      "metadata": "/e0/f7f347e0ce/1/metadata.json",
+      "transcript": "/e0/f7f347e0ce/1/full.jsonl",
+      "compact_transcript": "/e0/f7f347e0ce/1/transcript.jsonl",
+      "content_hash": "/e0/f7f347e0ce/1/content_hash.txt",
+      "prompt": "/e0/f7f347e0ce/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 70,
-    "cache_creation_tokens": 84683,
-    "cache_read_tokens": 2853033,
-    "output_tokens": 27096,
-    "api_call_count": 37
+    "input_tokens": 798,
+    "cache_creation_tokens": 1625225,
+    "cache_read_tokens": 124392795,
+    "output_tokens": 263670,
+    "api_call_count": 404
   }
 }
