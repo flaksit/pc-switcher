@@ -118,7 +118,7 @@ def _pass_display(path: str, label: str) -> str:
 #   4. the install-snippet registry (`~/.config/pc-switcher/package-snippets.yaml`), the
 #      relpath packages.state owns beside that glob but which the glob does not match
 #      (see _snippet_registry_exclude_filters). The registry DOES travel (PKG-FR-REGISTRY-SYNCS)
-#      — but only through manual_installs_sync's own push, which asks first when the transfer
+#      — but only through an unreproducible job's own push, which asks first when the transfer
 #      would lose or change an entry the target holds (PKG-FR-REGISTRY-CONSENT) and which a
 #      skipped or non-interactive run does not make at all (PKG-FR-OUTCOME-SKIPPED,
 #      PKG-FR-NO-TERMINAL). A mirror of the same file would be that transfer without the
@@ -505,11 +505,11 @@ class FolderSyncJob(SyncJob):
 
         Deliberately unconditional, and deliberately not "the registry never travels": the
         registry is shared knowledge and does travel (`PKG-FR-REGISTRY-SYNCS`), but only
-        through `manual_installs_sync`'s own push, which names the entries an overwrite would
+        through an unreproducible job's own push, which names the entries an overwrite would
         lose or change and asks first (`PKG-FR-REGISTRY-CONSENT`), and which a skipped or
         non-interactive run never makes (`PKG-FR-OUTCOME-SKIPPED`, `PKG-FR-NO-TERMINAL`).
         Mirroring the file here would be exactly that transfer with the question removed,
-        whether or not `manual_installs_sync` is enabled.
+        whether or not any unreproducible job is enabled.
         """
         root = Path(folder_path.rstrip("/") or "/")
         abs_path = Path.home() / SNIPPET_REGISTRY_RELPATH

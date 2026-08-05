@@ -31,14 +31,16 @@ Decision files live at `~/.config/pc-switcher/<manager>.decisions.yaml`, next to
 `config.yaml` (D-09) — one file per manager, so `apt_sync`'s decisions never collide
 with `snap_sync`'s. The directory portion is derived from `config_sync.CONFIG_REMOTE_DIR`
 rather than a second hardcoded literal (the CR-01 precedent `folder_sync` already
-follows for its own tool-state filter token).
+follows for its own tool-state filter token). One manager may ADOPT a slice of another's
+file (`AdoptedMarks`), which is how a job carved out of an older one keeps the answers the
+user already gave about the items it took with it.
 
 This module also owns `SnippetRegistry` (D-20, D-23): the SHARED, synced counterpart to
 the machine-local decision store above. Where a `DecisionEntry` says "never touch this
 item on this machine", a `Snippet` says "this is how to install something no package
 manager can reproduce" — knowledge about the PACKAGE, not the machine, so it is SHARED
 and synced (D-23) rather than living in a machine-local `*.decisions.yaml` file. It
-travels source-to-target by `manual_installs_sync`'s own post-review `send_file` push,
+travels source-to-target by an unreproducible job's own post-review `send_file` push,
 not via `config_sync`. A snippet's body is stored and replayed as an opaque text
 blob — never parsed, versioned, diffed or reasoned about (D-20) — and replay never
 supplies stdin, since `pcswitcher.executor.Process` documents that commands must be
@@ -66,6 +68,7 @@ __all__ = [
     "DECISION_FILE_GLOB_RELPATH",
     "DECISION_FILE_RELPATH_TEMPLATE",
     "SNIPPET_REGISTRY_RELPATH",
+    "AdoptedMarks",
     "DecisionEntry",
     "DecisionFile",
     "Snippet",
@@ -90,7 +93,7 @@ DECISION_FILE_GLOB_RELPATH = f"{_DECISION_DIR_RELPATH}/*.decisions.yaml"
 
 # The shared install-snippet registry, home-relative, alongside every manager's
 # decision file — but unlike those, this ONE file is not per-manager and is meant to be
-# synced (D-23): `manual_installs_sync` pushes it to the target with its own `send_file`
+# synced (D-23): an unreproducible job pushes it to the target with its own `send_file`
 # call after its review, so a snippet authored on the fly reaches the target that same run.
 SNIPPET_REGISTRY_RELPATH = f"{_DECISION_DIR_RELPATH}/package-snippets.yaml"
 
@@ -123,6 +126,28 @@ class DecisionEntry:
     label: str
     reason: str | None
     recorded_at: str  # ISO-8601 UTC
+
+
+@dataclass(frozen=True)
+class AdoptedMarks:
+    """The marks one manager takes over from ANOTHER manager's decision file, for a job
+    carved out of an older, wider one.
+
+    A decision file is per manager (D-09) while an `item_id` names the finding and not the
+    job that found it, so splitting a job moves the items without moving the entries the
+    user already recorded about them. Left alone those entries are orphaned, and D-08's
+    promise — a finding produces noise exactly once, then never again — silently breaks for
+    exactly the items the user cared enough about to answer permanently.
+
+    `manager` is the file to look in and `item_id_prefix` is the slice of it that belongs
+    to the adopting job; the two jobs partition one legacy file by prefix, so neither ever
+    reads the other's entries. Adoption is permanent rather than a one-shot copy: reading
+    is the only thing a plan may do (`PackageSyncJob.plan` is read-only), and a migration
+    that writes could never run before the first plan that needs its result.
+    """
+
+    manager: str
+    item_id_prefix: str
 
 
 class _HasItemId(Protocol):
@@ -169,7 +194,7 @@ def marks_on_either(
     Right-biased so a `label` or `reason` the target recorded wins on a shared id; only
     membership is ever read here, so the choice is cosmetic.
 
-    `manual_installs_sync` is the one job that does not need this: it captures an
+    The unreproducible jobs are the ones that do not need this: each captures an
     inventory from the source alone, so there is no second copy to leave behind, and
     `PKG-FR-MANUAL-SOURCE-DECIDES` makes the source the only authority anyway.
     """
@@ -224,9 +249,10 @@ class DecisionFile:
     ever talks to the executor it was given.
     """
 
-    def __init__(self, manager: str, executor: Executor) -> None:
+    def __init__(self, manager: str, executor: Executor, adopts: AdoptedMarks | None = None) -> None:
         self._manager = manager
         self._executor = executor
+        self._adopts = adopts
         # shlex.quote() is a no-op for this fixed, already-shell-safe relpath (only
         # word chars, '.', '/'), but is applied anyway per T-02-01 (ASVS V5) rather
         # than assuming a future manager name stays that safe. Left OUTSIDE the `~/`
@@ -238,7 +264,24 @@ class DecisionFile:
         self._display_path = f"~/{relpath}"
 
     async def load(self) -> dict[str, DecisionEntry]:
-        """Read this manager's decisions, or an empty mapping (D-08's degrade rule).
+        """Read this manager's decisions, plus any it adopts from an older manager's file
+        (`AdoptedMarks`), or an empty mapping (D-08's degrade rule).
+
+        This file wins on a shared `item_id`: an answer given since the split is the
+        current one.
+        """
+        entries = await self._load_own()
+        if self._adopts is None:
+            return entries
+        adopted = {
+            item_id: entry
+            for item_id, entry in (await DecisionFile(self._adopts.manager, self._executor)._load_own()).items()
+            if item_id.startswith(self._adopts.item_id_prefix)
+        }
+        return {**adopted, **entries}
+
+    async def _load_own(self) -> dict[str, DecisionEntry]:
+        """This file's own entries alone.
 
         Absent, empty and malformed all degrade to "no permanent decisions" rather
         than aborting the sync; only the malformed case logs a WARNING (naming the
@@ -266,8 +309,11 @@ class DecisionFile:
         `self._executor` — never a local filesystem write — so this identical method
         is correct whether `self._executor` is the source's `LocalExecutor` or the
         target's `RemoteExecutor`.
+
+        Own entries only: an adopted entry (`AdoptedMarks`) stays in the file that holds
+        it, so recording one answer never rewrites another manager's file wholesale.
         """
-        entries = await self.load()
+        entries = await self._load_own()
         entries[entry.item_id] = entry
         await self._write(
             _serialize(entries),
@@ -292,11 +338,28 @@ class DecisionFile:
         Writes nothing at all when the file holds none of `item_ids`, so a run over a file
         with nothing dead in it issues no command and needs no confirmation — and reads
         nothing either when `item_ids` is empty, which is every run that found no dead mark.
+
+        Covers the adopted file too (`AdoptedMarks`): an entry `load` returns is one this
+        job acts on, so a dead one has to leave the file it actually lives in. Dropping it
+        from this file alone would leave `load` adopting it again on the next run, which is
+        the mark outliving its item — the exact thing this method exists to prevent.
         """
         if not item_ids:
             return frozenset()
 
-        entries = await self.load()
+        removed = await self._drop_from_own_file(item_ids)
+        if self._adopts is not None:
+            adopted_ids = [item_id for item_id in item_ids if item_id.startswith(self._adopts.item_id_prefix)]
+            legacy = DecisionFile(self._adopts.manager, self._executor)
+            removed |= await legacy._drop_from_own_file(adopted_ids)
+        return removed
+
+    async def _drop_from_own_file(self, item_ids: Collection[str]) -> frozenset[str]:
+        """`drop`, over this file's own entries alone."""
+        if not item_ids:
+            return frozenset()
+
+        entries = await self._load_own()
         removed = frozenset(item_id for item_id in item_ids if item_id in entries)
         if not removed:
             return frozenset()
@@ -449,7 +512,7 @@ def load_snippets_from_text(raw: str, *, display_path: str, machine: str | None 
     "no snippets" and content that cannot be parsed ends the run (`_unreadable_registry`) —
     the same rule `SnippetRegistry.load` applies to executor-read content.
 
-    `manual_installs_sync` uses this to read the SOURCE's on-disk registry — the exact
+    An unreproducible job uses this to read the SOURCE's on-disk registry — the exact
     bytes `_push_snippet_registry` is about to `send_file` to the target — when deciding
     whether a wholesale overwrite is purely additive (decision 9). Reading the file that
     is actually sent keeps the additive check consistent with the transfer, rather than
@@ -472,7 +535,7 @@ class SnippetRegistry:
     (same one-`Executor`-per-instance shape `DecisionFile` follows).
 
     Unlike `DecisionFile`, the registry is not machine-scoped data — both machines may
-    hold different copies of the SAME file until `manual_installs_sync` reconciles them
+    hold different copies of the SAME file until an unreproducible job reconciles them
     by pushing the source's copy to the target (D-23). Construct with
     `SnippetRegistry(self.source)` to read/write the source's own copy — the reproducibility
     authority `plan()` classifies against (corrected D-23), and where a freshly authored

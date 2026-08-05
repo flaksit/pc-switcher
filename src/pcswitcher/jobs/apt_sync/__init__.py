@@ -37,13 +37,13 @@ network, an apt lock or an interrupted dpkg.
 Bare-`.deb` packages are NOT in scope and are dropped at capture
 (`probe.AptProbe.capture_source_items`). A package whose installed version comes from no
 configured repository was put there with `dpkg --install`; apt cannot install it on the
-target, and `manual_installs_sync` offers it as an install snippet in the same run (D-18).
+target, and `manual_deb_sync` offers it as an install snippet in the same run (D-18).
 Both jobs compute the predicate from the shared `packages/apt_policy.py` parser — the same
-test, never a result passed between them, since D-15/D-16 keep the four jobs independent.
+test, never a result passed between them, since D-15/D-16 keep the package jobs independent.
 
-The ownership split has a consequence this job may not paper over: `manual_installs_sync`
+The ownership split has a consequence this job may not paper over: `manual_deb_sync`
 has its own enable flag, and reading another job's flag is exactly the coupling D-15
-forbids. So enabling `apt_sync` while disabling `manual_installs_sync` leaves these packages
+forbids. So enabling `apt_sync` while disabling `manual_deb_sync` leaves these packages
 replicated by nobody — silently absent rather than offered as installs that fail. Documented
 for the user in `docs/jobs/package-sync.md`.
 

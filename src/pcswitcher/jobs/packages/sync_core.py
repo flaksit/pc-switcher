@@ -1,12 +1,12 @@
 """Shared package-sync pipeline: `PackageSyncJob`'s plan()/review/apply() split (D-15, D-16, D-24).
 
-Every package job (`apt_sync`, `snap_sync`, `flatpak_sync`, `manual_installs_sync`) is
-independent (D-15): its own config, enable flag, failure isolation and progress. What is
-here is what all four genuinely share — the plan/review/apply ORDER, the decision-file
-rules, the review grouping and the converge loop. A manager's own item shapes, its own
-diff and the facts only it can collect live in that manager's module, not here: a base
-class holding one manager's logic makes the other three inherit a surface they never use
-and cannot change. D-24 requires each job to present its
+Every package job (`apt_sync`, `snap_sync`, `flatpak_sync`, `manual_deb_sync`,
+`manual_installs_sync`) is independent (D-15): its own config, enable flag, failure
+isolation and progress. What is here is what they all genuinely share — the
+plan/review/apply ORDER, the decision-file rules, the review grouping and the converge
+loop. A manager's own item shapes, its own diff and the facts only it can collect live in
+that manager's module, not here: a base class holding one manager's logic makes every
+other job inherit a surface it never uses and cannot change. D-24 requires each job to present its
 own batched review before that job's own first mutating command — the batching is per
 manager, never across managers. The split of `plan()` from `apply()` exists to make that
 review-before-any-change ordering checkable and testable per job:
@@ -48,7 +48,7 @@ from abc import abstractmethod
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 from pcswitcher.jobs.base import SyncJob
 from pcswitcher.jobs.context import JobContext
@@ -57,6 +57,9 @@ from pcswitcher.jobs.packages.probes import ProbeFailed
 from pcswitcher.jobs.packages.review import Decision, ReviewEntry, ReviewGroup, ReviewOutcome, asks_for_a_decision
 from pcswitcher.jobs.packages.state import DecisionEntry, DecisionFile
 from pcswitcher.models import CommandResult, Host, JobSkipped, LogLevel, ProgressUpdate
+
+if TYPE_CHECKING:
+    from pcswitcher.executor import Executor
 
 __all__ = [
     "SNAP_CHANGE_REVIEW_ACTION",
@@ -381,6 +384,16 @@ class PackageSyncJob(SyncJob):
             return frozenset()
         return absent & frozenset(entries)
 
+    def _decision_file(self, executor: Executor) -> DecisionFile:
+        """This job's machine-local decision file on `executor`'s machine.
+
+        A hook, and the single construction site every read and write in this class goes
+        through, so a job carved out of an older one can also read the marks recorded under
+        that older manager id (`state.AdoptedMarks`) without the split silently orphaning
+        every permanent answer the user gave about the items it took with it.
+        """
+        return DecisionFile(self.manager_id, executor)
+
     async def _load_live_decisions_on(self, *, on_source: bool) -> dict[str, DecisionEntry]:
         """One machine's decision file with the entries that machine no longer has anything
         to say about left out. Read-only — the file itself is rewritten by
@@ -391,7 +404,7 @@ class PackageSyncJob(SyncJob):
         `_drop_inert_diffs` call consults, so the item it named is diffed and reviewed
         normally instead of being silenced by an entry nothing stands behind.
         """
-        entries = await DecisionFile(self.manager_id, self.source if on_source else self.target).load()
+        entries = await self._decision_file(self.source if on_source else self.target).load()
         absent = await self._absent_marks(entries, on_source=on_source)
         return {item_id: entry for item_id, entry in entries.items() if item_id not in absent}
 
@@ -428,7 +441,7 @@ class PackageSyncJob(SyncJob):
             return
 
         for on_source in (True, False):
-            decision_file = DecisionFile(self.manager_id, self.source if on_source else self.target)
+            decision_file = self._decision_file(self.source if on_source else self.target)
             entries = await decision_file.load()
             absent = await self._absent_marks(entries, on_source=on_source)
             for item_id in sorted(absent):
@@ -679,10 +692,11 @@ class PackageSyncJob(SyncJob):
         (`execute()`), since everything this seam exists for acts on an answer.
 
         No-op on the base — the three managers that produce no unreproducible items (apt,
-        snap, flatpak) need nothing between review and converge. Only `manual_installs_sync`
-        overrides it (D-23): it pushes the freshly reconciled install-snippet registry to
-        the target here, so a snippet the user authored during THIS run's review is on the
-        target before `apply()` replays it. Keeping the hook on the base leaves `execute()`
+        snap, flatpak) need nothing between review and converge. Only
+        `packages.unreproducible.UnreproducibleSyncJob` overrides it (D-23): it pushes the
+        freshly reconciled install-snippet registry to the target here, so a snippet the
+        user authored during THIS run's review is on the target before `apply()` replays
+        it. Keeping the hook on the base leaves `execute()`
         the single source of the plan/review/apply order rather than each manager
         re-deriving it.
         """
@@ -722,13 +736,13 @@ class PackageSyncJob(SyncJob):
         Before converging anything, `_record_permanent_skips` persists a `DecisionEntry`
         for every `SKIP_ALWAYS`-decided item (D-08). The `_finalize_unreproducible` hook
         then persists this run's authored snippets and unreproducible-item skip-always
-        decisions (D-20/D-21/D-23); it is a no-op on the base and only
-        `manual_installs_sync` implements it (D-18), but the call site stays here so both
-        run before any converge, independent of whether this run applies anything else
-        (a run with zero installs but one newly-authored snippet still records it). The
-        `_unresolved_as_failures` hook (also no-op on the base, overridden only by
-        `manual_installs_sync`) supplies the genuinely-undecided items that fail an
-        interactive run — which is why `total == 0` can still raise `PackageItemFailures`.
+        decisions (D-20/D-21/D-23); it is a no-op on the base and only the unreproducible
+        jobs implement it (D-18), but the call site stays here so both run before any
+        converge, independent of whether this run applies anything else (a run with zero
+        installs but one newly-authored snippet still records it). The
+        `_unresolved_as_failures` hook (also no-op on the base) supplies the
+        genuinely-undecided items that fail an interactive run — which is why `total == 0`
+        can still raise `PackageItemFailures`.
 
         After the loop, `_prune_dead_marks` reconciles both machines' decision files with
         what those machines actually hold. It runs whatever this job applied, `total == 0`
@@ -838,11 +852,11 @@ class PackageSyncJob(SyncJob):
         """Hook: this job's genuinely-undecided items that fail an interactive run (D-27).
 
         No-op on the base — it returns an empty list, so the three managers that produce
-        no unreproducible items (apt, snap, flatpak) never fail on this basis. Only
-        `manual_installs_sync` overrides it (D-18/D-21): an unreproducible item left with
-        neither a snippet nor a recorded decision after an interactive review fails the
-        job. The D-27 converge-failure contract in `apply()` is unchanged — converge
-        failures fail the job regardless of what this hook returns.
+        no unreproducible items (apt, snap, flatpak) never fail on this basis. The
+        unreproducible jobs do not override it either (D-21 decision 10): an interactive
+        review leaves no item genuinely undecided. The D-27 converge-failure contract in
+        `apply()` is unchanged — converge failures fail the job regardless of what this
+        hook returns.
         """
         return []
 
@@ -850,9 +864,10 @@ class PackageSyncJob(SyncJob):
         """Hook: persist this job's unreproducible-item snippet authoring and skip-always
         decisions (D-20/D-21/D-23).
 
-        No-op on the base — only `manual_installs_sync` produces unreproducible items
-        (D-18), and it overrides this hook with the real persistence; the three managers
-        that never do inherit this no-op so the base `apply()` stays generic.
+        No-op on the base — only the unreproducible jobs produce such items (D-18), and
+        `packages.unreproducible.UnreproducibleSyncJob` overrides this hook with the real
+        persistence; the three managers that never do inherit this no-op so the base
+        `apply()` stays generic.
         """
         return
 
@@ -897,7 +912,7 @@ class PackageSyncJob(SyncJob):
                 continue
 
             executor = self.source if self._mark_holders(diff.action)[0] else self.target
-            await DecisionFile(self.manager_id, executor).record(
+            await self._decision_file(executor).record(
                 DecisionEntry(
                     item_id=diff.item_id,
                     item_class=diff.item_class,
@@ -962,7 +977,7 @@ class PackageSyncJob(SyncJob):
         Self-contained (D-24): plan this job's diffs, review its own groups through the
         injected `JobContext.reviewer`, put the second round `plan_second_round()` builds out
         of those answers, accept the merged outcome, run the `after_review()` hook (the seam
-        where `manual_installs_sync` pushes its snippet registry, D-23), then apply. No
+        where an unreproducible job pushes its snippet registry, D-23), then apply. No
         component outside the job owns its review, and no fallback applies diffs that never
         came back from one — a missing reviewer fails loudly here rather than silently
         skipping the review and converging unreviewed diffs (T-02-38).
@@ -987,7 +1002,7 @@ class PackageSyncJob(SyncJob):
 
         `after_review()` runs only when a human answered (`PKG-FR-NO-TERMINAL`: a
         non-interactive run transfers no registry). The two SUCCESS cases above are
-        exactly where that matters: `manual_installs_sync`'s hook pushes the SOURCE's
+        exactly where that matters: an unreproducible job's hook pushes the SOURCE's
         whole snippet registry, which carries entries from earlier runs, so "this run had
         nothing to decide" is not "this run has nothing to transfer". Gated here rather
         than in the hook so the rule holds for any job that ever needs the seam.
