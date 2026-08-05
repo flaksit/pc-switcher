@@ -361,7 +361,7 @@ sequenceDiagram
 
 Reaching step 12 is not the same as success: per-item package failures are recorded as FAILED `JobResult`s rather than raised, so `_summarize_job_outcomes` derives the session status from the results.
 
-A `finally` block always runs `_cleanup()`: restore the snapd hold, release the target lock, terminate tracked processes on both machines, disconnect, release the source lock, drain the event bus and logging queues, stop the Live display, and print the warning summary. Locks are fcntl advisory locks released automatically when a process exits or the SSH connection drops, so a leftover lock *file* never blocks a future sync.
+A `finally` block always runs `_cleanup()`: restore the snapd hold, release the target lock, terminate tracked processes on both machines, disconnect, release the source lock, drain the event bus and logging queues, stop the Live display, and print the job outcome block and the warning summary. Locks are fcntl advisory locks released automatically when a process exits or the SSH connection drops, so a leftover lock *file* never blocks a future sync.
 
 ## Key Design Patterns
 

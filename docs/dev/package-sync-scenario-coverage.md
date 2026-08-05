@@ -17,7 +17,7 @@ Some A–K rows span more than one run, still in that direction, and each says s
 ## Navigation
 
 - [Package sync — user requirements](../planning/package-sync-user-requirements.md) — the intent every scenario here comes from
-- [Package sync conformance criteria](../planning/package-sync-conformance-criteria.md) — the 137 articles each section decomposes
+- [Package sync conformance criteria](../planning/package-sync-conformance-criteria.md) — the 138 articles each section decomposes
 - [Package sync specification](../system/package-sync.md) — how the behaviour is built
 - [Package sync job behaviour](../jobs/package-sync.md) — what the user sees
 - [Testing guide](testing-guide.md) — how to write the tests named here
@@ -1750,7 +1750,7 @@ Five exits, then the `userinfo` grammar boundary.
 | J146 | Source write 1: a "always skip" answer about an item Atlas holds | A mark is recorded on Atlas and nowhere else | U | `test_package_state:TestPipelineWiring::test_skip_always_on_install_writes_to_source_not_target` |
 | J147 | Source write 2: a snippet authored during the review | Written to Atlas's registry, not Nomad's | U | `test_package_sync_core:TestFinalizeUnreproducible::test_authored_snippet_is_written_to_the_source_registry_not_target` |
 | J148 | Source write 3: the snap refresh pause | Applied on Atlas as well as Nomad, and restored afterwards | U | `test_snap_autorefresh_hold:TestConfirmEachCommandGate::test_apply_and_restore_declare_mutations_on_both_hosts` |
-| J149 | No fourth source write exists | Every ungated executor call site in the codebase is accounted for as a read or a tracked gap; a new write fails the audit | U | `test_mutates_audit:TestSourceWrites::test_the_audit_sees_the_gated_call_sites`, `test_mutates_audit:TestSourceWrites::test_no_write_that_can_reach_the_source_is_unaccounted_for`, `test_mutates_audit:TestSourceWrites::test_a_package_sync_writes_exactly_three_things_on_the_source` |
+| J149 | No fifth source write exists | Every ungated executor call site in the codebase is accounted for as a read or a tracked gap; a new write fails the audit | U | `test_mutates_audit:TestSourceWrites::test_the_audit_sees_the_gated_call_sites`, `test_mutates_audit:TestSourceWrites::test_no_write_that_can_reach_the_source_is_unaccounted_for`, `test_mutates_audit:TestSourceWrites::test_a_package_sync_writes_exactly_four_things_on_the_source` |
 | J150 | No package manager's database, store or unpacked files travel between the machines | Only decisions plus the configuration a manager needs travel; the only file transfers a package job makes are repository/pin/config files, signing keys, remote filters and the snippet registry | U | `test_mutates_audit:TestFileTransfers::test_a_package_job_transfers_only_the_three_files_it_is_allowed_to`, `test_mutates_audit:TestFileTransfers::test_nothing_is_ever_fetched_off_the_target` |
 
 ### J.11 The per-command confirmation (article: PKG-FR-CONFIRM-EACH)
@@ -1892,10 +1892,11 @@ The table's four jobs × two machines. `apt_sync` and `snap_sync`: required on b
 
 | # | Scenario | Expected | Cov | Test |
 | --- | --- | --- | --- | --- |
-| K69 | `apt_sync` enabled; unattended-upgrades holds Nomad's dpkg frontend lock | Validation fails saying the lock is held on Nomad and to retry once it finishes; the run does not start | U | `unit/jobs/apt/test_apt_job:TestValidate::test_dpkg_lock_held_yields_distinct_validation_error` |
+| K69 | `apt_sync` enabled; something holds Nomad's dpkg frontend lock | Validation fails saying the lock is held on Nomad; the run does not start | U | `unit/jobs/apt/test_apt_job:TestValidate::test_dpkg_lock_held_yields_distinct_validation_error` |
 | K70 | Same, but the lock is free | No lock error | U | `…:TestValidate::test_all_checks_pass_returns_no_errors` (the probe's non-zero exit is the "all clear") |
 | K71 | The lock is held | The run neither waits nor retries: the refusal is immediate and states the reason | U | `test_apt_job:TestValidate::test_a_held_lock_is_probed_once_and_never_waited_on` (exactly one `fuser` probe, no sleep of any kind) |
 | K72 | A dry run while the lock is held | Still refuses to start — validation is not skipped for a dry run | U | `test_apt_job:TestValidate::test_a_dry_run_still_refuses_to_start_while_the_lock_is_held` |
+| K120 | The lock is held, by the user's own `apt install` or by the system's automatic updates | The refusal names both possibilities, asserts neither, and says to wait for it to finish and run the sync again | U | `test_apt_job:TestValidate::test_the_lock_message_names_both_holders_asserts_neither_and_gives_the_remedy` |
 
 ### K.7 The boundary with `folder_sync` (articles: PKG-FR-DATA-BOUNDARY, PKG-FR-SNAP-DATA-BOUNDARY, PKG-FR-MACHINE-SPECIFIC)
 
@@ -1923,6 +1924,45 @@ The table's four jobs × two machines. `apt_sync` and `snap_sync`: required on b
 | K92 | A run of `snap_sync` | It transfers no file between machines at all — convergence is `snap install/refresh/remove` on Nomad | U | `test_mutates_audit:TestTransferDestinations::test_snap_sync_moves_no_file_between_the_machines` (a negative control: the first transfer anyone adds to the job fails it) |
 | K93 | A run of `manual_installs_sync` | The only file it transfers is the snippet registry | U | `test_manual_installs_sync:TestSnippetPush::test_push_sends_source_registry_under_the_user_home_never_etc` |
 
+
+### K.8 The apt update-timer suspension (articles: PKG-FR-APT-TIMER-PAUSE)
+
+Driven by the orchestrator around the whole job window; listed here because the obligation is apt's. It covers the SYSTEM updater only — a person's own `apt install` and PackageKit are untouched and stay the fail-fast case of K.6.
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| K94 | `apt_sync` is enabled and the run is real | Both machines' automatic apt updates are suspended for the run | U | `test_apt_timer_suspension:TestSuspensionEngaged::test_both_timers_stopped_on_both_hosts_when_apt_sync_enabled` |
+| K95 | The suspension is about to be applied | Each machine's current updater state is read first, and reading it changes nothing | U | `test_apt_timer_suspension:TestSuspensionEngaged::test_capture_is_read_only_and_precedes_the_stop` |
+| K96 | The suspension is announced before the first job | The line says who holds it, why it spans the whole run, and that each machine resumes on its own | U | `test_apt_timer_suspension:TestSuspensionEngaged::test_the_announcement_names_its_owner_its_span_and_the_self_restart` |
+| K97 | `apt_sync` is not enabled | Nothing is suspended on either machine | U | `test_apt_timer_suspension:TestSuspensionEngaged::test_nothing_is_suspended_when_apt_sync_disabled` |
+| K98 | A dry run | Nothing is suspended on either machine | U | `test_apt_timer_suspension:TestSuspensionEngaged::test_nothing_is_suspended_in_dry_run` |
+| K99 | A machine has its automatic updates masked or already stopped | Nothing is suspended there and nothing is started afterwards | U | `test_apt_timer_suspension:TestOnlyRunningTimersAreTouched::test_a_machine_that_is_not_running_the_updater_is_left_alone` |
+| K100 | A machine runs one of the two update timers and not the other | Only the running one is suspended, and only it comes back | U | `test_apt_timer_suspension:TestOnlyRunningTimersAreTouched::test_only_the_running_timer_is_stopped_and_only_it_comes_back` |
+| K101 | Atlas's updater state cannot be read; Nomad's can | Atlas is left untouched and said so; Nomad is still suspended | U | `test_apt_timer_suspension:TestOnlyRunningTimersAreTouched::test_a_machine_whose_state_cannot_be_read_is_left_untouched` |
+| K102 | The state reading names only one of the two timers | It is treated as an answer that did not arrive; that machine is left untouched | U | `test_apt_timer_suspension:TestOnlyRunningTimersAreTouched::test_a_truncated_reading_is_not_read_as_a_machine_without_timers` |
+| K103 | A run dies without cleaning up | Each machine restarts its own automatic updates by itself, from a restart the run handed to that machine's own service manager | U | `test_apt_timer_suspension:TestTheSuspensionUndoesItselfWithoutThisProcess::test_a_restart_is_scheduled_on_each_host_and_this_process_owns_none_of_it` |
+| K104 | The suspension is applied to a machine | The deferred restart is in place before the suspension, so no instant exists where updates are off with nothing to turn them back on | U | `::test_the_restart_is_scheduled_before_the_timers_are_stopped` |
+| K105 | The deferred restart cannot be scheduled on a machine | That machine is not suspended at all; the run says so and continues | U | `::test_a_machine_whose_restart_cannot_be_scheduled_is_never_stopped` |
+| K106 | A user finds the pending restart on their own machine | It names pc-switcher and says what it will do | U | `::test_the_scheduled_restart_says_whose_it_is_on_the_machine_it_sits_on` |
+| K107 | Suspending fails on a machine after the restart was scheduled | The run says so, names the machine, continues, and still restores that machine at the end | U | `::test_a_stop_that_fails_still_leaves_the_machine_restorable`, `TestWarningsNameTheMachines::test_a_failed_stop_names_the_machine` |
+| K108 | The run ends normally | Each machine's updates are restarted, and only then is the deferred restart cancelled | U | `test_apt_timer_suspension:TestRestore::test_restore_starts_the_timers_then_cancels_the_scheduled_restart` |
+| K109 | The run outlasts the suspension, so the deferred restart has already fired | Cancelling nothing is not reported as a problem | U | `test_apt_timer_suspension:TestRestore::test_a_scheduled_restart_that_already_fired_is_not_a_warning` |
+| K110 | A run that never suspended anything reaches cleanup | No command is issued | U | `test_apt_timer_suspension:TestRestore::test_restore_is_noop_when_nothing_was_suspended` |
+| K111 | Cleanup runs twice | The restart happens once | U | `test_apt_timer_suspension:TestRestore::test_restore_is_idempotent` |
+| K112 | The restart for Nomad is attempted | It happens while the connection it needs is still up | U | `test_apt_timer_suspension:TestCleanupOrder::test_the_restart_runs_before_the_connection_it_needs_is_torn_down` |
+| K113 | The run is started with per-command confirmation | Every write of the suspension is shown to the user as a change; the state reading is not | U | `test_apt_timer_suspension:TestConfirmEachCommandGate::test_every_write_declares_itself_and_the_state_read_does_not` |
+| K114 | The user declines the restart at that prompt | The write does not happen | U | `test_apt_timer_suspension:TestConfirmEachCommandGate::test_abort_at_the_restart_is_not_swallowed_by_the_best_effort_handler` |
+| K115 | Same, at cleanup | The run still releases the lock on Nomad and its connection, and says the deferred restart is what will put the machines right | U | `::test_cleanup_honours_the_abort_but_still_releases_resources` |
+| K116 | A machine is left unsuspended because its state could not be read | The warning names that machine by hostname | U | `test_apt_timer_suspension:TestWarningsNameTheMachines::test_an_unreadable_state_names_the_machine_it_leaves_running` |
+| K117 | The restart command fails on a machine | The run says so, names the machine, and says the machine restarts by itself anyway | U | `test_apt_timer_suspension:TestWarningsNameTheMachines::test_a_failed_restart_names_the_machine_and_says_it_still_comes_back` |
+| K118 | The restart raises because the connection is already gone | The run says so, names the machine, and finishes tearing down | U | `test_apt_timer_suspension:TestWarningsNameTheMachines::test_a_restart_that_raises_names_the_machine` |
+| K119 | `apt_sync` enabled; a machine cannot run privileged commands without a password | Validation fails naming that machine, and says the timer pause is part of why it needs it | U | `test_apt_job:TestValidate::test_source_without_passwordless_sudo_yields_validation_error`, `::test_target_without_passwordless_sudo_yields_validation_error_naming_the_binaries` |
+| K121 | A machine still carries the pending restart of a run that died | It is pushed past the end of this sync and NOT carried out there — no automatic update is started at the moment the sync begins | U | `test_apt_timer_suspension:TestADeadRunsPendingRestore::test_a_pending_restore_is_deferred_and_no_apt_timer_is_started` |
+| K122 | Same, and that run left the machine's timers stopped | The machine is left alone by the ordinary flow; the pushed-back restart is its way back | U | `::test_a_host_a_dead_run_left_stopped_is_still_skipped_by_the_normal_flow` |
+| K123 | A run finishes with an earlier run's restart still outstanding | It is carried out and cleared at the end of the sync, so the machine does not keep its automatic updates off | U | `::test_cleanup_runs_and_clears_an_outstanding_restore` |
+| K124 | A run finishes with nothing outstanding (the ordinary run) | Nothing is issued and nothing is reported | U | `::test_cleanup_settles_nothing_when_nothing_is_outstanding` |
+| K125 | The pending restart cannot be pushed back | The run says so, names the machine, and continues | U | `::test_a_failed_defer_warns_and_the_sync_continues` |
+| K126 | The outstanding restart cannot be carried out at the end | It is left scheduled — the machine's only remaining way back — and the run says so | U | `::test_a_failed_trigger_at_cleanup_leaves_the_restore_scheduled` |
 
 ## N. Across runs, and across the two roles
 

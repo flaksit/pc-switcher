@@ -369,6 +369,28 @@ class TestValidate:
         assert any("lock" in e.message.lower() for e in errors)
 
     @pytest.mark.asyncio
+    async def test_the_lock_message_names_both_holders_asserts_neither_and_gives_the_remedy(self) -> None:
+        """K120 — `fuser` reports that the lock is held, not who holds it. Naming one holder is
+        a guess the user then has to disprove before they can act on it, and the two candidates
+        need opposite responses from them: their own package command is theirs to finish, the
+        system's automatic updates are theirs to wait out. So the message offers both, commits
+        to neither, and ends on the one action that works for either.
+        """
+        context, _source, _target = make_context(
+            target_responses={"fuser /var/lib/dpkg/lock-frontend": CommandResult(0, "1234", "")}
+        )
+        job = AptSyncJob(context)
+
+        errors = await job.validate()
+
+        message = next(e.message for e in errors if "lock" in e.message.lower())
+        assert "apt" in message and "graphical package manager" in message
+        assert "automatic updates" in message
+        assert "does not say which" in message
+        assert "Wait for it to finish, then run the sync again." in message
+        assert "unattended-upgrades" not in message
+
+    @pytest.mark.asyncio
     async def test_a_held_lock_is_probed_once_and_never_waited_on(self) -> None:
         """K71 — `PKG-FR-APT-DPKG-LOCK` forbids waiting on the lock silently, so the refusal
         must be the run's whole response to it: one `fuser` probe, no second one, and no
@@ -407,7 +429,7 @@ class TestValidate:
 
     @pytest.mark.asyncio
     async def test_source_without_passwordless_sudo_yields_validation_error(self) -> None:
-        """K41, K46 — Capturing /etc/apt state needs `sudo find` on the SOURCE.
+        """K41, K46, K119 — Capturing /etc/apt state needs `sudo find` on the SOURCE.
 
         Without this check the capture degrades to empty digest maps and the sync
         reports success having replicated no repository state at all.
@@ -424,7 +446,7 @@ class TestValidate:
 
     @pytest.mark.asyncio
     async def test_target_without_passwordless_sudo_yields_validation_error_naming_the_binaries(self) -> None:
-        """K42 — The target error must carry the sudoers remediation, not just a diagnosis:
+        """K42, K119 — The target error must carry the sudoers remediation, not just a diagnosis:
         every binary the job escalates for has to appear so the user can paste one
         working grant rather than discover the missing paths one failed run at a time.
         """

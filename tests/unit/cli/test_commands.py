@@ -158,46 +158,13 @@ class TestSyncAbortedHandling:
 class TestToolOutputIsNotRichMarkup:
     """Text pc-switcher did not author must reach Rich as `Text`, never as markup.
 
-    The end-of-run summary quotes each failed job's own reason, which carries a package
-    manager's stderr. Rich reads a `[...]`-shaped substring in a markup string as a style
-    tag: `[installed]` is swallowed and `[/usr/bin/apt]` raises MarkupError — a crash at
-    the final summary, after every job has already done its work.
+    A crash message quotes a package manager's stderr. Rich reads a `[...]`-shaped
+    substring in a markup string as a style tag: `[installed]` is swallowed and
+    `[/usr/bin/apt]` raises MarkupError — a crash while reporting a crash, after every job
+    has already done its work. The same rule for the end-of-run outcome block, which quotes
+    each job's recorded reason, is covered in
+    `tests/unit/orchestrator/test_job_outcome_summary.py`.
     """
-
-    @pytest.mark.parametrize(
-        "stderr",
-        [
-            "dpkg: error processing archive [/usr/bin/apt] (--unpack)",  # raises MarkupError as markup
-            "E: Sub-process returned an error code [installed]",  # silently swallowed as markup
-            "snap [core22/stable] is not available",
-        ],
-    )
-    @pytest.mark.asyncio
-    async def test_failed_session_summary_renders_bracketed_stderr(self, stderr: str) -> None:
-        """A failed run's summary prints its reason verbatim instead of crashing."""
-        console, buffer = captured_console()
-        session = SyncSession(
-            session_id="s1",
-            started_at=datetime.now(UTC),
-            source_hostname="source",
-            target_hostname="target-host",
-            config={},
-            status=SessionStatus.FAILED,
-            error_message=f"apt_sync — {stderr}",
-        )
-
-        with (
-            patch("pcswitcher.cli.Orchestrator") as mock_orchestrator_cls,
-            patch("pcswitcher.cli.console", console),
-        ):
-            mock_orchestrator = MagicMock()
-            mock_orchestrator.run = AsyncMock(return_value=session)
-            mock_orchestrator_cls.return_value = mock_orchestrator
-
-            exit_code = await _async_run_sync("target-host", MagicMock(spec=Configuration))
-
-        assert exit_code == 1
-        assert stderr in buffer.getvalue(), f"stderr must survive rendering.\nOutput: {buffer.getvalue()!r}"
 
     @pytest.mark.asyncio
     async def test_crashing_job_message_renders_bracketed_stderr(self) -> None:
@@ -239,16 +206,16 @@ class TestToolOutputIsNotRichMarkup:
         assert stderr in buffer.getvalue(), f"uv stderr must survive rendering.\nOutput: {buffer.getvalue()!r}"
 
 
-class TestFailureSummaryReadsAsAList:
-    """A run that ends with several failed jobs lists one per line, under the label.
+class TestFailuresAreReportedOnce:
+    """A failed run sets the exit code here and says nothing the outcome block already said.
 
-    `_summarize_job_outcomes` returns a reason per failed job; printed beside the label the
-    first reason would sit on the label line and the rest below it, so the list of failures
-    has no shape.
+    The orchestrator's end-of-run block names every job and, for each failed one, the reason
+    it recorded (`CORE-FR-SUMMARY`). A second list of the same failures in a different shape
+    would read as a second thing having gone wrong.
     """
 
     @pytest.mark.asyncio
-    async def test_each_failed_job_gets_its_own_line_under_the_label(self) -> None:
+    async def test_a_failed_session_exits_non_zero_without_reprinting_the_failures(self) -> None:
         console, buffer = captured_console()
         reasons = [
             "apt_sync — could not install vim on Nomad: E: Unable to fetch archives",
@@ -275,10 +242,8 @@ class TestFailureSummaryReadsAsAList:
             exit_code = await _async_run_sync("Nomad", MagicMock(spec=Configuration))
 
         assert exit_code == 1
-        printed = [line.rstrip() for line in buffer.getvalue().splitlines() if line.strip()]
-        assert "Sync finished with failures:" in printed, f"the label shares its line.\nOutput: {printed}"
-        label_at = printed.index("Sync finished with failures:")
-        assert printed[label_at + 1 : label_at + 3] == [f"  {reason}" for reason in reasons]
+        printed = buffer.getvalue()
+        assert printed.strip() == "", f"the CLI must add nothing to the outcome block.\nOutput: {printed!r}"
 
 
 class TestLogsCommand:
