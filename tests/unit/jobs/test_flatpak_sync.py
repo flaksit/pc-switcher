@@ -735,10 +735,13 @@ class TestRefOriginMismatch:
 
     @pytest.mark.asyncio
     async def test_an_origin_naming_no_configured_remote_matches_nothing(self) -> None:
-        """F92 — A ref whose origin remote the machine no longer configures has no URL, and an
+        """F92, F148 — A ref whose origin remote the machine no longer configures has no URL, and an
         absent URL is a value of its own that matches nothing — not even the same name on the
         other machine (`PKG-FR-FLATPAK-ORIGIN-DIFF`). Falling back to the name would call two
         unresolvable origins one origin on no evidence at all.
+
+        Nomad's copy is unreproducible here, and the pair survives the exclusion on purpose: it can
+        produce no install and no removal, only this report.
         """
         context, _source, _target = origin_pair_context(
             source_origin="flathub",
