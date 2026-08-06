@@ -1608,7 +1608,7 @@ class TestTheESMAttachmentGateOnVMs:
         pc2_with_pcswitcher: BashLoginRemoteExecutor,
         reset_pcswitcher_state: None,
     ) -> None:
-        """H54, J10, N18."""
+        """H54, J10, N18, C135."""
         _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
 
         esm_dests = [f"{APT_SOURCES_DIR}/{name}" for name in ESM_SOURCE_BODIES]

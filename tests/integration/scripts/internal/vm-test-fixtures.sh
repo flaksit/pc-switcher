@@ -301,7 +301,7 @@ assert_app_runtime_unchanged() {
         cat >&2 <<EOF
 [vm-test-fixtures] Flathub now builds $FLATPAK_APP against $declared,
 not the $FLATPAK_RUNTIME_REF this fixture seeds. Leaving it would make
-test_flatpak_derives_the_remote_its_ref_needs_and_carries_its_key download a whole runtime inside the
+every test that installs $FLATPAK_APP download a whole runtime inside the
 sync it is timing. Fix, in tests/integration/scripts/internal/vm-test-fixtures.sh:
   1. set FLATPAK_RUNTIME_REF=$declared
   2. bump FIXTURES_VERSION (and PCSWITCHER_TEST_FIXTURES_VERSION in internal/common.sh)
