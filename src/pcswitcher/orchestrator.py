@@ -1297,7 +1297,7 @@ class Orchestrator:
         must create `~/.local/share/flatpak` before folder_sync would otherwise land
         `~/.var/app` on top).
 
-        The three jobs for software no package manager can reproduce are in the rule for the
+        The four jobs for software no package manager can reproduce are in the rule for the
         same reason as the three package managers: replaying an install snippet puts software on the
         target, and that software writes its own stock defaults on first appearance exactly
         as a package's postinst does.
@@ -1329,6 +1329,7 @@ class Orchestrator:
                 "flatpak_sync",
                 "manual_deb_sync",
                 "manual_snap_sync",
+                "manual_flatpak_sync",
                 "manual_installs_sync",
             )
             if job_name in enabled_order and enabled_order.index(job_name) > folder_sync_index

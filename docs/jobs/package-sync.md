@@ -8,7 +8,7 @@ For what these jobs are for and why they behave as they do, see [Package sync �
 
 ## The six jobs
 
-Six independent jobs share one item -> diff -> review -> converge model. Each has its own enable flag, its own validation, its own review and its own failure isolation, so enabling one never drags in another.
+Seven independent jobs share one item -> diff -> review -> converge model. Each has its own enable flag, its own validation, its own review and its own failure isolation, so enabling one never drags in another.
 
 ```yaml
 sync_jobs:
@@ -17,21 +17,23 @@ sync_jobs:
   flatpak_sync: false         # installed flatpak refs and their remotes, per scope
   manual_deb_sync: false      # hand-installed .deb packages
   manual_snap_sync: false     # sideloaded snaps
+  manual_flatpak_sync: false  # flatpak apps no remote can supply
   manual_installs_sync: false # unowned software under /usr/local and /opt
 ```
 
-All six ship **disabled**: enabling any of them lets pc-switcher change installed software on the target, so it is opt-in.
+All seven ship **disabled**: enabling any of them lets pc-switcher change installed software on the target, so it is opt-in.
 
 ### What each job covers
 
 - **`apt_sync`** — the manually-installed apt package set (`apt-mark showmanual`, not the full dpkg selection — apt resolves dependencies on the target itself), minus the packages you installed from a hand-downloaded `.deb` (see below), plus the `/etc/apt` configuration that governs where packages come from. Three things under `/etc/apt` are reviewed: `apt.conf.d` files — added, changed or deleted — the deletion of a repository or pin file the source no longer has, and one narrow repository conflict. Repository files under `sources.list.d`, their signing keys, and pins under `preferences.d` are derived from the packages you approve and never get a review row — see [Repositories, pins and keys are derived](#repositories-pins-and-keys-are-derived).
 - **`snap_sync`** — installed snaps, converged to the source's exact revision and tracking channel.
-- **`flatpak_sync`** — installed flatpak refs, per user/system installation scope, plus the remotes those refs are derived to need.
+- **`flatpak_sync`** — installed flatpak refs, per user/system installation scope, plus the remotes those refs are derived to need, minus the refs no remote can supply (see below).
 - **`manual_deb_sync`** — apt packages whose installed version comes from no repository your machine has configured: a `.deb` you installed by hand, whether or not apt marks it as one you chose.
 - **`manual_snap_sync`** — snaps you installed from a local `.snap` file rather than from the store, which `snap list` shows at an `x`-prefixed revision.
+- **`manual_flatpak_sync`** — flatpak apps whose origin names no remote your machine configures: one installed from a local bundle, or from a remote you have since deleted.
 - **`manual_installs_sync`** — software under `/opt` and `/usr/local` that no dpkg package owns, dropped there by an install script or a tarball.
 
-The last three are the jobs for software no package manager can reproduce, and they share the [install-snippet registry](#install-snippets): a package, a snap and a directory tree are found differently but resolved the same way, by a recipe you write once. Everything else about them is separate — three enable flags, three reviews, three failure surfaces.
+The last four are the jobs for software no package manager can reproduce, and they share the [install-snippet registry](#install-snippets): a package, a snap, a flatpak app and a directory tree are found differently but resolved the same way, by a recipe you write once. Everything else about them is separate — four enable flags, four reviews, four failure surfaces.
 
 ### Hand-installed `.deb` packages belong to one job only
 
@@ -49,9 +51,19 @@ The same split, in the snap ecosystem. A snap installed from a local `.snap` fil
 
 The same consequence follows: **if you enable `snap_sync` but disable `manual_snap_sync`, your sideloaded snaps are synced by nobody.** Keep `manual_snap_sync` enabled if you install snaps from `.snap` files.
 
+### Flatpak apps no remote can supply belong to one job only
+
+The same split, one ecosystem over. A flatpak app whose origin names no remote your machine configures cannot be fetched from anywhere: it was installed from a local bundle, whose pseudo-origin carries no URL at all, or from a remote you have since deleted, whose name stays on the app after the remote is gone.
+
+`flatpak_sync` drops those apps from both machines before it diffs anything, so they produce no install, no removal and no derived remote — and, without that, a bundle app's origin became a remote the run tried to add with an empty URL. `manual_flatpak_sync` offers them instead, as [install snippets](#install-snippets).
+
+One thing is still reported: if both machines have the app and only the target's origin no longer resolves, that shows up as an [origin divergence](#flatpak-refs) like any other. Nothing is installed or removed either way, so there is nothing to protect by staying silent.
+
+**If you enable `flatpak_sync` but disable `manual_flatpak_sync`, your bundle-installed flatpaks are synced by nobody.** Keep it enabled if you install flatpaks from `.flatpak` files.
+
 ## Job ordering is enforced
 
-All six package jobs **must** be listed before `folder_sync` in `sync_jobs`. This is not a convention: pc-switcher validates the resolved order and aborts the run with a config error if any of them is enabled but sits after `folder_sync`.
+All seven package jobs **must** be listed before `folder_sync` in `sync_jobs`. This is not a convention: pc-switcher validates the resolved order and aborts the run with a config error if any of them is enabled but sits after `folder_sync`.
 
 The reason is the "defaults, then your data" layering. Installing software usually writes its own default config and data files on first appearance. If `folder_sync` ran first, the fresh install would overwrite your synced versions of those files with stock defaults. Running the package jobs first means the software already exists when `folder_sync` lands your versions on top. The snippet jobs are in the rule for the same reason: your snippet installs software, and that software writes its own defaults too.
 
@@ -229,11 +241,13 @@ A machine-specific package never appears in a review again, which is why the run
 
 ## Install snippets
 
-Some installed things no package manager can reproduce — a bare `.deb` downloaded and installed by hand, which is `manual_deb_sync`'s half, a snap installed from a local file, which is `manual_snap_sync`'s, or software dropped under `/usr/local` or `/opt` by an install script, which is `manual_installs_sync`'s. Each job surfaces its own findings in its own review as items needing a resolution, and all of them resolve the findings the same way, out of one registry.
+Some installed things no package manager can reproduce — a bare `.deb` downloaded and installed by hand, which is `manual_deb_sync`'s half, a snap installed from a local file, which is `manual_snap_sync`'s; a flatpak app no remote can supply, which is `manual_flatpak_sync`'s; or software dropped under `/usr/local` or `/opt` by an install script, which is `manual_installs_sync`'s. Each job surfaces its own findings in its own review as items needing a resolution, and all of them resolve the findings the same way, out of one registry.
 
 `manual_deb_sync` asks one question of everything dpkg reports as installed: which package's installed version comes from no repository this machine has configured. A package's own name is all it needs on the other machine — software that is there is there, whatever put it there — so a name the target already has installed is never raised.
 
 `manual_snap_sync` asks the same kind of question of `snap list`: which snaps sit at an `x`-prefixed revision, the one snapd gives a snap installed from a file. The snap's name is what the answer is filed under, so reinstalling from a newer `.snap` keeps your snippet working rather than asking again, and a name the target already has — sideloaded or from the store — is never raised. The revision is shown on the item's line so you can tell which build you are being asked about.
+
+`manual_flatpak_sync` asks the same shape of question of every installed flatpak app: which app's origin names no remote this machine configures **in that app's own scope**. Scope matters because flatpak keeps a separate set of remotes per installation, so a `flathub` configured system-wide says nothing about a user-scope app that names it. An app the other machine already has installed in the same scope is never raised, whatever remote put it there.
 
 `manual_installs_sync`'s scan is deliberately shallow. It looks in `/opt`, directly under `/usr/local`, and inside `/usr/local`'s `bin`, `sbin`, `lib`, `games` and `src` — one level each — and reports whatever dpkg does not own. It names what is there so you can decide about it; it never walks a tree, so an application under `/opt` is one finding rather than a thousand. `etc`, `include`, `man` and `share` are not looked into at all: what a hand install puts there comes with an application the scan finds elsewhere.
 
@@ -350,11 +364,15 @@ Those two checks guard an install, and an app already installed on both machines
 
 The comparison runs on URLs here too, so a remote the two machines merely named differently is not a divergence and two remotes sharing a name and pointing at different repositories is one. If a machine's app names a remote that machine no longer configures there is no URL at all — and no URL matches nothing, not even the same missing URL on the other side, so that app is reported as coming from a different origin and the entry says which side's URL is missing. Calling two unresolvable origins the same origin would state agreement on no evidence.
 
+That report is the only thing said about an unresolvable origin here. If the app is on the source, or on the target alone, it leaves this job entirely — see [Flatpak apps no remote can supply belong to one job only](#flatpak-apps-no-remote-can-supply-belong-to-one-job-only).
+
 A flatpak app is identified by its full `<application>/<arch>/<branch>` reference, not by the bare application id, and that reference is what the install and the uninstall name. Two branches of one app can be installed side by side, and a remote can offer several — flatpak refuses to guess between them and exits with `Multiple branches available`, so an app whose remote carries more than one branch never converges when only the id is named. The review line therefore shows the branch, and the same app on `stable` on one machine and `beta` on the other reads as an install plus a removal rather than as a version difference.
 
 ## Flatpak remotes
 
 A flatpak remote is **derived** from the apps approved from it, exactly as an apt repository is. You never approve a remote directly, whether it is being added, repointed or deleted: approving an app is what makes its remote arrive, and declining the app is the only way to decline the remote. Otherwise an app could be approved with the only thing that could deliver it declined — or, worse, approved from a same-named remote whose URL change was declined, meaning from a different source.
+
+No remote is ever derived from an app no remote can supply: a bundle's pseudo-origin has no URL to add, so such an app is out of this job before derivation runs at all.
 
 A remote the source has that feeds no app approved in this run is not provisioned at all. There is no flatpak equivalent of the distribution's own repositories: a fresh flatpak install configures **zero** remotes and a machine with none is a perfectly ordinary machine, so even Flathub is synced only as a consequence of something needing it.
 
@@ -418,7 +436,7 @@ A pin file is shown **whole**: its content is printed above the screen, one file
 
 The distribution's own source files are never offered for removal at all.
 
-`manual_deb_sync`, `manual_snap_sync` and `manual_installs_sync` are **install-only**: each reads the target only to tell what is already there, and keeps no record of what it put there, so none of them ever proposes removals. Removing a hand-installed item on the target is manual work today (tracking removal for manual installs is deferred to a future issue).
+`manual_deb_sync`, `manual_snap_sync`, `manual_flatpak_sync` and `manual_installs_sync` are **install-only**: each reads the target only to tell what is already there, and keeps no record of what it put there, so none of them ever proposes removals. Removing a hand-installed item on the target is manual work today (tracking removal for manual installs is deferred to a future issue).
 
 ## Prerequisites: passwordless sudo
 
@@ -427,4 +445,4 @@ Each enabled package job needs passwordless sudo for a handful of binaries:
 - **`apt_sync`** — on the source (to read `/etc/apt` configuration) and the target (to install packages, write and remove `/etc/apt` configuration including signing keys, and set or clear apt holds via `apt-mark`). Both hosts additionally need it for the sync-window pause of the system's own apt update timers (`sudo systemctl stop/start` on `apt-daily.timer` and `apt-daily-upgrade.timer`, plus the `sudo systemd-run` that schedules their automatic restart). The runtime pause tolerates a failure without aborting the sync, but the sudo grant is checked up front on both machines.
 - **`snap_sync`** — on both the **source** and the **target**; validation fails if either lacks it. The target needs it to install, refresh and remove snaps, and both hosts need it to pause snapd's auto-refresh for the sync window (`sudo snap set system refresh.hold`, plus the matching `sudo snap get` — snapd requires admin rights to read snap configuration as well as to write it). The runtime pause itself tolerates a transient failure without aborting the sync, but the sudo grant is checked up front on both machines.
 - **`flatpak_sync`** — on the target only, and only when a system-scope ref, remote or mask is in play on either machine. A user-scope-only sync never asks for root.
-- **`manual_deb_sync`**, **`manual_snap_sync`** and **`manual_installs_sync`** — none needs any: they only read `dpkg`, `apt-cache` or `snap list` to find their items, and a snippet author decides its own privilege needs, since the replay runs unprivileged.
+- **`manual_deb_sync`**, **`manual_snap_sync`**, **`manual_flatpak_sync`** and **`manual_installs_sync`** — none needs any: they only read `dpkg`, `apt-cache`, `snap list` or `flatpak` to find their items, and a snippet author decides its own privilege needs, since the replay runs unprivileged.

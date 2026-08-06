@@ -85,6 +85,10 @@ properties:
         type: boolean
         default: false
         description: "Detect and reproduce sideloaded snaps, after a batched review (destructive; opt-in)"
+      manual_flatpak_sync:
+        type: boolean
+        default: false
+        description: "Detect and reproduce flatpak refs no remote can supply, after a batched review (destructive; opt-in)"
       manual_installs_sync:
         type: boolean
         default: false
@@ -239,10 +243,9 @@ properties:
   # VscodeStateSyncJob has no configuration: the module hardcodes the editor list, DB
   # layout, and the preserved-key namespace (secret://). Enable/disable via sync_jobs.
 
-  # The apt_sync/snap_sync/flatpak_sync/manual_deb_sync/manual_snap_sync/manual_installs_sync
-  # jobs have no
-  # config section:
-  # they earn one only when they gain a real key (D-32). A config omitting them still
+  # The apt_sync/snap_sync/flatpak_sync/manual_deb_sync/manual_snap_sync/
+  # manual_flatpak_sync/manual_installs_sync jobs have no config section: they earn one only
+  # when they gain a real key (D-32). A config omitting them still
   # validates, and config.py's get_job_config returns {} for an absent section, which each
   # job's empty CONFIG_SCHEMA accepts. Enable/disable via sync_jobs only.
 

@@ -17,7 +17,7 @@ Some A–K rows span more than one run, still in that direction, and each says s
 ## Navigation
 
 - [Package sync — user requirements](../planning/package-sync-user-requirements.md) — the intent every scenario here comes from
-- [Package sync conformance criteria](../planning/package-sync-conformance-criteria.md) — the 138 articles each section decomposes
+- [Package sync conformance criteria](../planning/package-sync-conformance-criteria.md) — the 145 articles each section decomposes
 - [Package sync specification](../system/package-sync.md) — how the behaviour is built
 - [Package sync job behaviour](../jobs/package-sync.md) — what the user sees
 - [Testing guide](testing-guide.md) — how to write the tests named here
@@ -1062,12 +1062,22 @@ Driven by the orchestrator around the whole job window; listed here because the 
 | F143 | A system-scope repoint | Runs under sudo | U | `test_flatpak_sync:TestRemoteTrustTravelsWithTheDerivedWrite::test_a_system_scope_repoint_runs_under_sudo` |
 | F144 | A user-scope filter written to a path the SSH user cannot write | Fails naming that path rather than escalating the user-scope run to root | U | `test_flatpak_sync:TestRemoteFilterReplicates::test_a_user_scope_filter_path_the_ssh_user_cannot_write_fails_naming_it` |
 
+### F.15 Refs no remote can reproduce (article: PKG-FR-FLATPAK-UNREPRODUCIBLE)
+
+What this job drops, `manual_flatpak_sync` picks up (section G): the two read one predicate, so a ref cannot fall between them.
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| F157 | Atlas has a ref whose `origin` names no remote it configures in that ref's scope | No item in either direction and nothing reported: no install, no removal, no version report, and no remote derived from that origin | U | `test_flatpak_sync:TestPlanDiff::test_full_diff_taxonomy` |
+| F158 | The origin remote disappears from Atlas between the review and the install | The ref fails naming the remote, and no remote is added; the guard survives as a race check now that such a ref is never an item | U | `test_flatpak_sync:TestRemotesAreDerivedFromApprovedRefs::test_a_remote_the_source_does_not_report_fails_the_refs_that_named_it`, `TestConverge::test_ref_with_missing_origin_remote_is_skipped_with_named_failure` |
+| F159 | Both machines have the ref and only Nomad's origin resolves to no remote | Still reported as an origin divergence: a pair can produce no install and no removal, so the exclusion has nothing to protect and suppressing it would hide a real finding | U | `test_flatpak_sync:TestRefOriginMismatch::test_an_origin_naming_no_configured_remote_matches_nothing` |
+
 
 ## G. Software no package manager can reproduce, and the snippet registry
 
-### G.1 What the three jobs detect (articles: PKG-FR-MANUAL-SCOPE, PKG-FR-DEB-OWNERSHIP, PKG-FR-SNAP-SIDELOAD)
+### G.1 What the four jobs detect (articles: PKG-FR-MANUAL-SCOPE, PKG-FR-DEB-OWNERSHIP, PKG-FR-SNAP-SIDELOAD, PKG-FR-FLATPAK-UNREPRODUCIBLE)
 
-`manual_deb_sync` finds the hand-installed `.deb`s, `manual_snap_sync` the sideloaded snaps and `manual_installs_sync` the unowned paths; all three resolve a finding the same way, through the shared snippet registry, so everything from G.2 onward is one behaviour proved once.
+`manual_deb_sync` finds the hand-installed `.deb`s, `manual_snap_sync` the sideloaded snaps, `manual_flatpak_sync` the refs no remote can supply, and `manual_installs_sync` the unowned paths; all four resolve a finding the same way, through the shared snippet registry, so everything from G.2 onward is one behaviour proved once.
 
 | # | Scenario | Expected | Cov | Test |
 | --- | --- | --- | --- | --- |
@@ -1122,6 +1132,28 @@ Driven by the orchestrator around the whole job window; listed here because the 
 | G132 | `snap` is missing on Atlas | Validation fails before anything runs, naming Atlas and the missing tool | U | `test_manual_snap_sync:TestValidate::test_snap_unavailable_on_source_yields_validation_error` |
 | G133 | `snap` is missing on Nomad | Validation fails before anything runs, naming Nomad — the machine is read to tell what it already has | U | `test_manual_snap_sync:TestValidate::test_snap_unavailable_on_target_yields_validation_error` |
 | G134 | snapd answers on both machines | No validation error, and no administrative-rights precondition on either: listing snaps needs none, unlike converging them | U | `test_manual_snap_sync:TestValidate::test_valid_environment_yields_no_errors_and_asks_for_no_privilege` |
+| G138 | A configuration names `manual_flatpak_sync` in sync_jobs | Accepted as a job of its own: enabling it says nothing about `flatpak_sync` or the other unreproducible jobs | U | `test_config_system:TestJobEnableDisable::test_manual_flatpak_sync_is_an_accepted_job_name` |
+| G139 | That name is resolved to a job class | It resolves to `ManualFlatpakSyncJob` | U | `test_manual_flatpak_sync:TestFlatpakJobDiscovery::test_orchestrator_resolves_manual_flatpak_sync_to_its_job` |
+| G140 | The first-sync announcement is built with only this job enabled | It names the job, the flatpak refs no remote can supply, and snippet replay as the mechanism | U | `test_manual_flatpak_sync:TestFlatpakFirstSyncScope::test_the_announced_scope_names_the_refs_no_remote_can_supply`, `test_first_sync_scope:TestFirstSyncScopesPackageJobsOrdering::test_manual_flatpak_sync_announces_the_refs_it_would_replay` |
+| G141 | Atlas has a ref installed from a local bundle, whose origin is the url-less pseudo-remote flatpak writes for it | Presented as an item Nomad cannot get from any package manager, identified as `unreproducible:flatpak-no-remote:<scope>:<ref>` | U | `test_manual_flatpak_sync:TestNoRemoteDetection::test_a_bundle_installed_ref_is_unreproducible` |
+| G142 | Atlas has a ref whose remote was deleted while the ref stayed installed | Presented too: one predicate covers both shapes, because a deleted remote leaves the ref naming no remote | U | `test_manual_flatpak_sync:TestNoRemoteDetection::test_a_ref_whose_remote_was_deleted_is_unreproducible` |
+| G143 | Atlas has an ordinary ref from a remote it configures | Not presented — `flatpak_sync` replicates it | U | `test_manual_flatpak_sync:TestNoRemoteDetection::test_a_ref_from_a_configured_remote_is_not_presented` |
+| G144 | Atlas has the same bundle-installed application in both installation scopes | Two independent items, one per scope: scope is inside the identity | U | `test_manual_flatpak_sync:TestNoRemoteDetection::test_the_same_ref_in_two_scopes_yields_one_item_per_scope` |
+| G145 | Atlas configures `flathub` system-wide only, and a user-scope ref names it | Presented: remotes are tracked per installation, so each scope is asked its own question | U | `test_manual_flatpak_sync:TestNoRemoteDetection::test_a_remote_configured_in_the_other_scope_does_not_reproduce_the_ref` |
+| G146 | Nomad already has the ref installed, from an ordinary remote | Not presented — whatever origin put it there, it is on the machine | U | `test_manual_flatpak_sync:TestWhatTheTargetAlreadyHolds::test_a_ref_the_target_has_from_a_remote_counts_as_held` |
+| G147 | Atlas's `flatpak list` exits non-zero | The job fails once naming the command; nothing is proposed | U | `test_manual_flatpak_sync:TestAProbeThatDidNotAnswer::test_a_list_that_did_not_answer_fails_the_job` |
+| G148 | Atlas's `flatpak remotes` exits non-zero | The job fails once naming the command — silence would make every installed ref look unreproducible | U | `test_manual_flatpak_sync:TestAProbeThatDidNotAnswer::test_a_remotes_read_that_did_not_answer_fails_the_job` |
+| G149 | flatpak is missing on Atlas | Validation fails before anything runs, naming Atlas and the missing tool | U | `test_manual_flatpak_sync:TestValidate::test_flatpak_unavailable_on_source_yields_validation_error` |
+| G150 | flatpak is missing on Nomad | Validation fails before anything runs, naming Nomad — the machine is read to tell what it already has | U | `test_manual_flatpak_sync:TestValidate::test_flatpak_unavailable_on_target_yields_validation_error` |
+| G151 | flatpak present on both | No validation error, and no administrative-rights precondition is imposed on Nomad (a snippet's own needs are unknowable) | U | `test_manual_flatpak_sync:TestValidate::test_valid_environment_yields_no_errors_and_imposes_no_sudo_precondition` |
+| G152 | Atlas holds a "never install this on Nomad" answer about one of these findings | The finding is silenced rather than put to the user again | U | `test_manual_flatpak_sync:TestInertFiltering::test_a_marked_finding_produces_no_diff` |
+| G153 | A marked ref is no longer installed on the machine holding the mark | The mark is dropped from this job's own file | U | `test_manual_flatpak_sync:TestMarksFollowWhatTheMachineHolds::test_a_marked_ref_the_machine_no_longer_has_is_dropped` |
+| G154 | A marked ref is still installed on Atlas, now from a remote it configures again | The mark stays: presence answers this, never whether a remote could now supply it | U | `test_manual_flatpak_sync:TestMarksFollowWhatTheMachineHolds::test_a_marked_ref_still_installed_keeps_its_mark` |
+| G155 | Atlas has runtimes installed alongside its applications | No runtime is ever an item: a runtime arrives with the application that needs it | U | `test_manual_flatpak_sync:TestNoRemoteDetection::test_a_runtime_is_never_an_item` |
+| G156 | Atlas has no flatpak application at all | Nothing is presented, and the remote question is not even asked | U | `test_manual_flatpak_sync:TestNoRemoteDetection::test_a_machine_with_no_flatpak_apps_asks_no_remote_question` |
+| G157 | Atlas configures no remote at all in a scope that holds refs | An ordinary answer: every ref in that scope is presented | U | `test_manual_flatpak_sync:TestAProbeThatDidNotAnswer::test_a_scope_configuring_no_remote_at_all_is_data_not_a_failure` |
+| G158 | Atlas has the finding user-scope; Nomad has that application system-scope | Still presented — the two scopes are separate installations | U | `test_manual_flatpak_sync:TestWhatTheTargetAlreadyHolds::test_the_same_ref_in_the_other_scope_is_not_held` |
+| G159 | Only this job is enabled — `flatpak_sync` is not in the configuration at all | The finding is still detected and presented; the job asks flatpak its own questions | U | `test_manual_flatpak_sync:TestExecuteIndependentOfFlatpakSync::test_plan_runs_with_flatpak_sync_absent_from_config` |
 
 ### G.2 The three end states (articles: PKG-FR-MANUAL-RESOLUTION, PKG-FR-MANUAL-SOURCE-DECIDES)
 

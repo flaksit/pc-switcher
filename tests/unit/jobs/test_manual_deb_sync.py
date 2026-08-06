@@ -1,7 +1,7 @@
 """Unit tests for `ManualDebSyncJob`: the hand-installed `.deb` half of what no package
 manager can reproduce (D-18) — the no-candidate detection, its diff and its validation.
 
-The shared half both unreproducible jobs inherit is covered in `test_unreproducible_jobs.py`.
+The shared half every unreproducible job inherits is covered in `test_unreproducible_jobs.py`.
 All executor interactions are mocked; no real dpkg/apt-cache/sudo commands run.
 """
 

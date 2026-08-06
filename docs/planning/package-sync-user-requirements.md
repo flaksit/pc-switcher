@@ -282,14 +282,20 @@ A mask is derived, like the two holds: replicated from the source without review
 
 A flatpak installation that is neither the user nor the system one is skipped. Remotes belong to an installation, not to the machine, so nothing in such an installation depends on a remote a sync touches — a remote of the same name in the user or system installation is a different remote.
 
+### Applications no remote can supply
+
+An application whose origin names no remote configured in its own scope is not this job's. It came from a local bundle or from a remote since deleted, so there is nowhere to fetch it from: it is never installed, never removed, and no remote is derived from its origin. Its own job, `manual_flatpak_sync`, offers it instead.
+
+The one thing still said about such an application is a divergence both machines already have: if both hold it and only the target's origin no longer resolves, that is reported as an origin difference like any other. Nothing is installed or removed either way.
+
 ## Software no manager can reproduce
 
 Software that arrived on the source by a route nothing can replay automatically. Several kinds, one mechanism: the **install snippet**, a shell recipe written once that is synced with the software. Each kind in scope is a job of its own, enabled and reviewed on its own, and the kinds share the one snippet registry — how to install something is knowledge about the software, so one recipe file answers for all of them.
 
 - **A hand-downloaded `.deb`** — apt knows the name, but no configured repository offers that version. Its own job is the only one that offers it: apt drops these packages on both machines whatever else is enabled, so with apt synced and this job off they are replicated by nobody.
 - **A sideloaded snap** — installed from a local `.snap` file, so snapd holds it at a revision no store can serve. Same split: snap sync withholds the name on both machines whatever else is enabled, so with snaps synced and this job off they are replicated by nobody. It is identified by the snap's name alone, so reinstalling from a newer file keeps the snippet you wrote; a snap of that name already on the other machine — sideloaded or from the store — is never raised.
+- **A flatpak application no remote can supply** — installed from a local bundle, or from a remote since deleted, so its origin names nothing that can be fetched from. Same split again: `flatpak_sync` drops these applications on both machines whatever else is enabled, so with flatpak synced and this job off they are replicated by nobody.
 - **Unowned software under `/usr/local` or `/opt`** — dropped there by an install script or a tarball. The scan looks in `/opt`, directly under `/usr/local`, and inside `/usr/local`'s `bin`, `sbin`, `lib`, `games` and `src`. It never looks in `etc`, `include`, `man` or `share`: whatever is installed there arrives with an application the scan finds elsewhere. A finding — a file, a directory or a symlink — is named where it is found and never opened, or one application under `/opt` would arrive as thousands of findings. The directories the distribution itself creates under `/usr/local` are not findings, and neither is a directory with no file anywhere beneath it.
-- **A flatpak from a local bundle or a dead remote** — out of scope for now (#221).
 
 Both machines are scanned, and only what the target lacks is presented. That is what stops a second path to one application — the symlink in `bin` that starts what the snippet unpacked under `/opt` — from being asked about again every run after the snippet has already installed it. What only the target has produces nothing: **nothing here is ever removed**, and no record is kept of what a snippet put there.
 

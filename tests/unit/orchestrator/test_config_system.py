@@ -435,6 +435,7 @@ sync_jobs:
             """
 sync_jobs:
   manual_snap_sync: true
+  manual_flatpak_sync: true
   folder_sync: true
 """
         )
@@ -443,6 +444,24 @@ sync_jobs:
 
         assert config.sync_jobs["manual_snap_sync"] is True
         assert "snap_sync" not in config.sync_jobs
+
+    def test_manual_flatpak_sync_is_an_accepted_job_name(self, tmp_path: Path) -> None:
+        """G138 — the schema accepts `manual_flatpak_sync` as a valid sync_jobs key
+        (D-15/D-18): refs no remote can supply are their own job on their own enable flag,
+        and enabling one unreproducible job says nothing about the others."""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            """
+sync_jobs:
+  manual_flatpak_sync: true
+  folder_sync: true
+"""
+        )
+
+        config = Configuration.from_yaml(config_file)
+
+        assert config.sync_jobs["manual_flatpak_sync"] is True
+        assert "flatpak_sync" not in config.sync_jobs
 
     def test_core_edge_unknown_job_in_config(self, tmp_path: Path) -> None:
         """K13 — Edge case: Unknown job name in sync_jobs is rejected.
@@ -807,7 +826,7 @@ class TestShippedDefaultConfig:
         assert order.index("folder_sync") < order.index("vscode_state_sync")
 
     def test_package_jobs_ship_disabled(self) -> None:
-        """K1, K2, K3, K4 — all six package jobs are valid sync_jobs keys, shipped
+        """K1, K2, K3, K4 — all seven package jobs are valid sync_jobs keys, shipped
         opted-out by default: no sync installs or removes a package until the user says so."""
         config = Configuration.from_yaml(self._default_config_path())
         assert config.sync_jobs["apt_sync"] is False
@@ -815,11 +834,13 @@ class TestShippedDefaultConfig:
         assert config.sync_jobs["flatpak_sync"] is False
         assert config.sync_jobs["manual_deb_sync"] is False
         assert config.sync_jobs["manual_snap_sync"] is False
+        assert config.sync_jobs["manual_flatpak_sync"] is False
         assert config.sync_jobs["manual_installs_sync"] is False
 
     def test_package_jobs_precede_folder_sync(self) -> None:
-        """K24 — D-17: all six package jobs (apt_sync, snap_sync, flatpak_sync,
-        manual_deb_sync, manual_installs_sync) resolve before folder_sync in sync_jobs
+        """K24 — D-17: all seven package jobs (apt_sync, snap_sync, flatpak_sync,
+        manual_deb_sync, manual_snap_sync, manual_flatpak_sync, manual_installs_sync) resolve before
+        folder_sync in sync_jobs
         insertion order — the order both _discover_and_validate_jobs and _first_sync_scopes
         iterate directly, so apps land before folder_sync's data does.
         """
@@ -832,12 +853,13 @@ class TestShippedDefaultConfig:
             "flatpak_sync",
             "manual_deb_sync",
             "manual_snap_sync",
+            "manual_flatpak_sync",
             "manual_installs_sync",
         ):
             assert order.index(job_name) < folder_sync_index
 
     def test_shipped_config_omits_empty_package_sections(self) -> None:
-        """K6 — D-32: no top-level section ships for any of the six package jobs; a job
+        """K6 — D-32: no top-level section ships for any of the seven package jobs; a job
         earns a section only when it has a real key, and its resolved config defaults to an
         empty mapping."""
         config = Configuration.from_yaml(self._default_config_path())
@@ -847,6 +869,7 @@ class TestShippedDefaultConfig:
             "flatpak_sync",
             "manual_deb_sync",
             "manual_snap_sync",
+            "manual_flatpak_sync",
             "manual_installs_sync",
         ):
             assert config.get_job_config(job_name) == {}
@@ -865,6 +888,7 @@ sync_jobs:
   flatpak_sync: true
   manual_deb_sync: true
   manual_snap_sync: true
+  manual_flatpak_sync: true
   manual_installs_sync: true
   folder_sync: true
 """
@@ -878,6 +902,7 @@ sync_jobs:
             "flatpak_sync",
             "manual_deb_sync",
             "manual_snap_sync",
+            "manual_flatpak_sync",
             "manual_installs_sync",
         ):
             assert config.get_job_config(job_name) == {}
@@ -937,6 +962,7 @@ class TestPackageJobsBeforeFolderSyncStructuralCheck:
                 "flatpak_sync": True,
                 "manual_deb_sync": True,
                 "manual_snap_sync": True,
+                "manual_flatpak_sync": True,
                 "manual_installs_sync": True,
             }
         )
@@ -949,6 +975,7 @@ class TestPackageJobsBeforeFolderSyncStructuralCheck:
             "flatpak_sync",
             "manual_deb_sync",
             "manual_snap_sync",
+            "manual_flatpak_sync",
             "manual_installs_sync",
         }
 
@@ -972,6 +999,7 @@ class TestPackageJobsBeforeFolderSyncStructuralCheck:
                 "flatpak_sync": True,
                 "manual_deb_sync": True,
                 "manual_snap_sync": True,
+                "manual_flatpak_sync": True,
                 "manual_installs_sync": True,
                 "folder_sync": True,
             }

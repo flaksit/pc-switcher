@@ -11,7 +11,7 @@ This directory contains all project documentation, organized by audience.
 
 What each sync job does, kept separate from its configuration:
 
-- [package-sync.md](jobs/package-sync.md) - The six package jobs (`apt_sync`, `snap_sync`, `flatpak_sync`, `manual_deb_sync`, `manual_snap_sync`, `manual_installs_sync`): item -> diff -> review -> converge, per-manager review, machine-specific packages, install snippets
+- [package-sync.md](jobs/package-sync.md) - The seven package jobs (`apt_sync`, `snap_sync`, `flatpak_sync`, `manual_deb_sync`, `manual_snap_sync`, `manual_flatpak_sync`, `manual_installs_sync`): item -> diff -> review -> converge, per-manager review, machine-specific packages, install snippets
 - [folder-sync.md](jobs/folder-sync.md) - `folder_sync` filter-rule semantics, `authorized_keys` guidance, and always-excluded paths
 - [vscode-state-sync.md](jobs/vscode-state-sync.md) - `vscode_state_sync` selective, SQLite-aware merge that preserves machine-bound secrets
 

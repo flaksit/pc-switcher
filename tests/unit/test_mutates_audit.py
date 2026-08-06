@@ -235,6 +235,13 @@ _READ_ONLY_CALLS: dict[str, int] = {
     # No sudo on either machine, unlike snap_sync: listing snaps needs none.
     "jobs/manual_snap_sync.py::ManualSnapSyncJob._installed_snaps::run_command": 1,
     "jobs/manual_snap_sync.py::ManualSnapSyncJob.validate::run_command": 2,
+    # manual_flatpak_sync: the two reads its detection makes (the installed apps and, on the
+    # source alone, the configured remote names per scope) plus the presence check behind
+    # mark reconciliation; validate checks flatpak on both machines.
+    "jobs/manual_flatpak_sync.py::ManualFlatpakSyncJob._configured_remotes::run_command": 1,
+    "jobs/manual_flatpak_sync.py::ManualFlatpakSyncJob._installed_apps::run_command": 1,
+    "jobs/manual_flatpak_sync.py::ManualFlatpakSyncJob.observe_absent_marks::run_command": 1,
+    "jobs/manual_flatpak_sync.py::ManualFlatpakSyncJob.validate::run_command": 2,
     # manual_installs_sync: the unowned-file scan's four steps, each on whichever machine it
     # is handed; validate checks dpkg on both.
     "jobs/manual_installs_sync.py::ManualInstallsSyncJob._list_scan_entries::run_command": 1,
@@ -460,6 +467,7 @@ _PACKAGE_SYNC_MODULES = frozenset(
         "jobs/flatpak_sync.py",
         "jobs/manual_deb_sync.py",
         "jobs/manual_snap_sync.py",
+        "jobs/manual_flatpak_sync.py",
         "jobs/manual_installs_sync.py",
     }
 )
