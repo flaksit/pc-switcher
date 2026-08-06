@@ -63,7 +63,7 @@ Evidence is symbol names rather than line numbers, because the code moves. A tes
 | `test_apt_*` | `tests/unit/jobs/apt/test_apt_*.py` — one module per `src/pcswitcher/jobs/apt_sync/` module |
 | `test_snap_sync`, `test_flatpak_sync`, `test_manual_deb_sync`, `test_manual_snap_sync`, `test_manual_installs_sync`, `test_unreproducible_jobs`, `test_folder_sync` | `tests/unit/jobs/` |
 | `test_package_sync_core`, `test_package_review`, `test_package_state`, `test_package_items`, `test_block_state_decisions`, `test_review_skip_always`, `test_decision_list`, `test_prompt_navigation`, `test_apt_policy` | `tests/unit/jobs/` |
-| `test_snap_autorefresh_hold`, `test_config_system`, `test_skipped_jobs`, `test_first_sync_scope` | `tests/unit/orchestrator/` |
+| `test_snap_autorefresh_hold`, `test_config_system`, `test_skipped_jobs`, `test_first_sync_scope`, `test_job_outcome_summary` | `tests/unit/orchestrator/` |
 | `test_step_gate`, `test_mutates_audit`, `test_sudoers`, `test_redaction` | `tests/unit/` |
 | `test_package_sync` | `tests/integration/jobs/test_package_sync.py` — the runs no converging run can be: runs that fail, abort, are killed, or have nobody to answer their review |
 | `test_end_to_end_sync` | `tests/integration/test_end_to_end_sync.py` — the happy path, converging one divergence per manager on the way out and the reverse direction on the way back |
@@ -1636,6 +1636,7 @@ Rows H49–H52 assert an absence: the machinery derived from an approved package
 | J16 | A run in which one job was skipped and no job failed | The session is COMPLETED and the exit code is 0 | U | `test_skipped_jobs:TestSkippedJobArm::test_the_orchestrator_records_a_skipped_job_and_runs_the_next_one`; `test_session_status_from_job_results:TestSessionStatusReflectsJobResults::test_skipped_job_result_is_not_a_failure` |
 | J17 | A skipped job's reason | Reaches the run's own report, not only the log | U | `test_skipped_jobs:TestSkippedJobArm::test_the_orchestrator_records_a_skipped_job_and_runs_the_next_one` |
 | J18 | Skipped is distinguished from "answered no": a job the user answered entirely with declines | Reports success (J3), while a job nobody could answer reports skipped (J9) | U | J3 + J9 read together |
+| J190 | The end-of-run block, over a run in which a package job was skipped | One line for that job carrying the status word and the reason it recorded, and a line for every other job the run configured — including the step that installs pc-switcher on the target, whose own result the block is the only place to read | U V | `test_job_outcome_summary:TestTheBlockNamesEveryJob::test_a_skipped_or_failed_line_carries_the_reason_that_job_recorded`, `::test_each_job_gets_one_line_with_its_status`; `test_package_sync:TestARunWithNobodyToAsk::test_a_non_interactive_run_names_every_item_applies_none_and_mirrors_only_what_it_may`; `test_end_to_end_sync:TestEndToEndSync::test_full_sync_pipeline_both_directions` |
 
 ### J.3 Failure and its isolation (articles: PKG-FR-OUTCOME-FAILED, PKG-FR-FAIL-NAMED)
 
@@ -1657,6 +1658,8 @@ Rows H49–H52 assert an absence: the machinery derived from an approved package
 | J32 | A run that continued past a failed job | The session is FAILED and the CLI exits non-zero | U V | `test_job_failure_isolation:TestProbeFailedFailsOnlyItsOwnJob::test_the_session_is_still_reported_failed`; `test_session_status_from_job_results:TestCliExitCodeFromSessionStatus::test_failed_session_exits_non_zero`; `test_package_sync:TestAFailureCostsItsOwnItemAndNothingElse::test_the_item_after_a_failure_and_the_jobs_after_its_job_all_still_land` |
 | J33 | Any failure message a job emits | Names the item, package or file it concerns, and never a role ("the target") | U | `test_machine_naming:TestOutcomeMessages::test_no_outcome_message_names_a_role`; `test_job_failure_isolation:TestProbeFailedFailsOnlyItsOwnJob::test_the_failed_result_carries_the_command_that_did_not_answer` |
 | J34 | A converge command's stderr | Is carried into the failure line and the run's summary | U V | `test_package_sync_core` (`_converge_one` path, asserted per manager); `test_package_sync:TestAFailureCostsItsOwnItemAndNothingElse::test_the_item_after_a_failure_and_the_jobs_after_its_job_all_still_land` |
+| J191 | The end-of-run block, over a run in which two jobs failed and a third converged its own approved work | All three appear in the one block with their own statuses, and the failures are printed once — not again as a separate list | U V | `test_job_outcome_summary:TestTheBlockNamesEveryJob::test_a_skipped_or_failed_line_carries_the_reason_that_job_recorded`; `test_package_sync:TestAFailureCostsItsOwnItemAndNothingElse::test_the_item_after_a_failure_and_the_jobs_after_its_job_all_still_land` |
+| J192 | A failed job's reason quotes a package manager's own output, shaped like Rich markup | It is printed literally: the block renders reasons as text, so `[installed]` neither vanishes nor ends the run after all its work is done | U | `test_job_outcome_summary:TestTheBlockNamesEveryJob::test_a_reason_shaped_like_rich_markup_is_printed_literally` |
 
 ### J.4 The run with no terminal (article: PKG-FR-NO-TERMINAL)
 

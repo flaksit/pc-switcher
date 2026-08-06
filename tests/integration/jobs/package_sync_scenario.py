@@ -106,6 +106,41 @@ def collapse_run_output(text: str) -> str:
     return " ".join(ANSI_ESCAPE_RE.sub("", text).split())
 
 
+# The end-of-run block's header, and one row of it: the indent and glyph
+# `orchestrator._JOB_OUTCOME_MARKS` prints, then the job name, then the status word.
+# Restated here rather than imported so a change to either the glyphs or the status
+# vocabulary fails these tests instead of travelling silently into them.
+JOB_OUTCOME_HEADER = "Job outcomes:"
+JOB_OUTCOME_ROW = re.compile(r"^\s*[✔⏭✖]\s+(\S+)\s+(success|skipped|failed)(?:\s|$)")
+
+
+def job_outcome_statuses(run_output: str) -> dict[str, str]:
+    """Job name -> status word, read off the run's end-of-run `Job outcomes:` block.
+
+    Read from the RAW output rather than through `collapse_run_output`: the block is one
+    row per LINE, and collapsing the whole run to a single line would let a job name meet
+    a status word that belongs to the row below it. For the same reason a reason too long
+    for the terminal, which the grid folds under its own column with no glyph and no job
+    name on the continuation line, simply does not match a row and is skipped.
+
+    A job that ran twice cannot appear twice -- the orchestrator records one `JobResult`
+    per job -- so a flat mapping loses nothing. Returns `{}` when the run printed no
+    block at all, which is itself worth asserting: a run that ends before any job records
+    a result prints none.
+    """
+    statuses: dict[str, str] = {}
+    seen_header = False
+    for raw in ANSI_ESCAPE_RE.sub("", run_output).splitlines():
+        if not seen_header:
+            seen_header = JOB_OUTCOME_HEADER in raw
+            continue
+        if match := JOB_OUTCOME_ROW.match(raw):
+            statuses[match.group(1)] = match.group(2)
+        elif statuses and not raw.strip():
+            break
+    return statuses
+
+
 def parse_dpkg_installed(dpkg_query_output: str) -> set[str]:
     """Parse `dpkg-query --show --showformat='${Package}\\t${Status}\\n'` into fully-installed package names.
 

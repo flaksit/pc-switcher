@@ -34,6 +34,7 @@ Test VM Requirements:
 from __future__ import annotations
 
 import pytest
+import yaml
 
 from pcswitcher.executor import BashLoginRemoteExecutor
 from tests.integration.conftest import write_pcswitcher_config
@@ -62,6 +63,7 @@ sync_jobs:
   flatpak_sync: true
   manual_deb_sync: true
   manual_snap_sync: true
+  manual_flatpak_sync: true
   manual_installs_sync: true
   folder_sync: true
 disk_space_monitor:
@@ -83,6 +85,11 @@ folder_sync:
       enabled: true
       filter_file: ~/.config/pc-switcher/home.filter
 """
+
+#: The jobs the config above enables, read back out of it rather than restated: the outcome
+#: block must name every one, and a job added to the config with no matching entry here
+#: would leave that claim quietly weaker instead of failing.
+_PIPELINE_JOBS = tuple(name for name, enabled in yaml.safe_load(_FULL_PIPELINE_CONFIG)["sync_jobs"].items() if enabled)
 
 
 async def _assert_job_integration(
@@ -124,7 +131,7 @@ class TestEndToEndSync:
         pc2_executor: BashLoginRemoteExecutor,
     ) -> None:
         """J1, K9, J116, B1, E21, E67, K10, E55, K11, F72, G67, H30, K12, K16, N8, J145, A54,
-        N9, F103 — CORE-US-JOB-ARCH-AS1, the full pipeline end-to-end (ADR-015/016), and
+        N9, F103, J190 — CORE-US-JOB-ARCH-AS1, the full pipeline end-to-end (ADR-015/016), and
         ADR-020 D-37 in both flatpak directions plus `PKG-FR-FLATPAK-FILTER`'s two halves.
 
         One scenario, one seed, two syncs:
@@ -196,6 +203,26 @@ class TestEndToEndSync:
 
             # 1a. Job integration via interface: log entries, snapshots on both, config synced.
             await _assert_job_integration(pc1_executor, pc2_executor)
+
+            # 1a'. The end-of-run outcome block (`CORE-FR-SUMMARY`). Read here rather than in
+            # a run of its own: this is the only test whose config enables the whole pipeline
+            # AND lets `install_on_target` run, so it is the only place that step's own
+            # JobResult can be anything but skipped.
+            outcomes = package_sync_scenario.job_outcome_statuses(sync_ab.stdout + sync_ab.stderr)
+            assert set(_PIPELINE_JOBS) <= set(outcomes), (
+                f"the outcome block names {sorted(outcomes)}, missing "
+                f"{sorted(set(_PIPELINE_JOBS) - set(outcomes))} of the jobs this run configured"
+            )
+            assert outcomes.get("install_on_target") == "success", (
+                f"install_on_target is {outcomes.get('install_on_target')!r} in the outcome block; the step that "
+                f"puts pc-switcher on the target records a JobResult of its own, not only when it is skipped"
+            )
+            # Which jobs report `success` rather than `skipped` depends on what this run's
+            # seeding left each manager to do, so only the failures are pinned here — a
+            # converging pipeline must show none.
+            assert not [job for job, status in outcomes.items() if status == "failed"], (
+                f"the outcome block reports failures: {outcomes}"
+            )
 
             # 1b. folder_sync content + metadata: target manifests must equal source manifests exactly.
             await folder_sync_scenario.assert_manifests_match(pc2_executor, tree, src_manifests)

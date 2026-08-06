@@ -160,6 +160,7 @@ from tests.integration.jobs.package_sync_scenario import (
     install_from_a_repo_the_target_lacks,
     install_from_the_vendor_repository,
     installed_base_snap,
+    job_outcome_statuses,
     machine_utc_now,
     no_candidate_item_id,
     nonblank_lines,
@@ -410,7 +411,7 @@ class TestARunWithNobodyToAsk:
         reset_pcswitcher_state: None,
     ) -> None:
         """H162, J9, J12, J14, J37, J44, J49, J103, A30, J98, G28, E113, E115, K88, E49, F90,
-        F93 — and ADR-020 D-41's `ORIGIN_MISMATCH` at VM level.
+        F93, J190 — and ADR-020 D-41's `ORIGIN_MISMATCH` at VM level.
 
         What the run must SAY and must not APPLY, over four seeded divergences:
 
@@ -733,6 +734,19 @@ class TestARunWithNobodyToAsk:
                 )
             assert "Job apt_sync skipped: non-interactive run left every apt review item undecided" in collapsed, (
                 f"the run did not report apt_sync as skipped (PKG-FR-NO-TERMINAL).\n{combined_output}"
+            )
+            # The same two skips again, read off the end-of-run block rather than the log
+            # stream (`CORE-FR-SUMMARY`): the log line above says apt_sync was skipped when
+            # it happened, the block says so in the summary a user reads at the end, and
+            # only the block carries `install_on_target` — which every run in this module
+            # skips, and which recorded no JobResult at all before it did.
+            outcomes = job_outcome_statuses(combined_output)
+            assert outcomes.get("apt_sync") == "skipped", (
+                f"the outcome block reports apt_sync as {outcomes.get('apt_sync')!r}.\n{combined_output}"
+            )
+            assert outcomes.get("install_on_target") == "skipped", (
+                f"the outcome block reports install_on_target as {outcomes.get('install_on_target')!r}; the step "
+                f"records a JobResult whether or not it runs.\n{combined_output}"
             )
 
             # The group panel's own title is the witness that the class-3 package reached a
@@ -1378,7 +1392,7 @@ class TestAFailureCostsItsOwnItemAndNothingElse:
         pc2_with_pcswitcher: BashLoginRemoteExecutor,
         reset_pcswitcher_state: None,
     ) -> None:
-        """J20, J26, J34, H12, K20, N22, E53 — All four package jobs enabled, and two
+        """J20, J26, J34, H12, K20, N22, E53, J191 — All four package jobs enabled, and two
         deliberate defects among them.
 
         `manual_installs_sync` runs first, holding three approved snippets: two that
@@ -1530,6 +1544,24 @@ class TestAFailureCostsItsOwnItemAndNothingElse:
             )
             assert "1 snap item(s) failed" in collapsed, (
                 f"the run did not report exactly one failed snap item.\n{sync_result.stdout}\n{sync_result.stderr}"
+            )
+
+            # The end-of-run block over a run that ended three ways at once
+            # (`CORE-FR-SUMMARY`): the two failed jobs and, in the same block, the job whose
+            # approved work landed anyway. A block that named only the failures would read as
+            # "the run failed" and lose exactly what D-27 promises.
+            outcomes = job_outcome_statuses(sync_result.stdout + sync_result.stderr)
+            assert (outcomes.get("manual_installs_sync"), outcomes.get("snap_sync"), outcomes.get("apt_sync")) == (
+                "failed",
+                "failed",
+                "success",
+            ), (
+                f"the outcome block does not report the two failed jobs beside the one that succeeded: {outcomes}.\n"
+                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
+            )
+            assert collapsed.count("Job outcomes:") == 1, (
+                f"the run printed the outcome block {collapsed.count('Job outcomes:')} times; the CLI must no longer "
+                f"print a second list of failures.\n{sync_result.stdout}\n{sync_result.stderr}"
             )
 
             after_lines = nonblank_lines(
