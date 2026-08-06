@@ -1724,6 +1724,129 @@ class TestTheESMAttachmentGateOnVMs:
             await cleanup_in_parallel(clean_the_source(), clean_the_target())
 
 
+class TestTheCommandLineAnswersOneDirectionOfTheReview:
+    """`PKG-FR-APPLY-FLAGS` and its three companions, over a run with no terminal at all.
+
+    The flags are the only way to answer a package review without a person, and every unit
+    test of them asserts against the `ReviewPolicy` object. What only a real run settles is
+    that the answer reaches real package managers on a real machine with no TTY: the policy
+    is consulted BEFORE the automation-environment hook and before the TTY test, so a run
+    driven by `PACKAGE_REVIEW_AUTOMATION_ENV` — which is how every other test in this module
+    answers a review — would exercise the hook and say nothing about the flags.
+
+    Two divergences in opposite directions, so one flag can be seen answering one of them
+    and leaving the other exactly as a run with nobody to ask would. Both syncs are
+    genuinely non-interactive: no pty, no automation variable.
+    """
+
+    async def test_the_install_flag_converges_installs_leaves_removals_and_records_no_mark(  # noqa: PLR0913, PLR0917 - pytest fixtures, injected by name
+        self,
+        pc1_executor: BashLoginRemoteExecutor,
+        pc2_executor: BashLoginRemoteExecutor,
+        apt_subjects: AptSubjects,
+        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
+        pc2_with_pcswitcher: BashLoginRemoteExecutor,
+        reset_pcswitcher_state: None,
+    ) -> None:
+        """H219, H220, H234, H239, H221, H222 — one flag answers one direction on a machine
+        with no terminal, then both flags answer both.
+
+        Run 1 passes `--apply-package-installs` only. The install lands on pc2 and the
+        removal does not: it is named as declined for this run, which is what the ordinary
+        no-terminal path does with a group nobody answered — so the flag's scope is read off
+        pc2's own apt rather than off the policy object. Neither machine ends the run with a
+        decision file, which is the flag never answering permanently: an unattended run may
+        not declare an item specific to a machine.
+
+        `apt_sync` reports success rather than skipped, read off the end-of-run block. That
+        distinction is the whole of `PKG-FR-APPLY-FLAGS-OUTCOME` and exists nowhere else: a
+        no-terminal run that converged what it was told to is not the same as one that could
+        not be asked.
+
+        Run 2 adds `--apply-package-removals` over the pair run 1 left, and pc2 loses the
+        removal subject. `--allow-out-of-order` bypasses the unrelated consecutive-push gate
+        (ADR-015).
+        """
+        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
+
+        install_candidate = apt_subjects.install_direction[0]
+        removal_candidate = apt_subjects.removal_direction
+
+        async def pc2_installed() -> set[str]:
+            result = await pc2_executor.run_command(
+                "dpkg-query --show --showformat='${Package}\\t${Status}\\n'", login_shell=False, timeout=20.0
+            )
+            return parse_dpkg_installed(result.stdout)
+
+        async def sync_with(flags: str) -> CommandResult:
+            """One genuinely non-interactive run: no pty on the exec, no automation variable."""
+            return await pc1_executor.run_command(
+                f"{SKIP_INSTALL_ON_TARGET} pc-switcher sync pc2 --yes {flags}",
+                timeout=300.0,
+                login_shell=True,
+            )
+
+        # One divergence in each direction, one chain per machine, run at once.
+        async def seed_the_source() -> None:
+            await ensure_installed_and_manual(pc1_executor, install_candidate)
+            await ensure_absent(pc1_executor, removal_candidate)
+
+        async def seed_the_target() -> None:
+            await ensure_absent(pc2_executor, install_candidate)
+            await ensure_installed_and_manual(pc2_executor, removal_candidate)
+
+        _ = await finish_both(seed_the_source(), seed_the_target())
+        before = await pc2_installed()
+        assert install_candidate not in before and removal_candidate in before, (
+            f"pc2 does not hold the two divergences this scenario needs ({install_candidate} absent, "
+            f"{removal_candidate} present), so neither flag has anything to answer"
+        )
+
+        await write_apt_sync_config(pc1_executor)
+        first = await sync_with("--allow-first-sync --apply-package-installs")
+        assert first.success, f"the flag-answered run failed.\nstdout: {first.stdout}\nstderr: {first.stderr}"
+
+        after_first, pc1_marked, pc2_marked = await asyncio.gather(
+            pc2_installed(), decision_file_exists(pc1_executor, "apt"), decision_file_exists(pc2_executor, "apt")
+        )
+        assert install_candidate in after_first, (
+            f"{install_candidate} did not reach pc2 under --apply-package-installs, so the flag answered nothing on "
+            f"a machine with no terminal.\nstdout: {first.stdout}\nstderr: {first.stderr}"
+        )
+        assert removal_candidate in after_first, (
+            f"{removal_candidate} was removed from pc2 by a run carrying only --apply-package-installs: one flag "
+            f"answers one direction.\nstdout: {first.stdout}\nstderr: {first.stderr}"
+        )
+        collapsed = f"{collapse_run_output(first.stdout + first.stderr)} "
+        assert f"{UNASKED_ITEM_MARKER}{removal_candidate} " in collapsed, (
+            f"{removal_candidate} was neither applied nor named as declined, so the group the flag does not answer "
+            f"did not take the ordinary no-terminal path.\nstdout: {first.stdout}\nstderr: {first.stderr}"
+        )
+        assert not pc1_marked and not pc2_marked, (
+            f"a flag-answered run left a decision file behind (pc1: {pc1_marked}, pc2: {pc2_marked}); no flag may "
+            f"record an item as specific to a machine"
+        )
+        outcomes = job_outcome_statuses(first.stdout + first.stderr)
+        assert outcomes.get("apt_sync") == "success", (
+            f"apt_sync is {outcomes.get('apt_sync')!r} in the outcome block, not success: a no-terminal run whose "
+            f"review the command line answered converged something, so skipped would misreport it. {outcomes}\n"
+            f"stdout: {first.stdout}\nstderr: {first.stderr}"
+        )
+
+        second = await sync_with(
+            "--allow-first-sync --allow-out-of-order --apply-package-installs --apply-package-removals"
+        )
+        assert second.success, f"the run carrying both flags failed.\nstdout: {second.stdout}\nstderr: {second.stderr}"
+        after_second = await pc2_installed()
+        assert removal_candidate not in after_second, (
+            f"{removal_candidate} is still on pc2 after a run carrying --apply-package-removals, so the second "
+            f"direction went unanswered.\nstdout: {second.stdout}\nstderr: {second.stderr}"
+        )
+        assert not await decision_file_exists(pc2_executor, "apt"), (
+            "the run carrying both flags left a decision file on pc2"
+        )
+
+
 class TestAStrayAptHoldEndsTheRun:
     """`PKG-FR-HOLD-WITHOUT-PACKAGE` against real `apt-mark` state: a hold naming a package
     its machine does not have ends the run before anything is written.
