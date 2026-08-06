@@ -1,0 +1,17 @@
+<task-notification>
+<task-id>b9ctaz1ua</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/d48a43df-00d2-417c-8526-fece20d0ab06/tasks/b9ctaz1ua.output</output-file>
+<status>completed</status>
+<summary>Background command "Watch the integration run to completion" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bzowyprnu</task-id>
+<tool-use-id>toolu_011jZMGkgokBzrJwp2ovhiAB</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/d48a43df-00d2-417c-8526-fece20d0ab06/tasks/bzowyprnu.output</output-file>
+<status>completed</status>
+<summary>Background command "Continue waiting for the run" completed (exit code 0)</summary>
+</task-notification>

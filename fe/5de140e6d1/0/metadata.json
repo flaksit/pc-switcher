@@ -1,0 +1,43 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "fe5de140e6d1",
+  "session_id": "d48a43df-00d2-417c-8526-fece20d0ab06",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-06T14:38:52.608436943Z",
+  "branch": "worktree-integration-coverage-since-670c0438",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    "tests/unit/jobs/test_package_state.py",
+    "tests/unit/jobs/test_manual_snap_sync.py",
+    "tests/unit/jobs/test_manual_deb_sync.py",
+    "docs/planning/package-sync-conformance-criteria.md",
+    "docs/planning/package-sync-user-requirements.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "71bff2cfd1e3",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 743,
+    "cache_creation_tokens": 1573895,
+    "cache_read_tokens": 135704803,
+    "output_tokens": 236255,
+    "api_call_count": 375
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-06T14:38:52.427747154Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 2637,
+    "human_modified": 35,
+    "human_removed": 0,
+    "total_committed": 2637,
+    "total_lines_changed": 3230,
+    "agent_percentage": 0,
+    "metric_version": 2
+  }
+}
