@@ -3106,9 +3106,9 @@ async def restore_after_the_pending_writes(
 # cleanup cannot be mistaken for another test's marker.
 VERSION_SUBJECT_PATH = "/opt/pcswitcher-it-versioned"
 
-# What the subject's installed-version snippet reads. A plain file, so seeding a version is
-# one `tee` and reading one back needs no parser.
-VERSION_SUBJECT_FILE = f"{VERSION_SUBJECT_PATH}/version"
+# The version itself lives in `<path>/version`, derived at each use site rather than named
+# once here: every helper takes the path as a parameter, so a constant over the default
+# would only be right for the default.
 
 # Where this test's installed-version snippet records that it RAN, per machine. A real
 # version snippet must be read-only (`PKG-FR-VERSION-SNIPPET`) and this one deliberately is
