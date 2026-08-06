@@ -1873,6 +1873,206 @@ SNAP_HOLD_DURATION_SLACK = timedelta(minutes=15)
 
 
 # ---------------------------------------------------------------------------------
+# The apt half of the sync window: the system's own update timers, stopped for the run and
+# restored by a transient systemd timer that outlives the process.
+#
+# Every name and duration below is RESTATED rather than imported from `orchestrator`, on the
+# `SNAP_HOLD_EXPECTED_DURATION` precedent: what these tests assert is that a real systemd
+# holds these exact units under this exact unit name, which a test agreeing with whatever
+# the shipped constant currently says would not settle.
+# ---------------------------------------------------------------------------------
+
+APT_TIMERS = ("apt-daily.timer", "apt-daily-upgrade.timer")
+#: The services those timers trigger. The VM baseline masks BOTH, which is the interlock
+#: `arm_apt_timers` refuses to proceed without: a masked service cannot be queued, so a
+#: timer armed for a test window can fire and still run no apt.
+APT_TIMER_SERVICES = ("apt-daily.service", "apt-daily-upgrade.service")
+APT_TIMER_RESTORE_UNIT = "pc-switcher-apt-timers"
+APT_TIMER_EXPECTED_DURATION = timedelta(hours=6)
+APT_TIMER_DURATION_SLACK = timedelta(minutes=15)
+
+#: Where the test's own drop-ins go. `/run` is tmpfs, so one left behind by a failed cleanup
+#: dies at the next boot -- and the VM reset reboots before every session.
+APT_TIMER_DROPIN_DIR = "/run/systemd/system"
+APT_TIMER_DROPIN_NAME = "zz-pcswitcher-it.conf"
+
+
+def parse_systemctl_show_blocks(output: str) -> dict[str, dict[str, str]]:
+    """Parse `systemctl show`'s `Key=Value` blocks into `{unit id: {key: value}}`.
+
+    `systemctl show` emits one blank-line-separated block per unit ASKED, in order and
+    including units that do not exist. Written independently of
+    `orchestrator._parse_systemctl_show`, which is private to that module and is the thing
+    under test here: two parsers that agree are evidence, one parser checking itself is not.
+
+    A block with no `Id` is keyed by nothing and dropped -- systemd always emits `Id`, so
+    its absence means the block is not a unit.
+    """
+    blocks: dict[str, dict[str, str]] = {}
+    for chunk in output.split("\n\n"):
+        fields: dict[str, str] = {}
+        for line in chunk.splitlines():
+            key, separator, value = line.partition("=")
+            if separator:
+                fields[key.strip()] = value.strip()
+        if unit_id := fields.get("Id"):
+            blocks[unit_id] = fields
+    return blocks
+
+
+async def apt_timer_states(executor: BashLoginRemoteExecutor) -> dict[str, tuple[str, str]]:
+    """`{unit: (LoadState, ActiveState)}` for both apt timers, in one read.
+
+    The same question the orchestrator's own capture asks, so what a test asserts here is
+    what the run would have seen.
+    """
+    result = await executor.run_command(
+        f"systemctl show --property=Id --property=LoadState --property=ActiveState {' '.join(APT_TIMERS)}",
+        login_shell=False,
+        timeout=20.0,
+    )
+    blocks = parse_systemctl_show_blocks(result.stdout)
+    return {unit: (fields.get("LoadState", ""), fields.get("ActiveState", "")) for unit, fields in blocks.items()}
+
+
+async def pending_apt_timer_restore(executor: BashLoginRemoteExecutor) -> datetime | None:
+    """When the transient restore timer will next fire on `executor`, or `None` if the
+    machine has no such unit loaded.
+
+    `LoadState=not-found` is exactly the discriminator the product uses to decide whether a
+    dead run left a promise behind, so it is what "there is no pending restore" means here
+    too. `NextElapseUSecRealtime` is microseconds since the epoch, read as an aware UTC
+    instant -- and compared, by every caller, against `machine_utc_now(executor)` rather
+    than this runner's clock: the deadline was computed on the machine that must honour it.
+    """
+    result = await executor.run_command(
+        f"systemctl show --property=Id --property=LoadState --property=NextElapseUSecRealtime "
+        f"{APT_TIMER_RESTORE_UNIT}.timer",
+        login_shell=False,
+        timeout=20.0,
+    )
+    fields = parse_systemctl_show_blocks(result.stdout).get(f"{APT_TIMER_RESTORE_UNIT}.timer", {})
+    if fields.get("LoadState") != "loaded":
+        return None
+    elapse = fields.get("NextElapseUSecRealtime", "")
+    assert elapse.isdigit(), (
+        f"{APT_TIMER_RESTORE_UNIT}.timer is loaded on this machine but reports no numeric next elapse "
+        f"({elapse!r}), so there is no deadline to hold it to.\n{result.stdout}"
+    )
+    return datetime.fromtimestamp(int(elapse) / 1_000_000, tz=UTC)
+
+
+@dataclass(frozen=True)
+class AptTimerBaseline:
+    """Each apt timer's `LoadState` and `UnitFileState` as `arm_apt_timers` found them, so
+    the restore puts back exactly what was there rather than a guess at it.
+    """
+
+    unit_file_states: Mapping[str, str]
+    masked: tuple[str, ...]
+
+
+async def arm_apt_timers(executor: BashLoginRemoteExecutor) -> AptTimerBaseline:
+    """Make both apt timers loaded and active on `executor` for the duration of one test,
+    and return what to put back.
+
+    The VM baseline disables and MASKS the timers and their services
+    (`vm-test-fixtures.sh`), because a background apt taking the dpkg frontend lock breaks
+    whichever test pytest-randomly schedules into that window. The orchestrator only ever
+    touches timers it finds loaded AND active, so on an unmodified VM the whole feature is
+    inert and nothing about it can be observed.
+
+    Three guards keep an armed timer from running actual apt:
+
+    1. The services stay masked -- asserted here, not assumed. A trigger that fires cannot
+       queue a masked unit; systemd logs it and the timer stays waiting. If a future
+       baseline stops masking them, this refuses to arm rather than turning a test window
+       into a real `apt-daily-upgrade`.
+    2. A `Persistent=false` drop-in, so activating a timer whose window elapsed long ago
+       does not fire it immediately to catch up.
+    3. `apt-daily`'s own `OnCalendar` window with its randomised delay, which a test window
+       measured in seconds is very unlikely to fall inside.
+    """
+    services = " ".join(APT_TIMER_SERVICES)
+    interlock = await executor.run_command(
+        f"systemctl show --property=Id --property=LoadState {services}", login_shell=False, timeout=20.0
+    )
+    service_states = {
+        unit: fields.get("LoadState", "") for unit, fields in parse_systemctl_show_blocks(interlock.stdout).items()
+    }
+    unmasked = sorted(unit for unit, state in service_states.items() if state != "masked")
+    assert not unmasked, (
+        f"refusing to arm the apt timers: {unmasked} is not masked on this machine, so a timer this test starts "
+        f"could queue a real apt run and take the dpkg lock from whatever else is running. Re-mask it, or update "
+        f"tests/integration/scripts/internal/vm-test-fixtures.sh if the baseline changed on purpose.\n"
+        f"{interlock.stdout}"
+    )
+
+    timers = " ".join(APT_TIMERS)
+    before = await executor.run_command(
+        f"systemctl show --property=Id --property=LoadState --property=UnitFileState {timers}",
+        login_shell=False,
+        timeout=20.0,
+    )
+    blocks = parse_systemctl_show_blocks(before.stdout)
+    baseline = AptTimerBaseline(
+        unit_file_states={unit: fields.get("UnitFileState", "") for unit, fields in blocks.items()},
+        masked=tuple(unit for unit, fields in blocks.items() if fields.get("LoadState") == "masked"),
+    )
+
+    dropins = " && ".join(
+        f"sudo mkdir --parents {shlex.quote(f'{APT_TIMER_DROPIN_DIR}/{unit}.d')} && "
+        f"printf '[Timer]\\nPersistent=false\\n' | sudo tee "
+        f"{shlex.quote(f'{APT_TIMER_DROPIN_DIR}/{unit}.d/{APT_TIMER_DROPIN_NAME}')} > /dev/null"
+        for unit in APT_TIMERS
+    )
+    armed = await executor.run_command(
+        f"sudo systemctl unmask {timers} && {dropins} && sudo systemctl daemon-reload"
+        f" && sudo systemctl start {timers}",
+        login_shell=False,
+        timeout=60.0,
+    )
+    assert armed.success, f"could not arm the apt timers on this machine: {armed.stderr}"
+
+    states = await apt_timer_states(executor)
+    inactive = sorted(unit for unit, (_load, active) in states.items() if active != "active")
+    assert not inactive, f"{inactive} did not come up active after arming, so there is no suspension to observe"
+    return baseline
+
+
+async def restore_apt_timer_mask(executor: BashLoginRemoteExecutor, prior: AptTimerBaseline) -> None:
+    """Put `executor`'s apt timers back exactly as `arm_apt_timers` found them.
+
+    Stop BEFORE masking: masking an active unit leaves it running, which would hand the
+    rest of the session an armed timer wearing a mask.
+    """
+    steps = [f"sudo systemctl stop {' '.join(APT_TIMERS)} || true"]
+    if prior.masked:
+        steps.append(f"sudo systemctl mask {' '.join(prior.masked)} || true")
+    steps += [
+        f"sudo rm --recursive --force {shlex.quote(f'{APT_TIMER_DROPIN_DIR}/{unit}.d/{APT_TIMER_DROPIN_NAME}')}"
+        for unit in APT_TIMERS
+    ]
+    steps.append("sudo systemctl daemon-reload")
+    result = await executor.run_command("; ".join(steps), login_shell=False, timeout=60.0)
+    if not result.success:
+        print(f"[cleanup] failed to restore the apt timers' mask: {result.stderr}")
+
+
+async def cancel_pending_apt_timer_restore(executor: BashLoginRemoteExecutor) -> None:
+    """Drop the transient restore unit a killed run left behind, so it cannot fire into a
+    later test in this session. Best-effort: a machine that never had one is not an error.
+    """
+    result = await executor.run_command(
+        f"sudo systemctl stop {APT_TIMER_RESTORE_UNIT}.timer {APT_TIMER_RESTORE_UNIT}.service || true",
+        login_shell=False,
+        timeout=30.0,
+    )
+    if not result.success:
+        print(f"[cleanup] failed to cancel {APT_TIMER_RESTORE_UNIT}: {result.stderr}")
+
+
+# ---------------------------------------------------------------------------------
 # The whole happy path, as one seeded divergence per manager and the assertions that read
 # it back. Three modules drive it: `test_dry_run.py` rehearses it, `test_end_to_end_sync.py`
 # converges it and then converges the reverse direction over the same pair. Keeping the

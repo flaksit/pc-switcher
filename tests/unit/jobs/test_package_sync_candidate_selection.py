@@ -19,6 +19,7 @@ from tests.integration.jobs.package_sync_scenario import (
     job_outcome_statuses,
     nonblank_lines,
     parse_dpkg_installed,
+    parse_systemctl_show_blocks,
 )
 
 
@@ -102,3 +103,37 @@ class TestJobOutcomeStatuses:
 
     def test_a_run_that_printed_no_block_yields_nothing(self) -> None:
         assert job_outcome_statuses("sync complete\n") == {}
+
+
+class TestParseSystemctlShowBlocks:
+    """`systemctl show` emits one blank-line-separated block per unit asked, in order."""
+
+    def test_each_unit_becomes_its_own_block(self) -> None:
+        output = (
+            "Id=apt-daily.timer\nLoadState=loaded\nActiveState=active\n"
+            "\n"
+            "Id=apt-daily-upgrade.timer\nLoadState=masked\nActiveState=inactive\n"
+        )
+        assert parse_systemctl_show_blocks(output) == {
+            "apt-daily.timer": {"Id": "apt-daily.timer", "LoadState": "loaded", "ActiveState": "active"},
+            "apt-daily-upgrade.timer": {
+                "Id": "apt-daily-upgrade.timer",
+                "LoadState": "masked",
+                "ActiveState": "inactive",
+            },
+        }
+
+    def test_a_unit_that_does_not_exist_still_gets_a_block(self) -> None:
+        """systemd answers for a unit it has never heard of, which is how the product tells
+        a cancelled restore timer from a pending one.
+        """
+        output = "Id=pc-switcher-apt-timers.timer\nLoadState=not-found\n"
+        blocks = parse_systemctl_show_blocks(output)
+        assert blocks["pc-switcher-apt-timers.timer"]["LoadState"] == "not-found"
+
+    def test_a_value_containing_an_equals_sign_is_kept_whole(self) -> None:
+        output = "Id=x.timer\nDescription=restart timers after 6h\nExecStart=/bin/sh -c a=b\n"
+        assert parse_systemctl_show_blocks(output)["x.timer"]["ExecStart"] == "/bin/sh -c a=b"
+
+    def test_a_block_with_no_id_is_dropped(self) -> None:
+        assert parse_systemctl_show_blocks("LoadState=loaded\n") == {}

@@ -106,6 +106,10 @@ from tests.integration.jobs.package_sync_scenario import (
     APT_KEYRINGS_DIR,
     APT_PREFERENCES_DIR,
     APT_SOURCES_DIR,
+    APT_TIMER_DURATION_SLACK,
+    APT_TIMER_EXPECTED_DURATION,
+    APT_TIMER_RESTORE_UNIT,
+    APT_TIMERS,
     CONTINUE_TEST_MARKER_FAIL,
     CONTINUE_TEST_MARKER_INSTALL_FIRST,
     CONTINUE_TEST_MARKER_INSTALL_SECOND,
@@ -128,13 +132,17 @@ from tests.integration.jobs.package_sync_scenario import (
     VENDOR_PACKAGE,
     VENDOR_REPO_URI,
     AptSubjects,
+    AptTimerBaseline,
     a_name_apt_knows_the_machine_does_not_have,
     alternate_snap_revision,
     apt_get_update,
+    apt_timer_states,
     apt_update_lines_naming,
+    arm_apt_timers,
     author_snippet,
     automation_env_assignment,
     automation_env_assignment_multi,
+    cancel_pending_apt_timer_restore,
     capture_machine_package_state,
     capture_system_refresh_hold,
     cleanup_in_parallel,
@@ -167,12 +175,14 @@ from tests.integration.jobs.package_sync_scenario import (
     parse_dpkg_installed,
     parse_rfc3339_utc,
     parse_snap_list_names_revisions,
+    pending_apt_timer_restore,
     publish_a_cascading_pair,
     publish_a_rival_candidate,
     put_paths_back,
     remove_sideloaded_snap,
     remove_the_rival_candidate,
     remove_unowned_marker,
+    restore_apt_timer_mask,
     restore_auto_marked_package,
     restore_flatpak_target_baseline,
     restore_system_refresh_hold,
@@ -1798,17 +1808,33 @@ class TestAStrayAptHoldEndsTheRun:
 
 
 class TestTheSyncWindowHoldIsTimed:
-    """`PKG-FR-SNAP-REFRESH-PAUSE`'s self-healing half: the suspension a run writes is a
-    timed value on each machine's own clock, so a run that dies without cleaning up leaves
-    a hold that lapses rather than one that never does.
+    """Both self-healing suspensions a sync window engages, over one killed run and the run
+    that comes after it.
 
-    Only a real run can show it, and only a run that never finishes: the value is written by
-    the orchestrator and put back by its own cleanup, so the only moment it exists is inside
-    the sync window. No completed run can carry this claim, which is why it keeps a sync of
-    its own.
+    `PKG-FR-SNAP-REFRESH-PAUSE`: the value snapd is left holding is a timed instant on each
+    machine's own clock, so a run that dies without cleaning up leaves a hold that lapses
+    rather than one that never does.
+
+    `PKG-FR-APT-TIMER-PAUSE`: the same shape with a different mechanism, because
+    `systemctl stop` carries no expiry of its own. A run stops both apt timers and hands
+    each machine a TRANSIENT systemd timer that starts them again 6h later; a run that dies
+    leaves that promise loaded, and the NEXT run settles it instead of letting it fire
+    part-way through a later sync.
+
+    Only a real run can show either, and only a run that never finishes: both values exist
+    solely inside the sync window, and both are put back by the cleanup a SIGKILL denies.
+    No completed run can carry these claims, which is why they keep a sync of their own —
+    and why they share it, since it is the same killed run.
+
+    The apt timers need arming first. The VM baseline masks them and their services so a
+    background apt cannot take the dpkg lock from another test; the orchestrator only
+    touches timers it finds loaded and active, so on an unmodified VM this whole feature is
+    inert. `arm_apt_timers` unmasks the TIMERS only, leaving the masked services as the
+    interlock that keeps an armed timer from running actual apt, and `restore_apt_timer_mask`
+    puts the mask back in the `finally`.
     """
 
-    async def test_a_killed_run_leaves_a_timed_hold_on_each_machines_own_clock(
+    async def test_a_killed_run_leaves_a_timed_hold_on_each_machines_own_clock(  # noqa: PLR0915 - one killed run, two suspensions to read off both machines
         self,
         pc1_executor: BashLoginRemoteExecutor,
         pc2_executor: BashLoginRemoteExecutor,
@@ -1816,8 +1842,24 @@ class TestTheSyncWindowHoldIsTimed:
         pc2_with_pcswitcher: BashLoginRemoteExecutor,
         reset_pcswitcher_state: None,
     ) -> None:
-        """E88, E89 — A sync is killed inside its own window, and what snapd is left holding on
-        BOTH machines is an instant in that machine's own near future — never `forever`.
+        """E88, E89, K94, K103, K121, K123 — A sync is killed inside its own window; what
+        snapd is left holding on BOTH machines is an instant in that machine's own near
+        future, never `forever`, and both machines' apt timers are left stopped with a
+        transient unit due to start them again inside 6h. A second run then settles that
+        promise: it finds the timers active again and the transient unit gone.
+
+        `apt_sync` is enabled LAST in the config so that job order — which is config order —
+        puts it after the `dummy_success` the kill lands inside. It therefore never
+        executes, and does not need to: the suspension is gated on the config key alone and
+        happens before the first job runs. What it costs is two `systemctl` calls and one
+        `systemd-run` per machine.
+
+        The second run is inside this test body rather than beside it because the dead run's
+        leftovers ARE its precondition — the module's "state is converged to, not restored"
+        convention taken literally. It is non-interactive with no automation env, so
+        `apt_sync` reads both machines and raises `JobSkipped` without converging anything;
+        the timers coming back is therefore attributable to the settle path alone, since
+        this run's own capture found them already stopped and so stopped nothing itself.
 
         Killed with SIGKILL so no cleanup path can run: an orchestrator that restored the
         prior value would leave nothing to read, and a run that exited normally would say
@@ -1839,8 +1881,11 @@ class TestTheSyncWindowHoldIsTimed:
             capture_system_refresh_hold(pc1_executor), capture_system_refresh_hold(pc2_executor)
         )
         run_log = f"/var/tmp/pcswitcher-it-killed-sync-{uuid4().hex[:12]}.log"
+        pc1_timers: AptTimerBaseline | None = None
+        pc2_timers: AptTimerBaseline | None = None
 
         try:
+            pc1_timers, pc2_timers = await asyncio.gather(arm_apt_timers(pc1_executor), arm_apt_timers(pc2_executor))
             _ = await asyncio.gather(
                 restore_system_refresh_hold(pc1_executor, None), restore_system_refresh_hold(pc2_executor, None)
             )
@@ -1850,7 +1895,9 @@ class TestTheSyncWindowHoldIsTimed:
             assert cleared_source is None, "pc1 still holds a refresh.hold"
             assert cleared_target is None, "pc2 still holds a refresh.hold"
 
-            await write_package_sync_config(pc1_executor, snap_sync=True, dummy_success=True)
+            # `apt_sync` last: the kill lands inside `dummy_success`, so the job never runs
+            # while its suspension — taken before the first job — still happens.
+            await write_package_sync_config(pc1_executor, snap_sync=True, dummy_success=True, apt_sync=True)
 
             started = await pc1_executor.run_command(
                 f"{SKIP_INSTALL_ON_TARGET} setsid nohup"
@@ -1862,21 +1909,35 @@ class TestTheSyncWindowHoldIsTimed:
 
             engaged_source: str | None = None
             engaged_target: str | None = None
+            stopped_source: dict[str, tuple[str, str]] = {}
+            stopped_target: dict[str, tuple[str, str]] = {}
+
+            def all_stopped(states: dict[str, tuple[str, str]]) -> bool:
+                """Both apt timers loaded and no longer running on one machine."""
+                return len(states) == len(APT_TIMERS) and all(active != "active" for _load, active in states.values())
+
             deadline = asyncio.get_running_loop().time() + HOLD_POLL_TIMEOUT_SECONDS
             while asyncio.get_running_loop().time() < deadline:
-                # The one pair of commands this module issues while a sync is running: both
-                # are `snap get`, which reads and writes nothing, so neither can disturb the
-                # run they are watching.
-                engaged_source, engaged_target = await asyncio.gather(
-                    capture_system_refresh_hold(pc1_executor), capture_system_refresh_hold(pc2_executor)
+                # The only commands this module issues while a sync is running: `snap get`
+                # and `systemctl show`, which read and write nothing, so neither can disturb
+                # the run they are watching.
+                engaged_source, engaged_target, stopped_source, stopped_target = await asyncio.gather(
+                    capture_system_refresh_hold(pc1_executor),
+                    capture_system_refresh_hold(pc2_executor),
+                    apt_timer_states(pc1_executor),
+                    apt_timer_states(pc2_executor),
                 )
-                if engaged_source and engaged_target:
+                if engaged_source and engaged_target and all_stopped(stopped_source) and all_stopped(stopped_target):
                     break
                 await asyncio.sleep(HOLD_POLL_INTERVAL_SECONDS)
             log = await pc1_executor.run_command(f"cat {run_log}", login_shell=False, timeout=30.0)
             assert engaged_source and engaged_target, (
                 "the run never paused snapd auto-refresh on both machines, so there is no window to die inside "
                 f"(pc1: {engaged_source!r}, pc2: {engaged_target!r}).\n{log.stdout}"
+            )
+            assert all_stopped(stopped_source) and all_stopped(stopped_target), (
+                "the run never stopped both machines' apt timers inside its own window "
+                f"(pc1: {stopped_source}, pc2: {stopped_target}).\n{log.stdout}"
             )
 
             killed = await pc1_executor.run_command(KILL_RUNNING_SYNC_CMD, login_shell=False, timeout=30.0)
@@ -1907,6 +1968,56 @@ class TestTheSyncWindowHoldIsTimed:
                     f"{machine}'s refresh.hold {left!r} lapses {lapses - now} from now, far sooner than the "
                     f"{SNAP_HOLD_EXPECTED_DURATION} a sync window asks for"
                 )
+
+            # The apt half of the same death. `systemctl stop` cannot lapse by itself, so
+            # what must outlive the run is the transient unit scheduled BEFORE the stop.
+            for executor, machine in ((pc1_executor, "pc1"), (pc2_executor, "pc2")):
+                left_stopped = await apt_timer_states(executor)
+                assert all_stopped(left_stopped), (
+                    f"{machine}'s apt timers are not stopped after the run died inside its own window: {left_stopped}"
+                )
+                fires_at = await pending_apt_timer_restore(executor)
+                assert fires_at is not None, (
+                    f"{machine} was left with its apt timers stopped and NO pending restore, so its automatic "
+                    f"updates stay off until someone notices"
+                )
+                now = await machine_utc_now(executor)
+                assert fires_at > now, (
+                    f"{machine}'s pending apt-timer restore is due at {fires_at}, not in its own future (its clock "
+                    f"reads {now}) — the deadline was computed against another machine's clock"
+                )
+                assert fires_at - now <= APT_TIMER_EXPECTED_DURATION, (
+                    f"{machine}'s apt timers come back in {fires_at - now}, further ahead than the "
+                    f"{APT_TIMER_EXPECTED_DURATION} a sync window asks for"
+                )
+                assert fires_at - now >= APT_TIMER_EXPECTED_DURATION - APT_TIMER_DURATION_SLACK, (
+                    f"{machine}'s apt timers come back in {fires_at - now}, far sooner than the "
+                    f"{APT_TIMER_EXPECTED_DURATION} a sync window asks for"
+                )
+
+            # A later run adopts the dead run's promise and settles it. Nothing here answers
+            # a review, so `apt_sync` reads both machines and skips; the timers can only
+            # come back through the settle path, because this run's own capture found them
+            # already stopped and therefore stopped — and scheduled — nothing.
+            settled = await pc1_executor.run_command(
+                f"{SKIP_INSTALL_ON_TARGET} pc-switcher sync pc2 --yes --allow-first-sync --allow-out-of-order",
+                timeout=300.0,
+                login_shell=True,
+            )
+            assert settled.success, (
+                f"the run after the killed one failed.\nstdout: {settled.stdout}\nstderr: {settled.stderr}"
+            )
+            for executor, machine in ((pc1_executor, "pc1"), (pc2_executor, "pc2")):
+                back = await apt_timer_states(executor)
+                running = {unit: active for unit, (_load, active) in back.items() if active == "active"}
+                assert len(running) == len(APT_TIMERS), (
+                    f"{machine}'s apt timers are still not running after a later sync: {back}. A dead run's promise "
+                    f"is settled by the next run, not left for its 6h deadline to fire mid-sync"
+                )
+                assert await pending_apt_timer_restore(executor) is None, (
+                    f"{machine} still carries a pending {APT_TIMER_RESTORE_UNIT} after the run that settled it; the "
+                    f"transient unit must be released once its work is done"
+                )
         finally:
             # The kill comes first and alone: a sync still running would write both machines'
             # `refresh.hold` again after the restores below.
@@ -1915,8 +2026,20 @@ class TestTheSyncWindowHoldIsTimed:
             async def clean_the_source() -> None:
                 await restore_system_refresh_hold(pc1_executor, pc1_prior_hold)
                 await pc1_executor.run_command(f"rm --force {run_log}", login_shell=False, timeout=15.0)
+                # Cancel before re-masking: a transient unit this test's run left behind
+                # would otherwise start the timers again later in the session, under a mask
+                # that says they are off.
+                await cancel_pending_apt_timer_restore(pc1_executor)
+                if pc1_timers is not None:
+                    await restore_apt_timer_mask(pc1_executor, pc1_timers)
 
-            await cleanup_in_parallel(clean_the_source(), restore_system_refresh_hold(pc2_executor, pc2_prior_hold))
+            async def clean_the_target() -> None:
+                await restore_system_refresh_hold(pc2_executor, pc2_prior_hold)
+                await cancel_pending_apt_timer_restore(pc2_executor)
+                if pc2_timers is not None:
+                    await restore_apt_timer_mask(pc2_executor, pc2_timers)
+
+            await cleanup_in_parallel(clean_the_source(), clean_the_target())
 
 
 class TestSnapHoldCaptureTiming:
