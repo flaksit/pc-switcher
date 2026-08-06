@@ -161,9 +161,12 @@ from tests.integration.jobs.package_sync_scenario import (
     ensure_installed_and_manual,
     finish_both,
     flatpak_app_rows,
+    flatpak_install_snippet_body,
+    flatpak_no_remote_item_id,
     flatpak_remote_row,
     flatpak_subject,
     folder_sync_section,
+    hand_deb_install_snippet_body,
     holdable_snaps,
     home_dir,
     install_a_hand_downloaded_deb,
@@ -188,12 +191,16 @@ from tests.integration.jobs.package_sync_scenario import (
     remove_unowned_marker,
     restore_apt_timer_mask,
     restore_auto_marked_package,
+    restore_flatpak_source_baseline,
     restore_flatpak_target_baseline,
     restore_system_refresh_hold,
+    sideload_snippet_body,
     snap_notes,
     snap_revision,
     snap_saved_rows,
+    snap_sideload_item_id,
     snap_subjects,
+    strand_the_source_flatpak_remote,
     take_paths_aside,
     undeclare_local_repository,
     undeclare_the_vendor_repository,
@@ -1046,6 +1053,17 @@ class TestSkipAlwaysIsInertInBothRoles:
                 f"for {deb_item_id} on pc1 although the review was answered SKIP_ALWAYS for it.\n"
                 f"recorded: {sorted(manual_entries)}"
             )
+            # The ownership split, at no cost: `manual_installs_sync` is enabled on this run
+            # too, and a hand-installed `.deb` belongs to exactly one job now. Its own
+            # decision file exists only if it claimed something, and the run must not name
+            # the package as a finding of its own.
+            assert not await decision_file_exists(pc1_executor, "manual_installs"), (
+                "`manual_installs_sync` recorded a decision of its own on a run whose only unreproducible subject "
+                "is a hand-installed .deb, which is `manual_deb_sync`'s to own"
+            )
+            assert f"{UNASKED_ITEM_MARKER}{hand_deb} " not in f"{collapse_run_output(first.stdout + first.stderr)} ", (
+                f"{hand_deb} was also presented as an unowned-path finding, so the two jobs both claim it"
+            )
             still_absent = await pc2_executor.run_command("apt-mark showmanual", login_shell=False, timeout=15.0)
             pc2_manual_after_first = nonblank_lines(still_absent.stdout)
             assert candidate not in pc2_manual_after_first, "skip-always must not itself install the item"
@@ -1849,6 +1867,203 @@ class TestTheCommandLineAnswersOneDirectionOfTheReview:
         assert not await decision_file_exists(pc2_executor, "apt"), (
             "the run carrying both flags left a decision file on pc2"
         )
+
+
+class TestTheUnreproducibleJobsConvergeFromRecordedSnippets:
+    """The three jobs that carve up "software no package manager can reproduce", each
+    replaying its own recorded snippet onto the target in one run.
+
+    `manual_deb_sync`, `manual_snap_sync` and `manual_flatpak_sync` share a base class, a
+    snippet registry and a review shape, and differ only in what they detect: a package
+    `apt-cache policy` names no candidate for, a snap at an `x`-prefixed revision, and a ref
+    whose origin names no configured remote. Each needs a real package manager to be
+    detected at all, and each had no VM run: the fourth sibling,
+    `manual_installs_sync`, is the only one the suite ever exercised.
+
+    One sync carries all three. They contend on nothing — three managers, three item ids,
+    three snippets — and a run per job would cost three times the wall clock to assert the
+    same thing three times.
+
+    Each snippet's body is built by the same helper that seeds the source, so the bytes the
+    target ends up with cannot drift from the bytes the source holds.
+
+    The flatpak half strands pc1's Flathub remote, which is why this scenario can never ride
+    on `test_end_to_end_sync`'s run: every flatpak claim there — remote derivation, key
+    replication, filter replication — needs that remote configured. Its restore is therefore
+    NOT the zero-cost cleanup this module's convention asks for but a mandatory one, since
+    test order is randomised and the next flatpak test would otherwise find a stranded
+    machine.
+    """
+
+    async def test_each_unreproducible_manager_replays_its_own_snippet_on_the_target(  # noqa: PLR0915 - pytest fixtures, injected by name
+        self,
+        pc1_executor: BashLoginRemoteExecutor,
+        pc2_executor: BashLoginRemoteExecutor,
+        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
+        pc2_with_pcswitcher: BashLoginRemoteExecutor,
+        reset_pcswitcher_state: None,
+    ) -> None:
+        """G164, G122, G142, F157 — a hand-installed `.deb`, a sideloaded snap and
+        a ref no remote can reproduce, each with a snippet on pc1, all converging on pc2 in
+        one run; and `flatpak_sync` planning nothing over the stranded ref rather than trying
+        to provision a remote out of a dangling origin.
+
+        The snap's base is read off pc2, not pc1: a base the target lacks would turn the
+        replay into a multi-hundred-megabyte download inside the run.
+
+        `snap_sync` is deliberately NOT enabled. It would diff the fixture snaps and add a
+        second manager's work to a run whose subject is the unreproducible three, and the
+        claim that it withholds a sideload from its own manifests is already settled by
+        `TestARunWithNobodyToAsk`.
+        """
+        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
+
+        sideload_dir = f"/var/tmp/pcswitcher-it-unreproducible-{uuid4().hex[:12]}"
+        deb_name = ""
+        sideload_name = f"pcswitcher-it-sideload-{uuid4().hex[:12]}"
+        stranded = False
+        # Read before the `try`: both are reads, and the cleanup below needs the remote's
+        # name and scope whatever happens after this point.
+        application, _version, scope, remote_name, _url, ref = await flatpak_subject(pc1_executor)
+        base = await installed_base_snap(pc2_executor)
+
+        try:
+
+            async def seed_the_deb() -> None:
+                nonlocal deb_name
+                deb_name = await install_a_hand_downloaded_deb(pc1_executor)
+                await author_snippet(
+                    pc1_executor, no_candidate_item_id(deb_name), deb_name, hand_deb_install_snippet_body(deb_name)
+                )
+
+            async def seed_the_sideload() -> None:
+                await create_sideloaded_snap(pc1_executor, sideload_dir, sideload_name, base)
+                await author_snippet(
+                    pc1_executor,
+                    snap_sideload_item_id(sideload_name),
+                    sideload_name,
+                    sideload_snippet_body(sideload_dir, sideload_name, base),
+                )
+
+            async def seed_the_flatpak() -> None:
+                nonlocal stranded
+                await strand_the_source_flatpak_remote(pc1_executor, remote_name, scope)
+                stranded = True
+                await author_snippet(
+                    pc1_executor,
+                    flatpak_no_remote_item_id(scope, ref),
+                    ref,
+                    flatpak_install_snippet_body(remote_name, ref, scope),
+                )
+
+            # Sequential, all on pc1: three managers on one machine, and `author_snippet`
+            # rewrites the one shared registry file each time.
+            await seed_the_deb()
+            await seed_the_sideload()
+            await seed_the_flatpak()
+
+            deb_item = no_candidate_item_id(deb_name)
+            snap_item = snap_sideload_item_id(sideload_name)
+            flatpak_item = flatpak_no_remote_item_id(scope, ref)
+
+            # `flatpak_sync` before `manual_flatpak_sync`: the withholding claim is about
+            # what the ordinary flatpak job does when it meets a ref it cannot reproduce, so
+            # it has to run, and it has to run first.
+            await write_package_sync_config(
+                pc1_executor,
+                manual_deb_sync=True,
+                manual_snap_sync=True,
+                flatpak_sync=True,
+                manual_flatpak_sync=True,
+            )
+            decisions = dict.fromkeys((deb_item, snap_item, flatpak_item), Decision.APPLY)
+            sync_result = await pc1_executor.run_command(
+                f"{SKIP_INSTALL_ON_TARGET} {automation_env_assignment_multi(decisions)}"
+                f" pc-switcher sync pc2 --yes --allow-first-sync",
+                timeout=600.0,
+                login_shell=True,
+            )
+            assert sync_result.success, (
+                f"the run replaying three snippets failed.\nstdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
+            )
+
+            installed, snaps, apps, registry = await asyncio.gather(
+                pc2_executor.run_command(
+                    "dpkg-query --show --showformat='${Package}\\t${Status}\\n'", login_shell=False, timeout=20.0
+                ),
+                pc2_executor.run_command("snap list --all", login_shell=False, timeout=20.0),
+                flatpak_app_rows(pc2_executor),
+                SnippetRegistry(pc2_executor).load(),
+            )
+
+            assert deb_name in parse_dpkg_installed(installed.stdout), (
+                f"{deb_name} is not installed on pc2, so `manual_deb_sync` replayed no snippet for a package no "
+                f"repository supplies.\nstdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
+            )
+            revisions = parse_snap_list_names_revisions(snaps.stdout)
+            assert sideload_name in revisions, (
+                f"{sideload_name} is not on pc2, so `manual_snap_sync` replayed no snippet for a sideloaded snap.\n"
+                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
+            )
+            assert revisions[sideload_name].startswith("x"), (
+                f"pc2 holds {sideload_name} at revision {revisions[sideload_name]!r}, which is not a sideload: the "
+                f"replay installed it from the store instead of from local bytes"
+            )
+            assert application in [row[0] for row in apps], (
+                f"{application} is not installed on pc2, so `manual_flatpak_sync` replayed no snippet for a ref no "
+                f"remote can reproduce.\nstdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
+            )
+            for item in (deb_item, snap_item, flatpak_item):
+                assert item in registry, (
+                    f"pc2's snippet registry does not hold {item} after the run, so the replay read a registry the "
+                    f"push never delivered. pc2 holds: {sorted(registry)}"
+                )
+
+            # `flatpak_sync`'s own half: pc1's only app and its runtime both name a remote
+            # pc1 no longer configures. Before the withholding rule those origins became
+            # remotes the run tried to add, from a pseudo-origin carrying no URL at all.
+            remotes = await pc2_executor.run_command(
+                f"flatpak remotes {'--user' if scope == 'user' else '--system'} --columns=name,url",
+                login_shell=False,
+                timeout=20.0,
+            )
+            urls = {
+                fields[0]: (fields[1] if len(fields) > 1 else "")
+                for fields in (line.split("\t") for line in nonblank_lines(remotes.stdout))
+            }
+            assert urls, f"pc2 reports no flatpak remotes at all:\n{remotes.stdout}"
+            assert all(url for url in urls.values()), (
+                f"pc2 carries a flatpak remote with no URL: {urls}. A ref whose origin names no configured remote "
+                f"must be withheld, never turned into a remote to provision"
+            )
+            assert remote_name in urls, (
+                f"pc2 no longer configures {remote_name}, though its own runtime still installs from it: {urls}"
+            )
+            assert FIXTURE_UNUSED_FLATPAK_REMOTE not in urls, (
+                f"{FIXTURE_UNUSED_FLATPAK_REMOTE} reached pc2, though no approved ref comes from it: {urls}"
+            )
+        finally:
+
+            async def clean_the_source() -> None:
+                await remove_sideloaded_snap(pc1_executor, sideload_dir, sideload_name)
+                if deb_name:
+                    await pc1_executor.run_command(
+                        f"sudo dpkg --purge {shlex.quote(deb_name)}", login_shell=False, timeout=60.0
+                    )
+                if stranded:
+                    # Mandatory, not zero-cost: every other flatpak claim in this module
+                    # needs pc1's remote configured, and test order is randomised.
+                    await restore_flatpak_source_baseline(pc1_executor, remote_name, scope, "")
+
+            async def clean_the_target() -> None:
+                await remove_sideloaded_snap(pc2_executor, sideload_dir, sideload_name)
+                if deb_name:
+                    await pc2_executor.run_command(
+                        f"sudo dpkg --purge {shlex.quote(deb_name)}", login_shell=False, timeout=60.0
+                    )
+                await restore_flatpak_target_baseline(pc2_executor)
+
+            await cleanup_in_parallel(clean_the_source(), clean_the_target())
 
 
 class TestWhereAConflictingItemsPermanentMarkLands:

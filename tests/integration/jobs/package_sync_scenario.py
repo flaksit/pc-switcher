@@ -748,6 +748,19 @@ async def create_sideloaded_snap(executor: BashLoginRemoteExecutor, directory: s
     scan roots, and a directory left there by a failed cleanup would show up as somebody
     else's finding.
     """
+    result = await executor.run_command(sideload_snippet_body(directory, name, base), login_shell=False, timeout=180.0)
+    assert result.success, (
+        f"`snap try {directory}` failed, so there is no sideloaded snap to test with: {result.stderr}"
+    )
+
+
+def sideload_snippet_body(directory: str, name: str, base: str) -> str:
+    """The shell that creates the sideloaded snap `create_sideloaded_snap` installs.
+
+    Shared with the install snippet a `manual_snap_sync` test authors for the target, so
+    the bytes the seeding produces on one machine and the bytes the replay produces on the
+    other cannot drift apart -- which is the whole claim such a test makes.
+    """
     snap_yaml = (
         f"name: {name}\n"
         "version: '1.0'\n"
@@ -757,15 +770,10 @@ async def create_sideloaded_snap(executor: BashLoginRemoteExecutor, directory: s
         "confinement: strict\n"
         "grade: stable\n"
     )
-    result = await executor.run_command(
+    return (
         f"sudo mkdir --parents {shlex.quote(f'{directory}/meta')} && "
         f"printf %s {shlex.quote(snap_yaml)} | sudo tee {shlex.quote(f'{directory}/meta/snap.yaml')} > /dev/null && "
-        f"sudo snap try {shlex.quote(directory)}",
-        login_shell=False,
-        timeout=180.0,
-    )
-    assert result.success, (
-        f"`snap try {directory}` failed, so there is no sideloaded snap to test with: {result.stderr}"
+        f"sudo snap try {shlex.quote(directory)}"
     )
 
 
@@ -1018,6 +1026,60 @@ async def restore_flatpak_source_baseline(
     )
     if not result.success:
         print(f"[cleanup] failed to restore the source's unfiltered {remote_name}: {result.stderr}")
+
+
+async def strand_the_source_flatpak_remote(
+    executor: BashLoginRemoteExecutor, remote_name: str, scope: Literal["user", "system"]
+) -> None:
+    """Delete `remote_name` from `executor` while its refs stay installed, so every ref that
+    came from it names an origin no configured remote answers to -- which is exactly what
+    `flatpak_policy.partition_unreproducible` calls unreproducible.
+
+    Cheaper than the other shape that reaches the same predicate, a bundle-installed ref:
+    that needs `flatpak build-bundle` against a repo, an app to bundle and an install of it,
+    minutes of work and a second app on the machine every other flatpak assertion in this
+    suite would then have to tolerate. The predicate compares an origin against the remote
+    table and cannot tell the two shapes apart, so the cheap one settles it. Do not
+    "upgrade" this to a bundle.
+
+    The precondition it creates is ASSERTED, not assumed: flatpak must still print the now
+    dangling origin in `flatpak list` while `flatpak remotes` no longer lists it. Everything
+    downstream rests on that being how this flatpak behaves.
+    """
+    scope_flag = "--user" if scope == "user" else "--system"
+    sudo = "" if scope == "user" else "sudo "
+    deleted = await executor.run_command(
+        f"{sudo}flatpak remote-delete {scope_flag} --force {shlex.quote(remote_name)}",
+        login_shell=False,
+        timeout=120.0,
+    )
+    assert deleted.success, f"could not delete the {scope}-scope remote {remote_name}: {deleted.stderr}"
+
+    remotes, origins = await asyncio.gather(
+        executor.run_command(f"flatpak remotes {scope_flag} --columns=name", login_shell=False, timeout=20.0),
+        executor.run_command("flatpak list --columns=origin", login_shell=False, timeout=20.0),
+    )
+    assert remote_name not in nonblank_lines(remotes.stdout), (
+        f"{remote_name} is still configured in scope {scope} after the delete, so nothing is stranded:\n"
+        f"{remotes.stdout}"
+    )
+    assert remote_name in nonblank_lines(origins.stdout), (
+        f"no installed ref still names {remote_name} as its origin, so this machine holds nothing unreproducible "
+        f"and the scenario has no subject:\n{origins.stdout}"
+    )
+
+
+def flatpak_install_snippet_body(remote_name: str, ref: str, scope: Literal["user", "system"]) -> str:
+    """The install a user would write by hand for `ref`, for a snippet replayed on the
+    target -- which still has the remote and the runtime, so this costs a download of the app
+    alone.
+    """
+    scope_flag = "--user" if scope == "user" else "--system"
+    sudo = "" if scope == "user" else "sudo "
+    return (
+        f"{sudo}flatpak install {scope_flag} --assumeyes --noninteractive "
+        f"{shlex.quote(remote_name)} {shlex.quote(ref)}"
+    )
 
 
 async def flatpak_app_rows(executor: BashLoginRemoteExecutor) -> list[tuple[str, str, str, str, str]]:
@@ -1308,14 +1370,25 @@ async def install_a_hand_downloaded_deb(executor: BashLoginRemoteExecutor) -> st
     The package is empty — control metadata only, no files — so installing it changes
     nothing about the machine beyond dpkg's own records.
     """
-    uniq = uuid4().hex[:12]
-    name = f"pcswitcher-it-handdeb-{uniq}"
+    name = f"pcswitcher-it-handdeb-{uuid4().hex[:12]}"
+    result = await executor.run_command(hand_deb_install_snippet_body(name), login_shell=False, timeout=120.0)
+    assert result.success, f"Failed to build and install the hand-downloaded .deb on the source: {result.stderr}"
+    return name
+
+
+def hand_deb_install_snippet_body(name: str) -> str:
+    """The shell that builds and `dpkg --install`s the trivial package `name`.
+
+    Shared with the install snippet a `manual_deb_sync` test authors for the target: the
+    claim there is that the target ends up holding the same package the source holds, so
+    the seeding and the replay must not be two independent descriptions of it.
+    """
     control = (
         f"Package: {name}\nVersion: 1.0\nArchitecture: all\n"
         "Maintainer: pc-switcher integration tests <nobody@example.invalid>\n"
         "Description: synthetic hand-downloaded package for pc-switcher integration tests\n"
     )
-    build = "\n".join(
+    return "\n".join(
         (
             "set -eu",
             f"build=$(mktemp --directory)/{name}",
@@ -1325,9 +1398,6 @@ async def install_a_hand_downloaded_deb(executor: BashLoginRemoteExecutor) -> st
             'sudo dpkg --install "$build.deb"',
         )
     )
-    result = await executor.run_command(build, login_shell=False, timeout=120.0)
-    assert result.success, f"Failed to build and install the hand-downloaded .deb on the source: {result.stderr}"
-    return name
 
 
 def no_candidate_item_id(name: str) -> str:
@@ -1336,6 +1406,23 @@ def no_candidate_item_id(name: str) -> str:
     from a literal so a change to the identity fails here.
     """
     return UnreproducibleItem(origin="apt-no-candidate", identifier=name, label=name).item_id
+
+
+def snap_sideload_item_id(name: str) -> str:
+    """The `UnreproducibleItem.item_id` a sideloaded snap produces
+    (`unreproducible:snap-sideload:<name>`). Identity is the NAME alone: reinstalling the
+    same sideload moves its revision, and an id carrying the revision would orphan the
+    snippet and the mark every time it did.
+    """
+    return UnreproducibleItem(origin="snap-sideload", identifier=name, label=name).item_id
+
+
+def flatpak_no_remote_item_id(scope: Literal["user", "system"], ref: str) -> str:
+    """The `UnreproducibleItem.item_id` a ref whose origin names no configured remote
+    produces (`unreproducible:flatpak-no-remote:<scope>:<ref>`) -- scope first, so adopting
+    a mark from `flatpak_sync` stays a prefix swap.
+    """
+    return UnreproducibleItem(origin="flatpak-no-remote", identifier=f"{scope}:{ref}", label=ref).item_id
 
 
 async def create_synthetic_pin(executor: BashLoginRemoteExecutor) -> str:
