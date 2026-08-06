@@ -859,9 +859,9 @@ class TestShippedDefaultConfig:
             assert order.index(job_name) < folder_sync_index
 
     def test_shipped_config_omits_empty_package_sections(self) -> None:
-        """K6 — D-32: no top-level section ships for any of the seven package jobs; a job
-        earns a section only when it has a real key, and its resolved config defaults to an
-        empty mapping."""
+        """K6 — no top-level section ships for any of the seven package jobs; a job earns a
+        section only when it has a real key, and its resolved config defaults to an empty
+        mapping."""
         config = Configuration.from_yaml(self._default_config_path())
         for job_name in (
             "apt_sync",
@@ -875,7 +875,7 @@ class TestShippedDefaultConfig:
             assert config.get_job_config(job_name) == {}
 
     def test_config_omitting_package_sections_validates(self, tmp_path: Path) -> None:
-        """K7 — D-32: a config that enables every package job via sync_jobs but ships no
+        """K7 — a config that enables every package job via sync_jobs but ships no
         top-level section for them still validates (root additionalProperties: false
         rejects unknown keys, but an absent section is not one), and each job's resolved
         config is an empty mapping."""

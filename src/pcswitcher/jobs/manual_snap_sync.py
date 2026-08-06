@@ -60,8 +60,8 @@ class ManualSnapSyncJob(UnreproducibleSyncJob):
     manager_id: ClassVar[str] = "manual_snap"
 
     # No configurable properties: mirrors SnapSyncJob's empty schema — only the enable flag
-    # in sync_jobs is needed. D-32 forbids an empty placeholder config SECTION, so there is
-    # no `manual_snap_sync:` block in default-config.yaml, but the in-code CONFIG_SCHEMA
+    # in sync_jobs is needed. A job earns a config SECTION only when it has a real key, so
+    # there is no `manual_snap_sync:` block in default-config.yaml, but the in-code CONFIG_SCHEMA
     # ClassVar still declares the empty object every job carries.
     CONFIG_SCHEMA: ClassVar[dict[str, Any]] = {
         "type": "object",

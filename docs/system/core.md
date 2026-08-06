@@ -114,7 +114,7 @@ Lineage: 001-US-6
 
 **Example Configuration**: `pcswitcher/default-config.yaml` is the shipped, fully commented example; `pc-switcher init` writes it verbatim to `~/.config/pc-switcher/config.yaml` together with the `home.filter` and `root.filter` starter files it references.
 
-**Configuration Schema**: `src/pcswitcher/schemas/config-schema.yaml`. Job-specific settings are top-level keys outside `sync_jobs` (`btrfs_snapshots`, `disk_space_monitor`, `folder_sync`, `dummy_success`, `dummy_fail`). The five package jobs and `vscode_state_sync` have no config section — they are enabled through `sync_jobs` alone.
+**Configuration Schema**: `src/pcswitcher/schemas/config-schema.yaml`. Job-specific settings are top-level keys outside `sync_jobs` (`btrfs_snapshots`, `disk_space_monitor`, `folder_sync`, `dummy_success`, `dummy_fail`). The seven package jobs and `vscode_state_sync` have no config section — a job earns one only once it has a real key, so these are enabled through `sync_jobs` alone.
 
 ### Installation and Setup Infrastructure (CORE-US-INSTALL)
 
