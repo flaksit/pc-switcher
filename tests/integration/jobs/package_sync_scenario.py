@@ -456,7 +456,7 @@ async def remove_unowned_marker(executor: BashLoginRemoteExecutor, path: str) ->
     await executor.run_command(f"sudo rm --recursive --force {shlex.quote(path)}", login_shell=False, timeout=15.0)
 
 
-async def author_snippet(  # noqa: PLR0913 - one registry entry's fields; all but the executor keyword-usable
+async def author_snippet(
     executor: BashLoginRemoteExecutor,
     item_id: str,
     label: str,
@@ -2685,3 +2685,154 @@ async def restore_after_the_pending_writes(
         timeout=90.0,
     )
     await remove_unowned_marker(source, seed.unowned_path)
+
+
+# ---------------------------------------------------------------------------------
+# #207's own subjects: an unowned path carrying a readable version, and a `.deb` no
+# repository supplies. Both exist so a run can be observed converging a VERSION rather
+# than a presence, and removing what the source dropped, against real dpkg/snapd and a
+# real filesystem.
+# ---------------------------------------------------------------------------------
+
+# The unowned path both machines hold at different versions. Under `/opt`, so
+# `manual_installs_sync`'s own scan finds it, and named distinctly enough that a failed
+# cleanup cannot be mistaken for another test's marker.
+VERSION_SUBJECT_PATH = "/opt/pcswitcher-it-versioned"
+
+# What the subject's installed-version snippet reads. A plain file, so seeding a version is
+# one `tee` and reading one back needs no parser.
+VERSION_SUBJECT_FILE = f"{VERSION_SUBJECT_PATH}/version"
+
+# Where this test's installed-version snippet records that it RAN, per machine. A real
+# version snippet must be read-only (`PKG-FR-VERSION-SNIPPET`) and this one deliberately is
+# not: appending a line is the only witness available that the body executed on a machine
+# without reading the run's own log, and the claim under test is precisely that it runs on
+# BOTH machines while the run is still planning.
+VERSION_WITNESS_PATH = "/var/tmp/pcswitcher-it-version-witness"
+
+# The path only the target holds, for the removal direction. Distinct from the versioned
+# subject so one run can carry both without either explaining the other's absence.
+REMOVAL_SUBJECT_PATH = "/opt/pcswitcher-it-removed-upstream"
+
+# The hand-installed `.deb` only the target holds. The name exists in no Ubuntu repository,
+# which is what makes the target's own `apt-cache policy` report dpkg's status file as its
+# only origin — the finding `manual_deb_sync` claims and may therefore remove.
+REMOVAL_SUBJECT_DEB = "pcswitcher-it-manual-deb"
+
+# Where the sideload only the target holds is built. `/var/tmp` for
+# `create_sideloaded_snap`'s reason: `/opt` and `/usr/local` are another job's scan roots.
+REMOVAL_SUBJECT_SNAP = "pcswitcher-it-removed-snap"
+REMOVAL_SUBJECT_SNAP_DIR = f"/var/tmp/{REMOVAL_SUBJECT_SNAP}"
+
+
+async def create_versioned_unowned_marker(executor: BashLoginRemoteExecutor, path: str, version: str) -> None:
+    """An unowned directory at `path` whose `version` file reads `version`.
+
+    The file is what makes the directory a finding at all (`create_unowned_marker`'s
+    reason), and its content is what this subject's installed-version snippet prints — so
+    seeding two machines at two versions is the whole of setting up a drift scenario.
+    """
+    result = await executor.run_command(
+        f"sudo mkdir --parents {shlex.quote(path)} && "
+        f"printf '%s\\n' {shlex.quote(version)} | sudo tee {shlex.quote(f'{path}/version')} > /dev/null",
+        login_shell=False,
+        timeout=15.0,
+    )
+    assert result.success, f"Failed to seed {path} at version {version}: {result.stderr}"
+
+
+async def marker_version(executor: BashLoginRemoteExecutor, path: str) -> str | None:
+    """What `path`'s `version` file reads, or `None` where the path is not there."""
+    result = await executor.run_command(
+        f"cat {shlex.quote(f'{path}/version')} 2>/dev/null", login_shell=False, timeout=15.0
+    )
+    return result.stdout.strip() if result.success and result.stdout.strip() else None
+
+
+async def witness_ran_on(executor: BashLoginRemoteExecutor, path: str = VERSION_WITNESS_PATH) -> bool:
+    """Whether the installed-version snippet left its witness line on this machine."""
+    result = await executor.run_command(f"test -s {shlex.quote(path)}", login_shell=False, timeout=15.0)
+    return result.success
+
+
+async def clear_version_witness(executor: BashLoginRemoteExecutor) -> None:
+    await executor.run_command(f"sudo rm --force {shlex.quote(VERSION_WITNESS_PATH)}", login_shell=False, timeout=15.0)
+
+
+def version_snippet_body(path: str = VERSION_SUBJECT_PATH) -> str:
+    """The installed-version snippet these tests author: a witness line, then the version.
+
+    Only the version reaches stdout, which is what the diff compares; the witness goes to a
+    file of its own. See `VERSION_WITNESS_PATH` for why this one is deliberately not
+    read-only.
+    """
+    return f"echo ran >> {shlex.quote(VERSION_WITNESS_PATH)} 2>/dev/null || true; cat {shlex.quote(f'{path}/version')}"
+
+
+def install_snippet_body(version: str, path: str = VERSION_SUBJECT_PATH) -> str:
+    """The install-or-update snippet these tests author: bring `path` to `version`.
+
+    Written to install OR update, which is the contract `install_body` carries: it runs on a
+    machine that may already hold an older copy, and `mkdir --parents` plus an overwriting
+    `tee` is the smallest thing that satisfies both.
+    """
+    return (
+        f"sudo mkdir --parents {shlex.quote(path)} && "
+        f"printf '%s\\n' {shlex.quote(version)} | sudo tee {shlex.quote(f'{path}/version')} > /dev/null"
+    )
+
+
+async def install_local_deb(executor: BashLoginRemoteExecutor, name: str, version: str = "1.0") -> None:
+    """Build a trivial `.deb` on `executor`'s machine and `dpkg --install` it.
+
+    A real hand-installed package rather than a mark flip: `manual_deb_sync` claims a name
+    whose installed version comes from no repository the machine configures, and only a
+    package apt has never heard of has that shape. `apt-mark manual` on a repo package
+    changes a selection state and would leave the name reproducible, so this job would
+    correctly refuse to remove it.
+    """
+    build_dir = f"/var/tmp/{name}"
+    control = (
+        f"Package: {name}\n"
+        f"Version: {version}\n"
+        "Section: misc\n"
+        "Priority: optional\n"
+        "Architecture: all\n"
+        "Maintainer: pc-switcher integration tests <noreply@example.invalid>\n"
+        "Description: A package installed by hand, which no repository can supply.\n"
+    )
+    result = await executor.run_command(
+        f"sudo mkdir --parents {shlex.quote(f'{build_dir}/DEBIAN')} && "
+        f"printf %s {shlex.quote(control)} | sudo tee {shlex.quote(f'{build_dir}/DEBIAN/control')} > /dev/null && "
+        f"sudo dpkg-deb --build {shlex.quote(build_dir)} {shlex.quote(f'{build_dir}.deb')} && "
+        f"sudo dpkg --install {shlex.quote(f'{build_dir}.deb')}",
+        login_shell=False,
+        timeout=120.0,
+    )
+    assert result.success, f"Failed to build and install {name}: {result.stdout}\n{result.stderr}"
+
+
+async def purge_local_deb(executor: BashLoginRemoteExecutor, name: str) -> None:
+    """Undo `install_local_deb`, unconditionally so a half-done setup is still cleaned up."""
+    build_dir = f"/var/tmp/{name}"
+    await executor.run_command(
+        f"sudo dpkg --purge {shlex.quote(name)}; "
+        f"sudo rm --recursive --force {shlex.quote(build_dir)} {shlex.quote(f'{build_dir}.deb')}",
+        login_shell=False,
+        timeout=120.0,
+    )
+
+
+async def dpkg_has(executor: BashLoginRemoteExecutor, name: str) -> bool:
+    """Whether dpkg reports `name` as installed on this machine."""
+    result = await executor.run_command(
+        f"dpkg-query --show --showformat='${{db:Status-Status}}' {shlex.quote(name)} 2>/dev/null",
+        login_shell=False,
+        timeout=15.0,
+    )
+    return result.success and result.stdout.strip() == "installed"
+
+
+async def path_exists(executor: BashLoginRemoteExecutor, path: str) -> bool:
+    result = await executor.run_command(f"test -e {shlex.quote(path)}", login_shell=False, timeout=15.0)
+    return result.success

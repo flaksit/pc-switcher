@@ -953,7 +953,7 @@ class TestSnippetRegistry:
 
     @pytest.mark.asyncio
     async def test_every_malformed_entry_in_one_registry_is_named_at_once(self) -> None:
-        """G115 — the repair is a hand edit of one file, so the ending names every entry that
+        """G115, G181 — the repair is a hand edit of one file, so the ending names every entry that
         edit has to cover: stopping at the first would have the user fix it, start a new
         sync, and only then be shown the next.
         """

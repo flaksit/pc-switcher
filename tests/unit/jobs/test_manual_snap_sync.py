@@ -240,7 +240,7 @@ class TestWhatTheTargetAlreadyHolds:
 
     @pytest.mark.asyncio
     async def test_a_sideload_only_the_target_holds_is_offered_for_removal(self) -> None:
-        """G160 — `PKG-FR-MANUAL-REMOVE`: a sideload the source no longer has becomes a
+        """G137, G160 — `PKG-FR-MANUAL-REMOVE`: a sideload the source no longer has becomes a
         removal item, since the target's own listing calls it a sideload too."""
         context, _source, _target = make_context(
             source_responses={SNAP_LIST: snap_list()},

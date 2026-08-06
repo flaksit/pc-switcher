@@ -202,16 +202,17 @@ class TestPlanIsReadOnly:
 
 
 class TestInstallOnly:
-    """`PKG-NG-MANUAL-REMOVE`: what only the target has produces nothing. The target is read
-    to tell what is already there, never as a manifest to be "extra" against, so no input
-    can make this job propose a removal.
+    """`PKG-FR-MANUAL-REMOVE`: a removal reaches only what the TARGET's own detector claims
+    there. Software the target holds that some manager can account for is another job's, and
+    no input can make this one propose deleting it.
     """
 
     @pytest.mark.asyncio
-    async def test_no_removal_diff_or_group_even_when_the_target_holds_items(self) -> None:
-        """G22, G88 — the target is stocked with everything the source has plus its own extras — the
-        shape that produces `EXTRA_ON_TARGET`/REMOVE in every other manager — and still no
-        removal is proposed and nothing target-only is named anywhere.
+    async def test_no_removal_is_proposed_for_software_a_repository_supplies(self) -> None:
+        """G22, G88 — the target is stocked with everything the source has plus its own extras,
+        every one of them reproducible from a repository it configures — the shape that
+        produces `EXTRA_ON_TARGET`/REMOVE in every other manager — and still no removal is
+        proposed and nothing target-only is named anywhere.
         """
         context, _source, _target = make_context(
             source_responses={

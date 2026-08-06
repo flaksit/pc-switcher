@@ -1123,7 +1123,7 @@ class TestUnreproducibleGroupResolution:
         return outcome.snippets["u1"]
 
     async def test_add_snippet_choice_captures_the_body_the_user_wrote(self) -> None:
-        """G31 — everything between the first and last thing typed is kept: blank lines,
+        """G31, G182 — everything between the first and last thing typed is kept: blank lines,
         indentation, and the order of the commands.
         """
         body = "sudo dpkg --install /tmp/x.deb\n\n  sudo apt-get install --fix-broken --assume-yes"
@@ -1174,7 +1174,7 @@ class TestUnreproducibleGroupResolution:
         return install_open, version_open, install_answered, sink.getvalue()
 
     async def test_the_authoring_warning_is_on_the_editors_own_screen(self) -> None:
-        """G61 — the user is warned while they can still act on it. A snippet that asks a
+        """G61, G183 — the user is warned while they can still act on it. A snippet that asks a
         question does not fail on nomad, it HANGS there with nobody to answer, so the
         warning is worth nothing once the body is written: it rides on the editor's own
         prompt, which is on screen from the moment the editor opens.

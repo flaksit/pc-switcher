@@ -416,3 +416,59 @@ class TestFlatpakFirstSyncScope:
         assert scope.job_name == "manual_flatpak_sync"
         assert any("flatpak refs no remote can supply" in item for item in scope.scope_items)
         assert "replay install snippet" in scope.mechanism
+
+
+class TestRemovingARefTheSourceDropped:
+    """`PKG-FR-MANUAL-REMOVE`: a bundle-installed ref only the target holds is this job's to
+    take away, and a ref some remote can supply is not."""
+
+    @pytest.mark.asyncio
+    async def test_a_bundle_ref_only_the_target_holds_is_uninstalled_in_its_own_scope(self) -> None:
+        """G184 — the target's own remotes say nothing can serve its origin, and the source no
+        longer has it: that is a removal, named by the full reference in its own scope."""
+        context, _source, target = make_context(
+            source_responses=source_with(apps=""),
+            target_responses={LIST_APPS: CommandResult(0, ref_line(BUNDLE_REF, "bundle-origin", "system"), "")},
+        )
+        job = ManualFlatpakSyncJob(context)
+
+        plan = await job.plan()
+        (diff,) = plan.diffs
+        assert diff.action == DiffAction.REMOVE
+        await job.converge(diff)
+
+        (issued,) = [c for c in target.run_command.call_args_list if "flatpak uninstall" in c.args[0]]
+        assert issued.args[0] == f"sudo flatpak uninstall --assumeyes --system {BUNDLE_REF}"
+        assert issued.kwargs["mutates"]
+
+    @pytest.mark.asyncio
+    async def test_a_user_scope_removal_never_asks_for_root(self) -> None:
+        """G184 — privilege follows the reference's own scope, so a user-scope run needs none
+        (`PKG-FR-FLATPAK-PRIVILEGE`)."""
+        context, _source, target = make_context(
+            source_responses=source_with(apps=""),
+            target_responses={LIST_APPS: CommandResult(0, ref_line(BUNDLE_REF, "bundle-origin", "user"), "")},
+        )
+        job = ManualFlatpakSyncJob(context)
+
+        plan = await job.plan()
+        await job.converge(plan.diffs[0])
+
+        (issued,) = [c for c in target.run_command.call_args_list if "flatpak uninstall" in c.args[0]]
+        assert issued.args[0] == f"flatpak uninstall --assumeyes --user {BUNDLE_REF}"
+
+    @pytest.mark.asyncio
+    async def test_a_ref_a_configured_remote_serves_is_never_offered_for_removal(self) -> None:
+        """G184 — a ref the target's own remotes can supply is `flatpak_sync`'s decision, with
+        its own remote bookkeeping behind it, and is never deleted here."""
+        context, _source, _target = make_context(
+            source_responses=source_with(apps=""),
+            target_responses={
+                LIST_APPS: CommandResult(0, ref_line(BUNDLE_REF, "flathub", "user"), ""),
+                REMOTES_USER: remotes("flathub"),
+            },
+        )
+
+        plan = await ManualFlatpakSyncJob(context).plan()
+
+        assert plan.diffs == ()
