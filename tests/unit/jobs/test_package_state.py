@@ -538,7 +538,7 @@ class TestPipelineWiring:
     async def test_a_conflicting_items_mark_lands_on_the_side_the_user_named(
         self, side: MarkSide, writes_on_source: bool, writes_on_target: bool
     ) -> None:
-        """H219, H220, H221 — both machines have the item, so the review's follow-up decides
+        """H250, H251, H252 — both machines have the item, so the review's follow-up decides
         whose file gets the entry; "both" writes one on each, and each dies with its own
         machine's copy (`PKG-FR-MARK-LIFETIME`).
         """
@@ -564,7 +564,7 @@ class TestPipelineWiring:
 
     @pytest.mark.asyncio
     async def test_a_side_answer_cannot_move_an_installs_mark(self) -> None:
-        """H222 — only the source has an install's item, so no answer relocates its mark; a
+        """H253 — only the source has an install's item, so no answer relocates its mark; a
         side reaching one is an id the follow-up never offered.
         """
         context = make_context()
