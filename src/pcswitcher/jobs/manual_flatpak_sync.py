@@ -123,8 +123,8 @@ class ManualFlatpakSyncJob(UnreproducibleSyncJob):
     manager_id: ClassVar[str] = "manual_flatpak"
 
     # No configurable properties, mirroring the other package jobs: only the enable flag in
-    # sync_jobs is needed. D-32 forbids an empty placeholder config SECTION, so there is no
-    # `manual_flatpak_sync:` block in default-config.yaml, but the in-code CONFIG_SCHEMA
+    # sync_jobs is needed. A job earns a config SECTION only when it has a real key, so there is
+    # no `manual_flatpak_sync:` block in default-config.yaml, but the in-code CONFIG_SCHEMA
     # ClassVar still declares the empty object every job carries.
     CONFIG_SCHEMA: ClassVar[dict[str, Any]] = {
         "type": "object",
