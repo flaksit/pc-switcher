@@ -2090,25 +2090,30 @@ async def pending_apt_timer_restore(executor: BashLoginRemoteExecutor) -> dateti
 
     `LoadState=not-found` is exactly the discriminator the product uses to decide whether a
     dead run left a promise behind, so it is what "there is no pending restore" means here
-    too. `NextElapseUSecRealtime` is microseconds since the epoch, read as an aware UTC
-    instant -- and compared, by every caller, against `machine_utc_now(executor)` rather
-    than this runner's clock: the deadline was computed on the machine that must honour it.
+    too.
+
+    The deadline comes from `list-timers --output=json`, whose `next` is microseconds since
+    the epoch, NOT from `systemctl show`'s `NextElapseUSecRealtime`: despite the name, that
+    property renders as a formatted local timestamp ("Thu 2026-08-06 21:11:22 CEST" on
+    systemd 255, measured), which would have to be parsed back through the machine's own
+    locale and timezone. Every caller compares the result against `machine_utc_now`, never
+    this runner's clock -- the deadline was computed on the machine that must honour it.
     """
-    result = await executor.run_command(
-        f"systemctl show --property=Id --property=LoadState --property=NextElapseUSecRealtime "
-        f"{APT_TIMER_RESTORE_UNIT}.timer",
-        login_shell=False,
-        timeout=20.0,
+    unit = f"{APT_TIMER_RESTORE_UNIT}.timer"
+    loaded, listed = await asyncio.gather(
+        executor.run_command(
+            f"systemctl show --property=Id --property=LoadState {unit}", login_shell=False, timeout=20.0
+        ),
+        executor.run_command(f"systemctl list-timers --all --output=json {unit}", login_shell=False, timeout=20.0),
     )
-    fields = parse_systemctl_show_blocks(result.stdout).get(f"{APT_TIMER_RESTORE_UNIT}.timer", {})
-    if fields.get("LoadState") != "loaded":
+    if parse_systemctl_show_blocks(loaded.stdout).get(unit, {}).get("LoadState") != "loaded":
         return None
-    elapse = fields.get("NextElapseUSecRealtime", "")
-    assert elapse.isdigit(), (
-        f"{APT_TIMER_RESTORE_UNIT}.timer is loaded on this machine but reports no numeric next elapse "
-        f"({elapse!r}), so there is no deadline to hold it to.\n{result.stdout}"
+    rows = json.loads(listed.stdout or "[]")
+    assert rows, (
+        f"{unit} is loaded on this machine but `systemctl list-timers` does not list it, so there is no deadline "
+        f"to hold it to.\n{listed.stdout}"
     )
-    return datetime.fromtimestamp(int(elapse) / 1_000_000, tz=UTC)
+    return datetime.fromtimestamp(int(rows[0]["next"]) / 1_000_000, tz=UTC)
 
 
 @dataclass(frozen=True)
