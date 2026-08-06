@@ -1909,7 +1909,9 @@ class TestTheUnreproducibleJobsConvergeFromRecordedSnippets:
         to provision a remote out of a dangling origin.
 
         The snap's base is read off pc2, not pc1: a base the target lacks would turn the
-        replay into a multi-hundred-megabyte download inside the run.
+        replay into a multi-hundred-megabyte download inside the run. pc1 is then checked to
+        hold that same base, since it is pc1 that runs `snap try` against it — the two
+        machines pick from one preference list and would only diverge if their fixtures had.
 
         `snap_sync` is deliberately NOT enabled. It would diff the fixture snaps and add a
         second manager's work to a run whose subject is the unreproducible three, and the
@@ -1925,7 +1927,11 @@ class TestTheUnreproducibleJobsConvergeFromRecordedSnippets:
         # Read before the `try`: both are reads, and the cleanup below needs the remote's
         # name and scope whatever happens after this point.
         application, _version, scope, remote_name, _url, ref = await flatpak_subject(pc1_executor)
-        base = await installed_base_snap(pc2_executor)
+        base, source_base = await asyncio.gather(installed_base_snap(pc2_executor), installed_base_snap(pc1_executor))
+        assert base == source_base, (
+            f"pc2's preferred base snap is {base!r} and pc1's is {source_base!r}; the sideload is built on pc1 and "
+            f"replayed on pc2, so a base only one of them holds fails one end or downloads a base on the other"
+        )
 
         try:
 
