@@ -10,7 +10,7 @@ The "Golden Copy" of the system specification: what pc-switcher does **today**. 
 ## Domain Specifications
 
 - [Core](core.md): CLI, orchestration, locking, snapshots, configuration, and the job contract.
-- [Package Sync](package-sync.md): the four package jobs, their shared contract and their plan/review/apply pipeline.
+- [Package Sync](package-sync.md): the seven package jobs, their shared contract and their plan/review/apply pipeline.
 - [Testing Framework](testing.md): testing framework, infrastructure, and strategy.
 - [Logging](logging.md): logging infrastructure and configuration.
 

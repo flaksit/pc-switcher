@@ -55,7 +55,6 @@ from __future__ import annotations
 
 import shlex
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, override
 
@@ -69,6 +68,7 @@ from pcswitcher.jobs.packages.items import (
 )
 from pcswitcher.jobs.packages.probes import require_answer
 from pcswitcher.jobs.packages.review import Decision
+from pcswitcher.jobs.packages.snap_listing import SnapItem, parse_snap_list, partition_sideloaded
 from pcswitcher.jobs.packages.state import DecisionEntry, filter_inert, marks_on_either
 from pcswitcher.jobs.packages.sync_core import (
     ConvergeItemDeclined,
@@ -108,120 +108,10 @@ _TARGET_SUDO_COMMANDS = ("/usr/bin/snap",)
 _NON_REVISION_DIR_NAMES = frozenset({"common", "current"})
 
 
-# -- snap-owned item shape ------------------------------------------------------------
-#
-# Here rather than in the shared `packages/items.py`: no other job constructs a snap item.
-
-
-@dataclass(frozen=True)
-class SnapItem:
-    """One installed snap (D-06): name, tracked channel, and installed revision.
-
-    `channel` is a FIELD of the snap item, not a standalone item class:
-    `ItemClass.SNAP_CHANNEL` is reserved for the diff DETAIL on a channel-only change
-    (retracking with no revision change) and never becomes a standalone item — a
-    channel with no snap attached to it has no meaning of its own.
-
-    `held` is per-snap refresh-hold state parsed from `snap list` Notes (#208): it is a
-    FIELD, not part of the snap's identity, and defaults `False` so existing construction
-    sites and the shared diff never have to name it. `snap_sync` populates it and diffs it
-    into a separate `snap:hold:<name>` membership item (`ItemClass.SNAP_HOLD`), keeping the
-    hold's own `snap:hold:<name>` membership diff (`ItemClass.SNAP_HOLD`), which replicates
-    without review like every other block (`PKG-FR-BLOCKS-DERIVED`).
-
-    `classic` and `devmode` are the snap's CONFINEMENT, likewise parsed from the Notes
-    column and likewise FIELDS rather than identity, defaulted so existing construction
-    sites and the shared diff never have to name them. They are not identity because
-    confinement is a property snapd derives from the revision the store published, not a
-    user choice the two machines can legitimately disagree about for the same revision:
-    making it identity would split one snap into two items, and diffing on it would emit a
-    `CHANGE` proposing a "convergence" with no command behind it. They exist solely so
-    `snap_sync` can pass `--classic`/`--devmode` to `snap install`/`snap refresh`, which
-    snapd requires as explicit per-revision confirmation before it will install a
-    classic-confinement or devmode revision at all.
-    """
-
-    name: str
-    channel: str
-    revision: str
-    held: bool = False
-    classic: bool = False
-    devmode: bool = False
-
-    ITEM_CLASS: ClassVar[ItemClass] = ItemClass.SNAP
-
-    @property
-    def item_id(self) -> str:
-        """Stable identity string: `snap:<name>`."""
-        return f"snap:{self.name}"
-
-    def label(self) -> str:
-        """Human-readable text for the review UI and logs."""
-        return f"{self.name} ({self.channel}, revision {self.revision})"
-
-
 def _snap_name(item_id: str) -> str:
     if not item_id.startswith(_SNAP_ID_PREFIX):
         raise ValueError(f"Not a snap item id: {item_id!r}")
     return item_id.removeprefix(_SNAP_ID_PREFIX)
-
-
-def _parse_snap_list(output: str) -> list[SnapItem]:
-    """Parse `snap list --all` by HEADER column names, never fixed offsets or assumed
-    order (RESEARCH Open Question 2): a future snapd column reorder must yield correct
-    values, never a silently wrong revision driving a wrong `--revision` install.
-
-    Skips a disabled older-revision line (`Notes` names `disabled`) for a snap that
-    also has an active line — only the active revision becomes the item. Output shaped
-    like "No snaps are installed yet." (no recognizable header) degrades to an empty
-    list rather than raising: a snap-free machine is a valid, if rare, state.
-    """
-    lines = [line for line in output.splitlines() if line.strip()]
-    if not lines:
-        return []
-
-    header = lines[0].split()
-    try:
-        name_idx = header.index("Name")
-        rev_idx = header.index("Rev")
-        tracking_idx = header.index("Tracking")
-        notes_idx = header.index("Notes")
-    except ValueError:
-        return []
-
-    max_idx = max(name_idx, rev_idx, tracking_idx, notes_idx)
-    items: list[SnapItem] = []
-    for line in lines[1:]:
-        fields = line.split()
-        if len(fields) <= max_idx:
-            continue
-        notes = fields[notes_idx].split(",")
-        if "disabled" in notes:
-            continue
-        # `held` in the Notes column is a PER-SNAP refresh hold (#208, D9) — snapstate
-        # attached to this one snap. It is SEPARATE state from the system-wide
-        # `refresh.hold` the orchestrator sets across the sync window via `snap set
-        # system refresh.hold` (different snapd namespaces), so capturing here, inside
-        # the sync window, does not mask a per-snap hold: the system hold never writes
-        # `held` into an individual snap's Notes. If a VM integration test ever shows a
-        # system hold flipping this token, capture would have to move BEFORE the
-        # sync-window hold is applied. Fail-safe even then: a system hold flips both
-        # hosts symmetrically -> both-held -> no spurious diff.
-        held = "held" in notes
-        # Confinement, from the same Notes list: snapd refuses to install a classic or a
-        # devmode revision without the matching flag as explicit confirmation, so the
-        # capture has to carry it or `_converge_install` cannot build a working command.
-        items.append(
-            SnapItem(
-                name=fields[name_idx],
-                channel=fields[tracking_idx],
-                revision=fields[rev_idx],
-                held=held,
-                classic="classic" in notes,
-                devmode="devmode" in notes,
-            )
-        )
-    return items
 
 
 def _confinement_flags(item: SnapItem) -> str:
@@ -245,26 +135,6 @@ def _confinement_flags(item: SnapItem) -> str:
     if item.devmode:
         return " --devmode"
     return ""
-
-
-def _is_sideloaded(item: SnapItem) -> bool:
-    """Whether this snap's bytes came from a local `.snap` file rather than the store.
-
-    snapd assigns a store-less revision to a snap installed from a file (`snap install
-    --dangerous ./foo.snap`, `snap try`) and `snap list` renders it with an `x` prefix —
-    `x1`, `x2`, … — where a store revision is a plain integer. No store can serve an
-    `x<N>` revision, so `snap install --revision=x1 <name>` can never succeed; and such a
-    snap usually tracks no channel either, which makes the channel switch that follows
-    meaningless too.
-    """
-    return item.revision.startswith("x")
-
-
-def _partition_sideloaded(items: Sequence[SnapItem]) -> tuple[list[SnapItem], list[SnapItem]]:
-    """Split a captured listing into (store-installed, sideloaded), preserving order."""
-    store_items = [item for item in items if not _is_sideloaded(item)]
-    sideloaded = [item for item in items if _is_sideloaded(item)]
-    return store_items, sideloaded
 
 
 def _install_diff(item: SnapItem) -> ItemDiff:
@@ -441,7 +311,7 @@ async def target_snap_revisions(executor: RemoteExecutor) -> dict[str, str] | No
     result = await executor.run_command("snap list --all", login_shell=False)
     if not result.success:
         return None
-    return {item.name: item.revision for item in _parse_snap_list(result.stdout)}
+    return {item.name: item.revision for item in parse_snap_list(result.stdout)}
 
 
 def snap_sync_exclude_paths(target_revisions: Mapping[str, str] | None) -> list[Path]:
@@ -536,14 +406,14 @@ class SnapSyncJob(PackageSyncJob):
         command = "snap list --all"
         result = await self.source.run_command(command)
         require_answer(command, result, self.machines.source)
-        return _parse_snap_list(result.stdout)
+        return parse_snap_list(result.stdout)
 
     async def query_target_items(self) -> Sequence[SnapItem]:  # pyright: ignore[reportIncompatibleMethodOverride]
         """The target's own `snap list --all` (same reasoning as `capture_source_items`)."""
         command = "snap list --all"
         result = await self.target.run_command(command, login_shell=False)
         require_answer(command, result, self.machines.target)
-        return _parse_snap_list(result.stdout)
+        return parse_snap_list(result.stdout)
 
     @override
     async def observe_absent_marks(self, entries: Mapping[str, DecisionEntry], *, on_source: bool) -> frozenset[str]:
@@ -552,8 +422,9 @@ class SnapSyncJob(PackageSyncJob):
         snapd says is installed there.
 
         A sideloaded snap is in that listing like any other, so a mark on one survives:
-        `PKG-FR-SNAP-SIDELOAD` puts a sideload out of scope for the run, which says nothing
-        about whether the machine has it.
+        `PKG-FR-SNAP-SIDELOAD` puts a sideload out of THIS job's scope, which says nothing
+        about whether the machine has it. `manual_snap_sync` reconciles its own marks about
+        the same snaps out of its own file, under its own `unreproducible:` ids.
 
         `snap:hold:` entries answer nothing — a hold is derived and can never be recorded
         (`PKG-FR-BLOCKS-DERIVED`) — so they are left alone. Which entries those are is read
@@ -582,12 +453,16 @@ class SnapSyncJob(PackageSyncJob):
         `__init__`), since `ItemDiff.item_id` alone carries no revision/channel data.
 
         Sideloaded snaps on either machine are dropped from the diff input: their revision
-        exists in no store and nothing carries the `.snap` bytes between machines, so the
-        run can neither reproduce one nor replace one it removes. Every diff they could
-        produce — install, revision/channel change, the `snap:hold:` diff `_diff_snap_holds`
-        derives from a source snap, and removal — is withheld, and the run says nothing
-        about them: `PKG-FR-SNAP-SIDELOAD` puts them out of scope entirely, so there is
-        neither an action to take nor anything to report.
+        exists in no store, so snapd's own verbs can neither reproduce one nor replace one
+        this job removes. Every diff they could produce — install, revision/channel change,
+        the `snap:hold:` diff `_diff_snap_holds` derives from a source snap, and removal —
+        is withheld, and this job says nothing about them (`PKG-FR-SNAP-SIDELOAD`).
+
+        `manual_snap_sync` is where they go instead: it applies this same
+        `partition_sideloaded` predicate to its own `snap list --all` and offers the
+        sideloads it finds as items resolvable by an install snippet. The two jobs agree
+        because both call `packages/snap_listing.py`, never because one tells the other —
+        neither imports the other, and neither reads the other's enable flag (D-15/D-18).
         """
         source_decisions, target_decisions = await self._load_live_decisions()
 
@@ -595,8 +470,8 @@ class SnapSyncJob(PackageSyncJob):
         # filtering first would drop a marked sideload before `withheld` below could see it,
         # leaving the OTHER machine's copy of that name unmatched — and an unmatched entry is
         # an item, which is exactly what the article forbids for a sideloaded name.
-        source_items, source_sideloaded = _partition_sideloaded(await self.capture_source_items())
-        target_items, target_sideloaded = _partition_sideloaded(await self.query_target_items())
+        source_items, source_sideloaded = partition_sideloaded(await self.capture_source_items())
+        target_items, target_sideloaded = partition_sideloaded(await self.query_target_items())
 
         # Both files against BOTH manifests (`marks_on_either`): a snap present on both
         # machines at different revisions is marked on ONE of them, and filtering each

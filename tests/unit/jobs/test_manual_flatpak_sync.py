@@ -71,7 +71,7 @@ class TestNoRemoteDetection:
 
     @pytest.mark.asyncio
     async def test_a_bundle_installed_ref_is_unreproducible(self) -> None:
-        """G125 — `flatpak install --bundle` leaves the ref pointing at a url-less
+        """G141 — `flatpak install --bundle` leaves the ref pointing at a url-less
         pseudo-remote `flatpak remotes` does not list, so no remote can supply it."""
         context, _source, _target = make_context(
             source_responses=source_with(apps=ref_line(BUNDLE_REF, "bundle-origin"))
@@ -88,7 +88,7 @@ class TestNoRemoteDetection:
 
     @pytest.mark.asyncio
     async def test_a_ref_whose_remote_was_deleted_is_unreproducible(self) -> None:
-        """G126 — the second shape, and the reason there is one predicate rather than two: a
+        """G142 — the second shape, and the reason there is one predicate rather than two: a
         deleted remote leaves its name on the ref, which is a name matching no remote."""
         context, _source, _target = make_context(
             source_responses=source_with(apps=ref_line(DELETED_REMOTE_REF, "localrepo"))
@@ -101,7 +101,7 @@ class TestNoRemoteDetection:
 
     @pytest.mark.asyncio
     async def test_a_ref_from_a_configured_remote_is_not_presented(self) -> None:
-        """G127 — the negative control: an ordinary flathub app is `flatpak_sync`'s to
+        """G143 — the negative control: an ordinary flathub app is `flatpak_sync`'s to
         replicate, and presenting it here would ask for a snippet nobody needs."""
         context, _source, _target = make_context(source_responses=source_with(apps=ref_line(FLATHUB_REF, "flathub")))
         job = ManualFlatpakSyncJob(context)
@@ -112,7 +112,7 @@ class TestNoRemoteDetection:
 
     @pytest.mark.asyncio
     async def test_the_same_ref_in_two_scopes_yields_one_item_per_scope(self) -> None:
-        """G128 — user and system are separate installations, so scope is inside the
+        """G144 — user and system are separate installations, so scope is inside the
         identity: the same application in both, from a bundle in both, is two items."""
         context, _source, _target = make_context(
             source_responses=source_with(
@@ -127,7 +127,7 @@ class TestNoRemoteDetection:
 
     @pytest.mark.asyncio
     async def test_a_remote_configured_in_the_other_scope_does_not_reproduce_the_ref(self) -> None:
-        """G129 — flatpak tracks remotes per installation, so each scope is asked its own
+        """G145 — flatpak tracks remotes per installation, so each scope is asked its own
         question: a system-wide `flathub` says nothing about a user-scope ref naming it."""
         context, source, _target = make_context(
             source_responses={
@@ -149,7 +149,7 @@ class TestNoRemoteDetection:
 
     @pytest.mark.asyncio
     async def test_a_runtime_is_never_an_item(self) -> None:
-        """G139 — apps only, matching what `flatpak_sync` replicates: a runtime arrives with
+        """G155 — apps only, matching what `flatpak_sync` replicates: a runtime arrives with
         the app that needs it and is never installed on its own, so the detection listing is
         the `--app` one."""
         context, source, _target = make_context(
@@ -163,7 +163,7 @@ class TestNoRemoteDetection:
 
     @pytest.mark.asyncio
     async def test_a_machine_with_no_flatpak_apps_asks_no_remote_question(self) -> None:
-        """G140 — nothing installed is an ordinary answer, and a machine with no app has no
+        """G156 — nothing installed is an ordinary answer, and a machine with no app has no
         origin to judge, so the two `flatpak remotes` reads are not issued at all."""
         context, source, _target = make_context(source_responses={LIST_APPS: CommandResult(0, "", "")})
         job = ManualFlatpakSyncJob(context)
@@ -182,7 +182,7 @@ class TestAProbeThatDidNotAnswer:
 
     @pytest.mark.asyncio
     async def test_a_list_that_did_not_answer_fails_the_job(self) -> None:
-        """G131 — silence read as data would report "nothing on this machine was installed by
+        """G147 — silence read as data would report "nothing on this machine was installed by
         hand", the one answer this job exists to be able to contradict."""
         context, _source, _target = make_context(
             source_responses={LIST_APPS: CommandResult(1, "", "error: unable to reach flatpak")}
@@ -194,7 +194,7 @@ class TestAProbeThatDidNotAnswer:
 
     @pytest.mark.asyncio
     async def test_a_remotes_read_that_did_not_answer_fails_the_job(self) -> None:
-        """G132 — the other half: a remotes read that died would make every installed ref
+        """G148 — the other half: a remotes read that died would make every installed ref
         look unreproducible and ask for a snippet for each."""
         context, _source, _target = make_context(
             source_responses={
@@ -209,7 +209,7 @@ class TestAProbeThatDidNotAnswer:
 
     @pytest.mark.asyncio
     async def test_a_scope_configuring_no_remote_at_all_is_data_not_a_failure(self) -> None:
-        """G141 — a machine that configures no remote in one scope is ordinary; every ref in
+        """G157 — a machine that configures no remote in one scope is ordinary; every ref in
         that scope really is unreproducible, and that is the answer, not a probe failure."""
         context, _source, _target = make_context(
             source_responses=source_with(apps=ref_line(FLATHUB_REF, "flathub"), user_remotes=())
@@ -228,7 +228,7 @@ class TestWhatTheTargetAlreadyHolds:
 
     @pytest.mark.asyncio
     async def test_a_ref_the_target_has_from_a_remote_counts_as_held(self) -> None:
-        """G130 — whatever origin put it there: software that is on the machine is on the
+        """G146 — whatever origin put it there: software that is on the machine is on the
         machine, and re-asking the reproducibility question on the target would cost two more
         reads to answer what its own installed set already answers."""
         context, _source, target = make_context(
@@ -244,7 +244,7 @@ class TestWhatTheTargetAlreadyHolds:
 
     @pytest.mark.asyncio
     async def test_the_same_ref_in_the_other_scope_is_not_held(self) -> None:
-        """G142 — identity carries the scope, so a user-scope finding is not answered by a
+        """G158 — identity carries the scope, so a user-scope finding is not answered by a
         system-scope copy: the two are separate installations."""
         context, _source, _target = make_context(
             source_responses=source_with(apps=ref_line(BUNDLE_REF, "bundle-origin", "user")),
@@ -260,7 +260,7 @@ class TestWhatTheTargetAlreadyHolds:
 class TestValidate:
     @pytest.mark.asyncio
     async def test_flatpak_unavailable_on_source_yields_validation_error(self) -> None:
-        """G133 — validation fails before anything runs, naming the source and the missing tool."""
+        """G149 — validation fails before anything runs, naming the source and the missing tool."""
         context, _source, _target = make_context(source_responses={"flatpak --version": CommandResult(127, "", "")})
         job = ManualFlatpakSyncJob(context)
 
@@ -271,7 +271,7 @@ class TestValidate:
 
     @pytest.mark.asyncio
     async def test_flatpak_unavailable_on_target_yields_validation_error(self) -> None:
-        """G134 — the target is read to tell what it already has, so its flatpak is a
+        """G150 — the target is read to tell what it already has, so its flatpak is a
         precondition too."""
         context, _source, _target = make_context(target_responses={"flatpak --version": CommandResult(127, "", "")})
         job = ManualFlatpakSyncJob(context)
@@ -282,7 +282,7 @@ class TestValidate:
 
     @pytest.mark.asyncio
     async def test_valid_environment_yields_no_errors_and_imposes_no_sudo_precondition(self) -> None:
-        """G135 — both machines are only ever READ for detection, and a snippet's own
+        """G151 — both machines are only ever READ for detection, and a snippet's own
         administrative needs are unknowable, so no rights are demanded up front."""
         context, _source, target = make_context()
         job = ManualFlatpakSyncJob(context)
@@ -310,7 +310,7 @@ class TestInertFiltering:
 
     @pytest.mark.asyncio
     async def test_a_marked_finding_produces_no_diff(self) -> None:
-        """G136 — the answer silences the finding rather than putting it to the user again."""
+        """G152 — the answer silences the finding rather than putting it to the user again."""
         context, _source, _target = make_context(
             source_responses={
                 "manual_flatpak.decisions.yaml": CommandResult(0, _decisions(item_id(BUNDLE_REF)), ""),
@@ -342,7 +342,7 @@ class TestMarksFollowWhatTheMachineHolds:
 
     @pytest.mark.asyncio
     async def test_a_marked_ref_still_installed_keeps_its_mark(self) -> None:
-        """G138 — presence answers this, not reproducibility: a marked ref whose remote the
+        """G154 — presence answers this, not reproducibility: a marked ref whose remote the
         user re-added is still installed, and dropping its mark would re-offer software the
         user asked to be left alone."""
         source = await self._run(
@@ -356,7 +356,7 @@ class TestMarksFollowWhatTheMachineHolds:
 
     @pytest.mark.asyncio
     async def test_a_marked_ref_the_machine_no_longer_has_is_dropped(self) -> None:
-        """G137 — the other answer: the mark keeps this machine's copy, and there is no copy
+        """G153 — the other answer: the mark keeps this machine's copy, and there is no copy
         left for it to keep."""
         source = await self._run(
             source_responses={
@@ -375,7 +375,7 @@ class TestExecuteIndependentOfFlatpakSync:
 
     @pytest.mark.asyncio
     async def test_plan_runs_with_flatpak_sync_absent_from_config(self) -> None:
-        """G143 — the finding is still detected and presented; this job asks flatpak its own
+        """G159 — the finding is still detected and presented; this job asks flatpak its own
         questions and imports nothing from `flatpak_sync`."""
         context, _source, _target = make_context(
             source_responses=source_with(apps=ref_line(BUNDLE_REF, "bundle-origin")),
@@ -391,7 +391,7 @@ class TestExecuteIndependentOfFlatpakSync:
 class TestFlatpakJobDiscovery:
     @pytest.mark.asyncio
     async def test_orchestrator_resolves_manual_flatpak_sync_to_its_job(self) -> None:
-        """G123 — named in the configuration, the job resolves to its own class."""
+        """G139 — named in the configuration, the job resolves to its own class."""
         config = MagicMock(spec=Configuration)
         config.logging = MagicMock()
         config.logging.file = 10
@@ -408,7 +408,7 @@ class TestFlatpakJobDiscovery:
 
 class TestFlatpakFirstSyncScope:
     def test_the_announced_scope_names_the_refs_no_remote_can_supply(self) -> None:
-        """G124 — ADR-015's first-sync announcement names this job, what it would put on the
+        """G140 — ADR-015's first-sync announcement names this job, what it would put on the
         target and the mechanism it uses to get it there."""
         scope = ManualFlatpakSyncJob.describe_first_sync_scope({})
 

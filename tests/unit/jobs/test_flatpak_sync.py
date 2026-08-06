@@ -532,7 +532,7 @@ class TestPlanDiff:
 
     @pytest.mark.asyncio
     async def test_full_diff_taxonomy(self) -> None:
-        """F1, F9, F15, F16, F17, F18, F146 — source-only installs, target-only removals, a version
+        """F1, F9, F15, F16, F17, F18, F157 — source-only installs, target-only removals, a version
         report and the silent identical pair, in one plan.
         """
         context, _source, _target = make_context(source_responses=SOURCE_RESPONSES, target_responses=TARGET_RESPONSES)
@@ -735,7 +735,7 @@ class TestRefOriginMismatch:
 
     @pytest.mark.asyncio
     async def test_an_origin_naming_no_configured_remote_matches_nothing(self) -> None:
-        """F92, F148 — A ref whose origin remote the machine no longer configures has no URL, and an
+        """F92, F159 — A ref whose origin remote the machine no longer configures has no URL, and an
         absent URL is a value of its own that matches nothing — not even the same name on the
         other machine (`PKG-FR-FLATPAK-ORIGIN-DIFF`). Falling back to the name would call two
         unresolvable origins one origin on no evidence at all.
@@ -1090,13 +1090,13 @@ class TestRemotesAreDerivedFromApprovedRefs:
 
     @pytest.mark.asyncio
     async def test_a_remote_the_source_does_not_report_fails_the_refs_that_named_it(self) -> None:
-        """F98, F147 — the source's ref names an origin the source's own remote list does not carry,
+        """F98, F158 — the source's ref names an origin the source's own remote list does not carry,
         so the write has nothing to replicate: the failure is recorded against the remote and charged
         to the approved refs, never raised as an item of its own.
 
         Reached by deleting the remote from the plan's own record AFTER `plan()`, because that is the
         only way this state now arises: a ref whose origin the source does not configure never
-        becomes a flatpak item in the first place (F146), so what is left for this guard is the
+        becomes a flatpak item in the first place (F157), so what is left forthis guard is the
         plan/apply race — the remote removed on the source while the review was on screen.
         """
         context, _source, target = make_context(source_responses=derivation_source(), fake_target=FakeFlatpakTarget())
@@ -2333,11 +2333,11 @@ class TestConverge:
 
     @pytest.mark.asyncio
     async def test_ref_with_missing_origin_remote_is_skipped_with_named_failure(self) -> None:
-        """F85, F147 — an origin remote neither machine has refuses the application, naming it, and
+        """F85, F158 — an origin remote neither machine has refuses the application, naming it, and
         installs nothing.
 
         The remote is dropped from the plan's own record after `plan()`: a ref whose origin the
-        source does not configure is no longer a flatpak item at all (F146), so the state this guard
+        source does not configure is no longer a flatpak item at all (F157), so the state this guard
         answers is the plan/apply race rather than an ordinary listing.
         """
         context, _source, target = make_context(source_responses=SOURCE_RESPONSES, fake_target=converge_target())

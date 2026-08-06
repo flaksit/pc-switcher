@@ -57,7 +57,7 @@ graph TD
 
     BtrfsSnapshotJob["<b>BtrfsSnapshotJob</b><br/>SystemJob<br/>- pre/post phase<br/>- Both machines<br/>- Direct btrfs commands"]
 
-    SyncJobs["<b>SyncJobs</b><br/>- apt_sync, snap_sync, flatpak_sync<br/>- manual_deb_sync, manual_installs_sync<br/>- folder_sync, vscode_state_sync<br/>- dummy_success, dummy_fail<br/>[configurable]"]
+    SyncJobs["<b>SyncJobs</b><br/>- apt_sync, snap_sync, flatpak_sync<br/>- manual_deb_sync, manual_snap_sync<br/>- manual_installs_sync<br/>- folder_sync, vscode_state_sync<br/>- dummy_success, dummy_fail<br/>[configurable]"]
 
     DiskSpaceMonitorJob["<b>DiskSpaceMonitorJob</b><br/>BackgroundJob<br/>- Periodic check<br/>- One instance per host<br/>[concurrent]"]
 
@@ -361,7 +361,7 @@ sequenceDiagram
 
 Reaching step 12 is not the same as success: per-item package failures are recorded as FAILED `JobResult`s rather than raised, so `_summarize_job_outcomes` derives the session status from the results.
 
-A `finally` block always runs `_cleanup()`: restore the snapd hold, release the target lock, terminate tracked processes on both machines, disconnect, release the source lock, drain the event bus and logging queues, stop the Live display, and print the warning summary. Locks are fcntl advisory locks released automatically when a process exits or the SSH connection drops, so a leftover lock *file* never blocks a future sync.
+A `finally` block always runs `_cleanup()`: restore the snapd hold, release the target lock, terminate tracked processes on both machines, disconnect, release the source lock, drain the event bus and logging queues, stop the Live display, and print the job outcome block and the warning summary. Locks are fcntl advisory locks released automatically when a process exits or the SSH connection drops, so a leftover lock *file* never blocks a future sync.
 
 ## Key Design Patterns
 
@@ -383,7 +383,7 @@ Every executor call that is not purely read-only passes `mutates="<phrase>"`, wh
 
 ### Sequential Execution
 
-Sync jobs run one at a time, in config order, with no dependency graph. The one ordering rule is validated rather than resolved: the five package jobs must be listed before `folder_sync` (D-17), otherwise config validation fails.
+Sync jobs run one at a time, in config order, with no dependency graph. The one ordering rule is validated rather than resolved: the seven package jobs must be listed before `folder_sync` (D-17), otherwise config validation fails.
 
 The two `DiskSpaceMonitorJob`s run concurrently in the same `TaskGroup` and are cancelled when the job loop ends.
 

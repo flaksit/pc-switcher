@@ -13,6 +13,7 @@ from .install_on_target import InstallOnTargetJob
 from .manual_deb_sync import ManualDebSyncJob
 from .manual_flatpak_sync import ManualFlatpakSyncJob
 from .manual_installs_sync import ManualInstallsSyncJob
+from .manual_snap_sync import ManualSnapSyncJob
 from .vscode_state_sync import VscodeStateSyncJob
 
 __all__ = [
@@ -29,6 +30,7 @@ __all__ = [
     "ManualDebSyncJob",
     "ManualFlatpakSyncJob",
     "ManualInstallsSyncJob",
+    "ManualSnapSyncJob",
     "SyncJob",
     "SystemJob",
     "VscodeStateSyncJob",

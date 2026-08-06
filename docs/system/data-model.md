@@ -206,7 +206,7 @@ class SyncSession:
 
 ## Package Sync Entities
 
-Phase 2's package-sync subsystem (`apt_sync`, `snap_sync`, `flatpak_sync`, `manual_deb_sync`, `manual_installs_sync`) adds its own item model and two on-disk data shapes. See the [Package Sync Spec](package-sync.md) for the pipeline these flow through.
+Phase 2's package-sync subsystem (`apt_sync`, `snap_sync`, `flatpak_sync`, `manual_deb_sync`, `manual_snap_sync`, `manual_installs_sync`) adds its own item model and two on-disk data shapes. See the [Package Sync Spec](package-sync.md) for the pipeline these flow through.
 
 Only what more than one manager uses lives in the shared `jobs/packages/items.py`: the `ItemClass`/`DiffClass`/`DiffAction` taxonomy, `ItemDiff` and `Machines`. Each item class below lives in the job that constructs it (`jobs/apt_sync/items.py`, `jobs/snap_sync.py`, `jobs/flatpak_sync.py`) — the jobs are deliberately independent, and a registry of everyone's private shapes would couple them for nothing. `UnreproducibleItem` is the one shape two jobs construct, so it lives in the base they share (`jobs/packages/unreproducible.py`) rather than in either of them.
 
@@ -230,7 +230,7 @@ Every item class computes a stable `item_id` string rather than reusing the mana
 | `FlatpakRemoteItem` | `flatpak:remote:<scope>:<name>` | `scope` — `flathub` commonly exists in both scopes with an identical URL but needs independent provisioning. Never reviewed: captured state only, derived in every direction |
 | flatpak remote conflict | `flatpak:conflict:<scope>:<name>` | not an item at all — a two-answer review entry for a derived repoint that would move a machine-specific ref's origin |
 | `FlatpakMaskItem` | `flatpak:mask:<scope>:<pattern>` | `scope`, and the pattern itself: masks are patterns, not references to installed refs |
-| `UnreproducibleItem` | `unreproducible:<origin>:<identifier>` | `origin`: `apt-no-candidate` or `unowned-path` — the same identifier string can coincidentally collide across origins |
+| `UnreproducibleItem` | `unreproducible:<origin>:<identifier>` | `origin`: `apt-no-candidate`, `snap-sideload` or `unowned-path` — the same identifier string can coincidentally collide across origins |
 
 A signing key, an apt repository or pin the run WRITES, and a flatpak remote the run adds, repoints, filters or deletes have no `item_id` in any form: they are derived from the packages and refs approved from them, so there is nothing for the review or a decision file to key on.
 
@@ -287,7 +287,7 @@ machine_specific:
 
 ### Install-snippet registry (synced)
 
-One shared YAML file at `~/.config/pc-switcher/package-snippets.yaml`, holding an opaque, replayable shell command for each item no package manager can reproduce (a bare `.deb`, a manual install). **Reaches the target** — an unreproducible job (`manual_deb_sync`, `manual_installs_sync`) pushes it to the target itself with `send_file()` immediately after its own review, so a snippet authored on the fly during that review is included in the same run. It does **not** travel via `config_sync`, which carries `config.yaml` only and runs before any review, so it could not carry a snippet the user has not authored yet. How to install something is knowledge about the package, not the machine, so unlike the machine-local decision file above the registry does reach the target — but by the job's own push, never as a synced config file and never in `folder_sync`'s mirror, which excludes this path unconditionally so the push's consent question cannot be bypassed. Absent or empty means no snippets; a file that is there and cannot be parsed ends the run naming it, on either machine, rather than degrading to no snippets the way a decision file does — that degrade would make a wholesale push look additive and overwrite entries nobody could see.
+One shared YAML file at `~/.config/pc-switcher/package-snippets.yaml`, holding an opaque, replayable shell command for each item no package manager can reproduce (a bare `.deb`, a sideloaded snap, a manual install). **Reaches the target** — an unreproducible job (`manual_deb_sync`, `manual_snap_sync`, `manual_installs_sync`) pushes it to the target itself with `send_file()` immediately after its own review, so a snippet authored on the fly during that review is included in the same run. It does **not** travel via `config_sync`, which carries `config.yaml` only and runs before any review, so it could not carry a snippet the user has not authored yet. How to install something is knowledge about the package, not the machine, so unlike the machine-local decision file above the registry does reach the target — but by the job's own push, never as a synced config file and never in `folder_sync`'s mirror, which excludes this path unconditionally so the push's consent question cannot be bypassed. Absent or empty means no snippets; a file that is there and cannot be parsed ends the run naming it, on either machine, rather than degrading to no snippets the way a decision file does — that degrade would make a wholesale push look additive and overwrite entries nobody could see.
 
 ```python
 @dataclass(frozen=True)

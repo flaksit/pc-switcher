@@ -61,6 +61,7 @@ sync_jobs:
   snap_sync: true
   flatpak_sync: true
   manual_deb_sync: true
+  manual_snap_sync: true
   manual_installs_sync: true
   folder_sync: true
 disk_space_monitor:
