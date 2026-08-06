@@ -20,7 +20,7 @@ other job constructed one, and `manual_snap_sync` now does.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import ClassVar
 
 from pcswitcher.jobs.packages.items import ItemClass
@@ -54,6 +54,17 @@ class SnapItem:
     `snap_sync` can pass `--classic`/`--devmode` to `snap install`/`snap refresh`, which
     snapd requires as explicit per-revision confirmation before it will install a
     classic-confinement or devmode revision at all.
+
+    `version` is the snap's own declared version, the `Version` column beside `Rev`, and it
+    is excluded from equality (`compare=False`). `snap_sync` converges the REVISION and must
+    go on comparing two `SnapItem`s on the fields it acts upon; the version is a fact
+    `manual_snap_sync` needs and `snap_sync` does not, and folding it into equality would
+    make two identical snaps compare unequal whenever the store restated a version.
+
+    That version, and never the revision, is what `manual_snap_sync` compares a sideload on
+    (`PKG-FR-MANUAL-VERSION`): two machines' `x<N>` revisions are independent install
+    counters rather than two builds, so comparing them would report a difference between one
+    machine having reinstalled more often than the other.
     """
 
     name: str
@@ -62,6 +73,7 @@ class SnapItem:
     held: bool = False
     classic: bool = False
     devmode: bool = False
+    version: str = field(default="", compare=False)
 
     ITEM_CLASS: ClassVar[ItemClass] = ItemClass.SNAP
 
@@ -97,6 +109,9 @@ def parse_snap_list(output: str) -> list[SnapItem]:
         notes_idx = header.index("Notes")
     except ValueError:
         return []
+    # Optional, unlike the four above: a listing whose header omits it still yields usable
+    # snaps for `snap_sync`, which converges revisions and never reads a version.
+    version_idx = header.index("Version") if "Version" in header else None
 
     max_idx = max(name_idx, rev_idx, tracking_idx, notes_idx)
     items: list[SnapItem] = []
@@ -128,6 +143,7 @@ def parse_snap_list(output: str) -> list[SnapItem]:
                 held=held,
                 classic="classic" in notes,
                 devmode="devmode" in notes,
+                version=fields[version_idx] if version_idx is not None and version_idx < len(fields) else "",
             )
         )
     return items

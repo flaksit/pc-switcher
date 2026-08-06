@@ -16,7 +16,38 @@ from unittest.mock import AsyncMock, MagicMock
 from pcswitcher.jobs import JobContext
 from pcswitcher.jobs.packages.items import DiffAction, DiffClass, ItemClass, ItemDiff
 from pcswitcher.jobs.packages.review import Decision, ReviewGroup, ReviewOutcome, ReviewPolicy
+from pcswitcher.jobs.packages.state import SnippetBodies
 from pcswitcher.models import CommandResult
+
+__all__ = [
+    "BRSCAN3_REGISTRY_YAML",
+    "DPKG_WITNESS_LINE",
+    "FIXTURE_VERSION",
+    "POLICY_AUTO_DEP",
+    "POLICY_HAND_DEB",
+    "POLICY_NEWER_THAN_REPO",
+    "POLICY_PINNED_NO_CANDIDATE",
+    "POLICY_REPO_INSTALLED",
+    "STATUS_QUERY",
+    "TARGET_HOLDS_NOTHING_OF_INTEREST",
+    "Answer",
+    "FakeConfirmer",
+    "FakeGate",
+    "FakeReviewer",
+    "SnippetBodies",
+    "all_calls",
+    "decision_file_writes",
+    "every_directory_holds_a_file",
+    "hand_deb_policy",
+    "installed_at",
+    "installed_on",
+    "job_diff",
+    "make_context",
+    "registry_writes",
+    "repo_policy_for_requested",
+    "respond_to",
+    "scan_finds",
+]
 
 # -- Real `apt-cache policy` output, verbatim ------------------------------------------
 #
@@ -108,12 +139,14 @@ POLICY_AUTO_DEP = """7zip:
 # therefore reply with it, exactly as a working dpkg would.
 DPKG_WITNESS_LINE = "dpkg: /usr/bin/dpkg\n"
 
-# A `package-snippets.yaml` registry holding one snippet for the brscan3 no-candidate item.
+# A `package-snippets.yaml` registry holding one entry for the brscan3 no-candidate item.
+# Both bodies, because both are mandatory (D-22) and an entry missing either ends the run.
 BRSCAN3_REGISTRY_YAML = (
     "snippets:\n"
     "  unreproducible:apt-no-candidate:brscan3:\n"
     "    label: brscan3 (no apt candidate)\n"
-    "    body: sudo dpkg --install /tmp/brscan3.deb\n"
+    "    install_body: sudo dpkg --install /tmp/brscan3.deb\n"
+    "    version_body: dpkg-query --show --showformat='${Version}' brscan3\n"
     "    authored_at: '2026-01-01T00:00:00+00:00'\n"
     "    authored_on: laptop\n"
 )
@@ -125,15 +158,47 @@ BRSCAN3_REGISTRY_YAML = (
 # (`PKG-FR-MANUAL-DIFF`).
 STATUS_QUERY = "db:Status-Status"
 
+# The version every fixture package is installed at unless a test says otherwise. One value
+# on both machines is what makes an item both of them hold produce nothing, which is the
+# converged case every test that is not about drift assumes.
+FIXTURE_VERSION = "1.0"
 
-def installed_on(*names: str) -> CommandResult:
-    """What that `dpkg-query` answers on a machine holding exactly `names`."""
-    return CommandResult(0, "".join(f"{name}\tinstalled\n" for name in names), "")
+
+def installed_on(*names: str, version: str = FIXTURE_VERSION) -> CommandResult:
+    """What that `dpkg-query` answers on a machine holding exactly `names`, each at
+    `version` — the three fields the real query asks for."""
+    return CommandResult(0, "".join(f"{name}\t{version}\tinstalled\n" for name in names), "")
+
+
+def installed_at(versions: dict[str, str]) -> CommandResult:
+    """The same, with a version per package, for a test about drift."""
+    return CommandResult(0, "".join(f"{name}\t{version}\tinstalled\n" for name, version in versions.items()), "")
+
+
+def repo_policy_for_requested(command: str) -> CommandResult:
+    """One repo-installed `apt-cache policy` block per package the command asked about.
+
+    The target's default answer: everything it holds comes from a repository it configures,
+    so nothing on it is this job's own finding and no removal is proposed
+    (`PKG-FR-MANUAL-REMOVE`). A test about removal answers this question itself.
+    """
+    names = command.removeprefix("apt-cache policy ").split()
+    blocks = "".join(
+        f"{shlex.split(name)[0] if name else name}:\n"
+        f"  Installed: {FIXTURE_VERSION}\n"
+        f"  Candidate: {FIXTURE_VERSION}\n"
+        "  Version table:\n"
+        f" *** {FIXTURE_VERSION} 500\n"
+        "        500 http://ftp.belnet.be/ubuntu noble/universe amd64 Packages\n"
+        "        100 /var/lib/dpkg/status\n"
+        for name in names
+    )
+    return CommandResult(0, blocks, "")
 
 
 # What the target answers about its own installed set unless a test says otherwise. A
 # machine with no packages installed does not exist, and reading one as empty is a probe
-# failure by design (`_installed_names`), so every context needs an ordinary answer here for
+# failure by design (`_installed`), so every context needs an ordinary answer here for
 # the target's half of the diff to be reachable at all.
 TARGET_HOLDS_NOTHING_OF_INTEREST = ("coreutils",)
 
@@ -211,7 +276,14 @@ def make_context(  # noqa: PLR0913 - test builder knobs; all keyword-only
     target = MagicMock()
     target.run_command = AsyncMock(
         side_effect=respond_to(
-            {STATUS_QUERY: installed_on(*TARGET_HOLDS_NOTHING_OF_INTEREST), **(target_responses or {})}
+            {
+                STATUS_QUERY: installed_on(*TARGET_HOLDS_NOTHING_OF_INTEREST),
+                # The target's own no-repository question, asked of the names the source
+                # does not have (`PKG-FR-MANUAL-REMOVE`). Answering it by default keeps
+                # every test that is not about removal free of removal items.
+                "apt-cache policy": repo_policy_for_requested,
+                **(target_responses or {}),
+            }
         )
     )
     target.send_file = AsyncMock(return_value=None)
@@ -300,7 +372,7 @@ class FakeReviewer:
         self,
         *,
         decisions: dict[str, Decision] | None = None,
-        snippets: dict[str, str] | None = None,
+        snippets: dict[str, SnippetBodies] | None = None,
         unresolved: tuple[str, ...] = (),
         was_interactive: bool = True,
     ) -> None:

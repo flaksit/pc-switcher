@@ -456,16 +456,26 @@ async def remove_unowned_marker(executor: BashLoginRemoteExecutor, path: str) ->
     await executor.run_command(f"sudo rm --recursive --force {shlex.quote(path)}", login_shell=False, timeout=15.0)
 
 
-async def author_snippet(executor: BashLoginRemoteExecutor, item_id: str, label: str, body: str) -> None:
-    """Author one snippet directly into `executor`'s registry (D-20), bypassing the
-    interactive per-entry capture prompt entirely -- the test does not depend on that
+async def author_snippet(  # noqa: PLR0913 - one registry entry's fields; all but the executor keyword-usable
+    executor: BashLoginRemoteExecutor,
+    item_id: str,
+    label: str,
+    body: str,
+    version_body: str = "echo 1.0",
+) -> None:
+    """Author one registry entry directly into `executor`'s registry (D-20, D-22), bypassing
+    the interactive per-entry capture prompt entirely -- the test does not depend on that
     UI path, only on the registry's own read/write contract (`package_state.py`).
+
+    `version_body` defaults to a constant, so a scenario that is not about drift reports the
+    same version on both machines and produces no update item.
     """
     await SnippetRegistry(executor).add(
         Snippet(
             item_id=item_id,
             label=label,
-            body=body,
+            install_body=body,
+            version_body=version_body,
             authored_at=datetime.now(UTC).isoformat(),
             authored_on="integration-test",
         )

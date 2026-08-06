@@ -820,8 +820,8 @@ class TestARunWithNobodyToAsk:
                 f"pc2's registry is no longer its own: it holds {sorted(entries)} rather than the single entry "
                 f"{target_item} pc2 had before the run"
             )
-            assert entries[target_item].body == target_body, (
-                f"pc2's own entry for {target_path} was overwritten: its body reads {entries[target_item].body!r} "
+            assert entries[target_item].install_body == target_body, (
+                f"pc2's own entry for {target_path} was overwritten: its body reads {entries[target_item].install_body!r} "
                 f"rather than {target_body!r}"
             )
 

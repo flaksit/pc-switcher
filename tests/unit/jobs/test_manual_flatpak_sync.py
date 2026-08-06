@@ -159,7 +159,7 @@ class TestNoRemoteDetection:
 
         await job.plan()
 
-        assert "flatpak list --app --columns=origin,installation,ref" in all_calls(source)
+        assert "flatpak list --app --columns=origin,installation,ref,version" in all_calls(source)
 
     @pytest.mark.asyncio
     async def test_a_machine_with_no_flatpak_apps_asks_no_remote_question(self) -> None:
@@ -229,9 +229,9 @@ class TestWhatTheTargetAlreadyHolds:
     @pytest.mark.asyncio
     async def test_a_ref_the_target_has_from_a_remote_counts_as_held(self) -> None:
         """G146 — whatever origin put it there: software that is on the machine is on the
-        machine, and re-asking the reproducibility question on the target would cost two more
-        reads to answer what its own installed set already answers."""
-        context, _source, target = make_context(
+        machine, so nothing is offered for install and the two copies' versions are compared
+        instead. Same version on both, so no item at all."""
+        context, _source, _target = make_context(
             source_responses=source_with(apps=ref_line(BUNDLE_REF, "bundle-origin")),
             target_responses={LIST_APPS: CommandResult(0, ref_line(BUNDLE_REF, "flathub"), "")},
         )
@@ -240,12 +240,12 @@ class TestWhatTheTargetAlreadyHolds:
         plan = await job.plan()
 
         assert plan.diffs == ()
-        assert not [cmd for cmd in all_calls(target) if cmd.startswith("flatpak remotes")]
 
     @pytest.mark.asyncio
     async def test_the_same_ref_in_the_other_scope_is_not_held(self) -> None:
         """G158 — identity carries the scope, so a user-scope finding is not answered by a
-        system-scope copy: the two are separate installations."""
+        system-scope copy: the two are separate installations, and the source's user-scope
+        ref is still an item of its own."""
         context, _source, _target = make_context(
             source_responses=source_with(apps=ref_line(BUNDLE_REF, "bundle-origin", "user")),
             target_responses={LIST_APPS: CommandResult(0, ref_line(BUNDLE_REF, "flathub", "system"), "")},
@@ -254,7 +254,7 @@ class TestWhatTheTargetAlreadyHolds:
 
         plan = await job.plan()
 
-        assert [d.item_id for d in plan.diffs] == [item_id(BUNDLE_REF, "user")]
+        assert item_id(BUNDLE_REF, "user") in [d.item_id for d in plan.diffs]
 
 
 class TestValidate:

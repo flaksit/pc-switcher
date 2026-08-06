@@ -27,12 +27,12 @@ from __future__ import annotations
 
 import re
 import shlex
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from typing import Any, ClassVar, override
 
 from pcswitcher.executor import Executor
 from pcswitcher.jobs.packages.probes import ProbeFailed, require_answer
-from pcswitcher.jobs.packages.state import DecisionEntry
+from pcswitcher.jobs.packages.state import DecisionEntry, SnippetRegistry
 from pcswitcher.jobs.packages.unreproducible import UnreproducibleItem, UnreproducibleSyncJob, lines_of
 from pcswitcher.models import FirstSyncScope, Host, ValidationError
 
@@ -389,14 +389,65 @@ class ManualInstallsSyncJob(UnreproducibleSyncJob):
 
     @override
     async def query_target_items(self) -> Sequence[UnreproducibleItem]:
-        """What the TARGET already holds, in the source's own identities, so `plan()` can
-        drop a finding that is already there (`PKG-FR-MANUAL-DIFF`).
+        """What the TARGET holds, in the source's own identities (`PKG-FR-MANUAL-DIFF`),
+        from the same scan run there.
 
-        It exists so that a snippet which has already run stops being asked about — one
+        It is what stops a snippet that has already run from being asked about again — one
         snippet installs one application and leaves several traces, and each trace is a
         finding of its own. A path is held when the same scan finds it there unowned.
+
+        Every row is also this job's own finding, so the two readings coincide here and one
+        scan answers both: an unowned path under `/opt` or `/usr/local` is by definition
+        software no package manager accounts for, whichever machine it is on. A path the
+        target has and the source does not is therefore a removal candidate
+        (`PKG-FR-MANUAL-REMOVE`).
         """
         return await self._scan_unowned_installs(self.target, self.machines.target, ask_when_ambiguous=False)
+
+    @override
+    async def installed_versions(self, item_ids: Collection[str], *, on_source: bool) -> Mapping[str, str | None]:
+        """Each item's version, from its own `version_body` run on one machine (D-22).
+
+        One command per id, unlike the three manager-backed jobs: there is no listing to
+        batch, because what "installed version" means for an unowned path is whatever its
+        author's own snippet prints. An id with no registry entry, a body that failed, and a
+        body that printed nothing all answer `None`, which produces no item rather than a
+        claimed difference — a path nobody has written a snippet for yet is a finding to
+        resolve, not a version to compare.
+
+        Both machines run it, on every sync, which is what `PKG-FR-VERSION-SNIPPET` puts the
+        read-only obligation on the author for. The SOURCE's registry is read on both sides:
+        it is the machine being replicated, and `PKG-FR-MANUAL-SOURCE-DECIDES` already makes
+        its recipes the ones this run acts on.
+        """
+        executor = self.source if on_source else self.target
+        registry = SnippetRegistry(self.source, self.machines.source)
+        return {item_id: await registry.installed_version(item_id, executor) for item_id in item_ids}
+
+    @override
+    def removal_command(self, item: UnreproducibleItem) -> str:
+        """`rm --recursive --force` on the scanned path, and nothing else.
+
+        No uninstall snippet and no uninstall machinery behind it: this is not a package
+        manager, and what the path holds is the only thing the scan ever established. What
+        that leaves behind is stated on the screen instead (`removal_warning`).
+        """
+        return f"sudo rm --recursive --force {shlex.quote(item.identifier)}"
+
+    @override
+    def removal_warning(self) -> str | None:
+        """Say what a path deletion does not reach (`PKG-FR-MANUAL-REMOVE`).
+
+        The scan names a path; the snippet that created it will usually also have dropped a
+        `.desktop` file, a symlink in `/usr/local/bin` or a systemd unit somewhere this scan
+        never looks. Deleting the path leaves those behind, and the user is the only one who
+        can know where they are — pc-switcher records nothing about what a snippet put where.
+        """
+        return (
+            f"Only the path itself is deleted on {self.machines.target}. Whatever installed it may also have "
+            "left a launcher, a symlink or a service unit outside these directories, and nothing here knows "
+            "where; those stay."
+        )
 
     @override
     async def observe_absent_marks(self, entries: Mapping[str, DecisionEntry], *, on_source: bool) -> frozenset[str]:
@@ -446,11 +497,14 @@ class ManualInstallsSyncJob(UnreproducibleSyncJob):
     @override
     async def validate(self) -> list[ValidationError]:
         """The commands this job's own detection runs: `dpkg` on the source, and `dpkg` on
-        the target, which is read too now that a finding the target already holds is not
-        presented (`PKG-FR-MANUAL-DIFF`). Both machines are only ever read for detection, so
-        no sudo is needed for it. A snippet's own sudo needs are unpredictable (an opaque
-        blob, D-20), so this job does NOT pre-validate target sudo; a snippet that needs it
-        and lacks it fails as a per-item converge failure (D-27), reported like any other.
+        the target, which is read too for what it already holds and for the paths the source
+        has dropped (`PKG-FR-MANUAL-DIFF`, `PKG-FR-MANUAL-REMOVE`). Both machines are only
+        ever read for detection, so no sudo is needed for it. A snippet's own sudo needs are
+        unpredictable (an opaque blob, D-20), so this job does NOT pre-validate target sudo;
+        a snippet that needs it and lacks it fails as a per-item converge failure (D-27),
+        reported like any other. An approved `rm --recursive --force` under `/opt` needs it
+        too and is treated the same way: a run that approves no removal needs no privilege at
+        all, and demanding it up front would refuse the job to every user who only installs.
 
         Sequential checks appending to `errors`, never raising mid-validate (matches
         `AptSyncJob.validate()`'s shape).
@@ -479,9 +533,13 @@ class ManualInstallsSyncJob(UnreproducibleSyncJob):
     @override
     def describe_first_sync_scope(cls, config: dict[str, Any]) -> FirstSyncScope | None:
         """Name this job's destructive first-sync scope (ADR-015): replaying install
-        snippets for unowned installs under `/usr/local` and `/opt`."""
+        snippets for unowned installs under `/usr/local` and `/opt`, and deleting the paths
+        the source has dropped."""
         return FirstSyncScope(
             job_name=cls.name,
-            scope_items=["unowned installs under /usr/local and /opt (via recorded install snippets)"],
-            mechanism="replay install snippet per item, after review",
+            scope_items=[
+                "unowned installs under /usr/local and /opt (via recorded install snippets)",
+                "unowned paths under /usr/local and /opt the source no longer has (rm --recursive --force)",
+            ],
+            mechanism="replay install snippet or delete the path, per item, after review",
         )

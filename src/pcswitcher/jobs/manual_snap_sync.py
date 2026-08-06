@@ -24,7 +24,8 @@ enabling `snap_sync` while disabling this one leaves sideloaded snaps replicated
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+import shlex
+from collections.abc import Collection, Mapping, Sequence
 from typing import Any, ClassVar, override
 
 from pcswitcher.executor import Executor
@@ -113,32 +114,64 @@ class ManualSnapSyncJob(UnreproducibleSyncJob):
 
     @override
     async def query_target_items(self) -> Sequence[UnreproducibleItem]:
-        """What the TARGET already holds, in the source's own identities, so `plan()` can
-        drop a finding that is already there (`PKG-FR-MANUAL-DIFF`).
+        """What the TARGET holds, in the source's own identities (`PKG-FR-MANUAL-DIFF`),
+        from one `snap list --all`.
 
-        A snap is held when snapd reports the NAME installed at all — at any revision,
-        sideloaded or from the store. The two cases the target can present are exactly
-        those, and neither is a reason to offer the source's snippet:
+        A snap is HELD when snapd reports the NAME installed at all — at any revision,
+        sideloaded or from the store — so the source's copy of that name is never offered
+        for install. The two cases the target can present differ in what happens next, and
+        the difference is the snap's declared VERSION, never its revision:
 
-        - the target holds a SIDELOAD of that name, at its own `x<N>` revision. Which
-          `.snap` file each machine was fed is not knowable from either listing, and
-          comparing the two `x<N>` numbers would compare two machines' independent install
-          counters rather than two builds. Replaying the snippet would reinstall over a
-          working sideload to chase a difference nothing here can read.
-        - the target holds a STORE snap of that name. It is the same application, from a
-          route this tool did not need a snippet for, and `snap_sync` has withheld the
-          name on both machines (`PKG-FR-SNAP-SIDELOAD`), so nothing else in the run
-          touches it either. Replaying the snippet would sideload over the store copy and
-          take it off the update path it is on.
+        - the target holds a SIDELOAD of that name. Which `.snap` file each machine was fed
+          is not knowable from either listing and the two `x<N>` numbers are independent
+          install counters, so the comparison is on the `Version` column: equal versions are
+          convergence, and a difference is the drift `PKG-FR-MANUAL-VERSION` asks about.
+        - the target holds a STORE snap of that name. It is the same application by a route
+          needing no snippet, and `snap_sync` has withheld the name on both machines
+          (`PKG-FR-SNAP-SIDELOAD`), so nothing else in the run touches it either. Its
+          version is compared like any other: the source's sideload is what a run replicates,
+          and a target left behind on an older store build is the same drift.
 
-        Update, drift and version comparison are out of scope for every unreproducible job
-        alike (#207) and are deliberately not smuggled in here: what this returns decides
-        presence and nothing else.
+        `own_finding` is the sideload half alone, so only a snap the target itself
+        sideloaded can become a removal once the source drops it
+        (`PKG-FR-MANUAL-REMOVE`). A store snap the source lacks is `snap_sync`'s business,
+        not this job's, and offering to delete one here would take software off the update
+        path it is on.
         """
         return [
-            UnreproducibleItem(origin=_ORIGIN, identifier=item.name, label=item.name)
+            UnreproducibleItem(
+                origin=_ORIGIN,
+                identifier=item.name,
+                label=f"{item.name} (sideloaded snap, revision {item.revision})" if is_sideloaded(item) else item.name,
+                own_finding=is_sideloaded(item),
+            )
             for item in await self._installed_snaps(self.target, self.machines.target)
         ]
+
+    @override
+    async def installed_versions(self, item_ids: Collection[str], *, on_source: bool) -> Mapping[str, str | None]:
+        """Each snap's declared version on one machine, from one `snap list --all`.
+
+        The `Version` column, never `Rev`: a sideload's revision moves on every reinstall
+        from a newer file, so comparing revisions would report a difference between two
+        machines' install counters. A snap whose listing carries no version at all answers
+        `None`, which produces no item rather than a claimed difference.
+        """
+        executor = self.source if on_source else self.target
+        machine = self.machines.source if on_source else self.machines.target
+        versions = {item.name: item.version for item in await self._installed_snaps(executor, machine)}
+        prefix = UnreproducibleItem.id_prefix(_ORIGIN)
+        return {item_id: versions.get(item_id.removeprefix(prefix)) or None for item_id in item_ids}
+
+    @override
+    def removal_command(self, item: UnreproducibleItem) -> str:
+        """`snap remove` for a sideload the source no longer has.
+
+        Plain `snap remove`, so snapd's own pre-removal snapshot is left in place — the one
+        recovery path if the removal was a mistake, and the more valuable one here, since no
+        store can serve the revision back (`PKG-FR-SNAP-REMOVE-SNAPSHOT`).
+        """
+        return f"sudo snap remove {shlex.quote(item.identifier)}"
 
     @override
     async def observe_absent_marks(self, entries: Mapping[str, DecisionEntry], *, on_source: bool) -> frozenset[str]:
@@ -181,7 +214,9 @@ class ManualSnapSyncJob(UnreproducibleSyncJob):
         needs are unpredictable (an opaque blob, D-20) — a sideload's snippet will usually
         want it, since `snap install --dangerous` does — so this job does NOT pre-validate
         target sudo either; a snippet that needs it and lacks it fails as a per-item
-        converge failure (D-27), reported like any other.
+        converge failure (D-27), reported like any other. An approved removal needs it too
+        and is treated the same way: a run that approves none needs no privilege at all, and
+        demanding it up front would refuse the job to every user who only ever installs.
 
         Sequential checks appending to `errors`, never raising mid-validate (matches
         `SnapSyncJob.validate()`'s shape).
@@ -208,9 +243,12 @@ class ManualSnapSyncJob(UnreproducibleSyncJob):
     @override
     def describe_first_sync_scope(cls, config: dict[str, Any]) -> FirstSyncScope | None:
         """Name this job's destructive first-sync scope (ADR-015): replaying install
-        snippets for sideloaded snaps."""
+        snippets for sideloaded snaps, and removing the ones the source has dropped."""
         return FirstSyncScope(
             job_name=cls.name,
-            scope_items=["sideloaded snaps (via recorded install snippets)"],
-            mechanism="replay install snippet per item, after review",
+            scope_items=[
+                "sideloaded snaps (via recorded install snippets)",
+                "sideloaded snaps the source no longer has (snap remove)",
+            ],
+            mechanism="replay install snippet or remove, per item, after review",
         )

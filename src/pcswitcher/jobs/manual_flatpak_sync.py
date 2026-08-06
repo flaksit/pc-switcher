@@ -25,7 +25,8 @@ consequence the user must know: this job's enable flag is its own, so enabling
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+import shlex
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, ClassVar, Literal, override
 
@@ -50,16 +51,17 @@ __all__ = ["ManualFlatpakSyncJob"]
 _ORIGIN = "flatpak-no-remote"
 
 # Apps only, matching what `flatpak_sync` replicates: a runtime is pulled in by the app that
-# needs it and is never installed on its own. Three columns, because unreproducibility asks
-# only where a ref came from and where it lives — `<application>/<arch>/<branch>` is the ref
-# `flatpak install`/`uninstall` accept, and a snippet is what installs one here anyway, so
-# neither the application id nor the version is a fact this job acts on.
-_LIST_APPS_CMD = "flatpak list --app --columns=origin,installation,ref"
+# needs it and is never installed on its own. Four columns: unreproducibility asks where a
+# ref came from and where it lives — `<application>/<arch>/<branch>` is the ref
+# `flatpak install`/`uninstall` accept — and the version is what the two machines' copies of
+# one ref are compared on (`PKG-FR-MANUAL-VERSION`). The application id stays out; the ref
+# already carries it.
+_LIST_APPS_CMD = "flatpak list --app --columns=origin,installation,ref,version"
 
 # Every installed ref, runtimes included — used only for the presence check behind mark
 # reconciliation. Narrowing a "does this machine still have it" question to a subset is how
 # a mark on something still installed gets dropped (`flatpak_sync.observe_absent_marks`).
-_LIST_ALL_REFS_CMD = "flatpak list --columns=origin,installation,ref"
+_LIST_ALL_REFS_CMD = "flatpak list --columns=origin,installation,ref,version"
 
 
 @dataclass(frozen=True)
@@ -71,42 +73,62 @@ class _InstalledRef:
     scope: Literal["user", "system"]
     ref: str
     origin: str
+    version: str = ""
 
 
 def _parse_refs(output: str) -> list[_InstalledRef]:
-    """Parse a `flatpak list --columns=origin,installation,ref` run into rows.
+    """Parse a `flatpak list --columns=origin,installation,ref,version` run into rows.
 
     A line whose `installation` field is neither `user` nor `system` is skipped rather than
     guessed at, for the reason `flatpak_sync._parse_flatpak_list` records: flatpak permits
     further named installations, and a third scope needs its own modelling decision.
+
+    The version column is genuinely optional in flatpak's own output — an app whose appdata
+    declares none prints an empty field — so a row is accepted with three or four fields and
+    a missing version stays the empty string, which the version comparison reads as "this
+    machine did not say".
     """
     refs: list[_InstalledRef] = []
     for line in lines_of(output):
         fields = line.split("\t")
-        if len(fields) != 3:
+        if len(fields) not in (3, 4):
             continue
-        origin, installation, ref = fields
+        origin, installation, ref = fields[0], fields[1], fields[2]
         if installation not in ("user", "system"):
             continue
         scope: Literal["user", "system"] = "user" if installation == "user" else "system"
-        refs.append(_InstalledRef(scope=scope, ref=ref, origin=origin))
+        refs.append(_InstalledRef(scope=scope, ref=ref, origin=origin, version=fields[3] if len(fields) == 4 else ""))
     return refs
 
 
-def _item(row: _InstalledRef) -> UnreproducibleItem:
+def _identifier(row: _InstalledRef) -> str:
+    """`<scope>:<ref>`, so `item_id` reads
+    `unreproducible:flatpak-no-remote:<scope>:<application>/<arch>/<branch>`.
+
+    ADR-020 makes a ref's identity its full ref WITHIN its installation scope — user and
+    system are separate installations and the same application can be in both, from
+    different origins, at different versions — so scope has to be inside the identifier
+    rather than a field beside it, exactly as it is inside `FlatpakItem.item_id`.
+    """
+    return f"{row.scope}:{row.ref}"
+
+
+def _item(row: _InstalledRef, *, own_finding: bool = True) -> UnreproducibleItem:
     """This job's item for one installed ref.
 
-    The identifier is `<scope>:<ref>`, so `item_id` reads
-    `unreproducible:flatpak-no-remote:<scope>:<application>/<arch>/<branch>`. ADR-020 makes
-    a ref's identity its full ref WITHIN its installation scope — user and system are
-    separate installations and the same application can be in both, from different origins,
-    at different versions — so scope has to be inside the identifier rather than a field
-    beside it, exactly as it is inside `FlatpakItem.item_id`.
+    `own_finding` is False for a target row some remote CAN supply: it is software that is
+    there, so the source's copy of it is never offered for install, but it is
+    `flatpak_sync`'s to remove rather than this job's (`PKG-FR-MANUAL-REMOVE`). Its label
+    then says only what it is, since the origin clause would be a false statement about a
+    remote that is configured.
     """
     return UnreproducibleItem(
         origin=_ORIGIN,
-        identifier=f"{row.scope}:{row.ref}",
-        label=f"{row.ref} ({row.scope}, from {row.origin} — no such remote is configured)",
+        identifier=_identifier(row),
+        label=f"{row.ref} ({row.scope}, from {row.origin} — no such remote is configured)"
+        if own_finding
+        else f"{row.ref} ({row.scope})",
+        own_finding=own_finding,
     )
 
 
@@ -177,16 +199,60 @@ class ManualFlatpakSyncJob(UnreproducibleSyncJob):
 
     @override
     async def query_target_items(self) -> Sequence[UnreproducibleItem]:
-        """What the TARGET already holds, in the source's own identities, so `plan()` can
-        drop a finding that is already there (`PKG-FR-MANUAL-DIFF`).
+        """What the TARGET holds, in the source's own identities (`PKG-FR-MANUAL-DIFF`).
 
-        A ref is held when the target has it installed in the same scope AT ALL, whatever
-        origin put it there: a bundle the user already carried across by hand needs no
-        snippet replayed over it, and re-asking the reproducibility question on the target
-        would cost two more `flatpak remotes` reads to answer something its own installed
-        set already answers.
+        A ref is HELD when the target has it installed in the same scope AT ALL, whatever
+        origin put it there — a bundle the user already carried across by hand needs no
+        snippet replayed over it — and the two copies' versions are compared instead of the
+        source's being offered again.
+
+        `own_finding` is the reproducibility question asked of the TARGET's own remotes, and
+        it costs the two `flatpak remotes` reads this job used to skip here: a ref whose
+        origin names no remote the target configures, and which the source no longer has, is
+        a bundle install the source has dropped and this job's to remove
+        (`PKG-FR-MANUAL-REMOVE`). Every other row stays unflagged, so a ref some remote can
+        supply is never deleted here — that is `flatpak_sync`'s decision, taken with its own
+        remote bookkeeping behind it.
         """
-        return [_item(row) for row in await self._installed_apps(self.target, self.machines.target)]
+        apps = await self._installed_apps(self.target, self.machines.target)
+        if not apps:
+            return []
+        _, unreproducible = partition_unreproducible(
+            apps, await self._configured_remotes(self.target, self.machines.target)
+        )
+        unreproducible_ids = {_identifier(row) for row in unreproducible}
+        return [_item(row, own_finding=_identifier(row) in unreproducible_ids) for row in apps]
+
+    @override
+    async def installed_versions(self, item_ids: Collection[str], *, on_source: bool) -> Mapping[str, str | None]:
+        """Each ref's installed version on one machine, from one `flatpak list`.
+
+        Read fresh rather than taken from the capture: the converge loop asks this again
+        after every replay, and an answer from before the change would report every
+        convergence as successful. An app whose appdata declares no version answers `None`,
+        which produces no item rather than a claimed difference.
+        """
+        executor = self.source if on_source else self.target
+        machine = self.machines.source if on_source else self.machines.target
+        result = await executor.run_command(_LIST_ALL_REFS_CMD)
+        require_answer(_LIST_ALL_REFS_CMD, result, machine)
+        versions = {_identifier(row): row.version for row in _parse_refs(result.stdout)}
+        prefix = UnreproducibleItem.id_prefix(_ORIGIN)
+        return {item_id: versions.get(item_id.removeprefix(prefix)) or None for item_id in item_ids}
+
+    @override
+    def removal_command(self, item: UnreproducibleItem) -> str:
+        """`flatpak uninstall` for a ref no remote can supply that the source has dropped.
+
+        Privileged if and only if the ref's own scope is `system`, which is the rule every
+        flatpak write in this codebase follows: a user-scope run never has to ask for root
+        (`PKG-FR-FLATPAK-PRIVILEGE`). The full `<application>/<arch>/<branch>` is named
+        because the bare application id is what flatpak refuses to guess between when a
+        machine holds two branches of one app.
+        """
+        scope, _, ref = item.identifier.partition(":")
+        privilege = "sudo " if scope == "system" else ""
+        return f"{privilege}flatpak uninstall --assumeyes {scope_flag(scope)} {shlex.quote(ref)}"
 
     @override
     async def observe_absent_marks(self, entries: Mapping[str, DecisionEntry], *, on_source: bool) -> frozenset[str]:
@@ -216,7 +282,7 @@ class ManualFlatpakSyncJob(UnreproducibleSyncJob):
 
         result = await executor.run_command(_LIST_ALL_REFS_CMD)
         require_answer(_LIST_ALL_REFS_CMD, result, machine)
-        installed = {f"{row.scope}:{row.ref}" for row in _parse_refs(result.stdout)}
+        installed = {_identifier(row) for row in _parse_refs(result.stdout)}
         return frozenset(item_id for item_id, identifier in marked.items() if identifier not in installed)
 
     @override
@@ -255,9 +321,13 @@ class ManualFlatpakSyncJob(UnreproducibleSyncJob):
     @override
     def describe_first_sync_scope(cls, config: dict[str, Any]) -> FirstSyncScope | None:
         """Name this job's destructive first-sync scope (ADR-015): replaying install
-        snippets for flatpak refs no remote can supply."""
+        snippets for flatpak refs no remote can supply, and removing the ones the source has
+        dropped."""
         return FirstSyncScope(
             job_name=cls.name,
-            scope_items=["flatpak refs no remote can supply (via recorded install snippets)"],
-            mechanism="replay install snippet per item, after review",
+            scope_items=[
+                "flatpak refs no remote can supply (via recorded install snippets)",
+                "flatpak refs no remote can supply that the source no longer has (flatpak uninstall)",
+            ],
+            mechanism="replay install snippet or uninstall, per item, after review",
         )
