@@ -22,22 +22,22 @@ Every article decomposes exactly one section of the user requirements. Each sect
 
 Decomposes [What package sync is for](package-sync-user-requirements.md#what-package-sync-is-for).
 
-The package jobs — `apt_sync`, `snap_sync`, `flatpak_sync`, `manual_installs_sync` — replicate what software is installed. Application data is not theirs.
+The package jobs — `apt_sync`, `snap_sync`, `flatpak_sync`, `manual_deb_sync`, `manual_installs_sync` — replicate what software is installed. Application data is not theirs.
 
 - **PKG-FR-OPT-IN**: Every package job MUST ship disabled and MUST be enabled individually in configuration.
   Why: enabling one authorises the system to install and remove software on the target.
 - **PKG-FR-JOB-INDEPENDENCE**: Each package sync job MUST be enableable, reviewable and failable on its own. Enabling one MUST NOT enable another, and no package sync job's behaviour may depend on whether another package sync job is enabled. What jobs outside package sync do with that information is not this article's business.
-- **PKG-FR-JOB-ORDER**: All four package jobs — the three package managers and the job for software none of them can reproduce — MUST run before `folder_sync`, and the system MUST refuse to start when they are ordered otherwise.
+- **PKG-FR-JOB-ORDER**: Every package job — the three package managers and the jobs for software none of them can reproduce — MUST run before `folder_sync`, and the system MUST refuse to start when they are ordered otherwise.
   Why: software must exist before data lands on top of it, or an installer's stock defaults overwrite the synced configuration. Software installed by a snippet writes those defaults exactly as a package does.
 - **PKG-FR-APT-SCOPE**: `apt_sync` MUST cover the manually-installed apt package set, the repositories and pins that govern where those packages come from, apt's own behavioural configuration, and apt holds. Packages apt installed automatically to satisfy dependencies MUST NOT be items.
 - **PKG-FR-SNAP-SCOPE**: `snap_sync` MUST cover installed snaps with their revision, tracking channel, confinement mode and per-snap refresh holds.
 - **PKG-FR-FLATPAK-SCOPE**: `flatpak_sync` MUST cover installed flatpak applications per flatpak installation scope, the remotes those applications need, and mask patterns per scope.
-- **PKG-FR-MANUAL-SCOPE**: `manual_installs_sync` MUST cover what no package manager can reproduce — apt packages whose installed version comes from no repository the machine has configured, and software under `/usr/local` and `/opt` that no package owns — together with the registry of install snippets that is the only way such software can be reproduced on the other machine. The filesystem scan MUST cover `/opt`, every entry directly under `/usr/local`, and the entries of `/usr/local`'s `bin`, `sbin`, `lib`, `games` and `src`; it MUST NOT cover `/usr/local`'s `etc`, `include`, `man` or `share`. A finding may be a file, a directory or a symlink; it MUST be named at the path where it was found and MUST NOT be descended into. It is NOT a finding if a package owns it, if it is one of the entries `base-files` creates directly under `/usr/local`, or if it is a directory with no file anywhere beneath it.
+- **PKG-FR-MANUAL-SCOPE**: What no package manager can reproduce MUST be covered, by one job per kind of finding: `manual_deb_sync` covers apt packages whose installed version comes from no repository the machine has configured, and `manual_installs_sync` covers software under `/usr/local` and `/opt` that no package owns. Both MUST resolve a finding through the one shared registry of install snippets that is the only way such software can be reproduced on the other machine. The filesystem scan MUST cover `/opt`, every entry directly under `/usr/local`, and the entries of `/usr/local`'s `bin`, `sbin`, `lib`, `games` and `src`; it MUST NOT cover `/usr/local`'s `etc`, `include`, `man` or `share`. A finding may be a file, a directory or a symlink; it MUST be named at the path where it was found and MUST NOT be descended into. It is NOT a finding if a package owns it, if it is one of the entries `base-files` creates directly under `/usr/local`, or if it is a directory with no file anywhere beneath it.
   Why the four exclusions: what a hand install puts in `etc`, `include`, `man` or `share` arrives with an application the scan finds elsewhere, so scanning them adds a second finding for software already named once.
   Why a finding is not opened: one application under `/opt` or `/usr/local` is a whole tree, and walking it would ask the user about thousands of files that are one decision.
   Why the `base-files` entries: the distribution creates `/usr/local`'s own subdirectories and no package need own them, so presenting one would ask every user, on every machine, on every run, to write an install snippet for a stock directory whose contents the scan already names one level deeper. Every directory this scan descends into is one of them, so a scanned directory is never a finding of its own scan.
   Why the empty directory: a directory holding no file anywhere beneath it is a leftover shape rather than software, and there is nothing a snippet could reproduce.
-- **PKG-FR-DEB-OWNERSHIP**: Software installed from a hand-downloaded `.deb` MUST belong to `manual_installs_sync` alone. `apt_sync` MUST NOT produce an item, a review line or an install for it in any configuration.
+- **PKG-FR-DEB-OWNERSHIP**: Software installed from a hand-downloaded `.deb` MUST belong to `manual_deb_sync` alone. `apt_sync` MUST NOT produce an item, a review line or an install for it in any configuration.
   Why: the target's apt has never heard the name; an apt item for it could only fail.
 - **PKG-FR-DATA-BOUNDARY**: No package job may sync application data. Data belongs to `folder_sync`.
 
@@ -124,6 +124,7 @@ Decomposes the validation and review paragraphs of [What happens during a sync](
   | `apt_sync` | required | required |
   | `snap_sync` | required | required |
   | `flatpak_sync` | none | only where a system-scope item exists on either machine |
+  | `manual_deb_sync` | none | none |
   | `manual_installs_sync` | none | none |
 
   Why: it decides whether the job can run at all, so the user must learn it before the run starts changing things. Degrading is not an option for the source side of apt: without it the `/etc/apt` capture returns empty digests and the run reports success having replicated no repository configuration.

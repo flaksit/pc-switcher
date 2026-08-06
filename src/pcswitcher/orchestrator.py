@@ -1292,15 +1292,15 @@ class Orchestrator:
         return jobs, unresolved
 
     def _check_package_jobs_precede_folder_sync(self) -> list[ConfigError]:
-        """D-17: all four package jobs must run before folder_sync — apps are provisioned
+        """D-17: every package job must run before folder_sync — apps are provisioned
         first, then their data lands on top (decisive for flatpak, where `flatpak install`
         must create `~/.local/share/flatpak` before folder_sync would otherwise land
         `~/.var/app` on top).
 
-        `manual_installs_sync` is in the rule for the same reason as the three package
-        managers: replaying an install snippet puts software on the target, and that
-        software writes its own stock defaults on first appearance exactly as a package's
-        postinst does.
+        `manual_deb_sync` and `manual_installs_sync` are in the rule for the same reason as
+        the three package managers: replaying an install snippet puts software on the
+        target, and that software writes its own stock defaults on first appearance exactly
+        as a package's postinst does.
 
         The shipped `default-config.yaml` encodes this ordering only by key order
         (jobs run in `self._config.sync_jobs.items()` order) — a user who hand-edits
@@ -1323,7 +1323,7 @@ class Orchestrator:
                     "provision apps before folder_sync lands their data on top. Move it above folder_sync."
                 ),
             )
-            for job_name in ("apt_sync", "snap_sync", "flatpak_sync", "manual_installs_sync")
+            for job_name in ("apt_sync", "snap_sync", "flatpak_sync", "manual_deb_sync", "manual_installs_sync")
             if job_name in enabled_order and enabled_order.index(job_name) > folder_sync_index
         ]
 

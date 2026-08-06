@@ -7,7 +7,7 @@ trace and the per-command confirmation (`executor`), every log line and its stru
 context (`logger`), everything a review shows while the user decides, including the files it
 prints whole (`packages.review.ReviewEntry`), the label a recorded decision keeps
 (`packages.items.ItemDiff`), and the snippet bodies the registry-overwrite question puts to
-the user (`jobs.manual_installs_sync`).
+the user (`jobs.packages.unreproducible`).
 
 The whole userinfo component goes, not just the part after the colon. A repository that
 authenticates with a bearer token puts the token where a username belongs, so keeping "the

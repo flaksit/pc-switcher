@@ -6,42 +6,46 @@ Configuration for these jobs is limited to their `sync_jobs` enable flags; see t
 
 For what these jobs are for and why they behave as they do, see [Package sync — user requirements](../planning/package-sync-user-requirements.md); for the same requirements as checkable articles — the `PKG-FR-*` obligations per ecosystem and the `PKG-NG-*` non-goals — see [Package sync conformance criteria](../planning/package-sync-conformance-criteria.md). Where this page disagrees with either, this page is wrong.
 
-## The four jobs
+## The five jobs
 
-Four independent jobs share one item -> diff -> review -> converge model. Each has its own enable flag, its own validation, its own review and its own failure isolation, so enabling one never drags in another.
+Five independent jobs share one item -> diff -> review -> converge model. Each has its own enable flag, its own validation, its own review and its own failure isolation, so enabling one never drags in another.
 
 ```yaml
 sync_jobs:
   apt_sync: false             # apt packages plus the /etc/apt repository configuration they depend on
   snap_sync: false            # installed snaps, converged to the source's revision and channel
   flatpak_sync: false         # installed flatpak refs and their remotes, per scope
-  manual_installs_sync: false # things no package manager can reproduce, plus the install-snippet registry
+  manual_deb_sync: false      # hand-installed .deb packages
+  manual_installs_sync: false # unowned software under /usr/local and /opt
 ```
 
-All four ship **disabled**: enabling any of them lets pc-switcher change installed software on the target, so it is opt-in.
+All five ship **disabled**: enabling any of them lets pc-switcher change installed software on the target, so it is opt-in.
 
 ### What each job covers
 
 - **`apt_sync`** — the manually-installed apt package set (`apt-mark showmanual`, not the full dpkg selection — apt resolves dependencies on the target itself), minus the packages you installed from a hand-downloaded `.deb` (see below), plus the `/etc/apt` configuration that governs where packages come from. Three things under `/etc/apt` are reviewed: `apt.conf.d` files — added, changed or deleted — the deletion of a repository or pin file the source no longer has, and one narrow repository conflict. Repository files under `sources.list.d`, their signing keys, and pins under `preferences.d` are derived from the packages you approve and never get a review row — see [Repositories, pins and keys are derived](#repositories-pins-and-keys-are-derived).
 - **`snap_sync`** — installed snaps, converged to the source's exact revision and tracking channel.
 - **`flatpak_sync`** — installed flatpak refs, per user/system installation scope, plus the remotes those refs are derived to need.
-- **`manual_installs_sync`** — everything no package manager can reproduce: apt packages installed from no configured repository (a `.deb` you installed by hand, whether or not apt marks it as one you chose), plus unowned software under `/opt` and `/usr/local`. It also owns the [install-snippet registry](#install-snippets).
+- **`manual_deb_sync`** — apt packages whose installed version comes from no repository your machine has configured: a `.deb` you installed by hand, whether or not apt marks it as one you chose.
+- **`manual_installs_sync`** — software under `/opt` and `/usr/local` that no dpkg package owns, dropped there by an install script or a tarball.
+
+The last two are the jobs for software no package manager can reproduce, and they share the [install-snippet registry](#install-snippets): a package and a directory tree are found differently but resolved the same way, by a recipe you write once. Everything else about them is separate — two enable flags, two reviews, two failure surfaces.
 
 ### Hand-installed `.deb` packages belong to one job only
 
-A package whose installed version comes from no repository your machine has configured was put there with `dpkg --install`. It is `manual_installs_sync`'s territory exclusively: `apt_sync` detects the same packages, with the same test, on BOTH machines, and drops them from that machine's manifest before it diffs anything. They produce no apt item, no review entry, no install and no removal — including the one only the machine being synced TO has, which would otherwise look like software the source had deleted.
+A package whose installed version comes from no repository your machine has configured was put there with `dpkg --install`. It is `manual_deb_sync`'s territory exclusively: `apt_sync` detects the same packages, with the same test, on BOTH machines, and drops them from that machine's manifest before it diffs anything. They produce no apt item, no review entry, no install and no removal — including the one only the machine being synced TO has, which would otherwise look like software the source had deleted.
 
 That detection is over everything installed, not just what you chose explicitly. A `.deb` that arrived as another `.deb`'s dependency is marked automatic by apt, and apt's mark says how it got there rather than whether anything can supply it again.
 
-There is nothing apt could do with them anyway. The target's apt has never heard the name, so offering it as an ordinary install would fail with "Unable to locate package" — while `manual_installs_sync` offers the same package as an [install snippet](#install-snippets) in the same run. Only one of the two answers works, so only one job asks.
+There is nothing apt could do with them anyway. The target's apt has never heard the name, so offering it as an ordinary install would fail with "Unable to locate package" — while `manual_deb_sync` offers the same package as an [install snippet](#install-snippets) in the same run. Only one of the two answers works, so only one job asks.
 
-The consequence is worth knowing: the two jobs have separate enable flags, and `apt_sync` does not consult `manual_installs_sync`'s. **If you enable `apt_sync` but disable `manual_installs_sync`, your hand-installed `.deb` packages are synced by nobody** — they are silently absent from the review rather than offered as installs that fail. Keep `manual_installs_sync` enabled if you install software from downloaded `.deb` files.
+The consequence is worth knowing: the two jobs have separate enable flags, and `apt_sync` does not consult `manual_deb_sync`'s. **If you enable `apt_sync` but disable `manual_deb_sync`, your hand-installed `.deb` packages are synced by nobody** — they are silently absent from the review rather than offered as installs that fail. Keep `manual_deb_sync` enabled if you install software from downloaded `.deb` files.
 
 ## Job ordering is enforced
 
-All four package jobs **must** be listed before `folder_sync` in `sync_jobs`. This is not a convention: pc-switcher validates the resolved order and aborts the run with a config error if any of them is enabled but sits after `folder_sync`.
+All five package jobs **must** be listed before `folder_sync` in `sync_jobs`. This is not a convention: pc-switcher validates the resolved order and aborts the run with a config error if any of them is enabled but sits after `folder_sync`.
 
-The reason is the "defaults, then your data" layering. Installing software usually writes its own default config and data files on first appearance. If `folder_sync` ran first, the fresh install would overwrite your synced versions of those files with stock defaults. Running the package jobs first means the software already exists when `folder_sync` lands your versions on top. `manual_installs_sync` is in the rule for the same reason: your snippet installs software, and that software writes its own defaults too.
+The reason is the "defaults, then your data" layering. Installing software usually writes its own default config and data files on first appearance. If `folder_sync` ran first, the fresh install would overwrite your synced versions of those files with stock defaults. Running the package jobs first means the software already exists when `folder_sync` lands your versions on top. The two snippet jobs are in the rule for the same reason: your snippet installs software, and that software writes its own defaults too.
 
 ## Batched review
 
@@ -99,7 +103,7 @@ The batched review approves *items*, not commands. One approved line can expand 
 
 `pc-switcher sync <hostname> --confirm-each-command` inserts one question before every one of them, headed by the job and the hostname of the machine about to change, then what the change does, then the exact command (or, for a file transfer, the source and destination paths). It waits for a single keypress — **p** to proceed, **a** to abort the whole sync — and acts on it immediately, with no Enter to follow. There is no "skip this one": a single reviewed item can span several commands, so skipping one would leave that item half-applied. An unanswerable prompt (Ctrl-C, EOF) aborts.
 
-It covers every write the four jobs make, plus the machine-local decision files on both machines, the snippet registry and its push, the snapd auto-refresh pause and restore, and the sync-history update on both ends. It also covers what changes a machine without writing anything to it: taking each machine's sync lock, and starting a background process. Only genuinely read-only commands go unasked, and a read stays a read under `sudo` — the privileged probes a job runs before it starts prompt for nothing. The flag needs a real terminal and is refused without one. It is meant for auditing or debugging a run you do not trust yet, not for everyday syncs.
+It covers every write the five jobs make, plus the machine-local decision files on both machines, the snippet registry and its push, the snapd auto-refresh pause and restore, and the sync-history update on both ends. It also covers what changes a machine without writing anything to it: taking each machine's sync lock, and starting a background process. Only genuinely read-only commands go unasked, and a read stays a read under `sudo` — the privileged probes a job runs before it starts prompt for nothing. The flag needs a real terminal and is refused without one. It is meant for auditing or debugging a run you do not trust yet, not for everyday syncs.
 
 ### apt collateral
 
@@ -207,7 +211,7 @@ Where both machines have the item and their copies differ, neither is the holder
 
 A mark still counts when a later sync is launched the other way round, whichever machine it sits on.
 
-The mark is recorded in that machine's own decision file at `~/.config/pc-switcher/<manager>.decisions.yaml` (one per manager: `apt.decisions.yaml`, `snap.decisions.yaml`, `flatpak.decisions.yaml`, `manual.decisions.yaml`). That file is **never synced** — it stays local to the machine it describes.
+The mark is recorded in that machine's own decision file at `~/.config/pc-switcher/<manager>.decisions.yaml` (one per manager: `apt.decisions.yaml`, `snap.decisions.yaml`, `flatpak.decisions.yaml`, `manual_deb.decisions.yaml`, `manual.decisions.yaml`). That file is **never synced** — it stays local to the machine it describes.
 
 To un-mark something, delete its entry from the decision file (or delete the whole file to clear every machine-specific decision for that manager). The next sync treats the item as live again and re-offers it in the review.
 
@@ -217,13 +221,15 @@ A machine-specific package never appears in a review again, which is why the run
 
 ## Install snippets
 
-Some installed things no package manager can reproduce — a bare `.deb` downloaded and installed by hand, or software dropped under `/usr/local` or `/opt` by an install script. `manual_installs_sync` detects these and surfaces them in its review as items needing a resolution.
+Some installed things no package manager can reproduce — a bare `.deb` downloaded and installed by hand, which is `manual_deb_sync`'s half, or software dropped under `/usr/local` or `/opt` by an install script, which is `manual_installs_sync`'s. Each job surfaces its own findings in its own review as items needing a resolution, and both resolve them the same way, out of one registry.
 
-The filesystem half of that scan is deliberately shallow. It looks in `/opt`, directly under `/usr/local`, and inside `/usr/local`'s `bin`, `sbin`, `lib`, `games` and `src` — one level each — and reports whatever dpkg does not own. It names what is there so you can decide about it; it never walks a tree, so an application under `/opt` is one finding rather than a thousand. `etc`, `include`, `man` and `share` are not looked into at all: what a hand install puts there comes with an application the scan finds elsewhere.
+`manual_deb_sync` asks one question of everything dpkg reports as installed: which package's installed version comes from no repository this machine has configured. A package's own name is all it needs on the other machine — software that is there is there, whatever put it there — so a name the target already has installed is never raised.
 
-Three things are never offered. A path a package owns. One of the nine directories Ubuntu itself creates under `/usr/local` — `bin`, `etc`, `games`, `include`, `lib`, `man`, `sbin`, `share`, `src` — so a stock `/usr/local/bin` is not something you are asked to write an install snippet for. And a directory with no file anywhere beneath it, which is a leftover shape rather than software.
+`manual_installs_sync`'s scan is deliberately shallow. It looks in `/opt`, directly under `/usr/local`, and inside `/usr/local`'s `bin`, `sbin`, `lib`, `games` and `src` — one level each — and reports whatever dpkg does not own. It names what is there so you can decide about it; it never walks a tree, so an application under `/opt` is one finding rather than a thousand. `etc`, `include`, `man` and `share` are not looked into at all: what a hand install puts there comes with an application the scan finds elsewhere.
 
-You are asked about only what the OTHER machine does not already have. Both machines are scanned, and a finding that is already there is dropped. That is what stops one snippet's several traces — the tree it unpacks under `/opt` and the symlink in `bin` that starts it — from coming back at you on every later sync once the snippet has run. Nothing the other machine alone has is ever named, in either direction.
+Three things are never offered by that scan. A path a package owns. One of the nine directories Ubuntu itself creates under `/usr/local` — `bin`, `etc`, `games`, `include`, `lib`, `man`, `sbin`, `share`, `src` — so a stock `/usr/local/bin` is not something you are asked to write an install snippet for. And a directory with no file anywhere beneath it, which is a leftover shape rather than software.
+
+You are asked about only what the OTHER machine does not already have. Both machines are read, and a finding that is already there is dropped. That is what stops one snippet's several traces — the tree it unpacks under `/opt` and the symlink in `bin` that starts it — from coming back at you on every later sync once the snippet has run. Nothing the other machine alone has is ever named, in either direction.
 
 One directory under `/opt` cannot be judged by looking at it, and you are asked about it while the sync is still planning, before the review. If `/opt/something` holds files of its own it is one application. If it holds a single directory and no file, that directory is the application. If it holds several directories and no file, it is either one application or one publisher's directory holding several, and only you know which — so the question names what is inside and offers the two answers as what each would mean for the other machine.
 
@@ -242,11 +248,13 @@ sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes --fix-broken
 
 Snippets run **unprivileged**. On the target the body is replayed as `bash -c '<body>'` as the target user, with no outer `sudo` wrapped around it. Any privilege a snippet needs must be written inside the snippet by its author — that is why the example above calls `sudo` itself.
 
-The snippet registry lives at `~/.config/pc-switcher/package-snippets.yaml`. `folder_sync` never carries it, even when `~/.config` is inside a synced folder — it reaches the target through this job's own push and its question, below, and nowhere else. Unlike the machine-local decision files, it **does** reach the target: how to install something is knowledge about the *package*, not the machine, so a snippet authored on one machine reproduces the same item on any peer. Whether an item counts as reproducible is decided by whether the **source** holds a snippet for it; a snippet present only on the target does not make the item reproducible.
+The snippet registry lives at `~/.config/pc-switcher/package-snippets.yaml`, and one file holds both jobs' snippets: a snippet is keyed by the finding it reproduces, never by the job that found it. `folder_sync` never carries it, even when `~/.config` is inside a synced folder — it reaches the target through those jobs' own push and its question, below, and nowhere else. Unlike the machine-local decision files, it **does** reach the target: how to install something is knowledge about the *package*, not the machine, so a snippet authored on one machine reproduces the same item on any peer. Whether an item counts as reproducible is decided by whether the **source** holds a snippet for it; a snippet present only on the target does not make the item reproducible.
 
 ### Registry push and consolidation
 
-`manual_installs_sync` pushes the source's registry to the target as a **whole-file overwrite** — the source's `package-snippets.yaml` replaces the target's wholesale, no per-entry merge. Before the push, pc-switcher compares the two. A purely additive push (the source is a superset of the target) proceeds silently. But if the overwrite would **lose** an entry the target holds (absent from the source) or **change** one, pc-switcher shows you exactly which entries and asks you to confirm. "Change" is the whole entry, not the command alone: the label and the record of when and where the snippet was written are part of what the target holds, and the question shows you only the fields that differ. Declining aborts the run, and a non-interactive run that cannot ask aborts too — so you can consolidate the two registries by hand and re-run rather than silently dropping the target's snippets.
+A snippet job pushes the source's registry to the target after its own review, as a **whole-file overwrite** — the source's `package-snippets.yaml` replaces the target's wholesale, no per-entry merge. Before the push, pc-switcher compares the two. A purely additive push (the source is a superset of the target) proceeds silently. But if the overwrite would **lose** an entry the target holds (absent from the source) or **change** one, pc-switcher shows you exactly which entries and asks you to confirm. "Change" is the whole entry, not the command alone: the label and the record of when and where the snippet was written are part of what the target holds, and the question shows you only the fields that differ. Declining aborts the run, and a non-interactive run that cannot ask aborts too — so you can consolidate the two registries by hand and re-run rather than silently dropping the target's snippets.
+
+With both snippet jobs enabled the file goes over twice, once per review, and the second push asks nothing: it sends what the first one sent plus whatever its own review added, which is additive by construction. You are never asked the same question twice in a run.
 
 If either machine's `package-snippets.yaml` cannot be read as a registry — hand-edited into invalid YAML, truncated by a full disk — the sync stops there and names the file. An unreadable registry is not an empty one: reading it as empty would make the push look like it loses nothing, and it would overwrite entries nobody could see. Repair or delete that file and start a new sync. A registry that is simply absent, or empty, means what it says: no snippets.
 
@@ -274,7 +282,7 @@ A run without a TTY prompts for nothing, so every review item nothing else answe
 
 `apt_sync` has a second reason to report SKIPPED, and it applies to interactive runs too: the target reports no Ubuntu Pro attachment and the source carries ESM sources that would otherwise be written to it. Attach the target and re-run, or answer the question's re-check once you have — see [Ubuntu Pro and ESM](#ubuntu-pro-and-esm).
 
-A skipped package job applies nothing, records no decision, and pushes no install-snippet registry. The session still completes and the exit code is unchanged, so a headless run says plainly that it converged nothing rather than reporting four successful package syncs.
+A skipped package job applies nothing, records no decision, and pushes no install-snippet registry. The session still completes and the exit code is unchanged, so a headless run says plainly that it converged nothing rather than reporting five successful package syncs.
 
 No run without a terminal pushes the registry, not even the one that reports SUCCESS because its review had nothing to decide. That says this run found nothing to ask you about; the registry on disk still holds every snippet you have ever authored, and sending it over the other machine's copy is a change nobody approved. The one exception is a run where `--apply-package-installs` approved a hand-installed item: replaying its snippet reads the other machine's own copy of the registry, so the transfer is part of the install you asked for rather than a change nobody approved — and the guard on a transfer that would lose an entry still ends the run.
 
@@ -398,7 +406,7 @@ A pin file is shown **whole**: its content is printed above the screen, one file
 
 The distribution's own source files are never offered for removal at all.
 
-`manual_installs_sync` is **install-only**: it reads the target only to tell what is already there, and keeps no record of what it put there, so it never proposes removals. Removing a hand-installed item on the target is manual work today (tracking removal for manual installs is deferred to a future issue).
+`manual_deb_sync` and `manual_installs_sync` are **install-only**: each reads the target only to tell what is already there, and keeps no record of what it put there, so neither ever proposes removals. Removing a hand-installed item on the target is manual work today (tracking removal for manual installs is deferred to a future issue).
 
 ## Prerequisites: passwordless sudo
 
@@ -407,4 +415,4 @@ Each enabled package job needs passwordless sudo for a handful of binaries:
 - **`apt_sync`** — on the source (to read `/etc/apt` configuration) and the target (to install packages, write and remove `/etc/apt` configuration including signing keys, and set or clear apt holds via `apt-mark`). Both hosts additionally need it for the sync-window pause of the system's own apt update timers (`sudo systemctl stop/start` on `apt-daily.timer` and `apt-daily-upgrade.timer`, plus the `sudo systemd-run` that schedules their automatic restart). The runtime pause tolerates a failure without aborting the sync, but the sudo grant is checked up front on both machines.
 - **`snap_sync`** — on both the **source** and the **target**; validation fails if either lacks it. The target needs it to install, refresh and remove snaps, and both hosts need it to pause snapd's auto-refresh for the sync window (`sudo snap set system refresh.hold`, plus the matching `sudo snap get` — snapd requires admin rights to read snap configuration as well as to write it). The runtime pause itself tolerates a transient failure without aborting the sync, but the sudo grant is checked up front on both machines.
 - **`flatpak_sync`** — on the target only, and only when a system-scope ref, remote or mask is in play on either machine. A user-scope-only sync never asks for root.
-- **`manual_installs_sync`** — a snippet author decides its own privilege needs; the replay itself runs unprivileged, so the job requires no sudo beyond what a given snippet writes for itself.
+- **`manual_deb_sync`** and **`manual_installs_sync`** — neither needs any: both only read `dpkg` (and, for `manual_deb_sync`, `apt-cache`) to find their items, and a snippet author decides its own privilege needs, since the replay runs unprivileged.

@@ -1,10 +1,10 @@
-"""`apt-cache policy` output parsing, shared by `apt_sync` and `manual_installs_sync`.
+"""`apt-cache policy` output parsing, shared by `apt_sync` and `manual_deb_sync`.
 
 Two jobs ask apt three different questions off the same command, and all three need the
 same version-table walk to answer them: `apt_sync` asks what repository an INSTALLED
 package came from (C26's source-removal impact, and ADR-020 D-34's provenance comparison)
 and what repository the version the TARGET would install comes from (D-34's origin
-classification); `manual_installs_sync` asks whether a package on the SOURCE came from any
+classification); `manual_deb_sync` asks whether a package on the SOURCE came from any
 repository at all (D-18).
 
 The installed and the candidate row are DIFFERENT rows and answer different questions —
@@ -15,7 +15,7 @@ which version row it collects from.
 Shared here rather than duplicated per job, and here rather than on `PackageSyncJob`.
 D-15 forbids one manager's diff on the shared BASE CLASS (adr-020, "Job split into four
 jobs"): this module defines no class and sits in no job's MRO, so the other three managers
-inherit nothing from it. `manual_installs_sync`'s own rule — it never imports `apt_sync`
+inherit nothing from it. `manual_deb_sync`'s own rule — it never imports `apt_sync`
 (D-18) — also still holds, since both jobs import a third module instead. What is NOT
 worth duplicating is a stateful indentation walker with three separate subtle rules
 (installed-block tracking, eight-space origin rows, the `/var/lib/dpkg/status` pseudo

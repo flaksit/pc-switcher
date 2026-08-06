@@ -45,10 +45,10 @@ from tests.unit.jobs.test_apt_policy import (
     POLICY_ARCHIVE_CANDIDATE_UNINSTALLED,
     POLICY_MOZILLA_FIREFOX_INSTALLED,
 )
-from tests.unit.jobs.test_manual_installs_sync import (
-    _POLICY_REPO_INSTALLED,
-)
 from tests.unit.jobs.test_package_sync_core import FakeReviewer
+from tests.unit.jobs.unreproducible_harness import (
+    POLICY_REPO_INSTALLED,
+)
 
 
 def respond_to_target_apt(
@@ -96,7 +96,7 @@ class TestAPackageTheTargetCannotResolveYet:
             source_responses={
                 "apt-mark showmanual": CommandResult(0, "gh\n", ""),
                 "dpkg-query": CommandResult(0, "gh\t2.96.0\n", ""),
-                "apt-cache policy": CommandResult(0, _POLICY_REPO_INSTALLED, ""),
+                "apt-cache policy": CommandResult(0, POLICY_REPO_INSTALLED, ""),
                 _SOURCE_SCAN_CMD: CommandResult(0, _POLICY_FIXTURE_SCAN, ""),
             },
             target_side_effect=respond_to_target_apt(
@@ -123,7 +123,7 @@ class TestAPackageTheTargetCannotResolveYet:
             source_responses={
                 "apt-mark showmanual": CommandResult(0, "gh\n", ""),
                 "dpkg-query": CommandResult(0, "gh\t2.96.0\n", ""),
-                "apt-cache policy": CommandResult(0, _POLICY_REPO_INSTALLED, ""),
+                "apt-cache policy": CommandResult(0, POLICY_REPO_INSTALLED, ""),
                 _SOURCE_SCAN_CMD: CommandResult(0, _POLICY_FIXTURE_SCAN, ""),
             },
             target_side_effect=respond_to_target_apt(
@@ -155,7 +155,7 @@ class TestAPackageTheTargetCannotResolveYet:
                 "dpkg-query": CommandResult(0, "gh\t2.96.0\npkg-b\t1.0\nother-manual\t1.0\n", ""),
                 "apt-cache policy": CommandResult(
                     0,
-                    _POLICY_REPO_INSTALLED
+                    POLICY_REPO_INSTALLED
                     + _policy_block("pkg-b", _BASELINE_ARCHIVE)
                     + _policy_block("other-manual", _BASELINE_ARCHIVE),
                     "",

@@ -22,7 +22,7 @@ import pytest
 from pcswitcher.events import ProgressEvent
 from pcswitcher.jobs.base import SyncJob
 from pcswitcher.jobs.context import JobContext
-from pcswitcher.jobs.manual_installs_sync import ManualInstallsSyncJob
+from pcswitcher.jobs.manual_deb_sync import ManualDebSyncJob
 from pcswitcher.jobs.packages.items import DiffAction, DiffClass, ItemClass, ItemDiff
 from pcswitcher.jobs.packages.review import (
     Decision,
@@ -958,8 +958,8 @@ def _unreproducible_diff(item_id: str, action: DiffAction = DiffAction.REPORT_ON
     )
 
 
-class _FakeManualJob(ManualInstallsSyncJob):
-    """A `ManualInstallsSyncJob` with `manager_id="fake"` so the moved finalize hook's
+class _FakeManualJob(ManualDebSyncJob):
+    """An unreproducible job with `manager_id="fake"` so the moved finalize hook's
     decision-file assertions keep reading `fake.decisions` (D-18: finalize/unresolved
     now live on this job, not the base)."""
 
@@ -969,7 +969,7 @@ class _FakeManualJob(ManualInstallsSyncJob):
 
 class TestFinalizeUnreproducible:
     """D-20/D-21/D-23: the `_finalize_unreproducible` hook (owned by
-    `ManualInstallsSyncJob`, D-18) writes this run's snippet authoring and
+    `UnreproducibleSyncJob`, D-18) writes this run's snippet authoring and
     unreproducible-item skip-always decisions, both to the SOURCE — never the target, and
     never during a dry run or a non-interactive outcome.
     """
@@ -1177,7 +1177,7 @@ class TestExecuteSelfContained:
         await job.execute()
 
         # after_review is the seam between accept_review and apply (D-23: where
-        # manual_installs_sync pushes its snippet registry before any converge).
+        # an unreproducible job pushes its snippet registry before any converge).
         assert events == ["plan", "review", "accept_review", "after_review", "apply"]
         # apply must never precede review returning.
         assert events.index("apply") > events.index("review")
@@ -1235,7 +1235,7 @@ class TestExecuteSelfContained:
             await job.execute()
 
         assert exc_info.value.job_name == "fake_sync"
-        # Raised before after_review, so manual_installs_sync would not push its registry.
+        # Raised before after_review, so an unreproducible job would not push its registry.
         assert events == ["plan", "review"]
         assert job.converge_calls == []
 
@@ -1267,7 +1267,7 @@ class TestExecuteSelfContained:
 
         The `after_review` seam is still skipped (`PKG-FR-NO-TERMINAL`). An empty plan says
         this run's scan found nothing to review, not that there is nothing to transfer:
-        `manual_installs_sync` pushes the source's whole snippet registry there, entries
+        an unreproducible job pushes the source's whole snippet registry there, entries
         from earlier runs included.
         """
         events: list[str] = []
@@ -1297,7 +1297,7 @@ class TestExecuteSelfContained:
     async def test_that_success_still_reaches_no_after_review_seam(self) -> None:
         """J170 — the registry does not travel on the strength of a review nobody answered,
         whether that review was empty or held only findings: `after_review` is the seam
-        `manual_installs_sync` pushes from, and it is not reached.
+        an unreproducible job pushes from, and it is not reached.
         """
         events: list[str] = []
         reviewer = _RecordingReviewer(events, was_interactive=False)

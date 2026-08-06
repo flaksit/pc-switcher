@@ -223,20 +223,24 @@ _READ_ONLY_CALLS: dict[str, int] = {
     "jobs/folder_sync.py::FolderSyncJob._needs_copy_pass::run_command": 2,
     "jobs/install_on_target.py::InstallOnTargetJob.validate::run_command": 1,
     "jobs/install_on_target.py::InstallOnTargetJob.execute::run_command": 1,
-    # manual_installs_sync: the unowned-file scan's four steps, the apt queries, and the
-    # target's $HOME. Each scan step runs on whichever machine it is handed, since both are
-    # read now that a finding the target already holds is not presented
-    # (`PKG-FR-MANUAL-DIFF`); validate checks three tools across the two.
-    "jobs/manual_installs_sync.py::ManualInstallsSyncJob._push_snippet_registry::run_command": 1,
-    "jobs/manual_installs_sync.py::ManualInstallsSyncJob._scan_no_candidate_apt_packages::run_command": 1,
+    # manual_deb_sync: the two reads its detection makes, each on whichever machine it is
+    # handed, since both are read now that a finding the target already holds is not
+    # presented (`PKG-FR-MANUAL-DIFF`); validate checks apt-cache and dpkg on the source and
+    # dpkg on the target.
+    "jobs/manual_deb_sync.py::ManualDebSyncJob._scan_no_candidate_apt_packages::run_command": 1,
+    "jobs/manual_deb_sync.py::ManualDebSyncJob._installed_names::run_command": 1,
+    "jobs/manual_deb_sync.py::ManualDebSyncJob.validate::run_command": 3,
+    # manual_installs_sync: the unowned-file scan's four steps, each on whichever machine it
+    # is handed; validate checks dpkg on both.
     "jobs/manual_installs_sync.py::ManualInstallsSyncJob._list_scan_entries::run_command": 1,
     "jobs/manual_installs_sync.py::ManualInstallsSyncJob._scan_unowned_installs::run_command": 1,
     "jobs/manual_installs_sync.py::ManualInstallsSyncJob._resolve_opt_shapes::run_command": 1,
     "jobs/manual_installs_sync.py::ManualInstallsSyncJob._directories_holding_a_file::run_command": 1,
-    "jobs/manual_installs_sync.py::ManualInstallsSyncJob._installed_names::run_command": 1,
     # One batched `test -e` loop, for the marked paths a machine may no longer have.
     "jobs/manual_installs_sync.py::ManualInstallsSyncJob._paths_that_exist::run_command": 1,
-    "jobs/manual_installs_sync.py::ManualInstallsSyncJob.validate::run_command": 3,
+    "jobs/manual_installs_sync.py::ManualInstallsSyncJob.validate::run_command": 2,
+    # The shared unreproducible half: the target's $HOME, read to place the pushed registry.
+    "jobs/packages/unreproducible.py::UnreproducibleSyncJob._push_snippet_registry::run_command": 1,
     # The decision file and snippet registry are read with `cat`; their writes are gated.
     "jobs/packages/state.py::DecisionFile.load::run_command": 1,
     "jobs/packages/state.py::SnippetRegistry.load::run_command": 1,
@@ -445,7 +449,9 @@ _TARGET_HANDLES = frozenset({"self.target", "self._target", "target", "self._rem
 # The package-sync surface: the four jobs and their shared helpers. `orchestrator.py` is not
 # a path here — only the one function named in `_SOURCE_WRITES` belongs to this article.
 _PACKAGE_SYNC_PATHS = ("jobs/apt_sync/", "jobs/packages/")
-_PACKAGE_SYNC_MODULES = frozenset({"jobs/snap_sync.py", "jobs/flatpak_sync.py", "jobs/manual_installs_sync.py"})
+_PACKAGE_SYNC_MODULES = frozenset(
+    {"jobs/snap_sync.py", "jobs/flatpak_sync.py", "jobs/manual_deb_sync.py", "jobs/manual_installs_sync.py"}
+)
 
 # `PKG-FR-SOURCE-INTENT`: the writes a sync makes on the source are exactly four, each
 # required by an article of its own. The value is that article and why the write exists.
@@ -639,7 +645,7 @@ _PACKAGE_TRANSFERS: dict[str, str] = {
     "jobs/flatpak_sync.py::FlatpakSyncJob._stage_source_file::send_file": (
         "a remote's ref filter or trust anchor, staged into the target's cache"
     ),
-    "jobs/manual_installs_sync.py::ManualInstallsSyncJob._push_snippet_registry::send_file": (
+    "jobs/packages/unreproducible.py::UnreproducibleSyncJob._push_snippet_registry::send_file": (
         "the install-snippet registry"
     ),
 }
@@ -889,7 +895,7 @@ _PACKAGE_TRANSFER_DESTINATIONS: dict[str, _Destination] = {
             ("self._target_home_dir()", "the target user's own $HOME, read once per run"),
         ),
     ),
-    "jobs/manual_installs_sync.py::ManualInstallsSyncJob._push_snippet_registry::send_file": _Destination(
+    "jobs/packages/unreproducible.py::UnreproducibleSyncJob._push_snippet_registry::send_file": _Destination(
         argument="absolute_remote_path",
         literals=frozenset({"/", "/package-snippets.yaml", "~/.config/pc-switcher"}),
         supplied_by=(),

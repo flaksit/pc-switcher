@@ -667,6 +667,7 @@ class TestARunWithNobodyToAsk:
                 apt_sync=True,
                 snap_sync=True,
                 flatpak_sync=True,
+                manual_deb_sync=True,
                 manual_installs_sync=True,
                 folder_sync=True,
             )
@@ -987,7 +988,9 @@ class TestSkipAlwaysIsInertInBothRoles:
                 f"and this run cannot exercise the branch.\n{policy.stdout}"
             )
 
-            await write_package_sync_config(pc1_executor, apt_sync=True, manual_installs_sync=True)
+            await write_package_sync_config(
+                pc1_executor, apt_sync=True, manual_deb_sync=True, manual_installs_sync=True
+            )
 
             # -- run 1: record, and decline the removal ----------------------------------
             skip_always = {
@@ -1009,7 +1012,7 @@ class TestSkipAlwaysIsInertInBothRoles:
             assert apt_item_id in apt_entries, (
                 f"{candidate} not recorded in pc1's apt decision file after a skip-always decision (D-08a)"
             )
-            manual_entries = await DecisionFile("manual", pc1_executor).load()
+            manual_entries = await DecisionFile("manual_deb", pc1_executor).load()
             assert deb_item_id in manual_entries, (
                 f"{hand_deb} was never presented as an item needing an install snippet: no decision was recorded "
                 f"for {deb_item_id} on pc1 although the review was answered SKIP_ALWAYS for it.\n"
@@ -1055,7 +1058,8 @@ class TestSkipAlwaysIsInertInBothRoles:
             # A decision file holds nothing but skip-always entries, so the entry being
             # BYTE-IDENTICAL to run 1's -- `recorded_at` included -- is what says nobody
             # answered this item again.
-            assert (await DecisionFile("manual", pc1_executor).load())[deb_item_id] == manual_entries[deb_item_id], (
+            deb_entries_now = await DecisionFile("manual_deb", pc1_executor).load()
+            assert deb_entries_now[deb_item_id] == manual_entries[deb_item_id], (
                 f"{hand_deb}'s recorded decision was rewritten by the second run -- the item was presented again, "
                 "when D-08 makes it inert"
             )

@@ -408,6 +408,24 @@ sync_jobs:
 
         assert config.sync_jobs["manual_installs_sync"] is True
 
+    def test_manual_deb_sync_is_an_accepted_job_name(self, tmp_path: Path) -> None:
+        """The schema accepts `manual_deb_sync` as a valid sync_jobs key (D-15/D-18): the
+        hand-`.deb` half is its own job on its own enable flag, and enabling one
+        unreproducible job says nothing about the other."""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            """
+sync_jobs:
+  manual_deb_sync: true
+  folder_sync: true
+"""
+        )
+
+        config = Configuration.from_yaml(config_file)
+
+        assert config.sync_jobs["manual_deb_sync"] is True
+        assert "manual_installs_sync" not in config.sync_jobs
+
     def test_core_edge_unknown_job_in_config(self, tmp_path: Path) -> None:
         """K13 — Edge case: Unknown job name in sync_jobs is rejected.
 
@@ -771,32 +789,33 @@ class TestShippedDefaultConfig:
         assert order.index("folder_sync") < order.index("vscode_state_sync")
 
     def test_package_jobs_ship_disabled(self) -> None:
-        """K1, K2, K3, K4 — all four package jobs are valid sync_jobs keys, shipped
+        """K1, K2, K3, K4 — all five package jobs are valid sync_jobs keys, shipped
         opted-out by default: no sync installs or removes a package until the user says so."""
         config = Configuration.from_yaml(self._default_config_path())
         assert config.sync_jobs["apt_sync"] is False
         assert config.sync_jobs["snap_sync"] is False
         assert config.sync_jobs["flatpak_sync"] is False
+        assert config.sync_jobs["manual_deb_sync"] is False
         assert config.sync_jobs["manual_installs_sync"] is False
 
     def test_package_jobs_precede_folder_sync(self) -> None:
-        """K24 — D-17: all four package jobs (apt_sync, snap_sync, flatpak_sync,
-        manual_installs_sync) resolve before folder_sync in sync_jobs insertion order —
-        the order both _discover_and_validate_jobs and _first_sync_scopes iterate
-        directly, so apps land before folder_sync's data does.
+        """K24 — D-17: all five package jobs (apt_sync, snap_sync, flatpak_sync,
+        manual_deb_sync, manual_installs_sync) resolve before folder_sync in sync_jobs
+        insertion order — the order both _discover_and_validate_jobs and _first_sync_scopes
+        iterate directly, so apps land before folder_sync's data does.
         """
         config = Configuration.from_yaml(self._default_config_path())
         order = list(config.sync_jobs)
         folder_sync_index = order.index("folder_sync")
-        for job_name in ("apt_sync", "snap_sync", "flatpak_sync", "manual_installs_sync"):
+        for job_name in ("apt_sync", "snap_sync", "flatpak_sync", "manual_deb_sync", "manual_installs_sync"):
             assert order.index(job_name) < folder_sync_index
 
     def test_shipped_config_omits_empty_package_sections(self) -> None:
-        """K6 — D-32: no top-level apt_sync/snap_sync/flatpak_sync/manual_installs_sync section
-        ships; a job earns a section only when it has a real key, and its resolved config
-        defaults to an empty mapping."""
+        """K6 — D-32: no top-level section ships for any of the five package jobs; a job
+        earns a section only when it has a real key, and its resolved config defaults to an
+        empty mapping."""
         config = Configuration.from_yaml(self._default_config_path())
-        for job_name in ("apt_sync", "snap_sync", "flatpak_sync", "manual_installs_sync"):
+        for job_name in ("apt_sync", "snap_sync", "flatpak_sync", "manual_deb_sync", "manual_installs_sync"):
             assert config.get_job_config(job_name) == {}
 
     def test_config_omitting_package_sections_validates(self, tmp_path: Path) -> None:
@@ -811,6 +830,7 @@ sync_jobs:
   apt_sync: true
   snap_sync: true
   flatpak_sync: true
+  manual_deb_sync: true
   manual_installs_sync: true
   folder_sync: true
 """
@@ -818,7 +838,7 @@ sync_jobs:
 
         config = Configuration.from_yaml(config_file)
 
-        for job_name in ("apt_sync", "snap_sync", "flatpak_sync", "manual_installs_sync"):
+        for job_name in ("apt_sync", "snap_sync", "flatpak_sync", "manual_deb_sync", "manual_installs_sync"):
             assert config.get_job_config(job_name) == {}
 
 
@@ -866,7 +886,7 @@ class TestPackageJobsBeforeFolderSyncStructuralCheck:
         assert [e.job for e in errors] == ["snap_sync"]
         assert "folder_sync" in errors[0].message
 
-    def test_all_four_package_jobs_after_folder_sync_yield_four_errors(self) -> None:
+    def test_every_package_job_after_folder_sync_yields_its_own_error(self) -> None:
         """K29 — one error per misordered job."""
         orchestrator = self._orchestrator(
             {
@@ -874,13 +894,20 @@ class TestPackageJobsBeforeFolderSyncStructuralCheck:
                 "apt_sync": True,
                 "snap_sync": True,
                 "flatpak_sync": True,
+                "manual_deb_sync": True,
                 "manual_installs_sync": True,
             }
         )
 
         errors = orchestrator._check_package_jobs_precede_folder_sync()  # pyright: ignore[reportPrivateUsage]
 
-        assert {e.job for e in errors} == {"apt_sync", "snap_sync", "flatpak_sync", "manual_installs_sync"}
+        assert {e.job for e in errors} == {
+            "apt_sync",
+            "snap_sync",
+            "flatpak_sync",
+            "manual_deb_sync",
+            "manual_installs_sync",
+        }
 
     def test_manual_installs_after_folder_sync_yields_a_config_error(self) -> None:
         """K26 — Replaying an install snippet puts software on the target, and that software
@@ -900,6 +927,7 @@ class TestPackageJobsBeforeFolderSyncStructuralCheck:
                 "apt_sync": True,
                 "snap_sync": True,
                 "flatpak_sync": True,
+                "manual_deb_sync": True,
                 "manual_installs_sync": True,
                 "folder_sync": True,
             }

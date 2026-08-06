@@ -1,12 +1,12 @@
 """Shared package-sync pipeline: `PackageSyncJob`'s plan()/review/apply() split (D-15, D-16, D-24).
 
-Every package job (`apt_sync`, `snap_sync`, `flatpak_sync`, `manual_installs_sync`) is
-independent (D-15): its own config, enable flag, failure isolation and progress. What is
-here is what all four genuinely share — the plan/review/apply ORDER, the decision-file
-rules, the review grouping and the converge loop. A manager's own item shapes, its own
-diff and the facts only it can collect live in that manager's module, not here: a base
-class holding one manager's logic makes the other three inherit a surface they never use
-and cannot change. D-24 requires each job to present its
+Every package job (`apt_sync`, `snap_sync`, `flatpak_sync`, `manual_deb_sync`,
+`manual_installs_sync`) is independent (D-15): its own config, enable flag, failure
+isolation and progress. What is here is what they all genuinely share — the
+plan/review/apply ORDER, the decision-file rules, the review grouping and the converge
+loop. A manager's own item shapes, its own diff and the facts only it can collect live in
+that manager's module, not here: a base class holding one manager's logic makes every
+other job inherit a surface it never uses and cannot change. D-24 requires each job to present its
 own batched review before that job's own first mutating command — the batching is per
 manager, never across managers. The split of `plan()` from `apply()` exists to make that
 review-before-any-change ordering checkable and testable per job:
@@ -714,10 +714,11 @@ class PackageSyncJob(SyncJob):
         (`execute()`), since everything this seam exists for acts on an answer.
 
         No-op on the base — the three managers that produce no unreproducible items (apt,
-        snap, flatpak) need nothing between review and converge. Only `manual_installs_sync`
-        overrides it (D-23): it pushes the freshly reconciled install-snippet registry to
-        the target here, so a snippet the user authored during THIS run's review is on the
-        target before `apply()` replays it. Keeping the hook on the base leaves `execute()`
+        snap, flatpak) need nothing between review and converge. Only
+        `packages.unreproducible.UnreproducibleSyncJob` overrides it (D-23): it pushes the
+        freshly reconciled install-snippet registry to the target here, so a snippet the
+        user authored during THIS run's review is on the target before `apply()` replays
+        it. Keeping the hook on the base leaves `execute()`
         the single source of the plan/review/apply order rather than each manager
         re-deriving it.
         """
@@ -757,13 +758,13 @@ class PackageSyncJob(SyncJob):
         Before converging anything, `_record_permanent_skips` persists a `DecisionEntry`
         for every `SKIP_ALWAYS`-decided item (D-08). The `_finalize_unreproducible` hook
         then persists this run's authored snippets and unreproducible-item skip-always
-        decisions (D-20/D-21/D-23); it is a no-op on the base and only
-        `manual_installs_sync` implements it (D-18), but the call site stays here so both
-        run before any converge, independent of whether this run applies anything else
-        (a run with zero installs but one newly-authored snippet still records it). The
-        `_unresolved_as_failures` hook (also no-op on the base, overridden only by
-        `manual_installs_sync`) supplies the genuinely-undecided items that fail an
-        interactive run — which is why `total == 0` can still raise `PackageItemFailures`.
+        decisions (D-20/D-21/D-23); it is a no-op on the base and only the unreproducible
+        jobs implement it (D-18), but the call site stays here so both run before any
+        converge, independent of whether this run applies anything else (a run with zero
+        installs but one newly-authored snippet still records it). The
+        `_unresolved_as_failures` hook (also no-op on the base) supplies the
+        genuinely-undecided items that fail an interactive run — which is why `total == 0`
+        can still raise `PackageItemFailures`.
 
         After the loop, `_prune_dead_marks` reconciles both machines' decision files with
         what those machines actually hold. It runs whatever this job applied, `total == 0`
@@ -873,11 +874,11 @@ class PackageSyncJob(SyncJob):
         """Hook: this job's genuinely-undecided items that fail an interactive run (D-27).
 
         No-op on the base — it returns an empty list, so the three managers that produce
-        no unreproducible items (apt, snap, flatpak) never fail on this basis. Only
-        `manual_installs_sync` overrides it (D-18/D-21): an unreproducible item left with
-        neither a snippet nor a recorded decision after an interactive review fails the
-        job. The D-27 converge-failure contract in `apply()` is unchanged — converge
-        failures fail the job regardless of what this hook returns.
+        no unreproducible items (apt, snap, flatpak) never fail on this basis. The
+        unreproducible jobs do not override it either (D-21 decision 10): an interactive
+        review leaves no item genuinely undecided. The D-27 converge-failure contract in
+        `apply()` is unchanged — converge failures fail the job regardless of what this
+        hook returns.
         """
         return []
 
@@ -885,9 +886,10 @@ class PackageSyncJob(SyncJob):
         """Hook: persist this job's unreproducible-item snippet authoring and skip-always
         decisions (D-20/D-21/D-23).
 
-        No-op on the base — only `manual_installs_sync` produces unreproducible items
-        (D-18), and it overrides this hook with the real persistence; the three managers
-        that never do inherit this no-op so the base `apply()` stays generic.
+        No-op on the base — only the unreproducible jobs produce such items (D-18), and
+        `packages.unreproducible.UnreproducibleSyncJob` overrides this hook with the real
+        persistence; the three managers that never do inherit this no-op so the base
+        `apply()` stays generic.
         """
         return
 
@@ -998,7 +1000,7 @@ class PackageSyncJob(SyncJob):
         Self-contained (D-24): plan this job's diffs, review its own groups through the
         injected `JobContext.reviewer`, put the second round `plan_second_round()` builds out
         of those answers, accept the merged outcome, run the `after_review()` hook (the seam
-        where `manual_installs_sync` pushes its snippet registry, D-23), then apply. No
+        where an unreproducible job pushes its snippet registry, D-23), then apply. No
         component outside the job owns its review, and no fallback applies diffs that never
         came back from one — a missing reviewer fails loudly here rather than silently
         skipping the review and converging unreviewed diffs (T-02-38).
@@ -1032,7 +1034,7 @@ class PackageSyncJob(SyncJob):
 
         `after_review()` runs when a human answered OR the command line did
         (`PKG-FR-NO-TERMINAL`: a run nobody answered transfers no registry). It matters in
-        both directions here: `manual_installs_sync`'s hook pushes the SOURCE's whole
+        both directions here: an unreproducible job's hook pushes the SOURCE's whole
         snippet registry, which carries entries from earlier runs, so "this run had nothing
         to decide" is not "this run has nothing to transfer" — and an install the flags
         approved is REPLAYED from the target's copy of that registry, so skipping the push

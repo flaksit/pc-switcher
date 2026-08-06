@@ -38,7 +38,7 @@ the machine-local decision store above. Where a `DecisionEntry` says "never touc
 item on this machine", a `Snippet` says "this is how to install something no package
 manager can reproduce" — knowledge about the PACKAGE, not the machine, so it is SHARED
 and synced (D-23) rather than living in a machine-local `*.decisions.yaml` file. It
-travels source-to-target by `manual_installs_sync`'s own post-review `send_file` push,
+travels source-to-target by an unreproducible job's own post-review `send_file` push,
 not via `config_sync`. A snippet's body is stored and replayed as an opaque text
 blob — never parsed, versioned, diffed or reasoned about (D-20) — and replay never
 supplies stdin, since `pcswitcher.executor.Process` documents that commands must be
@@ -90,7 +90,7 @@ DECISION_FILE_GLOB_RELPATH = f"{_DECISION_DIR_RELPATH}/*.decisions.yaml"
 
 # The shared install-snippet registry, home-relative, alongside every manager's
 # decision file — but unlike those, this ONE file is not per-manager and is meant to be
-# synced (D-23): `manual_installs_sync` pushes it to the target with its own `send_file`
+# synced (D-23): an unreproducible job pushes it to the target with its own `send_file`
 # call after its review, so a snippet authored on the fly reaches the target that same run.
 SNIPPET_REGISTRY_RELPATH = f"{_DECISION_DIR_RELPATH}/package-snippets.yaml"
 
@@ -169,7 +169,7 @@ def marks_on_either(
     Right-biased so a `label` or `reason` the target recorded wins on a shared id; only
     membership is ever read here, so the choice is cosmetic.
 
-    `manual_installs_sync` is the one job that does not need this: it captures an
+    The unreproducible jobs are the ones that do not need this: each captures an
     inventory from the source alone, so there is no second copy to leave behind, and
     `PKG-FR-MANUAL-SOURCE-DECIDES` makes the source the only authority anyway.
     """
@@ -449,7 +449,7 @@ def load_snippets_from_text(raw: str, *, display_path: str, machine: str | None 
     "no snippets" and content that cannot be parsed ends the run (`_unreadable_registry`) —
     the same rule `SnippetRegistry.load` applies to executor-read content.
 
-    `manual_installs_sync` uses this to read the SOURCE's on-disk registry — the exact
+    An unreproducible job uses this to read the SOURCE's on-disk registry — the exact
     bytes `_push_snippet_registry` is about to `send_file` to the target — when deciding
     whether a wholesale overwrite is purely additive (decision 9). Reading the file that
     is actually sent keeps the additive check consistent with the transfer, rather than
@@ -472,7 +472,7 @@ class SnippetRegistry:
     (same one-`Executor`-per-instance shape `DecisionFile` follows).
 
     Unlike `DecisionFile`, the registry is not machine-scoped data — both machines may
-    hold different copies of the SAME file until `manual_installs_sync` reconciles them
+    hold different copies of the SAME file until an unreproducible job reconciles them
     by pushing the source's copy to the target (D-23). Construct with
     `SnippetRegistry(self.source)` to read/write the source's own copy — the reproducibility
     authority `plan()` classifies against (corrected D-23), and where a freshly authored
