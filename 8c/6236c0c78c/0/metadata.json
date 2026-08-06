@@ -1,0 +1,48 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "8c6236c0c78c",
+  "session_id": "d48a43df-00d2-417c-8526-fece20d0ab06",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-06T14:32:37.368190668Z",
+  "branch": "worktree-integration-coverage-since-670c0438",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    "docs/dev/package-sync-scenario-coverage.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "71bff2cfd1e3",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 688,
+    "cache_creation_tokens": 1535610,
+    "cache_read_tokens": 120382444,
+    "output_tokens": 222995,
+    "api_call_count": 346
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-06T14:32:37.20824823Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 1,
+    "human_removed": 0,
+    "total_committed": 0,
+    "total_lines_changed": 1,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    }
+  ]
+}
