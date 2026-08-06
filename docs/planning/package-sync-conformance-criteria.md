@@ -22,7 +22,7 @@ Every article decomposes exactly one section of the user requirements. Each sect
 
 Decomposes [What package sync is for](package-sync-user-requirements.md#what-package-sync-is-for).
 
-The package jobs — `apt_sync`, `snap_sync`, `flatpak_sync`, `manual_deb_sync`, `manual_snap_sync`, `manual_installs_sync` — replicate what software is installed. Application data is not theirs.
+The package jobs — `apt_sync`, `snap_sync`, `flatpak_sync`, `manual_deb_sync`, `manual_snap_sync`, `manual_flatpak_sync`, `manual_installs_sync` — replicate what software is installed. Application data is not theirs.
 
 - **PKG-FR-OPT-IN**: Every package job MUST ship disabled and MUST be enabled individually in configuration.
   Why: enabling one authorises the system to install and remove software on the target.
