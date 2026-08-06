@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "2429d1f13f83",
+  "strategy": "manual-commit",
+  "branch": "worktree-integration-coverage-since-670c0438",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "tests/integration/jobs/package_sync_scenario.py",
+    "tests/integration/jobs/test_package_sync.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/24/29d1f13f83/0/metadata.json",
+      "transcript": "/24/29d1f13f83/0/full.jsonl",
+      "compact_transcript": "/24/29d1f13f83/0/transcript.jsonl",
+      "content_hash": "/24/29d1f13f83/0/content_hash.txt",
+      "prompt": "/24/29d1f13f83/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 622,
+    "cache_creation_tokens": 1519466,
+    "cache_read_tokens": 103835353,
+    "output_tokens": 213239,
+    "api_call_count": 313
+  }
+}
