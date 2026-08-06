@@ -409,8 +409,8 @@ class TestARunWithNobodyToAsk:
         pc2_with_pcswitcher: BashLoginRemoteExecutor,
         reset_pcswitcher_state: None,
     ) -> None:
-        """H162, J9, J12, J14, J37, J44, J49, J103, A30, J98, G28, E113, E115, K88, E49 —
-        and ADR-020 D-41's `ORIGIN_MISMATCH` at VM level.
+        """H162, J9, J12, J14, J37, J44, J49, J103, A30, J98, G28, E113, E115, K88, E49, F90,
+        F93 — and ADR-020 D-41's `ORIGIN_MISMATCH` at VM level.
 
         What the run must SAY and must not APPLY, over four seeded divergences:
 
@@ -2030,7 +2030,7 @@ class TestOneManagerAtATime:
         pc2_with_pcswitcher: BashLoginRemoteExecutor,
         reset_pcswitcher_state: None,
     ) -> None:
-        """K9, K10, K11, K12, G67, N8, J2 — one divergence per manager, five pc1 -> pc2 runs.
+        """K9, K10, K11, K12, G67, N8, J2, F21 — one divergence per manager, five pc1 -> pc2 runs.
 
         Runs 1 to 4 enable `apt_sync`, `snap_sync`, `flatpak_sync` and
         `manual_installs_sync` respectively, and each approves its own manager's only item.
