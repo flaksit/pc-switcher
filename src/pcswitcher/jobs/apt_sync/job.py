@@ -1124,7 +1124,8 @@ class AptSyncJob(PackageSyncJob):
                 self._validation_error(
                     Host.SOURCE,
                     "passwordless sudo is not available on source "
-                    "(required to read /etc/apt repository, keyring and pin config).\n"
+                    "(required to read /etc/apt repository, keyring and pin config, and to pause this "
+                    "machine's own apt update timers for the sync window).\n"
                     + passwordless_sudo_hint(SOURCE_SUDO_COMMANDS),
                 )
             )
@@ -1135,20 +1136,28 @@ class AptSyncJob(PackageSyncJob):
                 self._validation_error(
                     Host.TARGET,
                     "passwordless sudo is not available on target "
-                    "(required to install packages and write /etc/apt config).\n"
+                    "(required to install packages, write /etc/apt config, and pause that machine's own "
+                    "apt update timers for the sync window).\n"
                     + passwordless_sudo_hint(TARGET_SUDO_COMMANDS, user=self.context.target_username),
                 )
             )
 
         # fuser exits 0 when the file IS held by at least one process, non-zero when
         # free (man fuser EXIT CODES) — read-only probe, no lock is acquired or released.
+        #
+        # The message names both holders it could be and picks neither, because the probe
+        # cannot tell: `fuser` reports that the lock is held, not who by. The sync-window
+        # suspension of the apt timers does not narrow it either — it stops the updater
+        # STARTING, and cannot stop one already running, let alone a person's own apt.
         lock_check = await self.target.run_command("sudo fuser /var/lib/dpkg/lock-frontend", login_shell=False)
         if lock_check.success:
             errors.append(
                 self._validation_error(
                     Host.TARGET,
-                    "dpkg frontend lock is held on target (likely unattended-upgrades); "
-                    "retry once it finishes (RESEARCH Pitfall 5)",
+                    "dpkg frontend lock is held on target: another package operation is in progress there. "
+                    "It may be a package command of your own (apt, dpkg, or a graphical package manager) or "
+                    "the system's automatic updates — the lock does not say which. "
+                    "Wait for it to finish, then run the sync again.",
                 )
             )
 

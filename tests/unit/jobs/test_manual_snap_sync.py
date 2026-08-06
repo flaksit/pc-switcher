@@ -357,7 +357,7 @@ class TestMarksFollowWhatTheMachineHolds:
 
     @pytest.mark.asyncio
     async def test_a_marked_snap_now_installed_from_the_store_keeps_its_mark(self) -> None:
-        """H218 — the check is whether the machine has it, not whether it is still a
+        """H247 — the check is whether the machine has it, not whether it is still a
         sideload: dropping the mark here would re-offer a snippet that overwrites the store
         copy the user chose."""
         source = await self._run(
@@ -371,7 +371,7 @@ class TestMarksFollowWhatTheMachineHolds:
 
     @pytest.mark.asyncio
     async def test_a_marked_snap_snapd_no_longer_reports_is_dropped(self) -> None:
-        """H219 — the other answer: the machine no longer holds the snap, so the mark has
+        """H248 — the other answer: the machine no longer holds the snap, so the mark has
         nothing left to keep."""
         source = await self._run(
             source_responses={

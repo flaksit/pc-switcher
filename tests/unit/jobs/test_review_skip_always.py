@@ -18,14 +18,17 @@ from rich.console import Console
 
 from pcswitcher.jobs.packages.review import (
     COLLATERAL_REVIEW_ACTION,
+    PACKAGE_REVIEW_AUTOMATION_ENV,
     REPO_CONFLICT_REVIEW_ACTION,
     REPO_REMOVAL_REVIEW_ACTION,
     UNREPRODUCIBLE_REVIEW_ACTION,
     Decision,
+    MarkSide,
     ReviewEntry,
     ReviewGroup,
     review_items,
 )
+from pcswitcher.jobs.packages.sync_core import SNAP_CHANGE_REVIEW_ACTION
 from pcswitcher.models import SyncAbortedByUser
 from tests.unit.console_capture import captured_console
 
@@ -153,7 +156,9 @@ class TestThePermanentAnswer:
         console = _interactive_console()
         ui = MagicMock()
         group = _group(action, [_entry("a", action_label=action)], title=f"{action} things")
-        screen = _fake_prompt(ask_return={"a": "skip_always"})
+        # The second answer is the follow-up's, which only the "change" direction reaches;
+        # an unused side effect is harmless for the other six.
+        screen = _fake_prompt(ask_side_effect=[{"a": "skip_always"}, {"a": "target"}])
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
@@ -161,7 +166,7 @@ class TestThePermanentAnswer:
         ):
             outcome = await review_items([group], console=console, ui=ui, **HOSTS)
 
-        assert _values(decision_list.call_args) == [Decision.APPLY, Decision.SKIP_ONCE, Decision.SKIP_ALWAYS]
+        assert _values(decision_list.call_args_list[0]) == [Decision.APPLY, Decision.SKIP_ONCE, Decision.SKIP_ALWAYS]
         assert outcome.decisions == {"a": Decision.SKIP_ALWAYS}
 
 
@@ -262,6 +267,209 @@ class TestGroupsNeverOfferedPermanence:
         assert Decision.SKIP_ALWAYS not in outcome.decisions.values()
 
 
+def _change_group(entries: Sequence[ReviewEntry]) -> ReviewGroup:
+    """A group of items BOTH machines have with different content — the only kind whose
+    permanent answer leaves a machine still to be named."""
+    return ReviewGroup(manager="apt", action="change", title="Change apt configuration files", entries=tuple(entries))
+
+
+@pytest.mark.asyncio
+class TestWhichMachineKeepsItsCopy:
+    """The follow-up after the batch (`PKG-FR-MARK-SIDE`): an item both machines have with
+    different content has no holder the run's direction can name, so the user names it.
+    """
+
+    async def test_a_conflicting_item_kept_for_good_is_asked_about_on_one_further_screen(self) -> None:
+        """H218 — the follow-up is a second screen, not a fourth answer on the batch."""
+        console = _interactive_console()
+        ui = MagicMock()
+        group = _change_group([_entry("apt:config:99local", label="99local", action_label="change")])
+        screen = _fake_prompt(ask_side_effect=[{"apt:config:99local": "skip_always"}, {"apt:config:99local": "both"}])
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen) as decision_list,
+        ):
+            outcome = await review_items([group], console=console, ui=ui, **HOSTS)
+
+        assert decision_list.call_count == 2
+        follow_up = decision_list.call_args_list[1]
+        assert _values(follow_up) == [MarkSide.SOURCE, MarkSide.TARGET, MarkSide.BOTH]
+        assert _words(follow_up) == ["atlas", "nomad", "both"]
+        assert outcome.decisions == {"apt:config:99local": Decision.SKIP_ALWAYS}
+        assert outcome.mark_sides == {"apt:config:99local": MarkSide.BOTH}
+
+    @pytest.mark.parametrize(
+        ("answer", "side"),
+        [("source", MarkSide.SOURCE), ("target", MarkSide.TARGET), ("both", MarkSide.BOTH)],
+    )
+    async def test_each_answer_comes_back_as_the_side_it_names(self, answer: str, side: MarkSide) -> None:
+        """H219, H220, H221 — all three answers are reachable and none is silently rewritten."""
+        console = _interactive_console()
+        ui = MagicMock()
+        group = _change_group([_entry("c1", action_label="change")])
+        screen = _fake_prompt(ask_side_effect=[{"c1": "skip_always"}, {"c1": answer}])
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen),
+        ):
+            outcome = await review_items([group], console=console, ui=ui, **HOSTS)
+
+        assert outcome.mark_sides == {"c1": side}
+
+    async def test_every_conflicting_item_is_on_that_one_screen(self) -> None:
+        """H218 — batched: a row each, never a screen each."""
+        console = _interactive_console()
+        ui = MagicMock()
+        group = _change_group([_entry(name, label=name, action_label="change") for name in ("c1", "c2", "c3")])
+        screen = _fake_prompt(
+            ask_side_effect=[
+                {"c1": "skip_always", "c2": "skip_always", "c3": "skip_always"},
+                {"c1": "source", "c2": "target", "c3": "both"},
+            ]
+        )
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen) as decision_list,
+        ):
+            outcome = await review_items([group], console=console, ui=ui, **HOSTS)
+
+        assert decision_list.call_count == 2
+        assert [row.row_id for row in decision_list.call_args_list[1].kwargs["rows"]] == ["c1", "c2", "c3"]
+        assert outcome.mark_sides == {"c1": MarkSide.SOURCE, "c2": MarkSide.TARGET, "c3": MarkSide.BOTH}
+
+    async def test_only_the_items_kept_for_good_are_on_it(self) -> None:
+        """H223 — the question exists for the rows answered permanently and no others, which
+        is why it can only be asked once the batch is confirmed."""
+        console = _interactive_console()
+        ui = MagicMock()
+        group = _change_group([_entry(name, label=name, action_label="change") for name in ("c1", "c2", "c3")])
+        screen = _fake_prompt(
+            ask_side_effect=[{"c1": "apply", "c2": "skip_once", "c3": "skip_always"}, {"c3": "source"}]
+        )
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen) as decision_list,
+        ):
+            outcome = await review_items([group], console=console, ui=ui, **HOSTS)
+
+        assert [row.row_id for row in decision_list.call_args_list[1].kwargs["rows"]] == ["c3"]
+        assert outcome.mark_sides == {"c3": MarkSide.SOURCE}
+
+    async def test_a_conflict_screen_nobody_answered_permanently_gets_no_follow_up(self) -> None:
+        """H223 — no permanent answer, no machine left to name."""
+        console = _interactive_console()
+        ui = MagicMock()
+        group = _change_group([_entry("c1", action_label="change")])
+        screen = _fake_prompt(ask_return={"c1": "skip_once"})
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen) as decision_list,
+        ):
+            outcome = await review_items([group], console=console, ui=ui, **HOSTS)
+
+        assert decision_list.call_count == 1
+        assert outcome.mark_sides == {}
+
+    @pytest.mark.parametrize("action", ["install", "add", "enable", "remove", "delete", "disable"])
+    async def test_an_arriving_or_leaving_item_is_never_asked_which_machine(self, action: str) -> None:
+        """H222 — only one machine has it, so its own action already names the holder."""
+        console = _interactive_console()
+        ui = MagicMock()
+        group = _group(action, [_entry("a", action_label=action)], title=f"{action} things")
+        screen = _fake_prompt(ask_return={"a": "skip_always"})
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen) as decision_list,
+        ):
+            outcome = await review_items([group], console=console, ui=ui, **HOSTS)
+
+        assert decision_list.call_count == 1
+        assert outcome.mark_sides == {}
+
+    async def test_a_snap_revision_change_never_reaches_it(self) -> None:
+        """H224 — a snap's revision change is a CHANGE that may never be recorded
+        (`PKG-FR-NO-MARK-ON-SNAP-REVISION`), so a permanent answer forced onto one must not
+        pull it into a question about which machine keeps its copy.
+        """
+        console = _interactive_console()
+        ui = MagicMock()
+        group = _group(SNAP_CHANGE_REVIEW_ACTION, [_entry("snap:vlc", action_label="change")], title="Change snaps")
+        screen = _fake_prompt(ask_return={"snap:vlc": "skip_always"})
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen) as decision_list,
+        ):
+            outcome = await review_items([group], console=console, ui=ui, **HOSTS)
+
+        assert decision_list.call_count == 1
+        assert outcome.mark_sides == {}
+
+    async def test_a_run_with_no_terminal_reaches_no_follow_up(self) -> None:
+        """H225 — D-26: nothing permanent is answered without a human, so there is no side to
+        choose and no screen is built."""
+        console, _ = captured_console()
+        ui = MagicMock()
+        group = _change_group([_entry("c1", action_label="change")])
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(False)),
+            patch("pcswitcher.jobs.packages.review.decision_list") as decision_list,
+        ):
+            outcome = await review_items([group], console=console, ui=ui, **HOSTS)
+
+        decision_list.assert_not_called()
+        assert outcome.mark_sides == {}
+        assert Decision.SKIP_ALWAYS not in outcome.decisions.values()
+
+    async def test_the_automation_variable_answers_no_side(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """H225 — the escape hatch maps item ids to decisions and knows nothing about sides;
+        a permanent answer from it leaves the side unanswered rather than guessed."""
+        console = _interactive_console()
+        ui = MagicMock()
+        group = _change_group([_entry("c1", action_label="change")])
+        monkeypatch.setenv(PACKAGE_REVIEW_AUTOMATION_ENV, '{"c1": "skip_always"}')
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.decision_list") as decision_list,
+        ):
+            outcome = await review_items([group], console=console, ui=ui, **HOSTS)
+
+        decision_list.assert_not_called()
+        assert outcome.decisions == {"c1": Decision.SKIP_ALWAYS}
+        assert outcome.mark_sides == {}
+
+    async def test_every_answer_names_a_machine_and_none_names_a_role(self) -> None:
+        """`PKG-FR-NAME-THE-MACHINES`, `PKG-FR-ANSWERS-AS-A-SET`: the two machines are
+        hostnames on this screen too, and each answer carries a sentence of its own."""
+        console = _interactive_console()
+        ui = MagicMock()
+        group = _change_group([_entry("c1", action_label="change")])
+        screen = _fake_prompt(ask_side_effect=[{"c1": "skip_always"}, {"c1": "target"}])
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen) as decision_list,
+        ):
+            await review_items([group], console=console, ui=ui, **HOSTS)
+
+        follow_up = decision_list.call_args_list[1]
+        hints = [option.hint for option in follow_up.kwargs["options"]]
+        explanation = follow_up.kwargs["explanation"]
+        assert all(hints)
+        assert "atlas" in " ".join(hints) and "nomad" in " ".join(hints)
+        assert "atlas" in explanation and "nomad" in explanation
+        spoken = " ".join([*hints, explanation, *_words(follow_up), follow_up.args[0]])
+        assert "source" not in spoken and "target" not in spoken
+
+
 @pytest.mark.asyncio
 class TestAbortAndTeardown:
     async def test_ctrl_c_at_a_decision_screen_aborts_the_whole_sync(self) -> None:
@@ -281,6 +489,23 @@ class TestAbortAndTeardown:
 
         # The later group is never reached: the abort stops the whole review.
         assert decision_list.call_count == 1
+        ui.resume.assert_called_once()
+
+    async def test_ctrl_c_at_the_machine_specific_follow_up_aborts_the_whole_sync(self) -> None:
+        """H226 — the follow-up is a review screen like every other: Ctrl-C there ends the
+        sync rather than leaving the mark to land on a machine nobody named."""
+        console = _interactive_console()
+        ui = MagicMock()
+        group = _change_group([_entry("c1", action_label="change")])
+        screen = _fake_prompt(ask_side_effect=[{"c1": "skip_always"}, None])
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen),
+            pytest.raises(SyncAbortedByUser, match="machine-specific follow-up"),
+        ):
+            await review_items([group], console=console, ui=ui, **HOSTS)
+
         ui.resume.assert_called_once()
 
     async def test_ui_resumed_when_the_screen_raises(self) -> None:

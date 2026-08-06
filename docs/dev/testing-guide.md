@@ -83,10 +83,10 @@ Build the console with `captured_console()` from `tests/unit/console_capture.py`
 
 ```python
 console, buffer = captured_console()          # add terminal=True for the is_terminal branches
-assert "Sync finished with failures:" in buffer.getvalue()
+assert "Job outcomes:" in buffer.getvalue()
 ```
 
-It pins width and terminal-ness, and turns styling off at the source. A hand-built console honours `FORCE_COLOR` even when it writes to a buffer, so the buffer holds `\x1b[1mSync finished…` and the assertion fails only for the developers whose environment sets it (#250). `no_color=True` is not enough — it drops colour and keeps bold.
+It pins width and terminal-ness, and turns styling off at the source. A hand-built console honours `FORCE_COLOR` even when it writes to a buffer, so the buffer holds `\x1b[1mJob outcomes…` and the assertion fails only for the developers whose environment sets it (#250). `no_color=True` is not enough — it drops colour and keeps bold.
 
 ### Mocking Patterns
 

@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 from pcswitcher.jobs import JobContext
 from pcswitcher.jobs.packages.items import DiffAction, DiffClass, ItemClass, ItemDiff
-from pcswitcher.jobs.packages.review import Decision, ReviewGroup, ReviewOutcome
+from pcswitcher.jobs.packages.review import Decision, ReviewGroup, ReviewOutcome, ReviewPolicy
 from pcswitcher.models import CommandResult
 
 # -- Real `apt-cache policy` output, verbatim ------------------------------------------
@@ -204,6 +204,7 @@ def make_context(  # noqa: PLR0913 - test builder knobs; all keyword-only
     reviewer: object | None = None,
     confirmer: object | None = None,
     enabled_sync_jobs: dict[str, bool] | None = None,
+    review_policy: ReviewPolicy | None = None,
 ) -> tuple[JobContext, MagicMock, MagicMock]:
     source = MagicMock()
     source.run_command = AsyncMock(side_effect=respond_to(source_responses or {}))
@@ -226,6 +227,7 @@ def make_context(  # noqa: PLR0913 - test builder knobs; all keyword-only
         confirmer=confirmer,  # pyright: ignore[reportArgumentType]
         reviewer=reviewer,  # pyright: ignore[reportArgumentType]
         enabled_sync_jobs=enabled_sync_jobs,
+        review_policy=review_policy,
     )
     return context, source, target
 
