@@ -1100,6 +1100,68 @@ FLATPAK_FILTERED_OPTION = "filtered"
 APT_SOURCES_DIR = "/etc/apt/sources.list.d"
 APT_KEYRINGS_DIR = "/etc/apt/keyrings"
 APT_PREFERENCES_DIR = "/etc/apt/preferences.d"
+APT_CONF_DIR = "/etc/apt/apt.conf.d"
+
+#: `AptConfigItem.item_id`'s prefix, restated rather than imported for the reason every
+#: other identity string in this module is: a test that agreed with whatever the shipped
+#: constant currently says could not notice the id shape changing under it.
+APT_CONFIG_ITEM_PREFIX = "apt:config:"
+
+
+def apt_config_item_id(filename: str) -> str:
+    """The review item id for an `/etc/apt/apt.conf.d` file called `filename`."""
+    return f"{APT_CONFIG_ITEM_PREFIX}{filename}"
+
+
+async def create_conflicting_apt_conf_file(
+    source: BashLoginRemoteExecutor, target: BashLoginRemoteExecutor
+) -> tuple[str, str, str]:
+    """Put an inert `apt.conf.d` file of the SAME name and DIFFERENT content on both
+    machines, and return `(filename, source body, target body)`.
+
+    An `/etc/apt/apt.conf.d` divergence is the product's only conflicting item class -- the
+    only one that both machines hold, that reviews as a change, and that a permanent answer
+    can be recorded against on either side. Everything about where such a mark lands is
+    therefore asserted through a file like this one.
+
+    The bodies set `APT::Never-Cache-Anything` under a uuid-suffixed key, which apt parses
+    and no apt option reads, so a copy left behind by a failed cleanup changes nothing about
+    how either machine behaves. The filename is uuid-suffixed too, so it can never collide
+    with a file either machine came with.
+    """
+    unique = uuid4().hex[:12]
+    filename = f"99-pcswitcher-it-{unique}.conf"
+    source_body = f'APT::Pcswitcher-It-{unique} "source";\n'
+    target_body = f'APT::Pcswitcher-It-{unique} "target";\n'
+    destination = shlex.quote(f"{APT_CONF_DIR}/{filename}")
+    for executor, body, machine in ((source, source_body, "source"), (target, target_body, "target")):
+        written = await executor.run_command(
+            f"printf %s {shlex.quote(body)} | sudo tee {destination} > /dev/null",
+            login_shell=False,
+            timeout=20.0,
+        )
+        assert written.success, f"could not write {filename} on the {machine}: {written.stderr}"
+    return filename, source_body, target_body
+
+
+async def read_apt_conf_file(executor: BashLoginRemoteExecutor, filename: str) -> str | None:
+    """The bytes of `filename` under `apt.conf.d` on `executor`'s machine, or `None` if it
+    holds no such file.
+    """
+    result = await executor.run_command(
+        f"cat {shlex.quote(f'{APT_CONF_DIR}/{filename}')}", login_shell=False, timeout=15.0
+    )
+    return result.stdout if result.success else None
+
+
+async def remove_apt_conf_file(executor: BashLoginRemoteExecutor, filename: str) -> None:
+    """Drop `filename` from `apt.conf.d` on `executor`'s machine. Best-effort cleanup."""
+    result = await executor.run_command(
+        f"sudo rm --force {shlex.quote(f'{APT_CONF_DIR}/{filename}')}", login_shell=False, timeout=15.0
+    )
+    if not result.success:
+        print(f"[cleanup] failed to remove {filename}: {result.stderr}")
+
 
 # Host the synthetic repository points at. `.invalid` is reserved by RFC 2606 and can
 # never resolve, so apt reaches this repo only to fail, and the name appears in

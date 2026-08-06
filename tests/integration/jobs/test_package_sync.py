@@ -135,6 +135,7 @@ from tests.integration.jobs.package_sync_scenario import (
     AptTimerBaseline,
     a_name_apt_knows_the_machine_does_not_have,
     alternate_snap_revision,
+    apt_config_item_id,
     apt_get_update,
     apt_timer_states,
     apt_update_lines_naming,
@@ -148,6 +149,7 @@ from tests.integration.jobs.package_sync_scenario import (
     cleanup_in_parallel,
     collapse_run_output,
     collateral_removal_item_id,
+    create_conflicting_apt_conf_file,
     create_extra_on_target_apt_package,
     create_sideloaded_snap,
     create_synthetic_pin,
@@ -179,6 +181,8 @@ from tests.integration.jobs.package_sync_scenario import (
     publish_a_cascading_pair,
     publish_a_rival_candidate,
     put_paths_back,
+    read_apt_conf_file,
+    remove_apt_conf_file,
     remove_sideloaded_snap,
     remove_the_rival_candidate,
     remove_unowned_marker,
@@ -1845,6 +1849,85 @@ class TestTheCommandLineAnswersOneDirectionOfTheReview:
         assert not await decision_file_exists(pc2_executor, "apt"), (
             "the run carrying both flags left a decision file on pc2"
         )
+
+
+class TestWhereAConflictingItemsPermanentMarkLands:
+    """`PKG-FR-MARK-SIDE`'s unattended fallback, over the product's only conflicting item
+    class.
+
+    It keeps a sync of its own because what it needs is a run that CONVERGES NOTHING and
+    still writes state: an item answered "never again" is refused this run and every later
+    one, so no converging run can carry it.
+    """
+
+    async def test_an_unattended_permanent_answer_on_a_conflicting_item_lands_on_the_target(
+        self,
+        pc1_executor: BashLoginRemoteExecutor,
+        pc2_executor: BashLoginRemoteExecutor,
+        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
+        pc2_with_pcswitcher: BashLoginRemoteExecutor,
+        reset_pcswitcher_state: None,
+    ) -> None:
+        """H256 — a run with no person answers a conflicting item permanently; the mark lands
+        on the target's decision file alone, and neither machine's copy of the file moves.
+
+        `PKG-FR-MARK-SIDE` asks which machine a conflicting item's permanent mark is about,
+        and asks it on a `prompt_toolkit` screen reached only after the interactive per-group
+        loop. Both routes that exist without a person return before it — the automation
+        variable answers `Decision`s and knows nothing about sides, and a run with no
+        terminal never enters the loop — so `both` and the source side cannot be produced on
+        a VM at all, and are proven at the unit tier and in the manual playbook.
+
+        What every scripted and CI run actually gets is the fallback, and it had no VM proof:
+        a `CHANGE` answered permanently with no side named is the TARGET's mark. So is the
+        conflicting item class itself — an `/etc/apt/apt.conf.d` divergence is the only item
+        the product treats this way, and no run had ever built one.
+
+        Nothing converges: a permanent answer is a refusal that outlives the run, so both
+        machines must still hold their own bytes afterwards.
+        """
+        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
+
+        filename, source_body, target_body = await create_conflicting_apt_conf_file(pc1_executor, pc2_executor)
+        try:
+            await write_apt_sync_config(pc1_executor)
+            item_id = apt_config_item_id(filename)
+            sync_result = await pc1_executor.run_command(
+                f"{SKIP_INSTALL_ON_TARGET} {automation_env_assignment_multi({item_id: Decision.SKIP_ALWAYS})}"
+                f" pc-switcher sync pc2 --yes --allow-first-sync",
+                timeout=300.0,
+                login_shell=True,
+            )
+            assert sync_result.success, (
+                f"the run recording a permanent answer failed.\nstdout: {sync_result.stdout}\n"
+                f"stderr: {sync_result.stderr}"
+            )
+
+            source_entries, target_entries, source_now, target_now = await asyncio.gather(
+                DecisionFile("apt", pc1_executor).load(),
+                DecisionFile("apt", pc2_executor).load(),
+                read_apt_conf_file(pc1_executor, filename),
+                read_apt_conf_file(pc2_executor, filename),
+            )
+            assert item_id in target_entries, (
+                f"{item_id} is in no entry of pc2's apt decision file, so the permanent answer landed on neither "
+                f"machine or on the wrong one. pc2 holds: {sorted(target_entries)}\nstdout: {sync_result.stdout}"
+            )
+            assert item_id not in source_entries, (
+                f"{item_id} was also recorded on pc1, which nobody named: with no side answered the mark is the "
+                f"target's alone. pc1 holds: {sorted(source_entries)}"
+            )
+            assert source_now == source_body, (
+                f"pc1's own {filename} changed during a run that answered it permanently: {source_now!r}"
+            )
+            assert target_now == target_body, (
+                f"pc2's {filename} was overwritten by an item answered 'never again': {target_now!r}. A permanent "
+                f"answer refuses the write, it does not perform it once first"
+            )
+        finally:
+            await cleanup_in_parallel(
+                remove_apt_conf_file(pc1_executor, filename), remove_apt_conf_file(pc2_executor, filename)
+            )
 
 
 class TestAStrayAptHoldEndsTheRun:
