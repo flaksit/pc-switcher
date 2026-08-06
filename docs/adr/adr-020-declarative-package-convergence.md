@@ -1,4 +1,4 @@
-# ADR-020: Declarative package convergence — a package replicates as (name, origin), and repository configuration follows the packages approved from it
+# ADR-020: Declarative package convergence — (name, origin) replicates; repository configuration is derived
 
 Status: Draft
 
@@ -6,206 +6,122 @@ Date: 2026-07-23
 
 ## TL;DR
 
-The source captures a manifest of package-related items; the target diffs its own state against it and converges using `apt`, `snap` and `flatpak` themselves — package databases are never rsynced. A package replicates as (name, origin), not name: the review decides packages and apt config, while repositories, their keys, pins, flatpak remotes and blocks — apt holds, snap refresh holds, flatpak masks — are all derived, replicated because the software they serve is and never reviewed at all. Four independent jobs (`apt_sync`, `snap_sync`, `flatpak_sync`, `manual_installs_sync`) each run plan then review then apply inside their own `execute()`, every change approved before it is made and the questions batched into one screen per manager per action where the logic permits.
+The source captures a manifest; the target diffs its own state against it and converges via `apt`, `snap` and `flatpak` themselves. Package databases are never rsynced. A package replicates as **(name, origin)**, not name alone. Seven independent jobs each run plan → review → apply inside their own `execute()`. Repositories, keys, pins, flatpak remotes and blocks (apt holds, snap refresh holds, flatpak masks) are derived from the packages approved from them and never reviewed directly.
 
 ## Context
 
-Phase 2 must replicate presence, version and provenance of packages across apt, snap and flatpak, plus the repository/keyring/pin/remote configuration those installs depend on. Package data under `~/.var/app`, `~/snap/<app>/common` and dotfiles is Phase 1 `folder_sync` territory; this ADR concerns the packages and the configuration that governs where they come from.
+Phase 2 must replicate presence, version and provenance of packages across apt, snap and flatpak, plus the repository/keyring/pin/remote configuration those installs depend on. Application data belongs to Phase 1 `folder_sync`.
 
-Provenance is the hard part, because a package name is offered by more than one vendor: `firefox` exists in Ubuntu's archive and in Mozilla's own repository, and `org.mozilla.firefox` on Flathub and Flathub-beta. Matching by name alone replicates the name and inverts the provenance, silently and at exit 0. Replication is therefore of (name, origin), and the configuration that makes an origin reachable is mechanism serving that guarantee rather than something the user is asked about — a repository ticked without its package does nothing, a package ticked without its repository cannot be installed, and the pairing was never expressible in a checkbox list.
-
-The review boundary is the manager: each package job captures its own diff and surfaces it for decision before it applies anything, and no review spans more than a single manager's items — which keeps four deliberately independent jobs independent rather than binding them to a shared review with a common ordering and failure surface. The normative obligations these decisions imply are stated as checkable articles in [package-sync-conformance-criteria.md](../planning/package-sync-conformance-criteria.md) (`PKG-FR-*`, `PKG-NG-*`); this ADR records the decisions, not a second rule set.
+Provenance is the hard part: `firefox` exists in Ubuntu's archive and in Mozilla's own repository; `org.mozilla.firefox` on Flathub and Flathub-beta. Matching by name alone replicates the name and inverts the provenance, silently, at exit 0.
 
 ## Decision
 
-### Convergence model (D-01)
+### D-01 — Convergence model
 
-The source captures a manifest; the target diffs its own state against it and converges using `apt`, `snap` and `flatpak` themselves. `/var/lib/dpkg`, `/var/lib/snapd` and the flatpak OSTree store are never rsynced — the package managers stay authoritative for their own state.
+Source captures a manifest; target diffs and converges via the ecosystem's own tools. `/var/lib/dpkg`, `/var/lib/snapd` and the flatpak OSTree store are never rsynced.
 
-### Item model (D-02)
+### D-02 — Item model
 
-An item is something the user can meaningfully decide about, carrying a stable identity through one diff → decide → apply pipeline. The item classes are the apt package, the apt config file, the snap, the snap channel, the flatpak ref, the unreproducible/manual install, and — for removal only — the apt source file and the apt pin file. A flatpak remote is not an item (D-41), and neither is a block — an apt hold, a snap refresh hold or a flatpak mask.
+An item is something the user can decide about. Item classes: apt package, apt config file, snap, snap channel, flatpak ref, unreproducible install; for removal only, apt source and pin files. Flatpak remotes and blocks (holds, masks) are derived, not items.
 
-A block keeps an identity of its own so the converge order (install before hold, masks after refs) and failure reporting can name it, but it is **derived**, not decided: it replicates because the software it applies to does, exactly as a pin does. Replicating every one costs nothing and cannot get a per-item derivation wrong, while asking about one separately let the user contradict the answer they gave about the software itself. A block that freezes an installed copy — an apt hold, a snap refresh hold — is not registered for software the target does not end the run with; a flatpak mask is a rule about what may be installed and still lands. An apt hold naming a package its own machine does not have freezes nothing while refusing every later install of that name: the run ends, naming the package and the machine. Mechanism the user has no basis to judge — repository files, signing keys, pins, flatpak remotes, and a transient guard a run sets and clears — is not an item and is the job's own business to keep correct (D-34, D-36, D-37, D-41).
+### D-03/D-04/D-05 — Version and manifest policy
 
-### Manifest content for apt (D-03)
+Apt manifest carries `apt-mark showmanual`. Versions float; a mismatch is `REPORT_ONLY`. Held apt packages take the source's exact version — a hold blocks install, upgrade and removal alike.
 
-The manifest carries the manually-installed set from `apt-mark showmanual`, not the full dpkg selection set; apt resolves dependencies on the target.
+### D-06 — Snap converges revision and channel
 
-### Version policy (D-04, D-05)
+Snap embeds the version in its per-user data path (`~/snap/<app>/<rev>`), so both machines must be on the same revision for `folder_sync` to mirror snap data cleanly. Snapd's automatic refresh is paused across the sync window on both hosts with a timeout, and each host's prior setting is restored on cleanup.
 
-Versions float to whatever the target's repos currently offer, and a version mismatch is a reported diff class rather than a forced change — which is why there is no version-pinning machinery. The one exception inside apt is a held package, which takes the source's exact version, because an apt hold blocks install, upgrade and removal alike and so carries "do not move this off the version that works". This is a product rule; its intent is owned by [package-sync-user-requirements.md](../planning/package-sync-user-requirements.md#the-model). Deliberate `preferences.d` pins still travel (D-36) even though versions float.
+### D-07 — Decision shape
 
-Floating rests on a premise only a managed package satisfies: a repository will eventually move the target onto the version the source has, so reporting the difference and waiting costs the user nothing. Nothing will ever move a manual install — no repository carries it, no `apt upgrade` reaches it, and the machine will sit at whatever build a snippet last put there. So for the four unreproducible jobs a version difference is **actionable rather than report-only** (D-22): it is offered as a change, converged by replaying the source's own install-or-update body, and the direction stays source-to-target whichever version is higher, exactly as it is for a managed package. That is one exception to the diff CLASS, not to the model: a sync still never reads a version to decide which way it runs.
+Three-way by default: apply / skip once / skip always. Two-way (act / skip once, no record) for apt source removal, apt pin removal and repository-conflict overwrite prompts. `REPORT_ONLY` takes no answer.
 
-### Revision/scope convergence (D-06)
+### D-08 — Machine-local decision file
 
-The snap manifest carries name + channel + revision; the flatpak manifest carries ref + origin + user/system scope. Snap converges revision and channel, because snap is the only ecosystem that embeds the version in its per-user data path (`~/snap/<app>/<rev>`), so both machines on the same revision is what lets `folder_sync` mirror that data cleanly. snapd auto-refreshes in the background and could move a snap off the converged revision mid-run, so the orchestrator pauses snapd's automatic refresh across the sync window on both hosts, restoring each host's prior setting on cleanup and relying on a timeout so a crashed run leaves no pause behind. This gates only auto-refresh, not the explicit convergence, and never leaves a standing block on any manager's auto-update once a run ends.
+One file per manager at `~/.config/pc-switcher/<manager>.decisions.yaml`, never synced. An entry on machine M makes the item inert on M in both roles. An entry is dropped once M no longer has the item; a dead entry would refuse the item's return.
 
-### Decision shape and direction (D-07)
+### D-11 through D-14 — `/etc/apt` is derived, not mirrored
 
-The default is a three-way decision: apply / skip once / skip always. A `REPORT_ONLY` item takes NO answer at all — it converges in neither direction and records nothing, so both answers would leave both machines identical; such items are printed, grouped by the `DiffClass` that caused them, each group carrying the remedy where there is one. "Apply" is direction-dependent: missing on target means install/add/enable, extra means remove/delete/disable, different on both means change the target to match the source. Two cases take **two** answers — act, or skip once — and record nothing: an apt source or pin removal (D-37), and the repository/remote-conflict overwrite prompts (D-37, D-41); a flatpak remote is never asked about (D-41). The grammar these screens and answers follow — hostnames not source/target, one answer per key, the answers read as a set — is specified in [package-sync.md](../system/package-sync.md) and its articles.
+Four buckets: derived from approved packages (repository files, keyrings, conflict-free overwrites); always synced (`preferences.d` pins, distribution source files); reviewed two-way (repository and pin removals, repository-conflict overwrite); reviewed three-way (`apt.conf.d`). Only files apt itself reads. Keys travel byte-for-byte from the source, never re-fetched. Derived writes precede the installs that need them.
 
-### Machine-local decision file (D-08, D-08a, D-09, D-10, D-43)
+### D-15 — Seven separate jobs
 
-One file per manager lives at `~/.config/pc-switcher/<manager>.decisions.yaml`, never synced, excluded from `folder_sync` non-overridably and outside `config_sync`. An entry on machine M makes the item inert on M in both roles — not pushed when M is the source, not installed or removed when M is the target. It is written on the machine whose copy the answer keeps: an install declined for good on the source, a declined removal or overwrite on the target. An overwrite is the one direction whose holder the run's own direction cannot name — both machines have the item and the recorder takes the other role next sync — so an item both machines have is read back from both files and filtered out of both inventories (D-08a). An entry lasts as long as its item is on the machine holding it, and is dropped once that machine no longer has it (D-43), including when this run's own approved work took it (the collateral case D-30 allows). A dead entry is not the cautious option: it acts in both roles, so one naming absent software goes on refusing to install it there for good. The check is a positive statement that the machine lacks the item, never absence from the narrower inventory the diff was built from; a check that cannot answer drops nothing. Software that returns is a new item, reviewed again.
+`apt_sync`, `snap_sync`, `flatpak_sync`, `manual_deb_sync`, `manual_snap_sync`, `manual_flatpak_sync`, `manual_installs_sync` are seven separate `SyncJob`s over one shared core. Each ships disabled. No review spans two managers. All seven run before `folder_sync`.
 
-### Repository configuration is derived mechanism (D-11, D-12, D-13, D-14)
+### D-22 — Unreproducible items
 
-`/etc/apt` is not file-mirrored: a `--delete` mirror would wipe the target's own machine-specific sources, and it is not an inventory of reviewed items. Four buckets cover every file: derived from approved packages (repository files, their keyrings, conflict-free overwrites of a repository on both machines — D-34, D-37); always synced (every `preferences.d` pin — D-36 — and the distribution's own source files — D-38); reviewed with two answers (repository and pin removals, the repository-conflict overwrite — D-07, D-37); and reviewed with the full three-way decision (`apt.conf.d` — D-37). Only files apt itself reads are captured, compared or written, by each fragment directory's own extension and filename rule (D-13; the `.save`, `.distUpgrade`, `.dpkg-dist` and editor backups those directories collect are left alone, since treating one as configuration would propose a change apt would never act on — [measurements](considerations/adr-020-apt-esm-and-snap-measurements.md)). A repository's signing key travels with it byte-for-byte from the source, never re-fetched from a vendor (a fresh fetch would silently substitute whatever the vendor serves today); the same governs a flatpak remote's ostree keyring (D-41). A repository whose key cannot be made to work is reported, not written. Every repository, key, pin and remote an approved item needs is provisioned before the install that needs it (D-14): for apt the `/etc/apt` group converges ahead of the first `apt-get install`, for flatpak the derived remote writes run ahead of the first `flatpak install`.
+Each item has two mandatory bodies: `install_body` (replayed on the target) and `version_body` (prints the installed version on whichever machine runs it). Version comparison drives convergence; there is no folder diff and no payload hash. `version_body` runs on both machines during `plan()`, ungated by `--confirm-each-command`. Replay loops until versions match or the user skips. No purge-and-retry answer; no uninstall snippets.
 
-### Job split into four jobs (D-15, D-16, D-17, D-18)
+### D-24 — Batched review, rounds when correctness needs them
 
-Four jobs — `apt_sync`, `snap_sync`, `flatpak_sync`, `manual_installs_sync` — are four separate `SyncJob`s, never merged into one `package_sync`, over one shared core extracted while building. The core holds what all four use: the item taxonomy, the plan/review/apply order, the decision flow, the batched TUI review, the machine-local file I/O and the read-failure guard (ADR-022). Each manager's own item shapes and diff stay in that manager's module — one manager's diff on the shared base would make the other three inherit inputs they never supply. All four run before `folder_sync` so software is provisioned before its data lands (decisive for flatpak, where `~/.local/share/flatpak` must exist before `~/.var/app` arrives); a snippet-installed program writes its own stock defaults as a package does. `manual_installs_sync` owns everything no package manager can reproduce and carries its own enable flag.
+Each job runs plan → review → apply in its own `execute()`. One screen per manager per action where the logic permits. `apt_sync` may ask in up to three rounds — the second round asks questions scoped to APPROVED work; the third asks collateral for an install whose repository this run itself writes.
 
-### Batched review inside each job (D-24)
+### D-30 / D-40 — Collateral protects the target's `apt-mark showmanual`
 
-Each package job runs plan then review then apply inside its own `execute()` and converges only what the review approved. Batching — one screen per manager per action — is a strong preference, applied where the logic permits and abandoned where it does not: a job never turns a batch into a question per item, and never complicates or omits its logic to avoid another round. A job may ask again, including after it has begun writing, when the answer it needs rests on facts this run's own changes invalidated or that no read could establish before the first write; correctness outranks batching, always. `apt_sync` asks in rounds, and only `apt_sync`. Three of its questions are scoped to the work this run APPROVES rather than proposes — a repository not raised for deletion while an approved-surviving package still uses it, a repository conflict raised only for a file an approved package makes travel, and a package marked as the target's own — none decidable while the plan is built and all decidable once the first round's answers exist: a second round, same sitting, nothing written yet. The one thing unknowable before writing is the collateral of an install whose repository this run itself writes (D-40): a third round, asked once, before the first of those installs. The other three jobs have one round. No review spans two managers (D-15), so there is no shared review phase and no coordinator.
+apt collateral affecting the target's own manually-installed set becomes its own reviewable item (act / skip now / stop the sync). Only APPROVED removals waive the protection.
 
-### Diff taxonomy (D-25)
+### D-34 / D-35 — (name, origin) enforced at the target's real state
 
-Conflicts, mismatches and unavailability are diff classes inside the job's own review: missing-on-target, extra-on-target, version-mismatch (both versions shown), origin-mismatch, origin-unavailable, unreproducible. `ORIGIN_MISMATCH` covers a package or ref installed on both machines from different vendors. `REPO_UNAVAILABLE` means the source's origin cannot be provided on the target — a statement about provenance, not about whether apt printed a candidate. There is no per-package echo of a pin or a hold: D-35 checks a pin against the target's real state, and echoing it onto every package it names would make a pinned target-only package impossible to remove.
+The unit of replication for apt is (name, origin). After the `/etc/apt` group's single `apt-get update` and before the first install, one batched `apt-cache policy` re-reads target candidate origins; an install whose candidates do not intersect the source's fails as its own item. Distribution origins are per-machine exempt.
 
-### Transactional repository convergence (D-27 boundary)
+### D-36 — Pins always-sync
 
-The `/etc/apt` group is the one place D-27's continue-and-report model does not apply: it is transactional, and a group whose metadata refresh fails leaves `/etc/apt` as it found it. Continuing past a bad write would leave the target's package manager unusable, and automatic snapshot rollback does not arrive until Phase 7.
+`preferences.d` pin adds and updates sync silently. A pin naming an absent origin is inert.
 
-### Unreproducible items and where a run terminates (D-21 with D-26 and D-27)
+### D-38 — Distribution source files and ESM
 
-An unreproducible item ends a run resolved one of three ways: it has a snippet, it is recorded machine-specific, or the user skipped it once. Skip-once is a real decision, not an unresolved state. pc-switcher offers to add a snippet on the fly during review, so resolving an item never requires leaving the sync; abandoning the review aborts the whole sync rather than manufacturing a skip-once. Only a non-interactive run leaves items undecided, and it does not fail on that alone, because the user was never given the chance to resolve them (D-26).
+`ubuntu.sources`, `/etc/apt/sources.list`, `ubuntu-esm-apps.sources`, `ubuntu-esm-infra.sources` are written when missing, overwritten when different, never removed. When the two ESM files would be written and the target reports unattached, `apt_sync` asks (attach and re-probe / skip `apt_sync`); non-interactive runs take the skip. pc-switcher cannot attach on the user's behalf.
 
-### Unreproducible items, their snippets and their versions (D-18 through D-23)
+### D-41 — Flatpak remotes derived from refs
 
-Detection covers apt packages whose installed version comes from no configured repository (a bare `.deb`, whose only origin is dpkg's status file), sideloaded snaps, flatpak refs no configured remote can supply, and unowned installs under `/usr/local` and `/opt`. It is a diff, not a scan of the source alone: both machines are scanned, what the target already holds is never offered for install — which stops a secondary trace (a symlink pointing at an `/opt` application) being asked about once the snippet has produced it — and what only the target holds, by its OWN detector's reading, is offered for removal. Reproducibility is judged by whether the SOURCE holds an entry, never the target. Snippets live in the shared, synced registry (`~/.config/pc-switcher/package-snippets.yaml`). Each job pushes the registry to the target itself and replays it the same run, so a snippet authored on the fly takes effect immediately. The push is a wholesale overwrite gated on being non-destructive: one that would lose or change an entry only the target holds needs explicit confirmation.
+A flatpak remote travels because an approved ref names it in that ref's scope. Ref identity is `<application>/<arch>/<branch>`; origin stays out of identity, so a ref on both machines from different remotes is `ORIGIN_MISMATCH` and never converged. Origin is compared by URL, never remote name.
 
-**Two bodies per entry, both mandatory** (D-22). `install_body` is replayed on the target; `version_body` is run on a machine to print the version of that item installed THERE. Both are opaque text blobs replayed non-interactively through the executor with the exit code deciding success — never parsed, templated or reasoned about. What the tool does compare is the STRING one machine's version source printed against the string the other's did. An entry carrying only one body is malformed and ends the run naming the file, as an unparsable registry already does: there is no backwards compatibility, because guessing a version body would invent a claim about what is installed and defaulting one to "no version" would silently restore convergence-on-presence.
+### D-42 — Snap: nothing to derive
 
-The version source is the manager's own where there is one — `dpkg-query` for a hand-installed `.deb`, `snap list` for a sideload, `flatpak list` for a ref — and `version_body` for an unowned path, which no manager accounts for. **There is no recursive folder diff and no payload hashing anywhere**: the version replaces them, and the guarantee that buys is exactly apt's, snap's and flatpak's — equal version means converged, and the content behind it is not verified. A corrupted or half-applied tree whose version string did not move is invisible, by design.
-
-The installed-version snippet's contract is the author's, and pc-switcher does not try to enforce it: it MUST print the version currently installed on the machine running it rather than the version the install body would install, and it MUST be read-only. It runs on BOTH machines during `plan()`, which is contractually read-only, and it is the first user-authored code to execute there — so it is deliberately **not** gated behind `--confirm-each-command`, which would otherwise put a question per item per machine in front of the user before the run had proposed anything. Its output is redacted in logs exactly as an install body's is.
-
-Detection is ordered version-first: an item both machines have produces nothing when the two versions agree, and only a difference looks at the bodies at all. That ordering is the point — a cosmetic snippet edit, a comment or a mirror URL, moves no version and so produces no review item.
-
-Convergence always means replaying the SOURCE's body on the target, and it is a loop rather than a command. A replay that exits 0 having installed nothing is the ordinary failure of an installer that no-ops over an existing tree, and no exit code can show it, so the target's version is read back afterwards. The loop ends on exactly two outcomes — the target reaching the source's version, or the user skipping the item for this run. After a replay that moved no version, replaying the recorded body is no longer offered: running the same bytes again is the same no-op, so the menu narrows to writing a new body or stopping, and authoring one always offers a new version body alongside it, in an editor opened on the existing content. There is deliberately **no purge-and-retry answer**: with no folder diff, purging cannot change what the version body reports, and an author whose installer no-ops writes `rm -rf … &&` into their own new body, which subsumes it and keeps pc-switcher out of deciding what to delete. A run with nobody to ask makes one attempt with the recorded body and then skips the item with a warning.
-
-An item the source no longer has becomes a REMOVE item, converged by the ecosystem's own removal — `apt-get remove`, `snap remove`, `flatpak uninstall` — or, for a path, `rm --recursive --force`, whose screen warns that a launcher or a symlink the snippet also dropped lies outside the scanned path and stays. There are **no uninstall snippets and no uninstall machinery**: this is not a package manager, and a second authored body for the one direction the user can always carry out by hand would cost more than it is worth. Removal claims only what a job's own detector claims on the target: a package some repository supplies, a store snap, a ref a configured remote serves are all software another job accounts for, and none of them is deleted here. The registry does not travel via `config_sync` (which runs before review) or `folder_sync` (a user-controlled job) — no job's correctness may depend on another running.
-
-### Failure and dry-run (D-26 through D-28)
-
-Non-interactive runs skip all once and record nothing. A failing item does not stop the job — continue, collect, report, and the job result is a failure. The target always downloads from its own repos; no source-cache reuse.
-
-### folder_sync overlap (D-29)
-
-Package jobs export their owned paths to `folder_sync` via the ADR-018 mechanism, which turns them into non-overridable filters: `flatpak_sync` owns `~/.local/share/flatpak`, `snap_sync` owns the `~/snap/<app>/<rev>` revision dirs, and `packages.state` owns the machine-local decision files and the install-snippet registry. The snap-dir rule is the target's own state, not this run's intent: a revision dir is mirrored only where the target is itself active at that revision, which `folder_sync` establishes by reading the target's `snap list` once after the package jobs run. That mirrors the active revision's per-user data (the point of converging the revision, D-06) and excludes everything else — retained older dirs, an app whose change or install was declined or failed, every dir on a run with `snap_sync` disabled. An indeterminate active revision, or a target snapd that could not be asked, excludes all of that app's revision dirs as the safe default: nothing in such a run establishes that the two machines agree. The snippet registry is excluded from the mirror outright on every run; it travels only as `manual_installs_sync`'s own consented push, and a mirror would be that transfer with the question removed.
-
-### Origin replication (D-34)
-
-The unit of replication for an apt package is (name, origin). The target must end up with the package installed from an origin the source used; a package whose origin cannot be provided — no source file declares it, or the file cannot be written — is reported, never installed from elsewhere. A repository, its keyring and its pins are derived from the packages approved from it; a repository feeding no synced package does not travel, the distribution's own files (D-38) excepted. A package the source has and the target lacks falls into exactly one of four classes, and the class decides both what is derived and what may be rehearsed:
-
-1. The target already has a candidate from an origin the source uses — an ordinary install, nothing derived.
-2. The target has a candidate, but from none of the source's origins — an install plus the derived repository, key and pins that make the source's origin win.
-3. The target has no candidate at all, and the source's origin can be provided — an install plus the same derived work; the target's apt cannot resolve the name until that repository lands, which excludes this class from D-40's plan-time collateral rehearsal.
-4. The source's origin cannot be provided on the target — `REPO_UNAVAILABLE`/`REPORT_ONLY`, never an install candidate.
-
-### Origin enforcement, at the target's real state (D-35)
-
-The guarantee is checked, not inferred. After the `/etc/apt` group's single `apt-get update` and before the first install, one batched `apt-cache policy` over the approved install names re-reads the target's candidate origins; an approved install whose candidate origins do not intersect the source's fails as its own item, naming both origins. Plan-time classification decides what to derive; only this check decides what may be installed. Origins declared by the distribution's own source files are exempt, computed per machine — two machines on different mirrors are not two vendors, and without the exemption every package on such a pair would fail.
-
-### Pins are mechanism, not inventory (D-36)
-
-A pin travels because it is what makes an origin win, in the same sense and for the same reason a signing key travels because it is what makes a repository trusted. Neither is reviewed in the add or change direction; pin adds and updates always sync, silently. A pin naming an origin the target does not have is inert, so always-syncing them costs nothing and cannot get a per-package derivation wrong. The measured reason a pin must travel rather than being derived per package: at equal priority apt takes the highest version, an epoch-1 distribution build outranks an epoch-0 vendor build, so adding the vendor's repository alone still installs the distribution's package — only the vendor's pin changes the outcome ([measurements](considerations/adr-020-apt-esm-and-snap-measurements.md)).
-
-### The review's scope, and its one non-package exception (D-37)
-
-The apt review decides packages. The one exception is `apt.conf.d`, reviewed in all three directions with the three-way decision and the registry: an `apt.conf.d` file governs apt's own behaviour, and nothing about an approved package implies whether it should travel, so the only honest source of the answer is the user — and it is a standing machine-local preference someone can hold, unlike a repository removal whose remedy is consolidating two files. Every other `/etc/apt` file earns its place by serving a package, so the package decision implies the file decision. A repository removal is not raised while anything on the target still uses the repository (counted after this run's approved removals, packages marked machine-specific included). A repository present on both machines with different content is overwritten silently unless the overwrite would repoint a machine-specific package's origin, in which case both file contents are shown side by side and the answer is overwrite or skip once — the gate D-41 applies to remotes.
-
-### The distribution's own source files, and ESM (D-38)
-
-`ubuntu.sources`, `/etc/apt/sources.list`, `ubuntu-esm-apps.sources` and `ubuntu-esm-infra.sources` are written when missing and overwritten when different, and are never removed or offered for removal: they define the distribution origins D-35 exempts, the one repository bucket that does not wait for a package to derive it. The two ESM files are gated on the target's Ubuntu Pro attachment. When they would be written and the target reports unattached, `apt_sync` asks — before its first mutating command — with exactly two answers: attach now (the user attaches on the target by hand and pc-switcher re-probes and continues) or skip `apt_sync` for this run while every other job runs. Writing them to an unattached target silently is not an option, because the ESM index is public, so the suites win candidate selection and the failure lands later at install time with a 401 the user will not connect to the sync ([measurements](considerations/adr-020-apt-esm-and-snap-measurements.md)). "Attach now" re-probes rather than trusting the answer and may be given any number of times. A run with nobody to ask takes the skip; withholding only the two files is not a coherent partial outcome, because pins always-sync (D-36) and would reach a target without the sources they name. A `--dry-run` never asks — it warns, because a rehearsal must not send the user to attach a machine and ADR-014 makes the preview the whole report. pc-switcher cannot attach on the user's behalf (`PKG-NG-ESM-SELF-ATTACH`): attaching needs a subscription token or an interactive browser flow, the source's credentials are root-only and not reusable, and a token would put a secret on a command line. Detection is `pro status --format json` on the target; only the parsed boolean may be logged or shown.
-
-### Derived-work failure attribution (D-39)
-
-A derived write that fails has no item of its own — the user decided about a package or a ref, not a file or a remote. It fails every approved item whose derived set contains it, naming the file or the remote and the reason; a rollback of the `/etc/apt` group fails all of them. A repository or remote conflict answered "skip once" does the same to the items that depended on it: a package cannot be quietly installed from the wrong origin because its repository was skipped. The converse is not a failure and not a rollback: a repository this run already wrote for an install the user then declined stays where it is (removing it is a change nobody approved), and where no surviving approved install needs it the run names the file and the URLs it declares, at INFO, and says nothing on the target installs from it.
-
-### Collateral protection keys on the target's manual set (D-30, D-40)
-
-apt may remove or downgrade packages other than the one named in order to satisfy dependencies, so the item the user ticked is not necessarily the transaction apt runs. The transaction is determined at plan time and its collateral classified rather than blanket-refused: collateral apt pulled in on its own proceeds and is logged, while collateral that is manually installed on the TARGET — its own `apt-mark showmanual` set, a fact that machine reports and not a mark anybody recorded — becomes its own reviewable item offering act / skip now / stop the sync. This is a product rule about what the tool must not silently destroy; its intent is owned by [package-sync-user-requirements.md](../planning/package-sync-user-requirements.md#collateral-damage). Being offered for removal is not consent to lose a package — only a removal the user APPROVED exempts it. A consent is keyed to the consequence it was given for (the causing change, what that change does, and the package it happens to), never the package alone: one package can be the casualty of the install batch and of the removal batch in one run. Declining collateral cancels the packages whose own transaction causes it, and nothing else; where no single candidate reproduces it, it is jointly caused and attributed to the whole batch. A cancellation never overwrites a decision the user made — only an approval is downgraded. The protected set is the TARGET's `apt-mark showmanual`, and only the target's: a package installed by hand on the source but arriving on the target as an automatic dependency is the target's apt's own, and that is also the set apt itself consults. One install cannot be classified at plan time — one whose repository this run derives from its own approval and writes during converge, so the target's apt has never heard the name and `apt-get --dry-run` refuses the whole batch containing it (excluded on the evidence of the target's `apt-cache policy`, never on the simulation's exit code — ADR-022 D-01). It gets a second collateral question after `/etc/apt` has converged and `apt-get update` has run, before the first of those installs, with the same three answers — what D-24's permission to ask again exists for.
-
-### flatpak: remotes are derived from the refs approved from them (D-41)
-
-A flatpak remote travels because a ref approved this run comes from it, in that ref's scope, and for no other reason; the derivation also completes an approved app's runtime, whose own remote the app's origin does not name. Remote adds and URL/trust changes are never review lines. A ref's identity is its full `<application>/<arch>/<branch>` within its scope — the bare id is ambiguous and `flatpak install`/`uninstall` refuse it — and origin deliberately stays OUT of identity, so a ref on both machines from different remotes is `ORIGIN_MISMATCH`, reported and never converged. Origin is compared by the remote's **URL**, never its name: a target remote carrying the source remote's name and a different URL installs another vendor's build at exit 0, so before an install the target's remote must carry the source remote's URL and verification setting, and after the install the landed origin is read back and resolved to a URL again — which also catches `remote-add --if-not-exists` silently keeping an old URL. Repointing a remote is silent derived mechanism, except — D-37's repository-conflict rule in a second ecosystem — where a ref the TARGET recorded skip-always takes it as its origin in that scope, in which case both configurations are shown and the answer is overwrite or skip once. A remote is never a review line in add, change or remove alike: one the source does not have is deleted once nothing on the target still uses it (counted after this run's approved removals, refs marked machine-specific and refs reported as an origin mismatch included), and while anything still uses it, it stays. Masks keep the three-way decision and the registry, for `apt.conf.d`'s reason. There is **no flatpak counterpart to D-38's distribution sources**: flatpak installs with zero remotes configured, so even Flathub travels only as a ref needs it. A remote's ostree keyring travels with it byte-for-byte and is never re-fetched (D-12), or every install from it fails the signature check.
-
-### snap: nothing to derive (D-42)
-
-Snap has no repository or key decision, so there is nothing for D-34's derivation to reach and no screen to invent. One store serves the device, and name→publisher is pinned store-side by a canonical-signed `snap-declaration` assertion snapd validates itself, so there is no second `firefox` for the target to install by accident (measured); keys are snapd's own, not the user's. A device could be provisioned against a brand store or pointed at a store proxy, but neither is a per-snap fact pc-switcher could converge, so snap is treated as having one store. Sideloaded snaps — installed from a local `.snap` file — are out of scope (#221) and ignored on both machines: never installed, removed, held, an item, or reported. The provenance variable that remains is which revision is installed and which channel it tracks; D-06 converges both, a difference in either producing one `CHANGE` diff.
+One store per device, name→publisher pinned by canonical-signed `snap-declaration`. No repository or key decision.
 
 ## Consequences
 
-**Positive:**
-- Provenance replicates, not just presence, and the guarantee is enforced against the target's real state rather than inferred at plan time.
-- Package managers stay authoritative for their own dependency resolution and state, avoiding the correctness problems of file-level package-database replication.
-- The review asks only what the user can answer: the unrepresentable pairing "package ticked, repository unticked" does not exist.
-- One batched screen per manager per action where the logic permits, so an ordinary run answers a job's questions in one sitting.
-- Keeping each job's review inside its own `execute()` keeps four independent jobs independent, with no shared ordering surface coupling one job's failure to another's.
-- Determining the real transaction at plan time catches collateral before anything is applied, so a legitimate install is not blocked by a dependency nobody chose.
+**Positive**
+- Provenance replicates, not just presence, and the guarantee is checked against the target's real state.
+- Package managers stay authoritative for their own state.
+- The review asks only what the user can answer.
 
-**Negative (costly to reverse):**
-- The manifest schema, the item identity scheme and the decision-file format are all shaped by D-01; switching to file-level replication later would replace the whole job core.
-- The decision files' location under `~/.config/pc-switcher/` means moving them later requires migrating user state on every machine.
-- Package sync requires passwordless sudo on BOTH machines: the source's `/etc/apt` state and snap configuration are root-only reads.
-- Repository configuration on the target is partly outside the user's line-by-line control; the only way to decline a repository, key, pin or remote is to decline the item.
-- A repository or remote feeding no item this run syncs does not travel: the two machines' configurations are converged for what packages need, not made identical.
+**Negative (costly to reverse)**
+- Manifest schema, item identity and decision-file format are shaped by D-01; switching to file-level replication later replaces the whole job core.
+- Package sync requires passwordless sudo on both machines.
+- A repository or remote feeding no synced item does not travel: the two machines converge for what packages need, not to identical configurations.
 - Pins always-sync, so a `preferences.d` file the user wanted on one machine returns every run unless deleted on the source.
-- A package hand-installed on the source but auto-resolved on the target can be removed as collateral without a prompt (D-40).
-- An unreproducible item is only as converged as its version string says (D-22): a tree that is corrupt or half-applied at an unchanged version is invisible, and no run will ever notice it.
-- Every registry entry needs a second authored body, including one for an item whose job reads a manager's version and never runs it — a uniform schema is what keeps one shared file from half-parsing.
-- A registry written before the second body existed cannot be read at all: the run ends naming the file, and the user edits it by hand before syncing again.
-- `plan()` runs the user's own shell code on both machines, ungated, on every sync. A version body that is not read-only breaks the read-only guarantee `plan()` otherwise has, and nothing in the tool can tell.
-- A removal reaches only the scanned path (D-22), so deleting a manual install leaves whatever it dropped elsewhere behind, and the target's own `.desktop` files and symlinks accumulate.
-- The four jobs now need privilege on the target for a removal they never needed for detection, and it is deliberately not pre-validated: an approved removal that lacks it fails as its own item rather than costing the whole job a run it would otherwise have completed.
-- A package whose repository this run derives gets its collateral question after `/etc/apt` has converged (D-40), so `apt_sync` can interrupt the user once more after it has begun writing.
-- ESM makes `apt_sync` interruptible by a question no other job can raise, and the "skip" answer costs the whole apt job for that run rather than only the two files (D-38).
-- A filtered flatpak remote replicates with its filter, and a source whose filter denies an application it has itself installed ends the run ([measurements](considerations/adr-020-flatpak-filter-and-trust-measurements.md)).
-- Sideloaded snaps sit outside the model entirely (#221), so a machine can hold software package sync will neither replicate nor remove nor mention.
+- An unreproducible item is only as converged as its version string says.
 
 ## Alternatives Considered
 
-- **File-level replication of the package databases** — rejected: the package managers must stay authoritative for their own state.
-- **A single combined `package_sync` job** — rejected per D-15: four separate jobs give independent enable flags, config, failure isolation and progress.
-- **A `--delete` file mirror of `/etc/apt`** — rejected per D-11: it would wipe the target's own machine-specific sources.
-- **Repositories and remotes as reviewed items, with an origin check on top** — rejected: it keeps the unrepresentable pairing and asks a question the package decision already implies.
-- **Deriving pins per package rather than always-syncing `preferences.d`** — rejected: a pin naming an absent origin is inert, so the precision buys nothing and adds a wrong-answer mode.
-- **Always-syncing every flatpak remote, as pins are** — rejected: a remote costs a summary fetch on every `flatpak update`, and converging for what refs need is the property D-34 already chose for apt.
-- **Writing the ESM sources to an unattached target and only warning** — rejected per D-38: the refresh succeeds and the ESM suites then win candidate selection, failing the next install with a 401.
-- **Withholding the two ESM files silently** — rejected: pins travel regardless (D-36), so the target ends up with pins over a repository set neither machine has.
-- **Refusing the whole run when an approved package's origin cannot be replicated** — rejected: it contradicts D-27's continue-and-report model; the package fails, the run continues.
-- **Protecting the union of both machines' manual sets from collateral** — rejected per D-40: the union protects a package on the strength of the wrong machine's bookkeeping.
-- **A snap store or key decision mirroring apt's** — rejected per D-42: there is nothing to derive.
-- **A recursive folder diff or a payload hash for a manual install** — rejected per D-22: the version body replaces both, for the guarantee apt, snap and flatpak already give.
-- **Comparing the snippet body before the installed version** — rejected per D-22: a cosmetic edit to a comment or a mirror URL would then raise a review item about software that has not moved.
-- **Letting the higher version decide the direction** — rejected per D-22: a sync goes source to target, and reading a version to reverse it would make the tool decide something the user did not ask it to.
-- **A purge-and-replace answer beside the retry** — rejected per D-22: with no folder diff, purging cannot change what the version body reports, and the author's own new body subsumes it.
-- **An uninstall snippet per entry** — rejected per D-22: the ecosystem's own removal covers three of the four jobs and a path deletion the fourth, and a second authored body would buy a direction the user can always carry out by hand.
-- **A backwards-compatible registry that defaults the missing version body** — rejected per D-22: every such entry would silently converge on presence again, which is the behaviour the second body exists to replace.
-- **Gating the installed-version snippet behind `--confirm-each-command`** — rejected per D-22: it runs on both machines before the run has proposed anything, so the confirmation would arrive before the user had been shown a single change.
-- **Pre-validating target sudo for the four unreproducible jobs** — rejected per D-22: only an approved removal needs it, and demanding it up front would fail validation for every user who never approves one.
-- **Source-cache reuse for offline installs** — deferred per D-28.
+- **File-level replication of the package databases** — rejected: managers must stay authoritative.
+- **A single combined `package_sync` job** — rejected: independent enable flags, config, failure isolation.
+- **A `--delete` file mirror of `/etc/apt`** — rejected: wipes the target's own machine-specific sources.
+- **Repositories and remotes as reviewed items on top of an origin check** — rejected: keeps the unrepresentable "package ticked, repository unticked" pairing.
+- **Deriving pins per package rather than always-syncing** — rejected: a pin naming an absent origin is inert, so precision buys nothing.
+- **Always-syncing every flatpak remote** — rejected: a remote costs a summary fetch on every `flatpak update`.
+- **Writing ESM sources to an unattached target and only warning** — rejected: refresh succeeds, ESM suites win candidate selection, install fails with 401.
+- **Withholding the two ESM files silently** — rejected: pins travel regardless, so pins land over a repository set neither machine has.
+- **Refusing the whole run when an approved origin cannot be replicated** — rejected: contradicts D-27's continue-and-report.
+- **Protecting the union of both machines' manual sets from collateral** — rejected: the union protects on the wrong machine's bookkeeping.
+- **A recursive folder diff or payload hash for a manual install** — rejected: version body replaces both.
+- **Comparing snippet body before version** — rejected: a cosmetic edit to a comment or mirror URL would raise a false review item.
+- **Letting the higher version decide sync direction** — rejected: sync goes source-to-target, always.
+- **A purge-and-replace answer beside retry** — rejected: with no folder diff, purging cannot change what the version body reports.
+- **Uninstall snippets** — rejected: ecosystem's own removal covers three jobs, `rm -rf` the fourth.
+- **A backwards-compatible registry defaulting the missing version body** — rejected: every such entry would silently converge on presence again.
+- **Gating `version_body` behind `--confirm-each-command`** — rejected: it runs before the run has proposed anything, so the confirm would arrive before the user had seen a single change.
+- **Pre-validating target sudo for the four unreproducible jobs** — rejected: only approved removals need it.
+- **Source-cache reuse for offline installs** — deferred.
 
 ## References
 
-- ADR-002: SSH as communication channel — package-manager invocations run through the same executor protocol.
-- ADR-005: Asyncio concurrency — all package-manager invocations are async subprocesses.
-- ADR-010: Logging infrastructure — per-item detail at FULL, per-job summaries at INFO.
-- ADR-021: What the log records and withholds — the content rules these jobs' reviews and collateral forced, and the credential redaction they need.
-- ADR-014: Unified dry-run contract — each job's batched review doubles as its dry-run output.
-- ADR-015: Topology-based sync-safety model — the warn-and-confirm precedent D-25/D-26 follow; this ADR's review is never a hard abort.
-- ADR-018: Selective VS Code state sync — the path-export mechanism D-29 reuses for `flatpak_sync` and `snap_sync`.
-- ADR-022: a read that did not answer fails the job; an answer of "nothing" is data — the guard every capture in these jobs passes through.
-- `docs/system/package-sync.md` and `docs/jobs/package-sync.md`: the resulting spec and user-facing description, including the review screen grammar.
-- `docs/planning/package-sync-user-requirements.md`: the user-viewpoint statement of what these jobs must deliver, and the authority on intent.
-- `docs/planning/package-sync-conformance-criteria.md`: that intent as individually checkable articles (`PKG-FR-*`, `PKG-NG-*`).
-- `docs/adr/considerations/adr-020-flatpak-filter-and-trust-measurements.md`: what flatpak does with a filter that excludes a ref, and which keyring directories libostree consults.
-- `docs/adr/considerations/adr-020-apt-esm-and-snap-measurements.md`: the apt config-file, pin-epoch, ESM and snap-identity measurements behind D-13, D-36, D-38 and D-42.
-- `.planning/phases/02-package-management-sync/02-SPEC-package-review-model.md`: the apt implementation contract — the four review screens, the origin classification, the enforcement point.
-- `.planning/phases/02-package-management-sync/02-SPEC-snap-flatpak-derivation.md`: the snap and flatpak implementation contract.
-- GitHub issue #118: the feature issue, including the snap-revision discussion motivating D-06.
+- ADR-002, ADR-005, ADR-010, ADR-014, ADR-015, ADR-018, ADR-021, ADR-022
+- `docs/system/package-sync.md` — the specification these decisions govern
+- `docs/planning/package-sync-user-requirements.md` — intent
+- `docs/adr/considerations/adr-020-flatpak-filter-and-trust-measurements.md`
+- `docs/adr/considerations/adr-020-apt-esm-and-snap-measurements.md`
+- `docs/adr/considerations/package-sync-rationale.md` — per-article justification, keyed by `PKG-FR-*` id
+- GitHub issue #118

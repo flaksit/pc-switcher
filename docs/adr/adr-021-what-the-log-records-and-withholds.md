@@ -6,82 +6,72 @@ Date: 2026-07-30
 
 ## TL;DR
 
-The log is the record of what pc-switcher did and why, so it names every item a review presented with the decision it received, every change a tool made on its own behalf that no review showed, and each command's own output verbatim at debug level. Against that, one class of content never reaches it: a credential embedded in a URL is withheld wherever pc-switcher logs a URL or puts one in front of the user, because the URL is the secret. What is stored for replay is left exactly as its author wrote it.
+The log names every item a review presented, every self-directed change a tool made, and each command's output verbatim at DEBUG. One class of content is withheld everywhere: a credential embedded in a URL — the URL is the secret. Snippets are stored and replayed as written; only their rendering is redacted.
 
 ## Implementation Rules
 
-**Required:**
-- Every item a review presented MUST be logged with the decision it received, including items the user skipped — an item that produced no change MUST still produce a line.
-- Every change a tool made on its own behalf that no review showed — a package manager resolving its own dependencies is the case that exists today — MUST be logged.
-- A command's own output MUST be recorded verbatim at DEBUG, alongside the command text the executor already traces there.
-- A credential embedded in a URL MUST be withheld wherever pc-switcher logs that URL or puts it in front of the user: the executor's command trace, a command's recorded output, anything the user reads while deciding, a configuration file displayed in full for a decision, and an install-snippet body displayed for one.
-- What counts as the credential MUST be the URL's `userinfo` as RFC 3986 defines it. A character that grammar permits MUST NOT end the match early.
-- Redaction MUST sit at each point a path leaves the process, never at each call site that builds a string. There are five: every log record, the per-command confirmation, everything a review shows while the user decides, the label a recorded decision keeps on disk, and the body of a question a job composes itself and puts straight to `Confirmer`.
-- A snippet body MUST be redacted only where it is displayed. It is stored and replayed as its author wrote it (`PKG-FR-SNIPPET-VERBATIM`), so redacting the file or the replay would break the item it installs.
+**Required**
+- Log every reviewed item with its decision, including skipped items.
+- Log every self-directed change (apt resolving its own dependencies).
+- Record each command's output verbatim at DEBUG.
+- Redact URL `userinfo` (RFC 3986) at every exit where a URL leaves the process: the log filter, the executor confirmation, `ReviewEntry`, `ItemDiff` label writes, and any question a job puts directly to `Confirmer`.
+- A snippet body is redacted only when displayed. It is stored and replayed as its author wrote it (`PKG-FR-SNIPPET-VERBATIM`).
 
-**Forbidden:**
-- No aggregate standing in for the record: "3 of 5 applied" does not say which two did not, and a count is not a decision.
-- No content-based withholding beyond a stated rule. What may not be logged is enumerated — this ADR's credential rule and ADR-020's Ubuntu Pro attachment payload — and everything else is recorded.
-- No redaction of the item, package, file or command a failure concerns. Failures name what they concern; that is the point of the record.
+**Forbidden**
+- Aggregates standing in for the record ("3 of 5 applied").
+- Content-based withholding beyond stated rules (this ADR + ADR-020 Ubuntu Pro).
+- Redaction of the item, package, file or command a failure concerns.
 
 ## Context
 
-ADR-010 settled the logging *infrastructure* — stdlib logging, queue handler, the FULL level, three floor settings. It says nothing about content, which was adequate while log lines were narration of work in progress.
+ADR-010 settled the logging infrastructure but not its content, which was adequate while log lines narrated work in progress.
 
-Package sync changed that. Its reviews make decisions the user will want to reconstruct months later, and today a decision leaves a trace only when it caused a change: an item the user skipped produces no line at all, and a dependency the package manager removed on its own initiative produces none either. The user asked for both, and for each command's output verbatim, so that a post-mortem reads the tool's own words rather than a paraphrase.
-
-That same widening creates an exposure. A private PPA or a commercial repository carries its credential in the URL itself, so recording a package manager's output records the secret. The executor has traced every command verbatim at DEBUG since long before this, log files sit at mode `rw-rw-r--` in `~/.local/share/pc-switcher/logs`, and nothing in the codebase redacts anything. The exposure is therefore older than the requirement that surfaced it.
+Package sync changed that. Its reviews make decisions the user will reconstruct months later, and a skipped item leaves no trace unless the log records it deliberately. That same widening exposes credentials that private PPAs and commercial repositories embed in URLs.
 
 ## Decision
 
 ### The log is the record, not a progress narration
 
-A reader of the log can answer three questions without the tool's help: what was proposed, what the user decided about each of it, and what happened. That obliges a line per presented item rather than a line per change, because "the user was asked and said no" is a fact about the run.
+A reader answers three questions from the log alone: what was proposed, what the user decided, what happened.
 
 ### Self-directed changes are logged, not reviewed
 
-A change the tool makes on its own behalf is not a review item — the user has no basis to decide it, which is why ADR-020 derives it rather than asking. But not asking is not the same as hiding. A package manager removing a dependency it installed itself is its own business and proceeds silently in the review; the log still names it, so a user who finds something gone can find out why.
+The user has no basis to decide a package manager's own dependency resolution. Not asking is not the same as hiding — the log names it.
 
-### Verbatim output, at debug
+### Verbatim output at DEBUG
 
-Each command's own output is recorded as the command produced it. A summary is a guess about what will matter later, made before knowing. The cost is size — runs already produce logs of several hundred megabytes — and it is accepted: the debug floor is configurable, and a log nobody can diagnose from is worth less than a large one.
+A summary is a guess about what will matter later, made before knowing. The cost is size; the DEBUG floor is configurable.
 
-### A credential in a URL is withheld everywhere
+### Credentials in URLs are withheld everywhere
 
-Repository credentials live inside the URL, so every place a URL appears is a place the secret appears: the command trace, recorded output, a review line, a configuration file shown whole for a decision, an install snippet whose body fetches a private `.deb`. Withholding it in the log alone would leave it in front of the user; withholding it there alone would leave it in a world-readable file.
+The URL is the secret, so every place a URL appears is a place the secret appears. Redaction sits at each of the five exits, not at each call site that builds a string.
 
-There is no single point. `Executor` covers the command trace and each command's output, but a job's own log lines never pass through it, and what a review shows — a review line, and a repository file printed whole for a conflict — is built in-process and goes to the terminal, not through a command. So the rule is applied at each of the five exits instead: a logging filter on the queue handlers, which is every route into the log; the confirmation in `Executor`, the one thing there that never becomes a log record; `ReviewEntry`, the single shape every review line and every file body a question prints is built from; `ItemDiff`, whose label a permanent answer writes to the decision file; and the one question a job composes itself rather than through a review — `manual_installs_sync`'s snippet-registry overwrite, which displays two whole snippet bodies and reaches the terminal through `Confirmer`. Five points, each of which every path of its kind passes through — not a rule repeated at each call site that happens to build a URL.
-
-The snippet exit redacts the rendering and nothing else. A snippet is opaque to the tool and is stored and replayed exactly as written (`PKG-FR-SNIPPET-VERBATIM`), so rewriting the registry or the replayed command would break the install it exists to reproduce — a worse defect than the disclosure it would close.
-
-### The precedent this generalises
-
-ADR-020's Ubuntu Pro rule already withholds content by construction: `pro status --format json` is parsed and only the `attached` boolean escapes, because the payload names the subscriber. That is the same shape — a named class of content that may not be logged, enforced where the content enters the process rather than where it leaves.
+The snippet exit redacts the rendering only. A snippet is opaque to the tool and replayed exactly as written — rewriting the file or the replayed command would break the install it exists to reproduce.
 
 ## Consequences
 
-**Positive:**
-- A run is reconstructable from its log alone: what was proposed, what was decided, what the tool did unasked, and what each command said.
-- The exposure that already existed in the command trace closes with the same change that widens the record.
-- A new job, a new command or a new review line inherits the rule instead of re-implementing it.
+**Positive**
+- A run is reconstructable from its log alone.
+- The exposure already present in the command trace closes with the change that widens the record.
+- New jobs and commands inherit the rule instead of re-implementing it.
 
-**Negative (costly to reverse):**
-- Log volume grows, and the current several-hundred-megabyte runs are the floor rather than the ceiling.
-- Each redaction point sits on the path of everything of its kind in the program, so a mistake there affects every job rather than one. The logging filter additionally renders each record's message eagerly, giving up stdlib logging's deferred formatting.
-- Redacted output is no longer byte-identical to what the command printed, so a reader cannot diff a log against a live command and expect equality.
-- The rule protects credentials in URLs and nothing else. A secret that reaches a command another way is not covered, and pretending otherwise would be worse than stating the boundary.
+**Negative**
+- Log volume grows.
+- Each redaction point sits on the path of everything of its kind; a mistake there affects every job.
+- Redacted output is no longer byte-identical to what the command printed.
+- The rule protects credentials in URLs only. A secret that reaches a command another way is not covered.
 
 ## Alternatives Considered
 
-- **Log the decisions, summarise the output** — rejected: the summary is chosen before knowing what a future post-mortem needs, which is the failure this ADR exists to fix.
-- **Verbatim output without redaction** — rejected: it writes repository credentials into a file every account on the machine can read.
-- **Redact in each job rather than at the exits** — rejected: it leaves every new call site free to forget, and the oldest path — the command trace the executor has always written — uncovered.
-- **Declare the debug log sensitive instead of redacting** — rejected: it moves a tool problem onto the user, and the user reads review lines and conflict displays too, which no file permission covers.
-- **Withhold whole URLs** — rejected: the URL is what makes a repository identifiable, and origin divergence is reported by URL precisely because names lie (ADR-020 D-35, D-41).
+- **Log decisions, summarise the output** — rejected: the summary is chosen before knowing what a post-mortem needs.
+- **Verbatim output without redaction** — rejected: writes credentials into a world-readable file.
+- **Redact in each job** — rejected: leaves every new call site free to forget, and leaves the executor's command trace uncovered.
+- **Declare the debug log sensitive instead of redacting** — rejected: moves a tool problem onto the user; the user also reads review lines and conflict displays.
+- **Withhold whole URLs** — rejected: origin divergence is reported by URL because names lie.
 
 ## References
 
-- ADR-010: Standard library logging infrastructure — the mechanism this ADR states the content rules for. Not superseded: infrastructure and content evolve independently.
-- ADR-020: Declarative package convergence — the requirements that forced these rules, and the Ubuntu Pro withholding precedent this generalises.
-- ADR-022: A read that did not answer fails the job — the other half of "the log names what went wrong".
-- `docs/planning/package-sync-conformance-criteria.md`: `PKG-FR-LOG-DECISIONS`, `PKG-FR-LOG-VERBATIM`, `PKG-FR-CREDENTIAL-PRIVACY`, `PKG-FR-COLLATERAL-AUTO`, `PKG-FR-ESM-PRIVACY` and `PKG-FR-SNIPPET-VERBATIM` — the same rules as individually checkable articles.
+- ADR-010: logging infrastructure — the mechanism this ADR states content rules for
+- ADR-020: package convergence — the requirements that forced these rules, and the Ubuntu Pro withholding precedent
+- ADR-022: read-failure attribution
+- `docs/system/package-sync.md`: `PKG-FR-LOG-DECISIONS`, `PKG-FR-LOG-VERBATIM`, `PKG-FR-CREDENTIAL-PRIVACY`, `PKG-FR-COLLATERAL-AUTO`, `PKG-FR-ESM-PRIVACY`, `PKG-FR-SNIPPET-VERBATIM`
