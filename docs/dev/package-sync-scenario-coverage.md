@@ -70,7 +70,7 @@ Evidence is symbol names rather than line numbers, because the code moves. A tes
 | `test_end_to_end_sync` | `tests/integration/test_end_to_end_sync.py` — the happy path, converging one divergence per manager on the way out and the reverse direction on the way back |
 | `test_dry_run` | `tests/integration/test_dry_run.py` — the rehearsal, over one pending write per manager |
 
-Those three are the only sources of a `V`. A `V` is a claim about a test that runs only on two provisioned VMs. The integration suite last passed whole at `a2c299dc`, on the pull request for this branch; a `V` added after that commit has not yet run.
+Those three are the only sources of a `V`. A `V` is a claim about a test that runs only on two provisioned VMs. The integration suite last passed whole at `baf3f475` — 73 tests, no failures — on the pull request for this branch; a `V` added after that commit has not yet run.
 
 ## A. Apt package identity, presence, version and origin
 
