@@ -77,7 +77,7 @@ A `ProbeFailed` escaping a job fails that job and no more; the orchestrator runs
 
 ### D-06a: One read ends the run instead
 
-An unparseable `package-snippets.yaml` raises `SyncAborted` from `packages.state`, not the `SyncAbortedByUser` subclass (nobody was asked). The USER can repair it, the fix has to land before the next sync reads it, and a passing sync with `manual_installs_sync` down reads as green rather than "go fix this file". Absent or empty registry stays ordinary data.
+An unparsable `package-snippets.yaml` raises `SyncAborted` from `packages.state`, not the `SyncAbortedByUser` subclass (nobody was asked). The USER can repair it, the fix has to land before the next sync reads it, and a passing sync with `manual_installs_sync` down reads as green rather than "go fix this file". Absent or empty registry stays ordinary data.
 
 ### D-07: Shared mechanism, no shared base class
 
