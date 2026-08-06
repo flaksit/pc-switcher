@@ -17,7 +17,7 @@ Some A–K rows span more than one run, still in that direction, and each says s
 ## Navigation
 
 - [Package sync — user requirements](../planning/package-sync-user-requirements.md) — the intent every scenario here comes from
-- [Package sync conformance criteria](../planning/package-sync-conformance-criteria.md) — the 145 articles each section decomposes
+- [Package sync specification](../system/package-sync.md) — the 150 articles each section decomposes (formerly package-sync-conformance-criteria.md)
 - [Package sync specification](../system/package-sync.md) — how the behaviour is built
 - [Package sync job behaviour](../jobs/package-sync.md) — what the user sees
 - [Testing guide](testing-guide.md) — how to write the tests named here
@@ -1956,7 +1956,7 @@ Five exits, then the `userinfo` grammar boundary.
 
 ### K.5 Validation preconditions (articles: PKG-FR-SUDO-PRECONDITION)
 
-The table's four jobs × two machines. `apt_sync` and `snap_sync`: required on both. `flatpak_sync`: none on the source, target only where a system-scope item exists on either machine. `manual_installs_sync`: none on either.
+All seven jobs × two machines. `apt_sync` and `snap_sync`: required on both. `flatpak_sync`: none on the source, target only where a system-scope item exists on either machine. The four `manual_*` jobs: none on either.
 
 | # | Scenario | Expected | Cov | Test |
 | --- | --- | --- | --- | --- |
@@ -2095,12 +2095,12 @@ These are the behaviours no single run can show: a second run, or a swap of whic
 | N19 | The last flatpak application from a remote is removed on approval in run 1 | the remote and its signing key go with it; run 2 has neither to raise | U | `test_flatpak_sync:TestUnusedRemoteIsDeleted::test_the_count_runs_after_this_runs_approved_removals` |
 | N20 | A flatpak application marked machine-specific on Nomad is the only user of a remote Atlas lacks | the remote is never deleted, in any run | U | `test_flatpak_sync`:`TestUnusedRemoteIsDeleted::test_a_machine_specific_app_keeps_its_remote`, `::test_a_remote_the_source_has_is_never_deleted` |
 | N21 | Snap revisions converged in run 1, `folder_sync` running after | Nomad's `~/snap/<app>/<revision>` matches Atlas's, so the data lands where the target's snapd will read it | U | `test_folder_sync:TestPackageJobExcludeFiltersGating::test_the_revision_the_target_holds_is_mirrored` |
-| N22 | Two machines, all four package jobs enabled, a full run | every job reviews before its own first change, one job's failure leaves the others' work intact, and the exit code reflects what failed | V | `test_package_sync`:`TestAFailureCostsItsOwnItemAndNothingElse::test_the_item_after_a_failure_and_the_jobs_after_its_job_all_still_land` (all four enabled, the job ordered first fails, apt's and snap's approved work still lands on Nomad, the run exits non-zero) |
+| N22 | Two machines, all package jobs enabled, a full run | every job reviews before its own first change, one job's failure leaves the others' work intact, and the exit code reflects what failed | V | `test_package_sync`:`TestAFailureCostsItsOwnItemAndNothingElse::test_the_item_after_a_failure_and_the_jobs_after_its_job_all_still_land` (the job ordered first fails, apt's and snap's approved work still lands on Nomad, the run exits non-zero) |
 | N24 | An `apt.conf.d` file both machines have and disagree about is marked in run 1; run 2 is launched from the other machine | it is raised in neither run, in neither role. This is the one case where the direction of a run cannot name the holding machine, so the mark is read from both machines' records | U | `test_block_state_decisions`:`TestAptConfigOverwriteDecision::test_a_marked_overwrite_is_recorded_on_the_target_and_inert_in_both_directions` |
 
 ## Where the tool does not do what the requirements say
 
-Empty. Every row still marked `‼` is a cost the criteria already accept, recorded in [Where the tool does not yet meet these requirements](../planning/package-sync-conformance-criteria.md#where-the-tool-does-not-yet-meet-these-requirements).
+Empty. Every row still marked `‼` is a cost the criteria already accept, recorded in [Where the tool does not yet meet these requirements](../system/package-sync.md#where-the-tool-does-not-yet-meet-these-requirements).
 
 This section is where a defect too long for a Test column goes. An entry belongs here once one reading of the code has found it and an independent reader asked to refute it has failed to; it states what the code does, not what a run was seen to do, unless it says otherwise.
 

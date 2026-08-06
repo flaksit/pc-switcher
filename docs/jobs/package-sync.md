@@ -1,484 +1,186 @@
 # Package Sync
 
-The package jobs replicate *what is installed* — apt packages plus the `/etc/apt` repository configuration they depend on, snaps, flatpaks, and the things no package manager can reproduce — rather than user data. Package *data* (`~/.var/app`, `~/snap/<app>/common`, dotfiles) stays `folder_sync`'s territory.
+Package sync replicates *what software is installed* — packages, snaps, flatpaks, and the software none of them can reproduce. Application data belongs to [`folder_sync`](folder-sync.md).
 
-Configuration for these jobs is limited to their `sync_jobs` enable flags; see the [configuration reference](../configuration.md#sync_jobs). There are no per-job config keys.
+For what package sync is for, read [package-sync-user-requirements.md](../planning/package-sync-user-requirements.md) first. This page tells you what to enable, what pc-switcher will ask you, and what the answers do.
 
-For what these jobs are for and why they behave as they do, see [Package sync — user requirements](../planning/package-sync-user-requirements.md); for the same requirements as checkable articles — the `PKG-FR-*` obligations per ecosystem and the `PKG-NG-*` non-goals — see [Package sync conformance criteria](../planning/package-sync-conformance-criteria.md). Where this page disagrees with either, this page is wrong.
+## The seven jobs
 
-## The six jobs
+Seven independent jobs share one review model. Each has its own enable flag, its own review, and its own failure isolation.
 
-Seven independent jobs share one item -> diff -> review -> converge model. Each has its own enable flag, its own validation, its own review and its own failure isolation, so enabling one never drags in another.
+| Flag | Covers |
+| --- | --- |
+| `apt_sync` | Manually-installed apt packages, plus the `/etc/apt` state they depend on: repositories, pins, keys, apt config, holds |
+| `snap_sync` | Store snaps, converged to the source's exact revision and channel |
+| `flatpak_sync` | Flatpak refs (per user/system scope), the remotes they need, and mask patterns |
+| `manual_deb_sync` | apt packages installed by hand from a downloaded `.deb` |
+| `manual_snap_sync` | Sideloaded snaps installed from a local `.snap` file |
+| `manual_flatpak_sync` | Flatpak apps installed from a local bundle or a since-deleted remote |
+| `manual_installs_sync` | Unowned software under `/usr/local` and `/opt` |
+
+All seven ship **disabled**. Enable them individually:
 
 ```yaml
 sync_jobs:
-  apt_sync: false             # apt packages plus the /etc/apt repository configuration they depend on
-  snap_sync: false            # installed snaps, converged to the source's revision and channel
-  flatpak_sync: false         # installed flatpak refs and their remotes, per scope
-  manual_deb_sync: false      # hand-installed .deb packages
-  manual_snap_sync: false     # sideloaded snaps
-  manual_flatpak_sync: false  # flatpak apps no remote can supply
-  manual_installs_sync: false # unowned software under /usr/local and /opt
+  apt_sync: true
+  snap_sync: true
+  flatpak_sync: true
+  manual_deb_sync: true
+  manual_snap_sync: true
+  manual_flatpak_sync: true
+  manual_installs_sync: true
 ```
 
-All seven ship **disabled**: enabling any of them lets pc-switcher change installed software on the target, so it is opt-in.
+Enabling one authorises pc-switcher to install and remove software on the target for that job — hence opt-in per job.
 
-### What each job covers
+## The three-way ownership split
 
-- **`apt_sync`** — the manually-installed apt package set (`apt-mark showmanual`, not the full dpkg selection — apt resolves dependencies on the target itself), minus the packages you installed from a hand-downloaded `.deb` (see below), plus the `/etc/apt` configuration that governs where packages come from. Three things under `/etc/apt` are reviewed: `apt.conf.d` files — added, changed or deleted — the deletion of a repository or pin file the source no longer has, and one narrow repository conflict. Repository files under `sources.list.d`, their signing keys, and pins under `preferences.d` are derived from the packages you approve and never get a review row — see [Repositories, pins and keys are derived](#repositories-pins-and-keys-are-derived).
-- **`snap_sync`** — installed snaps, converged to the source's exact revision and tracking channel.
-- **`flatpak_sync`** — installed flatpak refs, per user/system installation scope, plus the remotes those refs are derived to need, minus the refs no remote can supply (see below).
-- **`manual_deb_sync`** — apt packages whose installed version comes from no repository your machine has configured: a `.deb` you installed by hand, whether or not apt marks it as one you chose.
-- **`manual_snap_sync`** — snaps you installed from a local `.snap` file rather than from the store, which `snap list` shows at an `x`-prefixed revision.
-- **`manual_flatpak_sync`** — flatpak apps whose origin names no remote your machine configures: one installed from a local bundle, or from a remote you have since deleted.
-- **`manual_installs_sync`** — software under `/opt` and `/usr/local` that no dpkg package owns, dropped there by an install script or a tarball.
+Three jobs handle software the store or archive can supply: `apt_sync`, `snap_sync`, `flatpak_sync`. Three others handle software of the same shape that no store or archive can supply: `manual_deb_sync`, `manual_snap_sync`, `manual_flatpak_sync`. **The two never overlap.** For every ecosystem, one detection rule assigns each package to exactly one job:
 
-The last four are the jobs for software no package manager can reproduce, and they share the [install-snippet registry](#install-snippets): a package, a snap, a flatpak app and a directory tree are found differently but resolved the same way, by a recipe you write once. Everything else about them is separate — four enable flags, four reviews, four failure surfaces.
+| If you disable | Then software of this kind is synced by nobody |
+| --- | --- |
+| `manual_deb_sync` | Every apt package installed from a downloaded `.deb` |
+| `manual_snap_sync` | Every sideloaded snap |
+| `manual_flatpak_sync` | Every flatpak app from a local bundle or since-deleted remote |
 
-### Hand-installed `.deb` packages belong to one job only
+Keep the `manual_*` jobs enabled if you have any such software. `apt_sync`/`snap_sync`/`flatpak_sync` will not fill in — they cannot, because a package the store does not offer is not something the store can install.
 
-A package whose installed version comes from no repository your machine has configured was put there with `dpkg --install`. It is `manual_deb_sync`'s territory exclusively: `apt_sync` detects the same packages, with the same test, on BOTH machines, and drops them from that machine's manifest before it diffs anything. They produce no apt item, no review entry, no install and no removal — including the one only the machine being synced TO has, which would otherwise look like software the source had deleted.
+`manual_installs_sync` is separate: unowned software under `/opt` and `/usr/local` belongs to no other job.
 
-That detection is over everything installed, not just what you chose explicitly. A `.deb` that arrived as another `.deb`'s dependency is marked automatic by apt, and apt's mark says how it got there rather than whether anything can supply it again.
+## Job ordering
 
-There is nothing apt could do with them anyway. The target's apt has never heard the name, so offering it as an ordinary install would fail with "Unable to locate package" — while `manual_deb_sync` offers the same package as an [install snippet](#install-snippets) in the same run. Only one of the two answers works, so only one job asks.
-
-The consequence is worth knowing: the two jobs have separate enable flags, and `apt_sync` does not consult `manual_deb_sync`'s. **If you enable `apt_sync` but disable `manual_deb_sync`, your hand-installed `.deb` packages are synced by nobody** — they are silently absent from the review rather than offered as installs that fail. Keep `manual_deb_sync` enabled if you install software from downloaded `.deb` files.
-
-### Sideloaded snaps belong to one job only
-
-The same split, in the snap ecosystem. A snap installed from a local `.snap` file has a revision no store can serve — `snap list` shows it with an `x` prefix, `x1`, `x2` — so `snap_sync` withholds that name on both machines and says nothing about it, and `manual_snap_sync` offers it as an [install snippet](#install-snippets) instead, since a recipe is the only thing that can put such a snap on the other machine.
-
-The same consequence follows: **if you enable `snap_sync` but disable `manual_snap_sync`, your sideloaded snaps are synced by nobody.** Keep `manual_snap_sync` enabled if you install snaps from `.snap` files.
-
-### Flatpak apps no remote can supply belong to one job only
-
-The same split, one ecosystem over. A flatpak app whose origin names no remote your machine configures cannot be fetched from anywhere: it was installed from a local bundle, whose pseudo-origin carries no URL at all, or from a remote you have since deleted, whose name stays on the app after the remote is gone.
-
-`flatpak_sync` drops those apps from both machines before it diffs anything, so they produce no install, no removal and no derived remote — and, without that, a bundle app's origin became a remote the run tried to add with an empty URL. `manual_flatpak_sync` offers them instead, as [install snippets](#install-snippets).
-
-One thing is still reported: if both machines have the app and only the target's origin no longer resolves, that shows up as an [origin divergence](#flatpak-refs) like any other. Nothing is installed or removed either way, so there is nothing to protect by staying silent.
-
-**If you enable `flatpak_sync` but disable `manual_flatpak_sync`, your bundle-installed flatpaks are synced by nobody.** Keep it enabled if you install flatpaks from `.flatpak` files.
-
-## Job ordering is enforced
-
-All seven package jobs **must** be listed before `folder_sync` in `sync_jobs`. This is not a convention: pc-switcher validates the resolved order and aborts the run with a config error if any of them is enabled but sits after `folder_sync`.
-
-The reason is the "defaults, then your data" layering. Installing software usually writes its own default config and data files on first appearance. If `folder_sync` ran first, the fresh install would overwrite your synced versions of those files with stock defaults. Running the package jobs first means the software already exists when `folder_sync` lands your versions on top. The snippet jobs are in the rule for the same reason: your snippet installs software, and that software writes its own defaults too.
+All seven package jobs **must** be listed before `folder_sync` in your `sync_jobs`. pc-switcher validates this and refuses to start otherwise: software must exist before its data lands on top of it, or the fresh install's stock config overwrites your synced version.
 
 ## Batched review
 
-Because an enabled package job can install or remove software on the target, each one shows you a review and waits for your approval before it changes anything.
+Each enabled job shows you a review before it changes anything. Every screen names the two machines by hostname (`atlas`, `nomad`) — never "source" and "target".
 
-Every screen names the two machines by their **hostnames** — `atlas`, `nomad` — never as "the source" and "the target". Those are the tool's names for the two ends of a run, and the question a review asks is always about one of your computers: which machine loses the package, which machine's version of a file wins, which machine an install snippet runs on.
+Most items take three answers:
 
-The review lists every difference the job found between the two machines, grouped by action, and installs are always kept separate from removals: a group that would install software is never mixed with one that would remove it, and a removal group names the removal explicitly (`Remove apt packages`) rather than saying "apply". Removal rows start at **skip now**, so a bulk approval can never silently delete something. So do rows that would replace an `apt.conf.d` file the target already holds — that file is your own work, and overwriting it unread is as irreversible as a deletion. A snap the run moves to another revision or channel still starts applied: converging software you asked for overwrites nothing you wrote. Its screen is titled `Align snap package versions` and its act is `align`, because what the run does is put your machine's copy on the other one's revision and channel, not replace the software. That one is offered with **two** answers rather than three — its line says what your machine's copy is overwritten with and where the new value comes from ("overwrites revision 15 on nomad with revision 20 from atlas"), and there is no permanent answer, because nobody keeps a revision as a standing preference about one machine.
+| Key | Answer | Effect |
+| --- | --- | --- |
+| `y` | Apply (`install`, `remove`, `overwrite`, …) | Make this change on the target |
+| `s` | Skip now | Leave it this sync; ask again next sync |
+| `x` | Skip for good | Mark it machine-specific; never asked again |
 
-Most items that would actually change something — packages, applications and `apt.conf.d` files — offer the same three-way choice:
+Four questions take **two** answers only (act, or leave it — no record either way):
 
-- **Apply** it — make this change on the target.
-- **Skip now** — leave it alone this sync; it comes back next sync.
-- **Skip for good** — mark it as belonging to one machine only, so no future sync touches it and you are not asked again (see [Machine-specific packages](#machine-specific-packages)). Said as this screen's own act: `keep for good` on a removal screen, `never <verb>` on every other.
+- Deleting an apt repository or pin file
+- Overwriting a repository file both machines have with different content
+- Repointing a flatpak remote a machine-specific app depends on
 
-You give those answers on **one screen per group**, not in two passes. Every item is a row; the decision it currently carries is shown in a column to the right of the longest item; the arrow keys move between rows — the first and last rows are walls, not a way round to the other end — and one key sets the focused row:
+A snap's revision/channel change also takes two answers: nobody keeps a revision as a standing preference per machine.
 
-- `<y>` — apply, shown in the column as the group's own verb (`install`, `remove`, `overwrite`, …)
-- `<s>` — `skip now`
-- `<x>` — skip for good, as a cross for "exclude". Not `<n>`, which beside `<y>` reads as a plain "no" and would invite "not now" from the one answer that is permanent
-- `<space>` steps the focused row through the answers, and the shift of any key sets **every** row at once
-- `<enter>` confirms the whole screen; `<ctrl-c>` aborts the whole sync (the screen does not offer this — it is not one of the answers)
+**Removal groups start at skip-now.** A bulk confirm can never silently delete something. So do groups that would overwrite an `apt.conf.d` file the target already holds.
 
-Each answer is listed with a sentence of its own, naming the machine it happens to and how long it lasts, because the column word is too short to say either. The two skips share the act's own words and differ in the duration that follows, so the permanent one is chosen on what it costs you — never being asked about the item again — rather than on what it stops pc-switcher doing:
+Some questions come one-per-screen because they have to show you something first: a file body, a collateral package, an unreproducible item.
 
-```plain
-? Remove apt packages
-  <y> remove          remove from nomad
-  <s> skip now        keep on nomad for now; will be asked again next sync
-  <x> keep for good   keep on nomad for good; it is nomad's own, and will not be asked again
-  <space> cycles   <shift+key> sets every row   <enter> confirm
+Some findings are only reported, not asked about: version differences, origin divergences, repositories the source cannot reproduce. Neither answering nor declining would change anything, so there is nothing to answer.
 
- » ● fortunes-min  remove
-   ○ cowsay        skip now
-   ⊘ sl            keep for good
-```
+## Machine-specific items
 
-Four questions take **two** answers instead — act, or leave it for now, with nothing recorded either way: deleting an apt repository file, deleting an apt pin file, overwriting a repository file the two machines disagree about, and repointing a flatpak remote a machine-specific app takes as its origin. Their screens simply do not offer `<x>`. See [Deletions](#deletions) and [Flatpak remotes](#flatpak-remotes).
+Choosing `x` marks the item as belonging to *this specific machine*. The mark is written on the **holding machine** (the one whose copy the answer keeps) and never synced.
 
-Some questions come one item per screen rather than as a list: a repository or pin file being deleted, a repository whose two versions differ, a collateral package, and an unreproducible item. Each has something to show you first — a file body, two file bodies, or what a change would do to a package you installed or marked as that machine's own — and the decision follows the thing it is about. The answered list stays on screen afterwards; nothing is echoed back at you.
+Where both machines have the item and their copies differ, you get one follow-up screen asking whose own version this is — one machine, the other, or both. Naming both records one on each, so the answer survives either machine losing its copy.
 
-Items that only **report** a condition are not asked about at all — they are printed, grouped by what the condition IS, and the review moves on. Neither answering nor declining would change anything on either machine or be remembered, so there is nothing to answer. The groups are `Version differences`, `Installed from different repositories` and `Origins <target> cannot reproduce`. Each title ends with what the job syncs — `(apt packages)`, `(snap packages)`, `(flatpak applications)` — and the flatpak origin group says `remotes` where apt says `repositories`, because that is what flatpak calls them. Each line is the item and what was found about it — `tree: atlas has 1.0-1, nomad has 2.0-1` — with no verb in front of it, because nothing acts on a reported condition. The conditions: a version difference between the two machines, an apt package whose repository cannot be reproduced on the target, and a package or application the two machines installed from different origins. These change nothing on the target, and neither machine "holds" the item in the way a machine-specific mark requires — marking a version difference would silently stop the package syncing altogether rather than stop reporting the drift. Resolve them by fixing the underlying condition (align the versions, restore the repository on the source, pick one origin). A version difference is the one that resolves itself — its report says so, naming the upgrade command to run.
+The mark lasts as long as the software is on the holding machine. Once it is gone, the mark is dropped and the run says so.
 
-### One review per job, and nothing applied you did not approve
+Marks live under `~/.config/pc-switcher/<manager>.decisions.yaml`. To un-mark, delete the entry (or the whole file).
 
-`apt_sync` asks everything it can ask before it writes anything, and it never applies something you did not approve. It is one review, in one sitting, and most of it is one pass. A few questions come in a second pass immediately after: a repository whose last remaining package you have just approved removing, a repository file whose two versions only matter because you approved the install that carries it, and a package a *keep for good* answer you gave a moment ago now protects. Each of them is worth asking only because of an answer you have just given, so it cannot be put before you gave it — and none of them would be worth answering if it were asked from the whole list of things the run merely *proposed*. Nothing on the other machine has changed when that second pass opens, so **stop the sync** there still stops everything.
+## Install snippets for unreproducible items
 
-Nothing else needs a second look: a package is judged by where your **source** installed it from and a sync never changes the source, so nothing the run does to the target can make an answer you already gave wrong. The one fact that does depend on what the run wrote, which repository actually ends up supplying a package, is measured afterwards rather than guessed: a package that comes out wrong is refused and reported, not turned into another question.
+The four `manual_*` jobs share one snippet registry at `~/.config/pc-switcher/package-snippets.yaml`. When one of these jobs finds an item, you have three choices:
 
-A pin file gets no line of its own on a package either. Pins are synced — they are the files under `/etc/apt/preferences.d` that make one repository's build outrank the Ubuntu archive's — but a package named by a pin is reviewed like any other: if it is on the target and not on the source, it is offered for removal, and you can mark it machine-specific.
+- `y` — Write an install snippet. Two editors open: an install-or-update body, then an installed-version body.
+- `s` — Skip now.
+- `x` — Never install here.
 
-### Confirming every individual command
+The **installed-version snippet** runs on both machines every sync to detect drift. It must be read-only — pc-switcher cannot check that. Example: `/opt/foo/bin/foo --version`.
 
-The batched review approves *items*, not commands. One approved line can expand into several: an apt package is an `apt-get --dry-run` simulation then an `apt-get install`; an apt repository file is a backup, an upload, a `sudo install` promotion and an `apt-get update`.
-
-`pc-switcher sync <hostname> --confirm-each-command` inserts one question before every one of them, headed by the job and the hostname of the machine about to change, then what the change does, then the exact command (or, for a file transfer, the source and destination paths). It waits for a single keypress — **p** to proceed, **a** to abort the whole sync — and acts on it immediately, with no Enter to follow. There is no "skip this one": a single reviewed item can span several commands, so skipping one would leave that item half-applied. An unanswerable prompt (Ctrl-C, EOF) aborts.
-
-It covers every write the six jobs make, plus the machine-local decision files on both machines, the snippet registry and its push, the snapd auto-refresh pause and restore, and the sync-history update on both ends. It also covers what changes a machine without writing anything to it: taking each machine's sync lock, and starting a background process. Only genuinely read-only commands go unasked, and a read stays a read under `sudo` — the privileged probes a job runs before it starts prompt for nothing. The flag needs a real terminal and is refused without one. It is meant for auditing or debugging a run you do not trust yet, not for everyday syncs.
-
-### apt collateral
-
-An apt change sometimes forces apt to remove, downgrade or upgrade *other* packages to satisfy it — so the package on a review line is not always the whole transaction. While the review is being built, `apt_sync` simulates the whole set of candidate installs and the whole set of candidate removals with `apt-get --dry-run` and inspects that collateral. Dependencies apt pulls in or drops on its own are apt doing its job: they are not shown to you, but each one is named in the log, so a change nobody asked you about is still a change you can see afterwards.
-
-Two kinds of package are protected instead of let go: one you installed by hand on the target — in the target's own `apt-mark showmanual` set — and one you marked as that machine's own. Each becomes its own review item on a decision screen of its own, one package per screen, because each one's cause and effect differ and the answers name them. The screen is titled with that package's own case (`Removing fortunes-min on nomad would remove fortunes`), and the line under it — above the keys, because it is why you are being asked at all — says which ground protects it: apt's manual mark, your mark on that machine, or both. A marked package is named nowhere else in the review, so this is the only place its mark can be said. Three answers, each naming this package's own change:
-
-- `<y>` — the act, named as what happens to the package: `remove`, `downgrade` or `upgrade`. Its line reads, for example, `install sl on nomad, so fortunes is removed as well`.
-- `<s>` `skip now` — `keep fortunes on nomad; sl will not be installed; will be asked again next sync`. Everything else you approved is applied as you decided.
-- `<q>` `stop the sync` — not just `apt_sync`. Its line reads `nothing more is changed on nomad; what earlier jobs already did stays done`: no further job runs, and what jobs that already finished did stays done. `apt_sync` itself has changed nothing at this point: the review runs before its first mutating command.
-
-Being offered for removal is not the same as being given up. A package you were offered for removal and kept — by skipping it, or by marking it as this machine's own — keeps its protection, so an unrelated install that would take it still asks you first. A mark you made earlier in the same review counts from the moment you made it.
-
-The same package can be the casualty of two different changes in one run — an install's own transaction and an approved removal's cascade. Those are two questions, not one, and applying one says nothing about the other: the answer you give is to the consequence, not to the package.
-
-The source's manual set is not consulted, which gives up one case on purpose: a package you installed by hand on the source, which arrived on the target as an automatic dependency, can be removed as collateral without asking you. If the target's apt installed it automatically, the target's apt owns it, and that is also the set apt itself consults when deciding what it may remove.
-
-That holds inside the batch of removals as well, and it takes a second pass to say so. While the review is being built, each candidate is exempt from its own transaction — otherwise every one of them would be raised as collateral of itself — and there is no answer yet to tell an approved removal from a skipped one. So once you have answered, the run rehearses the removals you *approved* once more and asks about every candidate you did not: skipped, marked as this machine's own, or left alone. The question comes in the review's second pass, before anything is changed, and it reads the same as any other — apply, keep the package, or stop.
-
-Skipping cancels only the changes that actually cause the collateral. The question names them, and everything else you approved in the same review is applied as you decided. Where no single change causes it on its own — apt keeps a package as long as either of two others is there, and drops it once both go — the question says "the packages listed earlier" and keeping the package cancels all of them, because that combination really is the cause. Skipping never rewrites an answer you gave: a package you marked never-offer-again keeps that mark even when the skip cancels it for this run.
-
-One class of install cannot be classified while the review is being built: a package whose repository this run is about to add on the target's behalf. Until that repository lands the target's apt has never heard the name, and apt refuses the whole simulated batch on one such name — which would strip the protection from every other package in the run rather than weaken it for one.
-
-You are asked about those later in the same run, once the repositories have landed and the package lists have been refreshed, which is the first moment apt can say what installing them would cost. It is the same question with the same three answers, and every one of those questions comes before the first of those installs runs — so keeping a package leaves its install unapplied rather than undoing it, and stopping the sync stops it before any of them.
-
-Every change is rehearsed once more immediately before it runs, and what that rehearsal turns up can differ from what the review saw: the machine has moved since, or this run's own earlier changes moved it. Where the change would now take a protected package nobody was asked about, you get the same three answers again, right before that one command — keeping the package leaves that change unapplied, and it is neither applied nor reported as a failure.
-
-An install you withdraw that way is neither applied nor failed. The run says what happened to it and moves on to the rest of what you approved. Its hold, if the source holds it, is withdrawn with it — that is true of every install you decline, however you decline it.
-
-The repository that install needed landed before the question could be asked, and it stays. If nothing else you approved comes from it, the run names it — by URL as well as by filename, since the filename is whatever whoever wrote the file chose — and says nothing installs from it any more. It is left where it is: removing it is yours to decide, and the answer you gave was about a package.
-
-## Repositories, pins and keys are derived
-
-You are asked about packages. The `/etc/apt` machinery a package needs to be installable — the repository file it comes from, the signing key that makes that repository trusted, the pin that makes that repository's build win — follows from your answer and gets no review line of its own. Approving a repository without its package does nothing; approving a package without its repository cannot be installed; the pairing was never expressible as two review rows.
-
-A package is replicated as name **and** origin. If the source installed `gh` from `cli.github.com`, the target gets it from `cli.github.com` or not at all, and the review line names the repository when it is not the distribution's own archive. Approving that line is what carries that repository's file, its key and the source's pin files across. If no repository file on the source declares the origin, or every file that does names a key the source machine does not have, the package is reported instead of installed — never satisfied from a different repository.
-
-Two machines can also disagree about where a package they both have came from, and that is reported rather than converged: `gh` from `cli.github.com` on one machine and `gh` from Ubuntu's archive on the other is one name and two pieces of software, so the review names both and proposes nothing — reinstalling from the other origin is not something you asked for. It takes precedence over a version difference on the same package, since two origins' builds are numbered independently. Your whole distribution counts as ONE origin, worked out from that machine's own `ubuntu.sources` and friends, so two machines on different Ubuntu mirrors agree about every package.
-
-After the run's single metadata refresh and before its first install, the target's real candidate origins are read back for every approved install whose origin is not the distribution's own archive. If that repository's build is still not what the target would install, that install is refused as its own item naming both origins and the rest of the run continues. That check is the guarantee; everything before it is preparation.
-
-Pins are the reason the check can fail even when the repository landed. Ubuntu's own `firefox` is version `1:1snap1-0ubuntu5`, and that epoch outranks every epoch-free Mozilla version at equal priority — so adding Mozilla's repository alone still installs Ubuntu's package, and only Mozilla's pin file changes the outcome. Every `/etc/apt/preferences.d` file the source has is therefore written to the target when missing and overwritten when different, always and silently. A pin naming an origin the target does not have is inert, so that costs nothing. The price is that a pin file you wanted on one machine only comes back every run; deleting it on the source is the only way to stop that.
-
-The distribution's own files — `ubuntu.sources`, `/etc/apt/sources.list`, `ubuntu-esm-apps.sources` and `ubuntu-esm-infra.sources` — are written when missing and overwritten when different, and are never removed or offered for removal. They are what defines "the distribution's own origin" on each machine, which is what stops two machines on different Ubuntu mirrors from disagreeing about every package. Files apt itself does not read are ignored, in all three of its fragment directories and in every direction. `sources.list.d` is read for `.list` and `.sources` alone; `preferences.d` accepts no extension or `.pref`, `apt.conf.d` no extension or `.conf`; and none of them accepts a name with a character outside letters, digits, `_`, `-` and `.`, or one starting with a dot. So the `.save`, `.orig`, `.bak` and `.dpkg-dist` copies apt tooling and your editor leave behind are never written to the other machine and never offered for deletion — apt reads them on neither machine, so syncing one would change nothing.
-
-A repository present on both machines with different content is overwritten with the source's version silently. You are asked about exactly one case: a file this run would write because a package you approved comes from it, which also feeds a package you marked machine-specific on the target. Approved, not merely offered — which is why the question comes in the second pass: declining that package's install leaves the file unwritten, and there is then nothing to decide. Then you are shown both file contents whole, side by side and never as a diff, and asked to overwrite or leave it for now. Leaving it fails every approved package whose origin depended on that file, by name, rather than installing it from somewhere else.
-
-Both halves matter: a file no approved package needs is never written, so "overwrite" would change nothing, and a file whose packages are all ordinary ones is one whose changes you can already see item by item elsewhere in the review.
-
-### Ubuntu Pro and ESM
-
-The two `ubuntu-esm-*` files are part of the distribution set, so they would be written to a target that lacks them. `esm.ubuntu.com` serves its repository *index* publicly, so an unattached target's `apt-get update` still succeeds and the ESM versions win candidate selection — only the package pool is behind the 401. The failure lands later, at install time, on a package nobody will connect to the sync.
-
-pc-switcher cannot fix that itself: attaching needs a subscription token from your Pro dashboard or an interactive browser flow, the source machine's own credentials are root-only and not reusable for another machine, and holding a token would put a secret on a command line.
-
-So before `apt_sync` writes anything, it probes the target and — if the target reports no attachment — asks, with exactly two answers:
-
-- **I have attached `<target>` — check again and continue.** pc-switcher probes again rather than trusting the answer. You can answer this as many times as you like; re-probing is free.
-- **Skip `apt_sync` this run (every other job still runs).** The target's `/etc/apt` is left exactly as it was and every other job runs normally.
-
-The commands the prompt gives you, to run on the target, are `sudo pro attach <token>` followed by `sudo pro enable esm-apps esm-infra`, and it links Ubuntu's own tutorial — [Attach a machine to your subscription](https://documentation.ubuntu.com/pro/attach-tutorial/) — which stays current if the procedure changes.
-
-Skipping costs the whole apt job, not just the two files, and that is deliberate: pin files are always synced, so a pin the source has and the target lacks would reach the target whether or not the sources it names did, leaving a candidate selection matching neither machine. A run with nobody to ask takes the skip too. A dry run never asks — it warns that the target is unattached and that a real run would skip `apt_sync` entirely.
-
-Only the yes/no attachment answer is ever logged or shown. The probe's own output names the subscriber's account and never leaves the check.
-
-### Signing keys
-
-You think in repositories and packages. A signing key is just how a repository is made to work, so pc-switcher never asks you about one: no key gets a review line of its own, and no key can be marked machine-specific. Not asked about is not hidden, though — every derived write is logged as it lands and previewed under `--dry-run`, so you see what reached `/etc/apt`.
-
-When a repository is written to the target, the keyring it names arrives first — copied byte-for-byte from the source machine, never downloaded from the network. The same check runs for every repository that is *already* on the target: if the key on the source machine has different bytes, the target's copy is refreshed. That is what makes a **rotated** key follow you. A repository replacing its signing key changes no `.sources` file, so nothing in the review would ever mention it, and the target's apt would start failing that repository's signature check until you noticed by hand. A key that already matches is left alone entirely — no transfer, no command.
-
-Keys are looked for in three places: `/etc/apt/keyrings`, `/etc/apt/trusted.gpg.d` and `/usr/share/keyrings`. The last one matters more than its name suggests — it is where `add-apt-repository`, Ubuntu's own `ubuntu.sources` and most third-party `.deb`s put the key their `Signed-By:` line points at. A repository whose `Signed-By:` carries the key **inline** instead — the armored block written straight into the `.sources` file, which is what `add-apt-repository` does for a PPA — needs no keyring at all, so nothing is copied and nothing is missing.
-
-There is one thing pc-switcher will not overwrite: a keyring the target already has that belongs to a package the target got from your distribution. Replacing a distro keyring is not a sync's job. A keyring some *vendor's* package owns is refreshed like any other — shipping the keyring in a `.deb` is exactly how a vendor rotates one, so leaving it alone would mean the rotation never reaches the other machine and that repository eventually fails its signature check. Ownership only stops the *overwrite*, though — a keyring the target is **missing** is always copied, even one a package owns. Some repositories ship a `.deb` that carries both the repository entry and the key that trusts it, so refusing to copy an owned key would leave that repository permanently untrustable and the package permanently uninstallable.
-
-When you approve removing a repository, the keyring it was the last user of goes with it. That count is taken *after* the repository is actually gone, against the real state of the target, so it gets the awkward cases right: a repository you left skipped still counts, one you marked machine-specific still counts, and so does `/etc/apt/sources.list`, which pc-switcher never syncs at all. Nothing is deleted unless the source machine has dropped that key too. If you remove no repository in a run, nothing is collected.
-
-Only `/etc/apt/keyrings` is ever cleaned up. Keys in `/etc/apt/trusted.gpg.d` are *ambient* trust — no repository names them, so there is no way to tell which one is still doing a job — and `/usr/share/keyrings` is package territory. pc-switcher copies from both and deletes from neither; those keys are allowed to accumulate rather than be removed on a guess.
-
-If a repository on the source machine names a keyring that machine does not actually have, no package can be replicated through it: every package whose origin that repository declares is reported instead, naming the origin and the missing key. The repository is never written to the target without its key — a repository apt cannot verify is worse than no repository.
-
-A derived write that fails has no review line of its own to fail. The failure is charged to every approved package whose origin depended on it, naming the file and the reason — you decided about a package, not about a file.
-
-Everything under `/etc/apt` that a run writes or deletes is backed up first, applied, and followed by exactly one `apt-get update`. If that refresh fails, every file the group touched is restored, the target's `/etc/apt` is left as it was found, and the rollback fails the same approved packages a single failed write would.
-
-## What the log keeps
-
-The report tells you what a job did. The log is where you reconstruct why, months later, so it keeps more than the report does:
-
-- Every item a review offered you, with the answer you gave — including the ones you skipped, which change nothing and would otherwise leave no trace at all.
-- Every change that was applied, a line each: `apt: install sl (6.03-1) on nomad` — what was done, to what, by which manager and on which machine. The counts in the report say how many changes landed; this is where you find out which.
-- Every change a package manager made on its own behalf. Dependencies apt resolves for itself are never a question, but each one is named.
-- At `log.file: DEBUG`, every command pc-switcher ran and everything that command printed, verbatim. That is what makes a post-mortem read the tool's own words rather than a paraphrase. It is also why debug runs produce log files of several hundred megabytes.
-
-One thing never reaches any of it. A private PPA or a commercial repository carries its credential inside its own address, so `https://user:token@host/...` is printed as `https://***@host/...` — in the log, in the `--confirm-each-command` prompt, in every review line, and inside the repository, remote or pin file a question prints whole. Log files are readable by anyone with an account on the machine that wrote them. The rule covers credentials in URLs and nothing else: a secret that reaches a command another way is not withheld.
-
-## Machine-specific packages
-
-Choosing the permanent answer — `<x>`, `keep for good` or `never <verb>` — marks that package as belonging to *this specific machine*, the one running as source or target right now. A machine-specific package is never synced out to peers when this machine is the source, and never installed or removed here by a sync arriving from another machine. Use it for things tied to one box: a hardware driver, a tool for an attached peripheral.
-
-Which of the two machines it is written on is the one whose copy your answer keeps: an install you never want here is recorded on the machine that has it, and a removal you refuse on the machine you are syncing *to* — its copy is the one the answer protects.
-
-Where both machines have the item and their copies differ, neither is the holder by right, so the review asks. Once the screens are answered, every conflicting item you kept for good comes back on one more screen with three answers: this machine, the other one, or both. Naming one machine records the mark there; naming both records one on each, so the answer outlives either machine losing its copy. Either way the item stops travelling in both directions — what you are choosing is whose copy the decision is about, and therefore how long it lasts. Today the only items that reach this question are apt's own configuration files: nothing else that differs on both machines can be marked. A run with nobody at the keyboard never asks it and records nothing at all.
-
-A mark still counts when a later sync is launched the other way round, whichever machine it sits on.
-
-The mark is recorded in that machine's own decision file at `~/.config/pc-switcher/<manager>.decisions.yaml` (one per manager: `apt.decisions.yaml`, `snap.decisions.yaml`, `flatpak.decisions.yaml`, `manual_deb.decisions.yaml`, `manual_snap.decisions.yaml`, `manual.decisions.yaml`). That file is **never synced** — it stays local to the machine it describes.
-
-To un-mark something, delete its entry from the decision file (or delete the whole file to clear every machine-specific decision for that manager). The next sync treats the item as live again and re-offers it in the review.
-
-A mark also goes on its own once the machine no longer has what it names — you removed the package by hand, or a collateral question you answered took it. The run says which marks it dropped. That is not the tool forgetting your answer: a mark works in both directions, so one left standing over software you no longer have would quietly refuse to install that software here ever again, which is not what keeping your copy meant. Put the software back and it is reviewed again like anything else.
-
-A machine-specific package never appears in a review again, which is why the run protects it where it would otherwise be lost without a word: an apt repository it still installs from is not offered for deletion, a collateral removal that would take it is a question, and a flatpak remote it takes as its origin cannot be repointed silently.
-
-## Install snippets
-
-Some installed things no package manager can reproduce — a bare `.deb` downloaded and installed by hand, which is `manual_deb_sync`'s half, a snap installed from a local file, which is `manual_snap_sync`'s; a flatpak app no remote can supply, which is `manual_flatpak_sync`'s; or software dropped under `/usr/local` or `/opt` by an install script, which is `manual_installs_sync`'s. Each job surfaces its own findings in its own review as items needing a resolution, and all of them resolve the findings the same way, out of one registry.
-
-`manual_deb_sync` asks one question of everything dpkg reports as installed: which package's installed version comes from no repository this machine has configured. A package's own name is all it needs on the other machine — software that is there is there, whatever put it there — so a name the target already has installed is never offered for installation; the two copies' `dpkg-query` versions are compared instead.
-
-`manual_snap_sync` asks the same kind of question of `snap list`: which snaps sit at an `x`-prefixed revision, the one snapd gives a snap installed from a file. The snap's name is what the answer is filed under, so reinstalling from a newer `.snap` keeps your snippet working rather than asking again, and a name the target already has — sideloaded or from the store — is never offered for installation. What is compared is the snap's own **version**, never its revision: two machines' `x1`/`x2` numbers count how often each one reinstalled, not which build it has. The revision is shown on the item's line so you can tell which build you are being asked about.
-
-`manual_flatpak_sync` asks the same shape of question of every installed flatpak app: which app's origin names no remote this machine configures **in that app's own scope**. Scope matters because flatpak keeps a separate set of remotes per installation, so a `flathub` configured system-wide says nothing about a user-scope app that names it. An app the other machine already has installed in the same scope is never offered for installation, whatever remote put it there; the two copies' `flatpak list` versions are compared instead.
-
-`manual_installs_sync`'s scan is deliberately shallow. It looks in `/opt`, directly under `/usr/local`, and inside `/usr/local`'s `bin`, `sbin`, `lib`, `games` and `src` — one level each — and reports whatever dpkg does not own. It names what is there so you can decide about it; it never walks a tree, so an application under `/opt` is one finding rather than a thousand. `etc`, `include`, `man` and `share` are not looked into at all: what a hand install puts there comes with an application the scan finds elsewhere.
-
-Three things are never offered by that scan. A path a package owns. One of the nine directories Ubuntu itself creates under `/usr/local` — `bin`, `etc`, `games`, `include`, `lib`, `man`, `sbin`, `share`, `src` — so a stock `/usr/local/bin` is not something you are asked to write an install snippet for. And a directory with no file anywhere beneath it, which is a leftover shape rather than software.
-
-You are asked to *install* only what the other machine does not already have. Both machines are read, and something already there is never offered again — that is what stops one snippet's several traces, the tree it unpacks under `/opt` and the symlink in `bin` that starts it, from coming back at you on every later sync once the snippet has run. What happens to it instead is a version comparison, below.
-
-One directory under `/opt` cannot be judged by looking at it, and you are asked about it while the sync is still planning, before the review. If `/opt/something` holds files of its own it is one application. If it holds a single directory and no file, that directory is the application. If it holds several directories and no file, it is either one application or one publisher's directory holding several, and only you know which — so the question names what is inside and offers the two answers as what each would mean for the other machine.
-
-Each finding then gets a decision screen of its own — one item per screen, because answering `<y>` opens an editor for that item — titled with the decision it asks for (`Install /opt/pcsw-uat-app on nomad?`), with the review's usual three answers in the usual order:
-
-- `<y>` `install` — `write a command snippet that installs it; nomad runs it`, now and on every future sync.
-- `<s>` `skip now` — `do not install on nomad for now; will be asked again next sync`.
-- `<x>` `never install` — `do not install on nomad for good; it is atlas's own, and will not be asked again`.
-
-The same screen appears with `update` in place of `install` when both machines have the item at different versions and no snippet is recorded for it yet: there is nothing to replay, so the question is how to reproduce it, and the verb says update because the software is already there.
-
-Answering `<y>` opens **two** editors, one after the other, because an entry needs both recipes and neither may be empty.
-
-The first is the **install-or-update snippet**: the shell commands that reproduce the item. The name is the contract — it is replayed onto a machine that may already hold an *older* version of the thing, so write it to install or to update, whichever applies. An installer that quietly does nothing when its target directory already exists is the one failure pc-switcher cannot fix for you, and the editor's own screen says so. A typical shape:
+The **install-or-update snippet** runs on the target to install or update. Runs as the target user with no wrapping sudo — put `sudo` inside the snippet if you need it. Example:
 
 ```bash
 sudo DEBIAN_FRONTEND=noninteractive dpkg --install /path/to/package.deb || \
 sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes --fix-broken
 ```
 
-The second is the **installed-version snippet**: one command that prints the version of the item installed on whichever machine runs it — not the version the first snippet would install. `/opt/foo/bin/foo --version` is the usual shape.
+Both bodies are stored verbatim and mandatory. An empty body is refused.
 
-That one runs on **both** machines, on **every** sync, while the run is still planning and before anything has been proposed. So it **must be read-only**. pc-switcher cannot check that and does not ask you to confirm it — it is the one command in a sync that is deliberately outside `--confirm-each-command`, because a confirmation per item per machine would arrive before you had been shown a single change. Its output is redacted like everything else, so a version string carrying a credential is withheld.
+Convergence means the target reading back the source's version, not the snippet exiting zero. Where a replay leaves the version unchanged, you are asked again — this time to write a new snippet or leave it for this run. There is no purge-and-retry option: if your installer will not overwrite, `rm -rf … &&` goes into your own new snippet.
 
-Only `manual_installs_sync` actually runs it: the other three jobs ask `dpkg`, `snap` or `flatpak` for a version instead. It is still required for all four, because one file holds all of their entries and a half-filled entry cannot be read at all.
+The registry syncs between machines with each snippet job's push. A transfer that would lose or change an entry the target holds asks you to confirm; declining aborts the run so you can consolidate the two registries by hand.
 
-Both snippets are **stored and replayed verbatim**, with the one exception that the blank lines around what you typed are dropped when you submit, so the registry file stays readable and what you read there is what runs. The tool never parses, interprets or reasons about either. Both run **non-interactively**: no stdin is supplied, so a command that prompts (for example a debconf question) fails rather than hanging the sync.
+## Ubuntu Pro and ESM
 
-Snippets run **unprivileged**. On the target the body is replayed as `bash -c '<body>'` as the target user, with no outer `sudo` wrapped around it. Any privilege a snippet needs must be written inside the snippet by its author — that is why the example above calls `sudo` itself. That includes a removal: `apt-get remove`, `snap remove` and deleting a path under `/opt` all need root on the target, and pc-switcher does not check for it up front — a run where you approve no removal needs none, so an approved removal that cannot elevate fails as its own item and the rest of the run continues.
+If your source uses Ubuntu Pro's ESM repositories and your target is not attached, `apt_sync` asks before writing anything. Two answers: attach the target (pc-switcher gives you the `sudo pro attach <token>` and `sudo pro enable esm-apps esm-infra` commands to run there, plus a link to [Ubuntu's tutorial](https://documentation.ubuntu.com/pro/attach-tutorial/)) or skip `apt_sync` for this run. Every other job still runs.
 
-### Keeping a hand-installed thing up to date
+Skipping costs the whole apt job, not just the two ESM files: pins always-sync, so the source's ESM pins would reach a target without the sources they name, leaving a candidate selection matching neither machine.
 
-Once both machines have the item, they are compared on the **version each one has installed**. The same version is convergence and you are told nothing. A different version is a question, whichever machine holds the higher number — a sync goes one way, from the machine you launched it on, and the numbers never reverse that.
+A non-interactive run takes the skip. pc-switcher cannot attach the target on your behalf.
 
-Three answers, one item per screen:
+## Prerequisites
 
-- `<y>` `update` — run the recorded snippet on the other machine.
-- `<w>` `new snippet` — rewrite it first, in an editor opened on what is already there, then run it. Both recipes are offered, so a fix that only touches the install half costs one keystroke on the second.
-- `<s>` `skip now` — leave that machine's version as it is; you are asked again next sync.
+Each enabled job needs passwordless sudo where it writes:
 
-There is no permanent answer here, for the reason a snap's revision has none: nobody keeps a version as a standing preference about one machine.
+| Job | Source | Target |
+| --- | --- | --- |
+| `apt_sync` | required | required |
+| `snap_sync` | required | required |
+| `flatpak_sync` | none | required only when a system-scope item is in play on either machine |
+| `manual_deb_sync` | none | none |
+| `manual_snap_sync` | none | none |
+| `manual_flatpak_sync` | none | none |
+| `manual_installs_sync` | none | none |
 
-**A snippet that exits successfully has not necessarily converged anything.** An install script replayed as an update very often finds its directory already there and does nothing, exiting 0. So the version is read again afterwards, and if it has not moved you are asked once more — this time without the option of running the same snippet again, since that has just been tried and changed nothing. What is left is writing a new snippet or leaving it for this run.
+The `manual_*` jobs pre-validate no sudo: detection only reads. An approved removal on any of the first three needs root on the target and fails as its own item if that is not available. Snippet privilege is the author's — put `sudo` inside the snippet if needed.
 
-There is deliberately no "purge and retry" answer. With no comparison of the files themselves, purging cannot change what the version snippet reports; if your installer will not overwrite, write the `rm -rf … &&` into your own new snippet, where you decide exactly what goes.
+`apt_sync` and `snap_sync` also pause each machine's auto-update timers (apt) and auto-refresh (snapd) for the sync window, and restore them afterwards. The pauses expire on their own if the run dies.
 
-A run with nobody at the keyboard makes one attempt with the recorded snippet and then leaves the item alone with a warning. It is reported as neither applied nor failed.
+## Auditing every command
 
-**What this does not check.** The version string is the only evidence of drift pc-switcher ever looks for. Nothing compares the files under `/opt/foo` and nothing hashes them. So the guarantee is exactly the one apt, snap and flatpak give you — same version, converged — and the cost is that a half-applied or corrupted copy whose version still reads `2.1.0` is invisible, on every run, by design.
+`pc-switcher sync <hostname> --confirm-each-command` inserts one prompt before every operation that changes state on either machine — package installs, `/etc/apt` writes, snippet replays, decision-file writes, the snap refresh pause, the sync-history update. Read-only commands stay silent (a read under `sudo` is still a read).
 
-The snippet registry lives at `~/.config/pc-switcher/package-snippets.yaml`, and one file holds every job's entries: an entry is keyed by the finding it reproduces, never by the job that found it. Each entry carries both recipes, and one carrying only an `install_body` cannot be read at all — the sync stops naming the file so you can repair it, exactly as it does for a registry that is corrupt. There is no upgrade path for a registry written before the second recipe existed: add a `version_body` to each entry by hand. `folder_sync` never carries it, even when `~/.config` is inside a synced folder — it reaches the target through those jobs' own push and its question, below, and nowhere else. Unlike the machine-local decision files, it **does** reach the target: how to install something is knowledge about the *package*, not the machine, so a snippet authored on one machine reproduces the same item on any peer. Whether an item counts as reproducible is decided by whether the **source** holds a snippet for it; a snippet present only on the target does not make the item reproducible.
+Each prompt shows the command verbatim, the job, and the hostname. Answer `p` to proceed or `a` to abort the whole sync. There is no per-command skip: one reviewed item can span several commands.
 
-### Registry push and consolidation
+The flag needs a real terminal and is meant for auditing runs you do not trust yet, not for everyday syncs.
 
-A snippet job pushes the source's registry to the target after its own review, as a **whole-file overwrite** — the source's `package-snippets.yaml` replaces the target's wholesale, no per-entry merge. Before the push, pc-switcher compares the two. A purely additive push (the source is a superset of the target) proceeds silently. But if the overwrite would **lose** an entry the target holds (absent from the source) or **change** one, pc-switcher shows you exactly which entries and asks you to confirm. "Change" is the whole entry, not the command alone: the label and the record of when and where the snippet was written are part of what the target holds, and the question shows you only the fields that differ. Declining aborts the run, and a non-interactive run that cannot ask aborts too — so you can consolidate the two registries by hand and re-run rather than silently dropping the target's snippets.
+## Converging unattended
 
-With both snippet jobs enabled the file goes over twice, once per review, and the second push asks nothing: it sends what the first one sent plus whatever its own review added, which is additive by construction. You are never asked the same question twice in a run.
+Two flags answer a package review in advance so a run with nobody watching can still converge:
 
-If either machine's `package-snippets.yaml` cannot be read as a registry — hand-edited into invalid YAML, truncated by a full disk — the sync stops there and names the file. An unreadable registry is not an empty one: reading it as empty would make the push look like it loses nothing, and it would overwrite entries nobody could see. Repair or delete that file and start a new sync. A registry that is simply absent, or empty, means what it says: no snippets.
+- `--apply-package-installs` — everything that ADDS software (installs, adds, enables, converges an item to the source's content)
+- `--apply-package-removals` — everything that TAKES software AWAY (removes, deletes, disables, deletes repositories and pins, loses a protected package)
 
-That question displays a changed body in full, so a snippet that fetches from a private address has its credential withheld the same way every other URL does: you see `https://***@dl.example.com/agent.deb`. Only what you are shown is rewritten — the stored snippet and the command replayed on the target keep the bytes you wrote.
+Pass both to replicate the source's whole state. Pass one to converge that direction only.
 
-## Resolving unreproducible items
+Four things neither flag answers, because none of them can be settled from the source's package list:
 
-Every unreproducible item is resolved before the run continues: it gets a snippet, it is declared the source machine's own and never installed on the target, or you skip it now. There is no fourth "unresolved" outcome on an interactive run.
+- A repository conflict where a machine-specific package depends on the file
+- An `apt.conf.d` file the target already holds
+- An unreproducible item (writing a snippet needs an editor)
+- The Ubuntu Pro attachment question
 
-- **Ctrl-C** at the review means you want to stop, so it aborts the whole sync — never a silent per-item skip.
-- Choosing "add an install snippet" and then submitting an **empty** body is not accepted, for either of the two editors: the review re-prompts the three-way choice rather than falling through. You must enter both snippets or pick one of the two skips.
-- A **non-interactive** run (no TTY) cannot ask, so it marks every undecided item skip-now and reports them; it never records a snippet or a machine-specific mark. Re-run interactively to actually resolve anything.
+Each is left as a run with nobody to ask leaves it: named, and skipped for this run.
 
-## When a package manager cannot be read
+A registry transfer that would lose an entry is the one exception — it still ends the run so you can consolidate by hand.
 
-A package sync compares what the source has with what the target has. If one of those reads fails — snapd is not running, apt's status file cannot be read, a lock is held, the network dropped — the answer is not "that machine has nothing". pc-switcher stops the job and tells you which command failed and what the tool said, instead of proposing to remove everything the other machine has.
+Neither flag records a machine-specific mark, and neither writes a snippet.
 
-An empty *answer* is different and is left alone: a machine with no snaps, no flatpaks, no held packages and no pins is an ordinary machine, and syncing it is ordinary work.
+`--yes` is unrelated (it belongs to `config_sync`) and answers no package review.
 
-Only that job stops. The run continues with the others and reports the failed one by name, because a read that went dark on one package manager says nothing about the work another one has already had approved.
+## When something goes wrong
 
-## Non-interactive runs
+Every approved item is attempted. Failures are collected and reported together, each naming its item. One failed item does not block the rest of its job; one failed job does not stop the others.
 
-A run without a TTY prompts for nothing, so every review item nothing else answered comes back skip-now and the job converges nothing. (The two options in [Converging packages unattended](#converging-packages-unattended) are the one way to answer without a terminal; the rest of this section is what happens when they were not passed, or did not cover what the review held.) When the review had anything to **decide** and nothing answered it, the job therefore reports **SKIPPED**, not SUCCESS, and the run continues with the remaining jobs. A run whose review had nothing to decide still reports SUCCESS — either because the target already matches the source for that package manager, or because everything the review held was a finding you are told about rather than asked about, such as a version difference. No answer of yours would have changed either outcome.
+A read that does not answer — snapd unreachable, apt lock held on the source, a network drop — fails the job once, naming the command and the tool's own stderr. It never proposes removing everything on the other machine because one read returned nothing.
 
-`apt_sync` has a second reason to report SKIPPED, and it applies to interactive runs too: the target reports no Ubuntu Pro attachment and the source carries ESM sources that would otherwise be written to it. Attach the target and re-run, or answer the question's re-check once you have — see [Ubuntu Pro and ESM](#ubuntu-pro-and-esm).
+## What the log keeps
 
-A skipped package job applies nothing, records no decision, and pushes no install-snippet registry. The session still completes and the exit code is unchanged, so a headless run says plainly that it converged nothing rather than reporting five successful package syncs.
+The log is where you reconstruct why, months later:
 
-No run without a terminal pushes the registry, not even the one that reports SUCCESS because its review had nothing to decide. That says this run found nothing to ask you about; the registry on disk still holds every snippet you have ever authored, and sending it over the other machine's copy is a change nobody approved. The one exception is a run where `--apply-package-installs` approved a hand-installed item: replaying its snippet reads the other machine's own copy of the registry, so the transfer is part of the install you asked for rather than a change nobody approved — and the guard on a transfer that would lose an entry still ends the run.
+- Every reviewed item with the decision it got, skipped items included
+- Every applied change, one line per item (act, item, manager, machine)
+- Every self-directed change by a package manager (dependencies apt resolves for itself)
+- At `log.file: DEBUG`, every command's output verbatim
 
-## Converging packages unattended
-
-Two options answer a package review in advance, so a run with nobody watching can still bring the two machines' software into line. Each answers one direction:
-
-- `--apply-package-installs` applies everything that **adds** software: installs, repository and remote additions, enables, and converging an item both machines have to the version, channel or content the machine you sync from has.
-- `--apply-package-removals` applies everything that **takes software away**: removals, disables, repository and pin deletions, and the loss of a protected package an approved change would take with it.
-
-Pass both and the run replicates the package state of the machine you sync from. Pass one and the run converges that direction only — which is how you install what is new without also carrying out what you have since uninstalled.
-
-They answer as the machine you sync from dictates, not as the review screen's own starting position suggests: a removal screen starts at "skip now" precisely so that confirming it unread destroys nothing, and passing `--apply-package-removals` is you saying that this run you mean it.
-
-Four things neither option answers, because none of them is a question the other machine's package list can settle. Each is left exactly where a run with nobody to ask leaves it — named in a warning and skipped for this run:
-
-- a repository both machines hold with different content that feeds a package the machine you sync to recorded as its own;
-- an `/etc/apt/apt.conf.d` file that machine already holds, which states how its own apt behaves;
-- an item no package manager can install — the answer there is an install snippet you write, and no flag can write one;
-- the Ubuntu Pro question, which is about that machine's subscription rather than about software.
-
-A registry transfer that would lose one of that machine's snippet entries is the exception that does not skip: it still ends the run, so you can consolidate the two registries by hand. No option approves it.
-
-Neither option ever records a machine-specific mark, and neither writes a snippet. Both outlive the run that made them, and "this machine is different" is a statement only you can make. So a headless run converges software and records nothing about your preferences.
-
-Because a declined collateral question also leaves the changes causing it unapproved, `--apply-package-installs` **alone** will not install a package whose transaction would remove something you installed by hand on the other machine — that question belongs to the removal flag. Pass both if you want that install to land.
-
-`--yes` is unrelated and answers no package review; it is the configuration-sync prompt's option and nothing else.
-
-## The automation variable
-
-One environment variable overrides all of that, and it is not a feature: `PCSWITCHER_PACKAGE_REVIEW_AUTOMATION` carries a JSON map of item id to decision and answers a package review without asking. It exists so the integration tests can exercise a review with no terminal to answer at, and it appears in no help text and no configuration key. Its answers count as yours — a permanent one writes a machine-specific mark or an install snippet — so anything that sets it on a real run makes silent, unreviewed, permanent decisions on your machines.
-
-## Versions
-
-apt and flatpak let versions **float**. pc-switcher installs by name and takes whatever each machine's own repositories currently offer; a version difference between source and target is detected and reported in the review, never silently forced. (Deliberate pinning still replicates: `/etc/apt/preferences.d` files are always synced, without a review line — see [Repositories, pins and keys are derived](#repositories-pins-and-keys-are-derived).)
-
-Software no package manager handles is the other exception, and for the opposite reason to snap's. Floating is only worth it because a repository will eventually bring the other machine up to the same version by itself; nothing will ever do that for a `.deb` you downloaded, a snap you sideloaded or a tarball you unpacked into `/opt`. So there a version difference is **converged**, not reported — see [Keeping a hand-installed thing up to date](#keeping-a-hand-installed-thing-up-to-date).
-
-snap is the exception: it converges the source's exact **revision and channel**. The reason is where snap keeps per-user application data. snap stores it in revision-number-named directories, `~/snap/<app>/<rev>/`, whereas apt uses stable paths and flatpak uses id-named ones (`~/.var/app/<id>`). Only snap's data path embeds the version, so for `folder_sync` to mirror a snap's data cleanly both machines must be on the same revision — hence convergence.
-
-With both machines on the same revision, snap application data now follows you: `folder_sync` mirrors the current-revision data directory (`~/snap/<app>/<current-rev>/`, resolved through snapd's `current` symlink) plus the revision-independent `~/snap/<app>/common`.
-
-A revision directory travels only when the **target is on that revision**. `folder_sync` runs after the package jobs and asks the target which revision each snap is at, so it never plants data for a revision the target's snapd never installed: retained older-revision directories stay home, and so does the current one whenever the two machines have not ended up on the same revision — you skipped that snap's revision change, it failed, its install was declined, or `snap_sync` is disabled and nothing converged anything. `~/snap/<app>/common` and the `current` symlink always travel. The practical consequence of running `folder_sync` with `snap_sync` off is that per-revision snap data stops being mirrored: nothing in that run establishes that the two machines agree on a revision, so nothing may be written under one.
-
-A snap installed from a local `.snap` file (`snap install --dangerous`, `snap try`) is the one thing snap sync leaves alone. Such a snap has a revision no store can serve — `snap list` shows it with an `x` prefix, `x1`, `x2` — so `snap_sync` withholds that name on both machines: it is never installed, never removed, and produces no review item, nor does a hold set on one, and `snap_sync` does not mention it. A snap only the target has is no exception — the run will not offer to delete something it could not put back.
-
-[`manual_snap_sync`](#sideloaded-snaps-belong-to-one-job-only) is where they go instead, offering each one as an [install snippet](#install-snippets). With that job off, reproducing a sideload on the other machine is manual work.
-
-To keep the revision from changing mid-sync, snapd's **automatic** refresh is briefly paused on both machines for the duration of the run (snapd auto-refreshes several times a day, even for closed apps). The pause blocks only automatic refreshes; snap_sync's own `--revision` convergence still works. Each machine's prior refresh policy is read before the pause and written back when the run ends, so a hold you set yourself — including an indefinite one — survives the sync. If that prior value cannot be read on a machine, that machine's refresh policy is left untouched: no pause is set there and nothing is cleared afterwards, because a pause written over an unknown policy could not be put back — it would expire into "no hold at all" and take your own hold with it. The run says so and continues unpaused on that machine.
-
-## Flatpak refs
-
-A flatpak app comes from the source's remote or it does not arrive. Same *name* is not enough: two remotes can be called `flathub` and point at different repositories, serving different builds of the same app with nothing said about it. So before each install pc-switcher re-reads the target's remote list and requires that app's origin remote to carry the source remote's URL and verification setting, and after the install it reads the target's remotes again and checks what the app's origin actually resolves to on those same two counts. Either check failing is that app's own failure, naming both URLs — never an install issued in hope.
-
-Those two checks guard an install, and an app already installed on both machines issues none — so the case they cannot see is reported instead. The same app, same scope, same branch, coming from different remotes on the two machines is an **origin divergence**: the review names both remotes and both URLs and proposes nothing, and it takes precedence over a version difference on the same app, because two remotes' builds are numbered independently and showing the two numbers would read as ordinary drift. There is nothing to converge: flatpak refuses to install a ref that is already installed from another remote, so the only mechanical resolution would be uninstalling the app you have and reinstalling it from the other remote. Deciding which machine is the odd one out is yours.
-
-The comparison runs on URLs here too, so a remote the two machines merely named differently is not a divergence and two remotes sharing a name and pointing at different repositories is one. If a machine's app names a remote that machine no longer configures there is no URL at all — and no URL matches nothing, not even the same missing URL on the other side, so that app is reported as coming from a different origin and the entry says which side's URL is missing. Calling two unresolvable origins the same origin would state agreement on no evidence.
-
-That report is the only thing said about an unresolvable origin here. If the app is on the source, or on the target alone, it leaves this job entirely — see [Flatpak apps no remote can supply belong to one job only](#flatpak-apps-no-remote-can-supply-belong-to-one-job-only).
-
-A flatpak app is identified by its full `<application>/<arch>/<branch>` reference, not by the bare application id, and that reference is what the install and the uninstall name. Two branches of one app can be installed side by side, and a remote can offer several — flatpak refuses to guess between them and exits with `Multiple branches available`, so an app whose remote carries more than one branch never converges when only the id is named. The review line therefore shows the branch, and the same app on `stable` on one machine and `beta` on the other reads as an install plus a removal rather than as a version difference.
-
-## Flatpak remotes
-
-A flatpak remote is **derived** from the apps approved from it, exactly as an apt repository is. You never approve a remote directly, whether it is being added, repointed or deleted: approving an app is what makes its remote arrive, and declining the app is the only way to decline the remote. Otherwise an app could be approved with the only thing that could deliver it declined — or, worse, approved from a same-named remote whose URL change was declined, meaning from a different source.
-
-No remote is ever derived from an app no remote can supply: a bundle's pseudo-origin has no URL to add, so such an app is out of this job before derivation runs at all.
-
-A remote the source has that feeds no app approved in this run is not provisioned at all. There is no flatpak equivalent of the distribution's own repositories: a fresh flatpak install configures **zero** remotes and a machine with none is a perfectly ordinary machine, so even Flathub is synced only as a consequence of something needing it.
-
-Derivation includes the **runtime** an approved app is built against: the app's install pulls its runtime too, and if the source holds that runtime from a different remote, the app's own remote alone would leave the install unable to resolve it — so that remote is synced as well. Scope is still identity, so `flathub` in the user installation and `flathub` in the system installation are provisioned separately, and a user-scope app derives only the user-scope remote.
-
-A remote is synced with its **trust**, not only its name and URL. pc-switcher captures whether the source verifies the remote's signatures and, when it does, the remote's own signing key, and provisions the remote on the target with that key imported (`flatpak remote-add --gpg-import`). The key is copied byte-for-byte from the source machine and never fetched from the network — the same rule apt signing keys follow. Without it a provisioned remote would be configured but unusable: every install from it fails with `Can't check signature: public key not found`. A verified remote is never turned into an unverified one. A remote the source itself does not verify is provisioned unverified, and the run warns once per such remote, in a dry run too: nothing checks what it serves on either machine, and a successful provisioning would otherwise read as a remote you can trust.
-
-Some remotes carry no key of their own. flatpak also verifies against `/usr/share/ostree/trusted.gpg.d`, which belongs to the machine rather than to any one remote — a keyring dropped there by a vendor package trusts every remote at once. pc-switcher does not replicate that directory: it takes the files the target is missing and imports them into the replicated remote's **own** keyring instead. The target's copy of the remote then verifies exactly what the source's copy verified, and nothing else on the target gains trust it did not have. A key the target already holds is left alone.
-
-A key can also sit outside both places, named by the ostree `gpgkeypath` option in the installation's own repo config — a setting only a hand edit puts there, since flatpak never writes it. pc-switcher reads it and carries the files it names, a directory meaning every file in it, exactly as it carries any other key.
-
-If the source verifies a remote and has no key for it anywhere — not its own keyring, not that directory, not a `gpgkeypath` — there is nothing to sync, and the run says so once. That remote refuses installs on the source too; the target ends up in the same state rather than a better-looking one.
-
-A remote that already exists on both machines with a differing URL, verification setting or signing key is repointed in place, without a review line, keeping the apps that name it as their origin intact. A target that already trusted a different key for that remote ends up trusting both — flatpak merges imported keys rather than replacing them.
-
-There is one exception, and it is apt's repository-conflict rule in a second ecosystem: if a differing URL or verification setting would repoint a remote that an app you marked machine-specific on the target takes as its origin in that scope, you are shown both configurations — the target's first, one differing field per line, never a computed diff — and asked to overwrite or leave it for now. A machine-specific app is invisible in the review by design, so nothing else in the run would tell you its updates were about to come from somewhere else. The entry names those apps. Two answers, nothing recorded either way; leaving it fails every approved app that needed the source's URL, quoting your own decision. A key-only difference never raises it: importing a key can neither move an app's origin nor withdraw trust.
-
-A remote that cannot be provisioned has no review item of its own to fail, so the failure lands on every app that needed it, naming the remote and quoting flatpak's own error.
-
-A remote you restricted with a **filter** keeps it. `flatpak remote-modify --filter=<file>` records the file's path, not its content, so pc-switcher copies the file byte-for-byte to the same absolute path on the target and applies it there. Like a signing key it is derived: no review line, and declining the apps is the only way to decline it. It lands *before* the apps do — the remote is added, its filter set, and only then does anything install from it — so no run ever leaves that remote on the target offering more than either machine meant. A filter only the **target** had comes off in the same step when you no longer filter that remote on the source, which is what makes the two machines converge. If the filter cannot be copied, written or applied, the run warns naming the remote and the path, every approved app from that remote fails with the same reason, and the target's remote is left exactly as it was. Neither direction reaches a remote no approved app needs this run: a remote you install nothing from keeps the filter it has, on both machines.
-
-A filtered remote that does not offer an app the source itself installed from it ends the run before anything is written, naming the app, the remote and the filter. That machine is saying both "install this from there" and "nothing from there may be installed"; correct the filter, or uninstall the app, and sync again. flatpak is what answers here, not pc-switcher: the remote is asked what it offers under the filter you gave it. It never says why something is missing, so the same halt covers an app the remote itself has dropped — the message names both repairs and leaves the choice to you. A remote flatpak cannot list, or a filter file it refuses to read, ends nothing.
-
-A user-scope filter is written as the ordinary SSH user, so one kept outside your home directory on the target fails rather than escalating a user-scope run to root.
-
-A remote the source no longer has is **deleted**, not offered. Nothing is asked, because nothing about it is yours to decide once nothing uses it: the run counts what the target actually holds when the apps are done — every installed ref, runtimes and apps you marked machine-specific included — and deletes the remote only if nothing names it as its origin. While anything still does, the remote stays and the log says which refs kept it. A removal you approved that then failed leaves its app installed, so its remote stays too. Deleting a remote also drops its signing key, since flatpak stores that key with the remote.
-
-## Holds and masks
-
-Beyond *what is installed*, pc-switcher also replicates what you deliberately set to stop a package from moving: apt holds (`apt-mark hold`), per-snap refresh holds (`snap refresh --hold`), and flatpak masks (`flatpak mask`).
-
-None of them is a review item. They travel exactly as apt version *pins* do — because the software they apply to travels, without a line of their own and without a question. A hold or a mask changes nothing about what software exists, only about what may move, so replicating it costs nothing and there is nothing per-package to get wrong. What the source has, added and removed alike, is what the target ends the run with; the log names each one as it lands, and a dry run previews it.
-
-Because they follow the software, an install you decline takes its hold with it. Nothing is held on a machine that did not get the package: `apt-mark hold` accepts a package that is not installed and a hold recorded that way blocks every later attempt to install it. The run says the hold was not applied — not a failure, since your own answer is what withdrew it. If the install was approved and then failed, or the package is only reported because the run cannot reproduce the repository it comes from, the hold fails as its own item.
-
-A flatpak mask is different in one way: it lands whether or not the application it covers is still there. A mask says what may not be installed, so masking software the machine no longer has is exactly what it is for. Masks are patterns, replicated whether or not a matching ref is installed; a pattern edit reads as remove-old plus add-new, and a user/system scope change as add plus remove, reported as found rather than normalised. Masks land after the applications, so one can never suppress a dependency the same run is pulling in.
-
-Replicating a hold never touches the package's version: a held apt package is never installed or upgraded by a sync, and its version is left exactly as it is. A package the target has and holds produces no item at all — apt refuses to move it, so an item proposing that could only fail.
-
-There is one case where the version is not the target's own to choose: an apt package the source holds and the target does not have at all. apt gives a hold no way to say "at whatever version you happen to get", so installing the target's version and then holding it would freeze the two machines apart for good — nothing moves a held package again. That install therefore asks for the source's exact version. If the target cannot supply it, the install fails as its own item naming both versions, and the hold fails with it rather than pinning a package that is not there.
-
-### A hold on a package the machine does not have
-
-`apt-mark hold` accepts a name that is not installed, and the hold it records then refuses every later attempt to install that name — while freezing nothing, because there is nothing there to freeze. It is a bookkeeping mistake rather than a state worth replicating or protecting.
-
-If either machine carries one, the run **stops**, before anything is written. It names the package and the machine and gives you the `sudo apt-mark unhold` that clears it. Clear it and sync again.
-
-Snap and flatpak need no equivalent: snapd records a refresh hold only against an installed snap, and a flatpak mask is a rule about what may be installed rather than a freeze on an installed copy.
-
-## Deletions
-
-Removals propagate for the three package managers. A package removed from the source's `apt-mark showmanual` set, a snap uninstalled on the source, or a flatpak ref removed on the source becomes a removal review item on the target — starting at **skip now**, so you approve deletions deliberately.
-
-Deletion is where an apt repository file and an apt pin file are still review lines — the repository conflict is the only other one — and both take **two** answers rather than three: delete it, or leave it on the target. A flatpak remote gets no line at all: see [Flatpak remotes](#flatpak-remotes).
-
-A repository file the target still gets software from is **not offered at all**. Deleting it would leave those packages installed and never updated again, which is not a trade you can make usefully — and the packages most at risk are the ones you marked machine-specific, which are invisible in the review by design. "Still gets software from it" is counted after the removals you approve in this same review, which is why the offer comes in the second pass: a repository whose last package you decide to keep is never offered, and one whose packages are all going is offered alongside them. The run logs the repositories it kept back and why. One that is offered is named by its filename *and* by the repository URLs it declares — `nomad would stop getting software from https://cli.github.com/packages` — because the filename is whatever whoever created the file happened to call it, while the URL is what the deletion actually takes away. A file declaring no URL says so rather than trailing off.
-
-"Still gets software from it" is counted over every package installed on the target plus the ones you marked machine-specific, minus the packages this run proposes to remove — so removing a repository together with the software it feeds, the ordinary cleanup case, still works. That subtraction is what the offer is based on, and it assumes you approve those removals. If you then approve the repository and skip one of them, the file stays: something on the target still installs from it, and the run says so rather than deleting it and stranding the package. It is offered again next run. Packages apt pulled in automatically count too: a removal here is `apt remove`, never `apt autoremove`, so nothing takes them away when their reason goes, and a package you kept can still need them. The link comes from `apt-cache policy`: pc-switcher matches the origin of each of those packages' installed version against the URIs in the repository files. A package installed from a bare `.deb`, or one whose repository was already gone, has no resolvable origin and holds nothing back.
-
-A pin file is shown **whole**: its content is printed above the screen, one file at a time, the way the repository-conflict screen prints two. `99-pin.pref` says nothing about which origin it favours or by how much, and the filename is all a decision row can show. Reading it costs one `sudo cat` per pin file offered for deletion, and only on a run that offers one. There is no permanent answer, and nothing about the answer is recorded either way: a machine-local mark on a file whose whole purpose is to feed packages would silently and permanently change where those packages come from, and the remedy for two machines whose configurations have drifted is consolidating them. `/etc/apt/apt.conf.d` is the counter-case: it keeps the full three-way decision and the permanent mark, because a proxy or a recommends policy is a standing preference someone genuinely holds per machine.
-
-The distribution's own source files are never offered for removal at all.
-
-`manual_deb_sync`, `manual_snap_sync`, `manual_flatpak_sync` and `manual_installs_sync` propose removals too, and each uses its own ecosystem's: `apt-get remove` for a hand-installed `.deb`, `snap remove` for a sideload, `flatpak uninstall` for a bundle-installed app, and deleting the path for an unowned install. Only what the *target's own* detection finds is offered — a package a repository supplies, a snap from the store, an app a configured remote serves are each another job's to remove, and none of them is deleted here.
-
-Deleting a path is the one whose reach is smaller than it looks, and its screen says so: `rm -rf /opt/foo` takes the directory and nothing else, while whatever installed it will usually also have dropped a `.desktop` file, a symlink in `/usr/local/bin` or a service unit somewhere the scan never looks. Nothing records where, so those stay. There are no uninstall snippets: three of the four jobs have a package manager whose own removal is exact, the fourth has a path, and a second recipe to write would buy a direction you can always carry out by hand.
-
-## Prerequisites: passwordless sudo
-
-Each enabled package job needs passwordless sudo for a handful of binaries:
-
-- **`apt_sync`** — on the source (to read `/etc/apt` configuration) and the target (to install packages, write and remove `/etc/apt` configuration including signing keys, and set or clear apt holds via `apt-mark`). Both hosts additionally need it for the sync-window pause of the system's own apt update timers (`sudo systemctl stop/start` on `apt-daily.timer` and `apt-daily-upgrade.timer`, plus the `sudo systemd-run` that schedules their automatic restart). The runtime pause tolerates a failure without aborting the sync, but the sudo grant is checked up front on both machines.
-- **`snap_sync`** — on both the **source** and the **target**; validation fails if either lacks it. The target needs it to install, refresh and remove snaps, and both hosts need it to pause snapd's auto-refresh for the sync window (`sudo snap set system refresh.hold`, plus the matching `sudo snap get` — snapd requires admin rights to read snap configuration as well as to write it). The runtime pause itself tolerates a transient failure without aborting the sync, but the sudo grant is checked up front on both machines.
-- **`flatpak_sync`** — on the target only, and only when a system-scope ref, remote or mask is in play on either machine. A user-scope-only sync never asks for root.
-- **`manual_deb_sync`**, **`manual_snap_sync`**, **`manual_flatpak_sync`** and **`manual_installs_sync`** — none is checked for any: they only read `dpkg`, `apt-cache`, `snap list` or `flatpak` to find their items, and a snippet author decides its own privilege needs, since the replay runs unprivileged. An approved **removal** does need root on the target for three of them, and it is still not checked up front: a run where you approve none needs nothing, and a removal that cannot elevate fails as its own item.
+One class of content is withheld everywhere: a credential embedded in a URL is redacted in logs, prompts, review lines, file bodies shown for decisions, and snippet bodies shown for the registry-consent question. What is stored and replayed stays exactly as written.
