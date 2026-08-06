@@ -36,13 +36,25 @@ follows for its own tool-state filter token).
 This module also owns `SnippetRegistry` (D-20, D-23): the SHARED, synced counterpart to
 the machine-local decision store above. Where a `DecisionEntry` says "never touch this
 item on this machine", a `Snippet` says "this is how to install something no package
-manager can reproduce" — knowledge about the PACKAGE, not the machine, so it is SHARED
-and synced (D-23) rather than living in a machine-local `*.decisions.yaml` file. It
-travels source-to-target by an unreproducible job's own post-review `send_file` push,
-not via `config_sync`. A snippet's body is stored and replayed as an opaque text
-blob — never parsed, versioned, diffed or reasoned about (D-20) — and replay never
-supplies stdin, since `pcswitcher.executor.Process` documents that commands must be
-non-interactive; a snippet expecting a prompt fails rather than hanging the sync.
+manager can reproduce, and how to ask a machine which version of it is there" — knowledge
+about the PACKAGE, not the machine, so it is SHARED and synced (D-23) rather than living in
+a machine-local `*.decisions.yaml` file. It travels source-to-target by an unreproducible
+job's own post-review `send_file` push, not via `config_sync`.
+
+An entry carries TWO bodies (D-18, D-22), both mandatory: `install_body`, replayed to bring
+the target to the source's state, and `version_body`, run on a machine to print the version
+of that item installed THERE. Neither is ever parsed, templated or interpreted; what the
+tool does compare is the STRING one machine's `version_body` printed against the string the
+other's did, which is the whole of D-05's exception for a manual install. Both replay
+without stdin, since `pcswitcher.executor.Process` documents that commands must be
+non-interactive; a body expecting a prompt fails rather than hanging the sync.
+
+`version_body` is the one place a sync runs the user's own code during `plan()`, which is
+contractually read-only, so the contract is on its author: it MUST be read-only, pc-switcher
+cannot verify that and does not try, and it is deliberately not gated behind
+`--confirm-each-command` (`PKG-FR-VERSION-SNIPPET`). Its output reaches the log through the
+same redaction filter every other record passes (`logger.py`), so a version string carrying
+a credential in a URL is withheld exactly as an install body's is.
 """
 
 from __future__ import annotations
@@ -69,6 +81,7 @@ __all__ = [
     "DecisionEntry",
     "DecisionFile",
     "Snippet",
+    "SnippetBodies",
     "SnippetRegistry",
     "filter_inert",
     "load_snippets_from_text",
@@ -169,9 +182,11 @@ def marks_on_either(
     Right-biased so a `label` or `reason` the target recorded wins on a shared id; only
     membership is ever read here, so the choice is cosmetic.
 
-    The unreproducible jobs are the ones that do not need this: each captures an
-    inventory from the source alone, so there is no second copy to leave behind, and
-    `PKG-FR-MANUAL-SOURCE-DECIDES` makes the source the only authority anyway.
+    The unreproducible jobs need it too, now that a finding only the target holds is a
+    removal (`PKG-FR-MANUAL-REMOVE`): a mark on the source filtered out of the source's
+    findings alone would leave the target's copy unmatched and offer to delete the software
+    the mark was given to keep. `PKG-FR-MANUAL-SOURCE-DECIDES` is untouched by that — it
+    settles which registry decides REPRODUCIBILITY, never which marks silence a finding.
     """
     return {**source_decisions, **target_decisions}
 
@@ -335,36 +350,67 @@ class DecisionFile:
 _SNIPPET_FILE_HEADER = (
     "# pc-switcher install-snippet registry — regenerated on every write.\n"
     "#\n"
-    "# Each entry is an opaque shell snippet pc-switcher replays VERBATIM to converge\n"
-    "# an item no package manager can reproduce (D-20): a bare .deb or a manual\n"
-    "# install. The tool never parses, versions, diffs or reasons about the body —\n"
-    "# edit or remove an entry by hand if it goes stale.\n"
+    "# Each entry carries two opaque shell snippets for one item no package manager\n"
+    "# can reproduce — a bare .deb, a sideloaded snap, a bundle-installed flatpak, a\n"
+    "# manual install (D-20, D-22). pc-switcher replays them VERBATIM and parses\n"
+    "# neither:\n"
+    "#\n"
+    "#   install_body  brings the other machine to this one's state. It runs on a\n"
+    "#                 machine that may already hold an OLDER version, so write it to\n"
+    "#                 install or update, whichever applies.\n"
+    "#   version_body  prints the version installed on whichever machine runs it. It\n"
+    "#                 MUST be read-only: it runs on BOTH machines on every sync while\n"
+    "#                 the run is still planning, and it is not covered by\n"
+    "#                 --confirm-each-command.\n"
+    "#\n"
+    "# Both are mandatory. An entry missing either is malformed and ends the run\n"
+    "# naming this file.\n"
     "#\n"
     "# This file lives in the shared, synced config (D-23): every peer that runs\n"
-    "# `pc-switcher sync` carries it to the target alongside config.yaml. A snippet\n"
-    "# replays non-interactively with no stdin available — one that expects a prompt\n"
+    "# `pc-switcher sync` carries it to the target alongside config.yaml. Both bodies\n"
+    "# run non-interactively with no stdin available — one that expects a prompt\n"
     "# fails rather than hanging the sync.\n"
 )
 
 
 @dataclass(frozen=True)
 class Snippet:
-    """One recorded install snippet (D-20): an opaque shell command that reproduces an
-    item no package manager can install on its own.
+    """One registry entry (D-20, D-22): the two opaque shell bodies that reproduce an item
+    no package manager can install on its own and report which version of it is installed.
 
     `label` mirrors the unreproducible item's own label at authoring time (a snapshot,
-    not a live reference) so the registry file reads meaningfully on its own. `body` is
-    NEVER inspected by this dataclass or its callers beyond being replayed byte-for-byte:
-    it arrives already stripped of surrounding whitespace from the one place a snippet is
+    not a live reference) so the registry file reads meaningfully on its own. Neither body
+    is ever inspected by this dataclass or its callers beyond being replayed byte-for-byte:
+    both arrive already stripped of surrounding whitespace from the one place a snippet is
     captured (`packages.review`), which is what keeps the YAML a person can read and the
     string `replay` quotes identical.
+
+    `install_body` is named for its contract rather than for one of its two jobs: the
+    machine it lands on may already hold an older version, so an author who reads "install"
+    as "install onto nothing" writes a body that no-ops over what is there. The docs and the
+    editor preamble call it the install-or-update snippet for that reason; the field and the
+    YAML key stay `install_body` so no recorded entry has to be rewritten to say it.
     """
 
     item_id: str
     label: str
-    body: str
+    install_body: str
+    version_body: str
     authored_at: str  # ISO-8601 UTC
     authored_on: str  # hostname of the machine the snippet was authored on
+
+
+@dataclass(frozen=True)
+class SnippetBodies:
+    """The two bodies a review authored, before they are stamped into a `Snippet`.
+
+    A pair rather than two parallel mappings through `ReviewOutcome`: the two are written
+    at one screen, for one item, and a run that carried only one of them would record an
+    entry the registry itself refuses to parse back.
+    """
+
+    install_body: str
+    version_body: str
 
 
 def _serialize_snippets(entries: Mapping[str, Snippet]) -> str:
@@ -372,7 +418,8 @@ def _serialize_snippets(entries: Mapping[str, Snippet]) -> str:
     snippets = {
         item_id: {
             "label": entry.label,
-            "body": entry.body,
+            "install_body": entry.install_body,
+            "version_body": entry.version_body,
             "authored_at": entry.authored_at,
             "authored_on": entry.authored_on,
         }
@@ -417,6 +464,13 @@ def _deserialize_snippets(raw: str) -> dict[str, Snippet]:
     Every entry is tried before that is raised, and the failure names all of them: the repair
     is a hand edit of this one file, and stopping at the first malformed entry would have the
     user fix it, start a new sync, and only then be shown the next.
+
+    An entry carrying only one of the two bodies is malformed here, with no fallback of any
+    kind (D-22). A registry written before the second body existed therefore ends the run
+    naming the file, which is the outcome an unparsable registry already has: guessing a
+    version body would invent a claim about what is installed, and defaulting one to "no
+    version" would silently make every such item converge on presence again — the behaviour
+    the second body exists to replace.
     """
     data = yaml.safe_load(raw)
     snippets = data.get("snippets") if isinstance(data, dict) else None
@@ -430,7 +484,8 @@ def _deserialize_snippets(raw: str) -> dict[str, Snippet]:
             entries[str(item_id)] = Snippet(
                 item_id=str(item_id),
                 label=fields["label"],
-                body=fields["body"],
+                install_body=fields["install_body"],
+                version_body=fields["version_body"],
                 authored_at=fields["authored_at"],
                 authored_on=fields["authored_on"],
             )
@@ -541,9 +596,42 @@ class SnippetRegistry:
                 f"failed to add snippet for {snippet.item_id!r} in {self._display_path}: {result.stderr.strip()}"
             )
 
+    async def installed_version(self, item_id: str, executor: Executor) -> str | None:
+        """What this item's `version_body` prints on `executor`'s machine, or `None` where
+        no answer was had (D-22, `PKG-FR-VERSION-SNIPPET`).
+
+        Run on BOTH machines during `plan()`, which is why it carries no `mutates=`: the
+        contract puts the read-only obligation on the body's author, pc-switcher cannot
+        verify it and does not try, and gating it would put a confirmation in front of a
+        command the run issues before it has proposed anything. Its output passes the same
+        redaction filter every log record does, so a version string carrying a credential is
+        withheld exactly as an install body's output is.
+
+        `None` for three cases the caller must not tell apart: no entry, a body that exited
+        non-zero, and a body that printed nothing. All three mean the same thing here — this
+        machine did not say which version it has — and a version comparison needs two
+        answers, so the caller produces no item rather than claiming a difference it cannot
+        see. Stripped, because a version is one token and a trailing newline is the shell's,
+        not the author's.
+
+        `bash -c <quoted body>` and no `login_shell=` either way, unlike `replay`: this is
+        the one call in the codebase issued against BOTH machines and compared, and only the
+        base `Executor` interface is common to them, so asking for a shell mode one of the
+        two cannot honour would make the two sides differ in exactly the place a difference
+        is read as drift. The author writes the path they mean; the editor's own note shows
+        an absolute one.
+        """
+        snippet = await self.get(item_id)
+        if snippet is None:
+            return None
+        result = await executor.run_command(f"bash -c {shlex.quote(snippet.version_body)}")
+        if not result.success or not result.stdout.strip():
+            return None
+        return result.stdout.strip()
+
     async def replay(self, item_id: str, executor: RemoteExecutor) -> CommandResult:
-        """Replay the snippet registered for `item_id` against `executor` (always the
-        TARGET in practice) as an opaque blob (D-20): the body is never parsed,
+        """Replay the install-or-update body registered for `item_id` against `executor`
+        (always the TARGET in practice) as an opaque blob (D-20): the body is never parsed,
         templated or inspected, only quoted.
 
         Runs as `bash -c <shlex.quote(body)>` — the same build-a-command,
@@ -565,7 +653,7 @@ class SnippetRegistry:
         if snippet is None:
             return CommandResult(exit_code=1, stdout="", stderr=f"no snippet registered for {item_id!r}")
 
-        cmd = f"bash -c {shlex.quote(snippet.body)}"
+        cmd = f"bash -c {shlex.quote(snippet.install_body)}"
         return await executor.run_command(
             cmd, login_shell=False, mutates=f"replay install snippet for {snippet.label}"
         )

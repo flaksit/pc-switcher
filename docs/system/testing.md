@@ -280,7 +280,7 @@ As a pc-switcher developer or maintainer, I have architecture documentation that
 - **TST-FR-ARCH-ADR**: Architecture documentation MUST provide links to ADR-006 and related decision records  
   Lineage: 002-FR-032
 
-- **TST-FR-DOC-FILES**: Documentation MUST be organized as separate files: `docs/ops/testing-architecture.md` (architecture), `docs/dev/testing-guide.md` (developer guide), `docs/ops/testing-ops.md` (operational guide), `tests/manual-playbook.md` (manual playbook)
+- **TST-FR-DOC-FILES**: Documentation MUST be organized as separate files: `docs/ops/testing-architecture.md` (architecture), `docs/dev/testing-guide.md` (developer guide), `docs/ops/testing-ops.md` (operational guide), `tests/manual-playbook.md` (manual playbook)  
   Lineage: 002-FR-033, ADR-012, #134
 
 #### Test Fixture Requirements
@@ -300,28 +300,28 @@ Lineage: 002-Key-Entities
 
 ## Success Criteria
 
-- **TST-SC-FAST-RESET**: VM reset to clean baseline is fast due to btrfs snapshot rollback (no cloud VM snapshot restore or reprovisioning required)
+- **TST-SC-FAST-RESET**: VM reset to clean baseline is fast due to btrfs snapshot rollback (no cloud VM snapshot restore or reprovisioning required)  
   Lineage: 002-SC-001
 
-- **TST-SC-CI-100**: CI pipeline executes unit tests on 100% of pushes that touch code, and integration tests on 100% of non-draft PRs to main (from main repository) that touch code
+- **TST-SC-CI-100**: CI pipeline executes unit tests on 100% of pushes that touch code, and integration tests on 100% of non-draft PRs to main (from main repository) that touch code  
   Lineage: 002-SC-002
 
-- **TST-SC-LOCK**: Lock mechanism successfully prevents concurrent test runs in 100% of contention scenarios
+- **TST-SC-LOCK**: Lock mechanism successfully prevents concurrent test runs in 100% of contention scenarios  
   Lineage: 002-SC-003
 
-- **TST-SC-PLAYBOOK**: Manual playbook covers all visual elements for release verification
+- **TST-SC-PLAYBOOK**: Manual playbook covers all visual elements for release verification  
   Lineage: 002-SC-004
 
-- **TST-SC-COST**: Test infrastructure costs remain under EUR 10/month (see TST-FR-COST for details)
+- **TST-SC-COST**: Test infrastructure costs remain under EUR 10/month (see TST-FR-COST for details)  
   Lineage: 002-SC-005
 
-- **TST-SC-DEV-GUIDE**: Developer guide enables a new developer to write a working integration test without additional guidance
+- **TST-SC-DEV-GUIDE**: Developer guide enables a new developer to write a working integration test without additional guidance  
   Lineage: 002-SC-006
 
-- **TST-SC-OPS-GUIDE**: Operational guide enables infrastructure setup from scratch without additional guidance
+- **TST-SC-OPS-GUIDE**: Operational guide enables infrastructure setup from scratch without additional guidance  
   Lineage: 002-SC-007
 
-- **TST-SC-ARCH-EXPLAIN**: Architecture documentation enables someone unfamiliar with the testing framework to explain its structure after reading
+- **TST-SC-ARCH-EXPLAIN**: Architecture documentation enables someone unfamiliar with the testing framework to explain its structure after reading  
   Lineage: 002-SC-008
 
 ## Edge Cases

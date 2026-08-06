@@ -18,6 +18,7 @@ import pytest
 from pcswitcher.config import Configuration
 from pcswitcher.jobs import JobContext
 from pcswitcher.jobs.manual_installs_sync import ManualInstallsSyncJob
+from pcswitcher.jobs.packages.items import DiffAction
 from pcswitcher.jobs.packages.probes import ProbeFailed
 from pcswitcher.jobs.packages.review import ReviewOutcome
 from pcswitcher.jobs.packages.sync_core import PackagePlan
@@ -35,6 +36,17 @@ from tests.unit.jobs.unreproducible_harness import (
     installed_on,
     make_context,
     scan_finds,
+)
+
+# A registry entry for the /opt/az unowned path, with both bodies (D-22).
+AZ_REGISTRY_YAML = (
+    "snippets:\n"
+    "  unreproducible:unowned-path:/opt/az:\n"
+    "    label: /opt/az\n"
+    "    install_body: sudo /opt/az/install.sh\n"
+    "    version_body: az --version\n"
+    "    authored_at: '2026-01-01T00:00:00+00:00'\n"
+    "    authored_on: laptop\n"
 )
 
 
@@ -654,3 +666,113 @@ class TestMarksFollowWhatTheMachineHolds:
         rewrites = [cmd for cmd in all_calls(target) if "mv --force" in cmd]
         assert len(rewrites) == 1
         assert "vendor-app" not in rewrites[0]
+
+
+class TestRemovingAPathTheSourceDropped:
+    """`PKG-FR-MANUAL-REMOVE`: an unowned path only the target holds is this job's own
+    finding there, so it becomes a removal once the source no longer has it."""
+
+    @staticmethod
+    def _target_only() -> tuple[JobContext, MagicMock]:
+        empty_scan: dict[str, Answer] = {
+            "for root in": scan_finds(),
+            "dpkg --search": CommandResult(0, DPKG_WITNESS_LINE, ""),
+        }
+        context, _source, target = make_context(
+            source_responses=empty_scan,
+            target_responses={
+                "for root in": scan_finds("/opt/az/"),
+                "dpkg --search": CommandResult(0, DPKG_WITNESS_LINE, ""),
+                "find /opt/az": scan_finds("/opt/az/bin"),
+                "for dir in": every_directory_holds_a_file,
+            },
+        )
+        return context, target
+
+    @pytest.mark.asyncio
+    async def test_a_path_only_the_target_holds_is_offered_for_removal(self) -> None:
+        """G176 — an unowned path under `/opt` is software no package manager accounts for
+        whichever machine it is on, so the target's own scan claims it and the source having
+        dropped it makes it a removal."""
+        context, _target = self._target_only()
+
+        plan = await ManualInstallsSyncJob(context).plan()
+
+        (diff,) = plan.diffs
+        assert (diff.item_id, diff.action) == ("unreproducible:unowned-path:/opt/az", DiffAction.REMOVE)
+
+    @pytest.mark.asyncio
+    async def test_the_removal_deletes_the_path_and_the_screen_says_what_it_leaves(self) -> None:
+        """G177 — `rm --recursive --force` takes the scanned path and nothing else, while the
+        snippet that created it will usually also have dropped a launcher or a symlink
+        somewhere the scan never looks. The screen says so above the rows."""
+        context, target = self._target_only()
+        job = ManualInstallsSyncJob(context)
+        plan = await job.plan()
+
+        await job.converge(plan.diffs[0])
+
+        (issued,) = [c for c in target.run_command.call_args_list if "rm --recursive" in c.args[0]]
+        assert issued.args[0] == "sudo rm --recursive --force /opt/az"
+        assert issued.kwargs["mutates"]
+        (group,) = [g for g in plan.groups if g.action == DiffAction.REMOVE.value]
+        assert group.note is not None
+        assert "outside these directories" in group.note
+
+
+class TestTheInstalledVersionSnippet:
+    """`PKG-FR-VERSION-SNIPPET`: what "installed version" means for an unowned path is
+    whatever the entry's own `version_body` prints on the machine running it (D-22)."""
+
+    @staticmethod
+    def _both_hold(registry: str, source_version: str, target_version: str) -> tuple[JobContext, MagicMock, MagicMock]:
+        scan: dict[str, Answer] = {
+            "for root in": scan_finds("/opt/az/"),
+            "dpkg --search": CommandResult(0, DPKG_WITNESS_LINE, ""),
+            "find /opt/az": scan_finds("/opt/az/bin"),
+            "for dir in": every_directory_holds_a_file,
+        }
+        return make_context(
+            source_responses={
+                **scan,
+                "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, registry, ""),
+                "bash -c 'az --version'": CommandResult(0, f"{source_version}\n", ""),
+            },
+            target_responses={**scan, "bash -c 'az --version'": CommandResult(0, f"{target_version}\n", "")},
+        )
+
+    @pytest.mark.asyncio
+    async def test_the_version_body_runs_on_both_machines_and_its_output_is_compared(self) -> None:
+        """G178 — one command per machine, ungated, while the run is still planning: the
+        obligation to keep it read-only is the author's, and the two strings it prints are
+        the whole of what the diff compares."""
+        context, source, target = self._both_hold(AZ_REGISTRY_YAML, "2.0", "1.0")
+
+        plan = await ManualInstallsSyncJob(context).plan()
+
+        (diff,) = plan.diffs
+        assert diff.action == DiffAction.CHANGE
+        assert diff.detail == "source-host has 2.0, target-host has 1.0"
+        for machine in (source, target):
+            (call,) = [c for c in machine.run_command.call_args_list if c.args[0] == "bash -c 'az --version'"]
+            assert "mutates" not in call.kwargs
+
+    @pytest.mark.asyncio
+    async def test_the_same_output_on_both_machines_produces_nothing(self) -> None:
+        """G179 — equal versions are convergence, and the tree behind them is never read:
+        the guarantee is apt's, snap's and flatpak's, and no more."""
+        context, _source, _target = self._both_hold(AZ_REGISTRY_YAML, "2.0", "2.0")
+
+        plan = await ManualInstallsSyncJob(context).plan()
+
+        assert plan.diffs == ()
+
+    @pytest.mark.asyncio
+    async def test_a_path_with_no_registry_entry_has_no_version_to_compare(self) -> None:
+        """G180 — a path nobody has written a snippet for is a finding to resolve, not a
+        version to compare: there is no body to ask either machine with."""
+        context, _source, _target = self._both_hold("snippets: {}\n", "2.0", "1.0")
+
+        plan = await ManualInstallsSyncJob(context).plan()
+
+        assert plan.diffs == ()

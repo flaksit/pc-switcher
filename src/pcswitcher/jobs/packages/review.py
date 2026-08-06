@@ -142,6 +142,7 @@ from rich.text import Text
 
 from pcswitcher.jobs.packages import prompt_navigation
 from pcswitcher.jobs.packages.decision_list import DecisionOption, DecisionRow, decision_list
+from pcswitcher.jobs.packages.state import SnippetBodies
 from pcswitcher.models import SyncAbortedByUser
 from pcswitcher.redaction import redact_credentials
 from pcswitcher.terminal import is_interactive
@@ -151,7 +152,9 @@ __all__ = [
     "PACKAGE_REVIEW_AUTOMATION_ENV",
     "REPO_CONFLICT_REVIEW_ACTION",
     "REPO_REMOVAL_REVIEW_ACTION",
+    "UNREPRODUCIBLE_RETRY_REVIEW_ACTION",
     "UNREPRODUCIBLE_REVIEW_ACTION",
+    "UNREPRODUCIBLE_UPDATE_REVIEW_ACTION",
     "Decision",
     "MarkSide",
     "ReviewEntry",
@@ -219,6 +222,26 @@ _TRAILING_PARENTHETICAL = re.compile(r"\s*\([^()]*\)$")
 # `packages.review`-owned interaction kind, independent of the underlying diff's own
 # `action` (which stays `REPORT_ONLY`/`INSTALL` per D-25's taxonomy).
 UNREPRODUCIBLE_REVIEW_ACTION = "unreproducible"
+
+# The same per-entry flow for an item BOTH machines have at different versions, where the
+# source's registry already holds a body (D-22). Its act replays that body; its second
+# answer replaces it first, because a version that will not move is usually a body that no
+# longer installs what its author meant. There is no permanent answer: convergence and
+# skip-for-this-run are the only two ways the loop behind it ends, and "never update this"
+# is a standing preference about a version, which `PKG-FR-NO-MARK-ON-SNAP-REVISION` already
+# rules out one ecosystem over.
+UNREPRODUCIBLE_UPDATE_REVIEW_ACTION = "unreproducible_update"
+
+# The narrowed menu the converge loop puts after a replay that changed no version
+# (`PKG-FR-MANUAL-CONVERGE-LOOP`, `PKG-FR-ASK-AGAIN`): write a new body, or stop. The act
+# is gone because it has just been carried out and did nothing — running the same bytes
+# again is the same no-op, and offering it would invite a loop the user cannot win.
+UNREPRODUCIBLE_RETRY_REVIEW_ACTION = "unreproducible_retry"
+
+# The three actions whose answer is an authored shell body rather than a decision. Together
+# they are what `policy_decision` refuses to answer from the command line and what a run
+# with no terminal reports as unresolved — an editor is not something a flag can drive.
+_AUTHORING_ACTIONS = frozenset({UNREPRODUCIBLE_REVIEW_ACTION, UNREPRODUCIBLE_RETRY_REVIEW_ACTION})
 
 # Sentinel `ReviewGroup.action` a caller (today, only `AptSyncJob`) uses to mark a group
 # of manual-collateral items (D-30) as needing the three-way per-entry resolution flow
@@ -321,6 +344,11 @@ class ReviewGroup:
     irreversible as a deletion. A snap the run moves to another revision or channel is not —
     converging software the user asked for overwrites nothing they authored — so the caller
     decides this per group rather than every CHANGE starting skipped.
+
+    `recorded_bodies` is what the snippet registry already holds for these entries, so an
+    answer that rewrites a snippet opens its editors on that content instead of on nothing
+    (D-22). Only the two groups whose items HAVE a recorded snippet supply it; this module
+    never reads a registry itself, exactly as it never reads a repository file.
     """
 
     manager: str
@@ -329,6 +357,7 @@ class ReviewGroup:
     entries: Sequence[ReviewEntry]
     note: str | None = None
     overwrites_authored_content: bool = False
+    recorded_bodies: Mapping[str, SnippetBodies] | None = None
 
 
 class Decision(StrEnum):
@@ -368,8 +397,8 @@ class MarkSide(StrEnum):
 class ReviewOutcome:
     """The result of a review: every entry's decision, plus how it was reached.
 
-    `snippets` (item_id -> body, D-20) is populated by an `UNREPRODUCIBLE_REVIEW_ACTION`
-    group's per-entry resolution. `unresolved` (item ids, D-21) is populated ONLY on a
+    `snippets` (item_id -> both bodies, D-20/D-22) is populated by any of the three per-entry
+    snippet groups' resolutions. `unresolved` (item ids, D-21) is populated ONLY on a
     non-interactive run, listing the unreproducible items no one was present to resolve
     (D-26 reporting); an interactive review always resolves every entry (decision 10), so
     it leaves `unresolved` empty. Every other group leaves both at their empty defaults, so
@@ -385,7 +414,7 @@ class ReviewOutcome:
 
     decisions: Mapping[str, Decision]
     was_interactive: bool
-    snippets: Mapping[str, str] = field(default_factory=dict)
+    snippets: Mapping[str, SnippetBodies] = field(default_factory=dict)
     unresolved: tuple[str, ...] = ()
     mark_sides: Mapping[str, MarkSide] = field(default_factory=dict)
 
@@ -408,6 +437,16 @@ def _is_removal_direction(action: str) -> bool:
 
 def _is_unreproducible_group(action: str) -> bool:
     return action == UNREPRODUCIBLE_REVIEW_ACTION
+
+
+def _asks_for_an_authored_body(action: str) -> bool:
+    """A group whose only remaining answers need the user to write a shell body."""
+    return action in _AUTHORING_ACTIONS
+
+
+def _is_per_entry_snippet_group(action: str) -> bool:
+    """A group resolved one entry at a time, with an editor behind at least one answer."""
+    return action in _AUTHORING_ACTIONS or action == UNREPRODUCIBLE_UPDATE_REVIEW_ACTION
 
 
 def _is_collateral_group(action: str) -> bool:
@@ -540,8 +579,14 @@ def policy_decision(group: ReviewGroup, policy: ReviewPolicy) -> Decision | None
       holds, which states how the user's own apt behaves on that machine;
     - a repository conflict (D-37), which moves where software the target recorded
       machine-specific comes from;
-    - an unreproducible item (D-21), whose answer is an authored shell snippet rather than a
-      decision, and authoring one takes an editor.
+    - an unreproducible item still to be resolved (D-21), and the narrowed menu the converge
+      loop puts after a body that changed no version (D-22): the only answers either offers
+      are an authored shell body and a skip, and no flag can write one.
+
+    A version difference whose body the source already holds is NOT in that list: replaying
+    a recorded body is an install-direction act needing nothing authored, so
+    `--apply-package-installs` answers it like any other addition. What the loop behind it
+    then does with nobody to ask is its own rule — one attempt, then a warning.
 
     Everything else is one of the two directions. Removal covers `remove`/`delete`/`disable`,
     a repository or pin deletion, and the collateral question (D-30) — a protected package an
@@ -553,7 +598,7 @@ def policy_decision(group: ReviewGroup, policy: ReviewPolicy) -> Decision | None
         return None
     if group.overwrites_authored_content:
         return None
-    if _is_repo_conflict_group(group.action) or _is_unreproducible_group(group.action):
+    if _is_repo_conflict_group(group.action) or _asks_for_an_authored_body(group.action):
         return None
     if _is_removal_direction(group.action) or _is_collateral_group(group.action):
         return Decision.APPLY if policy.apply_removals else None
@@ -726,13 +771,37 @@ def _snippet_authoring_note(target_hostname: str) -> str:
     DEBIAN_FRONTEND=noninteractive + dependency-fix pattern is cheaper to read here than to
     discover as a stuck sync. Said as what happens on the machine that will run it, rather
     than as a fact about the executor.
+
+    It states the install-or-update contract too (D-22): the body is replayed onto a machine
+    that may already hold an older version, and an installer that no-ops over an existing
+    tree is the one failure the run cannot fix on the author's behalf.
     """
     return (
         f"These commands run on {target_hostname} with nobody watching — there is no keyboard\n"
         "attached to them, so a command that asks a question (e.g. a debconf prompt) hangs the\n"
-        "sync instead of failing. A typical shape:\n\n"
+        f"sync instead of failing. {target_hostname} may already hold an OLDER version, so write\n"
+        "this to install or to update, whichever applies. A typical shape:\n\n"
         "  sudo DEBIAN_FRONTEND=noninteractive dpkg --install /path/to/package.deb || \\\n"
         "  sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes --fix-broken\n"
+    )
+
+
+def _version_authoring_note(source_hostname: str, target_hostname: str) -> str:
+    """The second editor's own screen: what the installed-version snippet has to do, and the
+    one obligation pc-switcher cannot check for the author (D-22, `PKG-FR-VERSION-SNIPPET`).
+
+    Both machines are named because it runs on both, every sync, while the run is still
+    planning — which is also why it must be read-only and why it is not covered by
+    `--confirm-each-command`. Said as what happens on the machines rather than as a fact
+    about `plan()`.
+    """
+    return (
+        f"This runs on {source_hostname} AND on {target_hostname}, on every sync, before anything\n"
+        "is proposed. It must print the version installed on whichever machine runs it — not the\n"
+        "version the commands above would install — and it must change nothing: pc-switcher\n"
+        "cannot check that and does not ask you to confirm it. The two machines' output is\n"
+        "compared as text, so anything stable will do. A typical shape:\n\n"
+        "  /opt/foo/bin/foo --version\n"
     )
 
 
@@ -764,9 +833,9 @@ class _SnippetInstruction(str):
         return "" if is_done() else str(self)
 
 
-def _snippet_instruction(target_hostname: str) -> _SnippetInstruction:
-    """The editor header for a snippet that will run on `target_hostname`."""
-    return _SnippetInstruction(f"\n{_snippet_authoring_note(target_hostname)}\n{_SNIPPET_FINISH_HINT}")
+def _snippet_instruction(note: str) -> _SnippetInstruction:
+    """The editor header for one body: its own note, then the finish key."""
+    return _SnippetInstruction(f"\n{note}\n{_SNIPPET_FINISH_HINT}")
 
 
 def _snippet_submit_bindings() -> KeyBindings:
@@ -852,43 +921,114 @@ def _decisions_from_automation(groups: Sequence[ReviewGroup], raw: str) -> dict[
     }
 
 
-# The unreproducible screen's own act: not a `Decision` at all, because answering it opens
+# The unreproducible screens' own act: not a `Decision` at all, because answering it opens
 # an editor and only what comes back decides whether the item is resolved.
 _ADD_SNIPPET_VALUE = "add_snippet"
 _ADD_SNIPPET_GLYPH = "◆"
 
+# The key for "replace the recorded snippet before replaying it", on the two screens that
+# already have a recorded one. `w` for write: `y` is spent on the act that replays what is
+# there, and `x` on the permanent answer wherever one is offered.
+_NEW_SNIPPET_KEY = "w"
 
-def _unreproducible_options(source_hostname: str, target_hostname: str) -> tuple[DecisionOption, ...]:
-    """The three answers for an item no package manager can install (D-21).
+
+def _unreproducible_options(
+    source_hostname: str, target_hostname: str, verb: str = "install"
+) -> tuple[DecisionOption, ...]:
+    """The three answers for an item this run cannot reproduce yet (D-21).
 
     In the review's own order — act, skip now, never — so the keys mean here what they mean
     on every other screen, and the act is the one that resolves the item rather than the one
     that is listed first because it is the interesting case.
+
+    `verb` is the entry's own, because the same screen resolves two cases: software
+    `target_hostname` does not have, which is installed, and software it has at another
+    version, which is updated (D-22). Calling the second one "install" would state something
+    false about what is on the machine.
     """
     return (
         DecisionOption(
             value=_ADD_SNIPPET_VALUE,
             key=_APPLY_KEY,
-            word="install",
+            word=verb,
             glyph=_ADD_SNIPPET_GLYPH,
             is_act=True,
-            hint=f"write a command snippet that installs it; {target_hostname} runs it",
+            hint=f"write a command snippet that {verb}s it; {target_hostname} runs it",
         ),
         DecisionOption(
             value=Decision.SKIP_ONCE,
             key=_SKIP_NOW_KEY,
             word=SKIP_NOW_WORD,
             glyph=_SKIP_ONCE_GLYPH,
-            hint=f"do not install on {target_hostname} for now; will be asked again next sync",
+            hint=f"do not {verb} on {target_hostname} for now; will be asked again next sync",
         ),
         DecisionOption(
             value=Decision.SKIP_ALWAYS,
             key=_SKIP_ALWAYS_KEY,
-            word="never install",
+            word=f"never {verb}",
             glyph=_SKIP_ALWAYS_GLYPH,
             is_permanent=True,
-            hint=f"do not install on {target_hostname} for good; it is {source_hostname}'s own, "
+            hint=f"do not {verb} on {target_hostname} for good; it is {source_hostname}'s own, "
             "and will not be asked again",
+        ),
+    )
+
+
+def _update_options(target_hostname: str) -> tuple[DecisionOption, ...]:
+    """The three answers for an item both machines have at different versions (D-22).
+
+    No permanent answer, for `PKG-FR-NO-MARK-ON-SNAP-REVISION`'s reason one ecosystem over:
+    nobody holds a version as a standing preference about one machine, and a mark would
+    leave the two machines' records disagreeing about software neither would raise again.
+    Skipping says what the user means and the difference surfaces on the next sync.
+    """
+    return (
+        DecisionOption(
+            value=Decision.APPLY,
+            key=_APPLY_KEY,
+            word="update",
+            glyph=_APPLY_GLYPH,
+            is_act=True,
+            hint=f"run the recorded snippet on {target_hostname}",
+        ),
+        DecisionOption(
+            value=_ADD_SNIPPET_VALUE,
+            key=_NEW_SNIPPET_KEY,
+            word="new snippet",
+            glyph=_ADD_SNIPPET_GLYPH,
+            hint=f"rewrite the snippet first, then run it on {target_hostname}",
+        ),
+        DecisionOption(
+            value=Decision.SKIP_ONCE,
+            key=_SKIP_NOW_KEY,
+            word=SKIP_NOW_WORD,
+            glyph=_SKIP_ONCE_GLYPH,
+            hint=f"leave {target_hostname}'s version as it is for now; will be asked again next sync",
+        ),
+    )
+
+
+def _retry_options(target_hostname: str) -> tuple[DecisionOption, ...]:
+    """The narrowed menu after a snippet ran and moved no version (D-22).
+
+    Two answers, because the third has just been carried out and did nothing: replaying the
+    same bytes again is the same no-op, and offering it would invite a loop with no exit.
+    """
+    return (
+        DecisionOption(
+            value=_ADD_SNIPPET_VALUE,
+            key=_NEW_SNIPPET_KEY,
+            word="new snippet",
+            glyph=_ADD_SNIPPET_GLYPH,
+            is_act=True,
+            hint=f"rewrite the snippet, then run it on {target_hostname} again",
+        ),
+        DecisionOption(
+            value=Decision.SKIP_ONCE,
+            key=_SKIP_NOW_KEY,
+            word=SKIP_NOW_WORD,
+            glyph=_SKIP_ONCE_GLYPH,
+            hint=f"leave {target_hostname}'s version as it is for now; will be asked again next sync",
         ),
     )
 
@@ -937,91 +1077,143 @@ async def _ask_about_one_item(  # noqa: PLR0913 - one decision screen's content;
     return answered[entry.item_id]
 
 
-async def _review_unreproducible_group(  # noqa: PLR0913 - screen content plus the two dicts it fills; all but the group keyword-only
+async def _capture_body(prompt_title: str, note: str, existing: str) -> str:
+    """Open one editor and return what it captured, stripped.
+
+    The authoring note rides on the prompt rather than being printed above it: printed, it
+    stayed in the scrollback beside the body the user wrote, which no other screen does
+    (#236).
+
+    `existing` prefills the buffer, which is what makes rewriting a recorded body an edit
+    rather than a retype (D-22): the body that did not converge is usually nearly right, and
+    a blank editor invites a shorter, worse replacement. The empty string is an ordinary
+    value here — a first authoring simply opens on nothing.
+
+    Stripped once, here, before anything else sees it: the registry, the plan and the replay
+    all get the same string, so what the user reads in the YAML file is exactly what runs
+    (`PKG-FR-SNIPPET-VERBATIM`). That is not reasoning about the body (D-20) — the editor's
+    own trailing newlines and the blank lines a paste leaves behind are not something the
+    user typed as part of the command, and they change nothing about what `bash -c` runs.
+    """
+    prompt = questionary.text(
+        prompt_title,
+        multiline=True,
+        default=existing,
+        instruction=_snippet_instruction(note),
+        key_bindings=_SNIPPET_SUBMIT_BINDINGS,
+        style=_SNIPPET_STYLE,
+    )
+    captured: str | None = await asyncio.to_thread(prompt.ask)
+    return captured.strip() if captured else ""
+
+
+async def _capture_bodies(
+    entry: ReviewEntry, *, source_hostname: str, target_hostname: str, recorded: SnippetBodies | None
+) -> SnippetBodies | None:
+    """Both bodies for one item, or `None` where either editor came back empty (D-22).
+
+    Two editors, always, and never one: an entry carrying only an install body is one the
+    registry itself refuses to parse back, so authoring the pair is what authoring means.
+    The second opens on whatever version body the item already had, which is how a rewrite
+    that only needs the install half costs one keystroke.
+
+    `None` for an empty capture of EITHER body, which the caller turns into a re-prompt
+    rather than a resolution (`PKG-FR-SNIPPET-VERBATIM`: an empty snippet is not an answer).
+    A body of only spaces and newlines lands here as empty for the same reason it would
+    replay as nothing at all.
+    """
+    install_body = await _capture_body(
+        f"Install-or-update snippet for {entry.label}:",
+        _snippet_authoring_note(target_hostname),
+        recorded.install_body if recorded else "",
+    )
+    if not install_body:
+        return None
+    version_body = await _capture_body(
+        f"Installed-version snippet for {entry.label}:",
+        _version_authoring_note(source_hostname, target_hostname),
+        recorded.version_body if recorded else "",
+    )
+    if not version_body:
+        return None
+    return SnippetBodies(install_body=install_body, version_body=version_body)
+
+
+async def _review_snippet_group(  # noqa: PLR0913 - screen content plus the two dicts it fills; all but the group keyword-only
     group: ReviewGroup,
     *,
     console: Console,
     source_hostname: str,
     target_hostname: str,
     decisions: dict[str, Decision],
-    snippets: dict[str, str],
+    snippets: dict[str, SnippetBodies],
 ) -> None:
-    """Resolve one `UNREPRODUCIBLE_REVIEW_ACTION` group's entries, one at a time, with
-    the three-way choice D-21 requires: write an install snippet, skip for now, or never
-    install it here. One item per screen, because answering "install" opens an editor for
-    that item — but a decision screen like every other, so the review has one shape.
+    """Resolve one per-entry snippet group, one item at a time (D-21, D-22).
 
-    All three choices are VALID resolutions (D-21): a snippet, a skip-always, and an
-    explicit skip-once. There is no fourth "genuinely undecided" outcome (decision 10 —
-    unresolved must be unrepresentable in an interactive flow):
+    Three groups share this flow because they share its shape — one item per screen, because
+    the answer that resolves it opens an editor — and differ only in the answers offered:
 
-    - Ctrl-C at the resolution screen means the user wants to stop, so `_ask_about_one_item`
-      aborts the ENTIRE sync with `SyncAbortedByUser` — never a per-item
-      skip-and-mark-unresolved.
-    - Choosing "add an install snippet" and then submitting an empty body (or abandoning
-      the editor) is NOT accepted and does NOT fall through: the three-way choice is
-      re-prompted so the user must supply a real snippet or pick an explicit skip.
+    - `UNREPRODUCIBLE_REVIEW_ACTION`: write a snippet, skip for now, or never do it here.
+      All three are VALID resolutions (D-21) and there is no fourth "genuinely undecided"
+      outcome (decision 10 — unresolved must be unrepresentable in an interactive flow).
+    - `UNREPRODUCIBLE_UPDATE_REVIEW_ACTION`: run the recorded snippet, rewrite it first, or
+      leave the version alone this run. No permanent answer.
+    - `UNREPRODUCIBLE_RETRY_REVIEW_ACTION`: the same two minus the act, put by the converge
+      loop after a body that moved no version.
 
-    The body is stripped of surrounding whitespace at capture and stored as it is from then
-    on. That is not reasoning about it (D-20): the editor's own trailing newlines and the
-    blank lines a paste leaves behind are not something the user typed as part of the
-    command, they change nothing about what `bash -c` runs, and the registry is a YAML file
-    a person reads and edits — a body carrying them lands there as a block padded with empty
-    lines. Stripping HERE rather than at the registry is what makes the stored bytes and the
-    replayed bytes the same string (`SnippetRegistry.replay` quotes what it is given).
-    Emptiness falls out of the same strip: a body of only spaces and newlines replays as
-    nothing at all, so accepting it would record a snippet that resolves the item without
-    installing anything.
+    Two exits are shared by all three:
+
+    - Ctrl-C at the screen means the user wants to stop, so `_ask_about_one_item` aborts the
+      ENTIRE sync with `SyncAbortedByUser` — never a per-item skip-and-mark-unresolved.
+    - Choosing to write a snippet and then submitting an empty body, for either half, is NOT
+      accepted and does NOT fall through: the choice is re-prompted so the user must supply
+      real bodies or pick an explicit skip.
+
+    `ReviewGroup.recorded_bodies` carries what the registry already holds, so a rewrite opens
+    on it; it is absent for the resolve group, whose items have nothing recorded by
+    definition.
     """
-    options = _unreproducible_options(source_hostname, target_hostname)
+    recorded = group.recorded_bodies or {}
+    is_update = group.action == UNREPRODUCIBLE_UPDATE_REVIEW_ACTION
+    is_retry = group.action == UNREPRODUCIBLE_RETRY_REVIEW_ACTION
     for entry in group.entries:
-        # Re-prompt until the entry is resolved by a real snippet or an explicit skip. An
-        # empty snippet capture loops back here rather than manufacturing an unresolved
-        # item (decision 10); a cancelled screen breaks out by aborting the whole sync.
+        verb = entry.action_label
+        if is_update:
+            options = _update_options(target_hostname)
+            title = f"{target_hostname} has a different version of {entry.label} — update it?"
+            default = Decision.APPLY.value
+        elif is_retry:
+            options = _retry_options(target_hostname)
+            title = group.title
+            default = _ADD_SNIPPET_VALUE
+        else:
+            options = _unreproducible_options(source_hostname, target_hostname, verb)
+            title = f"{verb.capitalize()} {entry.label} on {target_hostname}?"
+            default = _ADD_SNIPPET_VALUE
+
+        # Re-prompt until the entry is resolved by real bodies or an explicit answer. An
+        # empty capture loops back here rather than manufacturing an unresolved item
+        # (decision 10); a cancelled screen breaks out by aborting the whole sync.
         while True:
-            selected = await _ask_about_one_item(
+            selected = await _ask_about_one_item(entry, title=title, options=options, default=default)
+
+            if selected in (Decision.SKIP_ALWAYS, Decision.SKIP_ONCE, Decision.APPLY):
+                # Every one of these is a real decision (D-21): the item is resolved, this
+                # run or for good.
+                decisions[entry.item_id] = Decision(selected)
+                break
+
+            bodies = await _capture_bodies(
                 entry,
-                # The decision the three answers actually offer, not the open question that
-                # preceded them: two of them do not answer "how" at all.
-                title=f"Install {entry.label} on {target_hostname}?",
-                options=options,
-                default=_ADD_SNIPPET_VALUE,
+                source_hostname=source_hostname,
+                target_hostname=target_hostname,
+                recorded=recorded.get(entry.item_id),
             )
-
-            if selected == Decision.SKIP_ALWAYS:
-                decisions[entry.item_id] = Decision.SKIP_ALWAYS
+            if bodies is not None:
+                snippets[entry.item_id] = bodies
                 break
 
-            if selected == Decision.SKIP_ONCE:
-                # An explicit "skip now" is a real decision (D-21): the item is resolved
-                # for this run.
-                decisions[entry.item_id] = Decision.SKIP_ONCE
-                break
-
-            # selected == _ADD_SNIPPET_VALUE. The authoring note rides on the prompt rather
-            # than being printed above it: printed, it stayed in the scrollback beside the
-            # body the user wrote, which no other screen does (#236).
-            body_prompt = questionary.text(
-                f"Install snippet for {entry.label}:",
-                multiline=True,
-                instruction=_snippet_instruction(target_hostname),
-                key_bindings=_SNIPPET_SUBMIT_BINDINGS,
-                style=_SNIPPET_STYLE,
-            )
-            captured: str | None = await asyncio.to_thread(body_prompt.ask)
-            # Stripped once, here, before anything else sees it: the registry, the plan and
-            # the replay all get the same string, so what the user reads in the YAML file is
-            # exactly what runs.
-            body = captured.strip() if captured else ""
-            if body:
-                snippets[entry.item_id] = body
-                break
-
-            # Empty, whitespace-only, or an abandoned editor (`None`): not a resolution and
-            # not an unresolved fall-through — re-prompt the three-way choice (decision 10).
-            console.print(
-                Text("An install snippet cannot be empty — enter a real snippet or choose a skip.", style="yellow")
-            )
+            console.print(Text("Neither snippet can be empty — enter both, or choose a skip.", style="yellow"))
 
 
 def _print_report_group(group: ReviewGroup, *, console: Console, target_hostname: str) -> None:
@@ -1054,11 +1246,17 @@ async def _review_decision_group(
 
     Ctrl-C (`ask` returns `None`) aborts the WHOLE sync like every other review screen —
     never a silent fallthrough that leaves this and every later group undecided.
+
+    `ReviewGroup.note` becomes the screen's explanation, between the title and the keys,
+    where the group carries one. It used to reach a report group alone; a removal whose
+    reach the rows cannot state — deleting a path leaves what the snippet dropped elsewhere
+    behind — needs the same sentence in front of an answer rather than after it.
     """
     prompt = decision_list(
         group.title,
         rows=_rows_for(group),
         options=_options_for(group, source_hostname=source_hostname, target_hostname=target_hostname),
+        explanation=group.note,
     )
     answered: Mapping[str, str] | None = await asyncio.to_thread(prompt.ask)
 
@@ -1506,7 +1704,7 @@ async def review_items(  # noqa: PLR0913 - review surface plus both machine name
 
     ui.pause()
     decisions: dict[str, Decision] = dict(by_policy)
-    snippets: dict[str, str] = {}
+    snippets: dict[str, SnippetBodies] = {}
     try:
         for group in groups:
             console.print()
@@ -1521,8 +1719,8 @@ async def review_items(  # noqa: PLR0913 - review surface plus both machine name
                     decisions[entry.item_id] = Decision.SKIP_ONCE
                 continue
 
-            if _is_unreproducible_group(group.action):
-                await _review_unreproducible_group(
+            if _is_per_entry_snippet_group(group.action):
+                await _review_snippet_group(
                     group,
                     console=console,
                     source_hostname=source_hostname,

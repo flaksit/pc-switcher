@@ -1,6 +1,6 @@
 """What every job for software no package manager can reproduce shares (D-18, D-20, D-21,
-D-23): the item shape, the detect -> filter -> diff pipeline, the snippet replay, and the
-whole install-snippet registry push/consent path.
+D-22, D-23): the item shape, the detect -> filter -> diff pipeline, the snippet replay, and
+the whole install-snippet registry push/consent path.
 
 Here rather than in one job's module because the registry is ONE shared file
 (`SNIPPET_REGISTRY_RELPATH`) serving every such job, and because the pipeline around it is
@@ -23,12 +23,34 @@ decision file, or the user skipped it once — skip-once is a real decision. The
 fourth "genuinely undecided" outcome an interactive review can reach: an empty snippet
 capture re-prompts rather than falling through, and Ctrl-C/EOF aborts the whole sync
 (`SyncAbortedByUser`) instead of leaving an item unresolved.
+
+What the diff compares is the installed VERSION, not presence (D-05, D-22). Presence alone
+made an item that is on both machines invisible for good: an application upgraded in place
+on the source went on being "already there" on the target at whatever build it happened to
+hold. So an item both machines have is compared on the string each machine's own version
+source printed — the manager's own version for a package, a snap or a ref, and the entry's
+`version_body` for an unowned path — and only a difference produces anything. That ordering
+is deliberate: a snippet edited to change a comment or a mirror URL moves no version and so
+raises no item at all.
+
+The guarantee this buys is exactly apt's, snap's and flatpak's, and no more: equal version
+means converged, and the content behind it is never verified. A half-applied or corrupted
+tree whose version string did not move is invisible here, by design — there is no recursive
+folder diff and no payload hashing anywhere.
+
+Three directions now, where there was one:
+
+- source only -> INSTALL (with a snippet) or an item to resolve (without one);
+- both machines, versions differ -> CHANGE, converged by replaying the SOURCE's
+  install-or-update body onto the target. Version numbers never decide direction: a sync
+  goes source to target whichever version is higher, exactly as it does for apt;
+- target only, and the target's own detector calls it a finding -> REMOVE.
 """
 
 from __future__ import annotations
 
 from abc import abstractmethod
-from collections.abc import Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -43,9 +65,12 @@ from pcswitcher.jobs.packages.items import (
     DiffClass,
     ItemClass,
     ItemDiff,
+    build_version_mismatch_detail,
 )
 from pcswitcher.jobs.packages.review import (
+    UNREPRODUCIBLE_RETRY_REVIEW_ACTION,
     UNREPRODUCIBLE_REVIEW_ACTION,
+    UNREPRODUCIBLE_UPDATE_REVIEW_ACTION,
     Decision,
     ReviewEntry,
     ReviewGroup,
@@ -56,12 +81,14 @@ from pcswitcher.jobs.packages.state import (
     DecisionEntry,
     DecisionFile,
     Snippet,
+    SnippetBodies,
     SnippetRegistry,
     filter_inert,
     load_snippets_from_text,
+    marks_on_either,
 )
-from pcswitcher.jobs.packages.sync_core import PackagePlan, PackageSyncJob
-from pcswitcher.models import CommandResult, SyncAborted
+from pcswitcher.jobs.packages.sync_core import ConvergeItemDeclined, PackagePlan, PackageSyncJob
+from pcswitcher.models import CommandResult, Host, LogLevel, SyncAborted
 from pcswitcher.redaction import redact_credentials
 
 __all__ = ["UnreproducibleItem", "UnreproducibleSyncJob", "lines_of"]
@@ -100,11 +127,27 @@ class UnreproducibleItem:
     method: the human-readable description comes from whichever detector found the
     item (D-19's unowned-install scan, or the no-candidate check) and is not something
     this dataclass can derive from `origin`/`identifier` alone.
+
+    `own_finding` separates the two questions a target listing answers, which used to need
+    two listings. On the SOURCE every item is a finding by construction and the field is
+    never read. On the TARGET both readings matter and they are not the same set: whether
+    the target HOLDS the item at all decides that the source's copy is not offered for
+    install (`PKG-FR-MANUAL-DIFF` — a package the target has from a repository is software
+    that is there, whatever route put it there), while whether the target's own detector
+    calls it a finding decides that an item the source no longer has may be offered for
+    REMOVAL (`PKG-FR-MANUAL-REMOVE`). Defaulted True so every source-side construction site
+    stays as it was; a job flags it on the target rows its own detector did not claim.
+
+    The installed VERSION is deliberately not a field. It is read per machine through
+    `UnreproducibleSyncJob.installed_versions`, which the converge loop asks again after
+    every replay — a value captured once with the item would be a fact from before the
+    change and would report every convergence as successful.
     """
 
     origin: UnreproducibleOrigin
     identifier: str
     label: str
+    own_finding: bool = True
 
     ITEM_CLASS: ClassVar[ItemClass] = ItemClass.UNREPRODUCIBLE
 
@@ -145,6 +188,16 @@ class UnreproducibleSyncJob(PackageSyncJob):
         # `apply()` calls it again; the second call is a no-op so a snippet's `authored_at`
         # is stamped exactly once and the source and pushed target registries stay identical.
         self._unreproducible_finalized = False
+        # What `plan()` read, for the two things `converge()` cannot re-derive from an
+        # `ItemDiff`: the version the target has to reach, and the target-side item a
+        # removal command is built from. Re-assigned on every `plan()`, never cached across
+        # calls.
+        self._source_versions: dict[str, str | None] = {}
+        self._removable: dict[str, UnreproducibleItem] = {}
+        # What the SOURCE's registry holds for the items on the update screen, so an answer
+        # that rewrites a snippet opens its editors on that content rather than on nothing.
+        # Collected in `plan()`, where the registry is already being read per item.
+        self._recorded_bodies: dict[str, SnippetBodies] = {}
 
     # -- Detection, supplied per job ----------------------------------------------------
 
@@ -155,13 +208,61 @@ class UnreproducibleSyncJob(PackageSyncJob):
 
     @abstractmethod
     async def query_target_items(self) -> Sequence[UnreproducibleItem]:
-        """What the TARGET already holds, in the source's own identities, so `plan()` can
-        drop a finding that is already there (`PKG-FR-MANUAL-DIFF`).
+        """What the TARGET holds, in the source's own identities (`PKG-FR-MANUAL-DIFF`).
 
-        Never a manifest and never a source of items: nothing it returns is presented,
-        converged or removed (`PKG-NG-MANUAL-REMOVE`).
+        Two answers in one listing, told apart by `UnreproducibleItem.own_finding`: every
+        row is something the target HAS, so the source's copy of it is never offered for
+        install, and a row this job's own detector claims on the target is additionally a
+        removal candidate once the source no longer has it (`PKG-FR-MANUAL-REMOVE`).
+
+        A job whose two readings need different reads does both here rather than in two
+        hooks: the expensive one is the detector's, and narrowing it to the names the source
+        does not have is what keeps it affordable.
         """
         ...
+
+    @abstractmethod
+    async def installed_versions(self, item_ids: Collection[str], *, on_source: bool) -> Mapping[str, str | None]:
+        """The version each of `item_ids` is installed at on ONE machine, read fresh
+        (D-22, `PKG-FR-MANUAL-VERSION`).
+
+        The whole of what a diff compares, and the one thing the converge loop re-reads to
+        decide whether a replay actually converged — which is why it is a hook of its own
+        rather than a field captured with the item.
+
+        `None` for an id this machine cannot answer for, and every reason collapses into
+        that one value: the item is not installed here, the manager printed no version, the
+        entry has no `version_body`, or that body failed. A comparison needs two answers, so
+        a `None` on either side produces no item rather than a claimed difference.
+
+        Batched: an implementation issues one command over the whole set wherever its
+        version source is a listing, and one per id only where each item carries its own
+        `version_body`.
+        """
+        ...
+
+    @abstractmethod
+    def removal_command(self, item: UnreproducibleItem) -> str:
+        """The command that takes `item` off the TARGET (`PKG-FR-MANUAL-REMOVE`).
+
+        One command per ecosystem — `apt-get remove`, `snap remove`, `flatpak uninstall`,
+        `rm --recursive --force` — and no uninstall snippet and no uninstall machinery
+        behind any of them: this is not a package manager, and a second authored body for
+        the one direction the user can always carry out by hand would cost more than it is
+        worth.
+        """
+        ...
+
+    def removal_warning(self) -> str | None:
+        """What the removal screen says above the rows, where the removal reaches further
+        than the item it names (`PKG-FR-MANUAL-REMOVE`).
+
+        `None` on the base: a package manager's own removal is bounded by what that manager
+        recorded. `manual_installs_sync` is the exception — `rm --recursive --force` takes
+        the scanned path and nothing else, while the snippet that created it will usually
+        also have dropped a `.desktop` file or a symlink somewhere the scan never looks.
+        """
+        return None
 
     # -- after-review snippet push (D-23) -----------------------------------------------
 
@@ -192,10 +293,14 @@ class UnreproducibleSyncJob(PackageSyncJob):
         self._promote_authored_snippets_to_install()
 
     def _promote_authored_snippets_to_install(self) -> None:
-        """Reclassify every on-the-fly-authored item's diff `REPORT_ONLY -> INSTALL` and
-        force its decision to `APPLY`, so the unchanged base `apply()` — which converges
+        """Reclassify every on-the-fly-authored item's diff `REPORT_ONLY -> INSTALL`/`CHANGE`
+        and force its decision to `APPLY`, so the unchanged base `apply()` — which converges
         only APPLY-decided, non-`REPORT_ONLY` diffs (`sync_core.py` apply_diffs filter) —
         replays the freshly authored snippet THIS run, closing the one-run-too-late gap.
+
+        Which of the two it becomes is the diff's own class: an item the target lacks was
+        demoted from `INSTALL` and a version difference from `CHANGE`, and both converge the
+        same way, so the promotion only has to put back the verb the run reports.
 
         Called from `after_review()` only after the authored snippets are persisted to the
         source registry and pushed to the target, so the target holds the snippet by the
@@ -216,7 +321,10 @@ class UnreproducibleSyncJob(PackageSyncJob):
         plan = self._accepted_plan
         authored = frozenset(outcome.snippets)
         new_diffs = tuple(
-            replace(diff, action=DiffAction.INSTALL)
+            replace(
+                diff,
+                action=DiffAction.CHANGE if diff.diff_class is DiffClass.VERSION_MISMATCH else DiffAction.INSTALL,
+            )
             if diff.item_id in authored and diff.action is DiffAction.REPORT_ONLY
             else diff
             for diff in plan.diffs
@@ -373,7 +481,7 @@ class UnreproducibleSyncJob(PackageSyncJob):
         ]
         for snippet in lost:
             lines.append(f"  LOST     {escape(snippet.label)}  ({escape(snippet.item_id)})")
-            lines.extend(body_lines(snippet.body, "             "))
+            lines.extend(body_lines(snippet.install_body, "             "))
         for target_snippet, source_snippet in changed:
             lines.append(f"  CHANGED  {escape(target_snippet.label)}  ({escape(target_snippet.item_id)})")
             for field, target_value, source_value in self._snippet_fields(target_snippet, source_snippet):
@@ -400,7 +508,8 @@ class UnreproducibleSyncJob(PackageSyncJob):
         """
         return [
             ("label", target_snippet.label, source_snippet.label),
-            ("body", target_snippet.body, source_snippet.body),
+            ("install snippet", target_snippet.install_body, source_snippet.install_body),
+            ("installed-version snippet", target_snippet.version_body, source_snippet.version_body),
             (
                 "authored",
                 f"{target_snippet.authored_at} on {target_snippet.authored_on}",
@@ -412,103 +521,326 @@ class UnreproducibleSyncJob(PackageSyncJob):
 
     @override
     async def plan(self) -> PackagePlan:
-        """Detect on both machines -> filter inert -> drop what the target holds -> diff
-        against the SOURCE's snippet registry. Read-only.
+        """Detect on both machines -> filter inert -> diff on presence and then on version
+        -> classify against the SOURCE's snippet registry. Read-only.
 
-        An item already recorded machine-specific on the SOURCE is dropped by
-        `filter_inert` before it becomes a diff (D-08/D-19: a finding produces noise
-        exactly once, then never again) — unless the source no longer has it, in which case
-        `_load_live_decisions_on` has already left that mark out and the item is a finding
-        again like any other. The marks that matter are the source's alone: a finding is
-        something the source has and the target lacks, so the source is always its holding
-        machine (`PKG-FR-MACHINE-SPECIFIC`).
+        Both machines' marks filter both inventories (`marks_on_either`), not each machine's
+        own: with a removal direction in the model, a mark on the source filtered out of the
+        source's findings alone would leave the target's copy unmatched and offer to delete
+        the very software the mark was given to keep. That is the failure `state.marks_on_
+        either` documents, reached here for the first time.
 
-        What the target already holds is then subtracted (`PKG-FR-MANUAL-DIFF`), which is
-        what stops a second path to one application — the symlink that starts what the
-        snippet unpacked — from being asked about on every later run. The target is not
-        queried at all when nothing survives the source's own filtering: there would be
-        nothing to subtract from, and a machine with no findings should cost no reads on the
-        other one.
+        Three directions come out of the pair of inventories:
+
+        - the target does not have it at all -> INSTALL, or, with no snippet on the source,
+          `REPORT_ONLY` in the group that asks the user to resolve it;
+        - both machines have it -> the two installed versions are read and compared, and
+          only a difference produces a `CHANGE`. Equal versions, and a version either
+          machine could not answer for, produce nothing: the first is convergence and the
+          second is not evidence of anything (`PKG-FR-MANUAL-VERSION`). A difference with no
+          snippet on the source is `REPORT_ONLY` like any other unresolved item — there is
+          nothing to replay;
+        - only the target has it, and the target's OWN detector claims it -> REMOVE
+          (`PKG-FR-MANUAL-REMOVE`). A target row this job's detector does not claim is
+          software some manager can account for and is not this job's to delete.
+
+        The target is queried whatever the source found, unlike before: a removal is exactly
+        the case where the source has nothing to contribute, so skipping the read when the
+        source's own findings are empty would make the whole direction unreachable.
 
         Reproducibility is judged from the SOURCE — the machine being replicated
         (`PKG-FR-MANUAL-SOURCE-DECIDES`): an item with a source-side registry snippet plans
-        `INSTALL` (a snippet makes it reproducible), one without plans `REPORT_ONLY` and
-        surfaces in its own review group for resolution. `after_review()`'s `send_file()`
-        push places that snippet on the target before `converge()` reads it, so convergence
-        still replays from the target's copy — only the classification authority is the
-        source's.
+        `INSTALL`/`CHANGE`, one without plans `REPORT_ONLY` and surfaces in its own review
+        group for resolution. `after_review()`'s `send_file()` push places that snippet on
+        the target before `converge()` reads it, so convergence still replays from the
+        target's copy — only the classification authority is the source's.
         """
-        source_decisions = await self._load_live_decisions_on(on_source=True)
-        items = await filter_inert(await self.capture_source_items(), source_decisions)
-        if items:
-            held = {item.item_id for item in await self.query_target_items()}
-            items = [item for item in items if item.item_id not in held]
+        source_decisions, target_decisions = await self._load_live_decisions()
+        marks = marks_on_either(source_decisions, target_decisions)
+        source_items = {item.item_id: item for item in await filter_inert(await self.capture_source_items(), marks)}
+        target_items = {item.item_id: item for item in await filter_inert(await self.query_target_items(), marks)}
 
         registry = SnippetRegistry(self.source, self.machines.source)
+        both = [item_id for item_id in source_items if item_id in target_items]
+        source_versions = await self.installed_versions(both, on_source=True) if both else {}
+        target_versions = await self.installed_versions(both, on_source=False) if both else {}
+        self._source_versions = dict(source_versions)
+
         diffs: list[ItemDiff] = []
-        for item in items:
-            snippet = await registry.get(item.item_id)
-            action = DiffAction.INSTALL if snippet is not None else DiffAction.REPORT_ONLY
+        self._recorded_bodies = {}
+        for item_id, item in source_items.items():
+            snippet = await registry.get(item_id)
+            if snippet is not None:
+                self._recorded_bodies[item_id] = SnippetBodies(
+                    install_body=snippet.install_body, version_body=snippet.version_body
+                )
+            if item_id not in target_items:
+                diffs.append(self._diff_for(item, DiffAction.INSTALL, snippet is not None, detail=None))
+                continue
+            source_version, target_version = source_versions.get(item_id), target_versions.get(item_id)
+            if source_version is None or target_version is None or source_version == target_version:
+                continue
             diffs.append(
-                ItemDiff(
-                    item_class=ItemClass.UNREPRODUCIBLE,
-                    diff_class=DiffClass.UNREPRODUCIBLE,
-                    action=action,
-                    item_id=item.item_id,
-                    label=item.label,
-                    detail=None,
+                self._diff_for(
+                    item,
+                    DiffAction.CHANGE,
+                    snippet is not None,
+                    detail=build_version_mismatch_detail(source_version, target_version, self.machines),
                 )
             )
-        all_diffs = tuple(diffs)
+        self._removable = {
+            item_id: item for item_id, item in target_items.items() if item_id not in source_items and item.own_finding
+        }
+        diffs.extend(self._diff_for(item, DiffAction.REMOVE, True, detail=None) for item in self._removable.values())
+
+        all_diffs = self._drop_inert_diffs(tuple(diffs), source_decisions, target_decisions)
         groups = self._build_review_groups(all_diffs)
         return PackagePlan(manager=self.manager_id, diffs=all_diffs, groups=groups)
 
+    def _diff_for(
+        self, item: UnreproducibleItem, action: DiffAction, reproducible: bool, *, detail: str | None
+    ) -> ItemDiff:
+        """One item's diff, demoted to `REPORT_ONLY` where the source holds no snippet.
+
+        The demotion is what routes an item into the group that asks the user to resolve it,
+        and it applies to a version difference exactly as it applies to a missing install:
+        both converge by replaying the source's body, so neither is actionable without one.
+        A removal needs no snippet, so it is never demoted.
+        """
+        return ItemDiff(
+            item_class=ItemClass.UNREPRODUCIBLE,
+            diff_class=DiffClass.VERSION_MISMATCH if action is DiffAction.CHANGE else DiffClass.UNREPRODUCIBLE,
+            action=action if reproducible else DiffAction.REPORT_ONLY,
+            item_id=item.item_id,
+            label=item.label,
+            detail=detail,
+        )
+
     @override
     def _build_review_groups(self, diffs: Sequence[ItemDiff]) -> tuple[ReviewGroup, ...]:
-        """Carve still-unresolved `UNREPRODUCIBLE` diffs (`action=REPORT_ONLY`, D-21) into
-        their own `UNREPRODUCIBLE_REVIEW_ACTION` group, presented after any resolved
-        (snippet-backed, `action=INSTALL`) install group so the user sees resolved items
-        before being asked to resolve the rest. A snippet-backed diff is NOT pulled out —
-        it flows through the base grouping like any other install-direction item.
+        """Carve the two groups this job asks differently from every other, and let the base
+        build the rest.
+
+        - still-unresolved diffs (`action=REPORT_ONLY`, D-21) go to
+          `UNREPRODUCIBLE_REVIEW_ACTION`, whose act opens an editor. Presented after any
+          resolved install group, so the user sees what is already answerable before being
+          asked to answer the rest. Each entry's `action_label` says which of the two cases
+          it is — an item the target lacks is installed, one whose version differs is
+          updated — because the screen is titled with that verb and "install" would be a
+          false statement about software that is already there.
+        - snippet-backed version differences (`action=CHANGE`) go to
+          `UNREPRODUCIBLE_UPDATE_REVIEW_ACTION`, which offers a third answer no ordinary
+          decision row has: replace the recorded body before replaying it.
+
+        A snippet-backed INSTALL and a REMOVE both flow through the base grouping like any
+        other item of their direction; the removal group picks up this job's own warning as
+        its note, where it has one (`removal_warning`).
         """
         needs_resolution = [
             diff
             for diff in diffs
             if diff.item_class == ItemClass.UNREPRODUCIBLE and diff.action == DiffAction.REPORT_ONLY
         ]
-        if not needs_resolution:
-            return super()._build_review_groups(diffs)
-
-        carved_ids = {diff.item_id for diff in needs_resolution}
+        updates = [
+            diff for diff in diffs if diff.item_class == ItemClass.UNREPRODUCIBLE and diff.action == DiffAction.CHANGE
+        ]
+        carved_ids = {diff.item_id for diff in (*needs_resolution, *updates)}
         rest = [diff for diff in diffs if diff.item_id not in carved_ids]
-        groups = list(super()._build_review_groups(rest))
-        groups.append(
-            ReviewGroup(
-                manager=self.manager_id,
-                action=UNREPRODUCIBLE_REVIEW_ACTION,
-                title=(
-                    f"{self.machines.source} has these and no package manager can install them on "
-                    f"{self.machines.target} ({self.manager_id})"
-                ),
-                entries=tuple(
-                    ReviewEntry(item_id=diff.item_id, label=diff.label, action_label="resolve", detail=diff.detail)
-                    for diff in needs_resolution
-                ),
+        groups = [self._with_removal_warning(group) for group in super()._build_review_groups(rest)]
+
+        if updates:
+            groups.append(
+                ReviewGroup(
+                    manager=self.manager_id,
+                    action=UNREPRODUCIBLE_UPDATE_REVIEW_ACTION,
+                    title=(
+                        f"{self.machines.source} and {self.machines.target} have these at different versions "
+                        f"({self.manager_id})"
+                    ),
+                    entries=tuple(
+                        ReviewEntry(item_id=diff.item_id, label=diff.label, action_label="update", detail=diff.detail)
+                        for diff in updates
+                    ),
+                    recorded_bodies={
+                        diff.item_id: self._recorded_bodies[diff.item_id]
+                        for diff in updates
+                        if diff.item_id in self._recorded_bodies
+                    },
+                )
             )
-        )
+        if needs_resolution:
+            groups.append(
+                ReviewGroup(
+                    manager=self.manager_id,
+                    action=UNREPRODUCIBLE_REVIEW_ACTION,
+                    title=(
+                        f"{self.machines.source} has these and no package manager can reproduce them on "
+                        f"{self.machines.target} ({self.manager_id})"
+                    ),
+                    entries=tuple(
+                        ReviewEntry(
+                            item_id=diff.item_id,
+                            label=diff.label,
+                            action_label="update" if diff.diff_class is DiffClass.VERSION_MISMATCH else "install",
+                            detail=diff.detail,
+                        )
+                        for diff in needs_resolution
+                    ),
+                )
+            )
         return tuple(groups)
+
+    def _with_removal_warning(self, group: ReviewGroup) -> ReviewGroup:
+        """This job's removal warning attached to its removal group, if it has one."""
+        warning = self.removal_warning()
+        if warning is None or group.action != DiffAction.REMOVE.value:
+            return group
+        return replace(group, note=warning)
+
+    # -- converge -----------------------------------------------------------------------
 
     @override
     async def converge(self, diff: ItemDiff) -> CommandResult:
-        """Replay this item's registered snippet against the target, verbatim (D-20).
-        `SnippetRegistry.replay` never raises for "no snippet registered" — it returns a
-        failed `CommandResult` instead, so a plan/apply-time race (the registry changed
-        underneath this run) is a per-item failure like any other (D-27), not a crash. The
-        only action reaching `converge()` is `INSTALL`: `plan()` sets that only when a
-        snippet exists, and a `REPORT_ONLY` diff never reaches this hook (`apply()`'s
-        filter).
+        """Take a removal off the target, or replay the source's install-or-update body
+        until the target reports the source's version (D-20, D-22).
+
+        A `REMOVE` is one command and one outcome. An `INSTALL` and a `CHANGE` are the same
+        work — replay the source's body — and both go through `_converge_by_snippet`, whose
+        loop is what makes a replay's success mean convergence rather than "the command
+        exited 0". A body that exits 0 and installs nothing is the ordinary failure mode of
+        an installer that no-ops over an existing tree, and it is invisible to an exit code.
+
+        A `REPORT_ONLY` diff never reaches this hook (`apply()`'s filter).
         """
-        return await SnippetRegistry(self.target, self.machines.target).replay(diff.item_id, self.target)
+        if diff.action is DiffAction.REMOVE:
+            return await self._converge_removal(diff)
+        return await self._converge_by_snippet(diff)
+
+    async def _converge_removal(self, diff: ItemDiff) -> CommandResult:
+        """Run this job's own removal command for one approved REMOVE.
+
+        No privilege is pre-validated for it, for the reason a snippet's is not (D-20,
+        D-27): this job's validation has never required sudo on the target, an install-only
+        run still does not need it, and demanding it up front would fail validation for
+        every user who never approves a removal. A removal that lacks the privilege fails as
+        its own item, named, like any other.
+        """
+        item = self._removable.get(diff.item_id)
+        if item is None:
+            return CommandResult(exit_code=1, stdout="", stderr=f"no target finding recorded for {diff.item_id!r}")
+        return await self.target.run_command(
+            self.removal_command(item), mutates=f"remove {item.label} from {self.machines.target}"
+        )
+
+    async def _converge_by_snippet(self, diff: ItemDiff) -> CommandResult:
+        """Replay, then check, then ask — until the target reports the source's version or
+        the user stops (D-22, `PKG-FR-MANUAL-CONVERGE-LOOP`, `PKG-FR-ASK-AGAIN`).
+
+        Convergence always means replaying the SOURCE's body onto the target, whichever
+        machine holds the higher version: a sync goes one way, and reading the numbers to
+        pick a direction would make the tool decide something the user did not ask it to.
+
+        The loop terminates on exactly two outcomes — the target reaching the source's
+        version, or the user skipping the item for this run. `apply existing snippet` is
+        offered once and never again inside one item's loop: after a replay that changed no
+        version, running the same bytes a second time is the same no-op, so the menu narrows
+        to writing a new body or stopping. There is deliberately no purge-and-retry answer;
+        an author whose installer no-ops over an existing tree writes the `rm -rf … &&`
+        into their own new body, which subsumes it and keeps pc-switcher out of deciding
+        what to delete.
+
+        With nobody to ask, one attempt is made with the recorded body and the item is then
+        skipped with a warning: the only remaining answers need a person to write a shell
+        script, and failing the item would report a broken sync where the truth is an
+        unanswered question.
+
+        A version neither machine can be asked for after the replay is not read as failure:
+        the replay's own exit code is all the run has, and an item whose `version_body`
+        stopped answering is reported converged on that evidence rather than looped on
+        forever.
+        """
+        expected = self._source_versions.get(diff.item_id)
+        while True:
+            result = await SnippetRegistry(self.target, self.machines.target).replay(diff.item_id, self.target)
+            if not result.success or expected is None:
+                return result
+            landed = (await self.installed_versions([diff.item_id], on_source=False)).get(diff.item_id)
+            if landed is None or landed == expected:
+                return result
+
+            self._log(
+                Host.TARGET,
+                LogLevel.FULL,
+                f"{diff.label}: {self.machines.target} still reports {landed}, not {expected}",
+            )
+            # Past this point the recorded body has run and left the version where it was,
+            # so every further pass replays a body the user wrote just now.
+            if not await self._author_replacement(diff, landed=landed, expected=expected):
+                raise ConvergeItemDeclined(
+                    f"{self.machines.target} still has {landed} rather than {expected}, and the recorded "
+                    "install-or-update snippet did not change that"
+                )
+
+    async def _author_replacement(self, diff: ItemDiff, *, landed: str, expected: str) -> bool:
+        """Put the narrowed menu — write a new snippet, or skip for this run — and record
+        what comes back. True where a replacement was written and the loop should replay it.
+
+        A one-entry review round rather than a bespoke prompt: it goes through the same
+        injected `Reviewer` as everything else, so the automation environment, the
+        no-terminal path and the Ctrl-C rule all behave here exactly as they do in the
+        review proper. `PKG-FR-ASK-AGAIN` is what licenses the round — the fact it rests on,
+        that this body does not move this machine's version, is one only the run's own
+        earlier change could establish.
+
+        The new bodies are written to BOTH registries directly, rather than to the source's
+        and then pushed. The push is a whole-file overwrite gated on being additive
+        (`_guard_registry_overwrite`), and a source entry changed after this run's own push
+        is exactly what that gate calls a lost entry — so pushing again would put a
+        consent question in front of the user about the change they had just made. Writing
+        the identical entry on both machines leaves the two copies equal, which is what the
+        gate is there to protect.
+        """
+        if self.context.reviewer is None:
+            return False
+        registry = SnippetRegistry(self.source, self.machines.source)
+        recorded = await registry.get(diff.item_id)
+        if recorded is None:
+            return False
+
+        bodies_now = SnippetBodies(install_body=recorded.install_body, version_body=recorded.version_body)
+        outcome = await self.context.reviewer.review(
+            (
+                ReviewGroup(
+                    manager=self.manager_id,
+                    action=UNREPRODUCIBLE_RETRY_REVIEW_ACTION,
+                    title=f"{diff.label} on {self.machines.target} is still {landed}, not {expected}",
+                    entries=(
+                        ReviewEntry(
+                            item_id=diff.item_id,
+                            label=diff.label,
+                            action_label="update",
+                            detail=build_version_mismatch_detail(expected, landed, self.machines),
+                        ),
+                    ),
+                    recorded_bodies={diff.item_id: bodies_now},
+                ),
+            )
+        )
+        bodies = outcome.snippets.get(diff.item_id)
+        if bodies is None:
+            return False
+
+        snippet = Snippet(
+            item_id=diff.item_id,
+            label=recorded.label,
+            install_body=bodies.install_body,
+            version_body=bodies.version_body,
+            authored_at=datetime.now(UTC).isoformat(),
+            authored_on=self.context.source_hostname,
+        )
+        await registry.add(snippet)
+        await SnippetRegistry(self.target, self.machines.target).add(snippet)
+        return True
 
     # -- Unreproducible finalize hook (moved off the base, D-18) -------------------------
 
@@ -521,10 +853,15 @@ class UnreproducibleSyncJob(PackageSyncJob):
         Snippets are written to `self.source` — never `self.target` — because the source
         registry is this job's own source of truth; `after_review()` then pushes that file
         to the target (D-23) so a snippet authored during THIS run's review reaches the
-        target THIS run, before `apply()` replays it. Skip-always decisions are also
-        recorded on `self.source`: unreproducible items are always source-held (they
-        describe what is installed on the machine currently acting as source), so there is
-        no target-held case to route to `self.target`.
+        target THIS run, before `apply()` replays it.
+
+        The skip-always half covers the resolve group alone (`REPORT_ONLY`), whose items are
+        by definition on the source and not usably on the target, so the source is their
+        holding machine. Every other direction this job now produces is recorded by the base
+        `_record_permanent_skips`, which routes a removal's mark to the target
+        (`_mark_recipients`) — the machine whose copy that answer keeps. Recording those
+        here as well would put a second, source-side entry on software the source does not
+        have.
 
         Idempotent per run: `after_review()` calls this before its push and the base
         `apply()` calls it again; a `self._unreproducible_finalized` guard makes the second
@@ -546,14 +883,15 @@ class UnreproducibleSyncJob(PackageSyncJob):
         if outcome.snippets:
             registry = SnippetRegistry(self.source, self.machines.source)
             authored_at = datetime.now(UTC).isoformat()
-            for item_id, body in outcome.snippets.items():
+            for item_id, bodies in outcome.snippets.items():
                 diff = by_id.get(item_id)
                 label = diff.label if diff is not None else item_id
                 await registry.add(
                     Snippet(
                         item_id=item_id,
                         label=label,
-                        body=body,
+                        install_body=bodies.install_body,
+                        version_body=bodies.version_body,
                         authored_at=authored_at,
                         authored_on=self.context.source_hostname,
                     )
@@ -561,7 +899,7 @@ class UnreproducibleSyncJob(PackageSyncJob):
 
         recorded_at = datetime.now(UTC).isoformat()
         for diff in plan.diffs:
-            if diff.item_class != ItemClass.UNREPRODUCIBLE:
+            if diff.item_class != ItemClass.UNREPRODUCIBLE or diff.action is not DiffAction.REPORT_ONLY:
                 continue
             if outcome.decisions.get(diff.item_id) != Decision.SKIP_ALWAYS:
                 continue

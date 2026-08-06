@@ -25,7 +25,7 @@ The system implements a six-level logging hierarchy (DEBUG, FULL, INFO, WARNING,
 
 3. *(Removed)*
 
-4. **Given** sync operation completes, **When** user inspects log file at `~/.local/share/pc-switcher/logs/sync-<timestamp>-<session_id>.log`, **Then** the file contains structured log entries in JSON Lines format (one JSON object per line) with fields: timestamp (ISO8601), level, event, plus `job` and `host` (`"source"`/`"target"`) when the call supplied them, plus additional context fields as needed, for all operations from both source and target machines. The hostname mapping (source hostname and target hostname) is logged once at session start, not in every entry.
+4. **Given** sync operation completes, **When** user inspects log file at `~/.local/share/pc-switcher/logs/sync-<timestamp>-<session_id>.log`, **Then** the file contains structured log entries in JSON Lines format (one JSON object per line) with fields: timestamp (ISO8601), level, event, plus `job` and `host` (`"source"`/`"target"`) when the call supplied them, plus additional context fields as needed, for all operations from both source and target machines. The hostname mapping (source hostname and target hostname) is logged once at session start, not in every entry.  
    Lineage: 001-US-4-AS-4 → #140
 
 5. *(Removed - target-side logging is Job implementation detail, not a spec-level concern)*
@@ -162,10 +162,10 @@ As a pc-switcher user, I want TUI and file log output to carry timestamps, colou
 - **LOG-FR-FILE-PATH**: System MUST write all logs at configured file level or above to a per-session file at `~/.local/share/pc-switcher/logs/sync-<timestamp>-<session_id>.log`.  
   Lineage: 001-FR-021
 
-- **LOG-FR-JSON**: System MUST preserve the current log file format: JSON Lines format (one JSON object per line with keys: timestamp in ISO8601 format, level, event, plus any additional context fields) for machine-readability. `job` and `host` are emitted when the call supplied them and omitted when it did not (e.g. during startup and shutdown). ~~hostname~~ removed from per-entry requirements; see LOG-FR-SESSION-HOSTNAMES.
+- **LOG-FR-JSON**: System MUST preserve the current log file format: JSON Lines format (one JSON object per line with keys: timestamp in ISO8601 format, level, event, plus any additional context fields) for machine-readability. `job` and `host` are emitted when the call supplied them and omitted when it did not (e.g. during startup and shutdown). ~~hostname~~ removed from per-entry requirements; see LOG-FR-SESSION-HOSTNAMES.  
   Lineage: 001-FR-022 → 004-FR-007 → #140
 
-- **LOG-FR-SESSION-HOSTNAMES**: System MUST log the source and target hostnames at session start, establishing the mapping between host roles ("source"/"target") and actual machine names.
+- **LOG-FR-SESSION-HOSTNAMES**: System MUST log the source and target hostnames at session start, establishing the mapping between host roles ("source"/"target") and actual machine names.  
   Lineage: #140
 
 - **LOG-FR-TUI-FORMAT**: System MUST render each record for the terminal as `HH:MM:SS [LEVEL   ] [job] (host) message key=value`, level-coloured, on the stderr handler used for non-interactive runs. In an interactive run records go to the UI's log panel instead, as plain text (`HH:MM:SS [LEVEL] [job] (host) message`) with no ANSI codes and no Rich markup, so arbitrary message content can neither render as markup nor corrupt the Live display.  
@@ -176,7 +176,7 @@ As a pc-switcher user, I want TUI and file log output to carry timestamps, colou
 - **LOG-FR-CONTEXT**: System MUST preserve structured context (key=value pairs) in log output.  
   Lineage: 004-FR-011
 
-- **LOG-FR-CREDENTIAL-REDACTION**: System MUST withhold the userinfo component of every absolute URL from a log record's message, its formatting arguments and its structured context, applied once per record before any formatter sees it (`logger.CredentialRedactionFilter`, installed on both `QueueHandler`s). Three routes never become log records and carry the same rule at their own point: the `--confirm-each-command` confirmation (`executor._announce`), everything a review shows while the user decides, including the files it prints whole (`jobs.packages.review.ReviewEntry`), and the snippet bodies the registry-overwrite question displays (`jobs.packages.unreproducible.UnreproducibleSyncJob._render_overwrite_diff`), which are redacted where they are rendered and nowhere else — a snippet is stored and replayed verbatim.
+- **LOG-FR-CREDENTIAL-REDACTION**: System MUST withhold the userinfo component of every absolute URL from a log record's message, its formatting arguments and its structured context, applied once per record before any formatter sees it (`logger.CredentialRedactionFilter`, installed on both `QueueHandler`s). Three routes never become log records and carry the same rule at their own point: the `--confirm-each-command` confirmation (`executor._announce`), everything a review shows while the user decides, including the files it prints whole (`jobs.packages.review.ReviewEntry`), and the snippet bodies the registry-overwrite question displays (`jobs.packages.unreproducible.UnreproducibleSyncJob._render_overwrite_diff`), which are redacted where they are rendered and nowhere else — a snippet is stored and replayed verbatim.  
   Lineage: ADR-021, `PKG-FR-CREDENTIAL-PRIVACY`
 
 #### Log Aggregation
@@ -188,40 +188,40 @@ As a pc-switcher user, I want TUI and file log output to carry timestamps, colou
 
 All of these live in `src/pcswitcher/logger.py` unless another module is named.
 
-- **LogConfig** (`config.py`): the three log level settings `file`, `tui`, `external`, parsed from the config file's `logging:` section.
+- **LogConfig** (`config.py`): the three log level settings `file`, `tui`, `external`, parsed from the config file's `logging:` section.  
   Lineage: 004-entities
 
-- **LogRecord**: standard Python logging record, carrying pc-switcher context (`job`, `host`, arbitrary structured data) in its `extra` dict.
+- **LogRecord**: standard Python logging record, carrying pc-switcher context (`job`, `host`, arbitrary structured data) in its `extra` dict.  
   Lineage: 004-entities
 
-- **Queue pipeline**: one `Queue` plus a `QueueListener` on a background thread, fed by a `QueueHandler` on the `pcswitcher` logger (`propagate=False`, so the external floor never applies to it) and a second on the root logger (external libraries only). This is what keeps a log call from blocking on I/O.
+- **Queue pipeline**: one `Queue` plus a `QueueListener` on a background thread, fed by a `QueueHandler` on the `pcswitcher` logger (`propagate=False`, so the external floor never applies to it) and a second on the root logger (external libraries only). This is what keeps a log call from blocking on I/O.  
   Lineage: 004-entities
 
-- **Handlers**: `FileHandler` + `JsonFormatter` at the `file` floor; at the `tui` floor either `UILogHandler` (interactive: hands each line to the UI's log panel on the event loop) or `StreamHandler(stderr)` + `RichFormatter`; and, interactive only, `WarningCaptureHandler` pinned to WARNING. `respect_handler_level=True` makes each apply its own floor.
+- **Handlers**: `FileHandler` + `JsonFormatter` at the `file` floor; at the `tui` floor either `UILogHandler` (interactive: hands each line to the UI's log panel on the event loop) or `StreamHandler(stderr)` + `RichFormatter`; and, interactive only, `WarningCaptureHandler` pinned to WARNING. `respect_handler_level=True` makes each apply its own floor.  
   Lineage: 004-entities
 
-- **CredentialRedactionFilter**: installed on both `QueueHandler`s; see LOG-FR-CREDENTIAL-REDACTION.
+- **CredentialRedactionFilter**: installed on both `QueueHandler`s; see LOG-FR-CREDENTIAL-REDACTION.  
   Lineage: ADR-021
 
 ## Success Criteria
 
-- **LOG-SC-CONFIG**: Users can configure all three log level settings (file, tui, external) through the config file without code changes.
+- **LOG-SC-CONFIG**: Users can configure all three log level settings (file, tui, external) through the config file without code changes.  
   Lineage: 004-SC-001
 
-- **LOG-SC-EXT-APPEAR**: Log messages from asyncssh and other external libraries appear in log output when their level meets both the `external` threshold and the destination's (`file`/`tui`) threshold.
+- **LOG-SC-EXT-APPEAR**: Log messages from asyncssh and other external libraries appear in log output when their level meets both the `external` threshold and the destination's (`file`/`tui`) threshold.  
   Lineage: 004-SC-002
 
-- **LOG-SC-FILE-DEBUG**: Setting `logging.file` to DEBUG and `logging.tui` to INFO results in file containing debug messages that don't appear in TUI.
+- **LOG-SC-FILE-DEBUG**: Setting `logging.file` to DEBUG and `logging.tui` to INFO results in file containing debug messages that don't appear in TUI.  
   Lineage: 004-SC-003
 
-- **LOG-SC-EXT-FILTER**: Setting `logging.external` to WARNING filters out INFO/DEBUG messages from external libraries regardless of `file`/`tui` settings.
+- **LOG-SC-EXT-FILTER**: Setting `logging.external` to WARNING filters out INFO/DEBUG messages from external libraries regardless of `file`/`tui` settings.  
   Lineage: 004-SC-004
 
-- **LOG-SC-TUI-VISUAL**: TUI log output carries the colours, layout and timestamps LOG-FR-TUI-FORMAT specifies, in both the interactive and the stderr path.
+- **LOG-SC-TUI-VISUAL**: TUI log output carries the colours, layout and timestamps LOG-FR-TUI-FORMAT specifies, in both the interactive and the stderr path.  
   Lineage: 004-SC-005
 
-- **LOG-SC-JSON-STRUCT**: Every file log line parses as one JSON object with the LOG-FR-JSON keys.
+- **LOG-SC-JSON-STRUCT**: Every file log line parses as one JSON object with the LOG-FR-JSON keys.  
   Lineage: 004-SC-006
 
-- **LOG-SC-INVALID-FAIL**: Invalid log level in config causes startup failure with clear error message (consistent with other config errors).
+- **LOG-SC-INVALID-FAIL**: Invalid log level in config causes startup failure with clear error message (consistent with other config errors).  
   Lineage: 004-SC-008

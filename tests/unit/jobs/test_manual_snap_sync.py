@@ -37,7 +37,8 @@ MYTOOL_REGISTRY_YAML = (
     "snippets:\n"
     "  unreproducible:snap-sideload:mytool:\n"
     "    label: mytool (sideloaded snap, revision x1)\n"
-    "    body: sudo snap install --dangerous /tmp/mytool.snap\n"
+    "    install_body: sudo snap install --dangerous /tmp/mytool.snap\n"
+    "    version_body: snap list mytool\n"
     "    authored_at: '2026-01-01T00:00:00+00:00'\n"
     "    authored_on: laptop\n"
 )
@@ -238,12 +239,27 @@ class TestWhatTheTargetAlreadyHolds:
         assert plan.diffs == ()
 
     @pytest.mark.asyncio
-    async def test_a_snap_only_the_target_holds_produces_nothing(self) -> None:
-        """G137 — `PKG-NG-MANUAL-REMOVE`: what the target alone has is never an item, in any
-        direction."""
+    async def test_a_sideload_only_the_target_holds_is_offered_for_removal(self) -> None:
+        """G137, G160 — `PKG-FR-MANUAL-REMOVE`: a sideload the source no longer has becomes a
+        removal item, since the target's own listing calls it a sideload too."""
         context, _source, _target = make_context(
             source_responses={SNAP_LIST: snap_list()},
             target_responses={SNAP_LIST: snap_list(sideload("theirs"))},
+        )
+
+        plan = await ManualSnapSyncJob(context).plan()
+
+        assert [(d.item_id, d.action) for d in plan.diffs] == [
+            ("unreproducible:snap-sideload:theirs", DiffAction.REMOVE)
+        ]
+
+    @pytest.mark.asyncio
+    async def test_a_store_snap_only_the_target_holds_produces_nothing(self) -> None:
+        """G161 — a store snap is `snap_sync`'s to remove, not this job's: offering to delete
+        one here would take software off the update path it is on."""
+        context, _source, _target = make_context(
+            source_responses={SNAP_LIST: snap_list()},
+            target_responses={SNAP_LIST: snap_list(store_snap("theirs"))},
         )
 
         plan = await ManualSnapSyncJob(context).plan()

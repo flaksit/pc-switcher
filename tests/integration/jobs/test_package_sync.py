@@ -100,6 +100,7 @@ from pcswitcher.jobs.packages.state import (
     DecisionFile,
     SnippetRegistry,
 )
+from pcswitcher.jobs.packages.unreproducible import UnreproducibleItem
 from pcswitcher.models import CommandResult
 from tests.integration import SKIP_INSTALL_ON_TARGET
 from tests.integration.jobs.package_sync_scenario import (
@@ -117,6 +118,10 @@ from tests.integration.jobs.package_sync_scenario import (
     HOLD_POLL_TIMEOUT_SECONDS,
     KILL_RUNNING_SYNC_CMD,
     REGISTRY_DIR_RELPATH,
+    REMOVAL_SUBJECT_DEB,
+    REMOVAL_SUBJECT_PATH,
+    REMOVAL_SUBJECT_SNAP,
+    REMOVAL_SUBJECT_SNAP_DIR,
     SNAP_HOLD_DURATION_SLACK,
     SNAP_HOLD_EXPECTED_DURATION,
     SNAP_STORE_OFFLINE_CMD,
@@ -127,6 +132,7 @@ from tests.integration.jobs.package_sync_scenario import (
     UNASKED_ITEM_MARKER,
     VENDOR_PACKAGE,
     VENDOR_REPO_URI,
+    VERSION_SUBJECT_PATH,
     AptSubjects,
     a_name_apt_knows_the_machine_does_not_have,
     alternate_snap_revision,
@@ -138,6 +144,7 @@ from tests.integration.jobs.package_sync_scenario import (
     capture_machine_package_state,
     capture_system_refresh_hold,
     cleanup_in_parallel,
+    clear_version_witness,
     collapse_run_output,
     collateral_removal_item_id,
     create_extra_on_target_apt_package,
@@ -145,7 +152,9 @@ from tests.integration.jobs.package_sync_scenario import (
     create_synthetic_pin,
     create_synthetic_repo_and_key,
     create_unowned_marker,
+    create_versioned_unowned_marker,
     decision_file_exists,
+    dpkg_has,
     engage_system_refresh_hold,
     ensure_absent,
     ensure_installed_and_manual,
@@ -159,15 +168,20 @@ from tests.integration.jobs.package_sync_scenario import (
     install_a_hand_downloaded_deb,
     install_from_a_repo_the_target_lacks,
     install_from_the_vendor_repository,
+    install_local_deb,
+    install_snippet_body,
     installed_base_snap,
     machine_utc_now,
+    marker_version,
     no_candidate_item_id,
     nonblank_lines,
     parse_dpkg_installed,
     parse_rfc3339_utc,
     parse_snap_list_names_revisions,
+    path_exists,
     publish_a_cascading_pair,
     publish_a_rival_candidate,
+    purge_local_deb,
     put_paths_back,
     remove_sideloaded_snap,
     remove_the_rival_candidate,
@@ -183,6 +197,8 @@ from tests.integration.jobs.package_sync_scenario import (
     undeclare_local_repository,
     undeclare_the_vendor_repository,
     unowned_item_id,
+    version_snippet_body,
+    witness_ran_on,
     write_apt_sync_config,
     write_package_sync_config,
 )
@@ -820,8 +836,9 @@ class TestARunWithNobodyToAsk:
                 f"pc2's registry is no longer its own: it holds {sorted(entries)} rather than the single entry "
                 f"{target_item} pc2 had before the run"
             )
-            assert entries[target_item].body == target_body, (
-                f"pc2's own entry for {target_path} was overwritten: its body reads {entries[target_item].body!r} "
+            landed_body = entries[target_item].install_body
+            assert landed_body == target_body, (
+                f"pc2's own entry for {target_path} was overwritten: its body reads {landed_body!r} "
                 f"rather than {target_body!r}"
             )
 
@@ -2258,3 +2275,199 @@ class TestOneManagerAtATime:
                 await restore_system_refresh_hold(pc2_executor, pc2_prior_hold)
 
             await cleanup_in_parallel(clean_the_source(), clean_the_target())
+
+
+class TestAHandInstalledItemIsKeptUpToDate:
+    """#207's own mechanism, against a real filesystem: an item BOTH machines hold is
+    compared on the version each one reports, and a difference converges by replaying the
+    source's install-or-update snippet (`PKG-FR-MANUAL-VERSION`,
+    `PKG-FR-MANUAL-CONVERGE-LOOP`, ADR-020 D-22).
+
+    Only a VM can carry this. The unit tests prove the diff and the loop against a mocked
+    executor, which is exactly where they prove least: what is at stake here is that a body
+    the user wrote actually RUNS on both machines during `plan()`, that its stdout is what
+    the comparison reads, and that the version read back AFTER the replay is the target's
+    own new state rather than the plan's memory of it.
+
+    The subject is an unowned path under `/opt` because that is the one job with no package
+    manager to ask: its version is whatever its own `version_body` prints, so this run
+    exercises the snippet path end to end. The three manager-backed jobs read `dpkg-query`,
+    `snap list` and `flatpak list` instead, and those readings are covered where they are
+    cheap — by the removal run below, which needs the same listings to find its subjects.
+
+    One sync. The witness that the version snippet ran on a machine is a line it appends to
+    a file of its own (`VERSION_WITNESS_PATH`), which makes THIS snippet deliberately not
+    read-only. That is a test fixture, not an example: a real one must change nothing, which
+    is the obligation `PKG-FR-VERSION-SNIPPET` puts on its author and which pc-switcher
+    cannot check. Reading the run's own log instead would prove only that a command was
+    traced.
+    """
+
+    async def test_the_installed_version_snippet_runs_on_both_machines_and_drives_convergence(
+        self,
+        pc1_executor: BashLoginRemoteExecutor,
+        pc2_executor: BashLoginRemoteExecutor,
+        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
+        pc2_with_pcswitcher: BashLoginRemoteExecutor,
+        reset_pcswitcher_state: None,
+    ) -> None:
+        """G163, G172, G178 — pc1 holds the subject at 2.0 and pc2 at 1.0, with one registry
+        entry whose two bodies are the whole of what the run has to work with.
+
+        The item is presented as a change rather than an install: both machines have the
+        path, so presence says nothing and only the two version strings differ. Approving it
+        replays pc1's install-or-update body on pc2, after which pc2's own file reads 2.0 —
+        and the run reports success only because the version was read AGAIN afterwards and
+        agreed, which is what separates convergence from a command that exited 0.
+
+        Both machines carry the witness, since the version body runs on each of them while
+        the run is still planning. pc2 carries it more than once — the converge loop asks it
+        again after the replay — so the assertion is presence, not a count.
+        """
+        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
+
+        item_id = unowned_item_id(VERSION_SUBJECT_PATH)
+        try:
+            await finish_both(
+                create_versioned_unowned_marker(pc1_executor, VERSION_SUBJECT_PATH, "2.0"),
+                create_versioned_unowned_marker(pc2_executor, VERSION_SUBJECT_PATH, "1.0"),
+            )
+            await finish_both(clear_version_witness(pc1_executor), clear_version_witness(pc2_executor))
+            await author_snippet(
+                pc1_executor,
+                item_id,
+                VERSION_SUBJECT_PATH,
+                install_snippet_body("2.0"),
+                version_body=version_snippet_body(),
+            )
+
+            # The precondition, asserted rather than assumed: a pc2 already at 2.0 would
+            # produce no item and every assertion below would pass for the wrong reason.
+            before = await marker_version(pc2_executor, VERSION_SUBJECT_PATH)
+            assert before == "1.0", f"pc2 was seeded at {before!r}, so there is no version difference to converge"
+
+            await write_package_sync_config(pc1_executor, manual_installs_sync=True)
+            sync_result = await pc1_executor.run_command(
+                f"{SKIP_INSTALL_ON_TARGET} {automation_env_assignment(item_id)}"
+                f" pc-switcher sync pc2 --yes --allow-first-sync",
+                timeout=600.0,
+                login_shell=True,
+            )
+            assert sync_result.success, (
+                "the run must succeed: its one item was approved and its snippet brings pc2 to pc1's version.\n"
+                f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
+            )
+
+            after = await marker_version(pc2_executor, VERSION_SUBJECT_PATH)
+            assert after == "2.0", (
+                f"pc2 still reads {after!r}: the version difference was not converged by replaying pc1's "
+                "install-or-update snippet"
+            )
+            source_ran, target_ran = await finish_both(witness_ran_on(pc1_executor), witness_ran_on(pc2_executor))
+            assert source_ran, "the installed-version snippet never ran on pc1, so nothing read the source's version"
+            assert target_ran, "the installed-version snippet never ran on pc2, so nothing read the target's version"
+        finally:
+            await cleanup_in_parallel(
+                remove_unowned_marker(pc1_executor, VERSION_SUBJECT_PATH),
+                remove_unowned_marker(pc2_executor, VERSION_SUBJECT_PATH),
+            )
+            await cleanup_in_parallel(clear_version_witness(pc1_executor), clear_version_witness(pc2_executor))
+
+
+class TestRemovingWhatTheSourceDropped:
+    """#207's other mechanism: software only the target holds, that the target's OWN
+    detector claims there, is removed by its own ecosystem (`PKG-FR-MANUAL-REMOVE`).
+
+    Three jobs in one sync, because the claim is the same in each and a `pc-switcher sync`
+    costs 30-40s whatever it converges (#216). Each subject is real and each removal is the
+    real command: `apt-get remove` against a `.deb` built and installed by hand on pc2,
+    `snap remove` against a snap `snap try` put there, and `rm --recursive --force` against
+    an unowned directory under `/opt`. The witnesses are pc2's own dpkg, snapd and
+    filesystem.
+
+    A mocked executor cannot carry this at all: what is at stake is that the TARGET's own
+    package managers report these three as software no repository, store or remote can
+    supply — the reading that makes them this job's to remove rather than another's — and
+    that the commands issued actually take them off the machine.
+    """
+
+    async def test_each_job_removes_its_own_kind_of_finding_from_the_target(
+        self,
+        pc1_executor: BashLoginRemoteExecutor,
+        pc2_executor: BashLoginRemoteExecutor,
+        pc1_with_pcswitcher_mod: BashLoginRemoteExecutor,
+        pc2_with_pcswitcher: BashLoginRemoteExecutor,
+        reset_pcswitcher_state: None,
+    ) -> None:
+        """G160, G168, G170, G176, G177 — pc2 holds three things pc1 does not, one per job,
+        each of a kind its own manager cannot reproduce.
+
+        Approving all three takes them off pc2: the package leaves dpkg's installed set
+        without being purged, the sideload leaves `snap list`, and the directory is gone from
+        the filesystem. Nothing on pc1 is touched, which is what a removal direction means
+        here — the source states the intent and the target carries it out.
+
+        The `.deb` is built on pc2 rather than promoted with `apt-mark manual`: a repository
+        package is reproducible, so this job would correctly refuse to remove it, and the
+        test would pass while proving the opposite of its claim.
+        """
+        _ = (pc1_with_pcswitcher_mod, pc2_with_pcswitcher, reset_pcswitcher_state)
+
+        deb_item = UnreproducibleItem(
+            origin="apt-no-candidate", identifier=REMOVAL_SUBJECT_DEB, label=REMOVAL_SUBJECT_DEB
+        ).item_id
+        snap_item = UnreproducibleItem(
+            origin="snap-sideload", identifier=REMOVAL_SUBJECT_SNAP, label=REMOVAL_SUBJECT_SNAP
+        ).item_id
+        path_item = unowned_item_id(REMOVAL_SUBJECT_PATH)
+
+        try:
+            base = await installed_base_snap(pc2_executor)
+            await install_local_deb(pc2_executor, REMOVAL_SUBJECT_DEB)
+            await create_sideloaded_snap(pc2_executor, REMOVAL_SUBJECT_SNAP_DIR, REMOVAL_SUBJECT_SNAP, base)
+            await create_unowned_marker(pc2_executor, REMOVAL_SUBJECT_PATH)
+
+            # The preconditions, asserted rather than assumed: a subject that never landed
+            # would make every assertion below pass without a removal having happened.
+            has_deb, has_path = await finish_both(
+                dpkg_has(pc2_executor, REMOVAL_SUBJECT_DEB), path_exists(pc2_executor, REMOVAL_SUBJECT_PATH)
+            )
+            assert has_deb, f"{REMOVAL_SUBJECT_DEB} was not installed on pc2, so there is no removal to observe"
+            assert has_path, f"{REMOVAL_SUBJECT_PATH} is not on pc2, so there is no removal to observe"
+            assert await snap_revision(pc2_executor, REMOVAL_SUBJECT_SNAP), (
+                f"{REMOVAL_SUBJECT_SNAP} is not installed on pc2, so there is no removal to observe"
+            )
+
+            await write_package_sync_config(
+                pc1_executor, manual_deb_sync=True, manual_snap_sync=True, manual_installs_sync=True
+            )
+            decisions = {
+                deb_item: Decision.APPLY,
+                snap_item: Decision.APPLY,
+                path_item: Decision.APPLY,
+            }
+            sync_result = await pc1_executor.run_command(
+                f"{SKIP_INSTALL_ON_TARGET} {automation_env_assignment_multi(decisions)}"
+                f" pc-switcher sync pc2 --yes --allow-first-sync",
+                timeout=900.0,
+                login_shell=True,
+            )
+            assert sync_result.success, (
+                "the run must succeed: every item it holds was approved and every removal is one its own "
+                f"manager can carry out.\nstdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
+            )
+
+            deb_left, path_left = await finish_both(
+                dpkg_has(pc2_executor, REMOVAL_SUBJECT_DEB), path_exists(pc2_executor, REMOVAL_SUBJECT_PATH)
+            )
+            assert not deb_left, f"{REMOVAL_SUBJECT_DEB} is still installed on pc2: `apt-get remove` did not run"
+            assert not path_left, f"{REMOVAL_SUBJECT_PATH} is still on pc2: the path was not deleted"
+            assert await snap_revision(pc2_executor, REMOVAL_SUBJECT_SNAP) is None, (
+                f"{REMOVAL_SUBJECT_SNAP} is still installed on pc2: `snap remove` did not run"
+            )
+        finally:
+            await cleanup_in_parallel(
+                purge_local_deb(pc2_executor, REMOVAL_SUBJECT_DEB),
+                remove_sideloaded_snap(pc2_executor, REMOVAL_SUBJECT_SNAP_DIR, REMOVAL_SUBJECT_SNAP),
+                remove_unowned_marker(pc2_executor, REMOVAL_SUBJECT_PATH),
+            )
