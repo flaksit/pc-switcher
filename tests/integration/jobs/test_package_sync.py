@@ -2256,9 +2256,10 @@ class TestTheSyncWindowHoldIsTimed:
     The apt timers need arming first. The VM baseline masks them and their services so a
     background apt cannot take the dpkg lock from another test; the orchestrator only
     touches timers it finds loaded and active, so on an unmodified VM this whole feature is
-    inert. `arm_apt_timers` unmasks the TIMERS only, leaving the masked services as the
-    interlock that keeps an armed timer from running actual apt, and `restore_apt_timer_mask`
-    puts the mask back in the `finally`.
+    inert. `arm_apt_timers` unmasks all four and neuters each service's `ExecStart` to
+    `/bin/true` instead, which is what keeps an armed timer from running actual apt — the
+    mask cannot serve as that guard, because systemd refuses to start a timer whose
+    triggered unit is masked. `restore_apt_timer_mask` puts every mask back in the `finally`.
     """
 
     async def test_a_killed_run_leaves_a_timed_hold_on_each_machines_own_clock(  # noqa: PLR0915 - one killed run, two suspensions to read off both machines

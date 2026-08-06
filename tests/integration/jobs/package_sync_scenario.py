@@ -2032,9 +2032,9 @@ SNAP_HOLD_DURATION_SLACK = timedelta(minutes=15)
 # ---------------------------------------------------------------------------------
 
 APT_TIMERS = ("apt-daily.timer", "apt-daily-upgrade.timer")
-#: The services those timers trigger. The VM baseline masks BOTH, which is the interlock
-#: `arm_apt_timers` refuses to proceed without: a masked service cannot be queued, so a
-#: timer armed for a test window can fire and still run no apt.
+#: The services those timers trigger. `arm_apt_timers` has to unmask these along with the
+#: timers -- systemd will not start a timer whose triggered unit is masked -- and neuters
+#: their `ExecStart` instead, which is the guard it does assert.
 APT_TIMER_SERVICES = ("apt-daily.service", "apt-daily-upgrade.service")
 APT_TIMER_RESTORE_UNIT = "pc-switcher-apt-timers"
 APT_TIMER_EXPECTED_DURATION = timedelta(hours=6)
@@ -2118,75 +2118,84 @@ async def pending_apt_timer_restore(executor: BashLoginRemoteExecutor) -> dateti
 
 @dataclass(frozen=True)
 class AptTimerBaseline:
-    """Each apt timer's `LoadState` and `UnitFileState` as `arm_apt_timers` found them, so
-    the restore puts back exactly what was there rather than a guess at it.
+    """Which of the four apt units `arm_apt_timers` found masked, so the restore puts back
+    exactly what was there rather than a guess at it.
     """
 
-    unit_file_states: Mapping[str, str]
     masked: tuple[str, ...]
+
+
+def _dropin_command(unit: str, body: str) -> str:
+    """The shell that writes one `/run` drop-in for `unit`."""
+    directory = f"{APT_TIMER_DROPIN_DIR}/{unit}.d"
+    return (
+        f"sudo mkdir --parents {shlex.quote(directory)} && printf %s {shlex.quote(body)} | "
+        f"sudo tee {shlex.quote(f'{directory}/{APT_TIMER_DROPIN_NAME}')} > /dev/null"
+    )
 
 
 async def arm_apt_timers(executor: BashLoginRemoteExecutor) -> AptTimerBaseline:
     """Make both apt timers loaded and active on `executor` for the duration of one test,
     and return what to put back.
 
-    The VM baseline disables and MASKS the timers and their services
+    The VM baseline disables and MASKS both timers and both services
     (`vm-test-fixtures.sh`), because a background apt taking the dpkg frontend lock breaks
     whichever test pytest-randomly schedules into that window. The orchestrator only ever
     touches timers it finds loaded AND active, so on an unmodified VM the whole feature is
     inert and nothing about it can be observed.
 
-    Three guards keep an armed timer from running actual apt:
+    The services have to be unmasked along with the timers: systemd will not start a timer
+    whose triggered unit is masked, so leaving the mask on as a safety net makes arming
+    impossible -- measured, on the run where it failed exactly that way.
 
-    1. The services stay masked -- asserted here, not assumed. A trigger that fires cannot
-       queue a masked unit; systemd logs it and the timer stays waiting. If a future
-       baseline stops masking them, this refuses to arm rather than turning a test window
-       into a real `apt-daily-upgrade`.
-    2. A `Persistent=false` drop-in, so activating a timer whose window elapsed long ago
-       does not fire it immediately to catch up.
-    3. `apt-daily`'s own `OnCalendar` window with its randomised delay, which a test window
-       measured in seconds is very unlikely to fall inside.
+    What replaces the mask is a stronger guard, because it constrains what the service DOES
+    rather than whether it can be reached: a drop-in that blanks `ExecStart` and puts
+    `/bin/true` in its place. A timer that somehow fires then runs `/bin/true` and touches
+    no apt. That is asserted here, not assumed -- if the override ever stops taking effect,
+    this refuses to arm rather than turning a test window into a real `apt-daily-upgrade`.
+    Two further guards sit behind it: a `Persistent=false` drop-in on each timer, so
+    activating one whose window elapsed long ago does not fire it immediately to catch up,
+    and `apt-daily`'s own `OnCalendar` window with its randomised delay.
+
+    Every drop-in lives in `/run`, which is tmpfs, so one left behind by a failed cleanup
+    dies at the next boot -- and the VM reset reboots before every session.
     """
-    services = " ".join(APT_TIMER_SERVICES)
-    interlock = await executor.run_command(
-        f"systemctl show --property=Id --property=LoadState {services}", login_shell=False, timeout=20.0
-    )
-    service_states = {
-        unit: fields.get("LoadState", "") for unit, fields in parse_systemctl_show_blocks(interlock.stdout).items()
-    }
-    unmasked = sorted(unit for unit, state in service_states.items() if state != "masked")
-    assert not unmasked, (
-        f"refusing to arm the apt timers: {unmasked} is not masked on this machine, so a timer this test starts "
-        f"could queue a real apt run and take the dpkg lock from whatever else is running. Re-mask it, or update "
-        f"tests/integration/scripts/internal/vm-test-fixtures.sh if the baseline changed on purpose.\n"
-        f"{interlock.stdout}"
-    )
-
-    timers = " ".join(APT_TIMERS)
+    units = (*APT_TIMERS, *APT_TIMER_SERVICES)
     before = await executor.run_command(
-        f"systemctl show --property=Id --property=LoadState --property=UnitFileState {timers}",
-        login_shell=False,
-        timeout=20.0,
+        f"systemctl show --property=Id --property=LoadState {' '.join(units)}", login_shell=False, timeout=20.0
     )
     blocks = parse_systemctl_show_blocks(before.stdout)
     baseline = AptTimerBaseline(
-        unit_file_states={unit: fields.get("UnitFileState", "") for unit, fields in blocks.items()},
-        masked=tuple(unit for unit, fields in blocks.items() if fields.get("LoadState") == "masked"),
+        masked=tuple(unit for unit, fields in blocks.items() if fields.get("LoadState") == "masked")
     )
 
     dropins = " && ".join(
-        f"sudo mkdir --parents {shlex.quote(f'{APT_TIMER_DROPIN_DIR}/{unit}.d')} && "
-        f"printf '[Timer]\\nPersistent=false\\n' | sudo tee "
-        f"{shlex.quote(f'{APT_TIMER_DROPIN_DIR}/{unit}.d/{APT_TIMER_DROPIN_NAME}')} > /dev/null"
-        for unit in APT_TIMERS
+        [_dropin_command(timer, "[Timer]\nPersistent=false\n") for timer in APT_TIMERS]
+        + [_dropin_command(service, "[Service]\nExecStart=\nExecStart=/bin/true\n") for service in APT_TIMER_SERVICES]
     )
     armed = await executor.run_command(
-        f"sudo systemctl unmask {timers} && {dropins} && sudo systemctl daemon-reload"
-        f" && sudo systemctl start {timers}",
+        f"{dropins} && sudo systemctl unmask {' '.join(units)} && sudo systemctl daemon-reload"
+        f" && sudo systemctl start {' '.join(APT_TIMERS)}",
         login_shell=False,
         timeout=60.0,
     )
-    assert armed.success, f"could not arm the apt timers on this machine: {armed.stderr}"
+    assert armed.success, (
+        f"could not arm the apt timers on this machine (exit {armed.exit_code}).\n"
+        f"stdout: {armed.stdout}\nstderr: {armed.stderr}"
+    )
+
+    # The guard the safety of this whole helper rests on, read back off systemd itself.
+    neutered = await executor.run_command(
+        f"systemctl show --property=Id --property=ExecStart {' '.join(APT_TIMER_SERVICES)}",
+        login_shell=False,
+        timeout=20.0,
+    )
+    for service, fields in parse_systemctl_show_blocks(neutered.stdout).items():
+        exec_start = fields.get("ExecStart", "")
+        assert "/bin/true" in exec_start and "apt" not in exec_start, (
+            f"{service} would still run {exec_start!r} if its timer fired, so arming it could take the dpkg lock "
+            f"from whatever else is running. The ExecStart override did not take effect."
+        )
 
     states = await apt_timer_states(executor)
     inactive = sorted(unit for unit, (_load, active) in states.items() if active != "active")
@@ -2195,17 +2204,19 @@ async def arm_apt_timers(executor: BashLoginRemoteExecutor) -> AptTimerBaseline:
 
 
 async def restore_apt_timer_mask(executor: BashLoginRemoteExecutor, prior: AptTimerBaseline) -> None:
-    """Put `executor`'s apt timers back exactly as `arm_apt_timers` found them.
+    """Put `executor`'s apt timers and their services back exactly as `arm_apt_timers` found
+    them: masked if they were masked, and carrying none of this test's drop-ins.
 
     Stop BEFORE masking: masking an active unit leaves it running, which would hand the
-    rest of the session an armed timer wearing a mask.
+    rest of the session an armed timer wearing a mask. The whole drop-in DIRECTORY goes,
+    not just the file in it, so nothing is left for a later `daemon-reload` to read.
     """
     steps = [f"sudo systemctl stop {' '.join(APT_TIMERS)} || true"]
     if prior.masked:
         steps.append(f"sudo systemctl mask {' '.join(prior.masked)} || true")
     steps += [
-        f"sudo rm --recursive --force {shlex.quote(f'{APT_TIMER_DROPIN_DIR}/{unit}.d/{APT_TIMER_DROPIN_NAME}')}"
-        for unit in APT_TIMERS
+        f"sudo rm --recursive --force {shlex.quote(f'{APT_TIMER_DROPIN_DIR}/{unit}.d')}"
+        for unit in (*APT_TIMERS, *APT_TIMER_SERVICES)
     ]
     steps.append("sudo systemctl daemon-reload")
     result = await executor.run_command("; ".join(steps), login_shell=False, timeout=60.0)
