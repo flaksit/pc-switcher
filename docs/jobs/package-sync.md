@@ -6,7 +6,7 @@ Configuration for these jobs is limited to their `sync_jobs` enable flags; see t
 
 For what these jobs are for and why they behave as they do, see [Package sync — user requirements](../planning/package-sync-user-requirements.md); for the same requirements as checkable articles — the `PKG-FR-*` obligations per ecosystem and the `PKG-NG-*` non-goals — see [Package sync conformance criteria](../planning/package-sync-conformance-criteria.md). Where this page disagrees with either, this page is wrong.
 
-## The six jobs
+## The seven jobs
 
 Seven independent jobs share one item -> diff -> review -> converge model. Each has its own enable flag, its own validation, its own review and its own failure isolation, so enabling one never drags in another.
 
@@ -231,7 +231,7 @@ Where both machines have the item and their copies differ, neither is the holder
 
 A mark still counts when a later sync is launched the other way round, whichever machine it sits on.
 
-The mark is recorded in that machine's own decision file at `~/.config/pc-switcher/<manager>.decisions.yaml` (one per manager: `apt.decisions.yaml`, `snap.decisions.yaml`, `flatpak.decisions.yaml`, `manual_deb.decisions.yaml`, `manual_snap.decisions.yaml`, `manual.decisions.yaml`). That file is **never synced** — it stays local to the machine it describes.
+The mark is recorded in that machine's own decision file at `~/.config/pc-switcher/<manager>.decisions.yaml` (one per manager: `apt.decisions.yaml`, `snap.decisions.yaml`, `flatpak.decisions.yaml`, `manual_deb.decisions.yaml`, `manual_snap.decisions.yaml`, `manual_flatpak.decisions.yaml`, `manual.decisions.yaml`). That file is **never synced** — it stays local to the machine it describes.
 
 To un-mark something, delete its entry from the decision file (or delete the whole file to clear every machine-specific decision for that manager). The next sync treats the item as live again and re-offers it in the review.
 
