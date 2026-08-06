@@ -19,7 +19,7 @@ Package sync replicates *what software is installed*. Application data belongs t
 
 It replicates by **convergence, not by copying**. Both machines' package managers are asked what they have, and the difference is what the sync acts on; no package database, store or installed file is copied between machines. What is synced is a decision — install this, remove that — plus the configuration the target's own package manager needs to carry it out.
 
-Package sync is one job per package manager — apt, snap, flatpak — plus one job per kind of software no package manager can reproduce: hand-installed `.deb` packages, and unowned software under `/usr/local` and `/opt`. Each is enabled separately, reviewed separately, and can fail without stopping the others. Enabling one authorises pc-switcher to install and remove software on the target.
+Package sync is one job per package manager — apt, snap, flatpak — plus one job per kind of software no package manager can reproduce: hand-installed `.deb` packages, sideloaded snaps, and unowned software under `/usr/local` and `/opt`. Each is enabled separately, reviewed separately, and can fail without stopping the others. Enabling one authorises pc-switcher to install and remove software on the target.
 
 ## Vocabulary
 
@@ -242,7 +242,7 @@ A refresh hold follows the snap it applies to, exactly as an apt hold follows it
 
 ### Sideloaded snaps
 
-Snaps installed from a local `.snap` file are out of scope (#221). They are ignored on both machines: never installed, never removed, never an item. A run does nothing else about them and does not report them.
+Snaps installed from a local `.snap` file belong to their own job, not to snap sync. Snap sync ignores them on both machines: never installed, never removed, never an item, and never reported by that job. They are offered instead as [software no manager can reproduce](#software-no-manager-can-reproduce), resolvable by an install snippet — the only thing that can put such a snap on the other machine, since no store can serve its revision.
 
 ## flatpak
 
@@ -287,8 +287,9 @@ A flatpak installation that is neither the user nor the system one is skipped. R
 Software that arrived on the source by a route nothing can replay automatically. Several kinds, one mechanism: the **install snippet**, a shell recipe written once that is synced with the software. Each kind in scope is a job of its own, enabled and reviewed on its own, and the kinds share the one snippet registry — how to install something is knowledge about the software, so one recipe file answers for all of them.
 
 - **A hand-downloaded `.deb`** — apt knows the name, but no configured repository offers that version. Its own job is the only one that offers it: apt drops these packages on both machines whatever else is enabled, so with apt synced and this job off they are replicated by nobody.
+- **A sideloaded snap** — installed from a local `.snap` file, so snapd holds it at a revision no store can serve. Same split: snap sync withholds the name on both machines whatever else is enabled, so with snaps synced and this job off they are replicated by nobody. It is identified by the snap's name alone, so reinstalling from a newer file keeps the snippet you wrote; a snap of that name already on the other machine — sideloaded or from the store — is never raised.
 - **Unowned software under `/usr/local` or `/opt`** — dropped there by an install script or a tarball. The scan looks in `/opt`, directly under `/usr/local`, and inside `/usr/local`'s `bin`, `sbin`, `lib`, `games` and `src`. It never looks in `etc`, `include`, `man` or `share`: whatever is installed there arrives with an application the scan finds elsewhere. A finding — a file, a directory or a symlink — is named where it is found and never opened, or one application under `/opt` would arrive as thousands of findings. The directories the distribution itself creates under `/usr/local` are not findings, and neither is a directory with no file anywhere beneath it.
-- **A sideloaded snap**, and **a flatpak from a local bundle or a dead remote** — out of scope for now (#221).
+- **A flatpak from a local bundle or a dead remote** — out of scope for now (#221).
 
 Both machines are scanned, and only what the target lacks is presented. That is what stops a second path to one application — the symlink in `bin` that starts what the snippet unpacked under `/opt` — from being asked about again every run after the snippet has already installed it. What only the target has produces nothing: **nothing here is ever removed**, and no record is kept of what a snippet put there.
 

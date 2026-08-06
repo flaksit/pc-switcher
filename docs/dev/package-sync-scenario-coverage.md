@@ -61,7 +61,7 @@ Evidence is symbol names rather than line numbers, because the code moves. A tes
 | Shorthand | File |
 | --- | --- |
 | `test_apt_*` | `tests/unit/jobs/apt/test_apt_*.py` — one module per `src/pcswitcher/jobs/apt_sync/` module |
-| `test_snap_sync`, `test_flatpak_sync`, `test_manual_deb_sync`, `test_manual_installs_sync`, `test_unreproducible_jobs`, `test_folder_sync` | `tests/unit/jobs/` |
+| `test_snap_sync`, `test_flatpak_sync`, `test_manual_deb_sync`, `test_manual_snap_sync`, `test_manual_installs_sync`, `test_unreproducible_jobs`, `test_folder_sync` | `tests/unit/jobs/` |
 | `test_package_sync_core`, `test_package_review`, `test_package_state`, `test_package_items`, `test_block_state_decisions`, `test_review_skip_always`, `test_decision_list`, `test_prompt_navigation`, `test_apt_policy` | `tests/unit/jobs/` |
 | `test_snap_autorefresh_hold`, `test_config_system`, `test_skipped_jobs`, `test_first_sync_scope` | `tests/unit/orchestrator/` |
 | `test_step_gate`, `test_mutates_audit`, `test_sudoers`, `test_redaction` | `tests/unit/` |
@@ -728,7 +728,7 @@ Flowchart edges are named in the Scenario column as `A→B`, `B→C`, etc.
 
 ### E.6 Sideloaded snaps (article: PKG-FR-SNAP-SIDELOAD)
 
-A sideload is a snap whose bytes came from a local `.snap` file; `snap list` shows it at an `x`-prefixed revision. All rows here assert the same outcome shape: no item in any direction and no command. The run is not asked to look for sideloads, nor to say anything about the ones it happened to see.
+A sideload is a snap whose bytes came from a local `.snap` file; `snap list` shows it at an `x`-prefixed revision. All rows here assert the same outcome shape for `snap_sync`: no item in any direction and no command. What `manual_snap_sync` does with the same snaps is G's business — G128 is the seam where the two meet.
 
 | # | Scenario | Expected | Cov | Test |
 | --- | --- | --- | --- | --- |
@@ -1065,9 +1065,9 @@ Driven by the orchestrator around the whole job window; listed here because the 
 
 ## G. Software no package manager can reproduce, and the snippet registry
 
-### G.1 What the two jobs detect (articles: PKG-FR-MANUAL-SCOPE, PKG-FR-DEB-OWNERSHIP)
+### G.1 What the three jobs detect (articles: PKG-FR-MANUAL-SCOPE, PKG-FR-DEB-OWNERSHIP, PKG-FR-SNAP-SIDELOAD)
 
-`manual_deb_sync` finds the hand-installed `.deb`s and `manual_installs_sync` the unowned paths; both resolve a finding the same way, through the shared snippet registry, so everything from G.2 onward is one behaviour proved once.
+`manual_deb_sync` finds the hand-installed `.deb`s, `manual_snap_sync` the sideloaded snaps and `manual_installs_sync` the unowned paths; all three resolve a finding the same way, through the shared snippet registry, so everything from G.2 onward is one behaviour proved once.
 
 | # | Scenario | Expected | Cov | Test |
 | --- | --- | --- | --- | --- |
@@ -1109,6 +1109,19 @@ Driven by the orchestrator around the whole job window; listed here because the 
 | G119 | `dpkg` is missing on Atlas, and the unowned scan is the job asking | Validation fails before anything runs, naming Atlas and the missing tool | U | `test_manual_installs_sync:TestUnownedValidate::test_dpkg_unavailable_on_source_yields_validation_error` |
 | G120 | `dpkg` is missing on Nomad, same job | Validation fails before anything runs, naming Nomad — the machine is read to tell what it already has | U | `test_manual_installs_sync:TestUnownedValidate::test_dpkg_unavailable_on_target_yields_validation_error` |
 | G121 | `dpkg` present on both, same job | No validation error, and no apt tool is probed for at all: what apt can supply is another job's question | U | `test_manual_installs_sync:TestUnownedValidate::test_valid_environment_yields_no_errors_and_asks_nothing_of_apt` |
+| G122 | Atlas has a snap snapd reports at revision `x1` | It is presented as an item Nomad cannot get from any package manager, identified as `unreproducible:snap-sideload:mytool` | U | `test_manual_snap_sync:TestSideloadDetection::test_a_sideloaded_snap_is_presented_as_an_item` |
+| G123 | Atlas has a store snap at a plain integer revision | Not presented — the store can serve it, so `snap_sync` converges it | U | `test_manual_snap_sync:TestSideloadDetection::test_a_store_snap_is_not_presented` |
+| G124 | The sideload Atlas holds is at revision `x3` | The item's line names that revision, so the user can tell which build they are being asked about | U | `test_manual_snap_sync:TestSideloadDetection::test_the_item_label_names_the_revision_the_source_holds` |
+| G125 | A sideload with a snippet is reinstalled from a newer `.snap` file, moving `x1` to `x2` | Same item, same snippet: the identity is the snap's name, so a reinstall neither orphans the recipe nor re-asks the question | U | `test_manual_snap_sync:TestSideloadDetection::test_reinstalling_a_sideload_at_a_new_revision_keeps_its_identity` |
+| G126 | Atlas's snapd cannot be reached | The job fails once naming the command and snapd's own error; nothing is proposed | U | `test_manual_snap_sync:TestSideloadDetection::test_a_listing_that_did_not_answer_fails_the_job` |
+| G127 | Atlas has no snaps installed at all | An ordinary answer: nothing is presented, and the empty listing is not read as a failure | U | `test_manual_snap_sync:TestSideloadDetection::test_a_machine_with_no_snaps_at_all_is_an_ordinary_answer` |
+| G128 | One listing holding a store snap and a sideload, read by both snap jobs | `snap_sync` converges the store snap and withholds the sideload; this job offers the sideload and says nothing about the store snap — no snap is owned by both jobs or by neither | U | `test_manual_snap_sync:TestSideloadDetection::test_the_snap_the_job_offers_is_the_one_snap_sync_withheld` |
+| G129 | Atlas holds a "never install this on Nomad" answer about a sideload it still has | The finding stays silent | U | `test_manual_snap_sync:TestInertFiltering::test_machine_specific_item_is_filtered_before_becoming_a_diff` |
+| G130 | Atlas's snap decision file holds a mark naming that same snap | It neither silences this job's finding nor is read at all: that answer is about converging the snap's revision, which is the other job's question, and each manager reads only its own file | U | `test_manual_snap_sync:TestInertFiltering::test_a_snap_syncs_own_mark_on_the_same_snap_is_not_read` |
+| G131 | Only this job is enabled — snap sync is not in the configuration at all | The sideload is still detected and presented; the job asks snapd its own question | U | `test_manual_snap_sync:TestExecuteIndependentOfSnapSync::test_plan_runs_with_snap_sync_absent_from_config` |
+| G132 | `snap` is missing on Atlas | Validation fails before anything runs, naming Atlas and the missing tool | U | `test_manual_snap_sync:TestValidate::test_snap_unavailable_on_source_yields_validation_error` |
+| G133 | `snap` is missing on Nomad | Validation fails before anything runs, naming Nomad — the machine is read to tell what it already has | U | `test_manual_snap_sync:TestValidate::test_snap_unavailable_on_target_yields_validation_error` |
+| G134 | snapd answers on both machines | No validation error, and no administrative-rights precondition on either: listing snaps needs none, unlike converging them | U | `test_manual_snap_sync:TestValidate::test_valid_environment_yields_no_errors_and_asks_for_no_privilege` |
 
 ### G.2 The three end states (articles: PKG-FR-MANUAL-RESOLUTION, PKG-FR-MANUAL-SOURCE-DECIDES)
 
@@ -1230,6 +1243,9 @@ Driven by the orchestrator around the whole job window; listed here because the 
 | G110 | The run after a snippet installed one application: its tree under `/opt` and the symlink in `bin` that starts it are both on Nomad | Neither is raised again — nothing is presented at all | U | `test_manual_installs_sync:TestWhatTheTargetAlreadyHolds::test_a_second_path_to_one_application_stops_being_asked_about` |
 | G111 | Atlas has a package no repository of its own supplies, and Nomad has that name installed from a repository | Not presented: software that is on Nomad is on Nomad, whatever origin put it there | U | `test_manual_deb_sync:TestWhatTheTargetAlreadyHolds::test_a_package_the_target_has_from_a_repository_counts_as_held` |
 | G113 | Nothing on Atlas survives its own detection and marks | Nomad is not read at all — there is nothing to subtract from | U | `test_unreproducible_jobs:TestWhatTheTargetAlreadyHolds::test_a_machine_with_no_findings_costs_the_other_one_no_reads` |
+| G135 | Atlas has a sideloaded snap, and Nomad has that name installed from the store | Not presented: it is the same application by a route needing no snippet, and replaying one would sideload over the store copy | U | `test_manual_snap_sync:TestWhatTheTargetAlreadyHolds::test_a_snap_the_target_has_from_the_store_counts_as_held` |
+| G136 | Both machines have a sideload of that name, at different `x` revisions | Not presented: two machines' `x` numbers are independent install counters, not two builds, so nothing here could read a difference between them | U | `test_manual_snap_sync:TestWhatTheTargetAlreadyHolds::test_a_sideload_of_the_same_name_at_another_revision_counts_as_held` |
+| G137 | Nomad has a sideloaded snap Atlas lacks | Nothing at all — no item, no removal, no report | U | `test_manual_snap_sync:TestWhatTheTargetAlreadyHolds::test_a_snap_only_the_target_holds_produces_nothing` |
 
 
 ## H. Consent, the review, the answers, and the memory of a decision
@@ -1485,6 +1501,8 @@ Rows H49–H52 assert an absence: the machinery derived from an approved package
 | H224 | A permanent answer is forced onto a snap's revision change. | It reaches no follow-up: a snap revision can be marked on no machine, so there is no side to choose. | U | `review_skip_always:TestWhichMachineKeepsItsCopy::test_a_snap_revision_change_never_reaches_it` |
 | H225 | A run with no terminal, or one answered by the automation variable, produces a permanent answer on a conflicting item. | No follow-up screen is built and no side is recorded — a side is chosen by a person or not at all. | U | `review_skip_always:TestWhichMachineKeepsItsCopy::test_a_run_with_no_terminal_reaches_no_follow_up`, `::test_the_automation_variable_answers_no_side` |
 | H226 | Ctrl-C at that follow-up screen. | The whole sync aborts; no mark lands on a machine nobody named. | U | `review_skip_always:TestAbortAndTeardown::test_ctrl_c_at_the_machine_specific_follow_up_aborts_the_whole_sync` |
+| H247 | A marked sideloaded snap has since been reinstalled from the store under the same name. | The mark stays: the check is whether the machine has the snap, not whether it is still a sideload — dropping it would re-offer a snippet that overwrites the store copy. | U | `test_manual_snap_sync:TestMarksFollowWhatTheMachineHolds::test_a_marked_snap_now_installed_from_the_store_keeps_its_mark` |
+| H248 | snapd no longer reports a marked sideloaded snap. | The mark is dropped. | U | `test_manual_snap_sync:TestMarksFollowWhatTheMachineHolds::test_a_marked_snap_snapd_no_longer_reports_is_dropped` |
 
 ### H.11 Abort (articles: PKG-FR-ABORT)
 
@@ -1682,6 +1700,7 @@ Per machine, per job, for a package-manager query and for a job's own scan.
 | J87 | Silence must not be read as broken: `snap list --all` exits 0 with no snaps | Ordinary data | U | `test_snap_sync:TestAProbeThatDidNotAnswer::test_a_source_with_no_snaps_installed_is_data_not_a_failure` |
 | J88 | An empty hold set | Ordinary data | U | `test_apt_probe:TestAReadThatDidNotAnswer::test_an_empty_hold_set_is_data_not_a_failure` |
 | J89 | A `/etc/apt` directory that does not exist | Answers "nothing" at exit 0 and is planned through — the reshaped command, tested with the same privilege as the query it wraps | U | `test_apt_probe:TestAReadThatDidNotAnswer::test_an_absent_directory_answers_nothing_rather_than_failing` |
+| J189 | `manual_snap_sync`'s own `snap list --all` does not answer | The job fails naming the command, rather than reporting no sideloads while `snap_sync` withholds the same snaps off the same predicate | U | `test_manual_snap_sync:TestSideloadDetection::test_a_listing_that_did_not_answer_fails_the_job` |
 | J90 | A scan root that is not there | Skipped by the loop, so it never reaches the exit code | U | `test_manual_installs_sync:TestUnownedScan::test_a_scan_root_that_is_not_there_is_skipped_not_an_error` |
 | J91 | `sha256sum` over a glob matching nothing (a scope with no remote keyring) exits 1 | Not a failure — this read is deliberately unguarded | U | `test_flatpak_sync:TestAProbeThatDidNotAnswer::test_a_keyring_digest_read_exiting_non_zero_is_not_a_failure` |
 | J92 | `dpkg --search` exits 1 because every queried path is genuinely unowned | Ordinary data — those paths become items | U | `test_manual_installs_sync:TestUnownedScan::test_a_batch_where_every_path_is_unowned_is_an_ordinary_answer` |
@@ -1817,7 +1836,7 @@ Five exits, then the `userinfo` grammar boundary.
 | K3 | Same, for `flatpak_sync` | present and off | U | same test |
 | K4 | Same, for `manual_installs_sync` | present and off | U | same test |
 | K6 | Read the shipped config for a per-job settings section | No top-level `apt_sync`/`snap_sync`/`flatpak_sync`/`manual_installs_sync` section ships; each job's resolved config is empty | U | `…:TestShippedDefaultConfig::test_shipped_config_omits_empty_package_sections` |
-| K7 | A hand-written config enables all four package jobs and writes no section for any of them | Loads without error; each job's config is empty | U | `…:TestShippedDefaultConfig::test_config_omitting_package_sections_validates` |
+| K7 | A hand-written config enables every package job and writes no section for any of them | Loads without error; each job's config is empty | U | `…:TestShippedDefaultConfig::test_config_omitting_package_sections_validates` |
 | K8 | A config with no `sync_jobs` block at all | No package job is instantiated; nothing is installed or removed | U | `unit/orchestrator/test_config_system:TestJobDiscoveryFollowsTheConfig::test_a_config_with_no_sync_jobs_block_instantiates_nothing`, `TestEmptyConfig::test_core_empty_config_file` |
 | K9 | The machines diverge in all four managers at once; Atlas's config enables `apt_sync` alone | The apt divergence converges on Nomad, and the snap, flatpak and manual-install ones are still diverged afterwards — the disabled jobs are never instantiated, so nothing of theirs is touched | V | `test_package_sync:TestOneManagerAtATime::test_each_job_alone_converges_its_own_manager_and_the_fifth_run_moves_nothing` |
 | K10 | The machines diverge in all four managers at once; Atlas's config enables `snap_sync` alone | The snap divergence converges on Nomad, and the apt, flatpak and manual-install ones are still diverged afterwards — the disabled jobs are never instantiated, so nothing of theirs is touched | V | same test |
@@ -1840,17 +1859,17 @@ Five exits, then the `userinfo` grammar boundary.
 | K22 | `snap_sync` disabled, other package jobs enabled | No snapd refresh pause is written on either machine | U | `unit/orchestrator/test_snap_autorefresh_hold:TestHoldEngaged::test_hold_not_set_when_snap_sync_disabled` (and `::test_hold_set_on_both_hosts_when_snap_sync_enabled` for the converse) |
 | K23 | `folder_sync` enabled; `snap_sync`/`flatpak_sync` toggled | Every package job behaves the same either way — the article binds package jobs to each other, and `folder_sync` is not one of them, so it is free to read those switches and to mirror `~/.local/share/flatpak` when its job is off | U | `unit/jobs/test_folder_sync:TestPackageJobExcludeFiltersGating::test_flatpak_sync_enabled_includes_data_dir_exclusion_not_var_app`, `::test_flatpak_sync_disabled_excludes_nothing` |
 
-### K.3 The four package jobs run before `folder_sync` (articles: PKG-FR-JOB-ORDER)
+### K.3 Every package job runs before `folder_sync` (articles: PKG-FR-JOB-ORDER)
 
 | # | Scenario | Expected | Cov | Test |
 | --- | --- | --- | --- | --- |
-| K24 | Read the shipped config's `sync_jobs` key order | All four package jobs are listed before `folder_sync` | U | `unit/orchestrator/test_config_system:TestShippedDefaultConfig::test_package_jobs_precede_folder_sync` |
+| K24 | Read the shipped config's `sync_jobs` key order | Every package job is listed before `folder_sync` | U | `unit/orchestrator/test_config_system:TestShippedDefaultConfig::test_package_jobs_precede_folder_sync` |
 | K25 | A hand-edited config enables `flatpak_sync` on a line after `folder_sync: true` | One configuration error naming `flatpak_sync` and `folder_sync` | U | `…:TestPackageJobsBeforeFolderSyncStructuralCheck::test_package_job_after_folder_sync_yields_config_error` |
 | K26 | Same, for `manual_installs_sync` | One error naming `manual_installs_sync` | U | `…::test_manual_installs_after_folder_sync_yields_a_config_error` |
 | K27 | Same, for `apt_sync` | One error naming `apt_sync` | U | `test_config_system:TestPackageJobsBeforeFolderSyncStructuralCheck::test_apt_sync_after_folder_sync_yields_a_config_error` |
 | K28 | Same, for `snap_sync` | One error naming `snap_sync` | U | `test_config_system:TestPackageJobsBeforeFolderSyncStructuralCheck::test_snap_sync_after_folder_sync_yields_a_config_error` |
 | K29 | Every package job listed after `folder_sync` | One error per job | U | `…::test_every_package_job_after_folder_sync_yields_its_own_error` |
-| K30 | All four listed before `folder_sync` | No error; the run proceeds | U | `…::test_package_jobs_before_folder_sync_yields_no_error` |
+| K30 | All of them listed before `folder_sync` | No error; the run proceeds | U | `…::test_package_jobs_before_folder_sync_yields_no_error` |
 | K31 | A package job listed after `folder_sync` but disabled | No error — only enabled jobs can race | U | `…::test_disabled_package_job_after_folder_sync_yields_no_error` |
 | K32 | `folder_sync` disabled (or absent) with a package job listed after it | No error | U | `…::test_folder_sync_disabled_yields_no_error_regardless_of_order` |
 | K33 | A misordered config is used for a real sync | The run refuses to start: it stops at job discovery, no job executes, nothing is changed on either machine | U | `test_config_system:TestJobDiscoveryFollowsTheConfig::test_a_misordered_config_refuses_to_start_before_any_job_is_touched` |
@@ -1901,6 +1920,9 @@ The table's four jobs × two machines. `apt_sync` and `snap_sync`: required on b
 | K66 | Any of the above failures | The failing machine is identified in the reported error | U | every `TestValidate` case above asserts `e.host` |
 | K67 | A precondition is missing | It is discovered in the validation step, never mid-execute: no job re-probes sudo or the dpkg lock while applying, and none degrades to a reduced capture | U | `test_mutates_audit:TestPreconditionProbes::test_no_precondition_is_probed_outside_validate` resolves every executor command back to its literals and finds `sudo --non-interactive` and the `fuser` lock probe in three `validate()` bodies and nowhere else, `::test_the_audit_can_read_the_commands_it_scans` guards the resolution. The degradation half is per job, each measuring one run's commands against its own `validate()`'s: `test_apt_job:TestNoRunReachesSudoValidationDidNotClear::test_every_machine_the_run_sudoes_on_is_one_validation_cleared` and `test_snap_sync:TestNoRunReachesSudoValidationDidNotClear::test_every_machine_the_run_sudoes_on_is_one_validation_cleared` for the two jobs needing the grant on both machines; `test_flatpak_sync:TestNoRunReachesSudoValidationDidNotClear::test_a_system_scope_run_sudoes_only_where_validation_cleared_it`, `::test_a_user_scope_only_run_escalates_nowhere_so_there_is_nothing_to_degrade` for the conditional gate; `test_unreproducible_jobs:TestNoRunReachesSudoValidationDidNotClear::test_neither_the_capture_nor_validation_asks_either_machine_to_escalate` for the job whose table row is "none" on both |
 | K68 | One enabled job fails validation while the others would pass | The whole run refuses to start before any job executes; nothing is changed on either machine | U | `test_config_system:TestJobDiscoveryFollowsTheConfig::test_one_jobs_validation_error_stops_the_whole_run` |
+| K94 | `manual_snap_sync` enabled; neither machine grants passwordless sudo | Validation passes — this job requires none on either machine, unlike `snap_sync`, which requires it on both | U | `test_manual_snap_sync:TestValidate::test_valid_environment_yields_no_errors_and_asks_for_no_privilege` |
+| K95 | `manual_snap_sync` enabled; `snap` missing on Atlas | Validation fails naming Atlas | U | `test_manual_snap_sync:TestValidate::test_snap_unavailable_on_source_yields_validation_error` |
+| K96 | `manual_snap_sync` enabled; `snap` missing on Nomad | Validation fails naming Nomad | U | `test_manual_snap_sync:TestValidate::test_snap_unavailable_on_target_yields_validation_error` |
 
 ### K.6 The dpkg lock (articles: PKG-FR-APT-DPKG-LOCK)
 

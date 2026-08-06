@@ -6,9 +6,9 @@ Configuration for these jobs is limited to their `sync_jobs` enable flags; see t
 
 For what these jobs are for and why they behave as they do, see [Package sync — user requirements](../planning/package-sync-user-requirements.md); for the same requirements as checkable articles — the `PKG-FR-*` obligations per ecosystem and the `PKG-NG-*` non-goals — see [Package sync conformance criteria](../planning/package-sync-conformance-criteria.md). Where this page disagrees with either, this page is wrong.
 
-## The five jobs
+## The six jobs
 
-Five independent jobs share one item -> diff -> review -> converge model. Each has its own enable flag, its own validation, its own review and its own failure isolation, so enabling one never drags in another.
+Six independent jobs share one item -> diff -> review -> converge model. Each has its own enable flag, its own validation, its own review and its own failure isolation, so enabling one never drags in another.
 
 ```yaml
 sync_jobs:
@@ -16,10 +16,11 @@ sync_jobs:
   snap_sync: false            # installed snaps, converged to the source's revision and channel
   flatpak_sync: false         # installed flatpak refs and their remotes, per scope
   manual_deb_sync: false      # hand-installed .deb packages
+  manual_snap_sync: false     # sideloaded snaps
   manual_installs_sync: false # unowned software under /usr/local and /opt
 ```
 
-All five ship **disabled**: enabling any of them lets pc-switcher change installed software on the target, so it is opt-in.
+All six ship **disabled**: enabling any of them lets pc-switcher change installed software on the target, so it is opt-in.
 
 ### What each job covers
 
@@ -27,9 +28,10 @@ All five ship **disabled**: enabling any of them lets pc-switcher change install
 - **`snap_sync`** — installed snaps, converged to the source's exact revision and tracking channel.
 - **`flatpak_sync`** — installed flatpak refs, per user/system installation scope, plus the remotes those refs are derived to need.
 - **`manual_deb_sync`** — apt packages whose installed version comes from no repository your machine has configured: a `.deb` you installed by hand, whether or not apt marks it as one you chose.
+- **`manual_snap_sync`** — snaps you installed from a local `.snap` file rather than from the store, which `snap list` shows at an `x`-prefixed revision.
 - **`manual_installs_sync`** — software under `/opt` and `/usr/local` that no dpkg package owns, dropped there by an install script or a tarball.
 
-The last two are the jobs for software no package manager can reproduce, and they share the [install-snippet registry](#install-snippets): a package and a directory tree are found differently but resolved the same way, by a recipe you write once. Everything else about them is separate — two enable flags, two reviews, two failure surfaces.
+The last three are the jobs for software no package manager can reproduce, and they share the [install-snippet registry](#install-snippets): a package, a snap and a directory tree are found differently but resolved the same way, by a recipe you write once. Everything else about them is separate — three enable flags, three reviews, three failure surfaces.
 
 ### Hand-installed `.deb` packages belong to one job only
 
@@ -41,11 +43,17 @@ There is nothing apt could do with them anyway. The target's apt has never heard
 
 The consequence is worth knowing: the two jobs have separate enable flags, and `apt_sync` does not consult `manual_deb_sync`'s. **If you enable `apt_sync` but disable `manual_deb_sync`, your hand-installed `.deb` packages are synced by nobody** — they are silently absent from the review rather than offered as installs that fail. Keep `manual_deb_sync` enabled if you install software from downloaded `.deb` files.
 
+### Sideloaded snaps belong to one job only
+
+The same split, in the snap ecosystem. A snap installed from a local `.snap` file has a revision no store can serve — `snap list` shows it with an `x` prefix, `x1`, `x2` — so `snap_sync` withholds that name on both machines and says nothing about it, and `manual_snap_sync` offers it as an [install snippet](#install-snippets) instead, since a recipe is the only thing that can put such a snap on the other machine.
+
+The same consequence follows: **if you enable `snap_sync` but disable `manual_snap_sync`, your sideloaded snaps are synced by nobody.** Keep `manual_snap_sync` enabled if you install snaps from `.snap` files.
+
 ## Job ordering is enforced
 
-All five package jobs **must** be listed before `folder_sync` in `sync_jobs`. This is not a convention: pc-switcher validates the resolved order and aborts the run with a config error if any of them is enabled but sits after `folder_sync`.
+All six package jobs **must** be listed before `folder_sync` in `sync_jobs`. This is not a convention: pc-switcher validates the resolved order and aborts the run with a config error if any of them is enabled but sits after `folder_sync`.
 
-The reason is the "defaults, then your data" layering. Installing software usually writes its own default config and data files on first appearance. If `folder_sync` ran first, the fresh install would overwrite your synced versions of those files with stock defaults. Running the package jobs first means the software already exists when `folder_sync` lands your versions on top. The two snippet jobs are in the rule for the same reason: your snippet installs software, and that software writes its own defaults too.
+The reason is the "defaults, then your data" layering. Installing software usually writes its own default config and data files on first appearance. If `folder_sync` ran first, the fresh install would overwrite your synced versions of those files with stock defaults. Running the package jobs first means the software already exists when `folder_sync` lands your versions on top. The snippet jobs are in the rule for the same reason: your snippet installs software, and that software writes its own defaults too.
 
 ## Batched review
 
@@ -103,7 +111,7 @@ The batched review approves *items*, not commands. One approved line can expand 
 
 `pc-switcher sync <hostname> --confirm-each-command` inserts one question before every one of them, headed by the job and the hostname of the machine about to change, then what the change does, then the exact command (or, for a file transfer, the source and destination paths). It waits for a single keypress — **p** to proceed, **a** to abort the whole sync — and acts on it immediately, with no Enter to follow. There is no "skip this one": a single reviewed item can span several commands, so skipping one would leave that item half-applied. An unanswerable prompt (Ctrl-C, EOF) aborts.
 
-It covers every write the five jobs make, plus the machine-local decision files on both machines, the snippet registry and its push, the snapd auto-refresh pause and restore, and the sync-history update on both ends. It also covers what changes a machine without writing anything to it: taking each machine's sync lock, and starting a background process. Only genuinely read-only commands go unasked, and a read stays a read under `sudo` — the privileged probes a job runs before it starts prompt for nothing. The flag needs a real terminal and is refused without one. It is meant for auditing or debugging a run you do not trust yet, not for everyday syncs.
+It covers every write the six jobs make, plus the machine-local decision files on both machines, the snippet registry and its push, the snapd auto-refresh pause and restore, and the sync-history update on both ends. It also covers what changes a machine without writing anything to it: taking each machine's sync lock, and starting a background process. Only genuinely read-only commands go unasked, and a read stays a read under `sudo` — the privileged probes a job runs before it starts prompt for nothing. The flag needs a real terminal and is refused without one. It is meant for auditing or debugging a run you do not trust yet, not for everyday syncs.
 
 ### apt collateral
 
@@ -211,7 +219,7 @@ Where both machines have the item and their copies differ, neither is the holder
 
 A mark still counts when a later sync is launched the other way round, whichever machine it sits on.
 
-The mark is recorded in that machine's own decision file at `~/.config/pc-switcher/<manager>.decisions.yaml` (one per manager: `apt.decisions.yaml`, `snap.decisions.yaml`, `flatpak.decisions.yaml`, `manual_deb.decisions.yaml`, `manual.decisions.yaml`). That file is **never synced** — it stays local to the machine it describes.
+The mark is recorded in that machine's own decision file at `~/.config/pc-switcher/<manager>.decisions.yaml` (one per manager: `apt.decisions.yaml`, `snap.decisions.yaml`, `flatpak.decisions.yaml`, `manual_deb.decisions.yaml`, `manual_snap.decisions.yaml`, `manual.decisions.yaml`). That file is **never synced** — it stays local to the machine it describes.
 
 To un-mark something, delete its entry from the decision file (or delete the whole file to clear every machine-specific decision for that manager). The next sync treats the item as live again and re-offers it in the review.
 
@@ -221,9 +229,11 @@ A machine-specific package never appears in a review again, which is why the run
 
 ## Install snippets
 
-Some installed things no package manager can reproduce — a bare `.deb` downloaded and installed by hand, which is `manual_deb_sync`'s half, or software dropped under `/usr/local` or `/opt` by an install script, which is `manual_installs_sync`'s. Each job surfaces its own findings in its own review as items needing a resolution, and both resolve them the same way, out of one registry.
+Some installed things no package manager can reproduce — a bare `.deb` downloaded and installed by hand, which is `manual_deb_sync`'s half, a snap installed from a local file, which is `manual_snap_sync`'s, or software dropped under `/usr/local` or `/opt` by an install script, which is `manual_installs_sync`'s. Each job surfaces its own findings in its own review as items needing a resolution, and all of them resolve the findings the same way, out of one registry.
 
 `manual_deb_sync` asks one question of everything dpkg reports as installed: which package's installed version comes from no repository this machine has configured. A package's own name is all it needs on the other machine — software that is there is there, whatever put it there — so a name the target already has installed is never raised.
+
+`manual_snap_sync` asks the same kind of question of `snap list`: which snaps sit at an `x`-prefixed revision, the one snapd gives a snap installed from a file. The snap's name is what the answer is filed under, so reinstalling from a newer `.snap` keeps your snippet working rather than asking again, and a name the target already has — sideloaded or from the store — is never raised. The revision is shown on the item's line so you can tell which build you are being asked about.
 
 `manual_installs_sync`'s scan is deliberately shallow. It looks in `/opt`, directly under `/usr/local`, and inside `/usr/local`'s `bin`, `sbin`, `lib`, `games` and `src` — one level each — and reports whatever dpkg does not own. It names what is there so you can decide about it; it never walks a tree, so an application under `/opt` is one finding rather than a thousand. `etc`, `include`, `man` and `share` are not looked into at all: what a hand install puts there comes with an application the scan finds elsewhere.
 
@@ -326,7 +336,9 @@ With both machines on the same revision, snap application data now follows you: 
 
 A revision directory travels only when the **target is on that revision**. `folder_sync` runs after the package jobs and asks the target which revision each snap is at, so it never plants data for a revision the target's snapd never installed: retained older-revision directories stay home, and so does the current one whenever the two machines have not ended up on the same revision — you skipped that snap's revision change, it failed, its install was declined, or `snap_sync` is disabled and nothing converged anything. `~/snap/<app>/common` and the `current` symlink always travel. The practical consequence of running `folder_sync` with `snap_sync` off is that per-revision snap data stops being mirrored: nothing in that run establishes that the two machines agree on a revision, so nothing may be written under one.
 
-A snap installed from a local `.snap` file (`snap install --dangerous`, `snap try`) is the one thing snap sync leaves alone. Such a snap has a revision no store can serve — `snap list` shows it with an `x` prefix, `x1`, `x2` — and pc-switcher has no way to carry the file itself to the other machine. Sideloaded snaps are left alone, on whichever machine they sit: they are never installed, never removed, and produce no review item, nor does a hold set on one. The run does not mention them either. A snap only the target has is no exception — the run will not offer to delete something it could not put back. Reproducing one on the other machine is manual work.
+A snap installed from a local `.snap` file (`snap install --dangerous`, `snap try`) is the one thing snap sync leaves alone. Such a snap has a revision no store can serve — `snap list` shows it with an `x` prefix, `x1`, `x2` — so `snap_sync` withholds that name on both machines: it is never installed, never removed, and produces no review item, nor does a hold set on one, and `snap_sync` does not mention it. A snap only the target has is no exception — the run will not offer to delete something it could not put back.
+
+[`manual_snap_sync`](#sideloaded-snaps-belong-to-one-job-only) is where they go instead, offering each one as an [install snippet](#install-snippets). With that job off, reproducing a sideload on the other machine is manual work.
 
 To keep the revision from changing mid-sync, snapd's **automatic** refresh is briefly paused on both machines for the duration of the run (snapd auto-refreshes several times a day, even for closed apps). The pause blocks only automatic refreshes; snap_sync's own `--revision` convergence still works. Each machine's prior refresh policy is read before the pause and written back when the run ends, so a hold you set yourself — including an indefinite one — survives the sync. If that prior value cannot be read on a machine, that machine's refresh policy is left untouched: no pause is set there and nothing is cleared afterwards, because a pause written over an unknown policy could not be put back — it would expire into "no hold at all" and take your own hold with it. The run says so and continues unpaused on that machine.
 
@@ -406,7 +418,7 @@ A pin file is shown **whole**: its content is printed above the screen, one file
 
 The distribution's own source files are never offered for removal at all.
 
-`manual_deb_sync` and `manual_installs_sync` are **install-only**: each reads the target only to tell what is already there, and keeps no record of what it put there, so neither ever proposes removals. Removing a hand-installed item on the target is manual work today (tracking removal for manual installs is deferred to a future issue).
+`manual_deb_sync`, `manual_snap_sync` and `manual_installs_sync` are **install-only**: each reads the target only to tell what is already there, and keeps no record of what it put there, so none of them ever proposes removals. Removing a hand-installed item on the target is manual work today (tracking removal for manual installs is deferred to a future issue).
 
 ## Prerequisites: passwordless sudo
 
@@ -415,4 +427,4 @@ Each enabled package job needs passwordless sudo for a handful of binaries:
 - **`apt_sync`** — on the source (to read `/etc/apt` configuration) and the target (to install packages, write and remove `/etc/apt` configuration including signing keys, and set or clear apt holds via `apt-mark`). Both hosts additionally need it for the sync-window pause of the system's own apt update timers (`sudo systemctl stop/start` on `apt-daily.timer` and `apt-daily-upgrade.timer`, plus the `sudo systemd-run` that schedules their automatic restart). The runtime pause tolerates a failure without aborting the sync, but the sudo grant is checked up front on both machines.
 - **`snap_sync`** — on both the **source** and the **target**; validation fails if either lacks it. The target needs it to install, refresh and remove snaps, and both hosts need it to pause snapd's auto-refresh for the sync window (`sudo snap set system refresh.hold`, plus the matching `sudo snap get` — snapd requires admin rights to read snap configuration as well as to write it). The runtime pause itself tolerates a transient failure without aborting the sync, but the sudo grant is checked up front on both machines.
 - **`flatpak_sync`** — on the target only, and only when a system-scope ref, remote or mask is in play on either machine. A user-scope-only sync never asks for root.
-- **`manual_deb_sync`** and **`manual_installs_sync`** — neither needs any: both only read `dpkg` (and, for `manual_deb_sync`, `apt-cache`) to find their items, and a snippet author decides its own privilege needs, since the replay runs unprivileged.
+- **`manual_deb_sync`**, **`manual_snap_sync`** and **`manual_installs_sync`** — none needs any: they only read `dpkg`, `apt-cache` or `snap list` to find their items, and a snippet author decides its own privilege needs, since the replay runs unprivileged.

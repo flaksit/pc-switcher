@@ -204,7 +204,7 @@ Lineage: 001-core edge cases, 003-core-tests edge cases
 - **CORE-FR-JOB-LOAD** `[Deliberate Simplicity]`: Jobs MUST be imported from `pcswitcher.jobs.<job_name>` and run in the order their keys appear in `sync_jobs`; there is no dependency resolution
   Lineage: 001-FR-004
 
-- **CORE-FR-JOB-ORDER** `[Reliability Without Compromise]`: The orchestrator MUST reject a config in which `apt_sync`, `snap_sync`, `flatpak_sync`, `manual_deb_sync` or `manual_installs_sync` is enabled after `folder_sync` — apps are provisioned before their data lands on top (D-17)
+- **CORE-FR-JOB-ORDER** `[Reliability Without Compromise]`: The orchestrator MUST reject a config in which `apt_sync`, `snap_sync`, `flatpak_sync`, `manual_deb_sync`, `manual_snap_sync` or `manual_installs_sync` is enabled after `folder_sync` — apps are provisioned before their data lands on top (D-17)
   Lineage: 02-WR-02
 
 #### Self-Installation
@@ -443,7 +443,7 @@ The dividing line between the first two is what the job's inaction means. "Nothi
 
 Situations that produce SKIPPED:
 
-- A package job (`apt_sync`, `snap_sync`, `flatpak_sync`, `manual_deb_sync`, `manual_installs_sync`) whose review had items to offer on a run with no TTY. Nobody was present to answer anything, so every item is marked skip-once and the job converges nothing.
+- A package job (`apt_sync`, `snap_sync`, `flatpak_sync`, `manual_deb_sync`, `manual_snap_sync`, `manual_installs_sync`) whose review had items to offer on a run with no TTY. Nobody was present to answer anything, so every item is marked skip-once and the job converges nothing.
 - `apt_sync` when the source carries Ubuntu Pro (ESM) packages, the target reports no attachment, and the ESM gate is either unanswerable or answered "skip".
 - `vscode_state_sync` when the source has none of the state DBs it handles.
 - `folder_sync` when every configured folder is `enabled: false`.
@@ -451,7 +451,7 @@ Situations that produce SKIPPED:
 
 A skipped job does not fail the run: the remaining jobs still execute, the session still completes, and the exit code is unchanged. A job signals it by raising `JobSkipped`, which it may only do **before** its first mutating command — raised later, the partial state it already wrote would go unreported.
 
-FAILED behaves the same way for every failure of a package job (`apt_sync`, `snap_sync`, `flatpak_sync`, `manual_deb_sync`, `manual_installs_sync`): a FAILED `JobResult`, a CRITICAL log, and the remaining jobs still run. What isolates a failure is the job it came out of, not its exception class — a package job that dies on a registry transfer, a filesystem error or a parser defect says no more about another manager's already-approved work than one whose items failed to converge. `PackageItemFailures` and `ProbeFailed` isolate wherever they are raised, being by construction one manager's trouble.
+FAILED behaves the same way for every failure of a package job (`apt_sync`, `snap_sync`, `flatpak_sync`, `manual_deb_sync`, `manual_snap_sync`, `manual_installs_sync`): a FAILED `JobResult`, a CRITICAL log, and the remaining jobs still run. What isolates a failure is the job it came out of, not its exception class — a package job that dies on a registry transfer, a filesystem error or a parser defect says no more about another manager's already-approved work than one whose items failed to converge. `PackageItemFailures` and `ProbeFailed` isolate wherever they are raised, being by construction one manager's trouble.
 
 Two things still end the run: a `SyncLockedError`, because the machine is no longer entitled to sync at all, and any failure of a job outside package sync (`folder_sync`, `vscode_state_sync`, the core jobs). Which of those may survive a failure is GitHub issue #220.
 

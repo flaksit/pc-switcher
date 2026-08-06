@@ -491,8 +491,8 @@ FIXTURE_SNAPS = ("hello", "hello-world")
 def parse_snap_list_names_revisions(output: str) -> dict[str, str]:
     """Parse `snap list --all` into `{name: revision}` by HEADER column names (RESEARCH
     Open Question 2: never assume fixed column offsets). Deliberately independent of
-    `snap_sync._parse_snap_list` -- that parser is private to `snap_sync.py`, and this
-    module must not reach into another module's private names.
+    `packages/snap_listing.parse_snap_list`: an integration fixture that parsed the
+    listing with the code under test could not catch that code misreading it.
     """
     lines = [line for line in output.splitlines() if line.strip()]
     if not lines:

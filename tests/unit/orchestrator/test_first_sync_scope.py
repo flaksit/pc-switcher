@@ -127,13 +127,14 @@ class TestFirstSyncScopesPackageJobsOrdering:
     """D-17: package job scopes precede folder_sync's scope, one entry per enabled job."""
 
     def test_all_package_jobs_and_folder_sync_each_contribute_one_scope_in_order(self, mock_config: MagicMock) -> None:
-        """All five package jobs and folder_sync each resolve to a real job class and
+        """All six package jobs and folder_sync each resolve to a real job class and
         contribute exactly one FirstSyncScope, in sync_jobs order."""
         mock_config.sync_jobs = {
             "apt_sync": True,
             "snap_sync": True,
             "flatpak_sync": True,
             "manual_deb_sync": True,
+            "manual_snap_sync": True,
             "manual_installs_sync": True,
             "folder_sync": True,
         }
@@ -147,6 +148,7 @@ class TestFirstSyncScopesPackageJobsOrdering:
             "snap_sync",
             "flatpak_sync",
             "manual_deb_sync",
+            "manual_snap_sync",
             "manual_installs_sync",
             "folder_sync",
         ]
@@ -174,6 +176,18 @@ class TestFirstSyncScopesPackageJobsOrdering:
         assert [scope.job_name for scope in scopes] == ["manual_deb_sync"]
         assert "snippet" in scopes[0].mechanism
         assert any("hand-installed .deb packages" in item for item in scopes[0].scope_items)
+
+    def test_manual_snap_sync_announces_the_snaps_it_would_replay(self, mock_config: MagicMock) -> None:
+        """The third unreproducible job announces its own scope, naming the sideloaded snaps
+        rather than the packages or paths the other two speak for."""
+        mock_config.sync_jobs = {"manual_snap_sync": True}
+        orchestrator, _ = _make_orchestrator(mock_config)
+
+        scopes = orchestrator._first_sync_scopes()  # pyright: ignore[reportPrivateUsage]
+
+        assert [scope.job_name for scope in scopes] == ["manual_snap_sync"]
+        assert "snippet" in scopes[0].mechanism
+        assert any("sideloaded snaps" in item for item in scopes[0].scope_items)
 
 
 class TestFirstSyncScopesEmptyFallback:

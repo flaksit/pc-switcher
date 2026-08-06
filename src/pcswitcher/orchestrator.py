@@ -1297,8 +1297,8 @@ class Orchestrator:
         must create `~/.local/share/flatpak` before folder_sync would otherwise land
         `~/.var/app` on top).
 
-        `manual_deb_sync` and `manual_installs_sync` are in the rule for the same reason as
-        the three package managers: replaying an install snippet puts software on the
+        The three jobs for software no package manager can reproduce are in the rule for the
+        same reason as the three package managers: replaying an install snippet puts software on the
         target, and that software writes its own stock defaults on first appearance exactly
         as a package's postinst does.
 
@@ -1323,7 +1323,14 @@ class Orchestrator:
                     "provision apps before folder_sync lands their data on top. Move it above folder_sync."
                 ),
             )
-            for job_name in ("apt_sync", "snap_sync", "flatpak_sync", "manual_deb_sync", "manual_installs_sync")
+            for job_name in (
+                "apt_sync",
+                "snap_sync",
+                "flatpak_sync",
+                "manual_deb_sync",
+                "manual_snap_sync",
+                "manual_installs_sync",
+            )
             if job_name in enabled_order and enabled_order.index(job_name) > folder_sync_index
         ]
 

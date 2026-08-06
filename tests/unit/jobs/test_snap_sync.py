@@ -24,8 +24,9 @@ from pcswitcher.jobs.packages.review import (
     _is_removal_direction,  # pyright: ignore[reportPrivateUsage]
     _options_for,  # pyright: ignore[reportPrivateUsage]
 )
+from pcswitcher.jobs.packages.snap_listing import SnapItem
 from pcswitcher.jobs.packages.sync_core import PackageItemFailures, PackagePlan
-from pcswitcher.jobs.snap_sync import SnapItem, SnapSyncJob, snap_sync_exclude_paths, target_snap_revisions
+from pcswitcher.jobs.snap_sync import SnapSyncJob, snap_sync_exclude_paths, target_snap_revisions
 from pcswitcher.models import CommandResult, Host, LogLevel, ValidationError
 from pcswitcher.orchestrator import Orchestrator
 
