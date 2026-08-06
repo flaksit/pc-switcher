@@ -47,6 +47,7 @@ from pcswitcher.jobs.packages.review import (
     policy_decision,
     review_items,
 )
+from pcswitcher.jobs.packages.state import SnippetBodies
 from pcswitcher.jobs.packages.sync_core import SNAP_CHANGE_REVIEW_ACTION, PackagePlan
 from pcswitcher.models import CommandResult, SyncAbortedByUser
 from pcswitcher.orchestrator import Orchestrator
@@ -1103,8 +1104,10 @@ class TestUnreproducibleGroupResolution:
     """
 
     @staticmethod
-    async def _captured(body: str) -> str:
-        """The snippet `review_items` hands back for a body the user submitted."""
+    async def _captured(body: str) -> SnippetBodies:
+        """Both bodies `review_items` hands back when the user submits `body` at each of the
+        two editors — the install-or-update snippet and the installed-version snippet, which
+        are authored together and are both mandatory (D-22)."""
         group = _unreproducible_group([_entry("u1", label="brscan3")])
         screen = _fake_prompt(ask_return={"u1": "add_snippet"})
         text_prompt = _fake_prompt(ask_return=body)
@@ -1120,27 +1123,31 @@ class TestUnreproducibleGroupResolution:
         return outcome.snippets["u1"]
 
     async def test_add_snippet_choice_captures_the_body_the_user_wrote(self) -> None:
-        """G31 — everything between the first and last thing typed is kept: blank lines,
+        """G31, G182 — everything between the first and last thing typed is kept: blank lines,
         indentation, and the order of the commands.
         """
         body = "sudo dpkg --install /tmp/x.deb\n\n  sudo apt-get install --fix-broken --assume-yes"
 
-        assert await self._captured(body) == body
+        assert await self._captured(body) == SnippetBodies(install_body=body, version_body=body)
 
     async def test_the_whitespace_around_the_body_is_dropped_at_capture(self) -> None:
         """#237 — the editor's own trailing newlines are not part of the command, and a body
         carrying them lands in the registry YAML as a block padded with empty lines. Stripped
         here, so the stored bytes and the replayed bytes are one string.
         """
-        assert await self._captured("\n\n  sudo dpkg --install /tmp/x.deb  \n\n") == ("sudo dpkg --install /tmp/x.deb")
+        stripped = "sudo dpkg --install /tmp/x.deb"
+
+        assert await self._captured("\n\n  sudo dpkg --install /tmp/x.deb  \n\n") == SnippetBodies(
+            install_body=stripped, version_body=stripped
+        )
 
     @staticmethod
-    async def _editor_screen() -> tuple[str, str, str]:
-        """Run one snippet capture and return what the editor's own screen carries.
+    async def _editor_screen() -> tuple[str, str, str, str]:
+        """Run one snippet capture and return what the two editors' own screens carry.
 
-        Three things, in the order they matter: the header while the editor is open, the
-        header on prompt_toolkit's final `is_done` render, and everything printed to the
-        console around the editor (its scrollback).
+        Four things: each editor's header while it is open and on prompt_toolkit's final
+        `is_done` render, plus everything printed to the console around them (the
+        scrollback). Two editors, because authoring is always the pair (D-22).
         """
         console, sink = captured_console(terminal=True)
         group = _unreproducible_group([_entry("u1", label="brscan3")])
@@ -1162,11 +1169,12 @@ class TestUnreproducibleGroupResolution:
         ):
             await review_items([group], console=console, ui=MagicMock(), **HOSTS)
 
-        while_open, once_answered = headers
-        return while_open, once_answered, sink.getvalue()
+        install_open, install_answered, version_open, version_answered = headers
+        assert install_answered == version_answered == ""
+        return install_open, version_open, install_answered, sink.getvalue()
 
     async def test_the_authoring_warning_is_on_the_editors_own_screen(self) -> None:
-        """G61 — the user is warned while they can still act on it. A snippet that asks a
+        """G61, G183 — the user is warned while they can still act on it. A snippet that asks a
         question does not fail on nomad, it HANGS there with nobody to answer, so the
         warning is worth nothing once the body is written: it rides on the editor's own
         prompt, which is on screen from the moment the editor opens.
@@ -1175,14 +1183,21 @@ class TestUnreproducibleGroupResolution:
         without showing them what that looks like leaves them to discover
         `DEBIAN_FRONTEND` as a stuck sync.
         """
-        while_open, _once_answered, _scrollback = await self._editor_screen()
+        install_open, version_open, _once_answered, _scrollback = await self._editor_screen()
 
-        assert "nomad" in while_open
-        assert "nobody watching" in while_open
-        assert "asks a question" in while_open
-        assert "hangs the" in while_open
-        assert "DEBIAN_FRONTEND=noninteractive" in while_open
-        assert "Ctrl-D to finish" in while_open
+        assert "nomad" in install_open
+        assert "nobody watching" in install_open
+        assert "asks a question" in install_open
+        assert "hangs the" in install_open
+        assert "DEBIAN_FRONTEND=noninteractive" in install_open
+        assert "Ctrl-D to finish" in install_open
+        # The install-or-update contract is stated where the body is written (D-22).
+        assert "OLDER version" in install_open
+        # The second editor states the one obligation pc-switcher cannot check for the
+        # author: it runs on both machines, every sync, and must change nothing.
+        assert "atlas" in version_open
+        assert "nomad" in version_open
+        assert "must change nothing" in version_open
 
     async def test_the_answered_editor_keeps_only_the_question_and_the_body(self) -> None:
         """#236 — every other review screen collapses to its title and the answer once
@@ -1192,7 +1207,7 @@ class TestUnreproducibleGroupResolution:
         every render with no `is_done` check. Neither survives the answer now, and nothing
         is printed around the editor for the scrollback to hold.
         """
-        _while_open, once_answered, scrollback = await self._editor_screen()
+        _install_open, _version_open, once_answered, scrollback = await self._editor_screen()
 
         assert once_answered == ""
         assert "nobody watching" not in scrollback
@@ -1281,7 +1296,8 @@ class TestUnreproducibleGroupResolution:
         group = _unreproducible_group([_entry("u1", label="brscan3")])
         body = "sudo dpkg --install /tmp/x.deb"
         screen = _fake_prompt(ask_side_effect=[{"u1": "add_snippet"}, {"u1": "add_snippet"}])
-        text_prompt = _fake_prompt(ask_side_effect=["", body])  # empty, then real
+        # Empty install body (which never reaches the second editor), then the real pair.
+        text_prompt = _fake_prompt(ask_side_effect=["", body, body])
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
@@ -1290,7 +1306,7 @@ class TestUnreproducibleGroupResolution:
         ):
             outcome = await review_items([group], console=console, ui=ui, **HOSTS)
 
-        assert outcome.snippets == {"u1": body}
+        assert outcome.snippets == {"u1": SnippetBodies(install_body=body, version_body=body)}
         assert outcome.unresolved == ()
 
     async def test_a_whitespace_only_snippet_is_not_a_resolution(self) -> None:

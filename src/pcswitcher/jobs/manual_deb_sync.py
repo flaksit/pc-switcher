@@ -5,9 +5,16 @@ Detection is one question asked of the whole INSTALLED set: which packages' INST
 version comes from no repository the SOURCE has configured. Not the `apt-mark showmanual`
 set — apt's manual/automatic mark says how a package got there, not whether any repository
 can supply it, so a `.deb` pulled in to satisfy another one is outside that set and is
-still software no package manager can put on the other machine. On the target the question
-is only whether dpkg reports the name installed at all: software that is there is there,
-whatever origin put it there.
+still software no package manager can put on the other machine.
+
+The target is read twice over, from one `dpkg-query`: every name it reports installed is
+software that is there, whatever origin put it there, so the source's copy of that name is
+never offered for install — and among the names the source does NOT have installed at all,
+the same no-repository question is asked of the target's own apt, so a hand-installed `.deb`
+the source has since dropped becomes a removal (`PKG-FR-MANUAL-REMOVE`). Narrowing that
+second question to the names the source lacks is what keeps it affordable: the full
+`apt-cache policy` over an installed set costs about three seconds and 700KB, and every
+name the source still has is answered by the source's own read already.
 
 Its own job, on its own enable flag, for the reason D-15 gives every package job one: an
 independent failure surface, an independent review and an independent switch. It sits
@@ -27,10 +34,11 @@ replicated by nobody.
 from __future__ import annotations
 
 import shlex
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from typing import Any, ClassVar, override
 
 from pcswitcher.executor import Executor
+from pcswitcher.jobs.context import JobContext
 from pcswitcher.jobs.packages.apt_policy import installed_origins_by_package, packages_installed_from_no_repository
 from pcswitcher.jobs.packages.probes import require_answer
 from pcswitcher.jobs.packages.state import DecisionEntry
@@ -58,9 +66,17 @@ class ManualDebSyncJob(UnreproducibleSyncJob):
     name: ClassVar[str] = "manual_deb_sync"
     manager_id: ClassVar[str] = "manual_deb"
 
+    def __init__(self, context: JobContext) -> None:
+        super().__init__(context)
+        # The source's installed set, read once per run. Both detection hooks need it —
+        # `capture_source_items` to ask apt about it, `query_target_items` to know which of
+        # the target's names the source does not have — and the source is the machine a sync
+        # never changes, so one read answers both whichever order they are called in.
+        self._source_installed_cache: dict[str, str] | None = None
+
     # No configurable properties: mirrors AptSyncJob's empty schema — only the enable flag
-    # in sync_jobs is needed. D-32 forbids an empty placeholder config SECTION, so there is
-    # no `manual_deb_sync:` block in default-config.yaml, but the in-code CONFIG_SCHEMA
+    # in sync_jobs is needed. A job earns a config SECTION only when it has a real key, so
+    # there is no `manual_deb_sync:` block in default-config.yaml, but the in-code CONFIG_SCHEMA
     # ClassVar still declares the empty object every job carries.
     CONFIG_SCHEMA: ClassVar[dict[str, Any]] = {
         "type": "object",
@@ -70,9 +86,11 @@ class ManualDebSyncJob(UnreproducibleSyncJob):
 
     # -- Detection (D-18), run on both machines (`PKG-FR-MANUAL-DIFF`) -------------------
 
-    async def _scan_no_candidate_apt_packages(self, installed_names: Sequence[str]) -> list[UnreproducibleItem]:
-        """D-18: installed packages whose INSTALLED version comes from no repository the
-        SOURCE has configured — put there by `dpkg --install` of a bare `.deb`.
+    async def _scan_no_candidate_apt_packages(
+        self, installed_names: Sequence[str], executor: Executor, machine: str
+    ) -> frozenset[str]:
+        """D-18: of `installed_names`, those whose INSTALLED version comes from no repository
+        `machine` has configured — put there by `dpkg --install` of a bare `.deb`.
 
         Over the whole INSTALLED set, not `apt-mark showmanual`. `PKG-FR-MANUAL-SCOPE` draws
         the boundary at "every installed version no configured repository supplies", and
@@ -100,36 +118,36 @@ class ManualDebSyncJob(UnreproducibleSyncJob):
         nothing said about it anywhere. Every name here is installed on this machine, so apt
         owes a block for each and no block at all is apt not answering rather than a machine
         with unusual packages.
+
+        Run on the TARGET too, over the names the source does not have installed, so a `.deb`
+        the source has dropped can become a removal (`PKG-FR-MANUAL-REMOVE`). The same guard
+        holds there for the same reason: every name handed to it is installed on the machine
+        being asked.
         """
         if not installed_names:
-            return []
+            return frozenset()
 
         quoted = " ".join(shlex.quote(name) for name in installed_names)
         command = f"apt-cache policy {quoted}"
-        result = await self.source.run_command(command)
+        result = await executor.run_command(command)
         # A key per block apt printed, whatever it said inside it — so this counts blocks and
         # not packages, and a machine whose whole manual set is bare `.deb`s still answers.
         require_answer(
             command,
             result,
-            self.machines.source,
+            machine,
             answers=len(installed_origins_by_package(result.stdout)),
             answer_noun="package block",
         )
-        no_repository = packages_installed_from_no_repository(result.stdout, installed_names)
-        return [
-            UnreproducibleItem(
-                origin=_ORIGIN,
-                identifier=name,
-                label=f"{name} (installed from no configured repository)",
-            )
-            for name in sorted(no_repository)
-        ]
+        return frozenset(packages_installed_from_no_repository(result.stdout, installed_names))
 
-    async def _installed_names(self, executor: Executor, machine: str) -> list[str]:
-        """Every package name dpkg reports as INSTALLED on `machine` — the population
-        `PKG-FR-MANUAL-SCOPE` draws the no-candidate scan from on the source, and the whole
-        of what the target holds (`PKG-FR-MANUAL-DIFF`).
+    async def _installed(self, executor: Executor, machine: str) -> dict[str, str]:
+        """`name -> installed version` for everything dpkg reports as INSTALLED on `machine`.
+
+        The population `PKG-FR-MANUAL-SCOPE` draws the no-candidate scan from on the source,
+        the whole of what the target holds (`PKG-FR-MANUAL-DIFF`), and the version each
+        machine is compared on (`PKG-FR-MANUAL-VERSION`) — one read answering all three,
+        since dpkg prints the version in the same record as the name.
 
         `${Package}`, not `${binary:Package}`: the arch-qualified form only appears for a
         foreign architecture, and `apt-cache policy` speaks the plain name. Two dpkg entries
@@ -141,34 +159,95 @@ class ManualDebSyncJob(UnreproducibleSyncJob):
         read as data would report "nothing on this machine was hand-installed" — the one
         answer this job exists to be able to contradict.
         """
-        command = "dpkg-query --show --showformat='${Package}\\t${db:Status-Status}\\n'"
+        command = "dpkg-query --show --showformat='${Package}\\t${Version}\\t${db:Status-Status}\\n'"
         result = await executor.run_command(command)
-        fields = (line.partition("\t") for line in lines_of(result.stdout))
-        installed = sorted({name for name, _, status in fields if status == "installed"})
+        installed: dict[str, str] = {}
+        for line in lines_of(result.stdout):
+            fields = line.split("\t")
+            if len(fields) == 3 and fields[2] == "installed":
+                installed[fields[0]] = fields[1]
         require_answer(command, result, machine, answers=len(installed), answer_noun="installed package")
         return installed
+
+    async def _source_installed(self) -> dict[str, str]:
+        """The source's installed set, read once per run (see `__init__`)."""
+        if self._source_installed_cache is None:
+            self._source_installed_cache = await self._installed(self.source, self.machines.source)
+        return self._source_installed_cache
 
     @override
     async def capture_source_items(self) -> Sequence[UnreproducibleItem]:
         """The source's hand-installed `.deb` packages. One `dpkg-query` names the source's
         installed set here and its result feeds the no-candidate scan.
         """
-        return await self._scan_no_candidate_apt_packages(
-            await self._installed_names(self.source, self.machines.source)
+        installed = await self._source_installed()
+        no_repository = await self._scan_no_candidate_apt_packages(
+            sorted(installed), self.source, self.machines.source
         )
+        return [
+            UnreproducibleItem(
+                origin=_ORIGIN,
+                identifier=name,
+                label=f"{name} (installed from no configured repository)",
+            )
+            for name in sorted(no_repository)
+        ]
 
     @override
     async def query_target_items(self) -> Sequence[UnreproducibleItem]:
-        """What the TARGET already holds, in the source's own identities, so `plan()` can
-        drop a finding that is already there (`PKG-FR-MANUAL-DIFF`).
+        """What the TARGET holds, in the source's own identities (`PKG-FR-MANUAL-DIFF`).
 
-        A package is held when dpkg reports the name installed AT ALL, whatever origin put
-        it there: software that is on the machine is on the machine, and running the
-        source's whole `apt-cache policy` origin analysis here would cost a second
-        3-second, 718KB read to answer a question its own installed set already answers.
+        Every name dpkg reports installed is here, whatever origin put it there: software
+        that is on the machine is on the machine, so the source's copy of that name is never
+        offered for install and its two versions are compared instead.
+
+        `own_finding` is the second reading, and it costs the one extra command this job
+        makes: among the names the source does NOT have installed at all, the target's own
+        apt is asked the same no-repository question, and a name it answers yes to is a
+        hand-installed `.deb` the source has dropped — a removal (`PKG-FR-MANUAL-REMOVE`).
+        Every other row is left unflagged, so nothing this job could not put back is ever
+        offered for deletion. Narrowing to the names the source lacks is what keeps the cost
+        proportionate: the same question over a whole installed set costs about three seconds
+        and 700KB, and a name the source still has cannot be a removal whatever apt says
+        about it.
         """
-        installed = await self._installed_names(self.target, self.machines.target)
-        return [UnreproducibleItem(origin=_ORIGIN, identifier=name, label=name) for name in installed]
+        installed = await self._installed(self.target, self.machines.target)
+        source_installed = await self._source_installed()
+        target_only = sorted(name for name in installed if name not in source_installed)
+        no_repository = await self._scan_no_candidate_apt_packages(target_only, self.target, self.machines.target)
+        return [
+            UnreproducibleItem(
+                origin=_ORIGIN,
+                identifier=name,
+                label=f"{name} (installed from no configured repository)" if name in no_repository else name,
+                own_finding=name in no_repository,
+            )
+            for name in sorted(installed)
+        ]
+
+    @override
+    async def installed_versions(self, item_ids: Collection[str], *, on_source: bool) -> Mapping[str, str | None]:
+        """Each package's installed version on one machine, from one `dpkg-query`.
+
+        Read fresh rather than taken from the capture: the converge loop asks this again
+        after every replay, and an answer from before the change would report every
+        convergence as successful. A record dpkg prints with an empty version answers `None`
+        like a name it does not have at all — both mean this machine did not say.
+        """
+        executor = self.source if on_source else self.target
+        machine = self.machines.source if on_source else self.machines.target
+        installed = await self._installed(executor, machine)
+        prefix = UnreproducibleItem.id_prefix(_ORIGIN)
+        return {item_id: installed.get(item_id.removeprefix(prefix)) or None for item_id in item_ids}
+
+    @override
+    def removal_command(self, item: UnreproducibleItem) -> str:
+        """`apt-get remove` for a hand-installed `.deb` the source no longer has.
+
+        Never `purge`, for `PKG-FR-APT-REMOVE`'s reason: what apt leaves under `/etc` can be
+        deleted by hand at any time, and a purge cannot be undone.
+        """
+        return f"sudo apt-get remove --assume-yes {shlex.quote(item.identifier)}"
 
     @override
     async def observe_absent_marks(self, entries: Mapping[str, DecisionEntry], *, on_source: bool) -> frozenset[str]:
@@ -196,18 +275,22 @@ class ManualDebSyncJob(UnreproducibleSyncJob):
         if not packages:
             return frozenset()
 
-        installed = frozenset(await self._installed_names(executor, machine))
+        installed = await self._installed(executor, machine)
         return frozenset(item_id for item_id, name in packages.items() if name not in installed)
 
     @override
     async def validate(self) -> list[ValidationError]:
         """The commands this job's own detection runs: `apt-cache` and `dpkg` on the source,
-        and `dpkg` on the target, which is read too now that a finding the target already
-        holds is not presented (`PKG-FR-MANUAL-DIFF`). Both machines are only ever read for
-        detection, so no sudo is needed for it. A snippet's own sudo needs are unpredictable
-        (an opaque blob, D-20), so this job does NOT pre-validate target sudo; a snippet that
-        needs it and lacks it fails as a per-item converge failure (D-27), reported like any
-        other.
+        and `apt-cache` and `dpkg` on the target, which is read too, for what it already
+        holds and for the hand-installed `.deb`s the source has dropped
+        (`PKG-FR-MANUAL-DIFF`, `PKG-FR-MANUAL-REMOVE`). Both machines are only ever read for
+        detection, so no sudo is needed for it.
+
+        Target sudo is deliberately still NOT pre-validated, although an approved removal
+        needs it: a snippet's own privilege needs are unpredictable (an opaque blob, D-20),
+        a run that approves no removal needs none, and failing validation up front would
+        refuse the job to every user who only ever installs. A removal that lacks the
+        privilege fails as a per-item converge failure (D-27), reported like any other.
 
         Sequential checks appending to `errors`, never raising mid-validate (matches
         `AptSyncJob.validate()`'s shape).
@@ -219,6 +302,16 @@ class ManualDebSyncJob(UnreproducibleSyncJob):
             errors.append(
                 self._validation_error(
                     Host.SOURCE, "apt-cache is not available on source (required to detect unreproducible packages)"
+                )
+            )
+
+        target_apt_cache_check = await self.target.run_command("apt-cache --version")
+        if not target_apt_cache_check.success:
+            errors.append(
+                self._validation_error(
+                    Host.TARGET,
+                    "apt-cache is not available on target (required to tell which of its packages no repository "
+                    "can supply)",
                 )
             )
 
@@ -244,9 +337,13 @@ class ManualDebSyncJob(UnreproducibleSyncJob):
     @override
     def describe_first_sync_scope(cls, config: dict[str, Any]) -> FirstSyncScope | None:
         """Name this job's destructive first-sync scope (ADR-015): replaying install
-        snippets for hand-installed `.deb` packages."""
+        snippets for hand-installed `.deb` packages, and removing the ones the source has
+        dropped."""
         return FirstSyncScope(
             job_name=cls.name,
-            scope_items=["hand-installed .deb packages (via recorded install snippets)"],
-            mechanism="replay install snippet per item, after review",
+            scope_items=[
+                "hand-installed .deb packages (via recorded install snippets)",
+                "hand-installed .deb packages the source no longer has (apt-get remove)",
+            ],
+            mechanism="replay install snippet or remove, per item, after review",
         )

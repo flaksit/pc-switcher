@@ -32,7 +32,7 @@ from pcswitcher.jobs.packages.review import (
     TerminalUIReviewer,
     policy_decision,
 )
-from pcswitcher.jobs.packages.state import filter_inert, marks_on_either
+from pcswitcher.jobs.packages.state import SnippetBodies, filter_inert, marks_on_either
 from pcswitcher.jobs.packages.sync_core import (  # pyright: ignore[reportPrivateUsage]
     _ACTION_VOCABULARY,
     BLOCK_ITEM_CLASSES,
@@ -820,7 +820,9 @@ class TestNoWorkBetweenTheQuestionsOfOneRound:
 
         commands_issued_when_each_screen_opened: list[int] = []
 
-        def screen(_title: str, *, rows: Sequence[Any], options: Sequence[Any]) -> MagicMock:
+        def screen(
+            _title: str, *, rows: Sequence[Any], options: Sequence[Any], explanation: str | None = None
+        ) -> MagicMock:
             commands_issued_when_each_screen_opened.append(
                 len(context.source.run_command.call_args_list)  # pyright: ignore[reportAttributeAccessIssue]
                 + len(context.target.run_command.call_args_list)  # pyright: ignore[reportAttributeAccessIssue]
@@ -984,7 +986,13 @@ class TestFinalizeUnreproducible:
         job.accept_review(
             plan,
             ReviewOutcome(
-                decisions={}, was_interactive=True, snippets={diff.item_id: "sudo dpkg --install /tmp/x.deb"}
+                decisions={},
+                was_interactive=True,
+                snippets={
+                    diff.item_id: SnippetBodies(
+                        install_body="sudo dpkg --install /tmp/x.deb", version_body="dpkg-query --show brscan3"
+                    )
+                },
             ),
         )
 
@@ -1025,7 +1033,7 @@ class TestFinalizeUnreproducible:
             ReviewOutcome(
                 decisions={diff.item_id: Decision.SKIP_ALWAYS},
                 was_interactive=True,
-                snippets={diff.item_id: "echo x"},
+                snippets={diff.item_id: SnippetBodies(install_body="echo x", version_body="echo v")},
             ),
         )
 
@@ -1046,7 +1054,7 @@ class TestFinalizeUnreproducible:
             ReviewOutcome(
                 decisions={diff.item_id: Decision.SKIP_ALWAYS},
                 was_interactive=False,
-                snippets={diff.item_id: "echo x"},
+                snippets={diff.item_id: SnippetBodies(install_body="echo x", version_body="echo v")},
             ),
         )
 
@@ -1083,7 +1091,7 @@ class TestBaseHooksAreNoOps:
             ReviewOutcome(
                 decisions={diff.item_id: Decision.SKIP_ALWAYS},
                 was_interactive=True,
-                snippets={diff.item_id: "echo x"},
+                snippets={diff.item_id: SnippetBodies(install_body="echo x", version_body="echo v")},
             ),
         )
 

@@ -224,22 +224,26 @@ _READ_ONLY_CALLS: dict[str, int] = {
     "jobs/install_on_target.py::InstallOnTargetJob.validate::run_command": 1,
     "jobs/install_on_target.py::InstallOnTargetJob.execute::run_command": 1,
     # manual_deb_sync: the two reads its detection makes, each on whichever machine it is
-    # handed, since both are read now that a finding the target already holds is not
-    # presented (`PKG-FR-MANUAL-DIFF`); validate checks apt-cache and dpkg on the source and
-    # dpkg on the target.
+    # handed — both machines are read for what they hold and for what only they hold
+    # (`PKG-FR-MANUAL-DIFF`, `PKG-FR-MANUAL-REMOVE`) — and the installed set again per
+    # machine for the versions the diff compares (`PKG-FR-MANUAL-VERSION`). validate checks
+    # apt-cache and dpkg on both machines. The removal itself is gated and is not here.
     "jobs/manual_deb_sync.py::ManualDebSyncJob._scan_no_candidate_apt_packages::run_command": 1,
-    "jobs/manual_deb_sync.py::ManualDebSyncJob._installed_names::run_command": 1,
-    "jobs/manual_deb_sync.py::ManualDebSyncJob.validate::run_command": 3,
-    # manual_snap_sync: one `snap list --all` per machine — the source's sideloads and what
-    # the target already holds (`PKG-FR-MANUAL-DIFF`); validate checks `snap version` on both.
-    # No sudo on either machine, unlike snap_sync: listing snaps needs none.
+    "jobs/manual_deb_sync.py::ManualDebSyncJob._installed::run_command": 1,
+    "jobs/manual_deb_sync.py::ManualDebSyncJob.validate::run_command": 4,
+    # manual_snap_sync: one `snap list --all` per machine — the source's sideloads, what the
+    # target holds, and the `Version` column both are compared on; validate checks
+    # `snap version` on both. No sudo on either machine, unlike snap_sync: listing snaps
+    # needs none, and the removal itself is gated.
     "jobs/manual_snap_sync.py::ManualSnapSyncJob._installed_snaps::run_command": 1,
     "jobs/manual_snap_sync.py::ManualSnapSyncJob.validate::run_command": 2,
-    # manual_flatpak_sync: the two reads its detection makes (the installed apps and, on the
-    # source alone, the configured remote names per scope) plus the presence check behind
+    # manual_flatpak_sync: the two reads its detection makes (the installed apps and the
+    # configured remote names per scope, on both machines now that a target-only bundle can
+    # be a removal), the version listing the diff compares, and the presence check behind
     # mark reconciliation; validate checks flatpak on both machines.
     "jobs/manual_flatpak_sync.py::ManualFlatpakSyncJob._configured_remotes::run_command": 1,
     "jobs/manual_flatpak_sync.py::ManualFlatpakSyncJob._installed_apps::run_command": 1,
+    "jobs/manual_flatpak_sync.py::ManualFlatpakSyncJob.installed_versions::run_command": 1,
     "jobs/manual_flatpak_sync.py::ManualFlatpakSyncJob.observe_absent_marks::run_command": 1,
     "jobs/manual_flatpak_sync.py::ManualFlatpakSyncJob.validate::run_command": 2,
     # manual_installs_sync: the unowned-file scan's four steps, each on whichever machine it
@@ -280,6 +284,15 @@ _READ_ONLY_CALLS: dict[str, int] = {
 # timestamp a successful `sudo` refreshes is sudo's own bookkeeping and no state this tool
 # tracks. What lands here is a read that writes something a filesystem would show.
 _TOLERATED_SIDE_EFFECTS: dict[str, _ToleratedSideEffect] = {
+    "jobs/packages/state.py::SnippetRegistry.installed_version::run_command": _ToleratedSideEffect(
+        1,
+        "the entry's `version_body`, run on both machines during `plan()` to read which version of the item is "
+        "installed there (D-22). It is the user's OWN shell code, so nothing static can prove it state-free — "
+        "the read-only obligation is the author's, stated in the editor's own note and in the registry header, "
+        "and `PKG-FR-VERSION-SNIPPET` puts it there deliberately. Gating it is refused rather than omitted: it "
+        "runs on every sync before the run has proposed anything, so a confirmation here would ask the user to "
+        "approve a command per item per machine before they had been shown a single change",
+    ),
     "jobs/flatpak_sync.py::FlatpakSyncJob._refs_the_remote_offers::run_command": _ToleratedSideEffect(
         1,
         "`flatpak remote-ls` — needs no elevation even for a `--system` remote, but populates the invoking "

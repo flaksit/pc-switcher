@@ -245,12 +245,12 @@ properties:
 
   # The apt_sync/snap_sync/flatpak_sync/manual_deb_sync/manual_snap_sync/
   # manual_flatpak_sync/manual_installs_sync jobs have no config section: they earn one only
-  # when they gain a real key (D-32). A config omitting them still
+  # when they gain a real key (see the section convention below). A config omitting them still
   # validates, and config.py's get_job_config returns {} for an absent section, which each
   # job's empty CONFIG_SCHEMA accepts. Enable/disable via sync_jobs only.
 
 # =============================================================================
-# DEVELOPER NOTE: Config Key Naming Convention
+# DEVELOPER NOTE: Config Key Conventions
 # =============================================================================
 # All job configuration MUST use a top-level key that exactly matches the
 # job's module name (the `name` class attribute). This ensures:
@@ -263,6 +263,12 @@ properties:
 #   - btrfs_snapshots.py (BtrfsSnapshotJob) -> btrfs_snapshots:
 #   - dummy_success (DummySuccessJob) -> dummy_success:
 #   - user_data.py (UserDataJob) -> user_data:
+#
+# A job earns a top-level SECTION only once it has a real key — never an empty
+# placeholder for a possible future one, and never a section that only carries a
+# banner comment. A job with no keys is enabled through `sync_jobs` alone; its
+# absent section resolves to {} in Configuration.get_job_config, which the empty
+# CONFIG_SCHEMA every such job declares accepts.
 #
 # Future job configs will be added here as top-level keys when features are implemented:
 # user_data:

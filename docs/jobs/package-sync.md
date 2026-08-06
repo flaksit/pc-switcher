@@ -243,17 +243,17 @@ A machine-specific package never appears in a review again, which is why the run
 
 Some installed things no package manager can reproduce — a bare `.deb` downloaded and installed by hand, which is `manual_deb_sync`'s half, a snap installed from a local file, which is `manual_snap_sync`'s; a flatpak app no remote can supply, which is `manual_flatpak_sync`'s; or software dropped under `/usr/local` or `/opt` by an install script, which is `manual_installs_sync`'s. Each job surfaces its own findings in its own review as items needing a resolution, and all of them resolve the findings the same way, out of one registry.
 
-`manual_deb_sync` asks one question of everything dpkg reports as installed: which package's installed version comes from no repository this machine has configured. A package's own name is all it needs on the other machine — software that is there is there, whatever put it there — so a name the target already has installed is never raised.
+`manual_deb_sync` asks one question of everything dpkg reports as installed: which package's installed version comes from no repository this machine has configured. A package's own name is all it needs on the other machine — software that is there is there, whatever put it there — so a name the target already has installed is never offered for installation; the two copies' `dpkg-query` versions are compared instead.
 
-`manual_snap_sync` asks the same kind of question of `snap list`: which snaps sit at an `x`-prefixed revision, the one snapd gives a snap installed from a file. The snap's name is what the answer is filed under, so reinstalling from a newer `.snap` keeps your snippet working rather than asking again, and a name the target already has — sideloaded or from the store — is never raised. The revision is shown on the item's line so you can tell which build you are being asked about.
+`manual_snap_sync` asks the same kind of question of `snap list`: which snaps sit at an `x`-prefixed revision, the one snapd gives a snap installed from a file. The snap's name is what the answer is filed under, so reinstalling from a newer `.snap` keeps your snippet working rather than asking again, and a name the target already has — sideloaded or from the store — is never offered for installation. What is compared is the snap's own **version**, never its revision: two machines' `x1`/`x2` numbers count how often each one reinstalled, not which build it has. The revision is shown on the item's line so you can tell which build you are being asked about.
 
-`manual_flatpak_sync` asks the same shape of question of every installed flatpak app: which app's origin names no remote this machine configures **in that app's own scope**. Scope matters because flatpak keeps a separate set of remotes per installation, so a `flathub` configured system-wide says nothing about a user-scope app that names it. An app the other machine already has installed in the same scope is never raised, whatever remote put it there.
+`manual_flatpak_sync` asks the same shape of question of every installed flatpak app: which app's origin names no remote this machine configures **in that app's own scope**. Scope matters because flatpak keeps a separate set of remotes per installation, so a `flathub` configured system-wide says nothing about a user-scope app that names it. An app the other machine already has installed in the same scope is never offered for installation, whatever remote put it there; the two copies' `flatpak list` versions are compared instead.
 
 `manual_installs_sync`'s scan is deliberately shallow. It looks in `/opt`, directly under `/usr/local`, and inside `/usr/local`'s `bin`, `sbin`, `lib`, `games` and `src` — one level each — and reports whatever dpkg does not own. It names what is there so you can decide about it; it never walks a tree, so an application under `/opt` is one finding rather than a thousand. `etc`, `include`, `man` and `share` are not looked into at all: what a hand install puts there comes with an application the scan finds elsewhere.
 
 Three things are never offered by that scan. A path a package owns. One of the nine directories Ubuntu itself creates under `/usr/local` — `bin`, `etc`, `games`, `include`, `lib`, `man`, `sbin`, `share`, `src` — so a stock `/usr/local/bin` is not something you are asked to write an install snippet for. And a directory with no file anywhere beneath it, which is a leftover shape rather than software.
 
-You are asked about only what the OTHER machine does not already have. Both machines are read, and a finding that is already there is dropped. That is what stops one snippet's several traces — the tree it unpacks under `/opt` and the symlink in `bin` that starts it — from coming back at you on every later sync once the snippet has run. Nothing the other machine alone has is ever named, in either direction.
+You are asked to *install* only what the other machine does not already have. Both machines are read, and something already there is never offered again — that is what stops one snippet's several traces, the tree it unpacks under `/opt` and the symlink in `bin` that starts it, from coming back at you on every later sync once the snippet has run. What happens to it instead is a version comparison, below.
 
 One directory under `/opt` cannot be judged by looking at it, and you are asked about it while the sync is still planning, before the review. If `/opt/something` holds files of its own it is one application. If it holds a single directory and no file, that directory is the application. If it holds several directories and no file, it is either one application or one publisher's directory holding several, and only you know which — so the question names what is inside and offers the two answers as what each would mean for the other machine.
 
@@ -263,16 +263,48 @@ Each finding then gets a decision screen of its own — one item per screen, bec
 - `<s>` `skip now` — `do not install on nomad for now; will be asked again next sync`.
 - `<x>` `never install` — `do not install on nomad for good; it is atlas's own, and will not be asked again`.
 
-An install snippet is a shell command that reproduces the item — the tool never parses, interprets, or reasons about it. It is **stored and replayed verbatim**, with the one exception that the blank lines around what you typed are dropped when you submit it, so the registry file stays readable and what you read there is what runs. It runs **non-interactively**: no stdin is supplied during replay, so a command that prompts (for example a debconf question) fails rather than hanging the sync. A typical shape:
+The same screen appears with `update` in place of `install` when both machines have the item at different versions and no snippet is recorded for it yet: there is nothing to replay, so the question is how to reproduce it, and the verb says update because the software is already there.
+
+Answering `<y>` opens **two** editors, one after the other, because an entry needs both recipes and neither may be empty.
+
+The first is the **install-or-update snippet**: the shell commands that reproduce the item. The name is the contract — it is replayed onto a machine that may already hold an *older* version of the thing, so write it to install or to update, whichever applies. An installer that quietly does nothing when its target directory already exists is the one failure pc-switcher cannot fix for you, and the editor's own screen says so. A typical shape:
 
 ```bash
 sudo DEBIAN_FRONTEND=noninteractive dpkg --install /path/to/package.deb || \
 sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes --fix-broken
 ```
 
-Snippets run **unprivileged**. On the target the body is replayed as `bash -c '<body>'` as the target user, with no outer `sudo` wrapped around it. Any privilege a snippet needs must be written inside the snippet by its author — that is why the example above calls `sudo` itself.
+The second is the **installed-version snippet**: one command that prints the version of the item installed on whichever machine runs it — not the version the first snippet would install. `/opt/foo/bin/foo --version` is the usual shape.
 
-The snippet registry lives at `~/.config/pc-switcher/package-snippets.yaml`, and one file holds both jobs' snippets: a snippet is keyed by the finding it reproduces, never by the job that found it. `folder_sync` never carries it, even when `~/.config` is inside a synced folder — it reaches the target through those jobs' own push and its question, below, and nowhere else. Unlike the machine-local decision files, it **does** reach the target: how to install something is knowledge about the *package*, not the machine, so a snippet authored on one machine reproduces the same item on any peer. Whether an item counts as reproducible is decided by whether the **source** holds a snippet for it; a snippet present only on the target does not make the item reproducible.
+That one runs on **both** machines, on **every** sync, while the run is still planning and before anything has been proposed. So it **must be read-only**. pc-switcher cannot check that and does not ask you to confirm it — it is the one command in a sync that is deliberately outside `--confirm-each-command`, because a confirmation per item per machine would arrive before you had been shown a single change. Its output is redacted like everything else, so a version string carrying a credential is withheld.
+
+Only `manual_installs_sync` actually runs it: the other three jobs ask `dpkg`, `snap` or `flatpak` for a version instead. It is still required for all four, because one file holds all of their entries and a half-filled entry cannot be read at all.
+
+Both snippets are **stored and replayed verbatim**, with the one exception that the blank lines around what you typed are dropped when you submit, so the registry file stays readable and what you read there is what runs. The tool never parses, interprets or reasons about either. Both run **non-interactively**: no stdin is supplied, so a command that prompts (for example a debconf question) fails rather than hanging the sync.
+
+Snippets run **unprivileged**. On the target the body is replayed as `bash -c '<body>'` as the target user, with no outer `sudo` wrapped around it. Any privilege a snippet needs must be written inside the snippet by its author — that is why the example above calls `sudo` itself. That includes a removal: `apt-get remove`, `snap remove` and deleting a path under `/opt` all need root on the target, and pc-switcher does not check for it up front — a run where you approve no removal needs none, so an approved removal that cannot elevate fails as its own item and the rest of the run continues.
+
+### Keeping a hand-installed thing up to date
+
+Once both machines have the item, they are compared on the **version each one has installed**. The same version is convergence and you are told nothing. A different version is a question, whichever machine holds the higher number — a sync goes one way, from the machine you launched it on, and the numbers never reverse that.
+
+Three answers, one item per screen:
+
+- `<y>` `update` — run the recorded snippet on the other machine.
+- `<w>` `new snippet` — rewrite it first, in an editor opened on what is already there, then run it. Both recipes are offered, so a fix that only touches the install half costs one keystroke on the second.
+- `<s>` `skip now` — leave that machine's version as it is; you are asked again next sync.
+
+There is no permanent answer here, for the reason a snap's revision has none: nobody keeps a version as a standing preference about one machine.
+
+**A snippet that exits successfully has not necessarily converged anything.** An install script replayed as an update very often finds its directory already there and does nothing, exiting 0. So the version is read again afterwards, and if it has not moved you are asked once more — this time without the option of running the same snippet again, since that has just been tried and changed nothing. What is left is writing a new snippet or leaving it for this run.
+
+There is deliberately no "purge and retry" answer. With no comparison of the files themselves, purging cannot change what the version snippet reports; if your installer will not overwrite, write the `rm -rf … &&` into your own new snippet, where you decide exactly what goes.
+
+A run with nobody at the keyboard makes one attempt with the recorded snippet and then leaves the item alone with a warning. It is reported as neither applied nor failed.
+
+**What this does not check.** The version string is the only evidence of drift pc-switcher ever looks for. Nothing compares the files under `/opt/foo` and nothing hashes them. So the guarantee is exactly the one apt, snap and flatpak give you — same version, converged — and the cost is that a half-applied or corrupted copy whose version still reads `2.1.0` is invisible, on every run, by design.
+
+The snippet registry lives at `~/.config/pc-switcher/package-snippets.yaml`, and one file holds every job's entries: an entry is keyed by the finding it reproduces, never by the job that found it. Each entry carries both recipes, and one carrying only an `install_body` cannot be read at all — the sync stops naming the file so you can repair it, exactly as it does for a registry that is corrupt. There is no upgrade path for a registry written before the second recipe existed: add a `version_body` to each entry by hand. `folder_sync` never carries it, even when `~/.config` is inside a synced folder — it reaches the target through those jobs' own push and its question, below, and nowhere else. Unlike the machine-local decision files, it **does** reach the target: how to install something is knowledge about the *package*, not the machine, so a snippet authored on one machine reproduces the same item on any peer. Whether an item counts as reproducible is decided by whether the **source** holds a snippet for it; a snippet present only on the target does not make the item reproducible.
 
 ### Registry push and consolidation
 
@@ -289,7 +321,7 @@ That question displays a changed body in full, so a snippet that fetches from a 
 Every unreproducible item is resolved before the run continues: it gets a snippet, it is declared the source machine's own and never installed on the target, or you skip it now. There is no fourth "unresolved" outcome on an interactive run.
 
 - **Ctrl-C** at the review means you want to stop, so it aborts the whole sync — never a silent per-item skip.
-- Choosing "add an install snippet" and then submitting an **empty** body is not accepted: the review re-prompts the three-way choice rather than falling through. You must enter a real snippet or pick one of the two skips.
+- Choosing "add an install snippet" and then submitting an **empty** body is not accepted, for either of the two editors: the review re-prompts the three-way choice rather than falling through. You must enter both snippets or pick one of the two skips.
 - A **non-interactive** run (no TTY) cannot ask, so it marks every undecided item skip-now and reports them; it never records a snippet or a machine-specific mark. Re-run interactively to actually resolve anything.
 
 ## When a package manager cannot be read
@@ -343,6 +375,8 @@ One environment variable overrides all of that, and it is not a feature: `PCSWIT
 ## Versions
 
 apt and flatpak let versions **float**. pc-switcher installs by name and takes whatever each machine's own repositories currently offer; a version difference between source and target is detected and reported in the review, never silently forced. (Deliberate pinning still replicates: `/etc/apt/preferences.d` files are always synced, without a review line — see [Repositories, pins and keys are derived](#repositories-pins-and-keys-are-derived).)
+
+Software no package manager handles is the other exception, and for the opposite reason to snap's. Floating is only worth it because a repository will eventually bring the other machine up to the same version by itself; nothing will ever do that for a `.deb` you downloaded, a snap you sideloaded or a tarball you unpacked into `/opt`. So there a version difference is **converged**, not reported — see [Keeping a hand-installed thing up to date](#keeping-a-hand-installed-thing-up-to-date).
 
 snap is the exception: it converges the source's exact **revision and channel**. The reason is where snap keeps per-user application data. snap stores it in revision-number-named directories, `~/snap/<app>/<rev>/`, whereas apt uses stable paths and flatpak uses id-named ones (`~/.var/app/<id>`). Only snap's data path embeds the version, so for `folder_sync` to mirror a snap's data cleanly both machines must be on the same revision — hence convergence.
 
@@ -436,7 +470,9 @@ A pin file is shown **whole**: its content is printed above the screen, one file
 
 The distribution's own source files are never offered for removal at all.
 
-`manual_deb_sync`, `manual_snap_sync`, `manual_flatpak_sync` and `manual_installs_sync` are **install-only**: each reads the target only to tell what is already there, and keeps no record of what it put there, so none of them ever proposes removals. Removing a hand-installed item on the target is manual work today (tracking removal for manual installs is deferred to a future issue).
+`manual_deb_sync`, `manual_snap_sync`, `manual_flatpak_sync` and `manual_installs_sync` propose removals too, and each uses its own ecosystem's: `apt-get remove` for a hand-installed `.deb`, `snap remove` for a sideload, `flatpak uninstall` for a bundle-installed app, and deleting the path for an unowned install. Only what the *target's own* detection finds is offered — a package a repository supplies, a snap from the store, an app a configured remote serves are each another job's to remove, and none of them is deleted here.
+
+Deleting a path is the one whose reach is smaller than it looks, and its screen says so: `rm -rf /opt/foo` takes the directory and nothing else, while whatever installed it will usually also have dropped a `.desktop` file, a symlink in `/usr/local/bin` or a service unit somewhere the scan never looks. Nothing records where, so those stay. There are no uninstall snippets: three of the four jobs have a package manager whose own removal is exact, the fourth has a path, and a second recipe to write would buy a direction you can always carry out by hand.
 
 ## Prerequisites: passwordless sudo
 
@@ -445,4 +481,4 @@ Each enabled package job needs passwordless sudo for a handful of binaries:
 - **`apt_sync`** — on the source (to read `/etc/apt` configuration) and the target (to install packages, write and remove `/etc/apt` configuration including signing keys, and set or clear apt holds via `apt-mark`). Both hosts additionally need it for the sync-window pause of the system's own apt update timers (`sudo systemctl stop/start` on `apt-daily.timer` and `apt-daily-upgrade.timer`, plus the `sudo systemd-run` that schedules their automatic restart). The runtime pause tolerates a failure without aborting the sync, but the sudo grant is checked up front on both machines.
 - **`snap_sync`** — on both the **source** and the **target**; validation fails if either lacks it. The target needs it to install, refresh and remove snaps, and both hosts need it to pause snapd's auto-refresh for the sync window (`sudo snap set system refresh.hold`, plus the matching `sudo snap get` — snapd requires admin rights to read snap configuration as well as to write it). The runtime pause itself tolerates a transient failure without aborting the sync, but the sudo grant is checked up front on both machines.
 - **`flatpak_sync`** — on the target only, and only when a system-scope ref, remote or mask is in play on either machine. A user-scope-only sync never asks for root.
-- **`manual_deb_sync`**, **`manual_snap_sync`**, **`manual_flatpak_sync`** and **`manual_installs_sync`** — none needs any: they only read `dpkg`, `apt-cache`, `snap list` or `flatpak` to find their items, and a snippet author decides its own privilege needs, since the replay runs unprivileged.
+- **`manual_deb_sync`**, **`manual_snap_sync`**, **`manual_flatpak_sync`** and **`manual_installs_sync`** — none is checked for any: they only read `dpkg`, `apt-cache`, `snap list` or `flatpak` to find their items, and a snippet author decides its own privilege needs, since the replay runs unprivileged. An approved **removal** does need root on the target for three of them, and it is still not checked up front: a run where you approve none needs nothing, and a removal that cannot elevate fails as its own item.

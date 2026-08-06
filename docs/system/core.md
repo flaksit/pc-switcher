@@ -114,7 +114,7 @@ Lineage: 001-US-6
 
 **Example Configuration**: `pcswitcher/default-config.yaml` is the shipped, fully commented example; `pc-switcher init` writes it verbatim to `~/.config/pc-switcher/config.yaml` together with the `home.filter` and `root.filter` starter files it references.
 
-**Configuration Schema**: `src/pcswitcher/schemas/config-schema.yaml`. Job-specific settings are top-level keys outside `sync_jobs` (`btrfs_snapshots`, `disk_space_monitor`, `folder_sync`, `dummy_success`, `dummy_fail`). The five package jobs and `vscode_state_sync` have no config section — they are enabled through `sync_jobs` alone.
+**Configuration Schema**: `src/pcswitcher/schemas/config-schema.yaml`. Job-specific settings are top-level keys outside `sync_jobs` (`btrfs_snapshots`, `disk_space_monitor`, `folder_sync`, `dummy_success`, `dummy_fail`). The seven package jobs and `vscode_state_sync` have no config section — a job earns one only once it has a real key, so these are enabled through `sync_jobs` alone.
 
 ### Installation and Setup Infrastructure (CORE-US-INSTALL)
 
@@ -192,163 +192,163 @@ Lineage: 001-core edge cases, 003-core-tests edge cases
 
 #### Job Architecture
 
-- **CORE-FR-JOB-IFACE** `[Deliberate Simplicity]` `[Reliability Without Compromise]`: `Job` MUST define the whole orchestrator/job contract: the `name` and `required` ClassVars, the `CONFIG_SCHEMA` ClassVar, `validate_config()`, `validate()`, `execute()`, `_log()` and `_report_progress()`
+- **CORE-FR-JOB-IFACE** `[Deliberate Simplicity]` `[Reliability Without Compromise]`: `Job` MUST define the whole orchestrator/job contract: the `name` and `required` ClassVars, the `CONFIG_SCHEMA` ClassVar, `validate_config()`, `validate()`, `execute()`, `_log()` and `_report_progress()`  
   Lineage: 001-FR-001
 
-- **CORE-FR-LIFECYCLE** `[Reliability Without Compromise]`: The orchestrator MUST call `validate_config()` for every enabled job, then `validate()` for every job that passed, then `execute()` one job at a time in config order
+- **CORE-FR-LIFECYCLE** `[Reliability Without Compromise]`: The orchestrator MUST call `validate_config()` for every enabled job, then `validate()` for every job that passed, then `execute()` one job at a time in config order  
   Lineage: 001-FR-002
 
-- **CORE-FR-TERM-CTRLC** `[Reliability Without Compromise]`: Ctrl+C MUST cancel the sync task so the running job receives `CancelledError` and the orchestrator's `finally` block runs cleanup; a second SIGINT MUST cancel every task immediately without waiting for cleanup
+- **CORE-FR-TERM-CTRLC** `[Reliability Without Compromise]`: Ctrl+C MUST cancel the sync task so the running job receives `CancelledError` and the orchestrator's `finally` block runs cleanup; a second SIGINT MUST cancel every task immediately without waiting for cleanup  
   Lineage: 001-FR-003
 
-- **CORE-FR-JOB-LOAD** `[Deliberate Simplicity]`: Jobs MUST be imported from `pcswitcher.jobs.<job_name>` and run in the order their keys appear in `sync_jobs`; there is no dependency resolution
+- **CORE-FR-JOB-LOAD** `[Deliberate Simplicity]`: Jobs MUST be imported from `pcswitcher.jobs.<job_name>` and run in the order their keys appear in `sync_jobs`; there is no dependency resolution  
   Lineage: 001-FR-004
 
-- **CORE-FR-JOB-ORDER** `[Reliability Without Compromise]`: The orchestrator MUST reject a config in which `apt_sync`, `snap_sync`, `flatpak_sync`, `manual_deb_sync`, `manual_snap_sync` or `manual_installs_sync` is enabled after `folder_sync` — apps are provisioned before their data lands on top (D-17)
+- **CORE-FR-JOB-ORDER** `[Reliability Without Compromise]`: The orchestrator MUST reject a config in which `apt_sync`, `snap_sync`, `flatpak_sync`, `manual_deb_sync`, `manual_snap_sync` or `manual_installs_sync` is enabled after `folder_sync` — apps are provisioned before their data lands on top (D-17)  
   Lineage: 02-WR-02
 
 #### Self-Installation
 
-- **CORE-FR-VERSION-CHECK** `[Frictionless Command UX]`: Before installing, the system MUST read the target's `pc-switcher --version`; if missing or different from the source's, it MUST install by piping the version's `install.sh` from the public GitHub repository into bash on the target (no authentication required)
+- **CORE-FR-VERSION-CHECK** `[Frictionless Command UX]`: Before installing, the system MUST read the target's `pc-switcher --version`; if missing or different from the source's, it MUST install by piping the version's `install.sh` from the public GitHub repository into bash on the target (no authentication required)  
   Lineage: 001-FR-005
 
-- **CORE-FR-VERSION-NEWER** `[Reliability Without Compromise]`: The system MUST abort if the target's version is newer than the source's, preventing an accidental downgrade
+- **CORE-FR-VERSION-NEWER** `[Reliability Without Compromise]`: The system MUST abort if the target's version is newer than the source's, preventing an accidental downgrade  
   Lineage: 001-FR-006
 
-- **CORE-FR-INSTALL-FAIL** `[Frictionless Command UX]`: A failed install, or a post-install version that does not match what was requested, MUST abort the sync
+- **CORE-FR-INSTALL-FAIL** `[Frictionless Command UX]`: A failed install, or a post-install version that does not match what was requested, MUST abort the sync  
   Lineage: 001-FR-007
 
-- **CORE-FR-CONFIG-SYNC** `[Reliability Without Compromise]`: After installation, the system MUST reconcile `config.yaml` with the target; with no config on the target it MUST show the source's and prompt, and MUST abort if the user declines
+- **CORE-FR-CONFIG-SYNC** `[Reliability Without Compromise]`: After installation, the system MUST reconcile `config.yaml` with the target; with no config on the target it MUST show the source's and prompt, and MUST abort if the user declines  
   Lineage: 001-FR-007a
 
-- **CORE-FR-CONFIG-DIFF** `[Frictionless Command UX]`: If the target's config differs, the system MUST show a unified diff and offer accept-source, keep-target or abort
+- **CORE-FR-CONFIG-DIFF** `[Frictionless Command UX]`: If the target's config differs, the system MUST show a unified diff and offer accept-source, keep-target or abort  
   Lineage: 001-FR-007b
 
-- **CORE-FR-CONFIG-MATCH** `[Frictionless Command UX]`: If the configs match, the system MUST skip the transfer without prompting
+- **CORE-FR-CONFIG-MATCH** `[Frictionless Command UX]`: If the configs match, the system MUST skip the transfer without prompting  
   Lineage: 001-FR-007c
 
 #### Safety Infrastructure (Btrfs Snapshots)
 
-- **CORE-FR-SNAP-PRE** `[Reliability Without Compromise]`: Read-only snapshots of the configured subvolumes MUST be created on both machines before any job executes
+- **CORE-FR-SNAP-PRE** `[Reliability Without Compromise]`: Read-only snapshots of the configured subvolumes MUST be created on both machines before any job executes  
   Lineage: 001-FR-008
 
-- **CORE-FR-SNAP-POST** `[Reliability Without Compromise]`: Post-sync snapshots MUST be created after the job loop finishes
+- **CORE-FR-SNAP-POST** `[Reliability Without Compromise]`: Post-sync snapshots MUST be created after the job loop finishes  
   Lineage: 001-FR-009
 
-- **CORE-FR-SNAP-NAME** `[Minimize SSD Wear]`: Snapshot names MUST be `{pre|post}-<subvolume>-<UTC timestamp>` inside a per-session folder `<UTC timestamp>-<session id>`
+- **CORE-FR-SNAP-NAME** `[Minimize SSD Wear]`: Snapshot names MUST be `{pre|post}-<subvolume>-<UTC timestamp>` inside a per-session folder `<UTC timestamp>-<session id>`  
   Lineage: 001-FR-010
 
-- **CORE-FR-SNAP-ALWAYS** `[Reliability Without Compromise]`: Snapshots MUST be orchestrator-level infrastructure (a `SystemJob`, not a `sync_jobs` entry) with no option to disable them
+- **CORE-FR-SNAP-ALWAYS** `[Reliability Without Compromise]`: Snapshots MUST be orchestrator-level infrastructure (a `SystemJob`, not a `sync_jobs` entry) with no option to disable them  
   Lineage: 001-FR-011
 
-- **CORE-FR-SNAP-FAIL** `[Frictionless Command UX]`: A failed pre-sync snapshot MUST abort before any state modification
+- **CORE-FR-SNAP-FAIL** `[Frictionless Command UX]`: A failed pre-sync snapshot MUST abort before any state modification  
   Lineage: 001-FR-012
 
-- **CORE-FR-SNAP-CLEANUP** `[Minimize SSD Wear]`: `pc-switcher cleanup-snapshots` MUST delete old snapshots while retaining the most recent N sessions; `keep_recent` and `max_age_days` MUST be configurable under `btrfs_snapshots`
+- **CORE-FR-SNAP-CLEANUP** `[Minimize SSD Wear]`: `pc-switcher cleanup-snapshots` MUST delete old snapshots while retaining the most recent N sessions; `keep_recent` and `max_age_days` MUST be configurable under `btrfs_snapshots`  
   Lineage: 001-FR-014
 
-- **CORE-FR-SUBVOL-EXIST** `[Reliability Without Compromise]`: Every configured subvolume MUST be verified to exist on both machines before snapshots are attempted
+- **CORE-FR-SUBVOL-EXIST** `[Reliability Without Compromise]`: Every configured subvolume MUST be verified to exist on both machines before snapshots are attempted  
   Lineage: 001-FR-015
 
-- **CORE-FR-SNAPDIR** `[Reliability Without Compromise]`: `/.snapshots` MUST be a btrfs subvolume; the system MUST create it when absent and MUST abort when it exists as a plain directory (which would make snapshots recursive)
+- **CORE-FR-SNAPDIR** `[Reliability Without Compromise]`: `/.snapshots` MUST be a btrfs subvolume; the system MUST create it when absent and MUST abort when it exists as a plain directory (which would make snapshots recursive)  
   Lineage: 001-FR-015b
 
-- **CORE-FR-DISK-PRE** `[Reliability Without Compromise]`: Free space on `/` MUST be checked on both machines before snapshots; `disk_space_monitor.preflight_minimum` MUST be a percentage (`"20%"`) or an absolute value with a `GiB`/`MiB`/`GB`/`MB` unit; unitless values are rejected by the schema; default `"20%"`
+- **CORE-FR-DISK-PRE** `[Reliability Without Compromise]`: Free space on `/` MUST be checked on both machines before snapshots; `disk_space_monitor.preflight_minimum` MUST be a percentage (`"20%"`) or an absolute value with a `GiB`/`MiB`/`GB`/`MB` unit; unitless values are rejected by the schema; default `"20%"`  
   Lineage: 001-FR-016
 
-- **CORE-FR-DISK-RUNTIME** `[Reliability Without Compromise]`: A background monitor per machine MUST re-check free space every `disk_space_monitor.check_interval` seconds (default 30) and abort the run when free space falls below `runtime_minimum` (default `"15%"`); `warning_threshold` (default `"25%"`) warns without aborting
+- **CORE-FR-DISK-RUNTIME** `[Reliability Without Compromise]`: A background monitor per machine MUST re-check free space every `disk_space_monitor.check_interval` seconds (default 30) and abort the run when free space falls below `runtime_minimum` (default `"15%"`); `warning_threshold` (default `"25%"`) warns without aborting  
   Lineage: 001-FR-017
 
 #### Interrupt Handling
 
-- **CORE-FR-SIGINT** `[Reliability Without Compromise]`: A SIGINT handler MUST cancel the sync task, log `Sync interrupted by user` at WARNING, and exit with code 130
+- **CORE-FR-SIGINT** `[Reliability Without Compromise]`: A SIGINT handler MUST cancel the sync task, log `Sync interrupted by user` at WARNING, and exit with code 130  
   Lineage: 001-FR-024
 
-- **CORE-FR-TARGET-TERM** `[Reliability Without Compromise]`: Cleanup MUST terminate every tracked local and remote process and run `pkill --full pc-switcher` on the target
+- **CORE-FR-TARGET-TERM** `[Reliability Without Compromise]`: Cleanup MUST terminate every tracked local and remote process and run `pkill --full pc-switcher` on the target  
   Lineage: 001-FR-025
 
-- **CORE-FR-FORCE-TERM** `[Reliability Without Compromise]`: A second SIGINT MUST cancel every task immediately, without waiting for cleanup
+- **CORE-FR-FORCE-TERM** `[Reliability Without Compromise]`: A second SIGINT MUST cancel every task immediately, without waiting for cleanup  
   Lineage: 001-FR-026
 
-- **CORE-FR-NO-ORPHAN** `[Reliability Without Compromise]`: No orphaned processes may remain on either machine after an interrupt
+- **CORE-FR-NO-ORPHAN** `[Reliability Without Compromise]`: No orphaned processes may remain on either machine after an interrupt  
   Lineage: 001-FR-027
 
 #### Configuration System
 
-- **CORE-FR-CONFIG-LOAD** `[Frictionless Command UX]`: Configuration MUST be loaded from `~/.config/pc-switcher/config.yaml`, overridable per command with `--config`
+- **CORE-FR-CONFIG-LOAD** `[Frictionless Command UX]`: Configuration MUST be loaded from `~/.config/pc-switcher/config.yaml`, overridable per command with `--config`  
   Lineage: 001-FR-028
 
-- **CORE-FR-CONFIG-FORMAT** `[Deliberate Simplicity]`: Configuration MUST be YAML with global sections, `sync_jobs` (enable/disable), and one top-level section per job named after the job
+- **CORE-FR-CONFIG-FORMAT** `[Deliberate Simplicity]`: Configuration MUST be YAML with global sections, `sync_jobs` (enable/disable), and one top-level section per job named after the job  
   Lineage: 001-FR-029
 
-- **CORE-FR-CONFIG-VALIDATE** `[Reliability Without Compromise]`: The file MUST be validated against the packaged JSON Schema (draft-07, via `jsonschema`) and each job section against that job's `CONFIG_SCHEMA`, both before execution
+- **CORE-FR-CONFIG-VALIDATE** `[Reliability Without Compromise]`: The file MUST be validated against the packaged JSON Schema (draft-07, via `jsonschema`) and each job section against that job's `CONFIG_SCHEMA`, both before execution  
   Lineage: 001-FR-030
 
-- **CORE-FR-CONFIG-DEFAULTS** `[Frictionless Command UX]`: Missing values MUST take the defaults defined on the config dataclasses
+- **CORE-FR-CONFIG-DEFAULTS** `[Frictionless Command UX]`: Missing values MUST take the defaults defined on the config dataclasses  
   Lineage: 001-FR-031
 
-- **CORE-FR-JOB-ENABLE** `[Frictionless Command UX]`: Jobs MUST be enabled or disabled via `sync_jobs: { module_name: true|false }`
+- **CORE-FR-JOB-ENABLE** `[Frictionless Command UX]`: Jobs MUST be enabled or disabled via `sync_jobs: { module_name: true|false }`  
   Lineage: 001-FR-032
 
-- **CORE-FR-CONFIG-ERROR** `[Reliability Without Compromise]`: A syntax error, a duplicate key or a schema violation MUST be reported with its location and exit before the sync starts
+- **CORE-FR-CONFIG-ERROR** `[Reliability Without Compromise]`: A syntax error, a duplicate key or a schema violation MUST be reported with its location and exit before the sync starts  
   Lineage: 001-FR-033
 
 #### Installation & Setup
 
-- **CORE-FR-INSTALL-SCRIPT** `[Frictionless Command UX]`: `install.sh` MUST run via `curl | bash` with no prerequisites — installing `uv` from `https://astral.sh/uv/install.sh` if absent, offering `btrfs-progs` via apt if absent, installing the package with `uv tool install`, and creating the log directory. `InstallOnTargetJob` MUST run this same script so there is one installation path
+- **CORE-FR-INSTALL-SCRIPT** `[Frictionless Command UX]`: `install.sh` MUST run via `curl | bash` with no prerequisites — installing `uv` from `https://astral.sh/uv/install.sh` if absent, offering `btrfs-progs` via apt if absent, installing the package with `uv tool install`, and creating the log directory. `InstallOnTargetJob` MUST run this same script so there is one installation path  
   Lineage: 001-FR-035
 
-- **CORE-FR-DEFAULT-CONFIG** `[Up-to-date Documentation]`: `pc-switcher init` MUST write the packaged `default-config.yaml`, whose inline comments explain every setting, plus the `home.filter` and `root.filter` files it references
+- **CORE-FR-DEFAULT-CONFIG** `[Up-to-date Documentation]`: `pc-switcher init` MUST write the packaged `default-config.yaml`, whose inline comments explain every setting, plus the `home.filter` and `root.filter` files it references  
   Lineage: 001-FR-036
 
 #### Testing Infrastructure (Dummy Jobs)
 
-- **CORE-FR-DUMMY-JOBS**: The system MUST ship two dummy jobs: `dummy_success` and `dummy_fail`
+- **CORE-FR-DUMMY-JOBS**: The system MUST ship two dummy jobs: `dummy_success` and `dummy_fail`  
   Lineage: 001-FR-038
 
-- **CORE-FR-DUMMY-SIM**: Both MUST simulate configurable-duration work on source (log every 2 s, WARNING at 6 s) and target (log every 2 s, ERROR at 8 s) and emit progress updates
+- **CORE-FR-DUMMY-SIM**: Both MUST simulate configurable-duration work on source (log every 2 s, WARNING at 6 s) and target (log every 2 s, ERROR at 8 s) and emit progress updates  
   Lineage: 001-FR-039
 
-- **CORE-FR-DUMMY-EXCEPTION** `[Reliability Without Compromise]`: `dummy_fail` MUST raise at the configured `fail_at` elapsed second, on whichever phase that falls in, to exercise orchestrator exception handling
+- **CORE-FR-DUMMY-EXCEPTION** `[Reliability Without Compromise]`: `dummy_fail` MUST raise at the configured `fail_at` elapsed second, on whichever phase that falls in, to exercise orchestrator exception handling  
   Lineage: 001-FR-041
 
-- **CORE-FR-DUMMY-TERM** `[Reliability Without Compromise]`: Both MUST handle `CancelledError` by logging a termination message and re-raising
+- **CORE-FR-DUMMY-TERM** `[Reliability Without Compromise]`: Both MUST handle `CancelledError` by logging a termination message and re-raising  
   Lineage: 001-FR-042
 
 #### Progress Reporting
 
-- **CORE-FR-PROGRESS-EMIT** `[Frictionless Command UX]`: Jobs CAN emit `ProgressUpdate`s (percentage, item counts, item description, heartbeat, sub-bar track). Optional, but recommended for long operations
+- **CORE-FR-PROGRESS-EMIT** `[Frictionless Command UX]`: Jobs CAN emit `ProgressUpdate`s (percentage, item counts, item description, heartbeat, sub-bar track). Optional, but recommended for long operations  
   Lineage: 001-FR-043
 
-- **CORE-FR-PROGRESS-FWD** `[Frictionless Command UX]`: The event bus MUST deliver `ProgressEvent`s to the terminal UI, which owns one bar per job and one per `track`
+- **CORE-FR-PROGRESS-FWD** `[Frictionless Command UX]`: The event bus MUST deliver `ProgressEvent`s to the terminal UI, which owns one bar per job and one per `track`  
   Lineage: 001-FR-044
 
 #### Core Orchestration
 
-- **CORE-FR-SYNC-CMD** `[Frictionless Command UX]`: `pc-switcher sync <hostname>` MUST run the complete workflow. Flags: `--config`, `--dry-run`, `--yes`, `--allow-out-of-order`, `--allow-first-sync`, `--confirm-each-command`, `--apply-package-installs`, `--apply-package-removals`
+- **CORE-FR-SYNC-CMD** `[Frictionless Command UX]`: `pc-switcher sync <hostname>` MUST run the complete workflow. Flags: `--config`, `--dry-run`, `--yes`, `--allow-out-of-order`, `--allow-first-sync`, `--confirm-each-command`, `--apply-package-installs`, `--apply-package-removals`  
   Lineage: 001-FR-046
 
-- **CORE-FR-LOCK** `[Reliability Without Compromise]`: A single unified lock per machine MUST prevent it from taking part in two syncs at once, in either role
+- **CORE-FR-LOCK** `[Reliability Without Compromise]`: A single unified lock per machine MUST prevent it from taking part in two syncs at once, in either role  
   Lineage: 001-FR-047
 
-- **CORE-FR-SUMMARY**: Every job that ran MUST contribute one `JobResult` with SUCCESS, SKIPPED or FAILED and its start/end timestamps; the session status MUST be derived from those results, the outcome message MUST name each failed job together with the reason it recorded, the run MUST end by printing one line per job giving its name, its status and — for SKIPPED and FAILED — the reason it recorded, and the exit code MUST be non-zero when any job failed
+- **CORE-FR-SUMMARY**: Every job that ran MUST contribute one `JobResult` with SUCCESS, SKIPPED or FAILED and its start/end timestamps; the session status MUST be derived from those results, the outcome message MUST name each failed job together with the reason it recorded, the run MUST end by printing one line per job giving its name, its status and — for SKIPPED and FAILED — the reason it recorded, and the exit code MUST be non-zero when any job failed  
   Lineage: 001-FR-048
 
 ### Core Test Requirements
 
-- **CORE-FR-TEST-US** / **CORE-FR-TEST-AS** / **CORE-FR-TEST-FR**: Tests MUST cover every user story, acceptance scenario and functional requirement in this document
+- **CORE-FR-TEST-US** / **CORE-FR-TEST-AS** / **CORE-FR-TEST-FR**: Tests MUST cover every user story, acceptance scenario and functional requirement in this document  
   Lineage: 003-FR-001, 003-FR-002, 003-FR-003
 
-- **CORE-FR-TEST-PATHS**: Tests MUST cover the failure path of each requirement, not only the success path
+- **CORE-FR-TEST-PATHS**: Tests MUST cover the failure path of each requirement, not only the success path  
   Lineage: 003-FR-004
 
-- **CORE-FR-TEST-NAMING**: Test names MUST identify the requirement under test (e.g. `test_core_fr_lock`), and each test file MUST reference the requirements it covers in its docstring
+- **CORE-FR-TEST-NAMING**: Test names MUST identify the requirement under test (e.g. `test_core_fr_lock`), and each test file MUST reference the requirements it covers in its docstring  
   Lineage: 003-FR-007, 003-FR-008
 
-- **CORE-FR-TEST-INDEP**: Tests MUST NOT depend on execution order or shared mutable state
+- **CORE-FR-TEST-INDEP**: Tests MUST NOT depend on execution order or shared mutable state  
   Lineage: 003-FR-009
 
-- **CORE-FR-TEST-MOCK**: Unit tests MUST use mock executors; integration tests MUST run real operations on test VMs
+- **CORE-FR-TEST-MOCK**: Unit tests MUST use mock executors; integration tests MUST run real operations on test VMs  
   Lineage: 003-FR-011, 003-FR-012
 
 Test directory layout, markers, fixtures and runtime budgets are specified in the [Testing Framework](testing.md).
@@ -371,37 +371,37 @@ Field-level definitions live in the [Data Model](data-model.md); this is the voc
 
 ## Success Criteria
 
-- **CORE-SC-SINGLE-CMD** `[Frictionless Command UX]`: A complete sync runs from `pc-switcher sync <hostname>` with no additional manual steps
+- **CORE-SC-SINGLE-CMD** `[Frictionless Command UX]`: A complete sync runs from `pc-switcher sync <hostname>` with no additional manual steps  
   Lineage: 001-SC-001
 
-- **CORE-SC-SNAPSHOTS** `[Reliability Without Compromise]`: Pre- and post-sync snapshots exist for 100% of successful runs
+- **CORE-SC-SNAPSHOTS** `[Reliability Without Compromise]`: Pre- and post-sync snapshots exist for 100% of successful runs  
   Lineage: 001-SC-002
 
-- **CORE-SC-ABORT** `[Reliability Without Compromise]`: A CRITICAL error aborts the run with no state modification after the abort
+- **CORE-SC-ABORT** `[Reliability Without Compromise]`: A CRITICAL error aborts the run with no state modification after the abort  
   Lineage: 001-SC-003
 
-- **CORE-SC-VERSION-TIME** `[Frictionless Command UX]`: Version check plus install/upgrade on the target completes within 30 seconds
+- **CORE-SC-VERSION-TIME** `[Frictionless Command UX]`: Version check plus install/upgrade on the target completes within 30 seconds  
   Lineage: 001-SC-004
 
-- **CORE-SC-AUDIT**: Log files carry a complete audit trail — timestamps, levels, job and host attribution — for 100% of runs
+- **CORE-SC-AUDIT**: Log files carry a complete audit trail — timestamps, levels, job and host attribution — for 100% of runs  
   Lineage: 001-SC-005
 
-- **CORE-SC-GRACEFUL** `[Reliability Without Compromise]`: Ctrl+C shuts down cleanly with no orphaned processes in 100% of tests
+- **CORE-SC-GRACEFUL** `[Reliability Without Compromise]`: Ctrl+C shuts down cleanly with no orphaned processes in 100% of tests  
   Lineage: 001-SC-006
 
-- **CORE-SC-JOB-SIMPLE** `[Deliberate Simplicity]`: A basic new job needs only the job interface and no orchestrator change
+- **CORE-SC-JOB-SIMPLE** `[Deliberate Simplicity]`: A basic new job needs only the job interface and no orchestrator change  
   Lineage: 001-SC-007
 
-- **CORE-SC-COW** `[Minimize SSD Wear]`: Snapshots are copy-on-write with zero initial write amplification
+- **CORE-SC-COW** `[Minimize SSD Wear]`: Snapshots are copy-on-write with zero initial write amplification  
   Lineage: 001-SC-008
 
-- **CORE-SC-INSTALL-TIME** `[Frictionless Command UX]`: `install.sh` completes on a fresh Ubuntu 24.04 machine in under 2 minutes with a network connection
+- **CORE-SC-INSTALL-TIME** `[Frictionless Command UX]`: `install.sh` completes on a fresh Ubuntu 24.04 machine in under 2 minutes with a network connection  
   Lineage: 001-SC-009
 
-- **CORE-SC-DUMMY-DEMO** `[Reliability Without Compromise]`: The dummy jobs demonstrate success, exception handling and cancellation in 100% of test runs
+- **CORE-SC-DUMMY-DEMO** `[Reliability Without Compromise]`: The dummy jobs demonstrate success, exception handling and cancellation in 100% of test runs  
   Lineage: 001-SC-010
 
-- **CORE-SC-TEST-GAPS**: Running the test suite surfaces any gap between this document and the implementation as a failing test
+- **CORE-SC-TEST-GAPS**: Running the test suite surfaces any gap between this document and the implementation as a failing test  
   Lineage: 003-SC-006
 
 ## Per-action confirmation

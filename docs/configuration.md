@@ -138,4 +138,4 @@ This job has no configuration beyond its `sync_jobs` enable flag: the editor lis
 
 ## Package Sync
 
-The seven package jobs (`apt_sync`, `snap_sync`, `flatpak_sync`, `manual_deb_sync`, `manual_snap_sync`, `manual_flatpak_sync`, `manual_installs_sync`) take no configuration beyond their `sync_jobs` enable flags, shown under [`sync_jobs`](#sync_jobs) above; there are no per-job config sections. What they do — the item -> diff -> review -> converge model, the per-manager batched review, machine-specific packages, install snippets and version handling — is described in [Package Sync](jobs/package-sync.md).
+The seven package jobs (`apt_sync`, `snap_sync`, `flatpak_sync`, `manual_deb_sync`, `manual_snap_sync`, `manual_flatpak_sync`, `manual_installs_sync`) take no configuration beyond their `sync_jobs` enable flags, shown under [`sync_jobs`](#sync_jobs) above; there are no per-job config sections. What they do — the item -> diff -> review -> converge model, the per-manager batched review, machine-specific packages, the two snippets each unreproducible item carries, and version handling — is described in [Package Sync](jobs/package-sync.md).

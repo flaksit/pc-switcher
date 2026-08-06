@@ -953,7 +953,7 @@ class TestSnippetRegistry:
 
     @pytest.mark.asyncio
     async def test_every_malformed_entry_in_one_registry_is_named_at_once(self) -> None:
-        """G115 — the repair is a hand edit of one file, so the ending names every entry that
+        """G115, G181 — the repair is a hand edit of one file, so the ending names every entry that
         edit has to cover: stopping at the first would have the user fix it, start a new
         sync, and only then be shown the next.
         """
@@ -964,8 +964,10 @@ class TestSnippetRegistry:
             "  apt:package:two: not-a-mapping\n"
             "  apt:package:three:\n"
             "    label: Three\n"
-            "    body: |\n"
+            "    install_body: |\n"
             "      echo three\n"
+            "    version_body: |\n"
+            "      echo v\n"
             "    authored_at: '2026-01-01T00:00:00+00:00'\n"
             "    authored_on: atlas\n"
         )
@@ -976,7 +978,7 @@ class TestSnippetRegistry:
             await SnippetRegistry(executor, "nomad").load()
 
         message = str(exc_info.value)
-        assert "apt:package:one (missing field 'body')" in message
+        assert "apt:package:one (missing field 'install_body')" in message
         assert "apt:package:two (" in message
         # The one entry that parses is never named as a problem.
         assert "apt:package:three" not in message
@@ -989,7 +991,8 @@ class TestSnippetRegistry:
         snippet = Snippet(
             item_id="unreproducible:apt-no-candidate:brscan3",
             label="brscan3 (no apt candidate)",
-            body="  sudo dpkg --install /tmp/brscan3.deb\n\nsudo apt-get install --fix-broken --assume-yes\n",
+            install_body="  sudo dpkg --install /tmp/brscan3.deb\n\nsudo apt-get install --fix-broken --assume-yes\n",
+            version_body="  dpkg-query --show --showformat='${Version}' brscan3\n",
             authored_at="2026-07-23T09:00:00+00:00",
             authored_on="laptop",
         )
@@ -998,7 +1001,8 @@ class TestSnippetRegistry:
         reloaded = await SnippetRegistry(shell).get(snippet.item_id)
 
         assert reloaded is not None
-        assert reloaded.body == snippet.body
+        assert reloaded.install_body == snippet.install_body
+        assert reloaded.version_body == snippet.version_body
 
     @pytest.mark.asyncio
     async def test_a_body_of_shell_metacharacters_is_stored_and_replayed_uninterpreted(self) -> None:
@@ -1010,7 +1014,8 @@ class TestSnippetRegistry:
         snippet = Snippet(
             item_id="unreproducible:unowned-path:/opt/tool",
             label="tool [red]v2 (unowned in /opt)",
-            body=body,
+            install_body=body,
+            version_body="echo v",
             authored_at="2026-07-23T09:00:00+00:00",
             authored_on="laptop",
         )
@@ -1019,7 +1024,7 @@ class TestSnippetRegistry:
         reloaded = await SnippetRegistry(shell).get(snippet.item_id)
 
         assert reloaded is not None
-        assert reloaded.body == body
+        assert reloaded.install_body == body
         assert reloaded.label == snippet.label
 
         target = MagicMock()
@@ -1042,7 +1047,11 @@ class TestSnippetRegistry:
         executor.run_command = AsyncMock(return_value=CommandResult(0, "", ""))
         registry = SnippetRegistry(executor)
 
-        await registry.add(Snippet(item_id="x", label="x", body="echo hi", authored_at="t", authored_on="h"))
+        await registry.add(
+            Snippet(
+                item_id="x", label="x", install_body="echo hi", version_body="echo v", authored_at="t", authored_on="h"
+            )
+        )
 
         cmd = executor.run_command.call_args.args[0]
         assert "mkdir --parents" in cmd
@@ -1054,22 +1063,33 @@ class TestSnippetRegistry:
     async def test_add_preserves_an_unrelated_pre_existing_entry(self) -> None:
         """G62 — a second snippet for a different item accumulates rather than replacing."""
         shell = FakeShellExecutor()
-        first = Snippet(item_id="a", label="a", body="echo a", authored_at="t", authored_on="h")
-        second = Snippet(item_id="b", label="b", body="echo b", authored_at="t", authored_on="h")
+        first = Snippet(
+            item_id="a", label="a", install_body="echo a", version_body="echo v", authored_at="t", authored_on="h"
+        )
+        second = Snippet(
+            item_id="b", label="b", install_body="echo b", version_body="echo v", authored_at="t", authored_on="h"
+        )
 
         await SnippetRegistry(shell).add(first)
         await SnippetRegistry(shell).add(second)
 
         entries = await SnippetRegistry(shell).load()
         assert set(entries) == {"a", "b"}
-        assert entries["a"].body == "echo a"
+        assert entries["a"].install_body == "echo a"
 
     @pytest.mark.asyncio
     async def test_replay_passes_body_as_one_quoted_argument_with_login_shell_false(self) -> None:
         """G57, J155 — replayed as one unit, as the SSH user, with nothing added around it: no
         elevation and no login shell."""
         shell = FakeShellExecutor()
-        snippet = Snippet(item_id="x", label="x", body="echo hello world", authored_at="t", authored_on="h")
+        snippet = Snippet(
+            item_id="x",
+            label="x",
+            install_body="echo hello world",
+            version_body="echo v",
+            authored_at="t",
+            authored_on="h",
+        )
         await SnippetRegistry(shell).add(snippet)
 
         target = MagicMock()
@@ -1097,7 +1117,9 @@ class TestSnippetRegistry:
     async def test_replay_exit_code_alone_decides_success(self) -> None:
         """G59 — a snippet that exits non-zero while printing nothing recognisable failed."""
         shell = FakeShellExecutor()
-        snippet = Snippet(item_id="x", label="x", body="false", authored_at="t", authored_on="h")
+        snippet = Snippet(
+            item_id="x", label="x", install_body="false", version_body="echo v", authored_at="t", authored_on="h"
+        )
         await SnippetRegistry(shell).add(snippet)
 
         target = MagicMock()

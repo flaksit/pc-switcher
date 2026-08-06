@@ -162,7 +162,7 @@ Same package, same origin, same version shows nothing at all.
 
 Three situations are reported and never acted on:
 
-- **different versions** — both named; versions float — package managers handle updates, not pc-switcher
+- **different versions** — both named; versions float — package managers handle updates, not pc-switcher. Software no package manager handles is the exception, and is converged instead (see [*Software no manager can reproduce*](#keeping-it-up-to-date))
 - **different origins** — both named; takes precedence over a version difference, and is never reported for a mirror difference
 - **an origin that cannot be replicated** — warning reported with the reason, never installed from somewhere else
 
@@ -301,13 +301,39 @@ Software that arrived on the source by a route nothing can replay automatically.
 - **A flatpak application no remote can supply** — installed from a local bundle, or from a remote since deleted, so its origin names nothing that can be fetched from. Same split again: flatpak sync drops these applications on both machines whatever else is enabled, so with flatpak synced and this job off they are replicated by nobody.
 - **Unowned software under `/usr/local` or `/opt`** — dropped there by an install script or a tarball. The scan looks in `/opt`, directly under `/usr/local`, and inside `/usr/local`'s `bin`, `sbin`, `lib`, `games` and `src`. It never looks in `etc`, `include`, `man` or `share`: whatever is installed there arrives with an application the scan finds elsewhere. A finding — a file, a directory or a symlink — is named where it is found and never opened, or one application under `/opt` would arrive as thousands of findings. The directories the distribution itself creates under `/usr/local` are not findings, and neither is a directory with no file anywhere beneath it.
 
-Both machines are scanned, and only what the target lacks is presented. That is what stops a second path to one application — the symlink in `bin` that starts what the snippet unpacked under `/opt` — from being asked about again every run after the snippet has already installed it. What only the target has produces nothing: **nothing here is ever removed**, and no record is kept of what a snippet put there.
+Both machines are scanned. What the target already has is never offered for installation, which is what stops a second path to one application — the symlink in `bin` that starts what the snippet unpacked under `/opt` — from being asked about again every run after the snippet has already installed it.
+
+### Keeping it up to date
+
+Software the two machines both have is compared on the **version installed on each**. The same version is convergence and produces nothing. A different version is offered as a change, applied by replaying the source's own recipe — the recipe is written to install *or update*, because the machine it lands on may already hold an older build.
+
+Versions do not float here, unlike apt's and flatpak's. Floating is worth it when a repository will eventually move the other machine onto the same version by itself; nothing will ever move software nothing manages, so a difference left unresolved is a machine sitting on an old build for good.
+
+The direction never depends on the numbers. A sync goes from the machine it was launched on to the other one, whichever of the two holds the higher version.
+
+Where the version comes from depends on the kind of software: the package manager's own answer for a `.deb`, a snap or a flatpak application, and for an unowned path the output of a second recipe the user writes — one that prints the version installed on whichever machine runs it. That one runs on **both** machines, on every sync, before anything is proposed, so it has to be read-only. pc-switcher cannot check that and does not ask the user to confirm it: the obligation is stated where the recipe is written, and it is the author's.
+
+Both recipes are required. An entry with only one of them cannot be read at all, and the run stops naming the file for the user to repair, exactly as an unreadable registry does.
+
+The version is the only evidence of drift ever sought. Nothing compares the files themselves and nothing hashes them, so the guarantee is the same one a package manager gives — same version, converged — and the cost is that a corrupted or half-applied copy at an unchanged version is invisible.
+
+Comparing the version first is deliberate: editing a recipe's comment or its download mirror changes no version, and raising a question about software that has not moved is noise.
+
+A recipe that runs and leaves the version where it was has not converged anything, whatever it exits. That is the ordinary failure of an install script replayed as an update, so the version is read again afterwards. Where it still differs the user is asked once more, without the option of running the same recipe again — that has just been tried — leaving a new recipe or leaving it for this run. There is no purge-and-retry: purging cannot change what the version recipe reports, and a user whose installer will not overwrite writes the deletion into their own new recipe. A run with nobody to ask tries once and then leaves it, saying so.
+
+### Removing what the source dropped
+
+Software only the target has, that the target's own detection calls the same kind of finding, is offered for removal — the package manager's own removal for a `.deb`, a snap or a flatpak application, and the deletion of the path itself for an unowned install. It takes the same deliberate gesture every removal takes.
+
+Software on the target that this detection does *not* claim there is left alone: a package a repository supplies, a snap from the store, an application a configured remote serves are each another job's to remove, with that job's bookkeeping behind it.
+
+There are no uninstall recipes. Deleting a path takes the path and nothing else, and nothing records what a recipe put where — so a launcher, a symlink or a service unit dropped elsewhere stays behind. The request says so rather than pretending otherwise.
 
 One shape cannot be judged by looking at it. An unowned `/opt/<name>` holding files of its own is one application. Holding a single directory and no file, it is a publisher's own directory and the application is that directory. Holding several directories and no file, it is either, and the user is asked which — the one question here that shapes the list of items rather than answering about one of them, so it is asked while the run is still planning.
 
 Every detected item ends the run with a snippet, marked machine-specific, or skipped for this run.
 
-A snippet is **opaque** — stored and replayed exactly as written, never parsed. It runs as the target user with no privilege added around it and no standing input, so a command expecting an answer fails rather than hanging the sync.
+A snippet is **opaque** — stored and replayed exactly as written, never parsed. It runs as the target user with no privilege added around it and no standing input, so a command expecting an answer fails rather than hanging the sync. Both of an entry's recipes are treated that way, and neither may be empty.
 
 Reproducibility is judged by what the **source** holds. The snippet registry is synced; if that would lose or change an entry only the target has, the user is asked and declining aborts the run. A registry file on either machine that cannot be read as a registry aborts it too, naming the file: an unreadable one is not an empty one, and treating it as empty would push over snippets nobody could see. Repair it and sync again. A snippet written during a review is replayed in that same run.
 
@@ -328,7 +354,8 @@ A read that does not answer is different. If a package manager cannot be queried
 - **A hold or a mask cannot be kept on one machine only.** Like a pin, it replicates from the source until the source drops it.
 - **A snap's revision cannot be kept on one machine only.** The difference is offered every run until the two machines agree.
 - **Version drift and origin divergence are reported, never resolved**, for apt and flatpak.
-- **Hand-installed software is never removed from the target.**
+- **What a hand-installed item actually contains is never compared.** Convergence is the version string, so a copy that is corrupt or half-applied at an unchanged version is invisible.
+- **Removing a hand-installed item reaches only what was named.** Nothing records where else its recipe wrote, so a launcher or a symlink it left elsewhere stays.
 - **A target with no Ubuntu Pro attachment costs the whole apt job for that run.**
 - **A non-interactive run answers a review only from its own command line.** There is no file of standing answers, no configuration key that pre-answers one, and no blanket assume-yes: the one way to answer without a terminal is the pair of per-direction options above, chosen for that run. The option that skips the sync's other confirmations is not one of them and answers no package question.
 - **Machine-specific marks are per job, per machine, and never synced.**
