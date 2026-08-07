@@ -12,7 +12,7 @@ reasons that have nothing to do with the shared pipeline.
 from __future__ import annotations
 
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any, ClassVar
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -822,6 +822,64 @@ class _ThreeScreenJob(FakeSyncJob):
             _diff("r1", DiffAction.REMOVE, DiffClass.EXTRA_ON_TARGET),
         )
         return PackagePlan(manager=self.manager_id, diffs=diffs, groups=self._build_review_groups(diffs))
+
+
+@pytest.mark.asyncio
+class TestAJobThatAsksNothingLeavesNoFrame:
+    """#279 — a job's review is consulted whatever its plan holds, so what decides whether
+    the live display is handed over is whether a QUESTION follows. Each handover leaves one
+    frame — status line, every progress bar, the whole Recent Logs panel — in the scrollback
+    on purpose, as the context a question is answered in; seven package jobs and one
+    question between them left seven.
+
+    Driven through the real `TerminalUIReviewer`, because the decision lives inside
+    `review_items` and a fake reviewer never reaches it.
+    """
+
+    @staticmethod
+    def _declining_screen(_title: str, *, rows: Sequence[Any], **_kwargs: Any) -> MagicMock:
+        """A screen that declines whatever rows it is handed, so the answer cannot go stale
+        when an item's id changes."""
+        prompt = MagicMock()
+        prompt.ask = MagicMock(return_value={row.row_id: Decision.SKIP_ONCE.value for row in rows})
+        return prompt
+
+    @classmethod
+    async def _run(cls, job_factory: Callable[[JobContext], PackageSyncJob]) -> MagicMock:
+        """Execute one job through a real reviewer and return the UI it was given."""
+        console, _ = captured_console(terminal=True)
+        ui = MagicMock()
+        reviewer = TerminalUIReviewer(console, ui, source_hostname="atlas", target_hostname="nomad")
+        stdin = MagicMock()
+        stdin.isatty.return_value = True
+        with (
+            patch.object(sys, "stdin", stdin),
+            patch("pcswitcher.jobs.packages.review.decision_list", side_effect=cls._declining_screen),
+        ):
+            await job_factory(make_context(reviewer=reviewer)).execute()
+        return ui
+
+    async def test_a_job_whose_plan_is_empty_never_takes_the_display(self) -> None:
+        """H261."""
+        ui = await self._run(lambda context: _OrderRecordingJob(context, []))
+
+        ui.pause.assert_not_called()
+        ui.resume.assert_not_called()
+
+    async def test_a_job_holding_only_report_only_findings_never_takes_it_either(self) -> None:
+        """H261 — neither answering nor declining a reported condition changes anything, so
+        there is nothing to answer and nothing to answer it in front of."""
+        ui = await self._run(lambda context: _ReportOnlyRecordingJob(context, []))
+
+        ui.pause.assert_not_called()
+        ui.resume.assert_not_called()
+
+    async def test_a_job_with_a_real_question_still_takes_it(self) -> None:
+        """H262."""
+        ui = await self._run(lambda context: _OrderRecordingJob(context, [], source_items=[FakeItem("pkg-a")]))
+
+        ui.pause.assert_called_once()
+        ui.resume.assert_called_once()
 
 
 class TestNoWorkBetweenTheQuestionsOfOneRound:

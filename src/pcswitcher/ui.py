@@ -229,6 +229,13 @@ class TerminalUI:
         stale frame per prompt, which resume() draws a fresh live region below
         rather than over.
 
+        That cost is why a caller must pause only where a prompt actually
+        follows. A pause taken for a step that turns out to ask nothing leaves a
+        frame with no question under it, which is a repeat of the display the
+        user is already looking at (#279). Printing while the display runs needs
+        no pause at all: Rich places console output above the live region and
+        leaves it in the scrollback.
+
         Keeping the display *live* through the prompt is not an option: Rich's
         Live anchors its region at the cursor and rewrites upward on every
         refresh tick, so it erases the prompt line and the characters the user

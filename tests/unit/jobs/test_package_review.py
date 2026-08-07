@@ -16,6 +16,7 @@ import sys
 import time
 from collections.abc import Sequence
 from dataclasses import fields
+from io import StringIO
 from typing import Any, ClassVar, TypedDict
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -54,6 +55,7 @@ from pcswitcher.jobs.packages.state import SnippetBodies, VersionedSnippetBodies
 from pcswitcher.jobs.packages.sync_core import SNAP_CHANGE_REVIEW_ACTION, PackagePlan
 from pcswitcher.models import CommandResult, SyncAbortedByUser
 from pcswitcher.orchestrator import Orchestrator
+from pcswitcher.ui import TerminalUI
 from tests.unit.console_capture import captured_console
 
 
@@ -641,6 +643,92 @@ class TestInteractive:
         assert "Report apt packages" in printed and "pkg" in printed
         assert "Nothing on nomad changes" in printed
         assert outcome.decisions == {"apt:package:tree": Decision.SKIP_ONCE}
+
+
+@pytest.mark.asyncio
+class TestTheLiveDisplayIsHandedOverOnlyForAQuestion:
+    """#279 — `ui.pause()` costs one frame in the scrollback (status line, every progress
+    bar, the whole Recent Logs panel), left there on purpose as the context a question is
+    answered in. A review that asks nothing needs no such frame; with seven package jobs
+    enabled, a run with one question between them printed seven.
+    """
+
+    @staticmethod
+    def _report_group() -> ReviewGroup:
+        return ReviewGroup(
+            manager="snap",
+            action="report_only",
+            title="Version differences (snaps)",
+            entries=[_entry("snap:vlc", label="vlc", action_label="report")],
+        )
+
+    async def test_an_empty_review_hands_the_display_over_to_nothing(self) -> None:
+        """H261."""
+        console = _interactive_console()
+        ui = MagicMock()
+
+        with patch.object(sys, "stdin", _mock_isatty(True)):
+            outcome = await review_items([], console=console, ui=ui, **HOSTS)
+
+        ui.pause.assert_not_called()
+        ui.resume.assert_not_called()
+        assert outcome.was_interactive is True
+
+    async def test_a_review_of_report_only_groups_prints_them_without_pausing(self) -> None:
+        """H261 — a report needs printing, not the live region: nothing blocks on input."""
+        console, out = captured_console(terminal=True)
+        ui = MagicMock()
+
+        with patch.object(sys, "stdin", _mock_isatty(True)):
+            outcome = await review_items([self._report_group()], console=console, ui=ui, **HOSTS)
+
+        ui.pause.assert_not_called()
+        ui.resume.assert_not_called()
+        printed = out.getvalue()
+        assert "Version differences (snaps)" in printed
+        assert "vlc" in printed
+        assert outcome.decisions == {"snap:vlc": Decision.SKIP_ONCE}
+
+    async def test_a_review_holding_one_question_still_pauses_once(self) -> None:
+        """H262 — the frame above a prompt is deliberate and stays: one group asking makes
+        the whole review a paused one, report-only neighbours included."""
+        console = _interactive_console()
+        ui = MagicMock()
+        asked = ReviewGroup(
+            manager="apt", action="install", title="Install apt packages on nomad?", entries=[_entry("a")]
+        )
+        screen = _fake_prompt(ask_return={"a": "apply"})
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen),
+        ):
+            await review_items([self._report_group(), asked], console=console, ui=ui, **HOSTS)
+
+        ui.pause.assert_called_once()
+        ui.resume.assert_called_once()
+
+    async def test_a_report_only_review_renders_its_panels_while_the_live_display_runs(self) -> None:
+        """H263 — the half most likely to render wrong: unpaused, the panel is printed THROUGH a
+        running Rich `Live`, which has to place it above its own region rather than let the
+        next refresh overwrite it.
+
+        A plain `StringIO` rather than `captured_console`: a real `Live` on a terminal
+        console emits cursor-control escapes, which that buffer refuses by design.
+        """
+        output = StringIO()
+        console = Console(file=output, force_terminal=True, width=120, color_system=None, highlight=False)
+        ui = TerminalUI(console=console, max_log_lines=5)
+        ui.start()
+        try:
+            with patch.object(sys, "stdin", _mock_isatty(True)):
+                await review_items([self._report_group()], console=console, ui=ui, **HOSTS)
+        finally:
+            ui.stop()
+
+        printed = output.getvalue()
+        assert "Version differences (snaps)" in printed
+        assert "Nothing on nomad changes for these." in printed
 
 
 @pytest.mark.asyncio

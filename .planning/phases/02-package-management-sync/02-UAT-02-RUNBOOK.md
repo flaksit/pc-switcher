@@ -181,6 +181,8 @@ Each pair of jobs decides its boundary by one shared rule, so a finding claimed 
 
 `snap_sync` and `flatpak_sync` therefore have nothing of their own to do in this run and must report `success`, not `skipped` (as `Snaps` and `Flatpaks` in the outcome block): a review holding nothing to decide is the goal already met. `apt_sync`'s only item is the `apt.conf.d` file of §3.3.
 
+Neither must leave a frame in the scrollback (#279 is fixed). A frozen copy of the status line, the progress bars and the Recent Logs panel belongs above a question and nowhere else, so count them: one per screen you are actually asked, and none for a job that asks nothing. A job whose review is only reported findings still PRINTS them — the panels appear while the display keeps running.
+
 ### 3.2 The seven reviews, and the order the screens come in
 
 The jobs run in the order the config lists them — apt, snap, flatpak, manual_deb, manual_snap, manual_flatpak, manual_installs, then the folder mirror — and each one's questions come before the next one plans. Inside one snippet job the groups come in a fixed order: **removal first, then the version differences, then the items needing a snippet.**

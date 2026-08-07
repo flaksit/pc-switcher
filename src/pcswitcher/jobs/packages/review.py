@@ -133,7 +133,8 @@ import logging
 import os
 import re
 from collections import Counter
-from collections.abc import Mapping, Sequence
+from collections.abc import Generator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Protocol, runtime_checkable
@@ -284,6 +285,31 @@ class PausableUI(Protocol):
     def pause(self) -> None: ...
 
     def resume(self) -> None: ...
+
+
+@contextmanager
+def _display_handed_over(ui: PausableUI, *, for_a_question: bool) -> Generator[None]:
+    """Hand the live display over for the blocking prompts inside, and take it back however
+    the block ends — only where a question is actually going to be put.
+
+    `ui.pause` stops the Live non-transiently on purpose, so its last frame (status line,
+    every progress bar, the whole Recent Logs panel) stays in the scrollback as the context
+    the question is answered in. That frame is worth one repeat of the run's own display
+    per question, and nothing at all for a step that asks none: seven package jobs and one
+    question between them left seven frames (#279).
+
+    A body that only PRINTS needs no handover. Rich places console output above a running
+    Live's region and leaves it in the scrollback, which is where a report belongs when
+    nothing blocks on input.
+    """
+    if not for_a_question:
+        yield
+        return
+    ui.pause()
+    try:
+        yield
+    finally:
+        ui.resume()
 
 
 @dataclass(frozen=True)
@@ -1809,10 +1835,15 @@ async def review_items(  # noqa: PLR0913 - review surface plus both machine name
     item comes back `SKIP_ONCE`, nothing is recorded permanently, one warning NAMES each
     item nobody could be asked about (`_warn_every_item_unasked`), and the group panels are
     printed as the report (`PKG-FR-NO-TERMINAL`).
-    Interactive runs pause `ui` around each group's blocking prompt (dispatched via
-    `asyncio.to_thread`) and resume it in a `finally`, so the live display is always handed
-    back even if the prompt raises. They print no group panel: the screen lists the items
-    itself, and its answered form stays in the scrollback as the record.
+    Interactive runs hand `ui`'s live display over around the blocking prompts (dispatched
+    via `asyncio.to_thread`) and take it back however the block ends, so the display is
+    always returned even if a prompt raises. They print no group panel: the screen lists
+    the items itself, and its answered form stays in the scrollback as the record.
+
+    The handover happens only where a question is actually going to be PUT
+    (`asks_for_a_decision` over the groups, `_display_handed_over`). A review holding
+    nothing, or nothing but report-only groups, answers nothing; its groups still print,
+    through the running display.
 
     One further screen can follow the groups on an interactive run: `_ask_mark_sides`, for
     the conflicting items answered permanently (`PKG-FR-MARK-SIDE`). Both paths that return
@@ -1825,8 +1856,8 @@ async def review_items(  # noqa: PLR0913 - review surface plus both machine name
 
     # Whatever the flags left over goes through unchanged, the empty set included: a review
     # the flags answered whole reaches the branches below with no groups, which is what an
-    # empty plan already does (a terminal still gets its pause/resume, and `was_interactive`
-    # still says only whether there was one).
+    # empty plan already does — nothing left to ask, so nothing is paused for, and
+    # `was_interactive` still says only whether there was a terminal.
     automation_raw = os.environ.get(PACKAGE_REVIEW_AUTOMATION_ENV)
     if automation_raw is not None:
         return ReviewOutcome(
@@ -1848,10 +1879,11 @@ async def review_items(  # noqa: PLR0913 - review surface plus both machine name
         )
         return ReviewOutcome(decisions=decisions, was_interactive=False, unresolved=non_interactive_unresolved)
 
-    ui.pause()
     decisions: dict[str, Decision] = dict(by_policy)
     snippets: dict[str, SnippetBodies] = {}
-    try:
+    # `_ask_mark_sides` needs no test of its own here: it can only follow a permanent answer
+    # on a decision group, so a review that puts no question cannot reach it either.
+    with _display_handed_over(ui, for_a_question=any(asks_for_a_decision(group) for group in groups)):
         for group in groups:
             console.print()
 
@@ -1917,8 +1949,6 @@ async def review_items(  # noqa: PLR0913 - review surface plus both machine name
             target_hostname=target_hostname,
             decisions=decisions,
         )
-    finally:
-        ui.resume()
 
     # An interactive review can no longer leave anything unresolved (decision 10): the
     # unreproducible flow re-prompts or aborts, and a decision screen's abort raises above —
