@@ -1,0 +1,96 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "f836e0c702a1",
+  "session_id": "3cd144d3-98e0-4cf7-af0c-0582503dd4ca",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-07T17:04:06.922323676Z",
+  "branch": "worktree-uat-02-deltas",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    "docs/jobs/package-sync.md",
+    "docs/system/core.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "a1d57cc8cc9e",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 399,
+    "cache_creation_tokens": 865947,
+    "cache_read_tokens": 55652272,
+    "output_tokens": 154434,
+    "api_call_count": 218
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-merge-main-2026-08-07T16:57:26.166515219Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "merge-main"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "f1d0a3606545",
+      "timestamp": "2026-08-07T16:57:26.166515219Z",
+      "native": {
+        "command": "/merge-main"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/merge-main",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "prompt-skill-claude-code-merge-main-2026-08-07T17:00:17.66449336Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "merge-main"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "a1d57cc8cc9e",
+      "timestamp": "2026-08-07T17:00:17.66449336Z",
+      "native": {
+        "command": "/merge-main"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/merge-main",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 5
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-07T17:04:06.777752109Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 2877,
+    "human_modified": 408,
+    "human_removed": 0,
+    "total_committed": 2877,
+    "total_lines_changed": 5389,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    }
+  ]
+}
