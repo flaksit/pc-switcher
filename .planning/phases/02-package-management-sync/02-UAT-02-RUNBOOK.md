@@ -85,7 +85,9 @@ echo 2.0 | sudo tee /opt/pcsw-uat-loop/version >/dev/null
 # reaches the update screen when a snippet is ALREADY recorded for it — with nothing
 # to replay, the run asks how to reproduce it instead, on the resolution screen with
 # the verb "update". So the two drifting package items get real entries, and
-# /opt/pcsw-uat-loop gets one whose install body exits 0 and moves nothing.
+# /opt/pcsw-uat-loop gets one whose install body exits 0 and moves nothing. Only the
+# unowned path carries a version_body: dpkg and snap answer that question for the
+# other two, and an entry of theirs carrying one is malformed.
 cat > ~/.config/pc-switcher/package-snippets.yaml <<'YAML'
 snippets:
   "unreproducible:unowned-path:/opt/pcsw-uat-loop":
@@ -103,7 +105,6 @@ snippets:
       printf "Package: pcsw-uat-drift\nVersion: 2.0\nSection: misc\nPriority: optional\nArchitecture: all\nMaintainer: pc-switcher UAT <noreply@example.invalid>\nDescription: A package installed by hand, which no repository can supply.\n" | sudo tee "$b/DEBIAN/control" >/dev/null
       sudo dpkg-deb --build "$b" "$b.deb" >/dev/null
       sudo dpkg --install "$b.deb"
-    version_body: "dpkg-query -W -f='${Version}' pcsw-uat-drift"
     authored_at: "2026-08-01T00:00:00+00:00"
     authored_on: pc1
   "unreproducible:snap-sideload:pcsw-uat-snapdrift":
@@ -114,7 +115,6 @@ snippets:
       sudo mkdir -p "$d/meta"
       printf "name: pcsw-uat-snapdrift\nversion: '2.0'\nsummary: pc-switcher UAT sideload\ndescription: A snap installed from local bytes.\nbase: core20\nconfinement: strict\ngrade: stable\n" | sudo tee "$d/meta/snap.yaml" >/dev/null
       sudo snap try "$d"
-    version_body: "snap list pcsw-uat-snapdrift | awk 'NR==2 {print $2}'"
     authored_at: "2026-08-01T00:00:00+00:00"
     authored_on: pc1
 YAML
@@ -167,7 +167,7 @@ pc-switcher sync pc2 --yes --allow-first-sync
 
 A dry run converges nothing, so three things below cannot happen in it: no snippet is recorded, no registry is pushed, and the converge loop of §3.7 never opens — `_converge_one` is not called at all (`jobs/packages/sync_core.py:804`). Walk the dry run for the screens, then answer the real run for the outcomes.
 
-Findings already raised from a walk of these fixtures, so they need no re-reporting — check they still read as described and move on: review copy and titles (#276), the `apt.conf.d` digests of §3.3 (#277), that screen's keys and default (#278), the repeated scrollback frames (#279), job names in the status line (#280), the snippet screens of §3.5 and §3.6 (#281), the second editor of §3.6 (#282), and the group order of §3.2 (#283).
+Findings already raised from a walk of these fixtures, so they need no re-reporting — check they still read as described and move on: review copy and titles (#276), the `apt.conf.d` digests of §3.3 (#277), that screen's keys and default (#278), the repeated scrollback frames (#279), job names in the status line (#280), the snippet screens of §3.5 and §3.6 (#281), and the group order of §3.2 (#283).
 
 ### 3.1 The three exclusions
 
@@ -190,7 +190,7 @@ The sections below follow the order you will meet the screens. On these fixtures
 | 1 | `apt_sync` | `Update apt configuration files` → the follow-up it raises | §3.3 |
 | 2 | `manual_deb_sync` | `Remove manual_deb packages` | §3.4 |
 | 3 | `manual_deb_sync` | version difference, `pcsw-uat-drift` | §3.5 |
-| 4 | `manual_deb_sync` | resolution, `pcsw-uat-deb` — two editors | §3.6 |
+| 4 | `manual_deb_sync` | resolution, `pcsw-uat-deb` — one editor | §3.6 |
 | 5 | `manual_snap_sync` | version difference, then resolution | §3.5, §3.6 |
 | 6 | `manual_flatpak_sync` | resolution, `sdl_sopwith` | §3.6 |
 | 7 | `manual_installs_sync` | `Remove manual packages`, then version difference, then resolution | §3.4, §3.5, §3.6 |
@@ -244,13 +244,15 @@ The comparison must be made on the snap's **version**, `2.0` against `1.0`, and 
 
 Answer, in the order the three come:
 
-- `pcsw-uat-drift` (deb) — `<w>`, to confirm the editor opens **on the recorded body** rather than empty, which is what makes a rewrite an edit. Change the `Description:` line so the body is provably yours, submit both editors, and let it run.
+- `pcsw-uat-drift` (deb) — `<w>`, to confirm the editor opens **on the recorded body** rather than empty, which is what makes a rewrite an edit. Change the `Description:` line so the body is provably yours, submit the one editor, and let it run.
 - `pcsw-uat-snapdrift` (snap) — `<y>`, the plain replay of a recorded snippet, with no editor in the way.
 - `/opt/pcsw-uat-loop` (path) — `<y>`. Its recorded body cannot converge it, which is what §3.7 is about; nothing says so yet, and the screen that does comes much later.
 
-### 3.6 The two editors
+### 3.6 The editors
 
-The last group of each snippet job. Four items have no recorded snippet and so are asked how to reproduce them, one screen each: `pcsw-uat-deb`, `pcsw-uat-snap`, `io.github.fragglet.sdl_sopwith/x86_64/stable` and `/opt/pcsw-uat-app`. On `Install /opt/pcsw-uat-app on pc2?` answer `<y>` and confirm that **two** editors open in sequence, not one:
+The last group of each snippet job. Four items have no recorded snippet and so are asked how to reproduce them, one screen each: `pcsw-uat-deb`, `pcsw-uat-snap`, `io.github.fragglet.sdl_sopwith/x86_64/stable` and `/opt/pcsw-uat-app`.
+
+`/opt/pcsw-uat-app` is the one kind with no package manager to ask for a version, so it is the only one that takes two editors. On `Install /opt/pcsw-uat-app on pc2?` answer `<y>` and confirm that **two** editors open in sequence:
 
 1. `Install-or-update snippet for /opt/pcsw-uat-app:` — its own screen states the install-or-update contract, that the body is replayed onto a machine which may already hold an older version.
 2. `Installed-version snippet for /opt/pcsw-uat-app:` — its own screen states that this one runs on both machines on every sync while the run is still planning, and must be read-only.
@@ -266,17 +268,15 @@ sudo mkdir -p /opt/pcsw-uat-app && echo hi | sudo tee /opt/pcsw-uat-app/README >
 echo 1.0
 ```
 
-The same screen for the three package-backed jobs asks for both bodies too, even though only `manual_installs_sync` ever runs the version body — the other three ask `dpkg`, `snap` and `flatpak` instead. That is what the code does today and it is going away: #282 makes the second body required only for unowned paths. Record what you see; do not read the second editor here as correct.
+The other three take **one** editor each and are never asked for a version body: `dpkg`, `snap` and `flatpak` report those versions themselves. A second editor here is a finding. Their refusal message says `The snippet cannot be empty — enter one, or choose a skip.`
 
-Answer the other three like this, each `<y>` followed by both editors:
+Answer them with an install-or-update body each, `<y>` then one editor:
 
-| Item | Install-or-update body | Installed-version body |
-|---|---|---|
-| `pcsw-uat-deb` | rebuild and `dpkg --install` it, as §2.1 does — copy that block with the name changed | `dpkg-query -W -f='${Version}' pcsw-uat-deb` |
-| `pcsw-uat-snap` | `snap try` a directory you write, as §2.1 does | `snap list pcsw-uat-snap \| awk 'NR==2 {print $2}'` |
-| `io.github.fragglet.sdl_sopwith/x86_64/stable` | `flatpak install --user --assumeyes flathub io.github.fragglet.sdl_sopwith` — pc2 still has flathub, which is what makes this one reproducible by hand | `flatpak list --user --columns=application,version \| awk '/sdl_sopwith/ {print $2}'` |
-
-None of the three version bodies is ever executed, so their exactness is not what is under test. Once #282 lands these three take one editor and no version body at all, and this table loses its right-hand column.
+| Item | Install-or-update body |
+|---|---|
+| `pcsw-uat-deb` | rebuild and `dpkg --install` it, as §2.1 does — copy that block with the name changed |
+| `pcsw-uat-snap` | `snap try` a directory you write, as §2.1 does |
+| `io.github.fragglet.sdl_sopwith/x86_64/stable` | `flatpak install --user --assumeyes flathub io.github.fragglet.sdl_sopwith` — pc2 still has flathub, which is what makes this one reproducible by hand |
 
 ### 3.7 The converge loop
 
@@ -320,8 +320,8 @@ On pc1:
 ```bash
 ls ~/.config/pc-switcher/*.decisions.yaml     # four manual files can exist, plus apt/snap/flatpak
 grep -c 'label: /opt/pcsw-uat-app' ~/.config/pc-switcher/package-snippets.yaml   # 1
-grep -c 'version_body' ~/.config/pc-switcher/package-snippets.yaml               # one per entry
-grep -c 'install_body' ~/.config/pc-switcher/package-snippets.yaml               # the same number
+grep -c 'version_body' ~/.config/pc-switcher/package-snippets.yaml               # one per unowned-path entry only
+grep -c 'install_body' ~/.config/pc-switcher/package-snippets.yaml               # one per entry, of every kind
 grep -c '99-pcsw-uat' ~/.config/pc-switcher/apt.decisions.yaml                   # 1 — "both" recorded here too
 LOG=$(ls -t ~/.local/share/pc-switcher/logs/sync-*.log | head -1)
 grep -nE 'pcsw-uat-deb|pcsw-uat-snap|sdl_sopwith' "$LOG" | grep -vE 'manual_deb|manual_snap|manual_flatpak' | head
@@ -411,9 +411,9 @@ ssh testuser@"$PC2" 'grep -c "label: /opt/pcsw-uat-pc2" ~/.config/pc-switcher/pa
 
 The run must end rather than overwrite, naming the entry pc2 would lose, with exit code 1 — so the two registries can be consolidated by hand.
 
-## 6. A registry entry missing its second body
+## 6. A registry entry carrying the wrong bodies
 
-An entry carrying only `install_body` is as unreadable as a corrupt file: the run ends naming the file, and nothing is completed by a default. The fixture is deliberately an **unowned path**, the one kind that genuinely needs a version body, so this check survives #282 — which drops the requirement for the three package-backed kinds.
+An entry with the wrong set of bodies is as unreadable as a corrupt file: the run ends naming the file, and nothing is completed by a default. Two ways to get it wrong, one per entry type — an unowned path with no `version_body`, and any other kind carrying one.
 
 ```bash
 ssh testuser@"$PC1" 'printf "snippets:\n  \"unreproducible:unowned-path:/opt/pcsw-uat-half\":\n    label: /opt/pcsw-uat-half\n    install_body: \"true\"\n    authored_at: \"2026-08-01T00:00:00+00:00\"\n    authored_on: pc1\n" > ~/.config/pc-switcher/package-snippets.yaml'
@@ -422,6 +422,16 @@ echo "exit code: $?"
 ```
 
 The message must name `~/.config/pc-switcher/package-snippets.yaml` and the machine, and say to repair or delete it before starting a new sync. Exit code 1, and neither machine changed.
+
+The mirror case, an `apt-no-candidate` entry carrying a `version_body` nothing would ever run:
+
+```bash
+ssh testuser@"$PC1" 'printf "snippets:\n  \"unreproducible:apt-no-candidate:pcsw-uat-extra\":\n    label: pcsw-uat-extra\n    install_body: \"true\"\n    version_body: \"echo 1.0\"\n    authored_at: \"2026-08-01T00:00:00+00:00\"\n    authored_on: pc1\n" > ~/.config/pc-switcher/package-snippets.yaml'
+ssh testuser@"$PC1" '~/.local/bin/pc-switcher sync pc2 --dry-run --yes --allow-out-of-order'
+echo "exit code: $?"
+```
+
+The same ending, naming the same file and this entry.
 
 ```bash
 ssh testuser@"$PC1" 'rm ~/.config/pc-switcher/package-snippets.yaml'

@@ -38,7 +38,6 @@ MYTOOL_REGISTRY_YAML = (
     "  unreproducible:snap-sideload:mytool:\n"
     "    label: mytool (sideloaded snap, revision x1)\n"
     "    install_body: sudo snap install --dangerous /tmp/mytool.snap\n"
-    "    version_body: snap list mytool\n"
     "    authored_at: '2026-01-01T00:00:00+00:00'\n"
     "    authored_on: laptop\n"
 )

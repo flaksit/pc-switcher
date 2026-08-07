@@ -287,7 +287,7 @@ machine_specific:
 
 ### Install-snippet registry (synced)
 
-One shared YAML file at `~/.config/pc-switcher/package-snippets.yaml`, holding TWO opaque, replayable shell bodies for each item no package manager can reproduce (a bare `.deb`, a sideloaded snap, a bundle-installed flatpak ref, a manual install). **Reaches the target** — an unreproducible job (`manual_deb_sync`, `manual_snap_sync`, `manual_flatpak_sync`, `manual_installs_sync`) pushes it to the target itself with `send_file()` immediately after its own review, so a snippet authored on the fly during that review is included in the same run. It does **not** travel via `config_sync`, which carries `config.yaml` only and runs before any review, so it could not carry a snippet the user has not authored yet. How to install something is knowledge about the package, not the machine, so unlike the machine-local decision file above the registry does reach the target — but by the job's own push, never as a synced config file and never in `folder_sync`'s mirror, which excludes this path unconditionally so the push's consent question cannot be bypassed. Absent or empty means no snippets; a file that is there and cannot be parsed ends the run naming it, on either machine, rather than degrading to no snippets the way a decision file does — that degrade would make a wholesale push look additive and overwrite entries nobody could see.
+One shared YAML file at `~/.config/pc-switcher/package-snippets.yaml`, holding opaque, replayable shell bodies for each item no package manager can reproduce (a bare `.deb`, a sideloaded snap, a bundle-installed flatpak ref, a manual install under an unowned path). **Reaches the target** — an unreproducible job (`manual_deb_sync`, `manual_snap_sync`, `manual_flatpak_sync`, `manual_installs_sync`) pushes it to the target itself with `send_file()` immediately after its own review, so a snippet authored on the fly during that review is included in the same run. It does **not** travel via `config_sync`, which carries `config.yaml` only and runs before any review, so it could not carry a snippet the user has not authored yet. How to install something is knowledge about the package, not the machine, so unlike the machine-local decision file above the registry does reach the target — but by the job's own push, never as a synced config file and never in `folder_sync`'s mirror, which excludes this path unconditionally so the push's consent question cannot be bypassed. Absent or empty means no snippets; a file that is there and cannot be parsed ends the run naming it, on either machine, rather than degrading to no snippets the way a decision file does — that degrade would make a wholesale push look additive and overwrite entries nobody could see.
 
 ```python
 @dataclass(frozen=True)
@@ -295,13 +295,17 @@ class Snippet:
     item_id: str
     label: str
     install_body: str  # opaque; replayed on the target verbatim, never parsed
-    version_body: str  # opaque; run on BOTH machines, prints the version installed there
     authored_at: str   # ISO-8601 UTC
     authored_on: str   # hostname the snippet was authored on
+
+
+@dataclass(frozen=True)
+class VersionedSnippet(Snippet):
+    version_body: str  # opaque; run on BOTH machines, prints the version installed there
 ```
 
 On disk, entries are keyed by `item_id` under a `snippets:` mapping. Each body replays as `bash -c <body>` with no stdin available — one expecting a prompt fails rather than hanging the sync.
 
-Both bodies are mandatory (ADR-020, `PKG-FR-VERSION-SNIPPET`). An entry carrying only one is malformed and ends the run naming the file, exactly as an unparsable registry does: there is no backwards compatibility and no default, because a guessed version body would state something about what is installed that nobody established, and one defaulting to "no version" would silently restore convergence on presence alone.
+Which of the two types an entry is follows the origin inside its `item_id`: `unreproducible:unowned-path:*` is a `VersionedSnippet`, the other three origins are `Snippet` (ADR-020-D-UNREPRODUCIBLE-ITEMS, `PKG-FR-VERSION-SNIPPET`). An entry with the wrong set of bodies — an unowned path without a version body, anything else with one — is malformed and ends the run naming the file, exactly as an unparsable registry does: no default completes it, because a guessed version body would state something about what is installed that nobody established, and one defaulting to "no version" would silently restore convergence on presence alone.
 
-`install_body` is the install-**or-update** snippet: it is replayed onto a machine that may already hold an older version, and the editor's own note says so. `version_body` is what `PKG-FR-MANUAL-VERSION` compares — it runs on both machines during `plan()`, carries no `mutates=` (`PKG-FR-VERSION-SNIPPET` is `PKG-FR-CONFIRM-EACH`'s one exception), and its read-only obligation rests on its author. Only `manual_installs_sync` executes it: the other three jobs read their machine's own package manager for a version, and store the body so one shared file has one shape.
+`install_body` is the install-**or-update** snippet: it is replayed onto a machine that may already hold an older version, and the editor's own note says so. `version_body` is what `PKG-FR-MANUAL-VERSION` compares for an unowned path — it runs on both machines during `plan()`, carries no `mutates=` (`PKG-FR-VERSION-SNIPPET` is `PKG-FR-CONFIRM-EACH`'s one exception), and its read-only obligation rests on its author. Only `manual_installs_sync` has entries carrying one, and it is the only job that executes one: the other three read their machine's own package manager for a version instead.

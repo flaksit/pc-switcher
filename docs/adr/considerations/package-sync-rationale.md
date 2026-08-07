@@ -79,9 +79,13 @@ Version-first, before looking at the bodies: a snippet edited to change a commen
 
 No machine-specific mark: `PKG-FR-NO-MARK-ON-SNAP-REVISION` one ecosystem over — nobody holds a version as a standing preference about one machine, and a mark would leave the two machines' records disagreeing about software neither would raise again.
 
-## `PKG-FR-VERSION-SNIPPET`: both bodies mandatory, no fallback
+## `PKG-FR-VERSION-SNIPPET`: the bodies a kind requires, no fallback
 
-An entry whose version is guessed states something about what is installed that nobody established. One whose version is defaulted to "unknown" silently converges on presence again — the behaviour the second body exists to replace.
+An unowned-path entry whose version is guessed states something about what is installed that nobody established. One whose version is defaulted to "unknown" silently converges on presence again — the behaviour the second body exists to replace.
+
+Why only that kind carries one: `dpkg-query`, `snap list` and `flatpak list` already answer the version question for the other three (`PKG-FR-MANUAL-VERSION`), so requiring a version body there would have the user write a command nothing ever runs, and would call an entry complete for its kind malformed.
+
+Why a redundant one is malformed rather than ignored: accepting it lets the file drift back to a shape the review no longer authors, and a body sitting in the registry unread reads to its author as something the sync uses.
 
 Why the version snippet is not gated by `--confirm-each-command`: it runs on every sync, on both machines, before the run has proposed anything. A confirmation would put a question per item per machine in front of the user before they had been shown a single change. The obligation moves to the author instead, and the editor screen says so.
 

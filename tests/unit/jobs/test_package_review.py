@@ -47,7 +47,7 @@ from pcswitcher.jobs.packages.review import (
     policy_decision,
     review_items,
 )
-from pcswitcher.jobs.packages.state import SnippetBodies
+from pcswitcher.jobs.packages.state import SnippetBodies, VersionedSnippetBodies
 from pcswitcher.jobs.packages.sync_core import SNAP_CHANGE_REVIEW_ACTION, PackagePlan
 from pcswitcher.models import CommandResult, SyncAbortedByUser
 from pcswitcher.orchestrator import Orchestrator
@@ -65,6 +65,12 @@ class _Hosts(TypedDict):
 # The two machine names every screen says out loud. Deliberately concrete and distinct, so
 # an assertion that a message names the right one cannot pass on the other's text.
 HOSTS: _Hosts = {"source_hostname": "atlas", "target_hostname": "nomad"}
+
+# The two unreproducible entry types, told apart by the origin in the id: a package manager
+# reports the version of the first, and only the second's own snippet can report the second's
+# (`PKG-FR-VERSION-SNIPPET`).
+PACKAGE_BACKED_ID = "unreproducible:apt-no-candidate:brscan3"
+UNOWNED_PATH_ID = "unreproducible:unowned-path:/opt/az"
 
 
 def _mock_isatty(interactive: bool) -> MagicMock:
@@ -1104,12 +1110,12 @@ class TestUnreproducibleGroupResolution:
     """
 
     @staticmethod
-    async def _captured(body: str) -> SnippetBodies:
-        """Both bodies `review_items` hands back when the user submits `body` at each of the
-        two editors — the install-or-update snippet and the installed-version snippet, which
-        are authored together and are both mandatory (`PKG-FR-VERSION-SNIPPET`)."""
-        group = _unreproducible_group([_entry("u1", label="brscan3")])
-        screen = _fake_prompt(ask_return={"u1": "add_snippet"})
+    async def _captured(body: str, item_id: str = PACKAGE_BACKED_ID) -> SnippetBodies:
+        """What `review_items` hands back when the user submits `body` at every editor this
+        item opens — one for a package-backed kind, two for an unowned path
+        (`PKG-FR-VERSION-SNIPPET`)."""
+        group = _unreproducible_group([_entry(item_id, label="brscan3")])
+        screen = _fake_prompt(ask_return={item_id: "add_snippet"})
         text_prompt = _fake_prompt(ask_return=body)
 
         with (
@@ -1119,16 +1125,25 @@ class TestUnreproducibleGroupResolution:
         ):
             outcome = await review_items([group], console=_interactive_console(), ui=MagicMock(), **HOSTS)
 
-        assert "u1" not in outcome.unresolved
-        return outcome.snippets["u1"]
+        assert item_id not in outcome.unresolved
+        return outcome.snippets[item_id]
 
     async def test_add_snippet_choice_captures_the_body_the_user_wrote(self) -> None:
         """G31, G182 — everything between the first and last thing typed is kept: blank lines,
-        indentation, and the order of the commands.
+        indentation, and the order of the commands. A package-backed kind records the install
+        body alone.
         """
         body = "sudo dpkg --install /tmp/x.deb\n\n  sudo apt-get install --fix-broken --assume-yes"
 
-        assert await self._captured(body) == SnippetBodies(install_body=body, version_body=body)
+        assert await self._captured(body) == SnippetBodies(install_body=body)
+
+    async def test_an_unowned_path_records_both_bodies(self) -> None:
+        """G182 — the one kind with no package manager to ask records the version body too."""
+        body = "sudo /opt/az/install.sh"
+
+        captured = await self._captured(body, item_id=UNOWNED_PATH_ID)
+
+        assert captured == VersionedSnippetBodies(install_body=body, version_body=body)
 
     async def test_the_whitespace_around_the_body_is_dropped_at_capture(self) -> None:
         """#237 — the editor's own trailing newlines are not part of the command, and a body
@@ -1138,20 +1153,21 @@ class TestUnreproducibleGroupResolution:
         stripped = "sudo dpkg --install /tmp/x.deb"
 
         assert await self._captured("\n\n  sudo dpkg --install /tmp/x.deb  \n\n") == SnippetBodies(
-            install_body=stripped, version_body=stripped
+            install_body=stripped
         )
 
     @staticmethod
-    async def _editor_screen() -> tuple[str, str, str, str]:
-        """Run one snippet capture and return what the two editors' own screens carry.
+    async def _editor_screens(item_id: str = UNOWNED_PATH_ID) -> tuple[list[str], str]:
+        """Run one snippet capture and return every editor header it produced, plus the
+        scrollback.
 
-        Four things: each editor's header while it is open and on prompt_toolkit's final
-        `is_done` render, plus everything printed to the console around them (the
-        scrollback). Two editors, because authoring is always the pair (`PKG-FR-VERSION-SNIPPET`).
+        Two headers per editor: while it is open, and on prompt_toolkit's final `is_done`
+        render. How many editors is the item's own business (`PKG-FR-VERSION-SNIPPET`), which
+        is what the caller asserts on.
         """
         console, sink = captured_console(terminal=True)
-        group = _unreproducible_group([_entry("u1", label="brscan3")])
-        screen = _fake_prompt(ask_return={"u1": "add_snippet"})
+        group = _unreproducible_group([_entry(item_id, label="brscan3")])
+        screen = _fake_prompt(ask_return={item_id: "add_snippet"})
         text_prompt = _fake_prompt(ask_return="sudo dpkg --install /tmp/x.deb")
         headers: list[str] = []
 
@@ -1169,9 +1185,7 @@ class TestUnreproducibleGroupResolution:
         ):
             await review_items([group], console=console, ui=MagicMock(), **HOSTS)
 
-        install_open, install_answered, version_open, version_answered = headers
-        assert install_answered == version_answered == ""
-        return install_open, version_open, install_answered, sink.getvalue()
+        return headers, sink.getvalue()
 
     async def test_the_authoring_warning_is_on_the_editors_own_screen(self) -> None:
         """G61, G183 — the user is warned while they can still act on it. A snippet that asks a
@@ -1183,7 +1197,8 @@ class TestUnreproducibleGroupResolution:
         without showing them what that looks like leaves them to discover
         `DEBIAN_FRONTEND` as a stuck sync.
         """
-        install_open, version_open, _once_answered, _scrollback = await self._editor_screen()
+        headers, _scrollback = await self._editor_screens()
+        install_open, _install_answered, version_open, _version_answered = headers
 
         assert "nomad" in install_open
         assert "nobody watching" in install_open
@@ -1207,11 +1222,21 @@ class TestUnreproducibleGroupResolution:
         every render with no `is_done` check. Neither survives the answer now, and nothing
         is printed around the editor for the scrollback to hold.
         """
-        _install_open, _version_open, once_answered, scrollback = await self._editor_screen()
+        headers, scrollback = await self._editor_screens()
 
-        assert once_answered == ""
+        assert headers[1::2] == ["", ""]
         assert "nobody watching" not in scrollback
         assert "Ctrl-D" not in scrollback
+
+    async def test_a_package_backed_kind_opens_one_editor(self) -> None:
+        """G182 — dpkg, snap and flatpak answer the version question for their own kind
+        (`PKG-FR-MANUAL-VERSION`), so authoring one of those asks for the install body and
+        stops there rather than for a command nothing would ever run.
+        """
+        headers, _scrollback = await self._editor_screens(item_id=PACKAGE_BACKED_ID)
+
+        assert len(headers) == 2
+        assert "must change nothing" not in headers[0]
 
     async def test_skip_always_choice_yields_skip_always_decision_and_no_snippet(self) -> None:
         """G32."""
@@ -1297,8 +1322,8 @@ class TestUnreproducibleGroupResolution:
         group = _unreproducible_group([_entry("u1", label="brscan3")])
         body = "sudo dpkg --install /tmp/x.deb"
         screen = _fake_prompt(ask_side_effect=[{"u1": "add_snippet"}, {"u1": "add_snippet"}])
-        # Empty install body (which never reaches the second editor), then the real pair.
-        text_prompt = _fake_prompt(ask_side_effect=["", body, body])
+        # Empty install body, then the real one.
+        text_prompt = _fake_prompt(ask_side_effect=["", body])
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
@@ -1307,7 +1332,7 @@ class TestUnreproducibleGroupResolution:
         ):
             outcome = await review_items([group], console=console, ui=ui, **HOSTS)
 
-        assert outcome.snippets == {"u1": SnippetBodies(install_body=body, version_body=body)}
+        assert outcome.snippets == {"u1": SnippetBodies(install_body=body)}
         assert outcome.unresolved == ()
 
     async def test_a_whitespace_only_snippet_is_not_a_resolution(self) -> None:

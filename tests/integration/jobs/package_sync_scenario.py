@@ -26,6 +26,7 @@ from uuid import uuid4
 from pcswitcher.executor import BashLoginRemoteExecutor
 from pcswitcher.jobs.apt_sync.items import AptPackageItem, collateral_item_id
 from pcswitcher.jobs.flatpak_sync import FlatpakItem
+from pcswitcher.jobs.packages.items import carries_version_body
 from pcswitcher.jobs.packages.review import PACKAGE_REVIEW_AUTOMATION_ENV, Decision
 from pcswitcher.jobs.packages.state import (
     DECISION_FILE_RELPATH_TEMPLATE,
@@ -33,6 +34,7 @@ from pcswitcher.jobs.packages.state import (
     DecisionFile,
     Snippet,
     SnippetRegistry,
+    VersionedSnippet,
 )
 from pcswitcher.jobs.packages.unreproducible import UnreproducibleItem
 from pcswitcher.models import CommandResult
@@ -504,19 +506,32 @@ async def author_snippet(
     per-entry capture prompt entirely -- the test does not depend on that UI path, only on
     the registry's own read/write contract (`package_state.py`).
 
+    The entry type follows `item_id`: an unowned path gets `version_body`, and the three
+    kinds a package manager reports the version of get none, whatever was passed.
+
     `version_body` defaults to a constant, so a scenario that is not about drift reports the
     same version on both machines and produces no update item.
     """
-    await SnippetRegistry(executor).add(
-        Snippet(
+    authored_at = datetime.now(UTC).isoformat()
+    entry = (
+        VersionedSnippet(
             item_id=item_id,
             label=label,
             install_body=body,
             version_body=version_body,
-            authored_at=datetime.now(UTC).isoformat(),
+            authored_at=authored_at,
+            authored_on="integration-test",
+        )
+        if carries_version_body(item_id)
+        else Snippet(
+            item_id=item_id,
+            label=label,
+            install_body=body,
+            authored_at=authored_at,
             authored_on="integration-test",
         )
     )
+    await SnippetRegistry(executor).add(entry)
 
 
 # -- snap helpers: name/revision parsing, independent of snap_sync's private parser --

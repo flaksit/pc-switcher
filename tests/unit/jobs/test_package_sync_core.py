@@ -989,11 +989,7 @@ class TestFinalizeUnreproducible:
             ReviewOutcome(
                 decisions={},
                 was_interactive=True,
-                snippets={
-                    diff.item_id: SnippetBodies(
-                        install_body="sudo dpkg --install /tmp/x.deb", version_body="dpkg-query --show brscan3"
-                    )
-                },
+                snippets={diff.item_id: SnippetBodies(install_body="sudo dpkg --install /tmp/x.deb")},
             ),
         )
 
@@ -1034,7 +1030,7 @@ class TestFinalizeUnreproducible:
             ReviewOutcome(
                 decisions={diff.item_id: Decision.SKIP_ALWAYS},
                 was_interactive=True,
-                snippets={diff.item_id: SnippetBodies(install_body="echo x", version_body="echo v")},
+                snippets={diff.item_id: SnippetBodies(install_body="echo x")},
             ),
         )
 
@@ -1055,7 +1051,7 @@ class TestFinalizeUnreproducible:
             ReviewOutcome(
                 decisions={diff.item_id: Decision.SKIP_ALWAYS},
                 was_interactive=False,
-                snippets={diff.item_id: SnippetBodies(install_body="echo x", version_body="echo v")},
+                snippets={diff.item_id: SnippetBodies(install_body="echo x")},
             ),
         )
 
@@ -1092,7 +1088,7 @@ class TestBaseHooksAreNoOps:
             ReviewOutcome(
                 decisions={diff.item_id: Decision.SKIP_ALWAYS},
                 was_interactive=True,
-                snippets={diff.item_id: SnippetBodies(install_body="echo x", version_body="echo v")},
+                snippets={diff.item_id: SnippetBodies(install_body="echo x")},
             ),
         )
 

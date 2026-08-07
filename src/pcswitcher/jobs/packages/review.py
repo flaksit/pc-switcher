@@ -142,7 +142,8 @@ from rich.text import Text
 
 from pcswitcher.jobs.packages import prompt_navigation
 from pcswitcher.jobs.packages.decision_list import DecisionOption, DecisionRow, decision_list
-from pcswitcher.jobs.packages.state import SnippetBodies
+from pcswitcher.jobs.packages.items import carries_version_body
+from pcswitcher.jobs.packages.state import SnippetBodies, VersionedSnippetBodies
 from pcswitcher.models import SyncAbortedByUser
 from pcswitcher.redaction import redact_credentials
 from pcswitcher.terminal import is_interactive
@@ -398,9 +399,9 @@ class MarkSide(StrEnum):
 class ReviewOutcome:
     """The result of a review: every entry's decision, plus how it was reached.
 
-    `snippets` (item_id -> both bodies, `PKG-FR-SNIPPET-VERBATIM`/`PKG-FR-VERSION-SNIPPET`) is populated by any of the
-    three per-entry
-    snippet groups' resolutions. `unresolved` (item ids, `PKG-FR-MANUAL-RESOLUTION`) is populated ONLY on a
+    `snippets` (item_id -> the bodies its kind takes,
+    `PKG-FR-SNIPPET-VERBATIM`/`PKG-FR-VERSION-SNIPPET`) is populated by any of the three
+    per-entry snippet groups' resolutions. `unresolved` (item ids, `PKG-FR-MANUAL-RESOLUTION`) is populated ONLY on a
     non-interactive run, listing the unreproducible items no one was present to resolve
     (`PKG-FR-NO-TERMINAL` reporting); an interactive review always resolves every entry (decision 10), so
     it leaves `unresolved` empty. Every other group leaves both at their empty defaults, so
@@ -1109,20 +1110,33 @@ async def _capture_body(prompt_title: str, note: str, existing: str) -> str:
     return captured.strip() if captured else ""
 
 
+def _empty_snippet_refusal(item_id: str) -> str:
+    """What the review says when an authoring editor came back empty — worded for however
+    many editors that item opens (`PKG-FR-SNIPPET-VERBATIM`).
+    """
+    if carries_version_body(item_id):
+        return "Neither snippet can be empty — enter both, or choose a skip."
+    return "The snippet cannot be empty — enter one, or choose a skip."
+
+
 async def _capture_bodies(
     entry: ReviewEntry, *, source_hostname: str, target_hostname: str, recorded: SnippetBodies | None
 ) -> SnippetBodies | None:
-    """Both bodies for one item, or `None` where either editor came back empty (`PKG-FR-VERSION-SNIPPET`).
+    """The bodies this item's registry entry takes, or `None` where an editor came back empty
+    (`PKG-FR-VERSION-SNIPPET`).
 
-    Two editors, always, and never one: an entry carrying only an install body is one the
-    registry itself refuses to parse back, so authoring the pair is what authoring means.
-    The second opens on whatever version body the item already had, which is how a rewrite
-    that only needs the install half costs one keystroke.
+    One editor for a package-backed item and two for an unowned path, decided by
+    `carries_version_body` — the same predicate the registry parse applies, so what is
+    authored here is what parses back. Asking for an installed-version body where dpkg, snap
+    or flatpak answers that question would have the user write a command nothing ever runs.
 
-    `None` for an empty capture of EITHER body, which the caller turns into a re-prompt
-    rather than a resolution (`PKG-FR-SNIPPET-VERBATIM`: an empty snippet is not an answer).
-    A body of only spaces and newlines lands here as empty for the same reason it would
-    replay as nothing at all.
+    Each editor opens on whatever the item already had, which is how a rewrite that only
+    needs the install half costs one keystroke.
+
+    `None` for an empty capture of ANY body it asked for, which the caller turns into a
+    re-prompt rather than a resolution (`PKG-FR-SNIPPET-VERBATIM`: an empty snippet is not an
+    answer). A body of only spaces and newlines lands here as empty for the same reason it
+    would replay as nothing at all.
     """
     install_body = await _capture_body(
         f"Install-or-update snippet for {entry.label}:",
@@ -1131,14 +1145,16 @@ async def _capture_bodies(
     )
     if not install_body:
         return None
+    if not carries_version_body(entry.item_id):
+        return SnippetBodies(install_body=install_body)
     version_body = await _capture_body(
         f"Installed-version snippet for {entry.label}:",
         _version_authoring_note(source_hostname, target_hostname),
-        recorded.version_body if recorded else "",
+        recorded.version_body if isinstance(recorded, VersionedSnippetBodies) else "",
     )
     if not version_body:
         return None
-    return SnippetBodies(install_body=install_body, version_body=version_body)
+    return VersionedSnippetBodies(install_body=install_body, version_body=version_body)
 
 
 async def _review_snippet_group(  # noqa: PLR0913 - screen content plus the two dicts it fills; all but the group keyword-only
@@ -1167,9 +1183,9 @@ async def _review_snippet_group(  # noqa: PLR0913 - screen content plus the two 
 
     - Ctrl-C at the screen means the user wants to stop, so `_ask_about_one_item` aborts the
       ENTIRE sync with `SyncAbortedByUser` — never a per-item skip-and-mark-unresolved.
-    - Choosing to write a snippet and then submitting an empty body, for either half, is NOT
-      accepted and does NOT fall through: the choice is re-prompted so the user must supply
-      real bodies or pick an explicit skip.
+    - Choosing to write a snippet and then submitting an empty body, for any editor the item
+      opens, is NOT accepted and does NOT fall through: the choice is re-prompted so the user
+      must supply real bodies or pick an explicit skip.
 
     `ReviewGroup.recorded_bodies` carries what the registry already holds, so a rewrite opens
     on it; it is absent for the resolve group, whose items have nothing recorded by
@@ -1215,7 +1231,7 @@ async def _review_snippet_group(  # noqa: PLR0913 - screen content plus the two 
                 snippets[entry.item_id] = bodies
                 break
 
-            console.print(Text("Neither snippet can be empty — enter both, or choose a skip.", style="yellow"))
+            console.print(Text(_empty_snippet_refusal(entry.item_id), style="yellow"))
 
 
 def _print_report_group(group: ReviewGroup, *, console: Console, target_hostname: str) -> None:

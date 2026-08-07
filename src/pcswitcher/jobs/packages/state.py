@@ -42,14 +42,16 @@ and synced (`PKG-FR-MANUAL-SAME-RUN`) rather than living in a machine-local
 `*.decisions.yaml` file. It travels source-to-target by an unreproducible
 job's own post-review `send_file` push, not via `config_sync`.
 
-An entry carries TWO bodies (`PKG-FR-MANUAL-SCOPE`, `PKG-FR-VERSION-SNIPPET`), both
-mandatory: `install_body`, replayed to bring the target to the source's state, and
-`version_body`, run on a machine to print the version of that item installed THERE.
-Neither is ever parsed, templated or interpreted; what the tool does compare is the STRING
-one machine's `version_body` printed against the string the other's did, which is the
-whole of `PKG-FR-APT-HOLD-VERSION`'s exception for a manual install. Both replay
-without stdin, since `pcswitcher.executor.Process` documents that commands must be
-non-interactive; a body expecting a prompt fails rather than hanging the sync.
+Every entry carries `install_body` (`PKG-FR-MANUAL-SCOPE`), replayed to bring the target to
+the source's state. An entry for an unowned path carries a second body, `version_body`, run
+on a machine to print the version of that item installed THERE — that kind alone, because
+the other three have a package manager to ask instead (`PKG-FR-MANUAL-VERSION`), which is
+why the two entry types here are `Snippet` and `VersionedSnippet`. Neither body is ever
+parsed, templated or interpreted; what the tool does compare is the STRING one machine's
+`version_body` printed against the string the other's did, which is the whole of
+`PKG-FR-APT-HOLD-VERSION`'s exception for a manual install. Both replay without stdin, since
+`pcswitcher.executor.Process` documents that commands must be non-interactive; a body
+expecting a prompt fails rather than hanging the sync.
 
 `version_body` is the one place a sync runs the user's own code during `plan()`, which is
 contractually read-only, so the contract is on its author: it MUST be read-only, pc-switcher
@@ -65,12 +67,12 @@ import logging
 import shlex
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Protocol, override
 
 import yaml
 
 from pcswitcher.config_sync import CONFIG_REMOTE_DIR
-from pcswitcher.jobs.packages.items import ItemClass
+from pcswitcher.jobs.packages.items import ItemClass, carries_version_body
 from pcswitcher.models import CommandResult, SyncAborted
 
 if TYPE_CHECKING:
@@ -85,9 +87,12 @@ __all__ = [
     "Snippet",
     "SnippetBodies",
     "SnippetRegistry",
+    "VersionedSnippet",
+    "VersionedSnippetBodies",
     "filter_inert",
     "load_snippets_from_text",
     "marks_on_either",
+    "snippet_from_bodies",
 ]
 
 _logger = logging.getLogger("pcswitcher.jobs.packages.state")
@@ -353,39 +358,41 @@ class DecisionFile:
 _SNIPPET_FILE_HEADER = (
     "# pc-switcher install-snippet registry — regenerated on every write.\n"
     "#\n"
-    "# Each entry carries two opaque shell snippets for one item no package manager\n"
-    "# can reproduce — a bare .deb, a sideloaded snap, a bundle-installed flatpak, a\n"
-    "# manual install (`PKG-FR-SNIPPET-VERBATIM`, `PKG-FR-VERSION-SNIPPET`).\n"
+    "# Each entry carries opaque shell snippets for one item no package manager can\n"
+    "# reproduce — a bare .deb, a sideloaded snap, a bundle-installed flatpak, a manual\n"
+    "# install under an unowned path (`PKG-FR-SNIPPET-VERBATIM`, `PKG-FR-VERSION-SNIPPET`).\n"
     "# pc-switcher replays them VERBATIM and parses neither:\n"
     "#\n"
     "#   install_body  brings the other machine to this one's state. It runs on a\n"
     "#                 machine that may already hold an OLDER version, so write it to\n"
-    "#                 install or update, whichever applies.\n"
-    "#   version_body  prints the version installed on whichever machine runs it. It\n"
-    "#                 MUST be read-only: it runs on BOTH machines on every sync while\n"
-    "#                 the run is still planning, and it is not covered by\n"
-    "#                 --confirm-each-command.\n"
+    "#                 install or update, whichever applies. Every entry carries one.\n"
+    "#   version_body  prints the version installed on whichever machine runs it. Only\n"
+    "#                 an unreproducible:unowned-path: entry carries one — for the other\n"
+    "#                 three kinds dpkg, snap and flatpak answer that question. It MUST\n"
+    "#                 be read-only: it runs on BOTH machines on every sync while the run\n"
+    "#                 is still planning, and it is not covered by --confirm-each-command.\n"
     "#\n"
-    "# Both are mandatory. An entry missing either is malformed and ends the run\n"
-    "# naming this file.\n"
+    "# An entry with no install_body, an unowned-path entry with no version_body, and any\n"
+    "# other entry that carries a version_body are all malformed: the run ends naming this\n"
+    "# file.\n"
     "#\n"
     "# This file lives in the shared, synced config (`PKG-FR-MANUAL-SAME-RUN`):\n"
-    "# every peer that runs `pc-switcher sync` carries it to the target alongside config.yaml. Both bodies\n"
-    "# run non-interactively with no stdin available — one that expects a prompt\n"
+    "# every peer that runs `pc-switcher sync` carries it to the target alongside config.yaml. Every body\n"
+    "# runs non-interactively with no stdin available — one that expects a prompt\n"
     "# fails rather than hanging the sync.\n"
 )
 
 
 @dataclass(frozen=True)
 class Snippet:
-    """One registry entry (`PKG-FR-SNIPPET-VERBATIM`, `PKG-FR-VERSION-SNIPPET`): the two
-    opaque shell bodies that reproduce an item no package manager can install on its own
-    and report which version of it is installed.
+    """One registry entry for an item a package manager tracks (`PKG-FR-SNIPPET-VERBATIM`):
+    the opaque shell body that reproduces something the manager cannot install on its own —
+    a bare .deb, a sideloaded snap, a bundle-installed flatpak.
 
     `label` mirrors the unreproducible item's own label at authoring time (a snapshot,
-    not a live reference) so the registry file reads meaningfully on its own. Neither body
-    is ever inspected by this dataclass or its callers beyond being replayed byte-for-byte:
-    both arrive already stripped of surrounding whitespace from the one place a snippet is
+    not a live reference) so the registry file reads meaningfully on its own. The body
+    is never inspected by this dataclass or its callers beyond being replayed byte-for-byte:
+    it arrives already stripped of surrounding whitespace from the one place a snippet is
     captured (`packages.review`), which is what keeps the YAML a person can read and the
     string `replay` quotes identical.
 
@@ -399,22 +406,79 @@ class Snippet:
     item_id: str
     label: str
     install_body: str
-    version_body: str
     authored_at: str  # ISO-8601 UTC
     authored_on: str  # hostname of the machine the snippet was authored on
+
+    @property
+    def bodies(self) -> SnippetBodies:
+        """This entry's bodies, in the shape a review re-offers them for editing."""
+        return SnippetBodies(install_body=self.install_body)
+
+
+@dataclass(frozen=True)
+class VersionedSnippet(Snippet):
+    """A registry entry for an install under a path no package manager owns
+    (`PKG-FR-VERSION-SNIPPET`, `ADR-020-D-UNREPRODUCIBLE-ITEMS`).
+
+    It is the one kind that also carries `version_body`, because it is the one kind with no
+    manager to ask which version is installed. A separate type rather than an optional field
+    so the site that runs a version body (`SnippetRegistry.installed_version`) is reachable
+    only with an entry that has one, and "entry without a version body" is not a state the
+    running code has to handle at all.
+    """
+
+    version_body: str
+
+    @property
+    @override
+    def bodies(self) -> VersionedSnippetBodies:
+        return VersionedSnippetBodies(install_body=self.install_body, version_body=self.version_body)
 
 
 @dataclass(frozen=True)
 class SnippetBodies:
-    """The two bodies a review authored, before they are stamped into a `Snippet`.
+    """What a review authored for a package-backed item, before it is stamped into a
+    `Snippet`.
 
-    A pair rather than two parallel mappings through `ReviewOutcome`: the two are written
-    at one screen, for one item, and a run that carried only one of them would record an
-    entry the registry itself refuses to parse back.
+    A value rather than a mapping through `ReviewOutcome` per body: an item's bodies are
+    written at one screen, and the type says how many there were to write.
     """
 
     install_body: str
+
+
+@dataclass(frozen=True)
+class VersionedSnippetBodies(SnippetBodies):
+    """What a review authored for an unowned path: the two bodies of a `VersionedSnippet`.
+
+    The type the review returns follows `carries_version_body(item_id)`, the same predicate
+    the parse applies, so authoring cannot record an entry the registry then refuses to
+    read back.
+    """
+
     version_body: str
+
+
+def snippet_from_bodies(
+    *, item_id: str, label: str, bodies: SnippetBodies, authored_at: str, authored_on: str
+) -> Snippet:
+    """The registry entry for `bodies`, of whichever of the two entry types they carry."""
+    if isinstance(bodies, VersionedSnippetBodies):
+        return VersionedSnippet(
+            item_id=item_id,
+            label=label,
+            install_body=bodies.install_body,
+            version_body=bodies.version_body,
+            authored_at=authored_at,
+            authored_on=authored_on,
+        )
+    return Snippet(
+        item_id=item_id,
+        label=label,
+        install_body=bodies.install_body,
+        authored_at=authored_at,
+        authored_on=authored_on,
+    )
 
 
 def _serialize_snippets(entries: Mapping[str, Snippet]) -> str:
@@ -423,7 +487,7 @@ def _serialize_snippets(entries: Mapping[str, Snippet]) -> str:
         item_id: {
             "label": entry.label,
             "install_body": entry.install_body,
-            "version_body": entry.version_body,
+            **({"version_body": entry.version_body} if isinstance(entry, VersionedSnippet) else {}),
             "authored_at": entry.authored_at,
             "authored_on": entry.authored_on,
         }
@@ -469,12 +533,13 @@ def _deserialize_snippets(raw: str) -> dict[str, Snippet]:
     is a hand edit of this one file, and stopping at the first malformed entry would have the
     user fix it, start a new sync, and only then be shown the next.
 
-    An entry carrying only one of the two bodies is malformed here, with no fallback of any
-    kind (`PKG-FR-VERSION-SNIPPET`). A registry written before the second body existed therefore ends the run
-    naming the file, which is the outcome an unparsable registry already has: guessing a
-    version body would invent a claim about what is installed, and defaulting one to "no
-    version" would silently make every such item converge on presence again — the behaviour
-    the second body exists to replace.
+    Which bodies an entry must carry follows its own `item_id` (`carries_version_body`), and
+    an entry that carries the wrong set is malformed here with no fallback of any kind
+    (`PKG-FR-VERSION-SNIPPET`): an unowned path without its version body, because guessing
+    one would invent a claim about what is installed and defaulting it to "no version" would
+    silently make that item converge on presence again; any other kind WITH one, because
+    nothing would ever run it and accepting it would let the file drift back to a shape the
+    review no longer authors.
     """
     data = yaml.safe_load(raw)
     snippets = data.get("snippets") if isinstance(data, dict) else None
@@ -484,15 +549,29 @@ def _deserialize_snippets(raw: str) -> dict[str, Snippet]:
     entries: dict[str, Snippet] = {}
     malformed: list[str] = []
     for item_id, fields in snippets.items():
+        key = str(item_id)
         try:
-            entries[str(item_id)] = Snippet(
-                item_id=str(item_id),
-                label=fields["label"],
-                install_body=fields["install_body"],
-                version_body=fields["version_body"],
-                authored_at=fields["authored_at"],
-                authored_on=fields["authored_on"],
-            )
+            label, install_body = fields["label"], fields["install_body"]
+            authored_at, authored_on = fields["authored_at"], fields["authored_on"]
+            if carries_version_body(key):
+                entries[key] = VersionedSnippet(
+                    item_id=key,
+                    label=label,
+                    install_body=install_body,
+                    version_body=fields["version_body"],
+                    authored_at=authored_at,
+                    authored_on=authored_on,
+                )
+            elif "version_body" in fields:
+                malformed.append(f"{item_id} (has a version_body; this kind's version comes from its package manager)")
+            else:
+                entries[key] = Snippet(
+                    item_id=key,
+                    label=label,
+                    install_body=install_body,
+                    authored_at=authored_at,
+                    authored_on=authored_on,
+                )
         except KeyError as exc:
             malformed.append(f"{item_id} (missing field {exc})")
         except TypeError as exc:
@@ -618,6 +697,12 @@ class SnippetRegistry:
         see. Stripped, because a version is one token and a trailing newline is the shell's,
         not the author's.
 
+        The entry has to be a `VersionedSnippet` for there to be a body to run at all, and
+        only an unowned path is one. The other three kinds never reach here: their job reads
+        `dpkg-query`, `snap list` or `flatpak list` instead (`PKG-FR-MANUAL-VERSION`), and
+        the parse ties an entry's type to its `item_id`, so an id one of those jobs owns
+        cannot resolve to an entry with a body.
+
         `bash -c <quoted body>` and no `login_shell=` either way, unlike `replay`: this is
         the one call in the codebase issued against BOTH machines and compared, and only the
         base `Executor` interface is common to them, so asking for a shell mode one of the
@@ -626,7 +711,7 @@ class SnippetRegistry:
         an absolute one.
         """
         snippet = await self.get(item_id)
-        if snippet is None:
+        if not isinstance(snippet, VersionedSnippet):
             return None
         result = await executor.run_command(f"bash -c {shlex.quote(snippet.version_body)}")
         if not result.success or not result.stdout.strip():

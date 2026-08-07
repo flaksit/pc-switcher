@@ -286,8 +286,9 @@ _READ_ONLY_CALLS: dict[str, int] = {
 _TOLERATED_SIDE_EFFECTS: dict[str, _ToleratedSideEffect] = {
     "jobs/packages/state.py::SnippetRegistry.installed_version::run_command": _ToleratedSideEffect(
         1,
-        "the entry's `version_body`, run on both machines during `plan()` to read which version of the item is "
-        "installed there (`PKG-FR-VERSION-SNIPPET`). It is the user's OWN shell code, so "
+        "an unowned-path entry's `version_body` — the one kind that carries one — run on both machines during "
+        "`plan()` to read which version of the item is installed there (`PKG-FR-VERSION-SNIPPET`). It is the "
+        "user's OWN shell code, so "
         "nothing static can prove it state-free — "
         "the read-only obligation is the author's, stated in the editor's own note and in the registry header, "
         "and `PKG-FR-VERSION-SNIPPET` puts it there deliberately. Gating it is refused rather than omitted: it "

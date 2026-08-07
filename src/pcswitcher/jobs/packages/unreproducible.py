@@ -58,7 +58,7 @@ from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import ClassVar, Literal, override
+from typing import ClassVar, override
 
 from rich.markup import escape
 
@@ -69,7 +69,9 @@ from pcswitcher.jobs.packages.items import (
     DiffClass,
     ItemClass,
     ItemDiff,
+    UnreproducibleOrigin,
     build_version_mismatch_detail,
+    unreproducible_id_prefix,
 )
 from pcswitcher.jobs.packages.review import (
     UNREPRODUCIBLE_RETRY_REVIEW_ACTION,
@@ -87,19 +89,17 @@ from pcswitcher.jobs.packages.state import (
     Snippet,
     SnippetBodies,
     SnippetRegistry,
+    VersionedSnippet,
     filter_inert,
     load_snippets_from_text,
     marks_on_either,
+    snippet_from_bodies,
 )
 from pcswitcher.jobs.packages.sync_core import ConvergeItemDeclined, PackagePlan, PackageSyncJob
 from pcswitcher.models import CommandResult, Host, LogLevel, SyncAborted
 from pcswitcher.redaction import redact_credentials
 
 __all__ = ["UnreproducibleItem", "UnreproducibleSyncJob", "lines_of"]
-
-#: The origins an `UnreproducibleItem` can be found under. One per detector, and part of
-#: identity rather than a field alongside it — see `UnreproducibleItem`.
-UnreproducibleOrigin = Literal["apt-no-candidate", "flatpak-no-remote", "unowned-path", "snap-sideload"]
 
 
 def lines_of(output: str) -> list[str]:
@@ -161,7 +161,7 @@ class UnreproducibleItem:
         (a job picking its own items out of a decision file that also holds another job's)
         builds the prefix from the same expression `item_id` does.
         """
-        return f"unreproducible:{origin}:"
+        return unreproducible_id_prefix(origin)
 
     @property
     def item_id(self) -> str:
@@ -236,8 +236,8 @@ class UnreproducibleSyncJob(PackageSyncJob):
         rather than a field captured with the item.
 
         `None` for an id this machine cannot answer for, and every reason collapses into
-        that one value: the item is not installed here, the manager printed no version, the
-        entry has no `version_body`, or that body failed. A comparison needs two answers, so
+        that one value: the item is not installed here, the manager printed no version, an
+        unowned path has no registry entry, or its `version_body` failed. A comparison needs two answers, so
         a `None` on either side produces no item rather than a claimed difference.
 
         Batched: an implementation issues one command over the whole set wherever its
@@ -510,17 +510,25 @@ class UnreproducibleSyncJob(PackageSyncJob):
         `item_id` is absent because the pair is matched on it. `authored_at` and `authored_on`
         are rendered as ONE `authored` field: they are two halves of a single authoring
         record, and naming them apart would put two lines in front of the user for one fact.
+
+        The installed-version row appears only for an unowned path, the one kind that has
+        such a body. Both copies are the same `item_id`, so either both carry one or neither
+        does.
         """
-        return [
+        fields = [
             ("label", target_snippet.label, source_snippet.label),
             ("install snippet", target_snippet.install_body, source_snippet.install_body),
-            ("installed-version snippet", target_snippet.version_body, source_snippet.version_body),
+        ]
+        if isinstance(target_snippet, VersionedSnippet) and isinstance(source_snippet, VersionedSnippet):
+            fields.append(("installed-version snippet", target_snippet.version_body, source_snippet.version_body))
+        fields.append(
             (
                 "authored",
                 f"{target_snippet.authored_at} on {target_snippet.authored_on}",
                 f"{source_snippet.authored_at} on {source_snippet.authored_on}",
-            ),
-        ]
+            )
+        )
+        return fields
 
     # -- plan() / converge() ------------------------------------------------------------
 
@@ -576,9 +584,7 @@ class UnreproducibleSyncJob(PackageSyncJob):
         for item_id, item in source_items.items():
             snippet = await registry.get(item_id)
             if snippet is not None:
-                self._recorded_bodies[item_id] = SnippetBodies(
-                    install_body=snippet.install_body, version_body=snippet.version_body
-                )
+                self._recorded_bodies[item_id] = snippet.bodies
             if item_id not in target_items:
                 diffs.append(self._diff_for(item, DiffAction.INSTALL, snippet is not None, detail=None))
                 continue
@@ -812,7 +818,7 @@ class UnreproducibleSyncJob(PackageSyncJob):
         if recorded is None:
             return False
 
-        bodies_now = SnippetBodies(install_body=recorded.install_body, version_body=recorded.version_body)
+        bodies_now = recorded.bodies
         outcome = await self.context.reviewer.review(
             (
                 ReviewGroup(
@@ -835,11 +841,10 @@ class UnreproducibleSyncJob(PackageSyncJob):
         if bodies is None:
             return False
 
-        snippet = Snippet(
+        snippet = snippet_from_bodies(
             item_id=diff.item_id,
             label=recorded.label,
-            install_body=bodies.install_body,
-            version_body=bodies.version_body,
+            bodies=bodies,
             authored_at=datetime.now(UTC).isoformat(),
             authored_on=self.context.source_hostname,
         )
@@ -893,11 +898,10 @@ class UnreproducibleSyncJob(PackageSyncJob):
                 diff = by_id.get(item_id)
                 label = diff.label if diff is not None else item_id
                 await registry.add(
-                    Snippet(
+                    snippet_from_bodies(
                         item_id=item_id,
                         label=label,
-                        install_body=bodies.install_body,
-                        version_body=bodies.version_body,
+                        bodies=bodies,
                         authored_at=authored_at,
                         authored_on=self.context.source_hostname,
                     )

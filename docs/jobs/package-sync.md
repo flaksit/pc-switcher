@@ -91,11 +91,11 @@ Marks live under `~/.config/pc-switcher/<manager>.decisions.yaml`. To un-mark, d
 
 The four `manual_*` jobs share one snippet registry at `~/.config/pc-switcher/package-snippets.yaml`. When one of these jobs finds an item, you have three choices:
 
-- `y` — Write an install snippet. Two editors open: an install-or-update body, then an installed-version body.
+- `y` — Write an install snippet. One editor opens for the install-or-update body; `manual_installs_sync` opens a second for an installed-version body.
 - `s` — Skip now.
 - `x` — Never install here.
 
-The **installed-version snippet** runs on both machines every sync to detect drift. It must be read-only — pc-switcher cannot check that. Example: `/opt/foo/bin/foo --version`.
+The **installed-version snippet** belongs to `manual_installs_sync` alone: nothing else can say which version of an unowned path is installed, while the other three jobs ask `dpkg-query`, `snap list` and `flatpak list`. It runs on both machines every sync to detect drift, and must be read-only — pc-switcher cannot check that. Example: `/opt/foo/bin/foo --version`.
 
 The **install-or-update snippet** runs on the target to install or update. Runs as the target user with no wrapping sudo — put `sudo` inside the snippet if you need it. Example:
 
@@ -104,7 +104,7 @@ sudo DEBIAN_FRONTEND=noninteractive dpkg --install /path/to/package.deb || \
 sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes --fix-broken
 ```
 
-Both bodies are stored verbatim and mandatory. An empty body is refused.
+Every body an entry takes is stored verbatim and mandatory. An empty body is refused.
 
 Convergence means the target reading back the source's version, not the snippet exiting zero. Where a replay leaves the version unchanged, you are asked again — this time to write a new snippet or leave it for this run. There is no purge-and-retry option: if your installer will not overwrite, `rm -rf … &&` goes into your own new snippet.
 

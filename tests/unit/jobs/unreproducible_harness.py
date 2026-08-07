@@ -140,13 +140,13 @@ POLICY_AUTO_DEP = """7zip:
 DPKG_WITNESS_LINE = "dpkg: /usr/bin/dpkg\n"
 
 # A `package-snippets.yaml` registry holding one entry for the brscan3 no-candidate item.
-# Both bodies, because both are mandatory (`PKG-FR-VERSION-SNIPPET`) and an entry missing either ends the run.
+# One body: dpkg answers the version question for this kind (`PKG-FR-VERSION-SNIPPET`), so an
+# entry carrying a version body would end the run as malformed.
 BRSCAN3_REGISTRY_YAML = (
     "snippets:\n"
     "  unreproducible:apt-no-candidate:brscan3:\n"
     "    label: brscan3 (no apt candidate)\n"
     "    install_body: sudo dpkg --install /tmp/brscan3.deb\n"
-    "    version_body: dpkg-query --show --showformat='${Version}' brscan3\n"
     "    authored_at: '2026-01-01T00:00:00+00:00'\n"
     "    authored_on: laptop\n"
 )
