@@ -40,3 +40,12 @@ The general ADR-rule should read that all creds should be redacted from the log.
 ---
 
 Ok, with one extra: now, ADR-021 tl;dr and "required" read as an exhaustive list of what must be logged and makes reader think other things MUST NOT be logged. That is not true. ADR-021 only talks about SOME types of log messages. Should be clear that ADR-021 does not define the complete set of what must be logged and what not: it only gives SOME musts and SOME must-nots.
+
+---
+
+ok.
+No need to refer explicitly to package sync ("that package sync forced onto the log") because that could read as not applicable to other code/jobs. The rules are generally applicable.
+
+---
+
+continue
