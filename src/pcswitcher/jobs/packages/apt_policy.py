@@ -13,9 +13,9 @@ installed — so the two live behind one walker (`_origins_by_package`) that dif
 which version row it collects from.
 
 Shared here rather than duplicated per job, and here rather than on `PackageSyncJob`.
-D-15 forbids one manager's diff on the shared BASE CLASS (adr-020, "Job split into four
-jobs"): this module defines no class and sits in no job's MRO, so the other three managers
-inherit nothing from it. `manual_deb_sync`'s own rule — it never imports `apt_sync`
+D-15 forbids one manager's diff on the shared BASE CLASS (adr-020, "Job split into one job
+per kind of finding"): this module defines no class and sits in no job's MRO, so the other
+managers inherit nothing from it. `manual_deb_sync`'s own rule — it never imports `apt_sync`
 (D-18) — also still holds, since both jobs import a third module instead. What is NOT
 worth duplicating is a stateful indentation walker with three separate subtle rules
 (installed-block tracking, eight-space origin rows, the `/var/lib/dpkg/status` pseudo

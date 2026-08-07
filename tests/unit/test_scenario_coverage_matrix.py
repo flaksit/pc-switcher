@@ -3,10 +3,12 @@
 `docs/dev/package-sync-scenario-coverage.md` names, for every branch the package sync
 requirements impose, the test that proves it; each of those tests names the scenarios it
 proves, in the first clause of its docstring. Neither direction is worth anything if the
-two drift, and all three ways they drift are silent: a renamed test leaves the matrix
-citing nothing, a renumbered scenario leaves a docstring pointing at someone else's
-branch, and a tag one character off the shape `DOCSTRING_TAG` reads leaves a proven branch
-looking unproven.
+two drift, and every way they drift is silent: a renamed test leaves the matrix citing
+nothing, a renumbered scenario leaves a docstring pointing at someone else's branch, a tag
+one character off the shape `DOCSTRING_TAG` reads leaves a proven branch looking unproven,
+a second row given a live id hides the first from every check here, and a citation in a
+shape the resolver cannot read is dropped without trace — leaving whatever else the row
+cites to satisfy the checks alone.
 
 These tests assert nothing about behaviour — only that the document and the suite still
 describe the same tests.
@@ -16,7 +18,8 @@ from __future__ import annotations
 
 import ast
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -28,6 +31,9 @@ TESTS = Path(__file__).parents[1]
 SCENARIO_ID = re.compile(r"\b([A-KN]\d{1,3}[a-z]?)\b")
 #: A citation in the Test column: `<module>:<Class>::<test>`, module optional.
 CITATION = re.compile(r"(Test[A-Za-z0-9_]+)::(test_[a-z0-9_]+)")
+#: A test that sits at module level rather than in a class, cited `<module>:::<test>` —
+#: the empty class slot is what doubles the colon. Its owner is the module stem.
+MODULE_TEST = re.compile(r"`\s*([a-z][a-z0-9_]*):::(test_[a-z0-9_]+)")
 #: The opening clause of a tagged docstring: `C48 — ...`, `A2, A3 — ...`, `H2.`
 DOCSTRING_TAG = re.compile(r"^\s*((?:[A-KN]\d{1,3}[a-z]?)(?:\s*[,/]\s*[A-KN]\d{1,3}[a-z]?)*)\s*[—:.\-]")
 #: A docstring that was MEANT to open with a tag: an id in first position, bare or inside
@@ -54,33 +60,48 @@ SAME_AS = re.compile(r"same (?:test|as)\s*(?:as\s+)?([A-KN]\d{1,3}[a-z]?)?")
 BARE_TEST = re.compile(r"`\s*(?:…|\.\.\.)?::(test_[a-z0-9_]+)")
 
 
-def _rows() -> dict[str, tuple[str, str, list[tuple[str, str]]]]:
-    """Scenario id -> (coverage mark, Test column, resolved [(Class, test), …])."""
-    rows: dict[str, tuple[str, str, list[tuple[str, str]]]] = {}
-    previous: list[tuple[str, str]] = []
-    for line in MATRIX.read_text().splitlines():
+def _row_cells() -> Iterator[list[str]]:
+    """The five cells of every scenario row, in document order."""
+    for line in MATRIX.read_text(encoding="utf-8").splitlines():
         if not re.match(r"^\| [A-KN]\d", line):
             continue
         cells = [cell.strip() for cell in line.strip().strip("|").split(" | ")]
-        if len(cells) != 5:
-            continue
+        if len(cells) == 5:
+            yield cells
+
+
+def _rows() -> dict[str, tuple[str, str, list[tuple[str, str]]]]:
+    """Scenario id -> (coverage mark, Test column, resolved [(owner, test), …]).
+
+    `owner` is a class for `Class::test` and a module stem for `module:::test`.
+    """
+    rows: dict[str, tuple[str, str, list[tuple[str, str]]]] = {}
+    previous: list[tuple[str, str]] = []
+    for cells in _row_cells():
         scenario, mark, cited = cells[0], cells[3], cells[4]
 
-        # Walk the cell left to right so a bare `::test_x` binds to the class named
-        # nearest before it, not to whichever class the cell happens to end on.
+        # Walk the cell left to right so a bare `::test_x` binds to the owner named
+        # nearest before it, not to whichever the cell happens to end on.
         resolved: list[tuple[str, str]] = []
         current = previous[-1][0] if previous else ""
-        for match in re.finditer(f"{CITATION.pattern}|{BARE_TEST.pattern}", cited):
-            cls, fn, bare = match.group(1), match.group(2), match.group(3)
+        for match in re.finditer(f"{CITATION.pattern}|{MODULE_TEST.pattern}|{BARE_TEST.pattern}", cited):
+            cls, fn, module, module_fn, bare = match.groups()
             if cls:
                 current = cls
                 resolved.append((cls, fn))
+            elif module:
+                current = module
+                resolved.append((module, module_fn))
             elif current:
                 resolved.append((current, bare))
 
-        if not resolved and (same := SAME_AS.search(cited)) is not None:
+        # `same test` ADDS the inherited citations to any the cell names itself: a row
+        # reading "same test; `X::test_y`" claims both, and dropping the inherited half
+        # would leave whichever tier it carried unchecked.
+        if (same := SAME_AS.search(cited)) is not None:
             named = same.group(1)
-            resolved = list(rows[named][2]) if named and named in rows else list(previous)
+            inherited = list(rows[named][2]) if named and named in rows else list(previous)
+            resolved += [citation for citation in inherited if citation not in resolved]
 
         rows[scenario] = (mark, cited, resolved)
         if resolved:
@@ -88,20 +109,39 @@ def _rows() -> dict[str, tuple[str, str, list[tuple[str, str]]]]:
     return rows
 
 
+def _repeated_ids() -> dict[str, int]:
+    """Scenario id -> how many rows carry it, for every id carried by more than one."""
+    counted = Counter(cells[0] for cells in _row_cells())
+    return {sid: count for sid, count in counted.items() if count > 1}
+
+
 def _docstrings() -> list[tuple[str, str, str]]:
-    """(Class, method, docstring) for every method of every test class, parsed once."""
-    return [
-        (node.name, item.name, ast.get_docstring(item) or "")
-        for path in sorted(TESTS.rglob("test_*.py"))
-        for node in ast.walk(ast.parse(path.read_text()))
-        if isinstance(node, ast.ClassDef)
-        for item in node.body
-        if isinstance(item, ast.FunctionDef | ast.AsyncFunctionDef)
-    ]
+    """(owner, test, docstring) for every test the suite defines, parsed once.
+
+    `owner` is the class for a method and the module stem for a module-level test
+    function — the two shapes the Test column cites. Classes are `Test…` and module stems
+    are lowercase, so the two namespaces cannot collide.
+    """
+    found: list[tuple[str, str, str]] = []
+    for path in sorted(TESTS.rglob("test_*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        found += [
+            (node.name, item.name, ast.get_docstring(item) or "")
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ClassDef)
+            for item in node.body
+            if isinstance(item, ast.FunctionDef | ast.AsyncFunctionDef)
+        ]
+        found += [
+            (path.stem, item.name, ast.get_docstring(item) or "")
+            for item in tree.body
+            if isinstance(item, ast.FunctionDef | ast.AsyncFunctionDef) and item.name.startswith("test_")
+        ]
+    return found
 
 
 def _tests(docstrings: list[tuple[str, str, str]]) -> dict[tuple[str, str], set[str]]:
-    """(Class, test) -> every scenario id any module's copy of it claims.
+    """(owner, test) -> every scenario id any module's copy of it claims.
 
     Keyed without the module because the Test column often omits it, and a class and test
     name together are specific enough in practice. Where two modules share both — several
@@ -123,10 +163,22 @@ CLAIMED = sorted(sid for sid, (mark, _, _) in ROWS.items() if mark in COVERED)
 
 
 def test_the_matrix_is_well_formed() -> None:
-    """Every row carries five columns, a unique id and a coverage mark from the legend."""
+    """Every row carries five columns, a unique id and a coverage mark from the legend.
+
+    Uniqueness is asserted here rather than left to the reader because `_rows()` keys a
+    dict: a second row given a live id overwrites the first, and the overwritten row then
+    reads as verified while nothing checks its citations and no test need name it back.
+    Two sections appending new rows to their own tails is all it takes.
+    """
     assert len(ROWS) > 1000, f"only {len(ROWS)} rows parsed — the table shape has changed"
     unknown = {sid: mark for sid, (mark, _, _) in ROWS.items() if mark not in COVERED | {"—", "‼"}}
     assert not unknown, f"coverage marks outside the legend: {unknown}"
+    repeated = _repeated_ids()
+    assert not repeated, (
+        f"ids carried by more than one row: {repeated}. Every row but the last of each is invisible to"
+        f" every check here. Renumber one block onto free ids and retag the docstrings that follow it"
+        f" — never resolve this by deleting a row."
+    )
 
 
 def test_no_scenario_states_which_tier_proves_it() -> None:
@@ -139,11 +191,8 @@ def test_no_scenario_states_which_tier_proves_it() -> None:
     """
     tiers = re.compile(r"\b(on a VM|VM run|integration test|unit test|mocked|a real run on a VM)\b")
     offenders: dict[str, str] = {}
-    for line in MATRIX.read_text().splitlines():
-        if not re.match(r"^\| [A-KN]\d", line):
-            continue
-        cells = [cell.strip() for cell in line.strip().strip("|").split(" | ")]
-        if len(cells) == 5 and (hit := tiers.search(f"{cells[1]} {cells[2]}")):
+    for cells in _row_cells():
+        if hit := tiers.search(f"{cells[1]} {cells[2]}"):
             offenders[cells[0]] = hit.group(0)
     assert not offenders, f"rows name a test tier in the Scenario or Expected column: {offenders}"
 
@@ -157,10 +206,24 @@ def test_every_claim_of_coverage_names_a_test() -> None:
     )
 
 
+def _why_it_did_not_resolve(owner: str, fn: str) -> str:
+    """A missing citation, in the terms of the fix it needs.
+
+    The two mistakes have different fixes: a test that exists nowhere is a rename or a
+    citation written for a test never added, while one cited at module level that is
+    really a method just needs the class name.
+    """
+    cited = f"{owner}:::{fn}" if owner.islower() else f"{owner}::{fn}"
+    holders = sorted({other for other, name in SUITE if name == fn and other != owner})
+    if not holders:
+        return f"{cited} (the suite defines no test of that name)"
+    return f"{cited} (that name belongs to {', '.join(holders)} — cite it there)"
+
+
 @pytest.mark.parametrize("scenario", CLAIMED)
 def test_every_cited_test_exists(scenario: str) -> None:
     """A row claiming coverage must cite a test the suite actually has."""
-    missing = [f"{cls}::{fn}" for cls, fn in ROWS[scenario][2] if (cls, fn) not in SUITE]
+    missing = [_why_it_did_not_resolve(owner, fn) for owner, fn in ROWS[scenario][2] if (owner, fn) not in SUITE]
     assert not missing, f"{scenario} cites tests that do not exist: {missing}"
 
 

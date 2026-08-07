@@ -139,6 +139,29 @@ pc-switcher sync pc2
 - [ ] Lines starting with `-` and `+` are distinguishable
 - [ ] Choices (a/k/x) displayed clearly
 
+### 5b. Which Machine Keeps Its Copy
+
+The only route to this screen is a person at a terminal: a run with no TTY, and one driven by the review automation variable, both answer no side at all. Nothing in the automated suite can reach it.
+
+Give both machines a differing copy of the same apt configuration file, then sync and answer that item "keep for good":
+
+```bash
+ssh pc1 "printf 'APT::Pcswitcher-Manual \"pc1\";\n' | sudo tee /etc/apt/apt.conf.d/99-pcswitcher-manual.conf"
+ssh pc2 "printf 'APT::Pcswitcher-Manual \"pc2\";\n' | sudo tee /etc/apt/apt.conf.d/99-pcswitcher-manual.conf"
+pc-switcher sync pc2
+```
+
+After the batch is confirmed:
+- [ ] One further screen appears, not one screen per item and not a fourth answer on the batch itself
+- [ ] It carries a row for each item kept for good, and for no other row
+- [ ] Each row offers three answers naming both machines by hostname, plus "both"
+- [ ] The starting answer is the target machine
+- [ ] Answering with the source's hostname writes the entry in the source's decision file only; the target's is untouched
+- [ ] Answering "both" writes an entry in each machine's file
+- [ ] Ctrl-C at this screen aborts the whole sync and leaves no entry on either machine
+
+Afterwards, remove the file from both machines.
+
 ### 6. Terminal Size Adaptability
 
 **Small terminal (80×24):**
@@ -176,6 +199,7 @@ Before release, verify all pass:
 - [ ] Error messages are formatted and helpful
 - [ ] Logs command output is readable
 - [ ] Job outcome block names every job with its status and reason
+- [ ] The machine-specific follow-up offers both hostnames and "both", and writes where it was told
 
 **Adaptability:**
 - [ ] Works on small terminals (80×24)

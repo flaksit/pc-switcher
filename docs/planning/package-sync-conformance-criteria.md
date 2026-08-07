@@ -22,7 +22,7 @@ Every article decomposes exactly one section of the user requirements. Each sect
 
 Decomposes [What package sync is for](package-sync-user-requirements.md#what-package-sync-is-for).
 
-The package jobs — `apt_sync`, `snap_sync`, `flatpak_sync`, `manual_deb_sync`, `manual_snap_sync`, `manual_installs_sync` — replicate what software is installed. Application data is not theirs.
+The package jobs — `apt_sync`, `snap_sync`, `flatpak_sync`, `manual_deb_sync`, `manual_snap_sync`, `manual_flatpak_sync`, `manual_installs_sync` — replicate what software is installed. Application data is not theirs.
 
 - **PKG-FR-OPT-IN**: Every package job MUST ship disabled and MUST be enabled individually in configuration.
   Why: enabling one authorises the system to install and remove software on the target.
@@ -394,6 +394,12 @@ Each of these is a real cost, given up knowingly.
 ## Where the tool does not yet meet these requirements
 
 Read against the code at `c6e4bf33`; articles untouched since `502321ec` were last read there. Below is every article not met in full, and every cost knowingly accepted in meeting one; every other article was found satisfied. Evidence is symbol names, because the code moves.
+
+Eleven articles have been re-read since, against `9fab6630`, and were found satisfied: `PKG-FR-APPLY-FLAGS`, `-SCOPE`, `-NO-MARK` and `-OUTCOME` (`cli.py`'s two options, `ReviewPolicy` reaching both `TerminalUIReviewer` and every `JobContext`, `review.policy_decision` returning `Decision.APPLY` or nothing at all, `_answer_by_policy` ahead of both the automation hook and the terminal test, `policy_answers_any` deciding the job's outcome); `PKG-FR-MARK-SIDE` (`PackageSyncJob._mark_recipients` against `_mark_holders`); `PKG-FR-APT-TIMER-PAUSE` (`_capture_apt_timer_state`, `_running_apt_timers`, `_schedule_apt_timer_restore` before the stop, `_restore_apt_timers`, `_defer_pending_apt_timer_restore` and `_settle_outstanding_apt_timer_restore`); `PKG-FR-MANUAL-SCOPE`, `PKG-FR-DEB-OWNERSHIP` and `PKG-FR-FLATPAK-UNREPRODUCIBLE` (the four jobs over `UnreproducibleSyncJob`, `snap_listing.is_sideloaded`, `flatpak_policy.partition_unreproducible`); and `PKG-NG-UNATTENDED` with `PKG-FR-NO-TERMINAL` (the same `_answer_by_policy` seam).
+
+Fifteen further articles that PRs #259–#266 touched have NOT been re-read and are owed: `PKG-FR-APT-DPKG-LOCK`, `PKG-FR-APT-IGNORES`, `PKG-FR-BATCHED`, `PKG-FR-FLATPAK-IDENTITY`, `PKG-FR-FLATPAK-REPOINT`, `PKG-FR-FLATPAK-SCOPE`, `PKG-FR-JOB-ORDER`, `PKG-FR-MACHINE-SPECIFIC`, `PKG-FR-MANUAL-DIFF`, `PKG-FR-REPO-CONFLICT`, `PKG-FR-SNAP-SIDELOAD`, `PKG-FR-SOURCE-INTENT`, `PKG-FR-SUDO-PRECONDITION`, `PKG-NG-ESM-SELF-ATTACH` and `PKG-FR-OUTCOME-SKIPPED`. Their wording changed, or the table under them gained rows, without the code behind them being read again.
+
+PR #269's own eight are owed on the same terms, and none of them is covered by the read above: `PKG-FR-MANUAL-VERSION`, `PKG-FR-VERSION-SNIPPET`, `PKG-FR-MANUAL-CONVERGE-LOOP`, `PKG-FR-MANUAL-REMOVE`, `PKG-NG-MANUAL-CONTENT` and `PKG-NG-MANUAL-REMOVE-REACH` are new, and `PKG-FR-ASK-WHEN-NOT-DERIVABLE` and `PKG-FR-SNIPPET-VERBATIM` were reworded for them. Each was written alongside the code it describes rather than read against it afterwards.
 
 ### flatpak
 

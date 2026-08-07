@@ -310,7 +310,7 @@ class TestExecuteIndependentOfSnapSync:
 class TestValidate:
     @pytest.mark.asyncio
     async def test_snap_unavailable_on_source_yields_validation_error(self) -> None:
-        """G132, K95 — validation fails before anything runs, naming the source and the missing
+        """G132, K128 — validation fails before anything runs, naming the source and the missing
         tool."""
         context, _source, _target = make_context(
             source_responses={"snap version": CommandResult(127, "", "not found")}
@@ -322,7 +322,7 @@ class TestValidate:
 
     @pytest.mark.asyncio
     async def test_snap_unavailable_on_target_yields_validation_error(self) -> None:
-        """G133, K96 — the target is read to tell what it already has, so its missing tool is
+        """G133, K129 — the target is read to tell what it already has, so its missing tool is
         named before the run starts rather than as a dead probe halfway through."""
         context, _source, _target = make_context(
             target_responses={"snap version": CommandResult(127, "", "not found")}
@@ -334,7 +334,7 @@ class TestValidate:
 
     @pytest.mark.asyncio
     async def test_valid_environment_yields_no_errors_and_asks_for_no_privilege(self) -> None:
-        """G134, K94 — with snapd answering on both machines nothing fails, and no
+        """G134, K127 — with snapd answering on both machines nothing fails, and no
         administrative-rights precondition is imposed on either: listing snaps needs none,
         and a snippet's own needs are unknowable."""
         context, source, target = make_context()
@@ -404,7 +404,7 @@ class TestMarksFollowWhatTheMachineHolds:
 class TestSnapJobDiscovery:
     @pytest.mark.asyncio
     async def test_orchestrator_resolves_manual_snap_sync_to_its_job(self) -> None:
-        """Named in the configuration, the job resolves to its own class."""
+        """G187 — named in the configuration, the job resolves to its own class."""
         config = MagicMock(spec=Configuration)
         config.logging = MagicMock()
         config.logging.file = 10
@@ -421,8 +421,8 @@ class TestSnapJobDiscovery:
 
 class TestSnapFirstSyncScope:
     def test_the_announced_scope_names_sideloaded_snaps(self) -> None:
-        """ADR-015's first-sync announcement names this job, what it would put on the target
-        and the mechanism it uses to get it there."""
+        """G188 — ADR-015's first-sync announcement names this job, what it would put on the
+        target and the mechanism it uses to get it there."""
         scope = ManualSnapSyncJob.describe_first_sync_scope({})
 
         assert scope is not None

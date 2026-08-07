@@ -6,7 +6,7 @@ Configuration for these jobs is limited to their `sync_jobs` enable flags; see t
 
 For what these jobs are for and why they behave as they do, see [Package sync — user requirements](../planning/package-sync-user-requirements.md); for the same requirements as checkable articles — the `PKG-FR-*` obligations per ecosystem and the `PKG-NG-*` non-goals — see [Package sync conformance criteria](../planning/package-sync-conformance-criteria.md). Where this page disagrees with either, this page is wrong.
 
-## The six jobs
+## The seven jobs
 
 Seven independent jobs share one item -> diff -> review -> converge model. Each has its own enable flag, its own validation, its own review and its own failure isolation, so enabling one never drags in another.
 
@@ -123,7 +123,7 @@ The batched review approves *items*, not commands. One approved line can expand 
 
 `pc-switcher sync <hostname> --confirm-each-command` inserts one question before every one of them, headed by the job and the hostname of the machine about to change, then what the change does, then the exact command (or, for a file transfer, the source and destination paths). It waits for a single keypress — **p** to proceed, **a** to abort the whole sync — and acts on it immediately, with no Enter to follow. There is no "skip this one": a single reviewed item can span several commands, so skipping one would leave that item half-applied. An unanswerable prompt (Ctrl-C, EOF) aborts.
 
-It covers every write the six jobs make, plus the machine-local decision files on both machines, the snippet registry and its push, the snapd auto-refresh pause and restore, and the sync-history update on both ends. It also covers what changes a machine without writing anything to it: taking each machine's sync lock, and starting a background process. Only genuinely read-only commands go unasked, and a read stays a read under `sudo` — the privileged probes a job runs before it starts prompt for nothing. The flag needs a real terminal and is refused without one. It is meant for auditing or debugging a run you do not trust yet, not for everyday syncs.
+It covers every write the seven jobs make, plus the machine-local decision files on both machines, the snippet registry and its push, the snapd auto-refresh pause and restore, and the sync-history update on both ends. It also covers what changes a machine without writing anything to it: taking each machine's sync lock, and starting a background process. Only genuinely read-only commands go unasked, and a read stays a read under `sudo` — the privileged probes a job runs before it starts prompt for nothing. The flag needs a real terminal and is refused without one. It is meant for auditing or debugging a run you do not trust yet, not for everyday syncs.
 
 ### apt collateral
 
@@ -231,7 +231,7 @@ Where both machines have the item and their copies differ, neither is the holder
 
 A mark still counts when a later sync is launched the other way round, whichever machine it sits on.
 
-The mark is recorded in that machine's own decision file at `~/.config/pc-switcher/<manager>.decisions.yaml` (one per manager: `apt.decisions.yaml`, `snap.decisions.yaml`, `flatpak.decisions.yaml`, `manual_deb.decisions.yaml`, `manual_snap.decisions.yaml`, `manual.decisions.yaml`). That file is **never synced** — it stays local to the machine it describes.
+The mark is recorded in that machine's own decision file at `~/.config/pc-switcher/<manager>.decisions.yaml` (one per manager: `apt.decisions.yaml`, `snap.decisions.yaml`, `flatpak.decisions.yaml`, `manual_deb.decisions.yaml`, `manual_snap.decisions.yaml`, `manual_flatpak.decisions.yaml`, `manual.decisions.yaml`). That file is **never synced** — it stays local to the machine it describes.
 
 To un-mark something, delete its entry from the decision file (or delete the whole file to clear every machine-specific decision for that manager). The next sync treats the item as live again and re-offers it in the review.
 
@@ -241,7 +241,7 @@ A machine-specific package never appears in a review again, which is why the run
 
 ## Install snippets
 
-Some installed things no package manager can reproduce — a bare `.deb` downloaded and installed by hand, which is `manual_deb_sync`'s half, a snap installed from a local file, which is `manual_snap_sync`'s; a flatpak app no remote can supply, which is `manual_flatpak_sync`'s; or software dropped under `/usr/local` or `/opt` by an install script, which is `manual_installs_sync`'s. Each job surfaces its own findings in its own review as items needing a resolution, and all of them resolve the findings the same way, out of one registry.
+Some installed things no package manager can reproduce — a bare `.deb` downloaded and installed by hand, which is `manual_deb_sync`'s share; a snap installed from a local file, which is `manual_snap_sync`'s; a flatpak app no remote can supply, which is `manual_flatpak_sync`'s; or software dropped under `/usr/local` or `/opt` by an install script, which is `manual_installs_sync`'s. Each job surfaces its own findings in its own review as items needing a resolution, and all of them resolve the findings the same way, out of one registry.
 
 `manual_deb_sync` asks one question of everything dpkg reports as installed: which package's installed version comes from no repository this machine has configured. A package's own name is all it needs on the other machine — software that is there is there, whatever put it there — so a name the target already has installed is never offered for installation; the two copies' `dpkg-query` versions are compared instead.
 
@@ -310,7 +310,7 @@ The snippet registry lives at `~/.config/pc-switcher/package-snippets.yaml`, and
 
 A snippet job pushes the source's registry to the target after its own review, as a **whole-file overwrite** — the source's `package-snippets.yaml` replaces the target's wholesale, no per-entry merge. Before the push, pc-switcher compares the two. A purely additive push (the source is a superset of the target) proceeds silently. But if the overwrite would **lose** an entry the target holds (absent from the source) or **change** one, pc-switcher shows you exactly which entries and asks you to confirm. "Change" is the whole entry, not the command alone: the label and the record of when and where the snippet was written are part of what the target holds, and the question shows you only the fields that differ. Declining aborts the run, and a non-interactive run that cannot ask aborts too — so you can consolidate the two registries by hand and re-run rather than silently dropping the target's snippets.
 
-With both snippet jobs enabled the file goes over twice, once per review, and the second push asks nothing: it sends what the first one sent plus whatever its own review added, which is additive by construction. You are never asked the same question twice in a run.
+With more than one snippet job enabled the file goes over once per review, and every push after the first asks nothing: it sends what the earlier ones sent plus whatever its own review added, which is additive by construction. You are never asked the same question twice in a run.
 
 If either machine's `package-snippets.yaml` cannot be read as a registry — hand-edited into invalid YAML, truncated by a full disk — the sync stops there and names the file. An unreadable registry is not an empty one: reading it as empty would make the push look like it loses nothing, and it would overwrite entries nobody could see. Repair or delete that file and start a new sync. A registry that is simply absent, or empty, means what it says: no snippets.
 
@@ -338,7 +338,7 @@ A run without a TTY prompts for nothing, so every review item nothing else answe
 
 `apt_sync` has a second reason to report SKIPPED, and it applies to interactive runs too: the target reports no Ubuntu Pro attachment and the source carries ESM sources that would otherwise be written to it. Attach the target and re-run, or answer the question's re-check once you have — see [Ubuntu Pro and ESM](#ubuntu-pro-and-esm).
 
-A skipped package job applies nothing, records no decision, and pushes no install-snippet registry. The session still completes and the exit code is unchanged, so a headless run says plainly that it converged nothing rather than reporting five successful package syncs.
+A skipped package job applies nothing, records no decision, and pushes no install-snippet registry. The session still completes and the exit code is unchanged, so a headless run says plainly that it converged nothing rather than reporting seven successful package syncs.
 
 No run without a terminal pushes the registry, not even the one that reports SUCCESS because its review had nothing to decide. That says this run found nothing to ask you about; the registry on disk still holds every snippet you have ever authored, and sending it over the other machine's copy is a change nobody approved. The one exception is a run where `--apply-package-installs` approved a hand-installed item: replaying its snippet reads the other machine's own copy of the registry, so the transfer is part of the install you asked for rather than a change nobody approved — and the guard on a transfer that would lose an entry still ends the run.
 
