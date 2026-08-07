@@ -1855,6 +1855,60 @@ class TestVersionDrift:
         assert plan.diffs == ()
 
 
+class TestTheOrderTheGroupsComeIn:
+    """The order a snippet job's review puts its questions in: what arrives, what moves, what
+    goes away."""
+
+    @pytest.mark.asyncio
+    async def test_a_job_holding_all_four_kinds_asks_install_then_update_then_remove(self) -> None:
+        """G194 — one run producing every group this job can build: an item to resolve, a
+        version difference with a snippet, an install with one, and a removal. Removals came
+        first and installs last, which put the run's most destructive question on the opening
+        screen and matched nobody's mental model (#283).
+
+        Pinned as one assertion over the whole list because the order is kept by two
+        independent lists — `_ACTION_ORDER` in the base builder and the sequence this
+        override appends in — and either drifting alone breaks it.
+        """
+        source_holds = {"a-install": "1.0", "b-update": "2.0", "c-resolve": "1.0"}
+        context, _source, _target = make_context(
+            source_responses={
+                STATUS_QUERY: installed_at(source_holds),
+                "apt-cache policy": CommandResult(
+                    0, "".join(hand_deb_policy(name, version) for name, version in source_holds.items()), ""
+                ),
+                "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(
+                    0,
+                    "snippets:\n"
+                    + "".join(
+                        f"  unreproducible:apt-no-candidate:{name}:\n"
+                        f"    label: {name}\n"
+                        "    install_body: true\n"
+                        "    authored_at: '2026-01-01T00:00:00+00:00'\n"
+                        "    authored_on: source-host\n"
+                        for name in ("a-install", "b-update")
+                    ),
+                    "",
+                ),
+            },
+            target_responses={
+                STATUS_QUERY: installed_at({"b-update": "1.0", "d-gone": "1.0"}),
+                "apt-cache policy": CommandResult(
+                    0, hand_deb_policy("b-update", "1.0") + hand_deb_policy("d-gone", "1.0"), ""
+                ),
+            },
+        )
+
+        plan = await ManualDebSyncJob(context).plan()
+
+        assert [(group.action, [entry.label for entry in group.entries]) for group in plan.groups] == [
+            (UNREPRODUCIBLE_REVIEW_ACTION, ["c-resolve (1.0)"]),
+            (UNREPRODUCIBLE_UPDATE_REVIEW_ACTION, ["b-update (2.0)"]),
+            (DiffAction.INSTALL.value, ["a-install (1.0)"]),
+            (DiffAction.REMOVE.value, ["d-gone (1.0)"]),
+        ]
+
+
 class TestRemovingWhatTheSourceDropped:
     """`PKG-FR-MANUAL-REMOVE`: an item only the target holds, that the target's OWN detector
     claims, becomes a removal."""

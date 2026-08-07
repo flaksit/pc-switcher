@@ -634,15 +634,20 @@ class UnreproducibleSyncJob(PackageSyncJob):
         build the rest.
 
         - still-unresolved diffs (`action=REPORT_ONLY`, `PKG-FR-MANUAL-RESOLUTION`) go to
-          `UNREPRODUCIBLE_REVIEW_ACTION`, whose act opens an editor. Presented after any
-          resolved install group, so the user sees what is already answerable before being
-          asked to answer the rest. Each entry's `action_label` says which of the two cases
-          it is — an item the target lacks is installed, one whose version differs is
-          updated — because the screen is titled with that verb and "install" would be a
-          false statement about software that is already there.
+          `UNREPRODUCIBLE_REVIEW_ACTION`, whose act opens an editor. Each entry's
+          `action_label` says which of the two cases it is — an item the target lacks is
+          installed, one whose version differs is updated — because the screen is titled with
+          that verb and "install" would be a false statement about software that is already
+          there.
         - snippet-backed version differences (`action=CHANGE`) go to
           `UNREPRODUCIBLE_UPDATE_REVIEW_ACTION`, which offers a third answer no ordinary
           decision row has: replace the recorded body before replaying it.
+
+        Both are emitted BEFORE the base groups: what arrives, then what moves, then what
+        goes away, which is the order the base's own `_ACTION_ORDER` already puts install,
+        change and remove in. Carving these two out and appending them left a snippet job
+        asking about removals first and installs last (#283) — the most destructive question
+        of the run as its opening screen, and an order nobody had decided.
 
         A snippet-backed INSTALL and a REMOVE both flow through the base grouping like any
         other item of their direction; the removal group picks up this job's own warning as
@@ -658,26 +663,8 @@ class UnreproducibleSyncJob(PackageSyncJob):
         ]
         carved_ids = {diff.item_id for diff in (*needs_resolution, *updates)}
         rest = [diff for diff in diffs if diff.item_id not in carved_ids]
-        groups = [self._with_removal_warning(group) for group in super()._build_review_groups(rest)]
+        groups: list[ReviewGroup] = []
 
-        if updates:
-            groups.append(
-                ReviewGroup(
-                    manager=self.manager_id,
-                    action=UNREPRODUCIBLE_UPDATE_REVIEW_ACTION,
-                    title=change_title("update", f"{self.item_noun} versions", self.machines.target),
-                    item_noun=self.item_noun,
-                    entries=tuple(
-                        ReviewEntry(item_id=diff.item_id, label=diff.label, action_label="update", detail=diff.detail)
-                        for diff in updates
-                    ),
-                    recorded_bodies={
-                        diff.item_id: self._recorded_bodies[diff.item_id]
-                        for diff in updates
-                        if diff.item_id in self._recorded_bodies
-                    },
-                )
-            )
         if needs_resolution:
             groups.append(
                 ReviewGroup(
@@ -699,6 +686,25 @@ class UnreproducibleSyncJob(PackageSyncJob):
                     ),
                 )
             )
+        if updates:
+            groups.append(
+                ReviewGroup(
+                    manager=self.manager_id,
+                    action=UNREPRODUCIBLE_UPDATE_REVIEW_ACTION,
+                    title=change_title("update", f"{self.item_noun} versions", self.machines.target),
+                    item_noun=self.item_noun,
+                    entries=tuple(
+                        ReviewEntry(item_id=diff.item_id, label=diff.label, action_label="update", detail=diff.detail)
+                        for diff in updates
+                    ),
+                    recorded_bodies={
+                        diff.item_id: self._recorded_bodies[diff.item_id]
+                        for diff in updates
+                        if diff.item_id in self._recorded_bodies
+                    },
+                )
+            )
+        groups.extend(self._with_removal_warning(group) for group in super()._build_review_groups(rest))
         return tuple(groups)
 
     def _with_removal_warning(self, group: ReviewGroup) -> ReviewGroup:

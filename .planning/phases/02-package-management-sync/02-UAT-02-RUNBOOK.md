@@ -167,7 +167,7 @@ pc-switcher sync pc2 --yes --allow-first-sync
 
 A dry run converges nothing, so three things below cannot happen in it: no snippet is recorded, no registry is pushed, and the converge loop of §3.7 never opens — `_converge_one` is not called at all (`jobs/packages/sync_core.py:804`). Walk the dry run for the screens, then answer the real run for the outcomes.
 
-Findings already raised from a walk of these fixtures, so they need no re-reporting — check they still read as described and move on: the group order of §3.2 (#283). Review copy and titles (#276), the follow-up's keys and default (#278), the repeated scrollback frames (#279) and the snippet screens of §3.5, §3.6 and §3.7 (#281) are fixed, and this runbook now says what to expect instead: seeing the old behaviour is a regression.
+Every finding raised from an earlier walk of these fixtures is fixed — review copy and titles (#276), the follow-up's keys and default (#278), the repeated scrollback frames (#279), the snippet screens of §3.5, §3.6 and §3.7 (#281) and the group order of §3.2 (#283). This runbook says what to expect instead: seeing the old behaviour is a regression.
 
 The status line, the progress bars and the outcome block name jobs the way a user would (#280 is fixed): `Apt packages`, `Snaps`, `Flatpaks`, `Manual debs`, `Sideloaded snaps`, `Manual flatpaks`, `Manually installed apps`, `Folder sync`, `Install on target`. A module name such as `manual_deb_sync` on screen is a regression. Config keys and the `job` field in the log file stay the module name, so §4's log greps are unaffected.
 
@@ -185,19 +185,19 @@ Neither must leave a frame in the scrollback (#279 is fixed). A frozen copy of t
 
 ### 3.2 The seven reviews, and the order the screens come in
 
-The jobs run in the order the config lists them — apt, snap, flatpak, manual_deb, manual_snap, manual_flatpak, manual_installs, then the folder mirror — and each one's questions come before the next one plans. Inside one snippet job the groups come in a fixed order: **removal first, then the version differences, then the items needing a snippet.**
+The jobs run in the order the config lists them — apt, snap, flatpak, manual_deb, manual_snap, manual_flatpak, manual_installs, then the folder mirror — and each one's questions come before the next one plans. Inside one snippet job the groups come in a fixed order (#283 is fixed): **the items needing a snippet, then the version differences, then the ordinary install, change and removal screens** — what arrives, then what moves, then what goes away. Removals first is a regression.
 
 The sections below follow the order you will meet the screens. On these fixtures that is:
 
 | # | Job | Screen | Section |
 |---|-----|--------|---------|
 | 1 | `apt_sync` | `Update apt configuration files on pc2?` → the follow-up it raises | §3.3 |
-| 2 | `manual_deb_sync` | `Remove manual debs from pc2?` | §3.4 |
+| 2 | `manual_deb_sync` | resolution, `pcsw-uat-deb` — one editor | §3.6 |
 | 3 | `manual_deb_sync` | version difference, `pcsw-uat-drift` | §3.5 |
-| 4 | `manual_deb_sync` | resolution, `pcsw-uat-deb` — one editor | §3.6 |
-| 5 | `manual_snap_sync` | version difference, then resolution | §3.5, §3.6 |
+| 4 | `manual_deb_sync` | `Remove manual debs from pc2?` | §3.4 |
+| 5 | `manual_snap_sync` | resolution, then version difference | §3.6, §3.5 |
 | 6 | `manual_flatpak_sync` | resolution, `sdl_sopwith` | §3.6 |
-| 7 | `manual_installs_sync` | `Remove manually installed apps from pc2?`, then version difference, then resolution | §3.4, §3.5, §3.6 |
+| 7 | `manual_installs_sync` | resolution, then version difference, then `Remove manually installed apps from pc2?` | §3.6, §3.5, §3.4 |
 | 8 | `manual_installs_sync` | the converge-loop retry, during apply | §3.7 |
 | 9 | — | `Job outcomes:` | §3.8 |
 
@@ -239,13 +239,13 @@ Nothing else in this run reaches that screen: an install is on pc1 alone and a r
 
 ### 3.4 Removals
 
-The first screen of `manual_deb_sync`, and again of `manual_installs_sync`. `pcsw-uat-gone` and `/opt/pcsw-uat-orphan` are on pc2 only. Each is offered for removal by the job whose own detector claims it there, and by no other. Confirm each row starts at **skip now**, and that the path deletion's screen carries the line saying its reach is smaller than its name: `Only the path itself is deleted from pc2. There may be config or files in other folders, like a launcher, a symlink or a service unit outside these folders. Remove them manually.`
+The last screen of `manual_deb_sync`, and again of `manual_installs_sync`. `pcsw-uat-gone` and `/opt/pcsw-uat-orphan` are on pc2 only. Each is offered for removal by the job whose own detector claims it there, and by no other. Confirm each row starts at **skip now**, and that the path deletion's screen carries the line saying its reach is smaller than its name: `Only the path itself is deleted from pc2. There may be config or files in other folders, like a launcher, a symlink or a service unit outside these folders. Remove them manually.`
 
 Approve both. What to check here is that the warning appears at all, on the path deletion and not on the package one.
 
 ### 3.5 Version convergence
 
-Follows the removal group in each job that has one. Three items reach this screen, one per ecosystem, and they are exactly the three that have a recorded snippet: `pcsw-uat-drift` (deb), `pcsw-uat-snapdrift` (snap) and `/opt/pcsw-uat-loop` (path). Each is asked on its own screen titled `pc1 and pc2 have different versions of <singular noun> <item> — update it on pc2?`, with exactly three answers and **no** `<x>`:
+Follows the resolution screens in each job that has both, and comes before that job's removal group. Three items reach this screen, one per ecosystem, and they are exactly the three that have a recorded snippet: `pcsw-uat-drift` (deb), `pcsw-uat-snapdrift` (snap) and `/opt/pcsw-uat-loop` (path). Each is asked on its own screen titled `pc1 and pc2 have different versions of <singular noun> <item> — update it on pc2?`, with exactly three answers and **no** `<x>`:
 
 - `<y> update` — `run the recorded snippet on pc2`
 - `<w> new snippet` — `rewrite the snippet first, then run it on pc2`
@@ -263,7 +263,7 @@ Answer, in the order the three come:
 
 ### 3.6 The editors
 
-The last group of each snippet job. Four items have no recorded snippet and so are asked how to reproduce them, one screen each: `pcsw-uat-deb`, `pcsw-uat-snap`, `io.github.fragglet.sdl_sopwith/x86_64/stable` and `/opt/pcsw-uat-app`.
+The first group of each snippet job. Four items have no recorded snippet and so are asked how to reproduce them, one screen each: `pcsw-uat-deb`, `pcsw-uat-snap`, `io.github.fragglet.sdl_sopwith/x86_64/stable` and `/opt/pcsw-uat-app`.
 
 `/opt/pcsw-uat-app` is the one kind with no package manager to ask for a version, so it is the only one that takes two editors. On `Install manually installed app /opt/pcsw-uat-app on pc2?` answer `<y>` and confirm that **two** editors open in sequence:
 

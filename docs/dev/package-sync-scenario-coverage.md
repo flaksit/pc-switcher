@@ -1317,6 +1317,7 @@ What this job drops, `manual_flatpak_sync` picks up (section G): the two read on
 | G191 | A body is submitted whose lines are longer than the question above it | Printed back below the question at full width and whole, so the scrollback holds what was written rather than a column of it | U | `test_package_review:TestUnreproducibleGroupResolution::test_the_captured_body_is_printed_full_width_and_whole`, `::test_the_answered_editor_keeps_only_the_question_and_the_body` |
 | G192 | An editor is submitted empty | Nothing is printed back: the choice is put again, and there is no body to record | U | `test_package_review:TestUnreproducibleGroupResolution::test_an_empty_capture_records_nothing` |
 | G193 | The resolution question, whose item has nothing on record | No snippet block above the answers: the user is writing the first body, not judging one | U | `test_package_review:TestTheRecordedSnippetIsOnScreen::test_the_resolve_screen_prints_no_block` |
+| G194 | One run of a snippet job producing an item to resolve, a version difference, an install and a removal | Asked in that order: the two snippet screens first, then the ordinary install, change and removal screens — what arrives, then what moves, then what goes away | U | `test_unreproducible_jobs:TestTheOrderTheGroupsComeIn::test_a_job_holding_all_four_kinds_asks_install_then_update_then_remove` |
 
 ### G.11 Removing what the source dropped (articles: PKG-FR-MANUAL-REMOVE, PKG-NG-MANUAL-REMOVE-REACH)
 
