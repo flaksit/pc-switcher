@@ -692,7 +692,7 @@ class Orchestrator:
             session.status, session.error_message = _summarize_job_outcomes(job_results)
 
             # SyncStep 12: Record sync history on both machines (this machine was SOURCE,
-            # target was TARGET). The write is skipped in dry-run mode (`PKG-FR-KEY-COPY`: dry-run must
+            # target was TARGET). The write is skipped in dry-run mode (`ADR-014`: dry-run must
             # not write any state), but the counter still advances so it reaches 100% on
             # both real and dry-run paths — matching the snapshot steps.
             session.ended_at = datetime.now(UTC)
@@ -1710,7 +1710,7 @@ class Orchestrator:
         """Pause snapd AUTOMATIC refreshes on both hosts for the sync window (decision 4).
 
         Gated on `sync_jobs.snap_sync` being enabled and skipped in dry-run (writing
-        `refresh.hold` is a system mutation; ADR-014/`PKG-FR-KEY-COPY`). Captures each host's prior
+        `refresh.hold` is a system mutation; ADR-014). Captures each host's prior
         `refresh.hold` first so `_cleanup` can restore it exactly, marks the hold engaged,
         then applies a timed hold on each host WHOSE PRIOR POLICY IT COULD READ. Only touches
         the system-wide `refresh.hold` option — never per-snap holds — and never blocks the
@@ -2071,7 +2071,7 @@ class Orchestrator:
         """Stop Ubuntu's own apt update timers on both hosts for the sync window (#248).
 
         Gated on `sync_jobs.apt_sync` being enabled and skipped in dry-run (stopping a system
-        timer is a system mutation; ADR-014/`PKG-FR-KEY-COPY`). Defers any restore a dead run left pending
+        timer is a system mutation; ADR-014). Defers any restore a dead run left pending
         first (`_defer_pending_apt_timer_restore`), then captures each host's timer state so
         `_cleanup` can put back exactly what was taken away, then suspends each host WHOSE
         STATE IT COULD READ.

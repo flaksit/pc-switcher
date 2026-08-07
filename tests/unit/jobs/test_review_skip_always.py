@@ -280,7 +280,7 @@ class TestWhichMachineKeepsItsCopy:
     """
 
     async def test_a_conflicting_item_kept_for_good_is_asked_about_on_one_further_screen(self) -> None:
-        """H218 — the follow-up is a second screen, not a fourth answer on the batch."""
+        """H249 — the follow-up is a second screen, not a fourth answer on the batch."""
         console = _interactive_console()
         ui = MagicMock()
         group = _change_group([_entry("apt:config:99local", label="99local", action_label="change")])
@@ -304,7 +304,7 @@ class TestWhichMachineKeepsItsCopy:
         [("source", MarkSide.SOURCE), ("target", MarkSide.TARGET), ("both", MarkSide.BOTH)],
     )
     async def test_each_answer_comes_back_as_the_side_it_names(self, answer: str, side: MarkSide) -> None:
-        """H219, H220, H221 — all three answers are reachable and none is silently rewritten."""
+        """H250, H251, H252 — all three answers are reachable and none is silently rewritten."""
         console = _interactive_console()
         ui = MagicMock()
         group = _change_group([_entry("c1", action_label="change")])
@@ -319,7 +319,7 @@ class TestWhichMachineKeepsItsCopy:
         assert outcome.mark_sides == {"c1": side}
 
     async def test_every_conflicting_item_is_on_that_one_screen(self) -> None:
-        """H218 — batched: a row each, never a screen each."""
+        """H249 — batched: a row each, never a screen each."""
         console = _interactive_console()
         ui = MagicMock()
         group = _change_group([_entry(name, label=name, action_label="change") for name in ("c1", "c2", "c3")])
@@ -341,7 +341,7 @@ class TestWhichMachineKeepsItsCopy:
         assert outcome.mark_sides == {"c1": MarkSide.SOURCE, "c2": MarkSide.TARGET, "c3": MarkSide.BOTH}
 
     async def test_only_the_items_kept_for_good_are_on_it(self) -> None:
-        """H223 — the question exists for the rows answered permanently and no others, which
+        """H254 — the question exists for the rows answered permanently and no others, which
         is why it can only be asked once the batch is confirmed."""
         console = _interactive_console()
         ui = MagicMock()
@@ -360,7 +360,7 @@ class TestWhichMachineKeepsItsCopy:
         assert outcome.mark_sides == {"c3": MarkSide.SOURCE}
 
     async def test_a_conflict_screen_nobody_answered_permanently_gets_no_follow_up(self) -> None:
-        """H223 — no permanent answer, no machine left to name."""
+        """H254 — no permanent answer, no machine left to name."""
         console = _interactive_console()
         ui = MagicMock()
         group = _change_group([_entry("c1", action_label="change")])
@@ -377,7 +377,7 @@ class TestWhichMachineKeepsItsCopy:
 
     @pytest.mark.parametrize("action", ["install", "add", "enable", "remove", "delete", "disable"])
     async def test_an_arriving_or_leaving_item_is_never_asked_which_machine(self, action: str) -> None:
-        """H222 — only one machine has it, so its own action already names the holder."""
+        """H253 — only one machine has it, so its own action already names the holder."""
         console = _interactive_console()
         ui = MagicMock()
         group = _group(action, [_entry("a", action_label=action)], title=f"{action} things")
@@ -393,7 +393,7 @@ class TestWhichMachineKeepsItsCopy:
         assert outcome.mark_sides == {}
 
     async def test_a_snap_revision_change_never_reaches_it(self) -> None:
-        """H224 — a snap's revision change is a CHANGE that may never be recorded
+        """H255 — a snap's revision change is a CHANGE that may never be recorded
         (`PKG-FR-NO-MARK-ON-SNAP-REVISION`), so a permanent answer forced onto one must not
         pull it into a question about which machine keeps its copy.
         """
@@ -412,7 +412,7 @@ class TestWhichMachineKeepsItsCopy:
         assert outcome.mark_sides == {}
 
     async def test_a_run_with_no_terminal_reaches_no_follow_up(self) -> None:
-        """H225 — `PKG-FR-NO-TERMINAL`: nothing permanent is answered without a human, so there is no side to
+        """H256 — `PKG-FR-NO-TERMINAL`: nothing permanent is answered without a human, so there is no side to
         choose and no screen is built."""
         console, _ = captured_console()
         ui = MagicMock()
@@ -429,7 +429,7 @@ class TestWhichMachineKeepsItsCopy:
         assert Decision.SKIP_ALWAYS not in outcome.decisions.values()
 
     async def test_the_automation_variable_answers_no_side(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """H225 — the escape hatch maps item ids to decisions and knows nothing about sides;
+        """H256 — the escape hatch maps item ids to decisions and knows nothing about sides;
         a permanent answer from it leaves the side unanswered rather than guessed."""
         console = _interactive_console()
         ui = MagicMock()
@@ -492,7 +492,7 @@ class TestAbortAndTeardown:
         ui.resume.assert_called_once()
 
     async def test_ctrl_c_at_the_machine_specific_follow_up_aborts_the_whole_sync(self) -> None:
-        """H226 — the follow-up is a review screen like every other: Ctrl-C there ends the
+        """H257 — the follow-up is a review screen like every other: Ctrl-C there ends the
         sync rather than leaving the mark to land on a machine nobody named."""
         console = _interactive_console()
         ui = MagicMock()

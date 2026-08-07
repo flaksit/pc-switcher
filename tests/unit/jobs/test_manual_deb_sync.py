@@ -534,7 +534,7 @@ class TestMarksFollowWhatTheMachineHolds:
 class TestDebJobDiscovery:
     @pytest.mark.asyncio
     async def test_orchestrator_resolves_manual_deb_sync_to_its_job(self) -> None:
-        """Named in the configuration, the job resolves to its own class."""
+        """G185 — named in the configuration, the job resolves to its own class."""
         config = MagicMock(spec=Configuration)
         config.logging = MagicMock()
         config.logging.file = 10
@@ -551,8 +551,8 @@ class TestDebJobDiscovery:
 
 class TestDebFirstSyncScope:
     def test_the_announced_scope_names_hand_installed_deb_packages(self) -> None:
-        """ADR-015's first-sync announcement names this job, what it would put on the target
-        and the mechanism it uses to get it there."""
+        """G186 — ADR-015's first-sync announcement names this job, what it would put on the
+        target and the mechanism it uses to get it there."""
         scope = ManualDebSyncJob.describe_first_sync_scope({})
 
         assert scope is not None
