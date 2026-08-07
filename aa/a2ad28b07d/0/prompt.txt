@@ -1,0 +1,5 @@
+I'm running it now. Do §1 and §2 yourself
+
+---
+
+remember the VMs are known on this laptop as pc1 and pc2, so I can just "ssh pc1"
