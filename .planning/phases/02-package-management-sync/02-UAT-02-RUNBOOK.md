@@ -266,7 +266,7 @@ sudo mkdir -p /opt/pcsw-uat-app && echo hi | sudo tee /opt/pcsw-uat-app/README >
 echo 1.0
 ```
 
-The same screen for the three package-backed jobs asks for both bodies too, even though only `manual_installs_sync` ever runs the version body — the other three ask `dpkg`, `snap` and `flatpak` instead. That is the shipped design, not a slip: one file holds every job's entries and a half-filled entry cannot be read at all. Whether it should stay that way is #282; confirm here only that the second editor is required.
+The same screen for the three package-backed jobs asks for both bodies too, even though only `manual_installs_sync` ever runs the version body — the other three ask `dpkg`, `snap` and `flatpak` instead. That is what the code does today and it is going away: #282 makes the second body required only for unowned paths. Record what you see; do not read the second editor here as correct.
 
 Answer the other three like this, each `<y>` followed by both editors:
 
@@ -276,7 +276,7 @@ Answer the other three like this, each `<y>` followed by both editors:
 | `pcsw-uat-snap` | `snap try` a directory you write, as §2.1 does | `snap list pcsw-uat-snap \| awk 'NR==2 {print $2}'` |
 | `io.github.fragglet.sdl_sopwith/x86_64/stable` | `flatpak install --user --assumeyes flathub io.github.fragglet.sdl_sopwith` — pc2 still has flathub, which is what makes this one reproducible by hand | `flatpak list --user --columns=application,version \| awk '/sdl_sopwith/ {print $2}'` |
 
-None of the three version bodies is ever executed, so their exactness is not what is under test — that the editor demands one, and rejects an empty one, is.
+None of the three version bodies is ever executed, so their exactness is not what is under test. Once #282 lands these three take one editor and no version body at all, and this table loses its right-hand column.
 
 ### 3.7 The converge loop
 
@@ -413,7 +413,7 @@ The run must end rather than overwrite, naming the entry pc2 would lose, with ex
 
 ## 6. A registry entry missing its second body
 
-An entry carrying only `install_body` is as unreadable as a corrupt file: the run ends naming the file, and nothing is completed by a default.
+An entry carrying only `install_body` is as unreadable as a corrupt file: the run ends naming the file, and nothing is completed by a default. The fixture is deliberately an **unowned path**, the one kind that genuinely needs a version body, so this check survives #282 — which drops the requirement for the three package-backed kinds.
 
 ```bash
 ssh testuser@"$PC1" 'printf "snippets:\n  \"unreproducible:unowned-path:/opt/pcsw-uat-half\":\n    label: /opt/pcsw-uat-half\n    install_body: \"true\"\n    authored_at: \"2026-08-01T00:00:00+00:00\"\n    authored_on: pc1\n" > ~/.config/pc-switcher/package-snippets.yaml'
