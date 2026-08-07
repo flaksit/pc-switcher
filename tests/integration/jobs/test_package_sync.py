@@ -1738,7 +1738,9 @@ class TestTheESMAttachmentGateOnVMs:
             )
 
             combined_output = sync_result.stdout + sync_result.stderr
-            assert "apt_sync skipped" in combined_output, f"apt_sync was not reported as skipped.\n{combined_output}"
+            assert "Job Apt packages skipped:" in combined_output, (
+                f"apt_sync was not reported as skipped.\n{combined_output}"
+            )
             for name in ESM_SOURCE_BODIES:
                 assert name in combined_output, f"the skip reason does not name {name}.\n{combined_output}"
             assert "snap_sync" in combined_output, (
