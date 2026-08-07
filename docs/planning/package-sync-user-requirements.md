@@ -85,5 +85,5 @@ Each of these is a real cost, given up knowingly.
 - **Removing a hand-installed item reaches only what was named.** Nothing records where else its recipe wrote, so a launcher or a symlink it left elsewhere stays.
 - **A target with no Ubuntu Pro attachment costs the whole apt job for that run**, not just the ESM files.
 - **A non-interactive run can answer no ordinary review.** There is no file of standing answers and no assume-yes option; the only unattended path is the two apply flags on the command line, per direction, for that one run.
-- **Machine-specific marks are per job, per machine, and never synced.** A new machine means deciding again.
+- **Machine-specific marks are per job, per machine, and never synced.** A new machine means deciding on what's specific for that machine.
 - **An environment variable can answer a review, and its answers count as the user's own.** `PCSWITCHER_PACKAGE_REVIEW_AUTOMATION` exists so the integration tests can answer one; it appears in no help text and no configuration key. Anything able to set it on a real run gets silent, unreviewed, permanent decisions.

@@ -204,7 +204,7 @@ Lineage: 001-core edge cases, 003-core-tests edge cases
 - **CORE-FR-JOB-LOAD** `[Deliberate Simplicity]`: Jobs MUST be imported from `pcswitcher.jobs.<job_name>` and run in the order their keys appear in `sync_jobs`; there is no dependency resolution  
   Lineage: 001-FR-004
 
-- **CORE-FR-JOB-ORDER** `[Reliability Without Compromise]`: The orchestrator MUST reject a config in which `apt_sync`, `snap_sync`, `flatpak_sync`, `manual_deb_sync`, `manual_snap_sync` or `manual_installs_sync` is enabled after `folder_sync` — apps are provisioned before their data lands on top (D-17)  
+- **CORE-FR-JOB-ORDER** `[Reliability Without Compromise]`: The orchestrator MUST reject a config in which `apt_sync`, `snap_sync`, `flatpak_sync`, `manual_deb_sync`, `manual_snap_sync` or `manual_installs_sync` is enabled after `folder_sync` — apps are provisioned before their data lands on top (`PKG-FR-JOB-ORDER`)  
   Lineage: 02-WR-02
 
 #### Self-Installation

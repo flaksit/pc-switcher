@@ -6,111 +6,113 @@ Date: 2026-07-28
 
 ## TL;DR
 
-Every command falls into exactly one of two classes — the tool did not answer, or the tool answered and the answer is inconvenient. They get opposite treatments: the first fails the job immediately, naming the command; the second is per-item data the code handles.
+Every subprocess a subsystem invokes falls into one of two classes: the tool did not answer, or the tool answered and the answer is inconvenient.
 
-## Implementation Rules
+Opposite treatments: the first fails the subsystem immediately, naming the command; the second is data the caller handles.
+
+## Scope
+
+Applies to any pc-switcher subsystem that shells out to a subprocess and reads its result.
+
+This ADR does not enumerate every read a subsystem must do or how each is classified — that is each subsystem's own responsibility, per the rules here.
+
+## Additional implementation rules
 
 **Required**
-- Every read feeding a decision MUST be classified at the call site, justified with the command's measured behaviour.
-- A read that did not answer MUST raise `ProbeFailed` (`src/pcswitcher/jobs/packages/probes.py`). It MUST NOT be a `ConvergeItemFailed`, MUST NOT be reported against an item, MUST NOT be caught by a per-item loop.
-- `ProbeFailed` names the host, the command verbatim, the failing condition, and the tool's own stderr. Once per command, never once per dependent item.
-- The discriminator is the command's measured behaviour. Default: non-zero exit. Commands where that is wrong MUST say so at the call site.
-- Where the exit code is ambiguous, the COMMAND MUST be reshaped so the code becomes unambiguous — via argument narrowing (naming only cases already established), argument widening (naming one case the tool must answer, as a witness), or an outer test — in preference to parsing output or stderr text.
-- Empty result MUST be treated as data unless emptiness is provably impossible. The `answers=` guard is passed only where at least one answer is genuinely owed.
-- A wrong request (package apt cannot locate, origin unreplicable, snippet that exits non-zero) stays per-item under ADR-020 D-27.
+
+- Every read whose result feeds a decision MUST be classified at the call site as tool-answered or tool-did-not-answer, justified with the command's measured behaviour.
+- A read that did not answer MUST raise an exception the subsystem's per-item loop does not catch. The exception MUST name the host, the command verbatim, the failing condition, and the tool's own stderr where there is one. It fails ONCE for the command, never once per dependent item.
+- The default discriminator is a non-zero exit code. A command for which that is wrong MUST say so in a comment at the call site and use something else or nothing.
+- Where the exit code is ambiguous — a legitimate state and a real failure share it — the COMMAND MUST be reshaped so the exit code becomes unambiguous. In preference to parsing output or stderr text: narrow the arguments to cases the run has already established the tool can answer; widen with one case the tool must answer as a witness; or wrap in an outer test that answers absence unambiguously.
+- A reshape's outer test MUST hold the same privilege as the query it wraps.
+- An empty result MUST be treated as data unless emptiness is provably not a state the machine can be in.
 
 **Forbidden**
-- Blanket "non-zero exit fails the job" — several reads exit non-zero in their normal case.
-- Blanket "empty output means broken" — most reads have a legitimate empty answer.
-- Reading a failed read's empty result as a manifest.
-- Swallowing a read failure into a warning and continuing with a degraded picture.
+
+- No blanket "non-zero exit fails the subsystem" rule applied without checking the command. Several reads exit non-zero in their normal case.
+- No blanket "empty output means broken" rule. Most reads have a legitimate empty answer.
+- No reading a failed read's empty result as inventory or manifest.
+- No swallowing a read failure into a warning and continuing with a degraded picture.
 
 ## Context
 
-The package jobs diff two manifests. Until this ADR, a failed read returned an empty `CommandResult` and code parsed it like any other: `snap list --all` failing on the source emptied the source manifest and turned every snap on the target into an `EXTRA_ON_TARGET` removal proposal. The same shape sat in a dozen other reads.
+Subsystems that diff two machines' state rest on reads asking what each machine has.
 
-`477f191e` fixed two apt origin probes and introduced the pattern. This ADR generalises it.
+Before this ADR, a failed read returned an empty result and code parsed it like any other — an empty capture read as "that machine has nothing" and inverted the whole diff.
+
+The pattern was first surfaced by package sync: `snap list --all` failing on the source emptied the source manifest and proposed removing every snap on the target. The shape sits in every read that returns a collection.
 
 ## Decision
 
-### D-01: The two categories
+### The two categories
 
-**The tool did not answer.** Transient network failure, held package-manager lock, interrupted dpkg, unreadable status file, snapd not running, flatpak installation unopenable, sudo unavailable. Nothing in pc-switcher explains these; nothing in the run repairs them. **Fail fast.**
+**The tool did not answer.** A transient network failure, a package-manager lock, an interrupted subprocess, an unreadable status file, a daemon not running, an installation that cannot be opened, sudo unavailable. Nothing in pc-switcher explains any of these, nothing in the run repairs them, and every conclusion drawn from the result is unfounded. **Fail fast.**
 
-**The tool answered, and the answer is inconvenient.** A package apt has never heard of. A repository the source does not declare. A snippet that exits non-zero. **Per-item, continue.**
+**The tool answered, and the answer is inconvenient.** A package the target has never heard of. A file the source does not have. A subprocess that exits non-zero because a request was wrong. Each of these is a fact about one request, produced by a tool that was working; deciding what to do with it is the whole subsystem. **Per-item, continue.**
 
-The line: **did the tool answer the question it was asked**.
+The line is not "did the command succeed". It is **did the tool answer the question it was asked**.
 
-One command sits on the line: `apt-get --dry-run`. `E: Unable to locate package` and a held dpkg lock both exit 100, and apt offers no way to separate them. At apply time it stays per-item (per-item loop would report either). At plan time the ambiguity is removed by naming only packages a prior `apt-cache policy` gave a candidate for — so `E: Unable to locate package` cannot occur.
+### Fail-fast at subsystem level, once
 
-### D-02: `ProbeFailed`, at job level, once
-
-`ProbeFailed` is a `RuntimeError` outside the `ConvergeItemFailed` hierarchy, so it escapes per-item loops. One line names the machine, the command, and the tool's stderr:
+The exception a failed read raises sits outside the per-item exception hierarchy so it escapes per-item loops. It fails the subsystem once, naming the command and the tool's own stderr. Example:
 
 > probe on Atlas did not answer — `apt-mark showmanual` exited 100: E: Problem opening /var/lib/dpkg/status
 
-### D-03: Ambiguous exit codes → reshape the command
+Naming the command verbatim is the point. The pre-ADR behaviour produced a screenful of removal proposals with the real cause appearing nowhere.
 
-Three measured shapes:
+### Ambiguous exit codes → reshape the command
 
-**Exit code separates cleanly** — `apt-mark showmanual/showhold`, `apt-cache policy`, `snap list --all`, `flatpak list/remotes/mask`, `dpkg-query --show`. Guarded on exit code alone.
+Three measured shapes occur, and each is decided against the command's own tested behaviour:
 
-**Non-zero is the normal answer** — `sha256sum <glob>` over an empty match, `sha256sum <path>` for an absent file (returns `None`), `dpkg --search` over unowned paths. These are unguarded (say so at the call site) or guarded on the answer instead — `manual_installs_sync._DPKG_OWNERSHIP_WITNESS` adds `/usr/bin/dpkg` to the batch as proof dpkg answered.
+**The exit code separates cleanly** — most reads. Guarded on exit code alone.
 
-**Exit code is ambiguous — reshape** — `find <dir>` exits 1 both for absent and unreadable. `_capture_dir_digests` wraps in `if sudo test -d <dir>`; `_scan_source_file_references` uses `-path` selectors from an always-present root; `_scan_unowned_installs` skips absent roots in the driver. A reshape's test MUST hold the same privilege as the query it wraps.
+**Non-zero is the normal answer** — some reads exit non-zero as part of the expected shape of the reply. These are either unguarded (say so at the call site) or guarded on the answer itself rather than the exit code — for example, adding to the batch one case the tool must answer, so an answer that does not claim it proves the tool did not answer (argument widening as a witness).
 
-The plan-time `apt-get --dry-run install` reshapes via ARGUMENTS: naming only packages `apt-cache policy` said the target can resolve.
+**The exit code is ambiguous** — the same non-zero exit means both a legitimate state and a real failure. Reshape the command: narrow to arguments already known to succeed, or wrap in an outer test that answers absence unambiguously. Reshaping is preferred to parsing stderr text, which is locale-dependent and turns classification into a string match. A reshape's outer test must hold the same privilege as the wrapped query — measured, an unprivileged `test -d` on a directory inside an unsearchable parent exits 1, collapsing the whole `if` to exit 0 with no output.
 
-### D-04: Empty is data unless impossible
+### Empty is data unless emptiness is impossible
 
-Most reads have a legitimate empty answer. `require_answer`'s `answers=` parameter is the exception, passed only where at least one answer is owed — today only `apt-cache policy` over names apt must know: names installed on the machine (`AptProbe.source_policy`, `_scan_no_candidate_apt_packages`) and names this run established have a candidate (`OriginClassifier._verify`).
+Most reads have an ordinary empty answer — no items installed, no matching files. Promoting emptiness to a failure breaks those cases.
 
-A recorded judgement: an `apt-cache policy` that answered "I know none" and one that died both print nothing; output cannot separate them. `477f191e` resolved it toward failing fast — misattributing environment failure to every package's provenance is the worse reading. Documented, not eliminated.
+The exception is reads whose answer set is genuinely owed: those may treat "empty" as "tool did not answer".
 
-### D-05: One accepted residual
+That exception is a judgement per read and must be recorded as one: a read that answered "I know none of these" and a read that died can print the same output.
 
-`apt-mark showmanual` with `/var/lib/dpkg/status` absent exits **0** and prints nothing — byte-identical to a machine with no manually-installed packages. No `answers=` guard: an empty manual set is legitimate, and a machine whose dpkg status is deleted has larger problems.
+### Subsystem-level failure is the ceiling
 
-### D-06: Job-level failure is the ceiling
+A read failure fails its subsystem and no more; the orchestrator continues with the remaining subsystems. This assumes the subsystems are independent, which is a separate decision (currently GitHub issue #220).
 
-A `ProbeFailed` escaping a job fails that job and no more; the orchestrator runs the rest. Package half of **issue #220**; every other exception out of a job still aborts the run.
-
-### D-06a: One read ends the run instead
-
-An unparsable `package-snippets.yaml` raises `SyncAborted` from `packages.state`, not the `SyncAbortedByUser` subclass (nobody was asked). The USER can repair it, the fix has to land before the next sync reads it, and a passing sync with `manual_installs_sync` down reads as green rather than "go fix this file". Absent or empty registry stays ordinary data.
-
-### D-07: Shared mechanism, no shared base class
-
-Free functions in `packages/probes.py`, alongside `apt_policy.py`. ADR-020 D-15/D-16 forbids a base class that only some jobs supply inputs for. `apt_sync` keeps a thin `commands.require_apt_answer` wrapper; the others call `require_answer` directly.
+A subsystem MAY escalate a specific read to a run-ending abort where nothing in the run can repair it, the USER can, and the fix has to land before the next sync reads it. Per-read judgement, per-subsystem justified.
 
 ## Consequences
 
 **Positive**
-- Inverted-diff defects (every snap proposed for removal because one read failed) closed at every site.
-- User sees one line naming what broke, not a screen of consequences.
-- apt collateral protection can no longer switch itself off silently.
-- Keyring GC can no longer delete keys in use because the scan came back empty.
-- Repository-conflict review can no longer show two empty panes.
+
+- A failed capture can no longer read as "that machine has nothing".
+- The user sees one line naming what actually broke, instead of a screen of consequences.
+- Every downstream defect that turned on the inverted diff — silent switch-off of consent guards, garbage collection of in-use resources, review screens showing two empty panes — closes at the same site.
+- The classification is written down per call site, so the next read added to a subsystem has to state which category it is in rather than defaulting to the dangerous one.
 
 **Negative**
-- One broken read costs its whole job.
-- Two commands are shaped for their exit code rather than the shortest form; a future "simplification" reintroduces the ambiguity. Call-site comments warn.
-- `answers=` can fail a run that had nothing wrong on three `apt-cache policy` probes.
-- Classification is per command; a tool that changes exit-code behaviour breaks the classification silently.
+
+- One broken read costs its whole subsystem, including the items that had nothing to do with it. This is a loss of availability, taken deliberately in exchange for not shipping wrong changes.
+- Reshaped commands are shaped for their exit code rather than for the shortest form. A future edit that "simplifies" a reshape back to the obvious form silently reintroduces the ambiguity. Call-site comments must warn.
+- Classification is per command and cannot be derived mechanically. A tool that changes its exit-code behaviour in a future release breaks the classification silently.
+- Failing fast means some runs that previously produced a partial, wrong-but-plausible result now produce nothing. That is the intent, and it will occasionally be inconvenient.
 
 ## Alternatives Considered
 
-- **Blanket "non-zero fails the job"** — rejected on measurement.
-- **Blanket "empty means broken"** — rejected: legitimate empty answers exist.
-- **Parsing stderr to disambiguate** — rejected: locale-dependent, and reshape removes the ambiguity.
-- **Warn-and-continue on failed reads** — rejected: that is the current defect.
-- **Guard as a `PackageSyncJob` method** — rejected per ADR-020 D-15/D-16.
-- **Retry before failing** — deferred to #220.
+- **A blanket "non-zero exit fails the subsystem" rule** — rejected: several reads exit non-zero in their normal case, so the rule fails every ordinary run.
+- **A blanket "empty output means the read failed" rule** — rejected: a machine with no snaps, no packages, no matching files is ordinary.
+- **Parsing stderr to disambiguate** — rejected: locale-dependent string matching, and reshaping the command removes the ambiguity outright.
+- **Warn-and-continue on a failed read** — rejected: that is the defect this ADR closes.
+- **Retrying a failed read before failing** — deferred. It would help transient cases and mask persistent ones; the decision belongs with the wider failure-model work in GitHub #220.
 
 ## References
 
-- ADR-020, ADR-014
-- `477f191e`: the first two sites
-- GitHub issue #220
-- `src/pcswitcher/jobs/packages/probes.py`
-- `docs/system/package-sync.md`
+- ADR-014: unified dry-run contract — a dry run must still surface a failed read
+- ADR-020: package convergence — the first subsystem this rule was written for
+- ADR-021: what the log records — the failure line this ADR produces goes through those rules
+- `docs/adr/considerations/adr-022-command-measurements.md`: per-command measured behaviour for the reads pc-switcher uses today (which discriminator, why, and where each classification is enforced)
+- `docs/system/package-sync.md`: `PKG-FR-READ-FAILS-JOB` (the rule instantiated for package sync), `PKG-FR-REGISTRY-CONSENT` (a run-ending escalation this ADR permits)
+- GitHub issue #220: subsystem-level failure independence
