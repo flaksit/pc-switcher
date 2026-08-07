@@ -167,7 +167,7 @@ pc-switcher sync pc2 --yes --allow-first-sync
 
 A dry run converges nothing, so three things below cannot happen in it: no snippet is recorded, no registry is pushed, and the converge loop of §3.7 never opens — `_converge_one` is not called at all (`jobs/packages/sync_core.py:804`). Walk the dry run for the screens, then answer the real run for the outcomes.
 
-Findings already raised from a walk of these fixtures, so they need no re-reporting — check they still read as described and move on: review copy and titles (#276), the snippet screens of §3.5 and §3.6 (#281), and the group order of §3.2 (#283). The follow-up's keys and default (#278) and the repeated scrollback frames (#279) are fixed, and this runbook now says what to expect instead: seeing the old behaviour is a regression.
+Findings already raised from a walk of these fixtures, so they need no re-reporting — check they still read as described and move on: the group order of §3.2 (#283). Review copy and titles (#276), the follow-up's keys and default (#278), the repeated scrollback frames (#279) and the snippet screens of §3.5, §3.6 and §3.7 (#281) are fixed, and this runbook now says what to expect instead: seeing the old behaviour is a regression.
 
 The status line, the progress bars and the outcome block name jobs the way a user would (#280 is fixed): `Apt packages`, `Snaps`, `Flatpaks`, `Manual debs`, `Sideloaded snaps`, `Manual flatpaks`, `Manually installed apps`, `Folder sync`, `Install on target`. A module name such as `manual_deb_sync` on screen is a regression. Config keys and the `job` field in the log file stay the module name, so §4's log greps are unaffected.
 
@@ -251,6 +251,8 @@ Follows the removal group in each job that has one. Three items reach this scree
 - `<w> new snippet` — `rewrite the snippet first, then run it on pc2`
 - `<s> skip now` — `leave pc2's version as it is for now; will be asked again next sync`
 
+Above the answers, a cyan panel titled `Recorded snippet — would run on pc2` holds that item's whole install body (#281 is fixed) — a screen asking whether the recorded snippet is still right without showing it is a regression. The first two answers both change pc2 and both read as acts; `<w>` rendered in the skip colour is a regression too.
+
 The comparison must be made on the snap's **version**, `2.0` against `1.0`, and never on its revision — both machines are at `x1`, so a run comparing revisions would find nothing to do. The revision must not be printed either: it is not something the user decides on (#276).
 
 Answer, in the order the three come:
@@ -267,6 +269,8 @@ The last group of each snippet job. Four items have no recorded snippet and so a
 
 1. `Install-or-update snippet for /opt/pcsw-uat-app:` — its own screen states the install-or-update contract, that the body is replayed onto a machine which may already hold an older version.
 2. `Installed-version snippet for /opt/pcsw-uat-app:` — its own screen states that this one runs on both machines on every sync while the run is still planning, and must be read-only.
+
+Each editor closes onto a panel of its own, titled with the question and holding the body you wrote at the terminal's full width (#281 is fixed). Watch a long line: `set -eu` followed by a `printf` of a `.deb` control file is the case that used to wrap mid-token in a narrow column. The authoring note and the `(Ctrl-D to finish)` marker must be gone from the scrollback; the body must be there, whole.
 
 Both must refuse an empty body and a body of only spaces, printing `Neither snippet can be empty — enter both, or choose a skip.` and putting the three answers again. Try each refusal on each editor: submitting a real install body and then an empty version body must not leave a half-written entry anywhere.
 
@@ -298,6 +302,7 @@ Answer them with an install-or-update body each, `<y>` then one editor:
 - The version is read again on pc2 after the replay.
 - The item is **not** reported as applied.
 - A second screen appears, titled `Manually installed app /opt/pcsw-uat-loop on pc2 is still 1.0, not 2.0`, offering exactly **two** answers — `<w> new snippet` and `<s> skip now`. The replay answer is gone, because replaying the same bytes cannot change the outcome.
+- The body that moved nothing is printed above those answers, in the same `Recorded snippet — would run on pc2` panel §3.5 describes.
 - Its editor opens on the body that just failed.
 
 Answer `<w>` and write a body that actually converges, then confirm the item comes out applied:

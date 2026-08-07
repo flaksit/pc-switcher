@@ -112,9 +112,11 @@ sudo DEBIAN_FRONTEND=noninteractive dpkg --install /path/to/package.deb || \
 sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes --fix-broken
 ```
 
-Every body an entry takes is stored verbatim and mandatory. An empty body is refused.
+Every body an entry takes is stored verbatim and mandatory. An empty body is refused. What you write is printed back under the editor, full width, so the scrollback keeps the record of it.
 
-Convergence means the target reading back the source's version, not the snippet exiting zero. Where a replay leaves the version unchanged, you are asked again — this time to write a new snippet or leave it for this run. There is no purge-and-retry option: if your installer will not overwrite, `rm -rf … &&` goes into your own new snippet.
+Where both machines have an item at different versions you are asked about that item on its own, with the recorded install snippet printed above the answers: `y` replays it, `w` rewrites it first and then replays it, `s` leaves the target's version alone this run.
+
+Convergence means the target reading back the source's version, not the snippet exiting zero. Where a replay leaves the version unchanged, you are asked again — this time to write a new snippet or leave it for this run, again with the body that did not work printed above. There is no purge-and-retry option: if your installer will not overwrite, `rm -rf … &&` goes into your own new snippet.
 
 The registry syncs between machines with each snippet job's push. A transfer that would lose or change an entry the target holds asks you to confirm; declining aborts the run so you can consolidate the two registries by hand.
 

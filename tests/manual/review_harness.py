@@ -20,11 +20,13 @@ from pcswitcher.jobs.packages.review import (
     REPO_CONFLICT_REVIEW_ACTION,
     REPO_REMOVAL_REVIEW_ACTION,
     UNREPRODUCIBLE_REVIEW_ACTION,
+    UNREPRODUCIBLE_UPDATE_REVIEW_ACTION,
     ReviewEntry,
     ReviewGroup,
     ask_gate,
     review_items,
 )
+from pcswitcher.jobs.packages.state import SnippetBodies
 from pcswitcher.models import SyncAbortedByUser
 from pcswitcher.ui import TerminalUI
 
@@ -237,6 +239,30 @@ GROUPS = [
             ReviewEntry("unreproducible:unowned-path:/usr/local/bin/mytool", "/usr/local/bin/mytool", "resolve"),
         ],
         item_noun="manually installed app",
+    ),
+    # The one screen that prints a body it did not just capture: the recorded snippet goes
+    # above the answers, because "run it or rewrite it" cannot be answered from a name.
+    ReviewGroup(
+        "manual_deb",
+        UNREPRODUCIBLE_UPDATE_REVIEW_ACTION,
+        f"Update manual deb versions on {TARGET_HOST}?",
+        [
+            ReviewEntry(
+                "unreproducible:apt-no-candidate:pcsw-uat-drift",
+                "pcsw-uat-drift (2.0)",
+                "update",
+                f"{SOURCE_HOST} has 2.0, {TARGET_HOST} has 1.0",
+            )
+        ],
+        item_noun="manual deb",
+        recorded_bodies={
+            "unreproducible:apt-no-candidate:pcsw-uat-drift": SnippetBodies(
+                install_body="set -eu\n"
+                "b=/var/tmp/pcsw-uat-drift\n"
+                'printf "Package: pcsw-uat-drift\\nVersion: 2.0\\nArchitecture: all\\n" > "$b/DEBIAN/control"\n'
+                "sudo DEBIAN_FRONTEND=noninteractive dpkg --install /var/tmp/pcsw-uat-drift_2.0_all.deb"
+            )
+        },
     ),
 ]
 

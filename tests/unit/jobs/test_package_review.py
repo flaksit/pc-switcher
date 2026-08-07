@@ -39,7 +39,9 @@ from pcswitcher.jobs.packages.review import (
     REPO_CONFLICT_REVIEW_ACTION,
     REPO_REMOVAL_REVIEW_ACTION,
     SKIP_NOW_WORD,
+    UNREPRODUCIBLE_RETRY_REVIEW_ACTION,
     UNREPRODUCIBLE_REVIEW_ACTION,
+    UNREPRODUCIBLE_UPDATE_REVIEW_ACTION,
     Decision,
     MarkSide,
     ReviewEntry,
@@ -1310,35 +1312,29 @@ class TestUnreproducibleGroupResolution:
         )
 
     @staticmethod
-    async def _editor_screens(item_id: str = UNOWNED_PATH_ID) -> tuple[list[str], str]:
-        """Run one snippet capture and return every editor header it produced, plus the
+    async def _editor_screens(
+        item_id: str = UNOWNED_PATH_ID, body: str = "sudo dpkg --install /tmp/x.deb"
+    ) -> tuple[list[Any], str]:
+        """Run one snippet capture and return one call record per editor it opened, plus the
         scrollback.
 
-        Two headers per editor: while it is open, and on prompt_toolkit's final `is_done`
-        render. How many editors is the item's own business (`PKG-FR-VERSION-SNIPPET`), which
-        is what the caller asserts on.
+        How many editors is the item's own business (`PKG-FR-VERSION-SNIPPET`), which is what
+        the caller asserts on; each record carries the message and the keyword arguments the
+        editor was built with.
         """
         console, sink = captured_console(terminal=True)
         group = _unreproducible_group([_entry(item_id, label="brscan3")])
         screen = _fake_prompt(ask_return={item_id: "add_snippet"})
-        text_prompt = _fake_prompt(ask_return="sudo dpkg --install /tmp/x.deb")
-        headers: list[str] = []
-
-        def open_editor(*_args: object, **kwargs: object) -> MagicMock:
-            instruction = kwargs["instruction"]
-            headers.append(format(instruction))
-            with patch("pcswitcher.jobs.packages.review.is_done", return_value=True):
-                headers.append(format(instruction))
-            return text_prompt
+        text_prompt = _fake_prompt(ask_return=body)
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
             patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen),
-            patch("pcswitcher.jobs.packages.review.questionary.text", side_effect=open_editor),
+            patch("pcswitcher.jobs.packages.review.questionary.text", return_value=text_prompt) as text,
         ):
             await review_items([group], console=console, ui=MagicMock(), **HOSTS)
 
-        return headers, sink.getvalue()
+        return text.call_args_list, sink.getvalue()
 
     async def test_the_authoring_warning_is_on_the_editors_own_screen(self) -> None:
         """G61, G183 — the user is warned while they can still act on it. A snippet that asks a
@@ -1350,8 +1346,8 @@ class TestUnreproducibleGroupResolution:
         without showing them what that looks like leaves them to discover
         `DEBIAN_FRONTEND` as a stuck sync.
         """
-        headers, _scrollback = await self._editor_screens()
-        install_open, _install_answered, version_open, _version_answered = headers
+        editors, _scrollback = await self._editor_screens()
+        install_open, version_open = (call.kwargs["instruction"] for call in editors)
 
         assert "nomad" in install_open
         assert "nobody watching" in install_open
@@ -1368,28 +1364,59 @@ class TestUnreproducibleGroupResolution:
         assert "must change nothing" in version_open
 
     async def test_the_answered_editor_keeps_only_the_question_and_the_body(self) -> None:
-        """#236 — every other review screen collapses to its title and the answer once
-        answered. This one used to keep the whole authoring note plus questionary's
-        `(Ctrl-D to finish)` marker in the scrollback: the note because it was printed
-        above the editor, the marker because `questionary.text` appends `instruction` on
-        every render with no `is_done` check. Neither survives the answer now, and nothing
-        is printed around the editor for the scrollback to hold.
+        """G61, G191 — every other review screen collapses to its title and the answer once
+        answered. This one keeps neither the authoring note nor questionary's `(Ctrl-D to
+        finish)` marker: the editor is erased whole when it closes, and the review prints the
+        title and the body itself. That printing is also what takes the body out of the narrow
+        column questionary echoes an answer into.
         """
-        headers, scrollback = await self._editor_screens()
+        editors, scrollback = await self._editor_screens()
 
-        assert headers[1::2] == ["", ""]
+        assert [call.kwargs["erase_when_done"] for call in editors] == [True, True]
         assert "nobody watching" not in scrollback
         assert "Ctrl-D" not in scrollback
+        assert "Install-or-update snippet for brscan3" in scrollback
+        assert "sudo dpkg --install /tmp/x.deb" in scrollback
+
+    async def test_the_captured_body_is_printed_full_width_and_whole(self) -> None:
+        """G191 — questionary echoes an answer in the column right of the prompt's own text,
+        which wrapped a shell line mid-token under a title naming the item. The review prints
+        the body itself instead, so a long line survives the scrollback as one line and is
+        the record of what was written.
+        """
+        long_line = "sudo DEBIAN_FRONTEND=noninteractive dpkg --install /var/tmp/pcsw-uat-drift/pcsw-uat-drift_2.0.deb"
+
+        _editors, scrollback = await self._editor_screens(item_id=PACKAGE_BACKED_ID, body=long_line)
+
+        assert long_line in scrollback
+
+    async def test_an_empty_capture_records_nothing(self) -> None:
+        """G192 — the body is printed as the record of what the user wrote, and an editor that
+        came back empty wrote nothing: the caller re-prompts, and a block asserting otherwise
+        would be a record of an answer that was refused.
+        """
+        console, sink = captured_console(terminal=True)
+        group = _unreproducible_group([_entry(PACKAGE_BACKED_ID, label="brscan3")])
+        screen = _fake_prompt(ask_side_effect=[{PACKAGE_BACKED_ID: "add_snippet"}, {PACKAGE_BACKED_ID: "skip_once"}])
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen),
+            patch("pcswitcher.jobs.packages.review.questionary.text", return_value=_fake_prompt(ask_return="")),
+        ):
+            await review_items([group], console=console, ui=MagicMock(), **HOSTS)
+
+        assert "Install-or-update snippet for brscan3" not in sink.getvalue()
 
     async def test_a_package_backed_kind_opens_one_editor(self) -> None:
         """G182 — dpkg, snap and flatpak answer the version question for their own kind
         (`PKG-FR-MANUAL-VERSION`), so authoring one of those asks for the install body and
         stops there rather than for a command nothing would ever run.
         """
-        headers, _scrollback = await self._editor_screens(item_id=PACKAGE_BACKED_ID)
+        editors, _scrollback = await self._editor_screens(item_id=PACKAGE_BACKED_ID)
 
-        assert len(headers) == 2
-        assert "must change nothing" not in headers[0]
+        assert len(editors) == 1
+        assert "must change nothing" not in editors[0].kwargs["instruction"]
 
     async def test_skip_always_choice_yields_skip_always_decision_and_no_snippet(self) -> None:
         """G32."""
@@ -1633,6 +1660,87 @@ class TestUnreproducibleGroupResolution:
 
         assert decision_list.call_count == 2
         assert [len(call.kwargs["rows"]) for call in decision_list.call_args_list] == [1, 1]
+
+
+RECORDED_BODY = "sudo dpkg --install /var/tmp/pcsw-uat-drift.deb"
+
+
+def _update_group(item_id: str = PACKAGE_BACKED_ID) -> ReviewGroup:
+    """The version-difference screen's group: one item both machines have, with the body the
+    registry already holds for it."""
+    return ReviewGroup(
+        manager="manual_deb",
+        action=UNREPRODUCIBLE_UPDATE_REVIEW_ACTION,
+        title="Update manual deb versions on nomad?",
+        item_noun="manual deb",
+        entries=(ReviewEntry(item_id=item_id, label="pcsw-uat-drift (2.0)", action_label="update", detail=None),),
+        recorded_bodies={item_id: SnippetBodies(install_body=RECORDED_BODY)},
+    )
+
+
+@pytest.mark.asyncio
+class TestTheRecordedSnippetIsOnScreen:
+    """#281: the two screens that offer to replay a body already on record show that body
+    above their answers. "Is the recorded snippet still right" is what they ask, and an item's
+    name is not enough to answer it."""
+
+    @staticmethod
+    async def _screen(group: ReviewGroup) -> tuple[Any, str]:
+        console, sink = captured_console(terminal=True)
+        item_id = group.entries[0].item_id
+        screen = _fake_prompt(ask_return={item_id: "skip_once"})
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen) as decision_list,
+        ):
+            await review_items([group], console=console, ui=MagicMock(), **HOSTS)
+
+        return decision_list.call_args, sink.getvalue()
+
+    async def test_the_version_difference_screen_prints_the_recorded_install_body(self) -> None:
+        """G165 — the answers are "run the recorded snippet" and "rewrite it first", and choosing
+        between them means reading it. The block says which machine would run it, because that
+        is the machine the answer changes."""
+        _call, scrollback = await self._screen(_update_group())
+
+        assert RECORDED_BODY in scrollback
+        assert "would run on nomad" in scrollback
+
+    async def test_the_retry_screen_prints_the_body_that_moved_no_version(self) -> None:
+        """G173 — same need, one screen over: the replay left the version where it was, so the body
+        is what the user is being asked to replace."""
+        group = ReviewGroup(
+            manager="manual_deb",
+            action=UNREPRODUCIBLE_RETRY_REVIEW_ACTION,
+            title="Manual deb pcsw-uat-drift on nomad is still 1.0, not 2.0",
+            item_noun="manual deb",
+            entries=(ReviewEntry(item_id=PACKAGE_BACKED_ID, label="pcsw-uat-drift", action_label="update"),),
+            recorded_bodies={PACKAGE_BACKED_ID: SnippetBodies(install_body=RECORDED_BODY)},
+        )
+
+        _call, scrollback = await self._screen(group)
+
+        assert RECORDED_BODY in scrollback
+
+    async def test_the_resolve_screen_prints_no_block(self) -> None:
+        """G193 — an item with nothing recorded has nothing to show: the screen asks the user to
+        write the first body, not to judge one."""
+        _call, scrollback = await self._screen(_unreproducible_group([_entry(PACKAGE_BACKED_ID, label="brscan3")]))
+
+        assert "would run on nomad" not in scrollback
+
+    async def test_writing_a_new_snippet_is_an_act(self) -> None:
+        """G165 — the rewritten body is RUN on nomad, so the answer changes the machine as
+        much as replaying the recorded one does. Unmarked it rendered in the skip colour,
+        which is also what the retry screen's identical answer already contradicted."""
+        call, _scrollback = await self._screen(_update_group())
+
+        assert [(option.key, option.word, option.is_act) for option in call.kwargs["options"]] == [
+            ("y", "update", True),
+            ("w", "new snippet", True),
+            ("s", SKIP_NOW_WORD, False),
+        ]
 
 
 @pytest.mark.asyncio

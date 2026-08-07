@@ -70,6 +70,11 @@ entry is resolved one at a time with a three-way choice — write the commands t
 it, mark it as belonging to the source machine alone, or skip for now — because "should this
 apply" is not the question for an item no package manager can reproduce; "how does the other
 machine get this" is.
+The two screens that replay a snippet already on record — the version difference and the
+retry after one that moved no version — print that install body above their answers, the way
+a deletion screen prints a pin file whole: "is the recorded snippet still right" is the
+question, and it cannot be answered from the item's name. A body the user WRITES is printed
+too, under the editor and full width, so the scrollback keeps what was authored.
 `ReviewOutcome.snippets` carries that group's authored snippets back to the caller
 (`PackageSyncJob.apply()`), which persists them. An interactive review always resolves
 every entry (decision 10): an empty snippet capture re-prompts rather than falling through
@@ -140,7 +145,6 @@ from enum import StrEnum
 from typing import Protocol, runtime_checkable
 
 import questionary
-from prompt_toolkit.filters import is_done
 from prompt_toolkit.key_binding import KeyBindings, KeyPressEvent
 from prompt_toolkit.keys import Keys
 from prompt_toolkit.styles import Style
@@ -893,32 +897,14 @@ def _version_authoring_note(source_hostname: str, target_hostname: str) -> str:
 _SNIPPET_FINISH_HINT = "(Ctrl-D to finish)\n>"
 
 
-class _SnippetInstruction(str):
-    """The snippet editor's header — the authoring note and the finish key — which is on
-    screen while the editor is open and gone from the scrollback once it is answered.
+def _snippet_instruction(note: str) -> str:
+    """The editor header for one body: its own note, then the finish key.
 
-    Every other review screen collapses to its title and the answer (`decision_list` drops
-    its legend on `answered`). This one could not: `questionary.text` appends `instruction`
-    on EVERY render, the final one included, with no `is_done` check of its own, and the
-    note printed above the editor was ordinary console scrollback nothing could take back
-    (#236).
-
-    A `str` subclass because that is what questionary's signature takes and what its
-    truthiness test reads; the override is on `__format__`, which is what
-    `"{}".format(instruction)` calls once per render — so prompt_toolkit's own final,
-    `is_done` render is where the header drops out. Nothing about the Ctrl-D binding or the
-    multiline buffer changes.
+    On screen while the editor is open and gone from the scrollback once it is answered —
+    the editor is erased whole on submit (`_capture_body`), so neither the note nor
+    questionary's `(Ctrl-D to finish)` marker survives the answer (#236).
     """
-
-    __slots__ = ()
-
-    def __format__(self, _spec: str, /) -> str:
-        return "" if is_done() else str(self)
-
-
-def _snippet_instruction(note: str) -> _SnippetInstruction:
-    """The editor header for one body: its own note, then the finish key."""
-    return _SnippetInstruction(f"\n{note}\n{_SNIPPET_FINISH_HINT}")
+    return f"\n{note}\n{_SNIPPET_FINISH_HINT}"
 
 
 def _snippet_submit_bindings() -> KeyBindings:
@@ -944,6 +930,24 @@ _SNIPPET_SUBMIT_BINDINGS = _snippet_submit_bindings()
 # snippet is not an answer to be echoed back; it is text being written, and it reads as
 # text.
 _SNIPPET_STYLE = Style([("answer", "noinherit")])
+
+
+def _snippet_record(title: str, body: str) -> Panel:
+    """One body as the scrollback keeps it, once its editor has closed.
+
+    Full width and uncut. questionary echoes an answer in the column to the RIGHT of the
+    prompt's own text, which for a shell body — long lines by nature, under a title naming
+    the item — is a gutter that wraps mid-token (#281). This is a panel of the review's own
+    instead, printed under the question, so the width available to it is the terminal's.
+
+    Uncut, unlike `_file_body`: that caps a body being printed so a question can be answered
+    from it, and a body long enough to scroll its own question away is unanswerable. This one
+    IS the record of what the user just wrote, and a record with lines missing is not one.
+
+    `Text`, never a bare `str` — a shell body is full of `[...]` shapes Rich would read as
+    console markup (T-02-02).
+    """
+    return Panel(Text(body), title=Text(title), border_style="cyan")
 
 
 def _bare_item_name(label: str) -> str:
@@ -1132,6 +1136,10 @@ def _update_options(target_hostname: str) -> tuple[DecisionOption, ...]:
             key=_NEW_SNIPPET_KEY,
             word="new snippet",
             glyph=_ADD_SNIPPET_GLYPH,
+            # An act, exactly as it is on the retry screen: the rewritten body is RUN on the
+            # target, so this changes the machine every bit as much as replaying the
+            # recorded one does. Unmarked, it rendered in the skip colour.
+            is_act=True,
             hint=f"rewrite the snippet first, then run it on {target_hostname}",
         ),
         DecisionOption(
@@ -1213,12 +1221,20 @@ async def _ask_about_one_item(  # noqa: PLR0913 - one decision screen's content;
     return answered[entry.item_id]
 
 
-async def _capture_body(prompt_title: str, note: str, existing: str) -> str:
-    """Open one editor and return what it captured, stripped.
+async def _capture_body(title: str, note: str, existing: str, *, console: Console) -> str:
+    """Open one editor, print what it captured, and return it stripped.
 
-    The authoring note rides on the prompt rather than being printed above it: printed, it
-    stayed in the scrollback beside the body the user wrote, which no other screen does
-    (#236).
+    The editor is erased whole when it closes (`erase_when_done`) and this reprints the
+    result as the review's own block: the title, then the body full width under it. Two
+    findings meet in that one flag. The authoring note and the finish marker are questionary's
+    to draw and were the review's only screen that left its own instructions in the scrollback
+    (#236); the body was echoed in the narrow column to the right of the title, wrapping shell
+    lines mid-token (#281). Erasing settles both, and what stays behind is only what was
+    written — so the scrollback keeps the record `PKG-FR-SNIPPET-VERBATIM` makes the registry
+    keep.
+
+    Nothing is printed for an empty capture: the caller re-prompts, and a panel saying the
+    user wrote nothing is not a record of anything.
 
     `existing` prefills the buffer, which is what makes rewriting a recorded body an edit
     rather than a retype (`PKG-FR-VERSION-SNIPPET`): the body that did not converge is usually nearly right, and
@@ -1232,15 +1248,19 @@ async def _capture_body(prompt_title: str, note: str, existing: str) -> str:
     user typed as part of the command, and they change nothing about what `bash -c` runs.
     """
     prompt = questionary.text(
-        prompt_title,
+        f"{title}:",
         multiline=True,
         default=existing,
         instruction=_snippet_instruction(note),
         key_bindings=_SNIPPET_SUBMIT_BINDINGS,
         style=_SNIPPET_STYLE,
+        erase_when_done=True,
     )
     captured: str | None = await asyncio.to_thread(prompt.ask)
-    return captured.strip() if captured else ""
+    body = captured.strip() if captured else ""
+    if body:
+        console.print(_snippet_record(title, body))
+    return body
 
 
 def _empty_snippet_refusal(item_id: str) -> str:
@@ -1253,7 +1273,12 @@ def _empty_snippet_refusal(item_id: str) -> str:
 
 
 async def _capture_bodies(
-    entry: ReviewEntry, *, source_hostname: str, target_hostname: str, recorded: SnippetBodies | None
+    entry: ReviewEntry,
+    *,
+    console: Console,
+    source_hostname: str,
+    target_hostname: str,
+    recorded: SnippetBodies | None,
 ) -> SnippetBodies | None:
     """The bodies this item's registry entry takes, or `None` where an editor came back empty
     (`PKG-FR-VERSION-SNIPPET`).
@@ -1272,22 +1297,54 @@ async def _capture_bodies(
     would replay as nothing at all.
     """
     install_body = await _capture_body(
-        f"Install-or-update snippet for {entry.label}:",
+        f"Install-or-update snippet for {entry.label}",
         _snippet_authoring_note(target_hostname),
         recorded.install_body if recorded else "",
+        console=console,
     )
     if not install_body:
         return None
     if not carries_version_body(entry.item_id):
         return SnippetBodies(install_body=install_body)
     version_body = await _capture_body(
-        f"Installed-version snippet for {entry.label}:",
+        f"Installed-version snippet for {entry.label}",
         _version_authoring_note(source_hostname, target_hostname),
         recorded.version_body if isinstance(recorded, VersionedSnippetBodies) else "",
+        console=console,
     )
     if not version_body:
         return None
     return VersionedSnippetBodies(install_body=install_body, version_body=version_body)
+
+
+def _print_recorded_snippet(recorded: SnippetBodies | None, *, console: Console, target_hostname: str) -> None:
+    """Print the install body already on record for this item, above the question about it.
+
+    The answer is whether that body is still the right one — replay it, rewrite it first, or
+    leave the version alone — and the screen used to ask it without ever showing the body
+    (#281). Same shape as the pin file a deletion screen prints whole: the thing first, then
+    the decision about the thing.
+
+    Printed per attempt rather than once per entry, so a re-prompt after an empty capture
+    puts the body back above the question rather than leaving it further up the scrollback.
+
+    Nothing is printed where nothing is recorded — the resolve group, whose items have no
+    snippet by definition. Only the install body: the version body is not what an update
+    replays, and this is the block the question is about.
+
+    Cut at `_file_body`'s cap, unlike the record `_snippet_record` keeps. A body long enough
+    to scroll its own question off the terminal cannot be the ground for answering it.
+    """
+    if recorded is None:
+        return
+    console.print()
+    console.print(
+        Panel(
+            _file_body(recorded.install_body),
+            title=Text(f"Recorded snippet — would run on {target_hostname}"),
+            border_style="cyan",
+        )
+    )
 
 
 async def _review_snippet_group(  # noqa: PLR0913 - screen content plus the two dicts it fills; all but the group keyword-only
@@ -1346,6 +1403,7 @@ async def _review_snippet_group(  # noqa: PLR0913 - screen content plus the two 
         # empty capture loops back here rather than manufacturing an unresolved item
         # (decision 10); a cancelled screen breaks out by aborting the whole sync.
         while True:
+            _print_recorded_snippet(recorded.get(entry.item_id), console=console, target_hostname=target_hostname)
             selected = await _ask_about_one_item(entry, title=title, options=options, default=default)
 
             if selected in (Decision.SKIP_ALWAYS, Decision.SKIP_ONCE, Decision.APPLY):
@@ -1356,6 +1414,7 @@ async def _review_snippet_group(  # noqa: PLR0913 - screen content plus the two 
 
             bodies = await _capture_bodies(
                 entry,
+                console=console,
                 source_hostname=source_hostname,
                 target_hostname=target_hostname,
                 recorded=recorded.get(entry.item_id),
