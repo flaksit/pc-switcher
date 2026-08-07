@@ -18,7 +18,7 @@ This ADR does not enumerate every read a subsystem must do or how each is classi
 
 ## Identifiers
 
-Each decision below carries an ID of the form `ADR-022-D-<name>`. These are the stable, greppable citations that code, tests and other docs use when they refer to a specific decision. Rejected alternatives are un-ID'd — cited by descriptive text if at all. Where a decision produces a specification article in [`docs/system/package-sync.md`](../system/package-sync.md), the section names the article inline for a bidirectional link.
+Each decision below carries an ID of the form `ADR-022-D-<name>` — the stable, greppable citation that code, tests and other docs use to refer to it. Where a decision produces a specification article in [`docs/system/package-sync.md`](../system/package-sync.md), the section names the article inline; the article's `Lineage:` names the ADR decision back.
 
 ## Additional implementation rules
 
