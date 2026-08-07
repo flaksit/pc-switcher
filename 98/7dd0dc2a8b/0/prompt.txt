@@ -1,0 +1,121 @@
+If I change the model here to opus 4.8, will subagents you call use opus 4.8 as well? Or no need for subagents for this task?
+
+---
+
+I changed model to opus 4.6, so we are sure you don't have a tendency to bloat text. Go
+
+---
+
+I changed model to opus 4.7, so we are sure you don't have a tendency to bloat text. Go
+
+---
+
+I see ADR-020 talks about "Phase 2". This is a GSD phase number. These phase numbers are only temporarily valid: within the milestone we are currently working on. As soon as we start on a next GSD milestone, we get new phases, numbered 1, 2, ... again. So phase numbers should be NOWHERE in code/tests and not in docs outside of GSD's own folder .planning. Fix that (ask agent if better than filling your context with all these docs/code/tests)
+
+---
+
+you committed changes that weren't yours
+
+---
+
+Is line 18 relevant in adr-021? Seems not related to logging
+
+---
+
+adr-021 isn't about reading. It's about logging. Or am I wrong weing so strict?
+
+---
+
+adr-021 isn't about reading. It's about logging. Or am I wrong being so strict?
+Snippets should not be in log at all, I think. And if they would, credentials should be redacted because we don't want them in a log file.
+
+---
+
+1: ok, snippets end up indirectly because we log each command. ALL log output MUST be redacted for credentials (in so far we can detect them): including DEBUG log of commands. So "verbatim" is not entirely true.
+
+---
+
+The general ADR-rule should read that all creds should be redacted from the log. Our current, pragmatic implementation only filters urls. Code must do all they can to prevent creds to go in log. Snippets are a bit of an exception because not controlled by code but by user. User can put anything. And we don't want expensive tooling that auto-detects what word in a snippet could be a cred.
+
+---
+
+Ok, with one extra: now, ADR-021 tl;dr and "required" read as an exhaustive list of what must be logged and makes reader think other things MUST NOT be logged. That is not true. ADR-021 only talks about SOME types of log messages. Should be clear that ADR-021 does not define the complete set of what must be logged and what not: it only gives SOME musts and SOME must-nots.
+
+---
+
+ok.
+No need to refer explicitly to package sync ("that package sync forced onto the log") because that could read as not applicable to other code/jobs. The rules are generally applicable.
+
+---
+
+continue
+
+---
+
+ADR-021 is not specifically about package-sync. So be clear when mentioning package-sync specific concepts, like "snippets": e.g; "package-sync snippets"
+
+---
+
+Same remark for ADR-022, e.g. "per-item data" on line 9. "item" is package-sync language. So should be "package-sync item". But on line 9 it doesn't even add value. Just "data" is enough. Sweep ADR-022
+
+---
+
+Actually, when reading parts of ADR-022, I see it is entirely formulated around package-sync concepts and code (e.g. "ProbeFailed", "ConvergeItemFailed"). Even though it is a generic ADR. What do you propose? Make it really generic, or restrict ADR-022 to be package-sync-specific?
+
+---
+
+Do the split
+
+---
+
+ADR-020 and 022 define D-nn numbers. Are they unique for this repo? Or are there other D-nn numbers around from other speckit runs or GSD phases we did before? I want to avoid confusion. That is why golden record contains describing id's instead of numberic.
+
+---
+
+do 3.
+use todo-list to keep track of all your tasks. This D-number fixing comes on top of the ADR-022 split you were working on
+
+---
+
+Does ADR-013 have D-nn numbers as well?
+
+---
+
+I don't see any article-id in ADR-020. Does nothing reference to ADR-020? Or did you put textual references? Even though you confirmed "descriptive text is worse than an ID for the same reasons D-nn is worse than PKG-FR-*. Updating the plan". Did you forget? If not, why did you decide against this?
+
+---
+
+If no code or other docs refer to these D-nn, or they always explicitly mention where the D-nn comes from, then leave like it is.
+
+I don't see any article-id in ADR-020. Does nothing reference to ADR-020? Or did you put textual references? Even though you confirmed "descriptive text is worse than an ID for the same reasons D-nn is worse than PKG-FR-*. Updating the plan". Did you forget? If not, why did you decide against this?
+
+---
+
+Why are you stubbornly refusing to give article-id's to ADR paragraphs?
+
+---
+
+You blah blah "Rejected alternatives are un-ID'd — cited by descriptive text if at all." This absolutely doesn't interest anyone. Why do you write such rubbish that goes into the trashbin directly
+
+---
+
+/merge-main
+
+---
+
+"Running the mechanical merge to see conflicts, then reconciling by intent." This is exactly what the skill tells you NOT to do: DO NOT TRUST the mechanical git conflict detection to find conflicts. There are possibly many more conflicts in logic/intent. Are the instructions in the skill not clear enough? How should we formulate the instructions so you follow them?
+Or did you follow and is that sentence not telling what you are actually doing?
+
+---
+
+I'll rewrite. You go on with your work.
+
+---
+
+<task-notification>
+<task-id>bpjo0fxbu</task-id>
+<tool-use-id>toolu_01YNbzoUgP9A3P8VvQJzLuUy</tool-use-id>
+<output-file>/tmp/claude-1000/-home-janfr-dev-pc-switcher/ffcc411a-efb9-4000-9b1a-550c5559dd1b/tasks/bpjo0fxbu.output</output-file>
+<status>failed</status>
+<summary>Background command "Wait for PR #274 CI checks to reach terminal state" failed with exit code 1</summary>
+</task-notification>
