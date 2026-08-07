@@ -13,6 +13,9 @@ cd /home/janfr/dev/pc-switcher
 export HCLOUD_TOKEN="$(pass show dev/pc-switcher/testing/hcloud_token_rw)"
 tests/integration/scripts/internal/lock.sh status
 tests/integration/scripts/internal/lock.sh acquire "janfr-uat-02-02"
+export PCSWITCHER_LOCK_HOLDER=janfr-uat-02-02   # reset-vm.sh takes its own lock otherwise
+tests/integration/scripts/reset-vm.sh pc1
+tests/integration/scripts/reset-vm.sh pc2
 export PC1="$(hcloud server ip pc1)"
 export PC2="$(hcloud server ip pc2)"
 for h in "$PC1" "$PC2"; do
@@ -25,6 +28,8 @@ ssh testuser@"$PC1" 'printf "logging:\n  file: DEBUG\nsync_jobs:\n  apt_sync: tr
 ```
 
 All seven package jobs are on, which is what this runbook is about: three of the four snippet jobs did not exist when the base runbook was written, and the exclusions they are the other half of only take effect when both sides of each pair are enabled. `init` is run for the two starter filter files it ships, and the config it writes is replaced on the next line. `/home` is the mirrored folder because the registry and the four decision files live under it, and `home.filter` is what keeps each machine's own `authorized_keys`.
+
+The reset to baseline is not optional here. A previous session's leftovers land in the same detectors these fixtures use — a stray hand-installed `.deb` becomes an extra `manual_deb_sync` finding, and an already-installed `sdl_sopwith` makes §2.1's flatpak fixture impossible, because flatpak will not install an application that is already there from another remote.
 
 Confirm the config was accepted before diverging anything — a key the schema does not know ends the run, and finding that out after the fixtures are in place costs you the setup:
 
@@ -62,19 +67,57 @@ for spec in pcsw-uat-snap:1.0 pcsw-uat-snapdrift:2.0; do
 done
 snap list pcsw-uat-snap pcsw-uat-snapdrift              # both at x1 — note the revisions
 
-# manual_flatpak_sync: an app whose origin names no remote this machine configures
+# manual_flatpak_sync: an app whose origin names no remote this machine configures.
+# The base fixtures already installed sopwith from flathub, and flatpak refuses to
+# install an app that is already there from another remote — so it comes off first.
+flatpak uninstall --user --assumeyes io.github.fragglet.sdl_sopwith
 flatpak remote-add --user --if-not-exists pcsw-uat-src https://dl.flathub.org/repo/flathub.flatpakrepo
 flatpak install --user --assumeyes pcsw-uat-src io.github.fragglet.sdl_sopwith
 flatpak remote-delete --user --force pcsw-uat-src
-flatpak list --user --app --columns=application,origin   # sopwith's origin is a remote that is gone
+flatpak list --user --app --columns=application,origin   # origin reads pcsw-uat-src, which is gone
 
 # manual_installs_sync: one plain finding, one that drifts
 sudo mkdir -p /opt/pcsw-uat-app /opt/pcsw-uat-loop
 echo hi | sudo tee /opt/pcsw-uat-app/README >/dev/null
 echo 2.0 | sudo tee /opt/pcsw-uat-loop/version >/dev/null
 
-# the converge loop's recorded entry: an install body that exits 0 and changes nothing
-printf 'snippets:\n  "unreproducible:unowned-path:/opt/pcsw-uat-loop":\n    label: /opt/pcsw-uat-loop\n    install_body: "true"\n    version_body: "cat /opt/pcsw-uat-loop/version"\n    authored_at: "2026-08-01T00:00:00+00:00"\n    authored_on: pc1\n' > ~/.config/pc-switcher/package-snippets.yaml
+# Three recorded entries. An item both machines have at different versions only
+# reaches the update screen when a snippet is ALREADY recorded for it — with nothing
+# to replay, the run asks how to reproduce it instead, on the resolution screen with
+# the verb "update". So the two drifting package items get real entries, and
+# /opt/pcsw-uat-loop gets one whose install body exits 0 and moves nothing.
+cat > ~/.config/pc-switcher/package-snippets.yaml <<'YAML'
+snippets:
+  "unreproducible:unowned-path:/opt/pcsw-uat-loop":
+    label: /opt/pcsw-uat-loop
+    install_body: "true"
+    version_body: "cat /opt/pcsw-uat-loop/version"
+    authored_at: "2026-08-01T00:00:00+00:00"
+    authored_on: pc1
+  "unreproducible:apt-no-candidate:pcsw-uat-drift":
+    label: pcsw-uat-drift
+    install_body: |
+      set -eu
+      b=/var/tmp/pcsw-uat-drift
+      sudo mkdir -p "$b/DEBIAN"
+      printf "Package: pcsw-uat-drift\nVersion: 2.0\nSection: misc\nPriority: optional\nArchitecture: all\nMaintainer: pc-switcher UAT <noreply@example.invalid>\nDescription: A package installed by hand, which no repository can supply.\n" | sudo tee "$b/DEBIAN/control" >/dev/null
+      sudo dpkg-deb --build "$b" "$b.deb" >/dev/null
+      sudo dpkg --install "$b.deb"
+    version_body: "dpkg-query -W -f='${Version}' pcsw-uat-drift"
+    authored_at: "2026-08-01T00:00:00+00:00"
+    authored_on: pc1
+  "unreproducible:snap-sideload:pcsw-uat-snapdrift":
+    label: pcsw-uat-snapdrift
+    install_body: |
+      set -eu
+      d=/var/tmp/pcsw-uat-snapdrift
+      sudo mkdir -p "$d/meta"
+      printf "name: pcsw-uat-snapdrift\nversion: '2.0'\nsummary: pc-switcher UAT sideload\ndescription: A snap installed from local bytes.\nbase: core20\nconfinement: strict\ngrade: stable\n" | sudo tee "$d/meta/snap.yaml" >/dev/null
+      sudo snap try "$d"
+    version_body: "snap list pcsw-uat-snapdrift | awk 'NR==2 {print $2}'"
+    authored_at: "2026-08-01T00:00:00+00:00"
+    authored_on: pc1
+YAML
 
 # mark-side: an apt.conf.d file both machines have, with different content
 printf 'APT::Install-Recommends "false";\n' | sudo tee /etc/apt/apt.conf.d/99-pcsw-uat >/dev/null
@@ -130,6 +173,8 @@ Each pair of jobs decides its boundary by one shared rule, so a finding claimed 
 - `snap_sync` names `pcsw-uat-snap` and `pcsw-uat-snapdrift` nowhere, and says nothing about a hold on either.
 - `flatpak_sync` names `io.github.fragglet.sdl_sopwith` nowhere and derives no remote for it — in particular it does not try to add a remote with an empty URL.
 
+`snap_sync` and `flatpak_sync` therefore have nothing of their own to do in this run and must report `success`, not `skipped`: a review holding nothing to decide is the goal already met. `apt_sync`'s only item is the `apt.conf.d` file of §3.6.
+
 ### 3.2 The seven reviews
 
 The jobs run in the order the config lists them — apt, snap, flatpak, manual_deb, manual_snap, manual_flatpak, manual_installs, then the folder mirror — and each one's questions come before the next one plans.
@@ -137,11 +182,18 @@ The jobs run in the order the config lists them — apt, snap, flatpak, manual_d
 - Each of the four snippet jobs puts its own review. A job's findings never appear in another's.
 - The group offering software pc2 cannot get is titled `pc1 has these and no package manager can reproduce them on pc2 (<manager>)`, where `<manager>` is `manual_deb`, `manual_snap`, `manual_flatpak` or `manual`.
 - The group for an item both machines have at different versions is titled `pc1 and pc2 have these at different versions (<manager>)`.
-- **Check the removal group titles.** They are built from the internal manager id and default to the noun "packages", so `manual_installs_sync`'s removal of `/opt/pcsw-uat-orphan` is expected to read `Remove manual packages` — wrong about both words for a path deletion, and wrong about the noun for `manual_flatpak`, which syncs applications. Record the exact strings you see; this is a finding, not a pass.
+- **The removal group titles are a confirmed finding, not a pass.** They are built from the internal manager id and default to the noun "packages". A dry run on these fixtures prints `Remove manual packages` for the `/opt/pcsw-uat-orphan` path deletion — wrong about both words — and `Remove manual_deb packages`, which leaks an internal id at the user. `manual_flatpak` would say "packages" where flatpak says "applications". Confirm the strings on your run and record them.
+
+The group titles that ARE right, and worth confirming read well on a real terminal:
+
+```plain
+pc1 has these and no package manager can reproduce them on pc2 (manual_deb)
+pc1 and pc2 have these at different versions (manual_snap)
+```
 
 ### 3.3 The two editors
 
-On `Install /opt/pcsw-uat-app on pc2?` answer `<y>` and confirm that **two** editors open in sequence, not one:
+Four items have no recorded snippet and so are asked how to reproduce them, one screen each: `pcsw-uat-deb`, `pcsw-uat-snap`, `io.github.fragglet.sdl_sopwith/x86_64/stable` and `/opt/pcsw-uat-app`. On `Install /opt/pcsw-uat-app on pc2?` answer `<y>` and confirm that **two** editors open in sequence, not one:
 
 1. `Install-or-update snippet for /opt/pcsw-uat-app:` — its own screen states the install-or-update contract, that the body is replayed onto a machine which may already hold an older version.
 2. `Installed-version snippet for /opt/pcsw-uat-app:` — its own screen states that this one runs on both machines on every sync while the run is still planning, and must be read-only.
@@ -161,7 +213,7 @@ The same screen for the three package-backed jobs asks for both bodies too, even
 
 ### 3.4 Version convergence
 
-Four items drift: `pcsw-uat-drift` (deb), `pcsw-uat-snapdrift` (snap), and `/opt/pcsw-uat-loop` (path). Each is asked on its own screen titled `pc2 has a different version of <item> — update it?`, with exactly three answers and **no** `<x>`:
+Three items reach this screen, one per ecosystem, and they are exactly the three that have a recorded snippet: `pcsw-uat-drift` (deb), `pcsw-uat-snapdrift` (snap) and `/opt/pcsw-uat-loop` (path). Each is asked on its own screen titled `pc2 has a different version of <item> — update it?`, with exactly three answers and **no** `<x>`:
 
 - `<y> update` — `run the recorded snippet on pc2`
 - `<w> new snippet` — `rewrite the snippet first, then run it on pc2`
