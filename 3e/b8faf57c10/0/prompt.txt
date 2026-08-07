@@ -1,0 +1,1 @@
+replace AGENTS.md by a symlink to CLAUDE.md
