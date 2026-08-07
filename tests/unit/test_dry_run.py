@@ -7,7 +7,7 @@ Tests verify that --dry-run mode:
 
 A dry run is NOT globally exempt from SKIPPED. A package job whose plan is non-empty raises
 `JobSkipped` on a non-interactive run whatever `--dry-run` says (`packages/sync_core.py`
-`execute()`): D-26 forces every item to skip-once when nobody is present to decide, so the
+`execute()`): `PKG-FR-NO-TERMINAL` forces every item to skip-once when nobody is present to decide, so the
 run has nothing to preview and says so rather than reporting a success it did not rehearse.
 
 Reference: GitHub issue #37

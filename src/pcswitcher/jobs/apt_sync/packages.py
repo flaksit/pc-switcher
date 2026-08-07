@@ -2,11 +2,12 @@
 each may run at all.
 
 The chain's ORDER is the load-bearing part, so it is written once, here, in the order it must
-run: a derived file that never landed refuses the install before any command at all (D-39,
-cheapest and most specific); then the run's single `apt-get update`; then the origin read-back
-(D-35, one cached lookup); then the transaction simulation and the collateral guard (D-30, one
-command). Each step is stated as its own early return so the sequence is readable as a
-sequence rather than inferred from nesting.
+run: a derived file that never landed refuses the install before any command at all
+(`PKG-FR-DERIVED-FAILURE`, cheapest and most specific); then the run's single `apt-get update`;
+then the origin read-back (`PKG-FR-APT-ORIGIN-VERIFY`, one cached lookup); then the transaction
+simulation and the collateral guard (`PKG-FR-COLLATERAL-MANUAL`, one command). Each step
+is stated as its own early return so the sequence is readable as a sequence rather than
+inferred from nesting.
 """
 
 from __future__ import annotations
@@ -87,9 +88,9 @@ class MetadataRefresh:
 
 
 class PackageConverger:
-    """One package per invocation (D-27) so a single bad package cannot fail the whole batch,
+    """One package per invocation (`PKG-FR-OUTCOME-FAILED`) so a single bad package cannot fail the whole batch,
     and so each package's simulation corresponds exactly to the command that follows it. The
-    target resolves dependencies and downloads from its own repos (D-28) — no source cache is
+    target resolves dependencies and downloads from its own repos (`PKG-FR-VERSION-FLOAT`) — no source cache is
     consulted.
     """
 
@@ -132,7 +133,7 @@ class PackageConverger:
         self, diff: ItemDiff, diffs: Sequence[ItemDiff], decisions: Mapping[str, Decision]
     ) -> CommandResult:
         """Simulate, then apply, one apt install — the last line of defence behind the
-        plan-time collateral classification (D-30). Auto-installed collateral (a package
+        plan-time collateral classification (`PKG-FR-COLLATERAL-MANUAL`). Auto-installed collateral (a package
         apt pulls in that `Collateral.protected` does not cover) proceeds silently but is
         logged. A protected package's collateral removal, downgrade or upgrade is refused
         unless the user approved it in the review; the decision was made at plan time,
@@ -174,7 +175,7 @@ class PackageConverger:
     ) -> CommandResult:
         """`install`'s guard chain and command, without the outcome bookkeeping."""
         # A derived `/etc/apt` write this package needed and that failed refuses it first
-        # (D-39), before any command at all: the file is named, which the origin check could
+        # (`PKG-FR-DERIVED-FAILURE`), before any command at all: the file is named, which the origin check could
         # only say the consequence of.
         blocked = self._derived.install_refusal(diff.item_id, name)
         if blocked is not None:
@@ -223,7 +224,7 @@ class PackageConverger:
                 name=name,
                 refusal=(
                     f"install of {name} refused: apt-get --dry-run would {effects}, "
-                    "which was not approved as collateral in this run (D-30)"
+                    "which was not approved as collateral in this run (`PKG-FR-COLLATERAL-MANUAL`)"
                 ),
             )
 
@@ -276,7 +277,7 @@ class PackageConverger:
         self, diff: ItemDiff, diffs: Sequence[ItemDiff], decisions: Mapping[str, Decision]
     ) -> CommandResult:
         """Simulate, then apply, one apt remove — the same last line of defence the
-        install guard is (D-30). A collateral removal of an auto-installed package proceeds
+        install guard is (`PKG-FR-COLLATERAL-MANUAL`). A collateral removal of an auto-installed package proceeds
         and is logged: removing a package legitimately removes the now-orphaned dependencies
         apt pulled in for it. A collateral change to a package `Collateral.protected` covers
         goes through only where it was itself an approved removal this run or was approved as
@@ -305,7 +306,8 @@ class PackageConverger:
                 name=name,
                 refusal=(
                     f"removal of {name} refused: apt-get --dry-run would also {effects}, "
-                    "which was neither an approved removal nor approved as collateral in this run (D-30)"
+                    "which was neither an approved removal nor approved as collateral in this run "
+                    "(`PKG-FR-COLLATERAL-MANUAL`)"
                 ),
             )
 
@@ -321,7 +323,7 @@ class PackageConverger:
         for the add direction (INSTALL), `apt-mark unhold` for the remove direction
         (REMOVE). Selection state only — no `apt-get --dry-run` simulation and no transaction
         guard (a hold changes nothing about the installed package set, D4). The command's
-        exit code alone decides pass/fail (D-27); a hold on an unknown package that
+        exit code alone decides pass/fail (`PKG-FR-OUTCOME-FAILED`); a hold on an unknown package that
         `apt-mark` rejects is a normal per-item failure (D6), not a gated abort.
 
         A hold whose package this run did not put on the target is refused before any command

@@ -1,4 +1,5 @@
-"""The `/etc/apt` files that travel with no review line of their own (D-37/D-38/D-39).
+"""The `/etc/apt` files that travel with no review line of their own
+(`PKG-FR-REPO-DERIVED`/`PKG-FR-DISTRO-FILES`/`PKG-FR-DERIVED-FAILURE`).
 
 Split out of the former single `test_apt_sync.py`.
 """
@@ -32,13 +33,13 @@ from tests.unit.jobs.apt.helpers import (
 
 class TestPinsStillTravelAsFiles:
     """The echo was a REPORT about pins, never the mechanism. A `preferences.d` file is
-    what makes a vendor's origin outrank the archive's epoch-1 copy (D-36), so it has to
+    what makes a vendor's origin outrank the archive's epoch-1 copy (`PKG-FR-PIN-ALWAYS`), so it has to
     keep reaching the target — deleting the echo must not touch that.
     """
 
     @pytest.mark.asyncio
     async def test_a_pin_file_the_target_lacks_is_written_with_no_review_line(self) -> None:
-        """C105, C108, H51 — the always-sync bucket (D-36): the reviewer is handed nothing at all,
+        """C105, C108, H51 — the always-sync bucket (`PKG-FR-PIN-ALWAYS`): the reviewer is handed nothing at all,
         and the pin still lands. This target has no repository at all, so the origin the pin
         names is one it does not have: inert, which is why always-sync cannot get a
         derivation wrong — and it is what makes Mozilla's build outrank the archive's epoch-1
@@ -109,7 +110,7 @@ class TestPinsStillTravelAsFiles:
 
 
 class TestARepositoryTravelsOnlyForAnApprovedInstall:
-    """D-37's rule read backwards: a repository file travels BECAUSE a package approved from
+    """`PKG-FR-REPO-DERIVED`'s rule read backwards: a repository file travels BECAUSE a package approved from
     it does, so an install nobody approved makes nothing travel — and there is no separate
     control the user could have ticked instead.
     """

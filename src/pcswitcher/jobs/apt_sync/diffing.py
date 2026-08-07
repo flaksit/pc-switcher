@@ -1,6 +1,6 @@
-"""Every diff this job produces — the whole of D-25 as apt expresses it.
+"""Every diff this job produces — the whole diff-class taxonomy as apt expresses it.
 
-This is apt's own, not the base class's (D-15): while the package diff lived on
+This is apt's own, not the base class's (`PKG-FR-JOB-INDEPENDENCE`): while the package diff lived on
 `PackageSyncJob`, the other three managers inherited hold sets, pin facts and no-candidate
 ids they never fill in, and each wrote its own diff anyway — because what a diff even IS
 differs per ecosystem. `packages/items.py` keeps the taxonomy every manager is keyed on.
@@ -84,12 +84,12 @@ def diff_apt_packages(  # noqa: PLR0913 - both sides' items plus their hold and 
     `apt:hold:` diff nobody is asked about. A hold naming a package the target does not have
     cannot reach here: `PKG-FR-HOLD-WITHOUT-PACKAGE` ends the run over it while planning.
     A PINNED package gets no echo of any kind: a pin's only job is
-    deciding which origin wins, which D-35 checks against the target's real post-refresh
+    deciding which origin wins, which `PKG-FR-APT-ORIGIN-VERIFY` checks against the target's real post-refresh
     state instead of guessing at it here. Otherwise:
 
     - missing-on-target -> `MISSING_ON_TARGET`/`INSTALL` when the source's origin either
       already serves the target or can be made to (`OriginPlan.outcome`), else
-      `REPO_UNAVAILABLE`/`REPORT_ONLY`. This is ADR-020 D-34: the package a target could
+      `REPO_UNAVAILABLE`/`REPORT_ONLY`. This is `PKG-FR-APT-IDENTITY`: the package a target could
       satisfy from a DIFFERENT vendor is still an install, but one that carries the source's
       repository with it, and the review line names where it will come from.
     - extra-on-target -> `EXTRA_ON_TARGET`/`REMOVE`.
@@ -97,7 +97,7 @@ def diff_apt_packages(  # noqa: PLR0913 - both sides' items plus their hold and 
       checked BEFORE the version comparison: two vendors' copies of one name have no common
       version scale, so "source has X, target has Y" would report a difference of degree
       where the real difference is of origin.
-    - present on both with differing versions -> `VERSION_MISMATCH`/`REPORT_ONLY` (D-04:
+    - present on both with differing versions -> `VERSION_MISMATCH`/`REPORT_ONLY` (`PKG-FR-VERSION-FLOAT`:
       reported, never force-downgraded).
     - present on both, same vendor, same version -> no diff at all.
 
@@ -283,7 +283,7 @@ async def diff_apt_pins(
     """Pin-file diffs — the REMOVAL direction only — plus each offered file's content.
 
     A pin the source has is written to the target when missing and overwritten when
-    different, with no review line at all (ADR-020 D-36): a pin is what makes an origin win,
+    different, with no review line at all (`PKG-FR-PIN-ALWAYS`): a pin is what makes an origin win,
     in the same sense a signing key is what makes a repository trusted, and neither is
     something an approved package leaves the user a basis to judge. A pin naming an origin
     the target does not have is inert, so the always-sync rule cannot get the derivation
@@ -347,7 +347,7 @@ async def diff_apt_sources(
     machines: Machines,
     in_use: frozenset[str] = frozenset(),
 ) -> list[ItemDiff]:
-    """Source-file diffs — the REMOVAL direction only (ADR-020 D-37).
+    """Source-file diffs — the REMOVAL direction only (`PKG-FR-REPO-DELETE`).
 
     Adding a repository is not a question. A source file lands on the target because a
     package approved on the review comes from it, so "package ticked, its repository
@@ -368,7 +368,7 @@ async def diff_apt_sources(
     machine would stop getting software from. They cost nothing — the file is already read
     here for its format, and `parse_source_file` returns the URIs from the same parse.
 
-    The distribution's own files are excluded outright (D-38): they are written and
+    The distribution's own files are excluded outright (`PKG-FR-DISTRO-FILES`): they are written and
     updated but never removed, so a target that has `ubuntu.sources` and a source that
     somehow does not must not turn into an offer to delete the target's archive.
     """
@@ -413,7 +413,7 @@ def metadata_refresh_diff() -> ItemDiff:
 def collateral_diff(
     name: str, detail: str, *, cause: str, act_word: str = "resolve", answer_hints: tuple[str, str] | None = None
 ) -> ItemDiff:
-    """One manual-collateral item (D-30): a package the TARGET's apt has marked manually
+    """One manual-collateral item (`PKG-FR-COLLATERAL-MANUAL`): a package the TARGET's apt has marked manually
     installed that the pending transaction would remove or downgrade. Stays `REPORT_ONLY` so
     `apply()` never converges it directly — its decision governs the changes that cause it,
     not itself.

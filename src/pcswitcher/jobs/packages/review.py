@@ -1,4 +1,4 @@
-"""Batched review — the single interaction surface for every package diff (D-24).
+"""Batched review — the single interaction surface for every package diff (`PKG-FR-BATCHED`).
 
 Each package job computes its own set of differences against the source's manifest and hands
 them to `review_items` as `ReviewGroup`s before applying anything. The user answers one
@@ -10,16 +10,16 @@ Nothing is echoed afterwards — the answered list stays in the scrollback, and 
 column is the record. That also removes the Rich panel that used to precede each screen:
 the control lists the items itself, so a panel above it said everything twice. The panel
 survives where there is nothing to answer: a report group, and the whole non-interactive
-path (D-26), where it IS the report.
+path (`PKG-FR-NO-TERMINAL`), where it IS the report.
 
-This composes with the single persistent Live display (Phase 1 plans 01-17/01-18) exactly
+This composes with the single persistent Live display exactly
 as `TerminalUIConfirmer.confirm` (`pcswitcher.confirmer`) does: pause the live region before
 the prompt, run the blocking prompt off the event loop via `asyncio.to_thread` (ADR-005 —
 no blocking calls on the event loop), and resume it in a `finally` so the terminal is always
 handed back even if the prompt raises.
 
-Removals get their own group, never sharing a screen with installs (D-07/D-24): a bulk
-confirm that also deleted software would be exactly the silent-destruction failure D-07
+Removals get their own group, never sharing a screen with installs (`PKG-FR-SKIP-ONCE`/`PKG-FR-BATCHED`): a bulk
+confirm that also deleted software would be exactly the silent-destruction failure `PKG-FR-SKIP-ONCE`
 exists to prevent, which is also why a removal-direction row starts at skip-once while an
 install-direction row starts applied. A group whose change replaces content the target's
 own user wrote starts at skip-once too (`ReviewGroup.overwrites_authored_content`). Which
@@ -30,14 +30,14 @@ input.
 
 `ask_gate` is the one question here that is NOT a review item: a two-answer yes/no about the
 target's environment, asked before any group is built, whose "no" answer means there is no
-review to hold (`apt_sync`'s Ubuntu Pro gate, ADR-020 D-38). It lives here because this
+review to hold (`apt_sync`'s Ubuntu Pro gate, `PKG-FR-DISTRO-FILES`). It lives here because this
 module already owns pause-the-live-UI-ask-resume, interactivity detection and the
 Ctrl-C-aborts-the-sync rule; it returns `None` when nobody could be asked, and the caller
 owns what that means.
 
-D-07's three answers are all on the one screen for an actionable group (install / change /
+`PKG-FR-SKIP-ONCE`'s three answers are all on the one screen for an actionable group (install / change /
 remove direction): apply, skip now, or skip for good —
-treat the item as specific to one machine, which makes it inert here in both roles (D-08a).
+treat the item as specific to one machine, which makes it inert here in both roles (`PKG-FR-MACHINE-SPECIFIC`).
 Those are the decisions; what each screen CALLS them is `_options_for` and the hints beside
 them, which say the act, the machine it happens to, and how long the answer lasts.
 
@@ -57,13 +57,13 @@ holds an informational item, so `_print_report_group` prints it and the review m
 `PACKAGE_REVIEW_AUTOMATION_ENV`: undocumented escape hatch for integration tests, which run
 without a TTY and cannot drive a real terminal prompt. When set, its value is trusted JSON
 (no schema validation) mapping item_id -> decision, applied instead of prompting. It never
-widens what the review offers (D-25 items are still exactly what the caller passed in) and
-is deliberately absent from `--help` and the config schema (D-26, `PKG-NG-AUTOMATION-ENV`), so
+widens what the review offers (items are still exactly what the caller passed in) and
+is deliberately absent from `--help` and the config schema (`PKG-FR-NO-TERMINAL`, `PKG-NG-AUTOMATION-ENV`), so
 nothing offers it as a way of running the tool. It is named in the docs as an accepted cost,
 because its answers count as the user's own: a permanent one writes a machine-specific mark.
 
 A `ReviewGroup` whose `action` is `UNREPRODUCIBLE_REVIEW_ACTION` gets a different
-interaction shape from every other group (D-21): instead of a row on a decision screen, each
+interaction shape from every other group (`PKG-FR-MANUAL-RESOLUTION`): instead of a row on a decision screen, each
 entry is resolved one at a time with a three-way choice — write the commands that install
 it, mark it as belonging to the source machine alone, or skip for now — because "should this
 apply" is not the question for an item no package manager can reproduce; "how does the other
@@ -74,10 +74,10 @@ every entry (decision 10): an empty snippet capture re-prompts rather than falli
 to an "unresolved" state, and Ctrl-C anywhere in the review aborts the whole sync
 (`SyncAbortedByUser`) rather than skipping items. `ReviewOutcome.unresolved` is therefore
 populated only on the non-interactive path, where it reports (never fails) the items no
-one was present to resolve (D-26).
+one was present to resolve (`PKG-FR-NO-TERMINAL`).
 
 A `ReviewGroup` whose `action` is `REPO_REMOVAL_REVIEW_ACTION` uses the same screen with one
-fewer answer (ADR-020 D-07): delete, or leave it for now. It starts at skip-once like every
+fewer answer (`PKG-FR-SKIP-ONCE`): delete, or leave it for now. It starts at skip-once like every
 other removal direction and is never offered permanence, so `Decision.SKIP_ALWAYS` is
 unreachable for it and nothing about it is ever recorded. That is why `_REMOVAL_ACTIONS` and
 `_PROMOTABLE_ACTIONS` are two independent sets rather than one derived from the other. An
@@ -85,7 +85,7 @@ entry carrying `ReviewEntry.content` prints that whole file first: a pin file's 
 nothing about what it does, and its name is all a decision row can show.
 
 A `ReviewGroup` whose `action` is `REPO_CONFLICT_REVIEW_ACTION` is the same two-answer screen
-(ADR-020 D-37) preceded by its own content: something that differs on the two machines and
+(`PKG-FR-REPO-CONFLICT`) preceded by its own content: something that differs on the two machines and
 feeds an item the target recorded machine-specific — a repository file for `apt_sync`, a
 remote for `flatpak_sync` — is printed as both versions, never a unified diff, before the one
 screen that answers overwrite or skip-once for all of them. Nothing is recorded either way,
@@ -101,7 +101,7 @@ machines' records disagreeing about a snap neither would raise again
 (`PKG-FR-NO-MARK-ON-SNAP-REVISION`). Apply or skip-once, and nothing recorded either way.
 
 A `ReviewGroup` whose `action` is `COLLATERAL_REVIEW_ACTION` likewise gets its own
-interaction shape (D-30): each entry is a package the TARGET protects — its own apt has it
+interaction shape (`PKG-FR-COLLATERAL-MANUAL`): each entry is a package the TARGET protects — its own apt has it
 marked manually installed, or that machine marked it machine-specific — that the pending
 transaction would remove, downgrade or upgrade, resolved one at a time with a three-way
 choice — apply, keep the package, or stop the whole sync. The decision
@@ -109,7 +109,7 @@ is recorded against the entry's `item_id` (the triggering change, set by the cal
 "apply" proceeds with it, "keep" leaves it unapproved, and "stop" raises
 `SyncAbortedByUser` naming the collateral package. A non-interactive run leaves every
 collateral entry `SKIP_ONCE` like every other item, so the change it gates is simply not
-approved (D-26).
+approved (`PKG-FR-NO-TERMINAL`).
 
 Every screen here names the two machines by hostname. `review_items` takes both and they
 are required: what an answer costs is "nomad loses this package", never "the target loses
@@ -171,13 +171,13 @@ __all__ = [
 
 _logger = logging.getLogger("pcswitcher.jobs.packages.review")
 
-# Undocumented on purpose (D-26): lets integration tests answer a review without a TTY.
+# Undocumented on purpose (`PKG-FR-NO-TERMINAL`): lets integration tests answer a review without a TTY.
 # Never mentioned in --help, the config schema, or docs/configuration.md.
 PACKAGE_REVIEW_AUTOMATION_ENV = "PCSWITCHER_PACKAGE_REVIEW_AUTOMATION"
 
 # Sentinel `ReviewGroup.action` a caller (today, only `AptSyncJob`) uses to mark a group of
 # `/etc/apt` repository or pin DELETIONS as taking only two answers — delete, or leave it
-# for now (ADR-020 D-07). Unlike the other two sentinels this needs no
+# for now (`PKG-FR-SKIP-ONCE`). Unlike the other two sentinels this needs no
 # per-entry flow: it renders as an ordinary decision screen starting at skip-once, and the
 # whole difference is that the third answer is absent from it. A permanent machine-local
 # mark on a file whose entire purpose is to feed packages would silently and permanently
@@ -187,7 +187,7 @@ PACKAGE_REVIEW_AUTOMATION_ENV = "PCSWITCHER_PACKAGE_REVIEW_AUTOMATION"
 # separate screens with separate titles.
 REPO_REMOVAL_REVIEW_ACTION = "repo_removal"
 
-# Canonical removal-direction action values (D-07's "remove/delete/disable" family). Any
+# Canonical removal-direction action values (`PKG-FR-SKIP-ONCE`'s "remove/delete/disable" family). Any
 # `ReviewGroup.action` outside this set is treated as install-direction (starting applied)
 # — covers "install"/"add"/"enable" as well as "change" (converging an existing item to
 # match the source is not the destructive branch a bulk confirm must guard against).
@@ -195,11 +195,11 @@ _REMOVAL_ACTIONS = frozenset({"remove", "delete", "disable", REPO_REMOVAL_REVIEW
 
 # `ReviewGroup.action` values whose items carry a converge verb AND may be recorded
 # machine-specific, and are therefore the only ones whose screen offers the third answer
-# (D-07).
+# (`PKG-FR-SKIP-ONCE`).
 #
 # Enumerated independently of `_REMOVAL_ACTIONS` rather than derived from it: "starts at
 # skip-once" and "is offered permanence" are two different questions about a group, and
-# ADR-020 D-07's two-answer screens answer them differently — `REPO_REMOVAL_REVIEW_ACTION`
+# `PKG-FR-SKIP-ONCE`'s two-answer screens answer them differently — `REPO_REMOVAL_REVIEW_ACTION`
 # is in the first set and deliberately absent from this one.
 _PROMOTABLE_ACTIONS = frozenset({"install", "add", "enable", "change", "remove", "delete", "disable"})
 
@@ -217,14 +217,15 @@ _REPORT_ACTION = "report_only"
 _TRAILING_PARENTHETICAL = re.compile(r"\s*\([^()]*\)$")
 
 # Sentinel `ReviewGroup.action` a caller (today, only `AptSyncJob`) uses to mark a group
-# of unreproducible items (D-18/D-21) as needing the three-way per-entry resolution flow
+# of unreproducible items (`PKG-FR-MANUAL-SCOPE`/`PKG-FR-MANUAL-RESOLUTION`) as needing the three-way per-entry
+# resolution flow
 # below, rather than an ordinary decision screen. Not a `DiffAction` value — this is a
 # `packages.review`-owned interaction kind, independent of the underlying diff's own
-# `action` (which stays `REPORT_ONLY`/`INSTALL` per D-25's taxonomy).
+# `action` (which stays `REPORT_ONLY`/`INSTALL` per the diff-class taxonomy).
 UNREPRODUCIBLE_REVIEW_ACTION = "unreproducible"
 
 # The same per-entry flow for an item BOTH machines have at different versions, where the
-# source's registry already holds a body (D-22). Its act replays that body; its second
+# source's registry already holds a body (`PKG-FR-VERSION-SNIPPET`). Its act replays that body; its second
 # answer replaces it first, because a version that will not move is usually a body that no
 # longer installs what its author meant. There is no permanent answer: convergence and
 # skip-for-this-run are the only two ways the loop behind it ends, and "never update this"
@@ -244,7 +245,7 @@ UNREPRODUCIBLE_RETRY_REVIEW_ACTION = "unreproducible_retry"
 _AUTHORING_ACTIONS = frozenset({UNREPRODUCIBLE_REVIEW_ACTION, UNREPRODUCIBLE_RETRY_REVIEW_ACTION})
 
 # Sentinel `ReviewGroup.action` a caller (today, only `AptSyncJob`) uses to mark a group
-# of manual-collateral items (D-30) as needing the three-way per-entry resolution flow
+# of manual-collateral items (`PKG-FR-COLLATERAL-MANUAL`) as needing the three-way per-entry resolution flow
 # below — apply / keep the package / stop the sync — rather than an ordinary decision
 # screen. A manual-collateral item is a package `Collateral.protected` covers that the
 # pending transaction would remove, downgrade or upgrade; whether to lose it is not
@@ -257,7 +258,7 @@ _AUTHORING_ACTIONS = frozenset({UNREPRODUCIBLE_REVIEW_ACTION, UNREPRODUCIBLE_RET
 COLLATERAL_REVIEW_ACTION = "collateral"
 
 # Sentinel `ReviewGroup.action` for the one `/etc/apt` CHANGE that is still a question
-# (ADR-020 D-37): a repository file present on both machines with different content that
+# (`PKG-FR-REPO-CONFLICT`): a repository file present on both machines with different content that
 # feeds a package the target recorded machine-specific. Every other change overwrites
 # silently, because the user asked for the two machines to match; this one cannot, because
 # overwriting it moves software the user explicitly told this tool to leave alone.
@@ -285,7 +286,7 @@ class ReviewEntry:
     02-03 introduces. Plan 02-05 adapts `ItemDiff` onto this shape.
 
     `versions` carries `(the target's current content, the source's content)` for the one
-    screen that shows two whole files side by side instead of a detail line (ADR-020 D-37's
+    screen that shows two whole files side by side instead of a detail line (`PKG-FR-REPO-CONFLICT`'s
     repository conflict). Optional and defaulted so every other construction site — and
     every other screen — is unaffected; a unified diff is deliberately not the shape.
 
@@ -347,7 +348,7 @@ class ReviewGroup:
 
     `recorded_bodies` is what the snippet registry already holds for these entries, so an
     answer that rewrites a snippet opens its editors on that content instead of on nothing
-    (D-22). Only the two groups whose items HAVE a recorded snippet supply it; this module
+    (`PKG-FR-VERSION-SNIPPET`). Only the two groups whose items HAVE a recorded snippet supply it; this module
     never reads a registry itself, exactly as it never reads a repository file.
     """
 
@@ -361,12 +362,12 @@ class ReviewGroup:
 
 
 class Decision(StrEnum):
-    """The three-way outcome D-07 requires for every reviewed item."""
+    """The three-way outcome `PKG-FR-SKIP-ONCE` requires for every reviewed item."""
 
     APPLY = "apply"
     SKIP_ONCE = "skip_once"
     # "Treat this item as specific to this machine": it goes inert here in BOTH roles
-    # (D-08a), so it is neither pushed from here nor converged onto here. The sentence the
+    # (`PKG-FR-MACHINE-SPECIFIC`), so it is neither pushed from here nor converged onto here. The sentence the
     # user reads beside this answer says the consequence — they will not be asked again
     # (`PKG-FR-EFFECT-NOT-MECHANISM`) — because "pc-switcher stops touching the item" is
     # the machinery, and what it costs to choose permanence is what a permanent answer has
@@ -380,7 +381,7 @@ class MarkSide(StrEnum):
     A conflicting item is one both machines have with different content, and it is the one
     case where the run's own direction cannot name the holding machine: either copy can be
     the one the user means to keep, and the machine that recorded the mark takes the other
-    role as soon as the next sync is launched from the other end (D-08a). So the user says
+    role as soon as the next sync is launched from the other end (`PKG-FR-MACHINE-SPECIFIC`). So the user says
     which, and `BOTH` is a real answer rather than a hedge — it records on each machine, so
     the answer survives either machine losing its copy (`PKG-FR-MARK-LIFETIME`).
 
@@ -397,10 +398,11 @@ class MarkSide(StrEnum):
 class ReviewOutcome:
     """The result of a review: every entry's decision, plus how it was reached.
 
-    `snippets` (item_id -> both bodies, D-20/D-22) is populated by any of the three per-entry
-    snippet groups' resolutions. `unresolved` (item ids, D-21) is populated ONLY on a
+    `snippets` (item_id -> both bodies, `PKG-FR-SNIPPET-VERBATIM`/`PKG-FR-VERSION-SNIPPET`) is populated by any of the
+    three per-entry
+    snippet groups' resolutions. `unresolved` (item ids, `PKG-FR-MANUAL-RESOLUTION`) is populated ONLY on a
     non-interactive run, listing the unreproducible items no one was present to resolve
-    (D-26 reporting); an interactive review always resolves every entry (decision 10), so
+    (`PKG-FR-NO-TERMINAL` reporting); an interactive review always resolves every entry (decision 10), so
     it leaves `unresolved` empty. Every other group leaves both at their empty defaults, so
     callers constructing a `ReviewOutcome` by hand (tests, and `PackageSyncJob.apply()`'s
     decision handling) are unaffected.
@@ -577,10 +579,10 @@ def policy_decision(group: ReviewGroup, policy: ReviewPolicy) -> Decision | None
     - report-only, which nobody answers at all (`asks_for_a_decision`);
     - `overwrites_authored_content` — today an `/etc/apt/apt.conf.d` file the target already
       holds, which states how the user's own apt behaves on that machine;
-    - a repository conflict (D-37), which moves where software the target recorded
+    - a repository conflict (`PKG-FR-REPO-CONFLICT`), which moves where software the target recorded
       machine-specific comes from;
-    - an unreproducible item still to be resolved (D-21), and the narrowed menu the converge
-      loop puts after a body that changed no version (D-22): the only answers either offers
+    - an unreproducible item still to be resolved (`PKG-FR-MANUAL-RESOLUTION`), and the narrowed menu the converge
+      loop puts after a body that changed no version (`PKG-FR-VERSION-SNIPPET`): the only answers either offers
       are an authored shell body and a skip, and no flag can write one.
 
     A version difference whose body the source already holds is NOT in that list: replaying
@@ -589,7 +591,7 @@ def policy_decision(group: ReviewGroup, policy: ReviewPolicy) -> Decision | None
     then does with nobody to ask is its own rule — one attempt, then a warning.
 
     Everything else is one of the two directions. Removal covers `remove`/`delete`/`disable`,
-    a repository or pin deletion, and the collateral question (D-30) — a protected package an
+    a repository or pin deletion, and the collateral question (`PKG-FR-COLLATERAL-MANUAL`) — a protected package an
     approved transaction would lose is a loss on the target, so it is the removal flag that
     speaks for it. Install-direction is the remainder: `install`/`add`/`enable`, and `change`,
     which converges an item both machines have to the source's version.
@@ -622,7 +624,7 @@ def _answer_by_policy(
 
     What is left over is handed to the ordinary path rather than declined here, so a flag
     changes nothing about a group it does not answer: on a terminal the user is still asked,
-    and without one the entries are still named in a warning and skipped for this run (D-26).
+    and without one the entries are still named in a warning and skipped for this run (`PKG-FR-NO-TERMINAL`).
 
     A `policy` of `None`, or one with no flag in force, answers nothing and returns `groups`
     untouched — which is what makes a run without the flags identical to one before they
@@ -705,7 +707,7 @@ def _hints(group: ReviewGroup, source_hostname: str, target_hostname: str) -> tu
 
 
 def _options_for(group: ReviewGroup, *, source_hostname: str, target_hostname: str) -> tuple[DecisionOption, ...]:
-    """The answers one group's screen offers — three, or two where D-07 records nothing.
+    """The answers one group's screen offers — three, or two where `PKG-FR-SKIP-ONCE` records nothing.
 
     The same widget either way: the user sees a missing option in the legend rather than a
     differently-shaped prompt.
@@ -772,7 +774,7 @@ def _snippet_authoring_note(target_hostname: str) -> str:
     discover as a stuck sync. Said as what happens on the machine that will run it, rather
     than as a fact about the executor.
 
-    It states the install-or-update contract too (D-22): the body is replayed onto a machine
+    It states the install-or-update contract too (`PKG-FR-VERSION-SNIPPET`): the body is replayed onto a machine
     that may already hold an older version, and an installer that no-ops over an existing
     tree is the one failure the run cannot fix on the author's behalf.
     """
@@ -788,7 +790,7 @@ def _snippet_authoring_note(target_hostname: str) -> str:
 
 def _version_authoring_note(source_hostname: str, target_hostname: str) -> str:
     """The second editor's own screen: what the installed-version snippet has to do, and the
-    one obligation pc-switcher cannot check for the author (D-22, `PKG-FR-VERSION-SNIPPET`).
+    one obligation pc-switcher cannot check for the author (`PKG-FR-VERSION-SNIPPET`, `PKG-FR-VERSION-SNIPPET`).
 
     Both machines are named because it runs on both, every sync, while the run is still
     planning — which is also why it must be read-only and why it is not covered by
@@ -876,7 +878,7 @@ def _bare_item_name(label: str) -> str:
 
 def _render_group_panel(group: ReviewGroup) -> Panel:
     """Build the REPORT panel for one group — the non-interactive path only, where there is
-    nothing to answer and this is all the user gets (D-26).
+    nothing to answer and this is all the user gets (`PKG-FR-NO-TERMINAL`).
 
     An interactive run never prints it: the decision screen lists the same items, and a
     panel above it made every group appear twice.
@@ -935,7 +937,7 @@ _NEW_SNIPPET_KEY = "w"
 def _unreproducible_options(
     source_hostname: str, target_hostname: str, verb: str = "install"
 ) -> tuple[DecisionOption, ...]:
-    """The three answers for an item this run cannot reproduce yet (D-21).
+    """The three answers for an item this run cannot reproduce yet (`PKG-FR-MANUAL-RESOLUTION`).
 
     In the review's own order — act, skip now, never — so the keys mean here what they mean
     on every other screen, and the act is the one that resolves the item rather than the one
@@ -943,7 +945,7 @@ def _unreproducible_options(
 
     `verb` is the entry's own, because the same screen resolves two cases: software
     `target_hostname` does not have, which is installed, and software it has at another
-    version, which is updated (D-22). Calling the second one "install" would state something
+    version, which is updated (`PKG-FR-VERSION-SNIPPET`). Calling the second one "install" would state something
     false about what is on the machine.
     """
     return (
@@ -975,7 +977,7 @@ def _unreproducible_options(
 
 
 def _update_options(target_hostname: str) -> tuple[DecisionOption, ...]:
-    """The three answers for an item both machines have at different versions (D-22).
+    """The three answers for an item both machines have at different versions (`PKG-FR-VERSION-SNIPPET`).
 
     No permanent answer, for `PKG-FR-NO-MARK-ON-SNAP-REVISION`'s reason one ecosystem over:
     nobody holds a version as a standing preference about one machine, and a mark would
@@ -1009,7 +1011,7 @@ def _update_options(target_hostname: str) -> tuple[DecisionOption, ...]:
 
 
 def _retry_options(target_hostname: str) -> tuple[DecisionOption, ...]:
-    """The narrowed menu after a snippet ran and moved no version (D-22).
+    """The narrowed menu after a snippet ran and moved no version (`PKG-FR-VERSION-SNIPPET`).
 
     Two answers, because the third has just been carried out and did nothing: replaying the
     same bytes again is the same no-op, and offering it would invite a loop with no exit.
@@ -1085,13 +1087,13 @@ async def _capture_body(prompt_title: str, note: str, existing: str) -> str:
     (#236).
 
     `existing` prefills the buffer, which is what makes rewriting a recorded body an edit
-    rather than a retype (D-22): the body that did not converge is usually nearly right, and
+    rather than a retype (`PKG-FR-VERSION-SNIPPET`): the body that did not converge is usually nearly right, and
     a blank editor invites a shorter, worse replacement. The empty string is an ordinary
     value here — a first authoring simply opens on nothing.
 
     Stripped once, here, before anything else sees it: the registry, the plan and the replay
     all get the same string, so what the user reads in the YAML file is exactly what runs
-    (`PKG-FR-SNIPPET-VERBATIM`). That is not reasoning about the body (D-20) — the editor's
+    (`PKG-FR-SNIPPET-VERBATIM`). That is not reasoning about the body (`PKG-FR-SNIPPET-VERBATIM`) — the editor's
     own trailing newlines and the blank lines a paste leaves behind are not something the
     user typed as part of the command, and they change nothing about what `bash -c` runs.
     """
@@ -1110,7 +1112,7 @@ async def _capture_body(prompt_title: str, note: str, existing: str) -> str:
 async def _capture_bodies(
     entry: ReviewEntry, *, source_hostname: str, target_hostname: str, recorded: SnippetBodies | None
 ) -> SnippetBodies | None:
-    """Both bodies for one item, or `None` where either editor came back empty (D-22).
+    """Both bodies for one item, or `None` where either editor came back empty (`PKG-FR-VERSION-SNIPPET`).
 
     Two editors, always, and never one: an entry carrying only an install body is one the
     registry itself refuses to parse back, so authoring the pair is what authoring means.
@@ -1148,13 +1150,13 @@ async def _review_snippet_group(  # noqa: PLR0913 - screen content plus the two 
     decisions: dict[str, Decision],
     snippets: dict[str, SnippetBodies],
 ) -> None:
-    """Resolve one per-entry snippet group, one item at a time (D-21, D-22).
+    """Resolve one per-entry snippet group, one item at a time (`PKG-FR-MANUAL-RESOLUTION`, `PKG-FR-VERSION-SNIPPET`).
 
     Three groups share this flow because they share its shape — one item per screen, because
     the answer that resolves it opens an editor — and differ only in the answers offered:
 
     - `UNREPRODUCIBLE_REVIEW_ACTION`: write a snippet, skip for now, or never do it here.
-      All three are VALID resolutions (D-21) and there is no fourth "genuinely undecided"
+      All three are VALID resolutions (`PKG-FR-MANUAL-RESOLUTION`) and there is no fourth "genuinely undecided"
       outcome (decision 10 — unresolved must be unrepresentable in an interactive flow).
     - `UNREPRODUCIBLE_UPDATE_REVIEW_ACTION`: run the recorded snippet, rewrite it first, or
       leave the version alone this run. No permanent answer.
@@ -1198,7 +1200,7 @@ async def _review_snippet_group(  # noqa: PLR0913 - screen content plus the two 
             selected = await _ask_about_one_item(entry, title=title, options=options, default=default)
 
             if selected in (Decision.SKIP_ALWAYS, Decision.SKIP_ONCE, Decision.APPLY):
-                # Every one of these is a real decision (D-21): the item is resolved, this
+                # Every one of these is a real decision (`PKG-FR-MANUAL-RESOLUTION`): the item is resolved, this
                 # run or for good.
                 decisions[entry.item_id] = Decision(selected)
                 break
@@ -1239,7 +1241,7 @@ async def _review_decision_group(
 ) -> None:
     """Present one actionable group as a single screen and record every row's answer.
 
-    The whole of D-07 in one pass: each row starts at `_default_decision` and ends wherever
+    The whole of `PKG-FR-SKIP-ONCE` in one pass: each row starts at `_default_decision` and ends wherever
     the user left it, so there is no leftover set to re-offer and no way for a screen asking
     about permanence to echo back an item's action. Every entry gets a decision, because the
     screen carries one per row from the moment it opens.
@@ -1352,7 +1354,7 @@ async def _ask_mark_sides(
     """Ask, once and for all of them, whose own copy each permanently-kept conflicting item
     is (`PKG-FR-MARK-SIDE`).
 
-    One screen, a row per item, three answers per row — the batch D-24 asks for, and what
+    One screen, a row per item, three answers per row — the batch `PKG-FR-BATCHED` asks for, and what
     `decision_list` already supports: it takes any number of options with any values, so
     nothing about the question forces a screen per item. The two other reasons a package
     question is asked one at a time do not apply: no answer here opens an editor, and there
@@ -1404,7 +1406,7 @@ _STOP_SYNC_GLYPH = "■"
 
 
 def _collateral_options(entry: ReviewEntry, target_hostname: str) -> tuple[DecisionOption, ...]:
-    """The three answers D-30 requires for one collateral package.
+    """The three answers `PKG-FR-COLLATERAL-MANUAL` requires for one collateral package.
 
     The act and skip sentences come from the entry (`answer_hints`), because they name the
     change that causes the collateral and what it does — "remove fortunes-min from nomad, so
@@ -1451,7 +1453,7 @@ async def _review_collateral_group(
     decisions: dict[str, Decision],
 ) -> None:
     """Resolve one `COLLATERAL_REVIEW_ACTION` group's entries, one at a time, with the
-    three-way choice D-30 requires for a package the pending transaction would remove,
+    three-way choice `PKG-FR-COLLATERAL-MANUAL` requires for a package the pending transaction would remove,
     downgrade or upgrade behind the user's back: let it happen, protect the package, or
     stop. Never a row on a decision screen — losing a package the user chose to have is not
     the same question as approving an install off a list.
@@ -1552,7 +1554,7 @@ async def _review_repo_conflict_group(
     target_hostname: str,
     decisions: dict[str, Decision],
 ) -> None:
-    """Resolve one `REPO_CONFLICT_REVIEW_ACTION` group with the two-way choice ADR-020 D-37
+    """Resolve one `REPO_CONFLICT_REVIEW_ACTION` group with the two-way choice `PKG-FR-REPO-CONFLICT`
     requires: overwrite the target's version with the source's, or skip for now.
 
     Both versions are printed, the target's first, never a unified diff — the user's own
@@ -1662,7 +1664,7 @@ async def review_items(  # noqa: PLR0913 - review surface plus both machine name
     Non-interactive runs (`is_interactive(console)` is False) prompt for nothing: every
     item comes back `SKIP_ONCE`, nothing is recorded permanently, one warning NAMES each
     item nobody could be asked about (`_warn_every_item_unasked`), and the group panels are
-    printed as the report (D-26).
+    printed as the report (`PKG-FR-NO-TERMINAL`).
     Interactive runs pause `ui` around each group's blocking prompt (dispatched via
     `asyncio.to_thread`) and resume it in a `finally`, so the live display is always handed
     back even if the prompt raises. They print no group panel: the screen lists the items
@@ -1695,7 +1697,7 @@ async def review_items(  # noqa: PLR0913 - review surface plus both machine name
             **by_policy,
             **{entry.item_id: Decision.SKIP_ONCE for group in groups for entry in group.entries},
         }
-        # D-26: no capture is ever offered without a TTY, so every unreproducible item
+        # `PKG-FR-NO-TERMINAL`: no capture is ever offered without a TTY, so every unreproducible item
         # is unresolved by construction — never a snippet, never a recorded decision.
         non_interactive_unresolved = tuple(
             entry.item_id for group in groups if _is_unreproducible_group(group.action) for entry in group.entries
@@ -1776,7 +1778,7 @@ async def review_items(  # noqa: PLR0913 - review surface plus both machine name
     # An interactive review can no longer leave anything unresolved (decision 10): the
     # unreproducible flow re-prompts or aborts, and a decision screen's abort raises above —
     # so `unresolved` is always empty here. It stays populated only on the non-interactive
-    # path (D-26 reporting).
+    # path (`PKG-FR-NO-TERMINAL` reporting).
     return ReviewOutcome(
         decisions=decisions, was_interactive=True, snippets=snippets, unresolved=(), mark_sides=mark_sides
     )
@@ -1840,7 +1842,7 @@ async def ask_gate(  # noqa: PLR0913 - one two-answer screen's content; all keyw
 
 @runtime_checkable
 class Reviewer(Protocol):
-    """A package job's review seam (D-24): given the groups one job planned, return that
+    """A package job's review seam (`PKG-FR-BATCHED`): given the groups one job planned, return that
     job's decisions.
 
     Injected through `JobContext.reviewer` exactly as `Confirmer` is through

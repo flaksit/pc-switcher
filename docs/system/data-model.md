@@ -206,7 +206,7 @@ class SyncSession:
 
 ## Package Sync Entities
 
-Phase 2's package-sync subsystem (`apt_sync`, `snap_sync`, `flatpak_sync`, `manual_deb_sync`, `manual_snap_sync`, `manual_installs_sync`) adds its own item model and two on-disk data shapes. See the [Package Sync Spec](package-sync.md) for the pipeline these flow through.
+The package-sync subsystem (`apt_sync`, `snap_sync`, `flatpak_sync`, `manual_deb_sync`, `manual_snap_sync`, `manual_installs_sync`) adds its own item model and two on-disk data shapes. See the [Package Sync Spec](package-sync.md) for the pipeline these flow through.
 
 Only what more than one manager uses lives in the shared `jobs/packages/items.py`: the `ItemClass`/`DiffClass`/`DiffAction` taxonomy, `ItemDiff` and `Machines`. Each item class below lives in the job that constructs it (`jobs/apt_sync/items.py`, `jobs/snap_sync.py`, `jobs/flatpak_sync.py`) — the jobs are deliberately independent, and a registry of everyone's private shapes would couple them for nothing. `UnreproducibleItem` is the one shape two jobs construct, so it lives in the base they share (`jobs/packages/unreproducible.py`) rather than in either of them.
 
@@ -302,6 +302,6 @@ class Snippet:
 
 On disk, entries are keyed by `item_id` under a `snippets:` mapping. Each body replays as `bash -c <body>` with no stdin available — one expecting a prompt fails rather than hanging the sync.
 
-Both bodies are mandatory (ADR-020 D-22, `PKG-FR-VERSION-SNIPPET`). An entry carrying only one is malformed and ends the run naming the file, exactly as an unparsable registry does: there is no backwards compatibility and no default, because a guessed version body would state something about what is installed that nobody established, and one defaulting to "no version" would silently restore convergence on presence alone.
+Both bodies are mandatory (ADR-020, `PKG-FR-VERSION-SNIPPET`). An entry carrying only one is malformed and ends the run naming the file, exactly as an unparsable registry does: there is no backwards compatibility and no default, because a guessed version body would state something about what is installed that nobody established, and one defaulting to "no version" would silently restore convergence on presence alone.
 
 `install_body` is the install-**or-update** snippet: it is replayed onto a machine that may already hold an older version, and the editor's own note says so. `version_body` is what `PKG-FR-MANUAL-VERSION` compares — it runs on both machines during `plan()`, carries no `mutates=` (`PKG-FR-VERSION-SNIPPET` is `PKG-FR-CONFIRM-EACH`'s one exception), and its read-only obligation rests on its author. Only `manual_installs_sync` executes it: the other three jobs read their machine's own package manager for a version, and store the body so one shared file has one shape.

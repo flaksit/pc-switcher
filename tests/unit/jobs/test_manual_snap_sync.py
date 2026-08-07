@@ -1,5 +1,5 @@
 """Unit tests for `ManualSnapSyncJob`: the sideloaded-snap half of what no package manager
-can reproduce (D-18) — the `x`-revision detection, the seam with `snap_sync`, what the
+can reproduce (`PKG-FR-MANUAL-SCOPE`) — the `x`-revision detection, the seam with `snap_sync`, what the
 target counts as already holding, and this job's validation.
 
 The shared half every unreproducible job inherits is covered in `test_unreproducible_jobs.py`.
@@ -67,7 +67,7 @@ def store_snap(name: str, revision: str = "42") -> tuple[str, str, str]:
 
 class TestSideloadDetection:
     """The `x`-revision scan: a snap whose bytes came from a local file becomes an
-    UNREPRODUCIBLE diff (D-18, `PKG-FR-SNAP-SIDELOAD`), and a store snap does not.
+    UNREPRODUCIBLE diff (`PKG-FR-MANUAL-SCOPE`, `PKG-FR-SNAP-SIDELOAD`), and a store snap does not.
     """
 
     @pytest.mark.asyncio
@@ -169,7 +169,8 @@ class TestSideloadDetection:
 
 
 class TestInertFiltering:
-    """An item recorded machine-specific on the source produces no diff (D-08/D-19)."""
+    """An item recorded machine-specific on the source produces no diff
+    (`PKG-FR-MACHINE-SPECIFIC`/`PKG-FR-MANUAL-DIFF`)."""
 
     @pytest.mark.asyncio
     async def test_machine_specific_item_is_filtered_before_becoming_a_diff(self) -> None:
@@ -192,7 +193,7 @@ class TestInertFiltering:
     async def test_a_snap_syncs_own_mark_on_the_same_snap_is_not_read(self) -> None:
         """G130 — a `snap:<name>` mark is `snap_sync`'s answer about converging that snap's
         revision, in that job's own file and id space, so it neither silences this job's
-        finding nor is read at all (D-09: one decision file per manager)."""
+        finding nor is read at all (`PKG-FR-MACHINE-SPECIFIC`: one decision file per manager)."""
         context, source, _target = make_context(
             source_responses={
                 SNAP_LIST: snap_list(sideload("mytool")),
@@ -268,7 +269,8 @@ class TestWhatTheTargetAlreadyHolds:
 
 
 class TestExecuteIndependentOfSnapSync:
-    """The job runs on its own enable flag, independent of snap_sync (D-15/D-18)."""
+    """The job runs on its own enable flag, independent of snap_sync
+    (`PKG-FR-JOB-INDEPENDENCE`/`PKG-FR-MANUAL-SCOPE`)."""
 
     @pytest.mark.asyncio
     async def test_plan_runs_with_snap_sync_absent_from_config(self) -> None:
@@ -290,7 +292,7 @@ class TestExecuteIndependentOfSnapSync:
         context, _source, target = make_context(
             source_responses={
                 SNAP_LIST: snap_list(sideload("mytool")),
-                # plan() classifies INSTALL from the SOURCE registry (D-23).
+                # plan() classifies INSTALL from the SOURCE registry (`PKG-FR-MANUAL-SAME-RUN`).
                 "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, MYTOOL_REGISTRY_YAML, ""),
             },
             target_responses={
@@ -310,7 +312,7 @@ class TestExecuteIndependentOfSnapSync:
 class TestValidate:
     @pytest.mark.asyncio
     async def test_snap_unavailable_on_source_yields_validation_error(self) -> None:
-        """G132, K95 — validation fails before anything runs, naming the source and the missing
+        """G132, K128 — validation fails before anything runs, naming the source and the missing
         tool."""
         context, _source, _target = make_context(
             source_responses={"snap version": CommandResult(127, "", "not found")}
@@ -322,7 +324,7 @@ class TestValidate:
 
     @pytest.mark.asyncio
     async def test_snap_unavailable_on_target_yields_validation_error(self) -> None:
-        """G133, K96 — the target is read to tell what it already has, so its missing tool is
+        """G133, K129 — the target is read to tell what it already has, so its missing tool is
         named before the run starts rather than as a dead probe halfway through."""
         context, _source, _target = make_context(
             target_responses={"snap version": CommandResult(127, "", "not found")}
@@ -334,7 +336,7 @@ class TestValidate:
 
     @pytest.mark.asyncio
     async def test_valid_environment_yields_no_errors_and_asks_for_no_privilege(self) -> None:
-        """G134, K94 — with snapd answering on both machines nothing fails, and no
+        """G134, K127 — with snapd answering on both machines nothing fails, and no
         administrative-rights precondition is imposed on either: listing snaps needs none,
         and a snippet's own needs are unknowable."""
         context, source, target = make_context()
@@ -404,7 +406,7 @@ class TestMarksFollowWhatTheMachineHolds:
 class TestSnapJobDiscovery:
     @pytest.mark.asyncio
     async def test_orchestrator_resolves_manual_snap_sync_to_its_job(self) -> None:
-        """Named in the configuration, the job resolves to its own class."""
+        """G187 — named in the configuration, the job resolves to its own class."""
         config = MagicMock(spec=Configuration)
         config.logging = MagicMock()
         config.logging.file = 10
@@ -421,8 +423,8 @@ class TestSnapJobDiscovery:
 
 class TestSnapFirstSyncScope:
     def test_the_announced_scope_names_sideloaded_snaps(self) -> None:
-        """ADR-015's first-sync announcement names this job, what it would put on the target
-        and the mechanism it uses to get it there."""
+        """G188 — ADR-015's first-sync announcement names this job, what it would put on the
+        target and the mechanism it uses to get it there."""
         scope = ManualSnapSyncJob.describe_first_sync_scope({})
 
         assert scope is not None

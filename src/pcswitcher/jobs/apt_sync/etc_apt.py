@@ -4,7 +4,7 @@ ONE `apt-get update`, and roll the whole thing back if that refresh fails (T-02-
 Never partially, because a failed metadata refresh with some files written and others not
 would leave `/etc/apt` in a configuration nobody reviewed.
 
-The unit is a MIX (ADR-020 D-39): reviewed items — repository and pin removals, apt config in
+The unit is a MIX (`PKG-FR-DERIVED-FAILURE`): reviewed items — repository and pin removals, apt config in
 all three directions — and derived writes, which have no item and so no per-item outcome. A
 derived write that fails is recorded against its destination and charged to the packages that
 needed it; a rollback marks every derived write failed, exactly as it marks every reviewed one.
@@ -152,7 +152,7 @@ class EtcApt:
         except ConvergeItemFailed as exc:
             # A backup failure aborts the whole unit before any write happens (T-02-34
             # never partially applies), but `self._outcome` must still end up populated for
-            # every group item (D-27) — otherwise the idempotency guard at the top of this
+            # every group item (`PKG-FR-OUTCOME-FAILED`) — otherwise the idempotency guard at the top of this
             # method treats the unit as "already handled" on the next `converge()` call, and
             # `converge_item`'s `self._outcome[diff.item_id]` raises a bare `KeyError` for
             # every item after the first, escaping the per-item `ConvergeItemFailed` handler
@@ -202,7 +202,7 @@ class EtcApt:
             stderr=update_result.stderr,
         )
 
-        # Every group item is recorded as a failure (D-27) — even ones whose own write
+        # Every group item is recorded as a failure (`PKG-FR-OUTCOME-FAILED`) — even ones whose own write
         # just succeeded above — because the rollback undid it: what actually landed on
         # the target is the pre-run state, not what this run intended.
         self._record_failure(
@@ -263,7 +263,7 @@ class EtcApt:
         )
         if reprobe.success:
             # After rollback `/etc/apt` is the pre-run configuration and this reprobe refreshed
-            # metadata for it; package installs that still run against that config (D-27 —
+            # metadata for it; package installs that still run against that config (`PKG-FR-OUTCOME-FAILED` —
             # a repo-group rollback does not cancel package items) then need no further
             # `apt-get update`. If the reprobe itself failed, the flag stays unset and the
             # install path's own refresh attempt will surface the still-broken apt.
@@ -282,10 +282,10 @@ class EtcApt:
 
     def _record_failure(self, group_diffs: Sequence[ItemDiff], marker_present: bool, message: str) -> None:
         """Mark every `group_diffs` item (and the metadata-refresh marker, if present)
-        as failed with `message`, and every DERIVED write with it (D-39).
+        as failed with `message`, and every DERIVED write with it (`PKG-FR-DERIVED-FAILURE`).
 
         Shared by the backup-failure short-circuit and the post-rollback failure path so
-        `self._outcome` always ends up fully populated (D-27) — a partially-populated map
+        `self._outcome` always ends up fully populated (`PKG-FR-OUTCOME-FAILED`) — a partially-populated map
         makes a later `converge()` call for an un-recorded item raise `KeyError` instead of
         `ConvergeItemFailed`.
         """
@@ -322,7 +322,7 @@ class EtcApt:
 
     async def _converge_write(self, diff: ItemDiff, staging_dir: str) -> None:
         """Run one REVIEWED item's file operation and record its per-item outcome
-        (D-27), so a single failing file never stops the rest of the unit."""
+        (`PKG-FR-OUTCOME-FAILED`), so a single failing file never stops the rest of the unit."""
         assert self._outcome is not None
         try:
             await self._write_or_remove(diff, staging_dir)
@@ -333,7 +333,7 @@ class EtcApt:
 
     async def _write_derived(self, dest: str, staging_dir: str) -> None:
         """Copy one DERIVED `/etc/apt` file from the source, logging what travelled and
-        recording a failure against the destination rather than against an item (D-39).
+        recording a failure against the destination rather than against an item (`PKG-FR-DERIVED-FAILURE`).
 
         There is no item to fail: the user decided about a package, and
         `DerivedWrites.install_refusal` is what turns this destination's failure into that

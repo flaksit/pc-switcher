@@ -86,10 +86,11 @@ class TestPlanApplySplit:
         assert len(plan.diffs) == 3
         for cmd in all_calls(target):
             # `apt-get --dry-run` (simulate) IS expected during plan() — plan 02-05's
-            # plan-time collateral simulation is read-only by design (D-24/T-02-32).
+            # plan-time collateral simulation is read-only by design (`PKG-FR-BATCHED`/T-02-32).
             # `sudo find ... sha256sum` IS also expected — plan 02-06's repo-state
             # capture reads `/etc/apt/*` via sudo to guarantee access regardless of
-            # file permissions; it is a read, never a write (D-11/D-12/D-13).
+            # file permissions; it is a read, never a write
+            # (`PKG-FR-REPO-DERIVED`/`PKG-FR-KEY-COPY`/`PKG-FR-APT-IGNORES`).
             assert "apt-get install" not in cmd
             assert "sudo install" not in cmd
             assert "sudo rm" not in cmd
@@ -179,7 +180,7 @@ class TestContinueOnFailure:
         assert len(real_installs) == 3
         simulations = [c for c in commands if "apt-get --dry-run" in c]
         # 1 batched plan-time simulation (all three candidates) + 1 apply-time
-        # simulation per approved item (D-24/T-02-32's two-layer guard).
+        # simulation per approved item (`PKG-FR-BATCHED`/T-02-32's two-layer guard).
         assert len(simulations) == 4
 
 
@@ -851,7 +852,7 @@ class TestRepoRemovalWithheldWhileInUse:
     @pytest.mark.asyncio
     async def test_the_machine_specific_package_itself_still_produces_no_diff(self) -> None:
         """C52 — the inertness this detail exists to compensate for must not regress: naming
-        the package in a removal's detail is NOT the same as re-proposing it (D-08).
+        the package in a removal's detail is NOT the same as re-proposing it (`PKG-FR-MACHINE-SPECIFIC`).
         """
         context, _source, _target = make_context(
             source_responses=_NO_PACKAGES,
@@ -1072,7 +1073,7 @@ class TestARepositoryWrittenForAnInstallThatFailed:
 
 
 class TestAPinNeverSpeaksForAPackage:
-    """The defect ADR-020 D-25 closes: a package present only on the target and named by
+    """The defect `PKG-FR-APT-ORIGIN-DIFF` closes: a package present only on the target and named by
     any pin stanza produced a `REPORT_ONLY` echo instead of its own removal diff — so it
     could neither be removed nor marked machine-specific, and came back every run.
     """
@@ -1411,7 +1412,7 @@ class TestRepositoryConflicts:
         job = AptSyncJob(context)
 
         # The install that carries the file is what raises the question, and this fixture's
-        # target offers no origin for it after the refresh — so the item fails D-35 once the
+        # target offers no origin for it after the refresh — so the item fails `PKG-FR-APT-ORIGIN-VERIFY` once the
         # file has landed, which is the write under test.
         await review_rounds(
             job,
@@ -1427,7 +1428,7 @@ class TestRepositoryConflicts:
     async def test_skipping_a_conflict_writes_nothing_and_fails_the_package_that_needed_it(self) -> None:
         """C35, H27 — the coupling §4.3 requires: a skipped conflict is not the same as no conflict.
         The package the user ticked depends on that file for its origin, so installing it
-        anyway would deliver the wrong vendor's software — exactly what D-34 exists to stop.
+        anyway would deliver the wrong vendor's software — exactly what `PKG-FR-APT-IDENTITY` exists to stop.
         """
         context, _source, target = _repo_context(
             source_responses={
@@ -1528,7 +1529,7 @@ class TestRepositoryConflicts:
 
     @pytest.mark.asyncio
     async def test_a_differing_repository_no_install_would_write_raises_no_question(self) -> None:
-        """C36 — the gate D-37 puts in front of the question: `vendor-tool` is on both
+        """C36 — the gate `PKG-FR-REPO-CONFLICT` puts in front of the question: `vendor-tool` is on both
         machines, so no install proposes to write `vendor.list`, and a file this run would
         not write is not a decision the user could act on. Nothing is asked, nothing is
         written, and neither copy is even read.

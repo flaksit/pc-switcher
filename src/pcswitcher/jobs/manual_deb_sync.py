@@ -1,5 +1,6 @@
 """`manual_deb_sync`: hand-installed `.deb` packages — the software `dpkg --install` put
-on a machine and no repository can put on the other one (D-15, D-18, `PKG-FR-DEB-OWNERSHIP`).
+on a machine and no repository can put on the other one (`PKG-FR-JOB-INDEPENDENCE`, `PKG-FR-MANUAL-SCOPE`,
+`PKG-FR-DEB-OWNERSHIP`).
 
 Detection is one question asked of the whole INSTALLED set: which packages' INSTALLED
 version comes from no repository the SOURCE has configured. Not the `apt-mark showmanual`
@@ -16,17 +17,17 @@ second question to the names the source lacks is what keeps it affordable: the f
 `apt-cache policy` over an installed set costs about three seconds and 700KB, and every
 name the source still has is answered by the source's own read already.
 
-Its own job, on its own enable flag, for the reason D-15 gives every package job one: an
+Its own job, on its own enable flag, for the reason `PKG-FR-JOB-INDEPENDENCE` gives every package job one: an
 independent failure surface, an independent review and an independent switch. It sits
 beside `manual_installs_sync`, which owns the OTHER thing no package manager can reproduce
 — unowned software under `/usr/local` and `/opt`, which is not a package at all. Both
 subclass `UnreproducibleSyncJob` and share one install-snippet registry; neither imports
-the other, and neither imports `apt_sync` (D-18).
+the other, and neither imports `apt_sync` (`PKG-FR-MANUAL-SCOPE`).
 
 The apt handoff is capture-time exclusion, not a message: `apt_sync` drops the same
 packages from both its manifests using the shared `packages/apt_policy.py` predicate, and
 this job independently re-runs it. Two jobs, one predicate, no result passed between them
-(D-15/D-16). The consequence the user must know: this job's enable flag is its own, so
+(`PKG-FR-JOB-INDEPENDENCE`). The consequence the user must know: this job's enable flag is its own, so
 enabling `apt_sync` while disabling this one leaves hand-installed `.deb` packages
 replicated by nobody.
 """
@@ -84,12 +85,12 @@ class ManualDebSyncJob(UnreproducibleSyncJob):
         "additionalProperties": False,
     }
 
-    # -- Detection (D-18), run on both machines (`PKG-FR-MANUAL-DIFF`) -------------------
+    # -- Detection (`PKG-FR-MANUAL-SCOPE`), run on both machines (`PKG-FR-MANUAL-DIFF`) -------------------
 
     async def _scan_no_candidate_apt_packages(
         self, installed_names: Sequence[str], executor: Executor, machine: str
     ) -> frozenset[str]:
-        """D-18: of `installed_names`, those whose INSTALLED version comes from no repository
+        """`PKG-FR-MANUAL-SCOPE`: of `installed_names`, those whose INSTALLED version comes from no repository
         `machine` has configured — put there by `dpkg --install` of a bare `.deb`.
 
         Over the whole INSTALLED set, not `apt-mark showmanual`. `PKG-FR-MANUAL-SCOPE` draws
@@ -108,7 +109,7 @@ class ManualDebSyncJob(UnreproducibleSyncJob):
         718KB of output against 96KB — one command either way, and the wider set is what the
         article asks for.
 
-        Guarded on the exit code AND on the block count (ADR-022 D-04), which is the guard
+        Guarded on the exit code AND on the block count (`PKG-FR-READ-FAILS-JOB`), which is the guard
         `apt_sync._source_policy` puts on its own copy of this command: same host, same
         probe, so the same strictness. Its silence indicts nothing on its own — an
         unanswered probe reports no unreproducible packages, which proposes nothing — but
@@ -287,10 +288,10 @@ class ManualDebSyncJob(UnreproducibleSyncJob):
         detection, so no sudo is needed for it.
 
         Target sudo is deliberately still NOT pre-validated, although an approved removal
-        needs it: a snippet's own privilege needs are unpredictable (an opaque blob, D-20),
+        needs it: a snippet's own privilege needs are unpredictable (an opaque blob, `PKG-FR-SNIPPET-VERBATIM`),
         a run that approves no removal needs none, and failing validation up front would
         refuse the job to every user who only ever installs. A removal that lacks the
-        privilege fails as a per-item converge failure (D-27), reported like any other.
+        privilege fails as a per-item converge failure (`PKG-FR-OUTCOME-FAILED`), reported like any other.
 
         Sequential checks appending to `errors`, never raising mid-validate (matches
         `AptSyncJob.validate()`'s shape).

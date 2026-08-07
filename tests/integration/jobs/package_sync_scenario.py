@@ -106,6 +106,41 @@ def collapse_run_output(text: str) -> str:
     return " ".join(ANSI_ESCAPE_RE.sub("", text).split())
 
 
+# The end-of-run block's header, and one row of it: the indent and glyph
+# `orchestrator._JOB_OUTCOME_MARKS` prints, then the job name, then the status word.
+# Restated here rather than imported so a change to either the glyphs or the status
+# vocabulary fails these tests instead of travelling silently into them.
+JOB_OUTCOME_HEADER = "Job outcomes:"
+JOB_OUTCOME_ROW = re.compile(r"^\s*[✔⏭✖]\s+(\S+)\s+(success|skipped|failed)(?:\s|$)")
+
+
+def job_outcome_statuses(run_output: str) -> dict[str, str]:
+    """Job name -> status word, read off the run's end-of-run `Job outcomes:` block.
+
+    Read from the RAW output rather than through `collapse_run_output`: the block is one
+    row per LINE, and collapsing the whole run to a single line would let a job name meet
+    a status word that belongs to the row below it. For the same reason a reason too long
+    for the terminal, which the grid folds under its own column with no glyph and no job
+    name on the continuation line, simply does not match a row and is skipped.
+
+    A job that ran twice cannot appear twice -- the orchestrator records one `JobResult`
+    per job -- so a flat mapping loses nothing. Returns `{}` when the run printed no
+    block at all, which is itself worth asserting: a run that ends before any job records
+    a result prints none.
+    """
+    statuses: dict[str, str] = {}
+    seen_header = False
+    for raw in ANSI_ESCAPE_RE.sub("", run_output).splitlines():
+        if not seen_header:
+            seen_header = JOB_OUTCOME_HEADER in raw
+            continue
+        if match := JOB_OUTCOME_ROW.match(raw):
+            statuses[match.group(1)] = match.group(2)
+        elif statuses and not raw.strip():
+            break
+    return statuses
+
+
 def parse_dpkg_installed(dpkg_query_output: str) -> set[str]:
     """Parse `dpkg-query --show --showformat='${Package}\\t${Status}\\n'` into fully-installed package names.
 
@@ -350,7 +385,7 @@ async def write_apt_sync_config(executor: BashLoginRemoteExecutor) -> None:
 
 async def decision_file_exists(executor: BashLoginRemoteExecutor, manager: str) -> bool:
     """Whether `manager`'s machine-local decision file currently exists on `executor`'s
-    machine (D-09) -- used to prove a non-interactive run records nothing (D-26).
+    machine (`PKG-FR-MACHINE-SPECIFIC`) -- used to prove a non-interactive run records nothing (`PKG-FR-NO-TERMINAL`).
     """
     relpath = shlex.quote(DECISION_FILE_RELPATH_TEMPLATE.format(manager=manager))
     result = await executor.run_command(f"test -f ~/{relpath}", login_shell=False, timeout=10.0)
@@ -359,7 +394,7 @@ async def decision_file_exists(executor: BashLoginRemoteExecutor, manager: str) 
 
 def automation_env_assignment_multi(decisions_by_item_id: Mapping[str, Decision]) -> str:
     """Shell-safe `VAR='{...}'` prefix pre-answering the review with one decision per
-    item id (D-26's hidden hook -- `package_review.PACKAGE_REVIEW_AUTOMATION_ENV`).
+    item id (`PKG-FR-NO-TERMINAL`'s hidden hook -- `package_review.PACKAGE_REVIEW_AUTOMATION_ENV`).
 
     The automation hook accepts any `Decision` value for any item id present in the
     review's groups, regardless of whether the interactive checkbox UI can produce that
@@ -373,14 +408,15 @@ def automation_env_assignment_multi(decisions_by_item_id: Mapping[str, Decision]
 
 def automation_env_assignment(item_id: str) -> str:
     """Shell-safe `VAR='{...}'` prefix pre-answering the review with one APPLY decision for
-    `item_id` (D-26's hidden hook -- `package_review.PACKAGE_REVIEW_AUTOMATION_ENV`).
+    `item_id` (`PKG-FR-NO-TERMINAL`'s hidden hook -- `package_review.PACKAGE_REVIEW_AUTOMATION_ENV`).
     """
     return automation_env_assignment_multi({item_id: Decision.APPLY})
 
 
 # ---------------------------------------------------------------------------------
 # `TestAFailureCostsItsOwnItemAndNothingElse`: three "unowned install" snippets authored
-# directly into pc1's registry (D-18/D-20/D-21) -- two that genuinely `apt-get install` a
+# directly into pc1's registry (`PKG-FR-MANUAL-SCOPE`/`PKG-FR-SNIPPET-VERBATIM`/`PKG-FR-MANUAL-RESOLUTION`) -- two that
+# genuinely `apt-get install` a
 # real package, one that deliberately exits non-zero.
 # `ManualInstallsSyncJob._scan_unowned_installs` sorts its findings alphabetically by path,
 # which is what places the failing item strictly BETWEEN the two installs in convergence
@@ -463,9 +499,10 @@ async def author_snippet(
     body: str,
     version_body: str = "echo 1.0",
 ) -> None:
-    """Author one registry entry directly into `executor`'s registry (D-20, D-22), bypassing
-    the interactive per-entry capture prompt entirely -- the test does not depend on that
-    UI path, only on the registry's own read/write contract (`package_state.py`).
+    """Author one registry entry directly into `executor`'s registry
+    (`PKG-FR-SNIPPET-VERBATIM`, `PKG-FR-VERSION-SNIPPET`), bypassing the interactive
+    per-entry capture prompt entirely -- the test does not depend on that UI path, only on
+    the registry's own read/write contract (`package_state.py`).
 
     `version_body` defaults to a constant, so a scenario that is not about drift reports the
     same version on both machines and produces no update item.
@@ -596,7 +633,7 @@ async def snap_subject(pc1_executor: BashLoginRemoteExecutor, pc2_executor: Bash
 async def alternate_snap_revision(executor: BashLoginRemoteExecutor, name: str, current_revision: str) -> str:
     """An installable revision of `name` distinct from `current_revision`, read from
     `snap info`'s channel table -- what a test moves the target to so the sync has a real
-    revision divergence to converge (D-06).
+    revision divergence to converge (`PKG-FR-SNAP-REVISION`).
 
     Read rather than hardcoded: pinning a revision number would rot the moment the store
     published a new one. `FIXTURE_SNAPS[0]` is chosen precisely because it carries
@@ -723,6 +760,19 @@ async def create_sideloaded_snap(executor: BashLoginRemoteExecutor, directory: s
     scan roots, and a directory left there by a failed cleanup would show up as somebody
     else's finding.
     """
+    result = await executor.run_command(sideload_snippet_body(directory, name, base), login_shell=False, timeout=180.0)
+    assert result.success, (
+        f"`snap try {directory}` failed, so there is no sideloaded snap to test with: {result.stderr}"
+    )
+
+
+def sideload_snippet_body(directory: str, name: str, base: str) -> str:
+    """The shell that creates the sideloaded snap `create_sideloaded_snap` installs.
+
+    Shared with the install snippet a `manual_snap_sync` test authors for the target, so
+    the bytes the seeding produces on one machine and the bytes the replay produces on the
+    other cannot drift apart -- which is the whole claim such a test makes.
+    """
     snap_yaml = (
         f"name: {name}\n"
         "version: '1.0'\n"
@@ -732,15 +782,10 @@ async def create_sideloaded_snap(executor: BashLoginRemoteExecutor, directory: s
         "confinement: strict\n"
         "grade: stable\n"
     )
-    result = await executor.run_command(
+    return (
         f"sudo mkdir --parents {shlex.quote(f'{directory}/meta')} && "
         f"printf %s {shlex.quote(snap_yaml)} | sudo tee {shlex.quote(f'{directory}/meta/snap.yaml')} > /dev/null && "
-        f"sudo snap try {shlex.quote(directory)}",
-        login_shell=False,
-        timeout=180.0,
-    )
-    assert result.success, (
-        f"`snap try {directory}` failed, so there is no sideloaded snap to test with: {result.stderr}"
+        f"sudo snap try {shlex.quote(directory)}"
     )
 
 
@@ -905,8 +950,8 @@ async def flatpak_subject(
     executor: BashLoginRemoteExecutor,
 ) -> tuple[str, str, Literal["user", "system"], str, str, str]:
     """`(application, version, scope, remote_name, remote_url, ref)` for the fixture
-    flatpak ref installed on `executor` (the source), used to prove D-06/D-14 convergence
-    for a real ref+remote pair.
+    flatpak ref installed on `executor` (the source), used to prove
+    `PKG-FR-SNAP-REVISION`/`PKG-FR-APT-ORIGIN-DERIVED` convergence for a real ref+remote pair.
 
     Read off `flatpak list`/`flatpak remotes` rather than assembled from the constants
     above so the tuple carries the machine's own idea of the ref (notably `version`,
@@ -995,6 +1040,60 @@ async def restore_flatpak_source_baseline(
         print(f"[cleanup] failed to restore the source's unfiltered {remote_name}: {result.stderr}")
 
 
+async def strand_the_source_flatpak_remote(
+    executor: BashLoginRemoteExecutor, remote_name: str, scope: Literal["user", "system"]
+) -> None:
+    """Delete `remote_name` from `executor` while its refs stay installed, so every ref that
+    came from it names an origin no configured remote answers to -- which is exactly what
+    `flatpak_policy.partition_unreproducible` calls unreproducible.
+
+    Cheaper than the other shape that reaches the same predicate, a bundle-installed ref:
+    that needs `flatpak build-bundle` against a repo, an app to bundle and an install of it,
+    minutes of work and a second app on the machine every other flatpak assertion in this
+    suite would then have to tolerate. The predicate compares an origin against the remote
+    table and cannot tell the two shapes apart, so the cheap one settles it. Do not
+    "upgrade" this to a bundle.
+
+    The precondition it creates is ASSERTED, not assumed: flatpak must still print the now
+    dangling origin in `flatpak list` while `flatpak remotes` no longer lists it. Everything
+    downstream rests on that being how this flatpak behaves.
+    """
+    scope_flag = "--user" if scope == "user" else "--system"
+    sudo = "" if scope == "user" else "sudo "
+    deleted = await executor.run_command(
+        f"{sudo}flatpak remote-delete {scope_flag} --force {shlex.quote(remote_name)}",
+        login_shell=False,
+        timeout=120.0,
+    )
+    assert deleted.success, f"could not delete the {scope}-scope remote {remote_name}: {deleted.stderr}"
+
+    remotes, origins = await asyncio.gather(
+        executor.run_command(f"flatpak remotes {scope_flag} --columns=name", login_shell=False, timeout=20.0),
+        executor.run_command("flatpak list --columns=origin", login_shell=False, timeout=20.0),
+    )
+    assert remote_name not in nonblank_lines(remotes.stdout), (
+        f"{remote_name} is still configured in scope {scope} after the delete, so nothing is stranded:\n"
+        f"{remotes.stdout}"
+    )
+    assert remote_name in nonblank_lines(origins.stdout), (
+        f"no installed ref still names {remote_name} as its origin, so this machine holds nothing unreproducible "
+        f"and the scenario has no subject:\n{origins.stdout}"
+    )
+
+
+def flatpak_install_snippet_body(remote_name: str, ref: str, scope: Literal["user", "system"]) -> str:
+    """The install a user would write by hand for `ref`, for a snippet replayed on the
+    target -- which still has the remote and the runtime, so this costs a download of the app
+    alone.
+    """
+    scope_flag = "--user" if scope == "user" else "--system"
+    sudo = "" if scope == "user" else "sudo "
+    return (
+        f"{sudo}flatpak install {scope_flag} --assumeyes --noninteractive "
+        f"{shlex.quote(remote_name)} {shlex.quote(ref)}"
+    )
+
+
 async def flatpak_app_rows(executor: BashLoginRemoteExecutor) -> list[tuple[str, str, str, str, str]]:
     """Every installed APP on `executor`'s machine, as `parse_flatpak_list_lines` tuples.
 
@@ -1068,13 +1167,75 @@ FLATPAK_FILTER_BODY = f"allow {FIXTURE_FLATPAK_APP}\n"
 FLATPAK_FILTERED_OPTION = "filtered"
 
 
-# -- apt repository-state helpers (D-11/D-12): synthesize a repo+key divergence -----
+# -- apt repository-state helpers (`PKG-FR-REPO-DERIVED`/`PKG-FR-KEY-COPY`): synthesize a repo+key divergence -----
 #
 # The two `/etc/apt` directories the apt-repository-state test touches (apt_sync.py owns
 # the full five-directory set).
 APT_SOURCES_DIR = "/etc/apt/sources.list.d"
 APT_KEYRINGS_DIR = "/etc/apt/keyrings"
 APT_PREFERENCES_DIR = "/etc/apt/preferences.d"
+APT_CONF_DIR = "/etc/apt/apt.conf.d"
+
+#: `AptConfigItem.item_id`'s prefix, restated rather than imported for the reason every
+#: other identity string in this module is: a test that agreed with whatever the shipped
+#: constant currently says could not notice the id shape changing under it.
+APT_CONFIG_ITEM_PREFIX = "apt:config:"
+
+
+def apt_config_item_id(filename: str) -> str:
+    """The review item id for an `/etc/apt/apt.conf.d` file called `filename`."""
+    return f"{APT_CONFIG_ITEM_PREFIX}{filename}"
+
+
+async def create_conflicting_apt_conf_file(
+    source: BashLoginRemoteExecutor, target: BashLoginRemoteExecutor
+) -> tuple[str, str, str]:
+    """Put an inert `apt.conf.d` file of the SAME name and DIFFERENT content on both
+    machines, and return `(filename, source body, target body)`.
+
+    An `/etc/apt/apt.conf.d` divergence is the product's only conflicting item class -- the
+    only one that both machines hold, that reviews as a change, and that a permanent answer
+    can be recorded against on either side. Everything about where such a mark lands is
+    therefore asserted through a file like this one.
+
+    The bodies set `APT::Never-Cache-Anything` under a uuid-suffixed key, which apt parses
+    and no apt option reads, so a copy left behind by a failed cleanup changes nothing about
+    how either machine behaves. The filename is uuid-suffixed too, so it can never collide
+    with a file either machine came with.
+    """
+    unique = uuid4().hex[:12]
+    filename = f"99-pcswitcher-it-{unique}.conf"
+    source_body = f'APT::Pcswitcher-It-{unique} "source";\n'
+    target_body = f'APT::Pcswitcher-It-{unique} "target";\n'
+    destination = shlex.quote(f"{APT_CONF_DIR}/{filename}")
+    for executor, body, machine in ((source, source_body, "source"), (target, target_body, "target")):
+        written = await executor.run_command(
+            f"printf %s {shlex.quote(body)} | sudo tee {destination} > /dev/null",
+            login_shell=False,
+            timeout=20.0,
+        )
+        assert written.success, f"could not write {filename} on the {machine}: {written.stderr}"
+    return filename, source_body, target_body
+
+
+async def read_apt_conf_file(executor: BashLoginRemoteExecutor, filename: str) -> str | None:
+    """The bytes of `filename` under `apt.conf.d` on `executor`'s machine, or `None` if it
+    holds no such file.
+    """
+    result = await executor.run_command(
+        f"cat {shlex.quote(f'{APT_CONF_DIR}/{filename}')}", login_shell=False, timeout=15.0
+    )
+    return result.stdout if result.success else None
+
+
+async def remove_apt_conf_file(executor: BashLoginRemoteExecutor, filename: str) -> None:
+    """Drop `filename` from `apt.conf.d` on `executor`'s machine. Best-effort cleanup."""
+    result = await executor.run_command(
+        f"sudo rm --force {shlex.quote(f'{APT_CONF_DIR}/{filename}')}", login_shell=False, timeout=15.0
+    )
+    if not result.success:
+        print(f"[cleanup] failed to remove {filename}: {result.stderr}")
+
 
 # Host the synthetic repository points at. `.invalid` is reserved by RFC 2606 and can
 # never resolve, so apt reaches this repo only to fail, and the name appears in
@@ -1091,7 +1252,7 @@ async def create_synthetic_repo_and_key(executor: BashLoginRemoteExecutor) -> tu
     Both directories are root-owned and `/etc/apt/keyrings` is absent on a fresh Ubuntu
     24.04, so `mkdir --parents` runs first (the shipped invariant) and every write goes through
     `sudo tee`. Filenames are uuid-suffixed so the pair is unique and the fresh target
-    provably lacks it. Dummy key bytes are fine: D-12 copies keys verbatim without
+    provably lacks it. Dummy key bytes are fine: `PKG-FR-KEY-COPY` copies keys verbatim without
     validating, and `SYNTHETIC_REPO_HOST` never resolves, so an `apt-get update` that
     sees this repo can only fail to fetch its index -- it can never install anything from
     it, on a dry run or a real one.
@@ -1124,7 +1285,7 @@ async def install_from_a_repo_the_target_lacks(executor: BashLoginRemoteExecutor
     repository, declare that repository, and install the package from it. Returns
     `(package_name, repo_dir, list_filename)`.
 
-    The only construction that produces ADR-020 D-34's class 3 on real machines: a package
+    The only construction that produces `PKG-FR-APT-IDENTITY`'s class 3 on real machines: a package
     the source has FROM A REPOSITORY IT DECLARES whose name the target's apt has never
     heard. `create_synthetic_repo_and_key`'s repository cannot do it — its host does not
     resolve, so no package can be installed from it, and a repository feeding no package
@@ -1221,14 +1382,32 @@ async def install_a_hand_downloaded_deb(executor: BashLoginRemoteExecutor) -> st
     The package is empty — control metadata only, no files — so installing it changes
     nothing about the machine beyond dpkg's own records.
     """
-    uniq = uuid4().hex[:12]
-    name = f"pcswitcher-it-handdeb-{uniq}"
+    name = f"pcswitcher-it-handdeb-{uuid4().hex[:12]}"
+    result = await executor.run_command(hand_deb_install_snippet_body(name), login_shell=False, timeout=120.0)
+    assert result.success, f"Failed to build and install the hand-downloaded .deb on the source: {result.stderr}"
+    return name
+
+
+def hand_deb_install_snippet_body(name: str) -> str:
+    """The shell that builds and `dpkg --install`s the trivial package `name`.
+
+    Shared with the install snippet a `manual_deb_sync` test authors for the target: the
+    claim there is that the target ends up holding the same package the source holds, so
+    the seeding and the replay must not be two independent descriptions of it.
+
+    `install_local_deb` below builds a trivial `.deb` too, and the two are deliberately not
+    one helper yet: that one is parameterised on the VERSION and builds at a fixed
+    `/var/tmp/<name>` its own teardown removes, because its tests move a package from 1.0 to
+    2.0. This one is a self-contained shell expression with no fixed path, because it has to
+    run as a recorded snippet on a machine no test set up. Worth folding together, once one
+    shape can carry both.
+    """
     control = (
         f"Package: {name}\nVersion: 1.0\nArchitecture: all\n"
         "Maintainer: pc-switcher integration tests <nobody@example.invalid>\n"
         "Description: synthetic hand-downloaded package for pc-switcher integration tests\n"
     )
-    build = "\n".join(
+    return "\n".join(
         (
             "set -eu",
             f"build=$(mktemp --directory)/{name}",
@@ -1238,9 +1417,6 @@ async def install_a_hand_downloaded_deb(executor: BashLoginRemoteExecutor) -> st
             'sudo dpkg --install "$build.deb"',
         )
     )
-    result = await executor.run_command(build, login_shell=False, timeout=120.0)
-    assert result.success, f"Failed to build and install the hand-downloaded .deb on the source: {result.stderr}"
-    return name
 
 
 def no_candidate_item_id(name: str) -> str:
@@ -1251,11 +1427,28 @@ def no_candidate_item_id(name: str) -> str:
     return UnreproducibleItem(origin="apt-no-candidate", identifier=name, label=name).item_id
 
 
+def snap_sideload_item_id(name: str) -> str:
+    """The `UnreproducibleItem.item_id` a sideloaded snap produces
+    (`unreproducible:snap-sideload:<name>`). Identity is the NAME alone: reinstalling the
+    same sideload moves its revision, and an id carrying the revision would orphan the
+    snippet and the mark every time it did.
+    """
+    return UnreproducibleItem(origin="snap-sideload", identifier=name, label=name).item_id
+
+
+def flatpak_no_remote_item_id(scope: Literal["user", "system"], ref: str) -> str:
+    """The `UnreproducibleItem.item_id` a ref whose origin names no configured remote
+    produces (`unreproducible:flatpak-no-remote:<scope>:<ref>`) -- scope first, so adopting
+    a mark from `flatpak_sync` stays a prefix swap.
+    """
+    return UnreproducibleItem(origin="flatpak-no-remote", identifier=f"{scope}:{ref}", label=ref).item_id
+
+
 async def create_synthetic_pin(executor: BashLoginRemoteExecutor) -> str:
     """Create a uuid-suffixed `/etc/apt/preferences.d` file the target lacks, and return its
     filename.
 
-    A pin is in ADR-020 D-36's always-sync bucket: it travels with no review line and no
+    A pin is in `PKG-FR-PIN-ALWAYS`'s always-sync bucket: it travels with no review line and no
     derivation predicate, which makes it the cheapest real subject for the derived-write
     preview. Its stanza names a package and an origin neither machine has, so it is inert
     wherever it lands — a pin naming an absent origin changes nothing about apt's choices.
@@ -1804,7 +1997,7 @@ async def remove_the_rival_candidate(
     )
 
 
-# The two files ADR-020 D-38 gates on the target's Ubuntu Pro attachment, with the real
+# The two files `PKG-FR-DISTRO-FILES` gates on the target's Ubuntu Pro attachment, with the real
 # stanzas `pro enable` writes. Their `Signed-By:` keyrings ship with `ubuntu-pro-client`
 # on every Ubuntu 24.04, attached or not, so this is the file set a genuinely attached
 # source carries — not an approximation of it.
@@ -1845,6 +2038,222 @@ KILL_RUNNING_SYNC_CMD = "pkill --signal KILL --full 'pc-switcher[ ]sync'"
 # the orchestrator's private constant currently says would not assert.
 SNAP_HOLD_EXPECTED_DURATION = timedelta(hours=6)
 SNAP_HOLD_DURATION_SLACK = timedelta(minutes=15)
+
+
+# ---------------------------------------------------------------------------------
+# The apt half of the sync window: the system's own update timers, stopped for the run and
+# restored by a transient systemd timer that outlives the process.
+#
+# Every name and duration below is RESTATED rather than imported from `orchestrator`, on the
+# `SNAP_HOLD_EXPECTED_DURATION` precedent: what these tests assert is that a real systemd
+# holds these exact units under this exact unit name, which a test agreeing with whatever
+# the shipped constant currently says would not settle.
+# ---------------------------------------------------------------------------------
+
+APT_TIMERS = ("apt-daily.timer", "apt-daily-upgrade.timer")
+#: The services those timers trigger. `arm_apt_timers` has to unmask these along with the
+#: timers -- systemd will not start a timer whose triggered unit is masked -- and neuters
+#: their `ExecStart` instead, which is the guard it does assert.
+APT_TIMER_SERVICES = ("apt-daily.service", "apt-daily-upgrade.service")
+APT_TIMER_RESTORE_UNIT = "pc-switcher-apt-timers"
+APT_TIMER_EXPECTED_DURATION = timedelta(hours=6)
+APT_TIMER_DURATION_SLACK = timedelta(minutes=15)
+
+#: Where the test's own drop-ins go. `/run` is tmpfs, so one left behind by a failed cleanup
+#: dies at the next boot -- and the VM reset reboots before every session.
+APT_TIMER_DROPIN_DIR = "/run/systemd/system"
+APT_TIMER_DROPIN_NAME = "zz-pcswitcher-it.conf"
+
+
+def parse_systemctl_show_blocks(output: str) -> dict[str, dict[str, str]]:
+    """Parse `systemctl show`'s `Key=Value` blocks into `{unit id: {key: value}}`.
+
+    `systemctl show` emits one blank-line-separated block per unit ASKED, in order and
+    including units that do not exist. Written independently of
+    `orchestrator._parse_systemctl_show`, which is private to that module and is the thing
+    under test here: two parsers that agree are evidence, one parser checking itself is not.
+
+    A block with no `Id` is keyed by nothing and dropped -- systemd always emits `Id`, so
+    its absence means the block is not a unit.
+    """
+    blocks: dict[str, dict[str, str]] = {}
+    for chunk in output.split("\n\n"):
+        fields: dict[str, str] = {}
+        for line in chunk.splitlines():
+            key, separator, value = line.partition("=")
+            if separator:
+                fields[key.strip()] = value.strip()
+        if unit_id := fields.get("Id"):
+            blocks[unit_id] = fields
+    return blocks
+
+
+async def apt_timer_states(executor: BashLoginRemoteExecutor) -> dict[str, tuple[str, str]]:
+    """`{unit: (LoadState, ActiveState)}` for both apt timers, in one read.
+
+    The same question the orchestrator's own capture asks, so what a test asserts here is
+    what the run would have seen.
+    """
+    result = await executor.run_command(
+        f"systemctl show --property=Id --property=LoadState --property=ActiveState {' '.join(APT_TIMERS)}",
+        login_shell=False,
+        timeout=20.0,
+    )
+    blocks = parse_systemctl_show_blocks(result.stdout)
+    return {unit: (fields.get("LoadState", ""), fields.get("ActiveState", "")) for unit, fields in blocks.items()}
+
+
+async def pending_apt_timer_restore(executor: BashLoginRemoteExecutor) -> datetime | None:
+    """When the transient restore timer will next fire on `executor`, or `None` if the
+    machine has no such unit loaded.
+
+    `LoadState=not-found` is exactly the discriminator the product uses to decide whether a
+    dead run left a promise behind, so it is what "there is no pending restore" means here
+    too.
+
+    The deadline comes from `list-timers --output=json`, whose `next` is microseconds since
+    the epoch, NOT from `systemctl show`'s `NextElapseUSecRealtime`: despite the name, that
+    property renders as a formatted local timestamp ("Thu 2026-08-06 21:11:22 CEST" on
+    systemd 255, measured), which would have to be parsed back through the machine's own
+    locale and timezone. Every caller compares the result against `machine_utc_now`, never
+    this runner's clock -- the deadline was computed on the machine that must honour it.
+    """
+    unit = f"{APT_TIMER_RESTORE_UNIT}.timer"
+    loaded, listed = await asyncio.gather(
+        executor.run_command(
+            f"systemctl show --property=Id --property=LoadState {unit}", login_shell=False, timeout=20.0
+        ),
+        executor.run_command(f"systemctl list-timers --all --output=json {unit}", login_shell=False, timeout=20.0),
+    )
+    if parse_systemctl_show_blocks(loaded.stdout).get(unit, {}).get("LoadState") != "loaded":
+        return None
+    rows = json.loads(listed.stdout or "[]")
+    assert rows, (
+        f"{unit} is loaded on this machine but `systemctl list-timers` does not list it, so there is no deadline "
+        f"to hold it to.\n{listed.stdout}"
+    )
+    return datetime.fromtimestamp(int(rows[0]["next"]) / 1_000_000, tz=UTC)
+
+
+@dataclass(frozen=True)
+class AptTimerBaseline:
+    """Which of the four apt units `arm_apt_timers` found masked, so the restore puts back
+    exactly what was there rather than a guess at it.
+    """
+
+    masked: tuple[str, ...]
+
+
+def _dropin_command(unit: str, body: str) -> str:
+    """The shell that writes one `/run` drop-in for `unit`."""
+    directory = f"{APT_TIMER_DROPIN_DIR}/{unit}.d"
+    return (
+        f"sudo mkdir --parents {shlex.quote(directory)} && printf %s {shlex.quote(body)} | "
+        f"sudo tee {shlex.quote(f'{directory}/{APT_TIMER_DROPIN_NAME}')} > /dev/null"
+    )
+
+
+async def arm_apt_timers(executor: BashLoginRemoteExecutor) -> AptTimerBaseline:
+    """Make both apt timers loaded and active on `executor` for the duration of one test,
+    and return what to put back.
+
+    The VM baseline disables and MASKS both timers and both services
+    (`vm-test-fixtures.sh`), because a background apt taking the dpkg frontend lock breaks
+    whichever test pytest-randomly schedules into that window. The orchestrator only ever
+    touches timers it finds loaded AND active, so on an unmodified VM the whole feature is
+    inert and nothing about it can be observed.
+
+    The services have to be unmasked along with the timers: systemd will not start a timer
+    whose triggered unit is masked, so leaving the mask on as a safety net makes arming
+    impossible -- measured, on the run where it failed exactly that way.
+
+    What replaces the mask is a stronger guard, because it constrains what the service DOES
+    rather than whether it can be reached: a drop-in that blanks `ExecStart` and puts
+    `/bin/true` in its place. A timer that somehow fires then runs `/bin/true` and touches
+    no apt. That is asserted here, not assumed -- if the override ever stops taking effect,
+    this refuses to arm rather than turning a test window into a real `apt-daily-upgrade`.
+    Two further guards sit behind it: a `Persistent=false` drop-in on each timer, so
+    activating one whose window elapsed long ago does not fire it immediately to catch up,
+    and `apt-daily`'s own `OnCalendar` window with its randomised delay.
+
+    Every drop-in lives in `/run`, which is tmpfs, so one left behind by a failed cleanup
+    dies at the next boot -- and the VM reset reboots before every session.
+    """
+    units = (*APT_TIMERS, *APT_TIMER_SERVICES)
+    before = await executor.run_command(
+        f"systemctl show --property=Id --property=LoadState {' '.join(units)}", login_shell=False, timeout=20.0
+    )
+    blocks = parse_systemctl_show_blocks(before.stdout)
+    baseline = AptTimerBaseline(
+        masked=tuple(unit for unit, fields in blocks.items() if fields.get("LoadState") == "masked")
+    )
+
+    dropins = " && ".join(
+        [_dropin_command(timer, "[Timer]\nPersistent=false\n") for timer in APT_TIMERS]
+        + [_dropin_command(service, "[Service]\nExecStart=\nExecStart=/bin/true\n") for service in APT_TIMER_SERVICES]
+    )
+    armed = await executor.run_command(
+        f"{dropins} && sudo systemctl unmask {' '.join(units)} && sudo systemctl daemon-reload"
+        f" && sudo systemctl start {' '.join(APT_TIMERS)}",
+        login_shell=False,
+        timeout=60.0,
+    )
+    assert armed.success, (
+        f"could not arm the apt timers on this machine (exit {armed.exit_code}).\n"
+        f"stdout: {armed.stdout}\nstderr: {armed.stderr}"
+    )
+
+    # The guard the safety of this whole helper rests on, read back off systemd itself.
+    neutered = await executor.run_command(
+        f"systemctl show --property=Id --property=ExecStart {' '.join(APT_TIMER_SERVICES)}",
+        login_shell=False,
+        timeout=20.0,
+    )
+    for service, fields in parse_systemctl_show_blocks(neutered.stdout).items():
+        exec_start = fields.get("ExecStart", "")
+        assert "/bin/true" in exec_start and "apt" not in exec_start, (
+            f"{service} would still run {exec_start!r} if its timer fired, so arming it could take the dpkg lock "
+            f"from whatever else is running. The ExecStart override did not take effect."
+        )
+
+    states = await apt_timer_states(executor)
+    inactive = sorted(unit for unit, (_load, active) in states.items() if active != "active")
+    assert not inactive, f"{inactive} did not come up active after arming, so there is no suspension to observe"
+    return baseline
+
+
+async def restore_apt_timer_mask(executor: BashLoginRemoteExecutor, prior: AptTimerBaseline) -> None:
+    """Put `executor`'s apt timers and their services back exactly as `arm_apt_timers` found
+    them: masked if they were masked, and carrying none of this test's drop-ins.
+
+    Stop BEFORE masking: masking an active unit leaves it running, which would hand the
+    rest of the session an armed timer wearing a mask. The whole drop-in DIRECTORY goes,
+    not just the file in it, so nothing is left for a later `daemon-reload` to read.
+    """
+    steps = [f"sudo systemctl stop {' '.join(APT_TIMERS)} || true"]
+    if prior.masked:
+        steps.append(f"sudo systemctl mask {' '.join(prior.masked)} || true")
+    steps += [
+        f"sudo rm --recursive --force {shlex.quote(f'{APT_TIMER_DROPIN_DIR}/{unit}.d')}"
+        for unit in (*APT_TIMERS, *APT_TIMER_SERVICES)
+    ]
+    steps.append("sudo systemctl daemon-reload")
+    result = await executor.run_command("; ".join(steps), login_shell=False, timeout=60.0)
+    if not result.success:
+        print(f"[cleanup] failed to restore the apt timers' mask: {result.stderr}")
+
+
+async def cancel_pending_apt_timer_restore(executor: BashLoginRemoteExecutor) -> None:
+    """Drop the transient restore unit a killed run left behind, so it cannot fire into a
+    later test in this session. Best-effort: a machine that never had one is not an error.
+    """
+    result = await executor.run_command(
+        f"sudo systemctl stop {APT_TIMER_RESTORE_UNIT}.timer {APT_TIMER_RESTORE_UNIT}.service || true",
+        login_shell=False,
+        timeout=30.0,
+    )
+    if not result.success:
+        print(f"[cleanup] failed to cancel {APT_TIMER_RESTORE_UNIT}: {result.stderr}")
 
 
 # ---------------------------------------------------------------------------------
@@ -2210,13 +2619,13 @@ async def assert_every_manager_converged(
 
     apt installs what the target lost, removes what the source lost, and registers the
     source's hold with no review line of its own (`PKG-FR-BLOCKS-DERIVED`). snap lands the
-    target on the source's revision without either machine's `refresh.hold` moving (D-06),
+    target on the source's revision without either machine's `refresh.hold` moving (`PKG-FR-SNAP-REVISION`),
     and the source's per-snap hold reaches the target's `snap list` Notes through the very
     window the orchestrator holds snapd in (#208 D9). flatpak provisions the remote BEFORE
-    installing the ref that needs it (D-14), carrying the real signing key (#215) and the
+    installing the ref that needs it (`PKG-FR-APT-ORIGIN-DERIVED`), carrying the real signing key (#215) and the
     source's ref filter, deletes the target-only remote together with its keyring, and leaves
     the unused remote -- which no approved ref comes from -- on the source alone. manual
-    installs pushes the registry and replays the snippet in the same run (D-23).
+    installs pushes the registry and replays the snippet in the same run (`PKG-FR-MANUAL-SAME-RUN`).
 
     The source's own `MachinePackageState` is identical across all of it
     (`PKG-FR-SOURCE-INTENT`): a run that genuinely installs, removes and re-revisions on the
@@ -2258,8 +2667,9 @@ async def assert_every_manager_converged(
     )
     for hold_after, machine in ((source_hold_after, "the source"), (target_hold_after, "the target")):
         assert hold_after is not None, (
-            f"the run left {machine} without the refresh.hold this scenario engaged -- D-06 forbids the convergence "
-            "mechanism from touching either machine's auto-refresh policy"
+            f"the run left {machine} without the refresh.hold this scenario engaged -- "
+            "`PKG-FR-SNAP-REVISION` forbids the convergence mechanism from touching either "
+            "machine's auto-refresh policy"
         )
 
     after_remotes = nonblank_lines(
@@ -2311,7 +2721,7 @@ async def assert_every_manager_converged(
     ref_index = run_output.find(ref_marker)
     assert remote_index != -1, f"derived remote write log line not found: {remote_marker!r}"
     assert ref_index != -1, f"ref converge log line not found: {ref_marker!r}"
-    assert remote_index < ref_index, "remote must be provisioned before the ref installs (D-14)"
+    assert remote_index < ref_index, "remote must be provisioned before the ref installs (`PKG-FR-APT-ORIGIN-DERIVED`)"
 
     registry_exists = await target.run_command(f"test -f {seed.registry_relpath}", login_shell=False, timeout=10.0)
     assert registry_exists.success, (
@@ -2699,9 +3109,9 @@ async def restore_after_the_pending_writes(
 # cleanup cannot be mistaken for another test's marker.
 VERSION_SUBJECT_PATH = "/opt/pcswitcher-it-versioned"
 
-# What the subject's installed-version snippet reads. A plain file, so seeding a version is
-# one `tee` and reading one back needs no parser.
-VERSION_SUBJECT_FILE = f"{VERSION_SUBJECT_PATH}/version"
+# The version itself lives in `<path>/version`, derived at each use site rather than named
+# once here: every helper takes the path as a parameter, so a constant over the default
+# would only be right for the default.
 
 # Where this test's installed-version snippet records that it RAN, per machine. A real
 # version snippet must be read-only (`PKG-FR-VERSION-SNIPPET`) and this one deliberately is
@@ -2790,6 +3200,10 @@ async def install_local_deb(executor: BashLoginRemoteExecutor, name: str, versio
     package apt has never heard of has that shape. `apt-mark manual` on a repo package
     changes a selection state and would leave the name reproducible, so this job would
     correctly refuse to remove it.
+
+    Kept separate from `hand_deb_install_snippet_body` for the reasons stated there: this
+    one carries a version and a fixed build directory, that one has to be replayable as a
+    snippet on a machine no test prepared.
     """
     build_dir = f"/var/tmp/{name}"
     control = (

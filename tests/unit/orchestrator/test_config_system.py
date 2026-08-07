@@ -393,7 +393,8 @@ sync_jobs:
         assert config.sync_jobs.get("dummy_fail") is False
 
     def test_manual_installs_sync_is_an_accepted_job_name(self, tmp_path: Path) -> None:
-        """The schema accepts `manual_installs_sync` as a valid sync_jobs key (D-15/D-18):
+        """The schema accepts `manual_installs_sync` as a valid sync_jobs key
+        (`PKG-FR-JOB-INDEPENDENCE`/`PKG-FR-MANUAL-SCOPE`):
         the fourth package job has its own independent enable flag."""
         config_file = tmp_path / "config.yaml"
         config_file.write_text(
@@ -409,7 +410,8 @@ sync_jobs:
         assert config.sync_jobs["manual_installs_sync"] is True
 
     def test_manual_deb_sync_is_an_accepted_job_name(self, tmp_path: Path) -> None:
-        """The schema accepts `manual_deb_sync` as a valid sync_jobs key (D-15/D-18): the
+        """The schema accepts `manual_deb_sync` as a valid sync_jobs key
+        (`PKG-FR-JOB-INDEPENDENCE`/`PKG-FR-MANUAL-SCOPE`): the
         hand-`.deb` half is its own job on its own enable flag, and enabling one
         unreproducible job says nothing about the other."""
         config_file = tmp_path / "config.yaml"
@@ -427,7 +429,8 @@ sync_jobs:
         assert "manual_installs_sync" not in config.sync_jobs
 
     def test_manual_snap_sync_is_an_accepted_job_name(self, tmp_path: Path) -> None:
-        """The schema accepts `manual_snap_sync` as a valid sync_jobs key (D-15/D-18): the
+        """The schema accepts `manual_snap_sync` as a valid sync_jobs key
+        (`PKG-FR-JOB-INDEPENDENCE`/`PKG-FR-MANUAL-SCOPE`): the
         sideloaded-snap half is its own job on its own enable flag, and enabling it says
         nothing about `snap_sync`."""
         config_file = tmp_path / "config.yaml"
@@ -447,7 +450,8 @@ sync_jobs:
 
     def test_manual_flatpak_sync_is_an_accepted_job_name(self, tmp_path: Path) -> None:
         """G138 — the schema accepts `manual_flatpak_sync` as a valid sync_jobs key
-        (D-15/D-18): refs no remote can supply are their own job on their own enable flag,
+        (`PKG-FR-JOB-INDEPENDENCE`/`PKG-FR-MANUAL-SCOPE`): refs no remote can supply are their own job on their own
+        enable flag,
         and enabling one unreproducible job says nothing about the others."""
         config_file = tmp_path / "config.yaml"
         config_file.write_text(
@@ -838,7 +842,7 @@ class TestShippedDefaultConfig:
         assert config.sync_jobs["manual_installs_sync"] is False
 
     def test_package_jobs_precede_folder_sync(self) -> None:
-        """K24 — D-17: all seven package jobs (apt_sync, snap_sync, flatpak_sync,
+        """K24 — `PKG-FR-JOB-ORDER`: all seven package jobs (apt_sync, snap_sync, flatpak_sync,
         manual_deb_sync, manual_snap_sync, manual_flatpak_sync, manual_installs_sync) resolve before
         folder_sync in sync_jobs
         insertion order — the order both _discover_and_validate_jobs and _first_sync_scopes
@@ -909,7 +913,7 @@ sync_jobs:
 
 
 class TestPackageJobsBeforeFolderSyncStructuralCheck:
-    """WR-02 regression: D-17 ordering must be a structural `ConfigError`, not just a
+    """WR-02 regression: `PKG-FR-JOB-ORDER` ordering must be a structural `ConfigError`, not just a
     convention the shipped `default-config.yaml`'s key order happens to satisfy — a
     user who hand-edits their own `config.yaml` (e.g. appending a newly-enabled
     `flatpak_sync: true` after an existing `folder_sync: true` line) must get a loud

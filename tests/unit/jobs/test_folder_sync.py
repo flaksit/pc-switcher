@@ -446,7 +446,7 @@ class TestBuildRsyncCmd:
 
     Each test directly inspects the returned shell command string for the
     presence or absence of specific flags and arguments (injection-safe per
-    T-05-01, correct flag baseline per D-13, D-05, D-14).
+    T-05-01, correct flag baseline per ADR-013).
     """
 
     def _build(
@@ -468,7 +468,7 @@ class TestBuildRsyncCmd:
             return job._build_rsync_cmd(folder, dry_run)
 
     def test_base_flags_present(self) -> None:
-        """Command contains the full D-13 flag baseline."""
+        """Command contains ADR-013's full flag baseline."""
         cmd = self._build()
         for flag in ("--archive", "--acls", "--xattrs", "--hard-links", "--sparse"):
             assert flag in cmd
@@ -504,7 +504,7 @@ class TestBuildRsyncCmd:
         assert "-l testuser" in cmd
 
     def test_no_forbidden_flags(self) -> None:
-        """Command never includes --delete-excluded or --checksum (D-06, D-14)."""
+        """Command never includes --delete-excluded or --checksum (ADR-013)."""
         cmd = self._build(filter_file="/abs/path with space/home.filter")
         assert "--delete-excluded" not in cmd
         assert "--checksum" not in cmd
@@ -705,7 +705,7 @@ class TestDecisionFileExcludeFilters:
     """Every manager's machine-local decision file (`~/.config/pc-switcher/*.decisions.yaml`)
     is excluded from the mirror via a home-relative GLOB that `packages.state` owns;
     folder_sync only translates it into a root-anchored, first-match filter for the
-    folder being synced (D-08, D-09). Unconditional — not gated on any package job.
+    folder being synced (`PKG-FR-MACHINE-SPECIFIC`). Unconditional — not gated on any package job.
     """
 
     def _filters(self, folder_path: str, home: str) -> list[str]:
@@ -811,7 +811,7 @@ class TestSnippetRegistryExcludeFilters:
 class TestSnapSyncExcludeFilters:
     """The `~/snap/<app>/<revision>` directories `snap_sync` owns are excluded via
     absolute paths that module owns; folder_sync only translates each into a
-    root-anchored, first-match filter for the folder being synced (D-29). Which revision
+    root-anchored, first-match filter for the folder being synced (`PKG-FR-SNAP-DATA-BOUNDARY`). Which revision
     dirs those are depends on the revisions the TARGET is on, which `execute` reads and
     passes down — see `TestPackageJobExcludeFiltersGating`.
     """
@@ -854,7 +854,7 @@ class TestSnapSyncExcludeFilters:
 class TestFlatpakSyncExcludeFilters:
     """`~/.local/share/flatpak`, which `flatpak_sync` owns, is excluded via the
     absolute path that module owns; folder_sync only translates it into a
-    root-anchored, first-match filter for the folder being synced (D-29). Gating on
+    root-anchored, first-match filter for the folder being synced (`PKG-FR-DATA-BOUNDARY`). Gating on
     `flatpak_sync` being enabled happens at the `_build_rsync_cmd` call site, not here
     — see `TestPackageJobExcludeFiltersGating`.
     """
@@ -876,7 +876,7 @@ class TestFlatpakSyncExcludeFilters:
 
 
 class TestPackageJobExcludeFiltersGating:
-    """What each package exclusion is conditioned on in the built rsync command (D-29).
+    """What each package exclusion is conditioned on in the built rsync command (`PKG-FR-DATA-BOUNDARY`).
     `flatpak_sync`'s store is excluded only when that job is enabled, read from
     `JobContext.enabled_sync_jobs` and never from `self.context.config` (that field is
     folder_sync's OWN config section). The snap revision dirs are conditioned on the

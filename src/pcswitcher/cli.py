@@ -439,7 +439,7 @@ async def _async_run_sync(  # noqa: PLR0913 - CLI flags threaded to the orchestr
         try:
             session = await main_task
             # A completed run is not automatically a clean one: per-item job failures are
-            # collected rather than raised (D-27), so the exit code comes from the session
+            # collected rather than raised (`PKG-FR-OUTCOME-FAILED`), so the exit code comes from the session
             # status the orchestrator derived from job_results, not from "nothing raised".
             #
             # Nothing is printed here: the orchestrator's end-of-run block has already named

@@ -1,5 +1,5 @@
 """Which `/etc/apt` files travel without a review line of their own, and who pays when one
-fails to land (ADR-020 D-37/D-38/D-39).
+fails to land (`PKG-FR-REPO-DERIVED`/`PKG-FR-DISTRO-FILES`/`PKG-FR-DERIVED-FAILURE`).
 
 Three buckets, in the order they are written, and each is a different answer to "why does
 this file travel":
@@ -14,7 +14,7 @@ this file travel":
   syncs stays where it is.
 
 A derived write has no item, so it cannot fail as one. It is recorded against its destination
-and charged to every approved package whose origin depended on it (D-39) — the refusal lands
+and charged to every approved package whose origin depended on it (`PKG-FR-DERIVED-FAILURE`) — the refusal lands
 on the thing the user actually decided about, naming the file.
 """
 
@@ -77,11 +77,11 @@ class DerivedWrites:
         self._repo_writes: tuple[str, ...] = ()
         # `{absolute destination: why it failed}`. A derived write fails no item of its own —
         # there is no item — so it is recorded here and charged to every approved package
-        # that needed the file (D-39). A rollback puts EVERY derived write in here, matching
+        # that needed the file (`PKG-FR-DERIVED-FAILURE`). A rollback puts EVERY derived write in here, matching
         # what it already does to the reviewed half of the group.
         self._failed: dict[str, str] = {}
         # `{package item_id: the derived destinations that package needs}`, the inverse
-        # lookup D-39's attribution runs at install time.
+        # lookup `PKG-FR-DERIVED-FAILURE`'s attribution runs at install time.
         self._package_dests: dict[str, frozenset[str]] = {}
 
     @property
@@ -129,13 +129,13 @@ class DerivedWrites:
         withheld_esm: frozenset[str],
     ) -> None:
         """Turn the accepted decisions into the `/etc/apt` files this run writes WITHOUT a
-        review line (ADR-020 D-37/D-38) — the counterpart to the reviewed half the repository
+        review line (`PKG-FR-REPO-DERIVED`/`PKG-FR-DISTRO-FILES`) — the counterpart to the reviewed half the repository
         unit carries.
 
         Only files the target lacks or holds different bytes for are listed — an identical
         file needs no write and can therefore fail nothing. `_package_dests` records which
         packages each write serves, because a derived write has no item of its own to fail
-        (D-39) and must charge its failure to the packages that needed it.
+        (`PKG-FR-DERIVED-FAILURE`) and must charge its failure to the packages that needed it.
         """
         self._failed = {}
         self._package_dests = {}
@@ -152,10 +152,11 @@ class DerivedWrites:
         # A conflict the user declined is a file this run may NOT write (ruling 6). It is
         # seeded as a failed derived write rather than merely dropped, because a package
         # whose origin depended on it cannot be delivered and installing it anyway would put
-        # the wrong vendor's software on the target — the one outcome D-34 exists to prevent.
+        # the wrong vendor's software on the target — the one outcome `PKG-FR-APT-IDENTITY` exists to prevent.
         skipped = {
             source_file_destination(filename): (
-                f"the user chose to keep {self._machines.target}'s version of this file for now (ADR-020 D-37)"
+                f"the user chose to keep {self._machines.target}'s version of this file for now "
+                "(`PKG-FR-REPO-CONFLICT`)"
             )
             for filename in conflicts
             if decisions.get(f"{CONFLICT_ID_PREFIX}{filename}") != Decision.APPLY
@@ -190,7 +191,7 @@ class DerivedWrites:
             if origin_plan is None:
                 continue
             # The attribution set keeps a skipped conflict; the write list does not. That
-            # asymmetry IS D-39's rule: the package still depended on the file.
+            # asymmetry IS `PKG-FR-DERIVED-FAILURE`'s rule: the package still depended on the file.
             needed = {
                 source_file_destination(filename)
                 for filename in origin_plan.derived_files
@@ -205,7 +206,7 @@ class DerivedWrites:
         self._failed[dest] = reason
 
     def fail_all(self, message: str) -> None:
-        """Mark every derived write failed — the rollback path (D-39).
+        """Mark every derived write failed — the rollback path (`PKG-FR-DERIVED-FAILURE`).
 
         The derived half needs the same treatment for the same reason a rollback fails items
         whose own write succeeded: what landed on the target is the pre-run state, so every
@@ -243,7 +244,7 @@ class DerivedWrites:
 
     def install_refusal(self, item_id: str, name: str) -> str | None:
         """Why this approved install may not run because a file it needed never landed
-        (D-39), or `None` when every derived file it depends on is in place.
+        (`PKG-FR-DERIVED-FAILURE`), or `None` when every derived file it depends on is in place.
 
         The attribution a derived write cannot make for itself: it has no item, so its
         failure has to be charged to the packages whose origin depended on it. Naming the

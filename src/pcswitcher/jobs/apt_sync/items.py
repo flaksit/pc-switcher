@@ -6,7 +6,7 @@ means "the file `/etc/apt/preferences.d/99-foo`", and a split between the two ha
 let an id exist that resolves to no path. Everything here is pure — no command, no I/O, no
 decision. `packages/items.py` keeps the taxonomy every manager is keyed on
 (`ItemClass`/`DiffClass`/`DiffAction`); these are apt's own shapes, which only this job
-constructs (D-15).
+constructs (`PKG-FR-JOB-INDEPENDENCE`).
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ from pcswitcher.jobs.packages.items import DiffAction, ItemClass, ItemDiff
 # rooted there has an unambiguous exit code (ADR-022).
 APT_ROOT_DIR = "/etc/apt"
 
-# The five `/etc/apt/*` directories D-11/D-13 pull into scope, each captured with one
+# The five `/etc/apt/*` directories `PKG-FR-REPO-DERIVED`/`PKG-FR-APT-IGNORES` pull into scope, each captured with one
 # batched `sha256sum` listing (never one command per file).
 APT_SOURCES_DIR = "/etc/apt/sources.list.d"
 # Which files apt reads in this directory and in the other two fragment directories is
@@ -32,21 +32,21 @@ APT_SOURCES_DIR = "/etc/apt/sources.list.d"
 # apt's other source location. It is scanned for keyring references, because a keyring named
 # only here is still in use and deleting it would break apt — the clearest instance of "a
 # source file this tool does not sync still counts as a reference" — and its digest is
-# captured on both machines, which is what ADR-020 D-38's write-when-missing/overwrite-when-
+# captured on both machines, which is what `PKG-FR-DISTRO-FILES`'s write-when-missing/overwrite-when-
 # different rule compares. It is never a removal candidate in any direction.
 APT_SOURCES_LIST = "/etc/apt/sources.list"
-# The distribution's own source files in `sources.list.d` (ADR-020 D-38). Exact names, not
+# The distribution's own source files in `sources.list.d` (`PKG-FR-DISTRO-FILES`). Exact names, not
 # a `ubuntu-esm-*` glob: a glob would also swallow a file a user happened to name
 # `ubuntu-esm-mine.sources`, and the set is short enough to enumerate.
 DISTRO_SOURCE_FILENAMES = frozenset({"ubuntu.sources", "ubuntu-esm-apps.sources", "ubuntu-esm-infra.sources"})
 # The subset of the above that only a Pro-attached machine can actually fetch from, and so
 # the only two files in the always-sync bucket that are gated on the target's attachment
-# (D-38). Measured: `esm.ubuntu.com` serves its INDEX publicly, so an unattached target's
+# (`PKG-FR-DISTRO-FILES`). Measured: `esm.ubuntu.com` serves its INDEX publicly, so an unattached target's
 # `apt-get update` still exits 0 and the ESM suites enter candidate selection at priority
 # 500 — above `noble/universe`. Only the pool is 401, so the failure surfaces much later,
 # as `apt-get install` exiting 100 on the `.deb`, which no user connects back to a sync.
 ESM_SOURCE_FILENAMES = frozenset({"ubuntu-esm-apps.sources", "ubuntu-esm-infra.sources"})
-# The filenames whose URIs count as DISTRIBUTION ORIGINS, computed per machine (D-35): a
+# The filenames whose URIs count as DISTRIBUTION ORIGINS, computed per machine (`PKG-FR-APT-ORIGIN-VERIFY`): a
 # package apt serves from one of these is served by the distribution, not by a vendor, so
 # two machines pointed at different Ubuntu mirrors must not read as two different vendors.
 # `/etc/apt/sources.list` joins the set by basename, which is how the reference scan keys it.
@@ -143,7 +143,7 @@ def collateral_name(item_id: str) -> str:
 
 # -- apt's own item shapes -------------------------------------------------------------
 #
-# A shape only this job constructs is this job's business (D-15): while the package diff
+# A shape only this job constructs is this job's business (`PKG-FR-JOB-INDEPENDENCE`): while the package diff
 # lived on `PackageSyncJob`, the other three managers inherited hold sets, pin facts and
 # no-candidate ids they never fill in, and each wrote its own diff anyway -- because what
 # a diff even IS differs per ecosystem.
@@ -151,7 +151,7 @@ def collateral_name(item_id: str) -> str:
 
 @dataclass(frozen=True)
 class AptPackageItem:
-    """One manually-installed apt package (D-03), captured from `apt-mark showmanual`
+    """One manually-installed apt package (`PKG-FR-APT-SCOPE`), captured from `apt-mark showmanual`
     plus one batched `dpkg-query` call for versions.
     """
 
@@ -197,7 +197,7 @@ class AptHoldItem:
 
 @dataclass(frozen=True)
 class AptSourceItem:
-    """One apt repository definition file under `/etc/apt/sources.list.d` (D-11).
+    """One apt repository definition file under `/etc/apt/sources.list.d` (`PKG-FR-REPO-DERIVED`).
 
     Identity is the FILENAME (package docstring), not the parsed repository URI: a
     legacy `.list` and a deb822 `.sources` file can coexist describing the same repo
@@ -231,12 +231,12 @@ class AptSourceItem:
 
 @dataclass(frozen=True)
 class AptPinItem:
-    """One apt pin-preference file under `/etc/apt/preferences.d` (D-13).
+    """One apt pin-preference file under `/etc/apt/preferences.d` (`PKG-FR-APT-IGNORES`).
 
     Diffed by whole-file digest, never by parsed stanza. The package names a pin file
-    mentions are deliberately not carried: under ADR-020 D-36 a pin is mechanism, and its
+    mentions are deliberately not carried: under `PKG-FR-PIN-ALWAYS` a pin is mechanism, and its
     only effect — which origin wins — is read back from the target's real candidate
-    origins after the refresh (D-35), not predicted from the stanzas here.
+    origins after the refresh (`PKG-FR-APT-ORIGIN-VERIFY`), not predicted from the stanzas here.
     """
 
     filename: str
@@ -256,7 +256,7 @@ class AptPinItem:
 
 @dataclass(frozen=True)
 class AptConfigItem:
-    """One apt behavior-configuration file under `/etc/apt/apt.conf.d` (D-13).
+    """One apt behavior-configuration file under `/etc/apt/apt.conf.d` (`PKG-FR-APT-IGNORES`).
 
     Synced as an opaque item — whole-file digest only, no parsing of apt's config
     grammar — since these files are plain, hand-authored `Acquire::.../APT::...`
@@ -327,7 +327,7 @@ class RemovalVocabulary(NamedTuple):
 
 
 # The two `/etc/apt` item classes whose ONLY remaining review direction is deletion, and
-# the words each reads with (ADR-020 D-37, rulings 5 and 12). Both take two answers — delete
+# the words each reads with (`PKG-FR-REPO-DELETE`/`PKG-FR-PIN-DELETE`). Both take two answers — delete
 # or leave it for now — so both carry `REPO_REMOVAL_REVIEW_ACTION`; keeping them as two
 # entries is what gives the user two separate screens rather than one mixed list.
 # `remove`, not "delete repository"/"delete pin file": the action label is also the word in
@@ -371,12 +371,12 @@ def source_file_destination(filename: str) -> str:
 
 
 def is_collateral_diff(diff: ItemDiff) -> bool:
-    """A manual-collateral item, identified by its stable id prefix (D-30). These carve
+    """A manual-collateral item, identified by its stable id prefix (`PKG-FR-COLLATERAL-MANUAL`). These carve
     into their own `COLLATERAL_REVIEW_ACTION` group rather than a checkbox group."""
     return diff.item_id.startswith(COLLATERAL_ID_PREFIX)
 
 
 def is_repo_removal_diff(diff: ItemDiff) -> bool:
     """A `/etc/apt` repository or pin DELETION — the only direction either class still
-    reaches the user in, and a two-answer one (ADR-020 D-07)."""
+    reaches the user in, and a two-answer one (`PKG-FR-SKIP-ONCE`)."""
     return diff.item_class in REPO_REMOVAL_VERBS and diff.action is DiffAction.REMOVE

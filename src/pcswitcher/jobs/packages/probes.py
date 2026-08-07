@@ -1,6 +1,6 @@
 """The fail-fast boundary for package-manager READS (ADR-022).
 
-Free functions, not a base class: ADR-020 D-15/D-16 keeps the four package jobs
+Free functions, not a base class: `PKG-FR-JOB-INDEPENDENCE` keeps the four package jobs
 independent, and a guard every job needs is exactly the kind of thing a shared base class
 would smuggle a manager's assumptions into. `apt_policy.py` is the precedent.
 
@@ -39,7 +39,7 @@ class ProbeFailed(RuntimeError):
 
     Deliberately NOT a `ConvergeItemFailed`. That type means "what we asked for is wrong",
     which is under our control, belongs to one item, and lets the job continue (ADR-020
-    D-27). This one means the tool or the machine is broken — a transient network failure,
+    `PKG-FR-OUTCOME-FAILED`). This one means the tool or the machine is broken — a transient network failure,
     a package-manager lock, an interrupted dpkg, a daemon that is not running — which no
     item's own state explains. It escapes the per-item loops on purpose, so the job fails
     ONCE naming the command that failed rather than N times naming N items.

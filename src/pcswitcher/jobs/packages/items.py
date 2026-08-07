@@ -1,4 +1,4 @@
-"""Item model shared by every package job (D-02, ADR-020).
+"""Item model shared by every package job (ADR-020, ADR-020).
 
 Item identity is the primary key for the whole subsystem: every package, apt source,
 signing key, pin, config file, snap, snap channel, flatpak ref, flatpak remote and
@@ -11,7 +11,7 @@ manager produced it.
 What belongs here is only what more than one manager uses. A shape only `snap_sync`
 constructs lives in `snap_sync`; `AptSourceItem` lives in `apt_sync`; a detail string
 only `flatpak_sync` writes lives in `flatpak_sync`. The four jobs are deliberately
-independent (D-15), and a registry of everyone's private shapes is a shared surface
+independent (`PKG-FR-JOB-INDEPENDENCE`), and a registry of everyone's private shapes is a shared surface
 they have to agree on — it couples the jobs without any of them gaining a thing.
 
 `ItemClass` and `DiffClass` stay whole here even though each member is produced by one
@@ -53,11 +53,12 @@ class Machines:
 
 
 class ItemClass(StrEnum):
-    """The full D-02 item-class taxonomy.
+    """The full ADR-020 item-class taxonomy.
 
     Not every member is reviewable in every direction. `APT_SOURCE` and `APT_PIN` identify
     reviewed REMOVALS only, and `FLATPAK_REMOTE` likewise: adds and changes for all three
-    are derived from the packages or refs approved from them (ADR-020 D-34/D-36/D-41) and
+    are derived from the packages or refs approved from them
+    (`PKG-FR-APT-IDENTITY`/`PKG-FR-PIN-ALWAYS`/`PKG-FR-FLATPAK-REMOTE-DERIVED`) and
     carry no `item_id` at all. `SNAP_CHANNEL` never becomes a standalone item; see
     `SnapItem`'s docstring. A signing key has no member here in any direction.
     """
@@ -77,11 +78,11 @@ class ItemClass(StrEnum):
 
 
 class DiffClass(StrEnum):
-    """The full D-25 conflict taxonomy. Each manager's own diff decides which members it
+    """The full diff/conflict taxonomy. Each manager's own diff decides which members it
     can produce; the enum is the definition of what the shared review and the decision
     files can carry, not one manager's business.
 
-    `REPO_UNAVAILABLE` and `ORIGIN_MISMATCH` are the two provenance members (ADR-020 D-34)
+    `REPO_UNAVAILABLE` and `ORIGIN_MISMATCH` are the two provenance members (`PKG-FR-APT-IDENTITY`)
     and are about WHERE an item comes from, not whether it is present:
 
     - `REPO_UNAVAILABLE` — the source's origin cannot be provided on the target, so the
@@ -93,7 +94,7 @@ class DiffClass(StrEnum):
 
     There is deliberately no `HELD_OR_PINNED` member. A hold replicates as its own
     `apt:hold:`/`snap:hold:` membership item, and a pin's only effect — which origin wins —
-    is read back off the target after the refresh (ADR-020 D-35) rather than echoed onto
+    is read back off the target after the refresh (`PKG-FR-APT-ORIGIN-VERIFY`) rather than echoed onto
     every package a pin file happens to name. Such an echo makes a target-only package
     named by any pin impossible to remove: `REPORT_ONLY` outranks its own
     `EXTRA_ON_TARGET`/`REMOVE` diff, and a report-only item cannot be skipped-always
@@ -109,7 +110,7 @@ class DiffClass(StrEnum):
 
 
 class DiffAction(StrEnum):
-    """The concrete converge verb a diff implies (D-07's direction-dependent "apply").
+    """The concrete converge verb a diff implies (`PKG-FR-SKIP-ONCE`'s direction-dependent "apply").
 
     Values match `packages.review`'s private removal-action set (`{"remove", "delete",
     "disable"}`) so a `ReviewGroup` built from these actions gets the right
@@ -126,7 +127,7 @@ class DiffAction(StrEnum):
 class ItemDiff:
     """One item's diff result — the one shape the review and converge loop both consume.
 
-    This is D-02's "all classes flow through one pipeline" made real: regardless of
+    This is ADR-020's "all classes flow through one pipeline" made real: regardless of
     which manager or item class produced it, `PackageSyncJob.apply()` and
     `packages.review.review_items()` only ever see `ItemDiff`/`ReviewEntry` shapes.
 
@@ -166,7 +167,7 @@ class ItemDiff:
 def build_version_mismatch_detail(source_version: str, target_version: str, machines: Machines) -> str:
     """Detail string for a `VERSION_MISMATCH` diff: both versions, machine-labelled.
 
-    Showing both versions in the review text is what makes D-04's "detected and
+    Showing both versions in the review text is what makes `PKG-FR-VERSION-FLOAT`'s "detected and
     reported, never force-downgraded" promise visible to the user — nothing here
     proposes a resolution, it names the two facts and leaves the decision alone.
     """

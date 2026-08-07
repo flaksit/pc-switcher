@@ -1,14 +1,15 @@
 """`apt_sync`: apt package convergence — install, remove, and the full diff taxonomy
-(D-01, D-03, D-04, D-07, D-24, D-25, ADR-020).
+(`PKG-FR-MANAGER-CONVERGES`, `PKG-FR-APT-SCOPE`, `PKG-FR-VERSION-FLOAT`, `PKG-FR-SKIP-ONCE`, `PKG-FR-BATCHED`,
+`PKG-FR-APT-VERSION-DIFF`, ADR-020).
 
 Captures the source's `apt-mark showmanual` set with `dpkg-query`-sourced versions
 (never `apt list --installed` — its own manpage says the output has no stable scripting
-contract), diffs it against the same query on the target into every D-25 class this
+contract), diffs it against the same query on the target into every diff class this
 manager produces (`diffing.diff_apt_packages`, this job's own — the base class holds no diff
-for anyone to inherit, D-15), and converges the approved `INSTALL`/`REMOVE` items via
+for anyone to inherit, `PKG-FR-JOB-INDEPENDENCE`), and converges the approved `INSTALL`/`REMOVE` items via
 `apt-get install`/`apt-get remove`.
 
-A package is matched by (name, ORIGIN), never by name alone (ADR-020 D-34). The target
+A package is matched by (name, ORIGIN), never by name alone (`PKG-FR-APT-IDENTITY`). The target
 having a candidate for a name is not evidence it can supply the source's software: one name
 is often offered by two vendors, and Ubuntu's `firefox` carries epoch 1, which outranks
 every unpinned vendor version, so an install matched by name replicates the name and
@@ -21,10 +22,10 @@ reported rather than installed from somewhere else. A package installed on both 
 from two different vendors is `ORIGIN_MISMATCH`, report-only.
 
 That classification is not the guarantee — it is only what decides which repository work to
-derive. The guarantee is `origins.OriginClassifier.refusal` (D-35): after this run's single
+derive. The guarantee is `origins.OriginClassifier.refusal` (`PKG-FR-APT-ORIGIN-VERIFY`): after this run's single
 `apt-get update` and before its first install, ONE batched `apt-cache policy` re-reads the
 target's candidate origins, and an approved install apt would now satisfy from none of the
-source's origins fails as its own item (D-27), naming both. It sees the state the derivation
+source's origins fails as its own item (`PKG-FR-OUTCOME-FAILED`), naming both. It sees the state the derivation
 actually produced, so a repository whose write failed or a pin that never landed is caught
 there rather than shipping the wrong vendor's package. Packages the source has only from its
 own distribution files are exempt: two machines on different Ubuntu mirrors are one vendor.
@@ -37,19 +38,19 @@ network, an apt lock or an interrupted dpkg.
 Bare-`.deb` packages are NOT in scope and are dropped at capture
 (`probe.AptProbe.capture_source_items`). A package whose installed version comes from no
 configured repository was put there with `dpkg --install`; apt cannot install it on the
-target, and `manual_deb_sync` offers it as an install snippet in the same run (D-18).
+target, and `manual_deb_sync` offers it as an install snippet in the same run (`PKG-FR-MANUAL-SCOPE`).
 Both jobs compute the predicate from the shared `packages/apt_policy.py` parser — the same
-test, never a result passed between them, since D-15/D-16 keep the package jobs independent.
+test, never a result passed between them, since `PKG-FR-JOB-INDEPENDENCE` keep the package jobs independent.
 
 The ownership split has a consequence this job may not paper over: `manual_deb_sync`
-has its own enable flag, and reading another job's flag is exactly the coupling D-15
+has its own enable flag, and reading another job's flag is exactly the coupling `PKG-FR-JOB-INDEPENDENCE`
 forbids. So enabling `apt_sync` while disabling `manual_deb_sync` leaves these packages
 replicated by nobody — silently absent rather than offered as installs that fail. Documented
 for the user in `docs/jobs/package-sync.md`.
 
 Every approved item's transaction is simulated with `apt-get --dry-run` before the real
 command runs, guarding against apt silently doing more than the review showed. Collateral
-effects are classified by origin (D-30): a package the simulation would remove or
+effects are classified by origin (`PKG-FR-COLLATERAL-MANUAL`): a package the simulation would remove or
 downgrade that is auto-installed (not in the target's `apt-mark showmanual` set) is apt
 resolving its own dependencies and proceeds silently, while a manually-installed one is
 something the user chose to have and is refused unless the user approved losing it. `plan()`
@@ -63,13 +64,14 @@ packages that actually cause the collateral rather than everything the user was 
 (`collateral.Collateral.for_direction`).
 
 One install is admitted to no plan-time simulation at all
-(`origins.OriginClassifier.target_resolvable`, D-40): a D-34 class-3 package, whose
+(`origins.OriginClassifier.target_resolvable`, `PKG-FR-COLLATERAL-MANUAL`): a `PKG-FR-APT-IDENTITY` class-3 package,
+whose
 repository this run derives from its own approval and writes during converge. Until that
 write lands the target's apt has never heard the name and `apt-get --dry-run` refuses the
 WHOLE batch containing it, which would strip the protection from every other package in the
 run rather than weaken it for one. The exclusion keys on the target's own `apt-cache policy`,
 never on the simulation's exit code, which cannot separate "unable to locate" from a held
-dpkg lock (ADR-022 D-01). What covers those packages instead is the per-item simulation
+dpkg lock (`PKG-FR-READ-FAILS-JOB`). What covers those packages instead is the per-item simulation
 `packages.PackageConverger.install` runs after the repository unit has converged, where apt
 CAN resolve them: unapproved manual collateral fails that one item, so the user is told
 afterwards rather than asked beforehand.
@@ -84,7 +86,8 @@ repository whose packages are going too is legitimate, so the removal stays offe
 like every removal group, unticked).
 
 Neither is `/etc/apt` itself, in most directions. Only what the user has a basis to judge
-is an item (ADR-020 D-37): a repository REMOVAL, a pin REMOVAL, and apt config in all
+is an item (`PKG-FR-REPO-DELETE`/`PKG-FR-PIN-DELETE`/`PKG-FR-APTCONF`): a repository REMOVAL, a pin REMOVAL, and apt
+config in all
 three directions. Everything else under `/etc/apt` is derived and written without a
 question, in three buckets `derived.DerivedWrites` assembles from the accepted decisions:
 
@@ -95,10 +98,10 @@ question, in three buckets `derived.DerivedWrites` assembles from the accepted d
   target does not have is inert — so always-sync costs nothing and cannot derive wrongly;
 - the distribution's own source files — `ubuntu.sources`, the two `ubuntu-esm-*` files and
   `/etc/apt/sources.list` — written when missing and overwritten when different, never
-  removed and never offered for removal (D-38).
+  removed and never offered for removal (`PKG-FR-DISTRO-FILES`).
 
 The two `ubuntu-esm-*` files carry the one question this job asks that is not about an item
-(`esm_gate.EsmGate`, D-38). Writing them to a target with no Ubuntu Pro attachment is not
+(`esm_gate.EsmGate`, `PKG-FR-DISTRO-FILES`). Writing them to a target with no Ubuntu Pro attachment is not
 harmless: `esm.ubuntu.com` serves its INDEX publicly, so the refresh succeeds and the ESM
 suites win candidate selection, and the failure surfaces much later as a 401 on the `.deb`
 of the target's next install of an ESM-covered package — a failure nobody traces back to a
@@ -116,7 +119,7 @@ Only the parsed `attached` boolean ever leaves `esm_gate` — the probe's payloa
 subscriber's account.
 
 A derived write has no item, so it cannot fail as one. It is recorded against its
-destination and charged to every approved package whose origin depended on it (D-39):
+destination and charged to every approved package whose origin depended on it (`PKG-FR-DERIVED-FAILURE`):
 the refusal lands on the thing the user actually decided about, naming the file. A rollback
 marks every derived write failed, exactly as it already does every reviewed group item.
 
@@ -164,9 +167,9 @@ Legacy `/etc/apt/trusted.gpg.d` keys are replicated but never collected: they ar
 trust with no discoverable referent, so "unused" is not computable for them and they are
 allowed to accumulate rather than be deleted on a guess.
 
-Keys travel byte-for-byte and are never re-fetched from a vendor (D-12).
+Keys travel byte-for-byte and are never re-fetched from a vendor (`PKG-FR-KEY-COPY`).
 
-This job reviews once per run before its first mutating command (ADR-020 D-24), and asks
+This job reviews once per run before its first mutating command (`PKG-FR-BATCHED`), and asks
 again only where applying an approved change reveals a fact the plan could not know — the
 requirements' own model, and a preference rather than a rule. Nothing this run writes can
 invalidate a decision it already took: a package is classified from the SOURCE's origins,
@@ -174,7 +177,7 @@ which no run mutates, and the one fact that genuinely depends on the target's po
 state — which origin actually wins — is not guessed at plan time at all, it is read back by
 `origins.OriginClassifier.refusal` and turned into a per-item refusal rather than a question.
 
-That is also why a pin says nothing about the packages it names (D-25). A per-package
+That is also why a pin says nothing about the packages it names. A per-package
 "pinned" report would fire for every package a target-side `preferences.d` stanza names,
 turning a no-op into review noise and — worse — making a package present only on the target
 and named by any pin impossible to REMOVE (a `REPORT_ONLY` echo outranks its own

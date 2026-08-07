@@ -165,7 +165,7 @@ pc-switcher sync pc2 --dry-run --yes --allow-first-sync
 pc-switcher sync pc2 --yes --allow-first-sync
 ```
 
-A dry run converges nothing, so three things below cannot happen in it: no snippet is recorded, no registry is pushed, and the converge loop of §3.7 never opens — `_converge_one` is not called at all (`jobs/packages/sync_core.py:802`). Walk the dry run for the screens, then answer the real run for the outcomes.
+A dry run converges nothing, so three things below cannot happen in it: no snippet is recorded, no registry is pushed, and the converge loop of §3.7 never opens — `_converge_one` is not called at all (`jobs/packages/sync_core.py:804`). Walk the dry run for the screens, then answer the real run for the outcomes.
 
 Findings already raised from a walk of these fixtures, so they need no re-reporting — check they still read as described and move on: review copy and titles (#276), the `apt.conf.d` digests of §3.3 (#277), that screen's keys and default (#278), the repeated scrollback frames (#279), job names in the status line (#280), the snippet screens of §3.5 and §3.6 (#281), the second editor of §3.6 (#282), and the group order of §3.2 (#283).
 
@@ -280,7 +280,7 @@ None of the three version bodies is ever executed, so their exactness is not wha
 
 ### 3.7 The converge loop
 
-**Real run only.** This is not a review screen: it is put while `manual_installs_sync` applies what you approved, and a dry run applies nothing — `_converge_one` is never reached (`jobs/packages/sync_core.py:802`), so no snippet is replayed, no version is re-read and this screen cannot appear. Seeing it in a dry run is a finding.
+**Real run only.** This is not a review screen: it is put while `manual_installs_sync` applies what you approved, and a dry run applies nothing — `_converge_one` is never reached (`jobs/packages/sync_core.py:804`), so no snippet is replayed, no version is re-read and this screen cannot appear. Seeing it in a dry run is a finding.
 
 `/opt/pcsw-uat-loop` is the item whose recorded install body is `true` — it exits zero and moves nothing — and §3.5 is where you answered `<y>` on it. Confirm:
 

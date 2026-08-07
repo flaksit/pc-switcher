@@ -36,8 +36,7 @@ Setup, architecture understanding, and troubleshooting:
 Requirements and planning artifacts:
 
 - [high-level-requirements.md](planning/high-level-requirements.md) - Project vision, scope, and constraints
-- [package-sync-user-requirements.md](planning/package-sync-user-requirements.md) - What package sync is for and how it behaves, in prose. Authoritative for intent; read this first
-- [package-sync-conformance-criteria.md](planning/package-sync-conformance-criteria.md) - The same intent as individually checkable articles (`PKG-FR-*` obligations, `PKG-NG-*` non-goals), for verifying an implementation against
+- [package-sync-user-requirements.md](planning/package-sync-user-requirements.md) - What package sync is for and its non-goals, PO-level. Read this first; the checkable articles are in `docs/system/package-sync.md`
 - [feature-breakdown.md](planning/feature-breakdown.md) - Feature planning
 - [issue-triage-2025-12-31.md](planning/issue-triage-2025-12-31.md) - Issue analysis
 

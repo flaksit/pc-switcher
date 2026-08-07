@@ -47,6 +47,7 @@ class _AbortingJob(SyncJob):
 
 class TestTheBlockNamesEveryJob:
     def test_each_job_gets_one_line_with_its_status(self, wired_orchestrator: Orchestrator) -> None:
+        """J190 — one line per job, the fixed install step included."""
         buffer = _capture(wired_orchestrator)
         wired_orchestrator._job_results.extend(  # pyright: ignore[reportPrivateUsage]
             [
@@ -68,6 +69,7 @@ class TestTheBlockNamesEveryJob:
     def test_a_skipped_or_failed_line_carries_the_reason_that_job_recorded(
         self, wired_orchestrator: Orchestrator
     ) -> None:
+        """J190, J191 — a status word answers "did it work", not "why not"."""
         buffer = _capture(wired_orchestrator)
         wired_orchestrator._job_results.extend(  # pyright: ignore[reportPrivateUsage]
             [
@@ -103,7 +105,7 @@ class TestTheBlockNamesEveryJob:
     def test_a_reason_shaped_like_rich_markup_is_printed_literally(
         self, wired_orchestrator: Orchestrator, reason: str
     ) -> None:
-        """A `[/usr/bin/apt]` used to raise MarkupError, crashing the run after all its work."""
+        """J192 — a `[/usr/bin/apt]` used to raise MarkupError, crashing the run after all its work."""
         buffer = _capture(wired_orchestrator)
         wired_orchestrator._job_results.append(  # pyright: ignore[reportPrivateUsage]
             _result("apt_sync", JobStatus.FAILED, reason)

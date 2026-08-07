@@ -1,4 +1,4 @@
-"""What else apt would do (D-30): the packages an approved change would remove, downgrade or
+"""What else apt would do (`PKG-FR-COLLATERAL-MANUAL`): the packages an approved change would remove, downgrade or
 upgrade without anybody having asked for it.
 
 Split by origin, which is the whole ruling: a collateral package apt installed
@@ -86,7 +86,7 @@ class CollateralEffect(NamedTuple):
 
 
 class CollateralSplit(NamedTuple):
-    """One simulation's collateral, split the way D-30 splits it.
+    """One simulation's collateral, split the way `PKG-FR-COLLATERAL-MANUAL` splits it.
 
     Both halves are returned because both have to be reported: `manual` becomes a review
     item, and `auto` becomes a log line (`PKG-FR-COLLATERAL-AUTO`) — a change nobody is
@@ -98,7 +98,7 @@ class CollateralSplit(NamedTuple):
 
 
 class Collateral:
-    """D-30, plan time and apply time.
+    """`PKG-FR-COLLATERAL-MANUAL`, plan time and apply time.
 
     The same `protected` set answers both, which is the point: a package classified manual at
     plan time and a package the apply-time guard refuses to lose must be the same package, or
@@ -132,7 +132,7 @@ class Collateral:
         # round asks about — and the ground `_reason` gives for asking.
         self._run_declined: frozenset[str] = frozenset()
         # The target's `apt-mark showmanual` set: the single source of the auto-versus-manual
-        # split (D-30). A collateral package the simulation would remove or downgrade is
+        # split (`PKG-FR-COLLATERAL-MANUAL`). A collateral package the simulation would remove or downgrade is
         # manual (the user chose it -> a review item) if it is in this set, auto (apt's own
         # dependency -> proceed silently) if it is not. Consulted at plan time by `classify`
         # and at apply time by the converge guards, which must agree.
@@ -142,7 +142,7 @@ class Collateral:
         # from the collateral group's decisions — the id and not the package name, because
         # one package can be collateral of two transactions and an approval answers one of
         # them. The apply-time guard lets exactly those consequences through; every other
-        # manual collateral stays refused (D-30 — the last line of defence behind plan-time
+        # manual collateral stays refused (`PKG-FR-COLLATERAL-MANUAL` — the last line of defence behind plan-time
         # classification).
         self._approved: frozenset[str] = frozenset()
         # Each collateral item's `item_id` -> the install/remove item_ids whose OWN
@@ -172,7 +172,7 @@ class Collateral:
 
     def protected(self) -> frozenset[str]:
         """Packages a collateral removal, downgrade or upgrade must not silently touch: the
-        TARGET's `apt-mark showmanual` set (ADR-020 D-40) plus the packages that machine
+        TARGET's `apt-mark showmanual` set (`PKG-FR-COLLATERAL-MANUAL`) plus the packages that machine
         marked machine-specific, this run's own marks included
         (`PKG-FR-COLLATERAL-MANUAL`, `PKG-FR-COLLATERAL-MARKED`).
 
@@ -189,11 +189,11 @@ class Collateral:
 
     async def plan_time(self, diffs: Sequence[ItemDiff]) -> list[ItemDiff]:
         """One BATCHED simulation per direction — the whole install candidate set, the whole
-        removal candidate set — not one per package (D-30).
+        removal candidate set — not one per package (`PKG-FR-COLLATERAL-MANUAL`).
 
         Each simulation's would-remove/would-downgrade collateral is split by `classify`
         against the target's manual set: auto collateral produces nothing (apt's own
-        business, D-30), manual collateral becomes a review item.
+        business, `PKG-FR-COLLATERAL-MANUAL`), manual collateral becomes a review item.
 
         The install rehearsal covers only the candidates the target's apt can resolve TODAY
         (`OriginClassifier.target_resolvable`); see there for what that costs and what still
@@ -318,8 +318,8 @@ class Collateral:
 
     async def classify(self, preview: AptTransactionPreview, reviewed_names: frozenset[str]) -> CollateralSplit:
         """Partition a simulation's would-remove, would-downgrade and would-upgrade packages
-        by origin (D-30): a package `protected()` covers becomes a manual-collateral review
-        item (ADR-020 D-40); one outside it is apt's own dependency and proceeds silently —
+        by origin (`PKG-FR-COLLATERAL-MANUAL`): a package `protected()` covers becomes a manual-collateral review
+        item (`PKG-FR-COLLATERAL-MANUAL`); one outside it is apt's own dependency and proceeds silently —
         but is still returned, so `PKG-FR-COLLATERAL-AUTO`'s log line can name it.
 
         A version change is an `install_versions` entry with a non-`None` old version; the
@@ -377,7 +377,7 @@ class Collateral:
         self, preview: AptTransactionPreview, *, exempt: frozenset[str], verb: str, subject: str
     ) -> list[CollateralEffect]:
         """The apply-time half of the same split, and the last line of defence behind
-        plan-time classification (D-30): the protected packages this real transaction would
+        plan-time classification (`PKG-FR-COLLATERAL-MANUAL`): the protected packages this real transaction would
         take that nobody approved.
 
         Runs the identical `classify` the review ran, so the package the user was asked about
@@ -561,7 +561,7 @@ class Collateral:
         return await self.for_direction(approved, frozenset(approved), remove_args, verb="Removing", restrict_to=kept)
 
     def resolve(self, diffs: Sequence[ItemDiff], outcome: ReviewOutcome) -> ReviewOutcome:
-        """Translate the manual-collateral group's decisions (D-30) into the guard's
+        """Translate the manual-collateral group's decisions (`PKG-FR-COLLATERAL-MANUAL`) into the guard's
         approved set and the triggering installs' decisions.
 
         For each collateral item (`apt:collateral:<cause>:<effect>:<pkg>`): an `APPLY` (go

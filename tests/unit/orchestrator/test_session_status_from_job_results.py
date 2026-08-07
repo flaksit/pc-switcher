@@ -2,7 +2,7 @@
 
 `PackageItemFailures` is caught per-job and recorded as a FAILED `JobResult` without
 re-raising, so one package manager's item failures cannot cancel another manager's
-already-approved work (D-27). That makes "no exception propagated" a strictly weaker
+already-approved work (`PKG-FR-OUTCOME-FAILED`). That makes "no exception propagated" a strictly weaker
 condition than "the sync was clean", so the session status and the CLI exit code must
 be derived from `job_results` rather than from the absence of an exception.
 

@@ -172,9 +172,9 @@ _READ_ONLY_CALLS: dict[str, int] = {
     "jobs/apt_sync/probe.py::AptProbe.collect_target_policy::run_command": 1,
     "jobs/apt_sync/probe.py::AptProbe.capture_target_manual_set::run_command": 1,
     # `pro status --format json` on the target — a read, and the only thing that leaves
-    # `esm_gate` is the parsed `attached` boolean (ADR-020 D-38).
+    # `esm_gate` is the parsed `attached` boolean (`PKG-FR-DISTRO-FILES`).
     "jobs/apt_sync/probe.py::AptProbe.target_pro_attached::run_command": 1,
-    # The post-`apt-get update` origin verification (ADR-020 D-35): one batched
+    # The post-`apt-get update` origin verification (`PKG-FR-APT-ORIGIN-VERIFY`): one batched
     # `apt-cache policy` re-read of the converged target, which refuses installs but
     # changes nothing itself.
     "jobs/apt_sync/origins.py::OriginClassifier._verify::run_command": 1,
@@ -204,7 +204,7 @@ _READ_ONLY_CALLS: dict[str, int] = {
     "jobs/flatpak_sync.py::FlatpakSyncJob._capture_source_runtimes::run_command": 1,
     # What a filtered source remote offers under its own filter (`PKG-FR-FLATPAK-FILTER`).
     # The post-install origin read-back: the same `flatpak list` the capture uses, re-run on
-    # the target so a ref's real provenance is checked rather than inferred (ADR-020 D-35).
+    # the target so a ref's real provenance is checked rather than inferred (`PKG-FR-APT-ORIGIN-VERIFY`).
     "jobs/flatpak_sync.py::FlatpakSyncJob._installed_origin_refusal::run_command": 1,
     # What the target holds once the converge loop is done, which decides whether a remote
     # the source lacks is still in use (`PKG-FR-FLATPAK-REMOTE-DELETE`).
@@ -287,7 +287,8 @@ _TOLERATED_SIDE_EFFECTS: dict[str, _ToleratedSideEffect] = {
     "jobs/packages/state.py::SnippetRegistry.installed_version::run_command": _ToleratedSideEffect(
         1,
         "the entry's `version_body`, run on both machines during `plan()` to read which version of the item is "
-        "installed there (D-22). It is the user's OWN shell code, so nothing static can prove it state-free — "
+        "installed there (`PKG-FR-VERSION-SNIPPET`). It is the user's OWN shell code, so "
+        "nothing static can prove it state-free — "
         "the read-only obligation is the author's, stated in the editor's own note and in the registry header, "
         "and `PKG-FR-VERSION-SNIPPET` puts it there deliberately. Gating it is refused rather than omitted: it "
         "runs on every sync before the run has proposed anything, so a confirmation here would ask the user to "
@@ -489,7 +490,7 @@ _PACKAGE_SYNC_MODULES = frozenset(
 # required by an article of its own. The value is that article and why the write exists.
 _SOURCE_WRITES: dict[str, str] = {
     # Written through whichever machine holds the item, which is the source whenever the
-    # source is the one that has the software (D-08a) — hence source-capable, not target-only.
+    # source is the one that has the software (`PKG-FR-MACHINE-SPECIFIC`) — hence source-capable, not target-only.
     # One call site for both directions of the same write: `record` puts a mark in the
     # file and `drop` takes one out once the holding machine no longer has its item.
     "jobs/packages/state.py::DecisionFile._write::run_command": (

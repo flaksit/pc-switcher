@@ -1,4 +1,4 @@
-"""What a decision file may and may not hold (ADR-020 D-08/D-08a).
+"""What a decision file may and may not hold (`PKG-FR-MACHINE-SPECIFIC`).
 
 Two halves. The first is what CAN be recorded and must then stay inert: `apt:config:`,
 whose identity is a directory digest rather than an input item, and whose overwrite
@@ -262,7 +262,7 @@ class TestAptRepoItemDecisions:
     with no input item to filter and depends on the same post-diff pass.
 
     Apt config is the ONE `/etc/apt` class that keeps the full three-way decision and the
-    machine-local registry, in all three directions (ADR-020 D-37): a proxy or a
+    machine-local registry, in all three directions (`PKG-FR-APTCONF`): a proxy or a
     `no-install-recommends` policy is a standing machine-local preference no approved
     package implies. Repositories and pins are mechanism and have no registry at all, and a
     signing key is not even an item — none of the three can ever be offered, declined, or
@@ -302,7 +302,7 @@ class TestAptRepoItemDecisions:
         outcome could do.
 
         The `apt:config:` line in the same run must still be recorded: it is the one
-        `/etc/apt` class that keeps the registry (D-37).
+        `/etc/apt` class that keeps the registry (`PKG-FR-APTCONF`).
         """
         target_responses = {
             "apt-mark showmanual": CommandResult(0, "", ""),

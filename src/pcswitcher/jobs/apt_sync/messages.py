@@ -1,6 +1,6 @@
 """Every sentence this job puts in front of the user, and nothing else.
 
-One home for the review text (ADR-020 D-07's "the review names the concrete action"): a
+One home for the review text (`PKG-FR-SKIP-ONCE`'s "the review names the concrete action"): a
 detail string built where it is needed drifts from the one beside it, and
 `tests/manual/review_harness.py` rehearses these builders directly so what a tester reads
 is what a real run shows rather than a paraphrase of it.
@@ -64,7 +64,7 @@ def build_origin_detail(origins: Sequence[str]) -> str | None:
 
 def build_repo_unavailable_detail(name: str, origins: Sequence[str], cause: str, machines: Machines) -> str:
     """Detail for a `REPO_UNAVAILABLE` diff: where the source has this package from, and why
-    the target cannot be given the same place (ADR-020 D-34).
+    the target cannot be given the same place (`PKG-FR-APT-IDENTITY`).
 
     Both halves are load-bearing. Naming the origin is what stops this reading as "apt has
     never heard of it"; naming the cause is what tells the user whether the remedy is theirs
@@ -80,7 +80,7 @@ def build_origin_mismatch_detail(
     """Detail for an `ORIGIN_MISMATCH` diff: the same package, two origins.
 
     Report only, and both sides are named because neither is wrong — converging it would
-    mean a cross-origin reinstall, which is not a float (D-04) and not something the user
+    mean a cross-origin reinstall, which is not a float (`PKG-FR-VERSION-FLOAT`) and not something the user
     asked for. The user is the only one who can say which machine is the odd one out.
 
     An empty sequence is that machine's DISTRIBUTION, not a missing half of the sentence.
@@ -104,7 +104,7 @@ def _named_origins(origins: Sequence[str], machine: str) -> str:
 def build_origin_refusal_detail(
     name: str, source_origins: Sequence[str], target_origins: Sequence[str], machines: Machines
 ) -> str:
-    """Why an approved install was refused at the last moment (ADR-020 D-35): the origin the
+    """Why an approved install was refused at the last moment (`PKG-FR-APT-ORIGIN-VERIFY`): the origin the
     source uses, and the origin the target's apt would have installed from instead.
 
     Both are named because either half alone is unactionable. "The wrong vendor" does not
@@ -119,7 +119,7 @@ def build_origin_refusal_detail(
         instead = "offers it from no repository at all"
     return (
         f"{name} was not installed: {machines.source} has it from {wanted}, but after this run's "
-        f"apt-get update {machines.target} {instead} (ADR-020 D-35)"
+        f"apt-get update {machines.target} {instead} (`PKG-FR-APT-ORIGIN-VERIFY`)"
     )
 
 
@@ -127,7 +127,7 @@ def build_dangling_keyring_detail(filename: str, missing_ref: str, machines: Mac
     """Detail string when a source file's `Signed-By:`/`signed-by=` reference resolves
     to no keyring file on the SOURCE itself (a source referencing a key nobody
     captured). Flags the source item rather than letting it be proposed for install on
-    its own (D-12): a repository written without its key is a repository apt refuses on
+    its own (`PKG-FR-KEY-COPY`): a repository written without its key is a repository apt refuses on
     every subsequent operation, so surfacing the gap here is cheaper than discovering it
     as an opaque apt-get failure on the target.
     """
@@ -191,7 +191,7 @@ def build_stranded_repository_line(dest: str, uris: Sequence[str], packages: Seq
 
 
 def build_esm_gate_message(esm_files: Sequence[str], machines: Machines, job_name: str) -> str:
-    """The ESM gate's question (D-38): the fact, how to fix it, what skipping costs.
+    """The ESM gate's question (`PKG-FR-DISTRO-FILES`): the fact, how to fix it, what skipping costs.
 
     No account of the failure it prevents. Why an unattached machine still refreshes cleanly
     and fails only later, on a 401 from the pool, is why this gate exists at all — but it

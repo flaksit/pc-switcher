@@ -1,6 +1,6 @@
 """Unit tests for what `PackageSyncJob` actually shares: review grouping, the converge
 dispatch across all four `DiffAction`s, decision-file routing and `execute()`'s order
-(D-07/D-24/D-25).
+(`PKG-FR-SKIP-ONCE`/`PKG-FR-BATCHED`).
 
 `FakeSyncJob` is a minimal concrete `PackageSyncJob` whose `plan()` diffs items by bare
 presence and whose `converge()` only records calls. Deliberately not apt-shaped: a
@@ -962,7 +962,7 @@ def _unreproducible_diff(item_id: str, action: DiffAction = DiffAction.REPORT_ON
 
 class _FakeManualJob(ManualDebSyncJob):
     """An unreproducible job with `manager_id="fake"` so the moved finalize hook's
-    decision-file assertions keep reading `fake.decisions` (D-18: finalize/unresolved
+    decision-file assertions keep reading `fake.decisions` (`PKG-FR-MANUAL-SCOPE`: finalize/unresolved
     now live on this job, not the base)."""
 
     name: ClassVar[str] = "fake_manual"
@@ -970,8 +970,9 @@ class _FakeManualJob(ManualDebSyncJob):
 
 
 class TestFinalizeUnreproducible:
-    """D-20/D-21/D-23: the `_finalize_unreproducible` hook (owned by
-    `UnreproducibleSyncJob`, D-18) writes this run's snippet authoring and
+    """`PKG-FR-SNIPPET-VERBATIM`/`PKG-FR-MANUAL-RESOLUTION`/`PKG-FR-MANUAL-SAME-RUN`: the `_finalize_unreproducible`
+    hook (owned by
+    `UnreproducibleSyncJob`, `PKG-FR-MANUAL-SCOPE`) writes this run's snippet authoring and
     unreproducible-item skip-always decisions, both to the SOURCE — never the target, and
     never during a dry run or a non-interactive outcome.
     """
@@ -1065,7 +1066,7 @@ class TestFinalizeUnreproducible:
 
 
 class TestBaseHooksAreNoOps:
-    """D-18: a manager with no unreproducible items (the base `FakeSyncJob`, standing in
+    """`PKG-FR-MANUAL-SCOPE`: a manager with no unreproducible items (the base `FakeSyncJob`, standing in
     for apt/snap/flatpak) inherits no-op finalize/unresolved hooks — an unresolved list or
     authored snippet on such a job's outcome is ignored, never raising and never writing.
     """
@@ -1171,7 +1172,7 @@ class _RaisingPlanJob(FakeSyncJob):
 
 
 class TestExecuteSelfContained:
-    """`execute()` is self-contained (D-24): plan -> review -> accept_review -> apply,
+    """`execute()` is self-contained (`PKG-FR-BATCHED`): plan -> review -> accept_review -> apply,
     with the review reached through the injected `JobContext.reviewer`.
     """
 
@@ -1184,7 +1185,7 @@ class TestExecuteSelfContained:
 
         await job.execute()
 
-        # after_review is the seam between accept_review and apply (D-23: where
+        # after_review is the seam between accept_review and apply (`PKG-FR-MANUAL-SAME-RUN`: where
         # an unreproducible job pushes its snippet registry before any converge).
         assert events == ["plan", "review", "accept_review", "after_review", "apply"]
         # apply must never precede review returning.
@@ -1232,7 +1233,7 @@ class TestExecuteSelfContained:
 
     @pytest.mark.asyncio
     async def test_a_non_interactive_package_review_skips_the_job_instead_of_applying_nothing(self) -> None:
-        """H9 — D-26 forces every item to SKIP_ONCE without a TTY, so the job converges nothing;
+        """H9 — `PKG-FR-NO-TERMINAL` forces every item to SKIP_ONCE without a TTY, so the job converges nothing;
         reporting SUCCESS for that made every headless run look like four successful syncs.
         """
         events: list[str] = []
@@ -1461,7 +1462,7 @@ class TestJobContextEnabledSyncJobs:
 
 class _StubFailingPackageJob(PackageSyncJob):
     """A package job whose execute() raises PackageItemFailures directly, isolating the
-    orchestrator's except-chain branch (D-27): its items failed, so the run continues.
+    orchestrator's except-chain branch (`PKG-FR-OUTCOME-FAILED`): its items failed, so the run continues.
     """
 
     name: ClassVar[str] = "stub_failing_package"
@@ -1531,7 +1532,7 @@ class _StubOtherFailureJob(SyncJob):
 
 
 class TestOrchestratorPackageItemFailuresContinuation:
-    """PackageItemFailures records a FAILED JobResult but does not abort the run (D-27).
+    """PackageItemFailures records a FAILED JobResult but does not abort the run (`PKG-FR-OUTCOME-FAILED`).
 
     Re-homed from the deleted test_package_phase.py: the coordinator is gone, but the
     orchestrator's per-job except chain that this exercises is a delivered behaviour.

@@ -11,7 +11,7 @@ from pcswitcher.jobs.packages.items import Machines, build_version_mismatch_deta
 
 
 def test_version_mismatch_detail_contains_both_versions() -> None:
-    """D-04 made visible: the review names both versions and proposes nothing, which is
+    """`PKG-FR-VERSION-FLOAT` made visible: the review names both versions and proposes nothing, which is
     what "reported, never force-downgraded" looks like in the text the user reads.
     """
     detail = build_version_mismatch_detail("1.0-1", "2.0-1", Machines(source="atlas", target="nomad"))

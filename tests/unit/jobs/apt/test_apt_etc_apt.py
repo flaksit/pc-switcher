@@ -153,7 +153,8 @@ class TestRepoGroupOrdering:
 
     @pytest.mark.asyncio
     async def test_pins_travel_without_a_review_line_and_land_before_the_sources(self) -> None:
-        """A75, C26, C107, C144, H51, N10 — D-36's ordering requirement: the pin is what makes the derived repository's
+        """A75, C26, C107, C144, H51, N10 — `PKG-FR-PIN-ALWAYS`'s ordering requirement: the pin is what makes the
+        derived repository's
         origin outrank the archive's, so it has to be in place before the sources it
         governs and before the refresh that reads them — and it reaches the target with no
         review entry of its own.
@@ -257,7 +258,7 @@ class TestRepoGroupOrdering:
 
     @pytest.mark.asyncio
     async def test_no_key_command_contains_a_url(self) -> None:
-        """C72 — D-12: `foo.gpg` really is provisioned (the repository that needs it is
+        """C72 — `PKG-FR-KEY-COPY`: `foo.gpg` really is provisioned (the repository that needs it is
         derived), and not one command reaches for a vendor to get it.
         """
         context, _source, target = _repo_context(source_responses=foo_source_responses())
@@ -275,7 +276,8 @@ class TestRepoGroupOrdering:
 
     @pytest.mark.asyncio
     async def test_a_failed_derived_repository_write_fails_the_package_that_needed_it(self) -> None:
-        """C88, J22 — D-39's attribution. A keyring that could not be promoted is not a failed item —
+        """C88, J22 — `PKG-FR-DERIVED-FAILURE`'s attribution. A keyring that could not be promoted is not a failed item
+         —
         there is no key item, and there is no repository item either — so the repository is
         not written (a repo apt cannot verify is worse than no repo) and the failure lands
         on the PACKAGE, which is the thing the user decided about. The message names the
@@ -304,7 +306,7 @@ class TestRepoGroupOrdering:
     @pytest.mark.asyncio
     async def test_a_repository_whose_own_promotion_fails_also_fails_its_package(self) -> None:
         """C159 — the other way a derived write can fail: the key lands, the repository's own
-        `sudo install` does not. The refusal must still reach the package (D-39) — there is
+        `sudo install` does not. The refusal must still reach the package (`PKG-FR-DERIVED-FAILURE`) — there is
         no repository item left for it to land on.
         """
         context, _source, target = _repo_context(source_responses=foo_source_responses())
@@ -715,7 +717,7 @@ class TestRepoGroupTransaction:
         failed_ids = {diff.item_id for diff, _ in exc_info.value.failures}
         assert "apt:config:99conf" in failed_ids
         # The reviewed half fails as an item; the derived pin has no item to fail, so the
-        # rollback records it against its destination instead (D-39) — without which a
+        # rollback records it against its destination instead (`PKG-FR-DERIVED-FAILURE`) — without which a
         # package depending on it would install against the pre-run `/etc/apt`.
         assert "/etc/apt/preferences.d/curl-pin" in job._work.derived.failed  # pyright: ignore[reportPrivateUsage]
 
@@ -832,9 +834,9 @@ class TestRepoGroupTransaction:
 
     @pytest.mark.asyncio
     async def test_post_rollback_install_issues_no_further_apt_get_update(self) -> None:
-        """C155 — D-18: the rollback's re-probe `apt-get update` succeeded, so `/etc/apt` is the
+        """C155 — `PKG-FR-MANUAL-SCOPE`: the rollback's re-probe `apt-get update` succeeded, so `/etc/apt` is the
         pre-run configuration with fresh metadata. The package items that still run after
-        the rollback (D-27) must issue no third refresh — the run's single-refresh
+        the rollback (`PKG-FR-OUTCOME-FAILED`) must issue no third refresh — the run's single-refresh
         guarantee (decision 1) holds across the rollback path too.
         """
         context, _source, target = _repo_context(
@@ -986,7 +988,7 @@ class TestRepoGroupBackupFailure:
     """CR-01 regression: a `_backup_destination` failure must fail every repository-
     group item through the normal per-item `PackageItemFailures` path, never escape
     as a bare `KeyError` (which would crash the whole job and cancel every other
-    already-approved job's `apply()`, violating D-27).
+    already-approved job's `apply()`, violating `PKG-FR-OUTCOME-FAILED`).
     """
 
     @pytest.mark.asyncio
@@ -1069,7 +1071,7 @@ class TestKeyringsDirectoryEnsured:
     @pytest.mark.asyncio
     async def test_directory_preparation_failure_fails_the_item_not_the_run(self) -> None:
         """C90, J22 — the failure surfaces on the PACKAGE, the thing the user reviewed: its key
-        never landed, so the repository is not written either (D-12/D-39)."""
+        never landed, so the repository is not written either (`PKG-FR-KEY-COPY`/`PKG-FR-DERIVED-FAILURE`)."""
         context, _source, target = self._fresh_target(
             **{"sudo mkdir --parents --mode=0755 /etc/apt/keyrings": CommandResult(1, "", "permission denied")}
         )

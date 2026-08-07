@@ -57,7 +57,7 @@ from tests.unit.jobs.unreproducible_harness import (
 
 
 class TestCapture:
-    """Capture: apt-mark showmanual + one batched dpkg-query call for versions (D-03)."""
+    """Capture: apt-mark showmanual + one batched dpkg-query call for versions (`PKG-FR-APT-SCOPE`)."""
 
     @pytest.mark.asyncio
     async def test_capture_source_items_returns_three_items_with_versions(self) -> None:
@@ -152,7 +152,7 @@ class TestManifestIsShowmanualOnly:
     async def test_empty_source_manifest_offers_every_target_package_as_an_unticked_removal(self) -> None:
         """A4 — an empty `apt-mark showmanual` on the source means every target package is
         extra. That mass removal must surface as ordinary EXTRA_ON_TARGET/REMOVE items in
-        a removal-direction group (unticked by default, D-07), never silently and never
+        a removal-direction group (unticked by default, `PKG-FR-SKIP-ONCE`), never silently and never
         pre-approved.
         """
         context, _source, _target = make_context(
@@ -175,7 +175,7 @@ class TestManifestIsShowmanualOnly:
 
 class TestHoldPinCapture:
     """collect_hold_sets: apt-mark showhold on BOTH machines. Pins are read no more: they
-    are files, not facts about packages (ADR-020 D-25/D-36)."""
+    are files, not facts about packages (`PKG-FR-PIN-ALWAYS`)."""
 
     @pytest.mark.asyncio
     async def test_hold_sets_from_both_machines_surface(self) -> None:
@@ -195,7 +195,7 @@ class TestHoldPinCapture:
 class TestUnavailableCapture:
     """ONE batched `apt-cache policy` on the target answers every origin question this run
     asks of it, and a package whose origin cannot be provided there is reported rather than
-    installed from somewhere else (ADR-020 D-34).
+    installed from somewhere else (`PKG-FR-APT-IDENTITY`).
     """
 
     @pytest.mark.asyncio
@@ -271,7 +271,7 @@ class TestUnavailableCapture:
 
 
 class TestBareDebPackagesAreNotAptSyncsBusiness:
-    """A11/D-18: a package whose INSTALLED version comes from no configured repository was
+    """A11/`PKG-FR-MANUAL-SCOPE`: a package whose INSTALLED version comes from no configured repository was
     put there with `dpkg --install`, so apt cannot install it anywhere and the target's apt has
     never heard the name. `manual_installs_sync` offers it as an install snippet in the same
     run; `apt_sync` drops it at CAPTURE, so it is structurally absent from every downstream
@@ -443,7 +443,7 @@ class TestBareDebPackagesAreNotAptSyncsBusiness:
     async def test_a_source_policy_that_did_not_run_fails_the_run_naming_the_command(self) -> None:
         """A12 — the other side of the same distinction, and a deliberate reversal: a policy read
         that EXITED NON-ZERO answered nothing about any package. Tolerating it silently
-        exempted every package from the D-35 origin check and offered
+        exempted every package from the `PKG-FR-APT-ORIGIN-VERIFY` origin check and offered
         `manual_installs_sync`'s bare-`.deb` packages as apt installs, both without a word.
 
         The stdout is a COMPLETE, parseable block on purpose: it isolates the exit code as
@@ -490,7 +490,7 @@ class TestBareDebPackagesAreNotAptSyncsBusiness:
     @pytest.mark.asyncio
     async def test_an_excluded_bare_deb_package_is_not_protected_from_collateral(self) -> None:
         """D31 — `code` is a bare `.deb` on the source, so it is dropped from the manifest, and it
-        is auto on the target. Under ADR-020 D-40 the target's apt owns it: an install whose
+        is auto on the target. Under `PKG-FR-COLLATERAL-MANUAL` the target's apt owns it: an install whose
         simulation would remove it proceeds with no collateral item and no prompt.
         """
         context, _source, _target = make_context(
@@ -615,7 +615,8 @@ class TestBareDebPackagesAreNotAptSyncsBusiness:
 
 class TestRepoStateCapture:
     """AptSyncJob.plan() extended with the `/etc/apt` directions that still have a review
-    line (D-11/D-13, ADR-020 D-37): repository and pin REMOVALS, apt config in all three.
+    line (`PKG-FR-REPO-DERIVED`/`PKG-FR-APT-IGNORES`/`PKG-FR-REPO-DELETE`/`PKG-FR-PIN-DELETE`/`PKG-FR-APTCONF`):
+    repository and pin REMOVALS, apt config in all three.
     """
 
     @pytest.mark.asyncio
@@ -740,7 +741,7 @@ _SOURCES_LIST_DIGEST_CMD = "sudo sha256sum /etc/apt/sources.list"
 
 
 class TestWhatAptItselfReads:
-    """The capture is scoped to the files apt reads, on both machines (ADR-020 D-11)."""
+    """The capture is scoped to the files apt reads, on both machines (`PKG-FR-REPO-DERIVED`)."""
 
     @pytest.mark.asyncio
     async def test_a_save_file_in_sources_list_d_is_never_captured(self) -> None:
@@ -866,7 +867,7 @@ class TestWhatAptItselfReads:
     @pytest.mark.asyncio
     async def test_sources_list_is_digested_on_both_machines_and_is_still_not_an_item(self) -> None:
         """C8 — `/etc/apt/sources.list` is a file, not a directory, so it appears in no `find`
-        listing and needs its own digest — which ADR-020 D-38's write-when-different rule
+        listing and needs its own digest — which `PKG-FR-DISTRO-FILES`'s write-when-different rule
         compares. Capturing it must not turn it into a reviewable item.
         """
         context, source, target = make_context(
@@ -939,7 +940,7 @@ class TestWhatAptItselfReads:
 
     @pytest.mark.asyncio
     async def test_ubuntu_sources_is_never_offered_for_removal(self) -> None:
-        """C11, C12 — D-38: the distribution's own files are written and updated but never removed.
+        """C11, C12 — `PKG-FR-DISTRO-FILES`: the distribution's own files are written and updated but never removed.
         A target holding `ubuntu.sources` and `ubuntu-esm-apps.sources` that the source does
         not have would otherwise be offered a deletion of its own archive, while a
         `.sources` file with a lookalike name is an ordinary repository and still is.
@@ -964,7 +965,8 @@ class TestWhatAptItselfReads:
 
     @pytest.mark.asyncio
     async def test_the_distribution_files_are_written_when_they_differ(self) -> None:
-        """C2, C13, C14 — The other half of D-38's always-sync bucket, `/etc/apt/sources.list` included —
+        """C2, C13, C14 — The other half of `PKG-FR-DISTRO-FILES`'s always-sync bucket, `/etc/apt/sources.list`
+        included —
         it is a file rather than a directory entry and so travels on its own digest. An
         ordinary vendor repository that feeds no approved package stays put, which is
         ruling 4 working as intended.
@@ -1020,7 +1022,7 @@ class TestWhatAptItselfReads:
         """The scan is machine-agnostic and both answers are load-bearing: the target's
         drives keyring reference counting and the removal impact, the source's is what maps
         a package's origin URIs back to the repository file that would have to travel
-        (ADR-020 D-34).
+        (`PKG-FR-APT-IDENTITY`).
         """
         context, source, target = make_context(
             source_responses={
@@ -1041,7 +1043,7 @@ class TestWhatAptItselfReads:
 
 
 class TestOriginCapture:
-    """ADR-020 D-34's origin facts: where the source installed each package from, which
+    """`PKG-FR-APT-IDENTITY`'s origin facts: where the source installed each package from, which
     repository file on the source declares that place, and which places are the
     distribution's own.
     """
@@ -1247,7 +1249,7 @@ class TestAReadThatDidNotAnswer:
     @pytest.mark.asyncio
     async def test_a_collateral_protection_read_that_did_not_answer_fails_the_job(self) -> None:
         """D32, J65 — The second of the two. Its silence empties the target's manual set, which
-        classifies every collateral package as automatic and switches D-30's protection off
+        classifies every collateral package as automatic and switches `PKG-FR-COLLATERAL-MANUAL`'s protection off
         entirely — the manifest read above it answers normally, so only this one can fail.
         """
         context, _source, target = make_context(
@@ -1486,7 +1488,7 @@ class TestAReadThatDidNotAnswer:
     @pytest.mark.asyncio
     async def test_a_conflict_content_read_that_did_not_answer_fails_the_job(self) -> None:
         """C38, J72 — The two panes the repository-conflict review shows are `sudo cat` output
-        (ADR-020 D-37). Reading that silence as CONTENT renders the source's pane empty and asks
+        (`PKG-FR-APTCONF`). Reading that silence as CONTENT renders the source's pane empty and asks
         the user to approve an overwrite off a diff nobody could read. The TARGET's `cat`
         runs first and answers normally, so only the source's can fail this.
         """

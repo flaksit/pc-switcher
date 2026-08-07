@@ -1,4 +1,4 @@
-"""Signing keys: the two file operations that bracket the repository unit (D-12).
+"""Signing keys: the two file operations that bracket the repository unit (`PKG-FR-KEY-COPY`).
 
 A key is NOT an item. It has no `ItemClass`, no `item_id`, no diff, no review entry and no
 decision-file identity: the user thinks in repositories and packages, and a key is only how a
@@ -160,7 +160,7 @@ class Keyrings:
         for ref in refs:
             local = self._source_keys.path_of(ref)
             if local is None:
-                # The source machine has no such key. That is D-12's dangling reference,
+                # The source machine has no such key. That is `PKG-FR-KEY-COPY`'s dangling reference,
                 # already reported on the REPOSITORY item; inventing a key here is exactly
                 # what "never re-fetched from a vendor" forbids.
                 continue
@@ -177,7 +177,7 @@ class Keyrings:
         source files this run writes.
 
         Three populations, and getting any of them wrong provisions or deletes the wrong
-        key: source files this run WRITES — the derived set, since ADR-020 D-37 leaves no
+        key: source files this run WRITES — the derived set, since `PKG-FR-REPO-DERIVED` leaves no
         other way for one to travel — contribute the SOURCE machine's references (a
         repository this run overwrites may point somewhere new); source files this run
         REMOVES contribute nothing (their keyring is about to be collected, not refreshed);
@@ -230,13 +230,13 @@ class Keyrings:
 
     def gap(self, dest: str) -> str | None:
         """Why writing this derived source file would leave apt with a repository it cannot
-        verify, or `None` when every keyring it names is in place (D-12).
+        verify, or `None` when every keyring it names is in place (`PKG-FR-KEY-COPY`).
 
         A repository written without its key is a repository apt refuses on every
         subsequent operation, so writing it anyway is strictly worse than leaving the target
         alone. The refusal lands on the destination and, through the derived-write
         attribution, on the packages that needed it — the things the user actually decided
-        about (D-39).
+        about (`PKG-FR-DERIVED-FAILURE`).
 
         A key the target has and its own distribution packaging owns counts as ready even
         though this run
@@ -255,7 +255,7 @@ class Keyrings:
             return (
                 f"it references keyring {ref!r}, which is neither already present on {self._machines.target} "
                 f"with {self._machines.source}'s own bytes nor among the keys this run provisioned "
-                "(D-12/T-02-16)"
+                "(`PKG-FR-KEY-COPY`/T-02-16)"
             )
         return None
 
@@ -266,7 +266,7 @@ class Keyrings:
         A failure here fails no ITEM — there is no key item to fail. It is logged and the
         destination is simply left out of the provisioned set, which makes every source
         file referencing that keyring refuse its own write with a message naming the key.
-        That is the D-12 outcome either way, reported against the thing the user reviewed.
+        That is the `PKG-FR-KEY-COPY` outcome either way, reported against the thing the user reviewed.
 
         Each key that lands gets its own FULL line, the same one a derived `/etc/apt` file
         gets (`PKG-FR-DERIVED-VISIBLE`): a key is never a review entry, so the log is the only

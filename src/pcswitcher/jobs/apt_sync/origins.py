@@ -1,11 +1,12 @@
 """Where a package actually comes from, and whether the target can be given the same place
-(ADR-020 D-34), plus the read-back that makes it a guarantee rather than a prediction (D-35).
+(`PKG-FR-APT-IDENTITY`), plus the read-back that makes it a guarantee rather than a prediction
+(`PKG-FR-APT-ORIGIN-VERIFY`).
 
 Two different jobs, deliberately in one module because they are two halves of one claim.
 The classification decides which repository work to derive and what the review says; the
 verification decides what may actually be installed, and only it sees the state the
 derivation produced. Splitting them would let one drift from the other, which is exactly
-the failure D-35 exists to catch.
+the failure `PKG-FR-APT-ORIGIN-VERIFY` exists to catch.
 """
 
 from __future__ import annotations
@@ -40,7 +41,7 @@ def _origin_identity(vendors: tuple[str, ...], from_distribution: bool) -> froze
 class OriginOutcome(StrEnum):
     """What the origin facts say can be done about one package missing on the target.
 
-    Three outcomes, not ADR-020 D-34's four: its classes 2 and 3 (the target has a candidate
+    Three outcomes, not `PKG-FR-APT-IDENTITY`'s four: its classes 2 and 3 (the target has a candidate
     from the wrong vendor / the target has no candidate at all) differ only in what they
     look like, never in what happens — both install the package and both derive the source's
     repository first — so collapsing them keeps the diff from branching on a distinction
@@ -61,7 +62,7 @@ class OriginOutcome(StrEnum):
 
 @dataclass(frozen=True)
 class OriginPlan:
-    """Every origin fact one source package's classification turns on (ADR-020 D-34).
+    """Every origin fact one source package's classification turns on (`PKG-FR-APT-IDENTITY`).
 
     Assembled per package from facts about BOTH machines, because the question "can the
     target end up with this package from the same place the source has it?" is not
@@ -108,7 +109,7 @@ class OriginPlan:
     repository apt would refuse on the target, so it cannot deliver the origin."""
 
     def outcome(self) -> OriginOutcome:
-        """Which of ADR-020 D-34's outcomes this package falls into.
+        """Which of `PKG-FR-APT-IDENTITY`'s outcomes this package falls into.
 
         The ladder is ordered by what it takes to be sure: a target candidate from an origin
         the source uses settles the question outright, and only after that does it matter
@@ -190,7 +191,8 @@ def is_origin_mismatch(plan: OriginPlan) -> bool:
 
 
 class OriginClassifier:
-    """D-34's classification over two machines' captured facts, and D-35's read-back."""
+    """`PKG-FR-APT-IDENTITY`'s classification over two machines' captured facts, and `PKG-FR-APT-ORIGIN-VERIFY`'s
+    read-back."""
 
     def __init__(
         self,
@@ -210,7 +212,7 @@ class OriginClassifier:
         self._plans: Mapping[str, OriginPlan] = {}
         # `{package name: refusal message}` for every approved install whose candidate on
         # the REAL post-`apt-get update` target comes from none of the source's origins
-        # (D-35). `None` until the one batched verification runs; `{}` once it has run and
+        # (`PKG-FR-APT-ORIGIN-VERIFY`). `None` until the one batched verification runs; `{}` once it has run and
         # found nothing to refuse, which is what distinguishes "not yet checked" from
         # "checked, all clear" and keeps the call to exactly one per run.
         self._refusals: dict[str, str] | None = None
@@ -231,7 +233,7 @@ class OriginClassifier:
     ) -> Mapping[str, OriginPlan]:
         """One `OriginPlan` per source package, from facts already captured this run.
 
-        Distribution origins are resolved per machine (D-35) from that machine's own
+        Distribution origins are resolved per machine (`PKG-FR-APT-ORIGIN-VERIFY`) from that machine's own
         distribution source files, so a source on one Ubuntu mirror and a target on another
         agree that both are the distribution rather than two vendors.
         """
@@ -281,15 +283,15 @@ class OriginClassifier:
         """Whether the target's apt named a version it would install for this package, from
         the batched `apt-cache policy` this run already ran (`AptProbe.collect_target_policy`).
 
-        The plan-time simulation's admission test, and a D-30 ruling rather than a detail. An
-        ADR-020 D-34 class-3 install — the repository that supplies it is derived from the
+        The plan-time simulation's admission test, and a `PKG-FR-COLLATERAL-MANUAL` ruling rather than a detail. An
+        `PKG-FR-APT-IDENTITY` class-3 install — the repository that supplies it is derived from the
         package's own approval and written during converge — is a name the target's apt
         cannot locate yet, and `apt-get --dry-run` refuses the WHOLE batch on it with the
         exit code a held dpkg lock also produces. Including such a name therefore does not
         weaken that one package's protection, it removes the protection from every other
         package in the run and aborts `plan()` before the user sees anything. The evidence
         used is the policy read, never the simulation's exit code, which cannot separate the
-        two causes (ADR-022 D-01).
+        two causes (`PKG-FR-READ-FAILS-JOB`).
 
         What this defers, rather than gives up: an excluded package gets no plan-time
         collateral classification, because apt cannot say what it would remove for a package
@@ -313,7 +315,7 @@ class OriginClassifier:
         target: RemoteExecutor,
     ) -> str | None:
         """Why this approved install may not run, or `None` when its origin checks out
-        (ADR-020 D-35) — the hard guarantee behind origin replication.
+        (`PKG-FR-APT-ORIGIN-VERIFY`) — the hard guarantee behind origin replication.
 
         Plan-time classification decides what `/etc/apt` work to derive; only this decides
         what may be installed, because only it sees the state that derivation actually
@@ -330,7 +332,7 @@ class OriginClassifier:
         install, which is the window in which the answer is about the converged target.
 
         Packages whose source origins are all distribution origins never enter the set
-        (D-35's exemption): two machines on different Ubuntu mirrors are not two vendors.
+        (`PKG-FR-APT-ORIGIN-VERIFY`'s exemption): two machines on different Ubuntu mirrors are not two vendors.
 
         A name an ANSWERED probe printed no block for is refused like any other mismatch.
         That is deliberately stricter than the plan-time rule, where apt's silence condemns
@@ -355,7 +357,7 @@ class OriginClassifier:
                 continue
             plan = self._plans.get(diff.item_id)
             # `vendor_source_origins` is `source_origins` minus the SOURCE's own distribution
-            # files, so an empty tuple is exactly D-35's exemption. The intersection below is
+            # files, so an empty tuple is exactly `PKG-FR-APT-ORIGIN-VERIFY`'s exemption. The intersection below is
             # against the FULL set: a package the source has from both a vendor and the
             # archive is faithfully replicated by either.
             if plan is None or not plan.vendor_source_origins:

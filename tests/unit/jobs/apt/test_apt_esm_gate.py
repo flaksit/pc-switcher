@@ -1,4 +1,4 @@
-"""The Ubuntu Pro question, its two answers, and what neither of them leaks (D-38).
+"""The Ubuntu Pro question, its two answers, and what neither of them leaks (`PKG-FR-DISTRO-FILES`).
 
 Split out of the former single `test_apt_sync.py`.
 """
@@ -115,7 +115,7 @@ def _promoted_files(target: MagicMock) -> list[str]:
 
 
 class TestTheESMAttachmentGate:
-    """D-38: the two `ubuntu-esm-*` sources are the one always-sync bucket that waits on a
+    """`PKG-FR-DISTRO-FILES`: the two `ubuntu-esm-*` sources are the one always-sync bucket that waits on a
     fact about the TARGET. Writing them to a machine with no Pro attachment leaves an apt
     whose next install of an ESM-covered package fails with a 401 nobody traces back to the
     sync — and pc-switcher cannot attach the machine itself, because `pro attach` needs a
@@ -289,7 +289,7 @@ class TestTheESMAttachmentGate:
     )
     async def test_an_unreadable_pro_probe_is_treated_as_unattached(self, probe: CommandResult) -> None:
         """C140 — False asks a question the user can answer; True writes files that break the
-        target's next install. The recoverable answer is the default (ADR-022 D-01).
+        target's next install. The recoverable answer is the default (`PKG-FR-READ-FAILS-JOB`).
         """
         job, target, reviewer = _esm_job(pro_status=probe, gate_answers=[False])
 

@@ -1,4 +1,4 @@
-"""Unit tests for the batched review primitive (D-24, plan 02-02).
+"""Unit tests for the batched review primitive (`PKG-FR-BATCHED`, plan 02-02).
 
 The decision screen's own rendering and key handling live in `test_decision_list.py`;
 these tests stub it out and drive `review_items` through its interactive, non-interactive,
@@ -130,7 +130,7 @@ def _collateral_group(entries: Sequence[ReviewEntry]) -> ReviewGroup:
 
 @pytest.mark.asyncio
 class TestNonInteractive:
-    """D-26: no TTY -> prompt for nothing, skip everything once, record nothing permanent."""
+    """`PKG-FR-NO-TERMINAL`: no TTY -> prompt for nothing, skip everything once, record nothing permanent."""
 
     async def test_no_prompt_constructed_and_everything_skipped_once(self) -> None:
         """H160, J35, J36 — no terminal: no screen is built at all and every item comes back declined for this run."""
@@ -439,7 +439,7 @@ class TestInteractive:
         assert not any("pc-switcher" in hint for hint in install_hints + removal_hints + change_hints)
 
     async def test_no_group_mixes_install_and_removal_entries_in_one_prompt(self) -> None:
-        """H97 — Removals never share a screen with installs (D-07/D-24)."""
+        """H97 — Removals never share a screen with installs (`PKG-FR-SKIP-ONCE`/`PKG-FR-BATCHED`)."""
         console = _interactive_console()
         ui = MagicMock()
         install_group = ReviewGroup(
@@ -515,7 +515,7 @@ class TestInteractive:
 
     async def test_every_removal_direction_still_offers_the_permanent_answer(self) -> None:
         """H82, H106 — "Starts at skip-once" and "is offered permanence" are two independent properties
-        of a group (`_REMOVAL_ACTIONS` vs `_PROMOTABLE_ACTIONS`), and ADR-020 D-07 makes them
+        of a group (`_REMOVAL_ACTIONS` vs `_PROMOTABLE_ACTIONS`), and `PKG-FR-SKIP-ONCE` makes them
         differ for the two-answer screens. Every ordinary removal direction keeps both.
         """
         console = _interactive_console()
@@ -540,7 +540,7 @@ class TestInteractive:
         assert outcome.decisions == dict.fromkeys(("remove", "delete", "disable"), Decision.SKIP_ALWAYS)
 
     async def test_repo_removal_starts_skipped_and_is_never_offered_permanence(self) -> None:
-        """H100, H107, H136 — The two-answer screen (ADR-020 D-07). It is a removal direction, so it starts at
+        """H100, H107, H136 — The two-answer screen (`PKG-FR-SKIP-ONCE`). It is a removal direction, so it starts at
         skip-once like any other; it is NOT promotable, so the permanent answer is absent
         from its options and `SKIP_ALWAYS` is unreachable — which is what "no registry entry"
         means at this layer.
@@ -656,7 +656,7 @@ class TestTerminalUIReviewer:
 @pytest.mark.asyncio
 class TestAskGate:
     """`ask_gate` asks about the MACHINE, not an item: two answers, no automation hook, and
-    a `None` the caller owns when there is no TTY (ADR-020 D-38).
+    a `None` the caller owns when there is no TTY (`PKG-FR-DISTRO-FILES`).
     """
 
     @staticmethod
@@ -971,7 +971,7 @@ class TestTheCommandLineAnswersAReview:
 
 
 class TestAutomationEnv:
-    """D-26: the hidden env var answers a review without a TTY, for integration tests only."""
+    """`PKG-FR-NO-TERMINAL`: the hidden env var answers a review without a TTY, for integration tests only."""
 
     @pytest.mark.asyncio
     async def test_automation_env_returns_mapped_decisions_without_prompting(self) -> None:
@@ -1026,7 +1026,7 @@ class TestAutomationEnv:
         `json.JSONDecodeError` out of `review_items`.
 
         A loud failure is the acceptable outcome here: the variable is a hidden, test-only
-        hook (D-26), so the only ways to get it wrong are a broken test harness or a user
+        hook (`PKG-FR-NO-TERMINAL`), so the only ways to get it wrong are a broken test harness or a user
         who found it and mis-set it — both of which must stop the run rather than silently
         degrade into prompting (a TTY-less integration run would then hang or skip
         everything) or into applying a half-parsed decision map.
@@ -1098,7 +1098,7 @@ class TestAutomationEnv:
 
 @pytest.mark.asyncio
 class TestUnreproducibleGroupResolution:
-    """D-21: an `UNREPRODUCIBLE_REVIEW_ACTION` group gets the three-way per-entry
+    """`PKG-FR-MANUAL-RESOLUTION`: an `UNREPRODUCIBLE_REVIEW_ACTION` group gets the three-way per-entry
     resolution flow (add a snippet / record machine-specific / skip for now), never a
     checkbox tick.
     """
@@ -1107,7 +1107,7 @@ class TestUnreproducibleGroupResolution:
     async def _captured(body: str) -> SnippetBodies:
         """Both bodies `review_items` hands back when the user submits `body` at each of the
         two editors — the install-or-update snippet and the installed-version snippet, which
-        are authored together and are both mandatory (D-22)."""
+        are authored together and are both mandatory (`PKG-FR-VERSION-SNIPPET`)."""
         group = _unreproducible_group([_entry("u1", label="brscan3")])
         screen = _fake_prompt(ask_return={"u1": "add_snippet"})
         text_prompt = _fake_prompt(ask_return=body)
@@ -1147,7 +1147,7 @@ class TestUnreproducibleGroupResolution:
 
         Four things: each editor's header while it is open and on prompt_toolkit's final
         `is_done` render, plus everything printed to the console around them (the
-        scrollback). Two editors, because authoring is always the pair (D-22).
+        scrollback). Two editors, because authoring is always the pair (`PKG-FR-VERSION-SNIPPET`).
         """
         console, sink = captured_console(terminal=True)
         group = _unreproducible_group([_entry("u1", label="brscan3")])
@@ -1191,7 +1191,7 @@ class TestUnreproducibleGroupResolution:
         assert "hangs the" in install_open
         assert "DEBIAN_FRONTEND=noninteractive" in install_open
         assert "Ctrl-D to finish" in install_open
-        # The install-or-update contract is stated where the body is written (D-22).
+        # The install-or-update contract is stated where the body is written (`PKG-FR-VERSION-SNIPPET`).
         assert "OLDER version" in install_open
         # The second editor states the one obligation pc-switcher cannot check for the
         # author: it runs on both machines, every sync, and must change nothing.
@@ -1231,7 +1231,8 @@ class TestUnreproducibleGroupResolution:
         assert "u1" not in outcome.unresolved
 
     async def test_explicit_skip_once_is_a_resolution_not_unresolved(self) -> None:
-        """G33, H115 — D-21: an explicit "Skip for now" is a real decision, so the item is resolved
+        """G33, H115 — `PKG-FR-MANUAL-RESOLUTION`: an explicit "Skip for now" is a real decision, so the item is
+        resolved
         for this run and left OUT of `unresolved`."""
         console = _interactive_console()
         ui = MagicMock()
@@ -1457,7 +1458,7 @@ class TestUnreproducibleGroupResolution:
 
 @pytest.mark.asyncio
 class TestCollateralGroupResolution:
-    """D-30: a `COLLATERAL_REVIEW_ACTION` group gets the three-way per-entry flow
+    """`PKG-FR-COLLATERAL-MANUAL`: a `COLLATERAL_REVIEW_ACTION` group gets the three-way per-entry flow
     (apply / keep the package / stop the sync), recorded against `entry.item_id` (which the caller,
     `AptSyncJob`, maps onto the triggering install), never a checkbox tick.
     """
@@ -1590,7 +1591,7 @@ class TestCollateralGroupResolution:
         assert [len(call.kwargs["rows"]) for call in decision_list.call_args_list] == [1, 1]
 
     async def test_non_interactive_collateral_entries_skip_once_and_are_not_unresolved(self) -> None:
-        """D28, J40 — D-26: without a TTY a collateral entry comes back SKIP_ONCE like every other
+        """D28, J40 — `PKG-FR-NO-TERMINAL`: without a TTY a collateral entry comes back SKIP_ONCE like every other
         item (the install it gates is simply not approved) and is never flagged unresolved
         — that status is reserved for unreproducible items.
         """
@@ -2250,7 +2251,7 @@ protects this package."""
 
 @pytest.mark.asyncio
 class TestCollateralPromptWording:
-    """D-30's prompt, in the user's language: what is protected, what the change does to it,
+    """`PKG-FR-COLLATERAL-MANUAL`'s prompt, in the user's language: what is protected, what the change does to it,
     what each of the three answers costs — and how far "stop" reaches."""
 
     @staticmethod

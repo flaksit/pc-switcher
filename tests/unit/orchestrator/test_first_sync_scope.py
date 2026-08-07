@@ -124,7 +124,7 @@ class TestFirstSyncScopesFolderSync:
 
 
 class TestFirstSyncScopesPackageJobsOrdering:
-    """D-17: package job scopes precede folder_sync's scope, one entry per enabled job."""
+    """`PKG-FR-JOB-ORDER`: package job scopes precede folder_sync's scope, one entry per enabled job."""
 
     def test_all_package_jobs_and_folder_sync_each_contribute_one_scope_in_order(self, mock_config: MagicMock) -> None:
         """All seven package jobs and folder_sync each resolve to a real job class and

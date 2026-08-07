@@ -66,6 +66,7 @@ sync_jobs:
   flatpak_sync: true
   manual_deb_sync: true
   manual_snap_sync: true
+  manual_flatpak_sync: true
   manual_installs_sync: true
   folder_sync: true
 
@@ -138,7 +139,7 @@ async def _capture_machine_state(executor: BashLoginRemoteExecutor) -> _MachineS
 
 
 class TestDryRunContract:
-    """The tool-wide `--dry-run` contract, on a real sync (ADR-014, D-12)."""
+    """The tool-wide `--dry-run` contract, on a real sync (ADR-014)."""
 
     async def test_dry_run_previews_the_whole_pipeline_and_writes_nothing(
         self,
@@ -148,7 +149,7 @@ class TestDryRunContract:
         package_sync_subjects: None,
         apt_subjects: AptSubjects,
     ) -> None:
-        """J53, J58, J59, C165, C168, C169, C2, A65 — ADR-014 / D-12, one rehearsal, every
+        """J53, J58, J59, C165, C168, C169, C2, A65 — ADR-014, one rehearsal, every
         forbidden write asserted absent.
 
         pc2 is seeded so a real sync would add files, overwrite one and delete several
@@ -233,7 +234,7 @@ class TestDryRunContract:
                 f"source: {source_after.snapshots!r}\ntarget: {target_after.snapshots!r}"
             )
             assert source_after.sync_history == "__ABSENT__" and target_after.sync_history == "__ABSENT__", (
-                "--dry-run recorded sync history (D-12).\n"
+                "--dry-run recorded sync history (ADR-014).\n"
                 f"source: {source_after.sync_history!r}\ntarget: {target_after.sync_history!r}"
             )
             assert target_after.config == "__ABSENT__", (
