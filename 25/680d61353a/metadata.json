@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "25680d61353a",
+  "strategy": "manual-commit",
+  "branch": "worktree-docs-debloat-271",
+  "checkpoints_count": 6,
+  "files_touched": [
+    "docs/adr/adr-021-what-the-log-records-and-withholds.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/25/680d61353a/0/metadata.json",
+      "transcript": "/25/680d61353a/0/full.jsonl",
+      "compact_transcript": "/25/680d61353a/0/transcript.jsonl",
+      "content_hash": "/25/680d61353a/0/content_hash.txt",
+      "prompt": "/25/680d61353a/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 203,
+    "cache_creation_tokens": 1061434,
+    "cache_read_tokens": 26376028,
+    "output_tokens": 126665,
+    "api_call_count": 113
+  }
+}
