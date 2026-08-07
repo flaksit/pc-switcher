@@ -9,10 +9,12 @@ stdlib-based logging are in tests/unit/test_logging.py and
 tests/contract/test_logging_contract.py.
 
 References:
-- docs/system/core.md - User Story 4 (Logging System)
+- docs/system/logging.md - LOG-US-SYSTEM (Comprehensive Logging System)
 - specs/004-python-logging - Standard Python Logging Integration
-- LOG-FR-LEVELS: Six log levels with correct ordering
+- LOG-FR-HIERARCHY: Six log levels with correct ordering
 - LOG-FR-FILE-PATH: Timestamped log files
+- LOG-FR-TUI-FORMAT: Interactive records go to the UI's log panel
+- LOG-FR-CONTEXT: Structured context (job, host) preserved on each record
 """
 
 from __future__ import annotations
@@ -34,10 +36,10 @@ from tests.unit.jobs.test_package_sync_core import make_context
 
 
 class TestLogLevelOrdering:
-    """Test LOG-FR-LEVELS: Six log levels with correct ordering."""
+    """Test LOG-FR-HIERARCHY: Six log levels with correct ordering."""
 
-    def test_log_fr_levels(self) -> None:
-        """LOG-FR-LEVELS: Six log levels with correct ordering.
+    def test_log_fr_hierarchy(self) -> None:
+        """LOG-FR-HIERARCHY: Six log levels with correct ordering.
 
         Verifies that LogLevel enum has exactly six levels with the ordering:
         DEBUG > FULL > INFO > WARNING > ERROR > CRITICAL
