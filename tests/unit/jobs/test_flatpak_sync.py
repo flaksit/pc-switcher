@@ -547,7 +547,7 @@ class TestPlanDiff:
         assert by_id["flatpak:ref:system:com.slack.Slack/x86_64/stable"].action == DiffAction.INSTALL
         assert by_id["flatpak:ref:system:com.slack.Slack/x86_64/stable"].diff_class == DiffClass.MISSING_ON_TARGET
 
-        # Version differs, same scope -> report_only, never a converge verb (D-04).
+        # Version differs, same scope -> report_only, never a converge verb (`PKG-FR-VERSION-FLOAT`).
         gimp = by_id["flatpak:ref:user:org.gimp.GIMP/x86_64/stable"]
         assert gimp.action == DiffAction.REPORT_ONLY
         assert gimp.diff_class == DiffClass.VERSION_MISMATCH
@@ -634,7 +634,7 @@ def origin_pair_context(  # noqa: PLR0913 - test builder knobs; all keyword-only
 
 
 class TestRefOriginMismatch:
-    """ADR-020 D-41: a ref present on both machines from different remotes is
+    """`PKG-FR-FLATPAK-REMOTE-DERIVED`: a ref present on both machines from different remotes is
     `ORIGIN_MISMATCH`, reported and never converged.
 
     The comparison runs on the remotes' URLs, never their names, so the two ways a name
@@ -707,7 +707,7 @@ class TestRefOriginMismatch:
     @pytest.mark.asyncio
     async def test_a_remote_the_two_machines_merely_named_differently_is_not_a_mismatch(self) -> None:
         """F91 — One vendor under two labels. Reporting it would be noise about a label, and the
-        label is not what D-41 replicates.
+        label is not what `PKG-FR-FLATPAK-REMOTE-DERIVED` replicates.
         """
         context, _source, _target = origin_pair_context(
             source_origin="flathub",
@@ -877,7 +877,7 @@ def derivation_source(
 
 
 class TestRemotesAreDerivedFromApprovedRefs:
-    """ADR-020 D-41: a remote travels because an approved ref needs it, and is
+    """`PKG-FR-FLATPAK-REMOTE-DERIVED`: a remote travels because an approved ref needs it, and is
     never a tickable line in the add or the change direction.
 
     The pairing this makes unrepresentable is the one that mattered: a ref approved and its
@@ -1069,7 +1069,8 @@ class TestRemotesAreDerivedFromApprovedRefs:
 
     @pytest.mark.asyncio
     async def test_two_approved_refs_from_one_failed_remote_both_fail_naming_it(self) -> None:
-        """F97 — the D-39 attribution map is per ref, so one write failure is charged to each of them."""
+        """F97 — the `PKG-FR-DERIVED-FAILURE` attribution map is per ref, so one write failure is charged to each of
+        them."""
         second = "org.example.Other\t1.0\tflathub\tuser\torg.example.Other/x86_64/stable\n"
         target = FakeFlatpakTarget(responses={"remote-add": CommandResult(1, "", "GPG verification failed")})
         context, _source, _target = make_context(
@@ -1150,7 +1151,7 @@ _FLATHUB_CONFLICT_ID = "flatpak:conflict:user:flathub"
 
 def target_decision_file(*item_ids: str) -> str:
     """The TARGET's own decision file recording `item_ids` skip-always — the one and only
-    definition of "machine-specific" (ADR-020 D-41), read straight off the file rather
+    definition of "machine-specific" (`PKG-FR-FLATPAK-REMOTE-DERIVED`), read straight off the file rather
     than inferred from the ref being target-only.
     """
     body = "".join(
@@ -1210,7 +1211,7 @@ def conflict_entries(plan: PackagePlan) -> list[ReviewEntry]:
 
 
 class TestARepointThatMovesAMachineSpecificRefIsAsked:
-    """ADR-020 D-41: repointing a flatpak remote is silent mechanism EXCEPT
+    """`PKG-FR-FLATPAK-REMOTE-DERIVED`: repointing a flatpak remote is silent mechanism EXCEPT
     when a ref the target recorded skip-always takes that remote as its origin.
 
     Machine-specific is the trigger, exactly as apt reads it from the target's decision file
@@ -1399,7 +1400,7 @@ class TestARepointThatMovesAMachineSpecificRefIsAsked:
 
     @pytest.mark.asyncio
     async def test_skip_once_fails_the_ref_that_needed_the_source_url_naming_the_decision(self) -> None:
-        """F56 — D-39, and the reason a skipped conflict is not the same as no conflict: the ref
+        """F56 — `PKG-FR-DERIVED-FAILURE`, and the reason a skipped conflict is not the same as no conflict: the ref
         the user approved cannot be delivered from the origin they were shown, and installing
         it from the URL the target still has is the wrong-vendor outcome the whole origin
         guarantee exists to prevent.
@@ -1774,7 +1775,7 @@ class TestRemoteTrustTravelsWithTheDerivedWrite:
         add_cmd = next(c for c in all_calls(target) if "remote-add" in c)
         assert f"--gpg-import={self._STAGED}" in add_cmd
         assert "--no-gpg-verify" not in add_cmd
-        # The key travels as bytes from the source's own keyring file (ADR-020 D-12).
+        # The key travels as bytes from the source's own keyring file (`PKG-FR-KEY-COPY`).
         sent_local, sent_remote = target.send_file.call_args.args
         assert sent_local == tmp_path / ".local" / "share" / "flatpak" / "repo" / "flathub.trustedkeys.gpg"
         assert sent_remote == self._STAGED
@@ -1928,7 +1929,7 @@ class TestRemoteTrustTravelsWithTheDerivedWrite:
     ) -> None:
         """F40 — The digest was captured at plan time, so the file disappearing before the write
         is a real inconsistency — never a provision-anyway. The derived write has no item,
-        so the refusal lands on the ref that needed it (D-39).
+        so the refusal lands on the ref that needed it (`PKG-FR-DERIVED-FAILURE`).
         """
         monkeypatch.setattr(Path, "home", lambda: tmp_path)  # no keyring file written
         target = FakeFlatpakTarget(responses={"echo $HOME": CommandResult(0, "/home/tester\n", "")})
@@ -2358,7 +2359,7 @@ _APP_REF = "org.mozilla.firefox/x86_64/stable"
 
 
 class TestOriginIsReplicatedNotJustNamed:
-    """ADR-020 D-41: a ref replicates as (ref, origin), and the origin is
+    """`PKG-FR-FLATPAK-REMOTE-DERIVED`: a ref replicates as (ref, origin), and the origin is
     checked against the target's real state rather than inferred from a name.
 
     Measured against real Flathub: a target remote called `flathub` pointing at
@@ -2645,7 +2646,7 @@ class TestMaskParse:
 
 
 class TestMaskDiff:
-    """Pure membership diff (#208, D-10): source-only -> INSTALL (mask), target-only ->
+    """Pure membership diff (#208, `PKG-FR-MARK-SIDE`): source-only -> INSTALL (mask), target-only ->
     REMOVE (unmask), present-both -> no diff. No CHANGE — a mask has no value to change.
     """
 
@@ -2703,7 +2704,7 @@ class TestMaskDiff:
         """F128 — a mask lands after the applications, so it cannot suppress a dependency pulled in the same run."""
         # A ref install (source-only app) plus a mask install (source-only mask): the
         # mask diff must come AFTER the ref diff so it cannot suppress an auto-pulled
-        # dependency of the ref being installed the same run (D-08).
+        # dependency of the ref being installed the same run (`PKG-FR-MACHINE-SPECIFIC`).
         context, _source, _target = make_context(
             source_responses={
                 "flatpak list --app": CommandResult(
@@ -2728,7 +2729,7 @@ class TestMaskDiff:
 
 
 class TestMaskEditsAndScopeMoves:
-    """#208 D-10 — masks are pure membership, so neither an edited pattern nor a moved
+    """#208 `PKG-FR-MARK-SIDE` — masks are pure membership, so neither an edited pattern nor a moved
     scope is ever normalised into a single CHANGE: both read as remove-old + add-new and
     are reported exactly as found (the same rule refs and remotes already follow).
     """
@@ -2773,7 +2774,7 @@ class TestMaskEditsAndScopeMoves:
 
     @pytest.mark.asyncio
     async def test_mask_replicates_even_when_its_pattern_matches_no_installed_ref(self) -> None:
-        """F127 — #208 D-10 — masks are captured from `flatpak mask`, never filtered against
+        """F127 — #208 `PKG-FR-MARK-SIDE` — masks are captured from `flatpak mask`, never filtered against
         `flatpak list`: a pattern matching nothing installed on EITHER machine is still
         replicated, because it encodes the user's intent about future installs.
         """
@@ -3307,7 +3308,7 @@ class TestUnusedRemoteIsDeleted:
 
 
 class TestMaskConverge:
-    """`[sudo] flatpak {--user|--system} mask [--remove] <pattern>` (#208, D-10): scope +
+    """`[sudo] flatpak {--user|--system} mask [--remove] <pattern>` (#208, `PKG-FR-MARK-SIDE`): scope +
     pattern recovered from the item_id (no source-side lookup), sudo iff system scope.
     """
 
@@ -3353,7 +3354,7 @@ class TestMaskConverge:
 
 
 class TestMaskSystemScopeGate:
-    """A system-scope mask on either machine (#208, D-07) writes into `/var/lib/flatpak`
+    """A system-scope mask on either machine (#208, `PKG-FR-SKIP-ONCE`) writes into `/var/lib/flatpak`
     just like a system remote, so it flips `_system_scope_in_play` and requires target
     sudo; a user-scope-only mask never does.
     """
@@ -3786,7 +3787,8 @@ class TestRemoteFilterReplicates:
 
     @pytest.mark.asyncio
     async def test_a_remote_no_approved_ref_needs_carries_no_filter_either(self, tmp_path: Path) -> None:
-        """F105 — A remote nothing derives is not provisioned (D-41), so there is nothing to filter."""
+        """F105 — A remote nothing derives is not provisioned (`PKG-FR-FLATPAK-REMOTE-DERIVED`), so there is nothing to
+         filter."""
         path = self._filter_file(tmp_path)
         context, _source, target = make_context(
             source_responses=self._source(

@@ -11,7 +11,7 @@ would let the two drift and leave a snap owned by both jobs or by neither.
 Shared here rather than duplicated per job, and here rather than on `PackageSyncJob` —
 `apt_policy.py` is the precedent, and its reasoning holds unchanged: this module defines
 no job class and sits in no job's MRO, so the other managers inherit nothing from it, and
-`manual_snap_sync` never imports `snap_sync` (D-18).
+`manual_snap_sync` never imports `snap_sync` (`PKG-FR-MANUAL-SCOPE`).
 
 `SnapItem` moved here with the parser that builds it: it was in `snap_sync.py` while no
 other job constructed one, and `manual_snap_sync` now does.
@@ -30,7 +30,7 @@ __all__ = ["SnapItem", "is_sideloaded", "parse_snap_list", "partition_sideloaded
 
 @dataclass(frozen=True)
 class SnapItem:
-    """One installed snap (D-06): name, tracked channel, and installed revision.
+    """One installed snap (`PKG-FR-SNAP-REVISION`): name, tracked channel, and installed revision.
 
     `channel` is a FIELD of the snap item, not a standalone item class:
     `ItemClass.SNAP_CHANNEL` is reserved for the diff DETAIL on a channel-only change

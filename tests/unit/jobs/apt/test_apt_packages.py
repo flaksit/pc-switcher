@@ -210,7 +210,7 @@ class TestTheDriftedTransactionIsAskedAbout:
 class TestTransactionGuard:
     @pytest.mark.asyncio
     async def test_install_whose_only_collateral_is_auto_deps_proceeds(self) -> None:
-        """D2 — The D-30 win, at the guard: an install whose simulation removes only
+        """D2 — The `PKG-FR-COLLATERAL-MANUAL` win, at the guard: an install whose simulation removes only
         auto-installed dependencies (nothing in the target's manual set) is NOT refused —
         this is the legitimate install the old blanket refusal wrongly blocked.
         """
@@ -553,7 +553,7 @@ class TestInstallBeforeHoldOrdering:
 
 
 class TestAFailedHoldCommand:
-    """#208 D6: an `apt-mark` that exits non-zero is a normal per-item failure (D-27
+    """#208 D6: an `apt-mark` that exits non-zero is a normal per-item failure (`PKG-FR-OUTCOME-FAILED`
     continue-and-report) — no gating machinery, no crash, no aborted run.
     """
 
@@ -1156,12 +1156,12 @@ class TestRemovalConverge:
 
 
 class TestRemovalGuard:
-    """Auto reverse-deps proceed (D-30); an unapproved manual removal is still refused."""
+    """Auto reverse-deps proceed (`PKG-FR-COLLATERAL-MANUAL`); an unapproved manual removal is still refused."""
 
     @pytest.mark.asyncio
     async def test_auto_reverse_dep_removal_proceeds(self) -> None:
         """D4 — Removing a package legitimately removes the auto-installed dependencies apt
-        pulled in for it (D-30): `pkg-b` is not in the target manual set, so the removal
+        pulled in for it (`PKG-FR-COLLATERAL-MANUAL`): `pkg-b` is not in the target manual set, so the removal
         of `pkg-a` proceeds even though its transaction also removes `pkg-b`.
         """
         context, _source, target = make_context(
@@ -1253,7 +1253,7 @@ class TestDowngradeGuard:
     @pytest.mark.asyncio
     async def test_guard_allows_auto_downgrade(self) -> None:
         """D7 — An auto-installed package the simulation would downgrade proceeds silently —
-        apt resolving its own dependencies (D-30). `auto-dg` is not in the target manual
+        apt resolving its own dependencies (`PKG-FR-COLLATERAL-MANUAL`). `auto-dg` is not in the target manual
         set, so the guard never even compares versions for it.
         """
         context, _source, target = make_context(

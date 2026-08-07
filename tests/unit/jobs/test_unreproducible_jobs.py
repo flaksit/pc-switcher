@@ -58,7 +58,7 @@ from tests.unit.jobs.unreproducible_harness import (
 
 class TestSnippetResolution:
     """A registry snippet makes an item reproducible: INSTALL + replay; without one it is
-    REPORT_ONLY and carved into its own resolution group (D-20/D-21)."""
+    REPORT_ONLY and carved into its own resolution group (`PKG-FR-SNIPPET-VERBATIM`/`PKG-FR-MANUAL-RESOLUTION`)."""
 
     @pytest.mark.asyncio
     async def test_item_with_snippet_plans_install_and_converges_by_replaying_it(self) -> None:
@@ -66,7 +66,7 @@ class TestSnippetResolution:
             source_responses={
                 STATUS_QUERY: installed_on("brscan3"),
                 "apt-cache policy": CommandResult(0, hand_deb_policy("brscan3"), ""),
-                # plan() now classifies from the SOURCE registry (corrected D-23).
+                # plan() now classifies from the SOURCE registry (corrected `PKG-FR-MANUAL-SAME-RUN`).
                 "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, BRSCAN3_REGISTRY_YAML, ""),
             },
             target_responses={
@@ -116,7 +116,7 @@ class TestSnippetResolution:
     @pytest.mark.asyncio
     async def test_missing_snippet_at_converge_is_a_failed_result_not_a_crash(self) -> None:
         """G85 — a snippet-backed diff whose snippet vanished between plan and converge (a
-        registry race) fails as one item (D-27), never raises."""
+        registry race) fails as one item (`PKG-FR-OUTCOME-FAILED`), never raises."""
         context, _source, _target = make_context(
             target_responses={
                 "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, "snippets: {}\n", ""),
@@ -135,7 +135,7 @@ class TestPromptingSnippetCannotHang:
     mechanism is the replay command's shape — the body passed as ONE quoted argument to
     `bash -c`, `login_shell=False`, and no stdin supplied under any name — so a command
     that waits for input reads EOF and exits non-zero, becoming an ordinary per-item
-    failure (D-27). Asserted on the command shape; nothing here actually blocks.
+    failure (`PKG-FR-OUTCOME-FAILED`). Asserted on the command shape; nothing here actually blocks.
     """
 
     @pytest.mark.asyncio
@@ -279,7 +279,8 @@ class TestWhatTheTargetAlreadyHolds:
 
 
 class TestPermanentMarkWrites:
-    """`_finalize_unreproducible`'s write side (D-08a/D-21): which machine records a
+    """`_finalize_unreproducible`'s write side (`PKG-FR-MACHINE-SPECIFIC`/`PKG-FR-MANUAL-RESOLUTION`): which machine
+    records a
     resolved unreproducible item, and which resolutions record nothing at all."""
 
     @staticmethod
@@ -411,7 +412,7 @@ class TestTracerEndToEnd:
 
 
 class TestSameRunApplication:
-    """Corrected D-23: a snippet authored on the fly during review is APPLIED (replayed) on
+    """Corrected `PKG-FR-MANUAL-SAME-RUN`: a snippet authored on the fly during review is APPLIED (replayed) on
     the target the SAME run, not one run too late. An item REPORT_ONLY at plan time (no
     source snippet) whose id the review returns in `outcome.snippets` is promoted to an
     INSTALL diff decided APPLY by `after_review()`, so the unchanged base `apply()`
@@ -467,7 +468,7 @@ class TestSameRunApplication:
 
 
 class TestClassificationAuthority:
-    """Corrected D-23: reproducibility is judged from the SOURCE registry, never the
+    """Corrected `PKG-FR-MANUAL-SAME-RUN`: reproducibility is judged from the SOURCE registry, never the
     target. A snippet only on the target does NOT make an item reproducible; the same
     snippet on the source does. Direct pin of the one-run-too-late bug's root cause."""
 
@@ -605,7 +606,7 @@ class TestNoTerminalRun:
 
 
 class TestSkipOnceResolution:
-    """D-21: skip-once is a valid resolution — a run whose only items were skipped-once is
+    """`PKG-FR-MANUAL-RESOLUTION`: skip-once is a valid resolution — a run whose only items were skipped-once is
     clean. Decision 10: an interactive review can no longer leave an item genuinely
     undecided, so `unresolved` never fails an interactive run."""
 
@@ -622,7 +623,7 @@ class TestSkipOnceResolution:
 
         plan = await job.plan()
         item_id = "unreproducible:apt-no-candidate:brscan3"
-        # Explicit skip-once: a resolution, NOT in unresolved (D-21).
+        # Explicit skip-once: a resolution, NOT in unresolved (`PKG-FR-MANUAL-RESOLUTION`).
         job.accept_review(
             plan,
             ReviewOutcome(decisions={item_id: Decision.SKIP_ONCE}, was_interactive=True, unresolved=()),
@@ -677,7 +678,7 @@ class TestContinueOnFailure:
             source_responses={
                 STATUS_QUERY: installed_on("brscan3", "cnpg"),
                 "apt-cache policy": CommandResult(0, hand_deb_policy("brscan3") + hand_deb_policy("cnpg"), ""),
-                # plan() classifies both INSTALL from the SOURCE registry (corrected D-23).
+                # plan() classifies both INSTALL from the SOURCE registry (corrected `PKG-FR-MANUAL-SAME-RUN`).
                 "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, registry_yaml, ""),
             },
             target_responses={
@@ -780,7 +781,7 @@ class TestNoRunReachesSudoValidationDidNotClear:
 
 
 class TestSnippetPush:
-    """D-23: `manual_installs_sync` pushes `package-snippets.yaml` to the target itself,
+    """`PKG-FR-MANUAL-SAME-RUN`: `manual_installs_sync` pushes `package-snippets.yaml` to the target itself,
     after its own review and before any replay, depending on no other job. The source
     registry lives at `~/.config/pc-switcher/package-snippets.yaml`; the source is the
     local machine, so its on-disk path resolves against `Path.home()`."""
@@ -1022,7 +1023,7 @@ class TestSnippetPush:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """G49 — finalize-then-push: the review's authored snippet is written to the SOURCE
-        registry before the file is pushed, so the pushed copy includes it (D-23)."""
+        registry before the file is pushed, so the pushed copy includes it (`PKG-FR-MANUAL-SAME-RUN`)."""
         source_registry = self._write_source_registry(tmp_path, "snippets: {}\n")
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         item_id = "unreproducible:apt-no-candidate:brscan3"
@@ -1075,7 +1076,7 @@ class TestSnippetPush:
             source_responses={
                 STATUS_QUERY: installed_on("brscan3"),
                 "apt-cache policy": CommandResult(0, hand_deb_policy("brscan3"), ""),
-                # plan() classifies INSTALL from the SOURCE registry (corrected D-23).
+                # plan() classifies INSTALL from the SOURCE registry (corrected `PKG-FR-MANUAL-SAME-RUN`).
                 "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, BRSCAN3_REGISTRY_YAML, ""),
             },
             target_responses={
@@ -1786,7 +1787,8 @@ class TestTheCommandLineAnswersTheReview:
 
 class TestVersionDrift:
     """`PKG-FR-MANUAL-VERSION`: an item both machines have is compared on its installed
-    version, and only a difference produces anything (D-05's exception, D-22)."""
+    version, and only a difference produces anything (`PKG-FR-APT-HOLD-VERSION`'s exception,
+    `PKG-FR-VERSION-SNIPPET`)."""
 
     @staticmethod
     def _both_hold(source_version: str, target_version: str, *, registry: str = BRSCAN3_REGISTRY_YAML) -> JobContext:
@@ -1955,7 +1957,7 @@ class TestRemovingWhatTheSourceDropped:
 
 class TestTheConvergeLoop:
     """`PKG-FR-MANUAL-CONVERGE-LOOP`: a replay that exits 0 is not convergence. The target's
-    version is read back, and a body that moved nothing narrows the menu (D-22)."""
+    version is read back, and a body that moved nothing narrows the menu (`PKG-FR-VERSION-SNIPPET`)."""
 
     @staticmethod
     def _updating_job(target_versions: list[str], *, reviewer: object | None = None) -> tuple[Any, MagicMock]:

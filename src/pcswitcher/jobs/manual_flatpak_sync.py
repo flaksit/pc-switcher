@@ -1,6 +1,6 @@
 """`manual_flatpak_sync`: flatpak refs no remote can reproduce — an application installed
 from a local bundle (`flatpak install --bundle`), or from a remote that no longer exists
-(#252, D-15, D-18).
+(#252, `PKG-FR-JOB-INDEPENDENCE`, `PKG-FR-MANUAL-SCOPE`).
 
 Detection is one question asked of the whole installed set on each machine: which refs'
 `origin` names no remote configured in that ref's own installation scope. The predicate and
@@ -10,15 +10,15 @@ too — the two jobs partition the same population, so one of them widening its 
 and reported nowhere. On the target the question is only whether the ref is installed
 there at all, whatever origin put it there: software that is there is there.
 
-Its own job, on its own enable flag, for the reason D-15 gives every package job one: an
+Its own job, on its own enable flag, for the reason `PKG-FR-JOB-INDEPENDENCE` gives every package job one: an
 independent failure surface, an independent review and an independent switch. It sits
 beside `manual_deb_sync` and `manual_installs_sync`; all three subclass
 `UnreproducibleSyncJob` and share one install-snippet registry, and none imports another
-or imports the package-manager job it was carved out of (D-18).
+or imports the package-manager job it was carved out of (`PKG-FR-MANUAL-SCOPE`).
 
 The flatpak handoff is capture-time exclusion, not a message: `flatpak_sync` drops the same
 refs from both its manifests using the shared predicate, and this job independently
-re-runs it. Two jobs, one predicate, no result passed between them (D-15/D-16). The
+re-runs it. Two jobs, one predicate, no result passed between them (`PKG-FR-JOB-INDEPENDENCE`). The
 consequence the user must know: this job's enable flag is its own, so enabling
 `flatpak_sync` while disabling this one leaves bundle-installed refs replicated by nobody.
 """
@@ -154,13 +154,13 @@ class ManualFlatpakSyncJob(UnreproducibleSyncJob):
         "additionalProperties": False,
     }
 
-    # -- Detection (D-18), run on both machines (`PKG-FR-MANUAL-DIFF`) -------------------
+    # -- Detection (`PKG-FR-MANUAL-SCOPE`), run on both machines (`PKG-FR-MANUAL-DIFF`) -------------------
 
     async def _configured_remotes(self, executor: Executor, machine: str) -> dict[str, frozenset[str]]:
         """`scope -> the remote names configured there`, one `flatpak remotes` per scope.
 
         Per scope and never combined, because flatpak tracks remotes per installation
-        (D-14): `flathub` configured system-wide says nothing about a user-scope ref whose
+        (`PKG-FR-APT-ORIGIN-DERIVED`): `flathub` configured system-wide says nothing about a user-scope ref whose
         origin is `flathub`. Guarded on the exit code alone — a scope with no remote at all
         is an ordinary machine, and `flatpak remotes` exits 0 for it.
         """
@@ -290,8 +290,8 @@ class ManualFlatpakSyncJob(UnreproducibleSyncJob):
         """`flatpak` on both machines: the source is read for detection and the target for
         what it already holds (`PKG-FR-MANUAL-DIFF`). Both are only ever READ here, so no
         sudo is needed for detection — and a snippet's own sudo needs are unpredictable (an
-        opaque blob, D-20), so this job does NOT pre-validate target sudo; a snippet that
-        needs it and lacks it fails as a per-item converge failure (D-27), reported like any
+        opaque blob, `PKG-FR-SNIPPET-VERBATIM`), so this job does NOT pre-validate target sudo; a snippet that
+        needs it and lacks it fails as a per-item converge failure (`PKG-FR-OUTCOME-FAILED`), reported like any
         other.
 
         Sequential checks appending to `errors`, never raising mid-validate (matches

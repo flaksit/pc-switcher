@@ -1,5 +1,5 @@
 """Unit tests for `ManualFlatpakSyncJob`: the flatpak half of what no package manager can
-reproduce (#252, D-18) — the no-remote detection, its validation, and its own
+reproduce (#252, `PKG-FR-MANUAL-SCOPE`) — the no-remote detection, its validation, and its own
 machine-specific marks.
 
 The shared half every unreproducible job inherits is covered in `test_unreproducible_jobs.py`.
@@ -304,7 +304,8 @@ def _decisions(*item_ids: str) -> str:
 
 
 class TestInertFiltering:
-    """An item recorded machine-specific on the source produces no diff (D-08/D-19). The
+    """An item recorded machine-specific on the source produces no diff
+    (`PKG-FR-MACHINE-SPECIFIC`/`PKG-FR-MANUAL-DIFF`). The
     file is this job's own — `manual_flatpak.decisions.yaml` — and starts empty.
     """
 
@@ -371,7 +372,8 @@ class TestMarksFollowWhatTheMachineHolds:
 
 
 class TestExecuteIndependentOfFlatpakSync:
-    """The job runs on its own enable flag, independent of `flatpak_sync` (D-15/D-18)."""
+    """The job runs on its own enable flag, independent of `flatpak_sync`
+    (`PKG-FR-JOB-INDEPENDENCE`/`PKG-FR-MANUAL-SCOPE`)."""
 
     @pytest.mark.asyncio
     async def test_plan_runs_with_flatpak_sync_absent_from_config(self) -> None:

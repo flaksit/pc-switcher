@@ -1,5 +1,7 @@
-"""What every job for software no package manager can reproduce shares (D-18, D-20, D-21,
-D-22, D-23): the item shape, the detect -> filter -> diff pipeline, the snippet replay, and
+"""What every job for software no package manager can reproduce shares (`PKG-FR-MANUAL-SCOPE`,
+`PKG-FR-SNIPPET-VERBATIM`, `PKG-FR-MANUAL-RESOLUTION`,
+`PKG-FR-VERSION-SNIPPET`, `PKG-FR-MANUAL-SAME-RUN`): the item shape, the detect -> filter -> diff pipeline, the snippet
+ replay, and
 the whole install-snippet registry push/consent path.
 
 Here rather than in one job's module because the registry is ONE shared file
@@ -16,15 +18,17 @@ a consent question and a finalize step none of them can reach. The no-op hooks t
 `sync_core.apply()` generic (`_finalize_unreproducible`, `after_review`) stay there; their
 real implementations are here.
 
-An unreproducible item ends an interactive run resolved in one of three ways (D-21,
+An unreproducible item ends an interactive run resolved in one of three ways (`PKG-FR-MANUAL-RESOLUTION`,
 decision 10): it has an install snippet in the shared, synced registry (`SnippetRegistry`,
-D-20/D-23), it is recorded machine-specific (skip-always) in its job's machine-local
+`PKG-FR-SNIPPET-VERBATIM`/`PKG-FR-MANUAL-SAME-RUN`), it is recorded machine-specific (skip-always) in its job's
+machine-local
 decision file, or the user skipped it once — skip-once is a real decision. There is no
 fourth "genuinely undecided" outcome an interactive review can reach: an empty snippet
 capture re-prompts rather than falling through, and Ctrl-C/EOF aborts the whole sync
 (`SyncAbortedByUser`) instead of leaving an item unresolved.
 
-What the diff compares is the installed VERSION, not presence (D-05, D-22). Presence alone
+What the diff compares is the installed VERSION, not presence (`PKG-FR-APT-HOLD-VERSION`, `PKG-FR-VERSION-SNIPPET`).
+Presence alone
 made an item that is on both machines invisible for good: an application upgraded in place
 on the source went on being "already there" on the target at whatever build it happened to
 hold. So an item both machines have is compared on the string each machine's own version
@@ -105,7 +109,7 @@ def lines_of(output: str) -> list[str]:
 
 @dataclass(frozen=True)
 class UnreproducibleItem:
-    """One item no package manager can reproduce (D-18): an apt package installed from no
+    """One item no package manager can reproduce (`PKG-FR-MANUAL-SCOPE`): an apt package installed from no
     configured repository, a sideloaded snap, a flatpak ref installed from no configured
     remote, or an unowned install under `/usr/local`/`/opt`.
 
@@ -125,7 +129,7 @@ class UnreproducibleItem:
 
     Unlike the other item types, `label` here is a plain FIELD rather than a `label()`
     method: the human-readable description comes from whichever detector found the
-    item (D-19's unowned-install scan, or the no-candidate check) and is not something
+    item (`PKG-FR-MANUAL-DIFF`'s unowned-install scan, or the no-candidate check) and is not something
     this dataclass can derive from `origin`/`identifier` alone.
 
     `own_finding` separates the two questions a target listing answers, which used to need
@@ -167,7 +171,8 @@ class UnreproducibleItem:
 
 class UnreproducibleSyncJob(PackageSyncJob):
     """The shared half of every job that detects software no package manager can reproduce
-    and resolves it through the install-snippet registry (D-18/D-20/D-21/D-23).
+    and resolves it through the install-snippet registry
+    (`PKG-FR-MANUAL-SCOPE`/`PKG-FR-SNIPPET-VERBATIM`/`PKG-FR-MANUAL-RESOLUTION`/`PKG-FR-MANUAL-SAME-RUN`).
 
     A subclass supplies its own detection — `capture_source_items()` and
     `query_target_items()` — plus the usual `name`, `manager_id`, `validate()` and
@@ -224,7 +229,7 @@ class UnreproducibleSyncJob(PackageSyncJob):
     @abstractmethod
     async def installed_versions(self, item_ids: Collection[str], *, on_source: bool) -> Mapping[str, str | None]:
         """The version each of `item_ids` is installed at on ONE machine, read fresh
-        (D-22, `PKG-FR-MANUAL-VERSION`).
+        (`PKG-FR-VERSION-SNIPPET`, `PKG-FR-MANUAL-VERSION`).
 
         The whole of what a diff compares, and the one thing the converge loop re-reads to
         decide whether a replay actually converged — which is why it is a hook of its own
@@ -264,12 +269,12 @@ class UnreproducibleSyncJob(PackageSyncJob):
         """
         return None
 
-    # -- after-review snippet push (D-23) -----------------------------------------------
+    # -- after-review snippet push (`PKG-FR-MANUAL-SAME-RUN`) -----------------------------------------------
 
     @override
     async def after_review(self) -> None:
         """Push the install-snippet registry to the target after this job's review and
-        before `apply()` replays any snippet (D-23), then promote each on-the-fly-authored
+        before `apply()` replays any snippet (`PKG-FR-MANUAL-SAME-RUN`), then promote each on-the-fly-authored
         item so it is APPLIED — not merely transported — the same run.
 
         Finalize-then-push-then-promote: `_finalize_unreproducible` persists this run's
@@ -621,7 +626,7 @@ class UnreproducibleSyncJob(PackageSyncJob):
         """Carve the two groups this job asks differently from every other, and let the base
         build the rest.
 
-        - still-unresolved diffs (`action=REPORT_ONLY`, D-21) go to
+        - still-unresolved diffs (`action=REPORT_ONLY`, `PKG-FR-MANUAL-RESOLUTION`) go to
           `UNREPRODUCIBLE_REVIEW_ACTION`, whose act opens an editor. Presented after any
           resolved install group, so the user sees what is already answerable before being
           asked to answer the rest. Each entry's `action_label` says which of the two cases
@@ -702,7 +707,7 @@ class UnreproducibleSyncJob(PackageSyncJob):
     @override
     async def converge(self, diff: ItemDiff) -> CommandResult:
         """Take a removal off the target, or replay the source's install-or-update body
-        until the target reports the source's version (D-20, D-22).
+        until the target reports the source's version (`PKG-FR-SNIPPET-VERBATIM`, `PKG-FR-VERSION-SNIPPET`).
 
         A `REMOVE` is one command and one outcome. An `INSTALL` and a `CHANGE` are the same
         work — replay the source's body — and both go through `_converge_by_snippet`, whose
@@ -719,8 +724,8 @@ class UnreproducibleSyncJob(PackageSyncJob):
     async def _converge_removal(self, diff: ItemDiff) -> CommandResult:
         """Run this job's own removal command for one approved REMOVE.
 
-        No privilege is pre-validated for it, for the reason a snippet's is not (D-20,
-        D-27): this job's validation has never required sudo on the target, an install-only
+        No privilege is pre-validated for it, for the reason a snippet's is not (`PKG-FR-SNIPPET-VERBATIM`,
+        `PKG-FR-OUTCOME-FAILED`): this job's validation has never required sudo on the target, an install-only
         run still does not need it, and demanding it up front would fail validation for
         every user who never approves a removal. A removal that lacks the privilege fails as
         its own item, named, like any other.
@@ -734,7 +739,7 @@ class UnreproducibleSyncJob(PackageSyncJob):
 
     async def _converge_by_snippet(self, diff: ItemDiff) -> CommandResult:
         """Replay, then check, then ask — until the target reports the source's version or
-        the user stops (D-22, `PKG-FR-MANUAL-CONVERGE-LOOP`, `PKG-FR-ASK-AGAIN`).
+        the user stops (`PKG-FR-VERSION-SNIPPET`, `PKG-FR-MANUAL-CONVERGE-LOOP`, `PKG-FR-ASK-AGAIN`).
 
         Convergence always means replaying the SOURCE's body onto the target, whichever
         machine holds the higher version: a sync goes one way, and reading the numbers to
@@ -842,17 +847,18 @@ class UnreproducibleSyncJob(PackageSyncJob):
         await SnippetRegistry(self.target, self.machines.target).add(snippet)
         return True
 
-    # -- Unreproducible finalize hook (moved off the base, D-18) -------------------------
+    # -- Unreproducible finalize hook (moved off the base, `PKG-FR-MANUAL-SCOPE`) -------------------------
 
     @override
     async def _finalize_unreproducible(self, plan: PackagePlan, outcome: ReviewOutcome) -> None:
         """Persist this run's snippet authoring and unreproducible-item skip-always
-        decisions (D-20/D-21/D-23). Overrides the base no-op hook (D-18: only an
+        decisions (`PKG-FR-SNIPPET-VERBATIM`/`PKG-FR-MANUAL-RESOLUTION`/`PKG-FR-MANUAL-SAME-RUN`). Overrides the base
+        no-op hook (`PKG-FR-MANUAL-SCOPE`: only an
         unreproducible job produces such items).
 
         Snippets are written to `self.source` — never `self.target` — because the source
         registry is this job's own source of truth; `after_review()` then pushes that file
-        to the target (D-23) so a snippet authored during THIS run's review reaches the
+        to the target (`PKG-FR-MANUAL-SAME-RUN`) so a snippet authored during THIS run's review reaches the
         target THIS run, before `apply()` replays it.
 
         The skip-always half covers the resolve group alone (`REPORT_ONLY`), whose items are
@@ -868,7 +874,7 @@ class UnreproducibleSyncJob(PackageSyncJob):
         call a no-op so each snippet's `authored_at` is stamped once and the source and
         pushed target registries stay byte-identical.
 
-        Never during dry-run (ADR-014) and never for a non-interactive outcome (D-26):
+        Never during dry-run (ADR-014) and never for a non-interactive outcome (`PKG-FR-NO-TERMINAL`):
         nothing is recorded permanently when nothing was actually decided by a human.
         """
         if self._unreproducible_finalized:
@@ -920,5 +926,5 @@ class UnreproducibleSyncJob(PackageSyncJob):
     # manufacturing an unresolved SKIP_ONCE — so `outcome.unresolved` is empty after any
     # interactive run. The base no-op hook (`[]`) is therefore correct here: nothing an
     # interactive review produces needs failing on this basis. A non-interactive run still
-    # populates `outcome.unresolved` for reporting (D-26), but that path was always exempt
+    # populates `outcome.unresolved` for reporting (`PKG-FR-NO-TERMINAL`), but that path was always exempt
     # from failing the job, so removing the override changes no behavior.

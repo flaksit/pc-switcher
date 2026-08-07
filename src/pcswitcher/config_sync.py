@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 # packages/state.py derives its decision-file and snippet-registry relpaths from
 # CONFIG_REMOTE_DIR the same way.
 #
-# config_sync carries exactly ONE file, config.yaml (D-23): it is the single required
+# config_sync carries exactly ONE file, config.yaml (`PKG-FR-MANUAL-SAME-RUN`): it is the single required
 # config a first sync needs. The shared install-snippet registry is NOT carried here —
 # it travels by an unreproducible job's own post-review `send_file` push, because
 # config_sync runs before any review (sync step 9) and so cannot carry a snippet the
@@ -309,7 +309,7 @@ async def sync_config_to_target(  # noqa: PLR0913 - config state + flags; flags 
 
     Carries exactly one file, the caller-supplied `source_config_path` (config.yaml). The
     install-snippet registry is NOT transferred here — an unreproducible job pushes it
-    itself after its review (D-23).
+    itself after its review (`PKG-FR-MANUAL-SAME-RUN`).
 
     Args:
         target: RemoteExecutor for target machine

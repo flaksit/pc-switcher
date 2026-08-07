@@ -1,9 +1,9 @@
 """Machine-local decision store: the ONLY pc-switcher state deliberately per-machine
-and never synced (D-08, D-08a, D-09).
+and never synced (`PKG-FR-MACHINE-SPECIFIC`, `PKG-FR-MACHINE-SPECIFIC`, `PKG-FR-MACHINE-SPECIFIC`).
 
 An entry recorded here means "inert on THIS machine in both roles": not pushed when
 this machine is the source, not installed or removed when this machine is the target.
-D-19's whole argument for scanning aggressively — a finding produces noise exactly
+`PKG-FR-MANUAL-DIFF`'s whole argument for scanning aggressively — a finding produces noise exactly
 once, then never again — only holds if this durability is real.
 
 Durable for as long as the item is, and no longer: an entry keeps THIS machine's copy of
@@ -13,7 +13,7 @@ which entries those are). Leaving it in place is not the conservative option —
 suppresses its item in both roles, so a dead one silently blocks a later install of that
 same software here, which is not what the answer that wrote it chose.
 
-Which machine's file gets an entry follows which machine HOLDS the item (D-08a): an
+Which machine's file gets an entry follows which machine HOLDS the item (`PKG-FR-MACHINE-SPECIFIC`): an
 install declined for good is recorded on the source, the only machine that has it; a
 removal and an overwrite are both recorded on the target, which is the machine whose
 copy the answer keeps. An overwrite is therefore the one direction whose mark can be
@@ -28,24 +28,26 @@ it, so the SAME code path serves both roles; there is no separate "local write"
 branch to accidentally use for the target.
 
 Decision files live at `~/.config/pc-switcher/<manager>.decisions.yaml`, next to
-`config.yaml` (D-09) — one file per manager, so `apt_sync`'s decisions never collide
+`config.yaml` (`PKG-FR-MACHINE-SPECIFIC`) — one file per manager, so `apt_sync`'s decisions never collide
 with `snap_sync`'s. The directory portion is derived from `config_sync.CONFIG_REMOTE_DIR`
 rather than a second hardcoded literal (the CR-01 precedent `folder_sync` already
 follows for its own tool-state filter token).
 
-This module also owns `SnippetRegistry` (D-20, D-23): the SHARED, synced counterpart to
-the machine-local decision store above. Where a `DecisionEntry` says "never touch this
-item on this machine", a `Snippet` says "this is how to install something no package
-manager can reproduce, and how to ask a machine which version of it is there" — knowledge
-about the PACKAGE, not the machine, so it is SHARED and synced (D-23) rather than living in
-a machine-local `*.decisions.yaml` file. It travels source-to-target by an unreproducible
+This module also owns `SnippetRegistry` (`PKG-FR-SNIPPET-VERBATIM`, `PKG-FR-MANUAL-SAME-RUN`):
+the SHARED, synced counterpart to the machine-local decision store above. Where a
+`DecisionEntry` says "never touch this item on this machine", a `Snippet` says "this is
+how to install something no package manager can reproduce, and how to ask a machine which
+version of it is there" — knowledge about the PACKAGE, not the machine, so it is SHARED
+and synced (`PKG-FR-MANUAL-SAME-RUN`) rather than living in a machine-local
+`*.decisions.yaml` file. It travels source-to-target by an unreproducible
 job's own post-review `send_file` push, not via `config_sync`.
 
-An entry carries TWO bodies (D-18, D-22), both mandatory: `install_body`, replayed to bring
-the target to the source's state, and `version_body`, run on a machine to print the version
-of that item installed THERE. Neither is ever parsed, templated or interpreted; what the
-tool does compare is the STRING one machine's `version_body` printed against the string the
-other's did, which is the whole of D-05's exception for a manual install. Both replay
+An entry carries TWO bodies (`PKG-FR-MANUAL-SCOPE`, `PKG-FR-VERSION-SNIPPET`), both
+mandatory: `install_body`, replayed to bring the target to the source's state, and
+`version_body`, run on a machine to print the version of that item installed THERE.
+Neither is ever parsed, templated or interpreted; what the tool does compare is the STRING
+one machine's `version_body` printed against the string the other's did, which is the
+whole of `PKG-FR-APT-HOLD-VERSION`'s exception for a manual install. Both replay
 without stdin, since `pcswitcher.executor.Process` documents that commands must be
 non-interactive; a body expecting a prompt fails rather than hanging the sync.
 
@@ -94,7 +96,7 @@ _logger = logging.getLogger("pcswitcher.jobs.packages.state")
 # CONFIG_REMOTE_DIR ("~/.config/pc-switcher") rather than a second hardcoded literal.
 _DECISION_DIR_RELPATH = CONFIG_REMOTE_DIR.removeprefix("~/")
 
-# `{manager}.decisions.yaml`, home-relative — one file per manager (D-09).
+# `{manager}.decisions.yaml`, home-relative — one file per manager (`PKG-FR-MACHINE-SPECIFIC`).
 DECISION_FILE_RELPATH_TEMPLATE = f"{_DECISION_DIR_RELPATH}/{{manager}}.decisions.yaml"
 
 # The single glob `folder_sync` consumes for its non-overridable exclusion, so the
@@ -103,7 +105,7 @@ DECISION_FILE_GLOB_RELPATH = f"{_DECISION_DIR_RELPATH}/*.decisions.yaml"
 
 # The shared install-snippet registry, home-relative, alongside every manager's
 # decision file — but unlike those, this ONE file is not per-manager and is meant to be
-# synced (D-23): an unreproducible job pushes it to the target with its own `send_file`
+# synced (`PKG-FR-MANUAL-SAME-RUN`): an unreproducible job pushes it to the target with its own `send_file`
 # call after its review, so a snippet authored on the fly reaches the target that same run.
 SNIPPET_REGISTRY_RELPATH = f"{_DECISION_DIR_RELPATH}/package-snippets.yaml"
 
@@ -111,7 +113,7 @@ _FILE_HEADER = (
     "# pc-switcher machine-specific decision file — regenerated on every write.\n"
     "#\n"
     '# Every entry below came from an explicit "skip always" choice in a sync\n'
-    "# review (D-08). An item listed here is inert on THIS machine in both roles:\n"
+    "# review (`PKG-FR-MACHINE-SPECIFIC`). An item listed here is inert on THIS machine in both roles:\n"
     "# never pushed to a peer when this machine is the source, never installed or\n"
     "# removed here when this machine is the target.\n"
     "#\n"
@@ -127,7 +129,7 @@ _FILE_HEADER = (
 
 @dataclass(frozen=True)
 class DecisionEntry:
-    """One permanent "skip always" decision (D-07's third outcome), persisted by
+    """One permanent "skip always" decision (`PKG-FR-SKIP-ONCE`'s third outcome), persisted by
     `DecisionFile.record` and read back by `DecisionFile.load`.
     """
 
@@ -149,7 +151,7 @@ async def filter_inert[T: _HasItemId](items: Sequence[T], decisions: Mapping[str
     A pure, module-level function (not a method) so both the source-capture side
     (drop recorded items from the manifest before it is even diffed) and the
     target-query side (drop recorded items from what would otherwise become a
-    proposed install/remove) share exactly one definition of "inert" (D-08).
+    proposed install/remove) share exactly one definition of "inert" (`PKG-FR-MACHINE-SPECIFIC`).
 
     A job that captures an inventory from BOTH machines passes `marks_on_either` here
     rather than each machine's own file; see that function for why.
@@ -231,11 +233,11 @@ def _deserialize(raw: str) -> dict[str, DecisionEntry]:
 
 class DecisionFile:
     """Read/write access to ONE manager's machine-local decision file, through
-    whichever `Executor` is local to the machine that should hold it (D-08a).
+    whichever `Executor` is local to the machine that should hold it (`PKG-FR-MACHINE-SPECIFIC`).
 
     Construct with `executor=self.source` to read/write the SOURCE machine's file,
     or `executor=self.target` to read/write the TARGET machine's file — the caller
-    (`PackageSyncJob`, plan 02-04 task 2) decides which per D-08a, this class only
+    (`PackageSyncJob`, plan 02-04 task 2) decides which per `PKG-FR-MACHINE-SPECIFIC`, this class only
     ever talks to the executor it was given.
     """
 
@@ -253,7 +255,7 @@ class DecisionFile:
         self._display_path = f"~/{relpath}"
 
     async def load(self) -> dict[str, DecisionEntry]:
-        """Read this manager's decisions, or an empty mapping (D-08's degrade rule).
+        """Read this manager's decisions, or an empty mapping (`PKG-FR-MACHINE-SPECIFIC`'s degrade rule).
 
         Absent, empty and malformed all degrade to "no permanent decisions" rather
         than aborting the sync; only the malformed case logs a WARNING (naming the
@@ -297,7 +299,7 @@ class DecisionFile:
         The counterpart to `record`, and the reason a mark is not simply written once and
         left: an entry says "this machine's own copy of X stays as it is", and once this
         machine has no copy of X there is nothing left for it to say. Kept as durable as
-        `record` makes it while its item is there (D-08's whole argument for scanning
+        `record` makes it while its item is there (`PKG-FR-MACHINE-SPECIFIC`'s whole argument for scanning
         aggressively), and no longer: an entry naming software the machine no longer has
         goes on suppressing that item in BOTH roles, so it silently blocks a later install
         of it here — an outcome the answer that wrote the entry never chose. Which entries
@@ -344,7 +346,8 @@ class DecisionFile:
 
 
 # ---------------------------------------------------------------------------------
-# SnippetRegistry — the shared, synced counterpart to DecisionFile above (D-20, D-23).
+# SnippetRegistry — the shared, synced counterpart to DecisionFile above (`PKG-FR-SNIPPET-VERBATIM`,
+# `PKG-FR-MANUAL-SAME-RUN`).
 # ---------------------------------------------------------------------------------
 
 _SNIPPET_FILE_HEADER = (
@@ -352,8 +355,8 @@ _SNIPPET_FILE_HEADER = (
     "#\n"
     "# Each entry carries two opaque shell snippets for one item no package manager\n"
     "# can reproduce — a bare .deb, a sideloaded snap, a bundle-installed flatpak, a\n"
-    "# manual install (D-20, D-22). pc-switcher replays them VERBATIM and parses\n"
-    "# neither:\n"
+    "# manual install (`PKG-FR-SNIPPET-VERBATIM`, `PKG-FR-VERSION-SNIPPET`).\n"
+    "# pc-switcher replays them VERBATIM and parses neither:\n"
     "#\n"
     "#   install_body  brings the other machine to this one's state. It runs on a\n"
     "#                 machine that may already hold an OLDER version, so write it to\n"
@@ -366,8 +369,8 @@ _SNIPPET_FILE_HEADER = (
     "# Both are mandatory. An entry missing either is malformed and ends the run\n"
     "# naming this file.\n"
     "#\n"
-    "# This file lives in the shared, synced config (D-23): every peer that runs\n"
-    "# `pc-switcher sync` carries it to the target alongside config.yaml. Both bodies\n"
+    "# This file lives in the shared, synced config (`PKG-FR-MANUAL-SAME-RUN`):\n"
+    "# every peer that runs `pc-switcher sync` carries it to the target alongside config.yaml. Both bodies\n"
     "# run non-interactively with no stdin available — one that expects a prompt\n"
     "# fails rather than hanging the sync.\n"
 )
@@ -375,8 +378,9 @@ _SNIPPET_FILE_HEADER = (
 
 @dataclass(frozen=True)
 class Snippet:
-    """One registry entry (D-20, D-22): the two opaque shell bodies that reproduce an item
-    no package manager can install on its own and report which version of it is installed.
+    """One registry entry (`PKG-FR-SNIPPET-VERBATIM`, `PKG-FR-VERSION-SNIPPET`): the two
+    opaque shell bodies that reproduce an item no package manager can install on its own
+    and report which version of it is installed.
 
     `label` mirrors the unreproducible item's own label at authoring time (a snapshot,
     not a live reference) so the registry file reads meaningfully on its own. Neither body
@@ -466,7 +470,7 @@ def _deserialize_snippets(raw: str) -> dict[str, Snippet]:
     user fix it, start a new sync, and only then be shown the next.
 
     An entry carrying only one of the two bodies is malformed here, with no fallback of any
-    kind (D-22). A registry written before the second body existed therefore ends the run
+    kind (`PKG-FR-VERSION-SNIPPET`). A registry written before the second body existed therefore ends the run
     naming the file, which is the outcome an unparsable registry already has: guessing a
     version body would invent a claim about what is installed, and defaulting one to "no
     version" would silently make every such item converge on presence again — the behaviour
@@ -528,9 +532,9 @@ class SnippetRegistry:
 
     Unlike `DecisionFile`, the registry is not machine-scoped data — both machines may
     hold different copies of the SAME file until an unreproducible job reconciles them
-    by pushing the source's copy to the target (D-23). Construct with
+    by pushing the source's copy to the target (`PKG-FR-MANUAL-SAME-RUN`). Construct with
     `SnippetRegistry(self.source)` to read/write the source's own copy — the reproducibility
-    authority `plan()` classifies against (corrected D-23), and where a freshly authored
+    authority `plan()` classifies against (corrected `PKG-FR-MANUAL-SAME-RUN`), and where a freshly authored
     snippet is recorded before that run's push carries it to the target — or
     `SnippetRegistry(self.target)` to read the target's copy at converge time, after this
     run's push has already placed it there.
@@ -598,7 +602,7 @@ class SnippetRegistry:
 
     async def installed_version(self, item_id: str, executor: Executor) -> str | None:
         """What this item's `version_body` prints on `executor`'s machine, or `None` where
-        no answer was had (D-22, `PKG-FR-VERSION-SNIPPET`).
+        no answer was had (`PKG-FR-VERSION-SNIPPET`, `PKG-FR-VERSION-SNIPPET`).
 
         Run on BOTH machines during `plan()`, which is why it carries no `mutates=`: the
         contract puts the read-only obligation on the body's author, pc-switcher cannot
@@ -631,7 +635,7 @@ class SnippetRegistry:
 
     async def replay(self, item_id: str, executor: RemoteExecutor) -> CommandResult:
         """Replay the install-or-update body registered for `item_id` against `executor`
-        (always the TARGET in practice) as an opaque blob (D-20): the body is never parsed,
+        (always the TARGET in practice) as an opaque blob (`PKG-FR-SNIPPET-VERBATIM`): the body is never parsed,
         templated or inspected, only quoted.
 
         Runs as `bash -c <shlex.quote(body)>` — the same build-a-command,
@@ -643,7 +647,7 @@ class SnippetRegistry:
         `CommandResult`'s exit code alone decides success — never raises for "no
         snippet registered", instead returning a failed `CommandResult` so a stale plan
         (the registry changed between `plan()` and `apply()`) is a per-item failure
-        like any other, not a crash that stops the whole job (D-27).
+        like any other, not a crash that stops the whole job (`PKG-FR-OUTCOME-FAILED`).
 
         The exact `bash -c <quoted body>` command is what `--confirm-each-command` shows:
         an opaque snippet is the one thing in a sync whose content pc-switcher cannot vouch

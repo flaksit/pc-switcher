@@ -1,5 +1,6 @@
 """`manual_snap_sync`: sideloaded snaps — the snaps installed from a local `.snap` file
-rather than from the store, which no store can serve to the other machine (D-15, D-18,
+rather than from the store, which no store can serve to the other machine (`PKG-FR-JOB-INDEPENDENCE`,
+`PKG-FR-MANUAL-SCOPE`,
 `PKG-FR-SNAP-SIDELOAD`).
 
 Detection is one question asked of `snap list --all`: which snaps snapd renders at an
@@ -7,17 +8,17 @@ Detection is one question asked of `snap list --all`: which snaps snapd renders 
 or a `snap try`. On the target the question is only whether snapd reports the NAME
 installed at all: software that is there is there, whatever put it there.
 
-Its own job, on its own enable flag, for the reason D-15 gives every package job one: an
+Its own job, on its own enable flag, for the reason `PKG-FR-JOB-INDEPENDENCE` gives every package job one: an
 independent failure surface, an independent review and an independent switch. It sits
 beside `manual_deb_sync` (hand-installed `.deb` packages) and `manual_installs_sync`
 (unowned software under `/usr/local` and `/opt`). All three subclass
 `UnreproducibleSyncJob` and share one install-snippet registry; none imports another, and
-none imports the package-manager job it is paired with (D-18).
+none imports the package-manager job it is paired with (`PKG-FR-MANUAL-SCOPE`).
 
 The snap handoff is capture-time exclusion, not a message: `snap_sync` withholds the same
 names from both its manifests using the shared `packages/snap_listing.py` predicate, and
 this job independently re-runs it. Two jobs, one predicate, no result passed between them
-(D-15/D-16). The consequence the user must know: this job's enable flag is its own, so
+(`PKG-FR-JOB-INDEPENDENCE`). The consequence the user must know: this job's enable flag is its own, so
 enabling `snap_sync` while disabling this one leaves sideloaded snaps replicated by nobody
 — which is what the whole run did before this job existed.
 """
@@ -42,7 +43,7 @@ __all__ = ["ManualSnapSyncJob"]
 # string.
 _ORIGIN = "snap-sideload"
 
-# This job reads its own `manual_snap.decisions.yaml` and nothing else (D-09: one file per
+# This job reads its own `manual_snap.decisions.yaml` and nothing else (`PKG-FR-MACHINE-SPECIFIC`: one file per
 # manager). A `snap:<name>` mark in `snap.decisions.yaml` names the same snap but answers
 # `snap_sync`'s question — "do not converge this snap's revision" — not this one, so it is
 # left where it is.
@@ -70,7 +71,7 @@ class ManualSnapSyncJob(UnreproducibleSyncJob):
         "additionalProperties": False,
     }
 
-    # -- Detection (D-18), run on both machines (`PKG-FR-MANUAL-DIFF`) -------------------
+    # -- Detection (`PKG-FR-MANUAL-SCOPE`), run on both machines (`PKG-FR-MANUAL-DIFF`) -------------------
 
     async def _installed_snaps(self, executor: Executor, machine: str) -> list[SnapItem]:
         """Every snap snapd reports on `machine`, sideloaded or not.
@@ -211,10 +212,10 @@ class ManualSnapSyncJob(UnreproducibleSyncJob):
 
         No sudo on either machine, unlike `snap_sync`, which needs it on both: detection
         here only lists, and `snap list --all` needs no privilege. A snippet's own sudo
-        needs are unpredictable (an opaque blob, D-20) — a sideload's snippet will usually
+        needs are unpredictable (an opaque blob, `PKG-FR-SNIPPET-VERBATIM`) — a sideload's snippet will usually
         want it, since `snap install --dangerous` does — so this job does NOT pre-validate
         target sudo either; a snippet that needs it and lacks it fails as a per-item
-        converge failure (D-27), reported like any other. An approved removal needs it too
+        converge failure (`PKG-FR-OUTCOME-FAILED`), reported like any other. An approved removal needs it too
         and is treated the same way: a run that approves none needs no privilege at all, and
         demanding it up front would refuse the job to every user who only ever installs.
 

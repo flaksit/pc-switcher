@@ -1,4 +1,4 @@
-"""What else apt would do, classified by origin at plan time (D-30).
+"""What else apt would do, classified by origin at plan time (`PKG-FR-COLLATERAL-MANUAL`).
 
 Split out of the former single `test_apt_sync.py`.
 """
@@ -56,7 +56,7 @@ def finding(diff: ItemDiff) -> str:
 
 
 class TestPlanTimeCollateral:
-    """D-30: batched-simulation collateral is split by provenance against the target
+    """`PKG-FR-COLLATERAL-MANUAL`: batched-simulation collateral is split by provenance against the target
     manual set — manual becomes a three-way review item, auto produces nothing.
     """
 
@@ -100,7 +100,7 @@ class TestPlanTimeCollateral:
     @pytest.mark.asyncio
     async def test_auto_collateral_removal_produces_no_review_item(self) -> None:
         """D1, H62 — a package the simulation would remove that is NOT in the target manual set is
-        auto-installed — apt's own business (D-30) — so no review item is emitted and the
+        auto-installed — apt's own business (`PKG-FR-COLLATERAL-MANUAL`) — so no review item is emitted and the
         install remains approvable.
         """
         context, _source, _target = make_context(
@@ -299,7 +299,7 @@ class TestNoRehearsalEverAsksToMoveHeldPackages:
 
 
 class TestCollateralFlow:
-    """D-30 three-way outcome, end to end through execute()."""
+    """`PKG-FR-COLLATERAL-MANUAL` three-way outcome, end to end through execute()."""
 
     @pytest.mark.asyncio
     async def test_install_anyway_proceeds_and_guard_allows_the_collateral_removal(self) -> None:
@@ -539,7 +539,7 @@ def _two_independent_removals_context() -> tuple[JobContext, MagicMock, MagicMoc
 
 
 class TestCollateralAttribution:
-    """D-30: a collateral item's triggers are the candidates whose OWN transaction causes
+    """`PKG-FR-COLLATERAL-MANUAL`: a collateral item's triggers are the candidates whose OWN transaction causes
     it, so declining it cancels those and nothing else.
     """
 
@@ -572,7 +572,7 @@ class TestCollateralAttribution:
         """D59, D61 — the permanent decision is the user's, not the collateral question's. Both
         candidates really do take `other-manual` with them, so both are cancelled by the
         skip — but `pkg-y`'s "always skip" must survive the
-        cancellation and still be recorded (D-08a: a REMOVE is target-held).
+        cancellation and still be recorded (`PKG-FR-MACHINE-SPECIFIC`: a REMOVE is target-held).
 
         `pkg-y` is a declined trigger of the collateral, so this is also the whole of D61 that
         can be observed: the only other declined answer, `SKIP_ONCE`, would be overridden to
@@ -763,7 +763,7 @@ _SOURCE_DECISION_SKIP_SRC_ONLY = (
 
 
 class TestSourceOnlyCollateral:
-    """ADR-020 D-40: a package manual on the SOURCE alone is NOT protected from collateral
+    """`PKG-FR-COLLATERAL-MANUAL`: a package manual on the SOURCE alone is NOT protected from collateral
     removal/downgrade. The loss is deliberate — if the target's apt installed the package
     automatically, the target's apt owns it, and reclaiming it as a user choice on the
     strength of the other machine's bookkeeping is a guess. These two tests are kept

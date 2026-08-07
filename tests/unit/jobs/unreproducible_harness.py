@@ -140,7 +140,7 @@ POLICY_AUTO_DEP = """7zip:
 DPKG_WITNESS_LINE = "dpkg: /usr/bin/dpkg\n"
 
 # A `package-snippets.yaml` registry holding one entry for the brscan3 no-candidate item.
-# Both bodies, because both are mandatory (D-22) and an entry missing either ends the run.
+# Both bodies, because both are mandatory (`PKG-FR-VERSION-SNIPPET`) and an entry missing either ends the run.
 BRSCAN3_REGISTRY_YAML = (
     "snippets:\n"
     "  unreproducible:apt-no-candidate:brscan3:\n"

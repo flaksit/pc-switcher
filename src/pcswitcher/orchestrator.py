@@ -87,7 +87,7 @@ __all__ = ["Orchestrator"]
 # overlord/snapstate/autorefresh.go: EffectiveRefreshHold is consumed only by autoRefresh).
 # It is written as a TIMED timestamp (now + _SNAP_AUTOREFRESH_HOLD_DURATION) so a crashed sync
 # self-heals when the hold expires; the prior refresh.hold is captured and restored exactly in
-# _cleanup (D-06: no standing block left behind). Deliberately NOT the `snap refresh --hold`
+# _cleanup (`PKG-FR-SNAP-REVISION`: no standing block left behind). Deliberately NOT the `snap refresh --hold`
 # verb, whose no-snap form sets an INDEFINITE global hold (snap_sync module docstring, Pitfall
 # 1) and whose `--unhold` would also clear unrelated per-snap holds; `snap set system
 # refresh.hold` touches only the general option and is fully symmetric with `snap get` —
@@ -293,10 +293,10 @@ def _failure_stays_in_its_job(job: Job, exc: Exception) -> bool:
     (`PKG-FR-JOB-INDEPENDENCE`, `PKG-FR-OUTCOME-FAILED`) — and a package job can fail in
     ways that are not a converge failure or a dead read: a registry transfer, a filesystem
     error, a parser defect. Each package job plans, reviews and applies its own work with
-    nothing coordinating them (D-15/D-16), so none of those say anything about the consent
+    nothing coordinating them (`PKG-FR-JOB-INDEPENDENCE`), so none of those say anything about the consent
     the user already gave to another manager; cancelling it would discard approved work for
     a job that is still fine. `PackageItemFailures` and `ProbeFailed` isolate wherever they
-    are raised, because both are by construction one manager's trouble (D-27, ADR-022).
+    are raised, because both are by construction one manager's trouble (`PKG-FR-OUTCOME-FAILED`, ADR-022).
 
     A lock conflict is the exception to the exception: it means this machine is no longer
     entitled to be syncing at all, so it ends the run whichever job surfaced it.
@@ -325,7 +325,7 @@ def _summarize_job_outcomes(job_results: list[JobResult]) -> tuple[SessionStatus
     Reaching the end of the job loop without an exception is not the same as success:
     per-item package failures are collected and recorded as FAILED ``JobResult``s rather
     than raised, so that one manager's item failures cannot cancel another manager's
-    already-approved work (D-27). The outcome therefore has to come from the results
+    already-approved work (`PKG-FR-OUTCOME-FAILED`). The outcome therefore has to come from the results
     themselves, or a sync where every item failed would still exit 0.
 
     ``SKIPPED`` is a normal outcome for a disabled or not-applicable job, not a failure.
@@ -692,7 +692,7 @@ class Orchestrator:
             session.status, session.error_message = _summarize_job_outcomes(job_results)
 
             # SyncStep 12: Record sync history on both machines (this machine was SOURCE,
-            # target was TARGET). The write is skipped in dry-run mode (D-12: dry-run must
+            # target was TARGET). The write is skipped in dry-run mode (`PKG-FR-KEY-COPY`: dry-run must
             # not write any state), but the counter still advances so it reaches 100% on
             # both real and dry-run paths — matching the snapshot steps.
             session.ended_at = datetime.now(UTC)
@@ -1292,7 +1292,7 @@ class Orchestrator:
         return jobs, unresolved
 
     def _check_package_jobs_precede_folder_sync(self) -> list[ConfigError]:
-        """D-17: every package job must run before folder_sync — apps are provisioned
+        """`PKG-FR-JOB-ORDER`: every package job must run before folder_sync — apps are provisioned
         first, then their data lands on top (decisive for flatpak, where `flatpak install`
         must create `~/.local/share/flatpak` before folder_sync would otherwise land
         `~/.var/app` on top).
@@ -1319,7 +1319,7 @@ class Orchestrator:
                 job=job_name,
                 path="sync_jobs",
                 message=(
-                    f"{job_name} must be listed before folder_sync in sync_jobs (D-17): package jobs "
+                    f"{job_name} must be listed before folder_sync in sync_jobs (`PKG-FR-JOB-ORDER`): package jobs "
                     "provision apps before folder_sync lands their data on top. Move it above folder_sync."
                 ),
             )
@@ -1435,7 +1435,7 @@ class Orchestrator:
     async def _execute_jobs(self, jobs: list[Job], seed_results: list[JobResult] | None = None) -> list[JobResult]:
         """Execute sync jobs sequentially with background disk monitoring.
 
-        Each package job reviews its own diffs inside its own ``execute()`` (D-24): it
+        Each package job reviews its own diffs inside its own ``execute()`` (`PKG-FR-BATCHED`): it
         plans, prompts through the injected ``JobContext.reviewer``, then converges. The
         review's blocking prompt runs inside the job TaskGroup alongside the disk-space
         monitors — ``review_items`` pauses the Live display before prompting and resumes
@@ -1710,7 +1710,7 @@ class Orchestrator:
         """Pause snapd AUTOMATIC refreshes on both hosts for the sync window (decision 4).
 
         Gated on `sync_jobs.snap_sync` being enabled and skipped in dry-run (writing
-        `refresh.hold` is a system mutation; ADR-014/D-12). Captures each host's prior
+        `refresh.hold` is a system mutation; ADR-014/`PKG-FR-KEY-COPY`). Captures each host's prior
         `refresh.hold` first so `_cleanup` can restore it exactly, marks the hold engaged,
         then applies a timed hold on each host WHOSE PRIOR POLICY IT COULD READ. Only touches
         the system-wide `refresh.hold` option — never per-snap holds — and never blocks the
@@ -2071,7 +2071,7 @@ class Orchestrator:
         """Stop Ubuntu's own apt update timers on both hosts for the sync window (#248).
 
         Gated on `sync_jobs.apt_sync` being enabled and skipped in dry-run (stopping a system
-        timer is a system mutation; ADR-014/D-12). Defers any restore a dead run left pending
+        timer is a system mutation; ADR-014/`PKG-FR-KEY-COPY`). Defers any restore a dead run left pending
         first (`_defer_pending_apt_timer_restore`), then captures each host's timer state so
         `_cleanup` can put back exactly what was taken away, then suspends each host WHOSE
         STATE IT COULD READ.

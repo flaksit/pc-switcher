@@ -1,5 +1,5 @@
 """Unit tests for SnapSyncJob: header-based `snap list --all` parsing, the snap-specific
-plan()/diff pipeline, revision+channel convergence, and the D-06 no-hold guarantee.
+plan()/diff pipeline, revision+channel convergence, and the `PKG-FR-SNAP-REVISION` no-hold guarantee.
 
 All executor interactions are mocked; no real snap/snapd commands run.
 """
@@ -179,7 +179,7 @@ class TestCapture:
 
 
 class TestDiff:
-    """`plan()`'s snap-specific diff: install/remove/change, D-06's active-converge rule."""
+    """`plan()`'s snap-specific diff: install/remove/change, `PKG-FR-SNAP-REVISION`'s active-converge rule."""
 
     @pytest.mark.asyncio
     async def test_missing_on_target_yields_install_diff(self) -> None:
@@ -362,7 +362,7 @@ class TestPlanReadOnly:
 
 
 class TestNoHold:
-    """The single most important guarantee (D-06, RESEARCH Pitfall 1): no command this
+    """The single most important guarantee (`PKG-FR-SNAP-REVISION`, RESEARCH Pitfall 1): no command this
     job issues across install/change/channel-retrack/removal ever sets a snap hold.
     """
 
@@ -702,7 +702,7 @@ class TestHolds:
 
     @pytest.mark.asyncio
     async def test_hold_converge_never_emits_bare_hold(self) -> None:
-        """E66 — the D-06/RESEARCH Pitfall 1 guarantee for the hold path: the snap name is
+        """E66 — the `PKG-FR-SNAP-REVISION`/RESEARCH Pitfall 1 guarantee for the hold path: the snap name is
         always present, so `--hold` never appears without a following snap name.
         """
         context, _source, target = make_context(
@@ -898,7 +898,7 @@ class TestHoldIntentIsSourceAuthoritative:
 
 
 class TestHoldAndRevisionFailuresArePerItem:
-    """D-27/D6: a hold or refresh command that snapd rejects fails exactly that item —
+    """`PKG-FR-OUTCOME-FAILED`/D6: a hold or refresh command that snapd rejects fails exactly that item —
     the loop still completes and every other approved item still converges.
     """
 
@@ -946,7 +946,7 @@ class TestHoldAndRevisionFailuresArePerItem:
 
     @pytest.mark.asyncio
     async def test_unfetchable_revision_is_a_clean_per_item_failure_not_a_crash(self) -> None:
-        """E50, E51 — the D-06 assumption that the source's `--revision=N` is fetchable by the
+        """E50, E51 — the `PKG-FR-SNAP-REVISION` assumption that the source's `--revision=N` is fetchable by the
         target's snapd can fail (a revision that never reached this machine's store). The
         refusal surfaces as a per-item `PackageItemFailures`, the channel switch for the
         failed snap is skipped, and gamma's own retrack still runs.

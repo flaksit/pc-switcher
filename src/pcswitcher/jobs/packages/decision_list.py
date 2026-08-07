@@ -1,6 +1,6 @@
-"""One screen per review group, one decision per row (ADR-020 D-07 + D-24).
+"""One screen per review group, one decision per row (`PKG-FR-SKIP-ONCE` + `PKG-FR-BATCHED`).
 
-D-07's three-way decision used to need two passes over the same group: a checkbox list
+`PKG-FR-SKIP-ONCE`'s three-way decision used to need two passes over the same group: a checkbox list
 whose ticks meant apply, then a second checkbox list over the leftovers whose ticks meant
 skip-always. Two screens made "apply" and "never offer this again" look like answers to
 two different questions, and the second screen echoed the item's ACTION back ("remove

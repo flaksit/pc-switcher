@@ -1,5 +1,5 @@
 """`snap_sync`: snap name/channel/revision convergence through snapd's own verbs
-(D-06, D-14, D-29, ADR-020).
+(`PKG-FR-SNAP-REVISION`, `PKG-FR-APT-ORIGIN-DERIVED`, `PKG-FR-SNAP-DATA-BOUNDARY`, ADR-020).
 
 WARNING — `snap refresh --hold` with NO snap name is a MUTATING command: called that
 way it silently sets an INDEFINITE GLOBAL hold on auto-refresh for every snap on the
@@ -10,14 +10,14 @@ refresh.hold` (`validate()`, informational only, never acted on; sudo because sn
 admin-gates reading snap config, not because the read changes anything). Convergence uses
 only `snap install --revision=<N>` and `snap refresh --revision=<N>`, which land the
 target on the source's exact revision without touching the standing auto-refresh
-policy at all — the mechanism D-06 requires: both machines converge on the same
+policy at all — the mechanism `PKG-FR-SNAP-REVISION` requires: both machines converge on the same
 revision, neither stops updating.
 
-The snapd store stays authoritative for its own state (D-01): this job never touches
+The snapd store stays authoritative for its own state (`PKG-FR-MANAGER-CONVERGES`): this job never touches
 `/var/lib/snapd` directly, only shells out to `snap` itself, the same shape
 `apt_sync` uses for `apt`/`dpkg`.
 
-Snap has no repository or key decision to replicate, and gets no screen for one (D-42).
+Snap has no repository or key decision to replicate, and gets no screen for one (`PKG-FR-SNAP-IDENTITY`).
 One store serves the device, and name -> publisher is pinned store-side by a
 canonical-signed `snap-declaration` snapd validates itself, so one name resolves to one
 snap-id resolves to one publisher and there is no second `firefox` for the target to
@@ -26,20 +26,21 @@ proxy could in principle make two machines draw from different stores, but both 
 device-provisioning facts rather than per-snap facts and neither is replicable, so snap
 is treated as having one store and no store-identity check exists. The provenance
 variable that remains is which revision of that one snap is installed and which channel
-it tracks, and D-06 converges both.
+it tracks, and `PKG-FR-SNAP-REVISION` converges both.
 
 `SnapSyncJob` subclasses `PackageSyncJob` and implements the abstract `plan()`: what a
 diff even IS differs per manager, so the base class holds no diff to inherit. apt's own
 diff lives in `apt_sync` and is apt-package-shaped (a version difference is `REPORT_ONLY`
-per D-04, with no notion of a tracking channel), while D-06 wants a snap's revision AND
+per `PKG-FR-VERSION-FLOAT`, with no notion of a tracking channel), while `PKG-FR-SNAP-REVISION` wants a snap's revision
+ AND
 channel differences to actively converge (`CHANGE`). `plan()` here reuses the
 manager-agnostic building blocks the shared core does provide — `DecisionFile`/
-`filter_inert` (D-08's machine-local skip-always filtering) and
-`PackageSyncJob._build_review_groups` (D-24's action-grouped review) — so the only
+`filter_inert` (`PKG-FR-MACHINE-SPECIFIC`'s machine-local skip-always filtering) and
+`PackageSyncJob._build_review_groups` (`PKG-FR-BATCHED`'s action-grouped review) — so the only
 genuinely snap-specific code is capture, diff and converge. `accept_review()`, `apply()`
 and `execute()` are inherited unchanged, and `execute()` is where this job's own single
 review happens, before its own first mutating command: there is no coordinator and no
-review spanning two managers (D-15, D-24).
+review spanning two managers (`PKG-FR-JOB-INDEPENDENCE`, `PKG-FR-BATCHED`).
 
 Revision AND channel differences share one `DiffAction.CHANGE` diff per snap, tagged
 `ItemClass.SNAP` in both cases (never `ItemClass.SNAP_CHANNEL`) even though a
@@ -48,7 +49,7 @@ at once, so no per-facet class can name it, and `PackageSyncJob._build_review_gr
 keys its groups on `(action, item_class)` — tagging some CHANGE diffs `SNAP_CHANNEL`
 would put one snap's convergence on one screen or another according to which facets
 happened to differ, for a decision that is the same either way. The diff's `detail` names
-every value that differs, satisfying D-07's "review names the concrete action".
+every value that differs, satisfying `PKG-FR-SKIP-ONCE`'s "review names the concrete action".
 """
 
 from __future__ import annotations
@@ -98,7 +99,7 @@ _SNAP_HOLD_ID_PREFIX = "snap:hold:"
 # check fails. A lower bound on what must be permitted, not an exact scope (ADR-013).
 _TARGET_SUDO_COMMANDS = ("/usr/bin/snap",)
 
-# Directory names under ~/snap/<app>/ that are never a per-revision data dir (D-29):
+# Directory names under ~/snap/<app>/ that are never a per-revision data dir (`PKG-FR-SNAP-DATA-BOUNDARY`):
 # `common` is revision-independent user data folder_sync must keep mirroring, `current`
 # is the symlink snapd maintains to the active revision. Both are always kept for the
 # mirror. Of the per-revision dirs, folder_sync mirrors the ONE the app's `current`
@@ -160,8 +161,8 @@ def _remove_diff(item: SnapItem) -> ItemDiff:
 
 
 def _change_diff(item_id: str, source_item: SnapItem, target_item: SnapItem, machines: Machines) -> ItemDiff:
-    """Present on both with a different revision and/or channel (D-06: unlike apt
-    package versions, D-04, both actively converge — never `REPORT_ONLY`).
+    """Present on both with a different revision and/or channel (`PKG-FR-SNAP-REVISION`: unlike apt
+    package versions, `PKG-FR-VERSION-FLOAT`, both actively converge — never `REPORT_ONLY`).
 
     `detail` names EVERY value that differs (`PKG-FR-SNAP-CASES`): one change can move
     both the revision and the channel, and naming the revision alone left the retrack out
@@ -237,7 +238,7 @@ def _diff_snap_items(
     source_items: Sequence[SnapItem], target_items: Sequence[SnapItem], machines: Machines
 ) -> list[ItemDiff]:
     """One diff per snap name present on either side, source-then-target order — same
-    shape as `apt_sync.diffing.diff_apt_packages`, but with D-06's own convergence rule.
+    shape as `apt_sync.diffing.diff_apt_packages`, but with `PKG-FR-SNAP-REVISION`'s own convergence rule.
     Per-snap hold membership diffs follow the presence diffs (D8: install-before-hold).
     """
     source_by_id = {item.item_id: item for item in source_items}
@@ -387,7 +388,7 @@ class SnapSyncJob(PackageSyncJob):
         self._target_items_by_id: dict[str, SnapItem] = {}
 
     async def capture_source_items(self) -> Sequence[SnapItem]:  # pyright: ignore[reportIncompatibleMethodOverride]
-        """`snap list --all` on the source (D-06).
+        """`snap list --all` on the source (`PKG-FR-SNAP-REVISION`).
 
         This job overrides `plan()` and never routes through `PackageSyncJob.
         diff_items`'s apt-package-shaped dispatch (module docstring), so widening this
@@ -462,7 +463,8 @@ class SnapSyncJob(PackageSyncJob):
         `partition_sideloaded` predicate to its own `snap list --all` and offers the
         sideloads it finds as items resolvable by an install snippet. The two jobs agree
         because both call `packages/snap_listing.py`, never because one tells the other —
-        neither imports the other, and neither reads the other's enable flag (D-15/D-18).
+        neither imports the other, and neither reads the other's enable flag
+        (`PKG-FR-JOB-INDEPENDENCE`/`PKG-FR-MANUAL-SCOPE`).
         """
         source_decisions, target_decisions = await self._load_live_decisions()
 
@@ -504,8 +506,8 @@ class SnapSyncJob(PackageSyncJob):
     @override
     async def converge(self, diff: ItemDiff) -> CommandResult:
         """Install/refresh at the source's explicit revision, switch channel only when
-        it differs, or remove (never purge) — the only D-06-safe verbs (module
-        docstring). One snap per invocation (D-27) so a single bad snap cannot fail the
+        it differs, or remove (never purge) — the only `PKG-FR-SNAP-REVISION`-safe verbs (module
+        docstring). One snap per invocation (`PKG-FR-OUTCOME-FAILED`) so a single bad snap cannot fail the
         whole batch.
 
         Hold membership items (`snap:hold:<name>`) are routed FIRST, by item_id prefix
@@ -537,7 +539,7 @@ class SnapSyncJob(PackageSyncJob):
 
     async def _converge_install(self, source_item: SnapItem) -> CommandResult:
         """`snap install --revision=<N>` lands the exact revision without ever
-        touching a hold (D-06); the channel switch always follows so the target
+        touching a hold (`PKG-FR-SNAP-REVISION`); the channel switch always follows so the target
         tracks the same channel as the source. There is no cheap way to learn
         "snapd's default channel for a not-yet-installed snap" from `snap list --all`
         alone (only installed snaps appear in it), and re-running `switch` to a
@@ -641,7 +643,7 @@ class SnapSyncJob(PackageSyncJob):
         neither meaningful nor what they asked for. Declined, never failed — the user's own
         answer is what withdrew it. An install that was approved and then BROKE is the other
         case, and it needs nothing here: `snap refresh --hold` on the absent snap exits
-        non-zero and fails that hold as its own item (D-27).
+        non-zero and fails that hold as its own item (`PKG-FR-OUTCOME-FAILED`).
         """
         raw_name = diff.item_id.removeprefix(_SNAP_HOLD_ID_PREFIX)
         if diff.action == DiffAction.INSTALL and self._install_was_declined(raw_name):

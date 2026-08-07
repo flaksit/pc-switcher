@@ -43,7 +43,7 @@ sync_jobs:
   dummy_success: false   # Test job that completes successfully
   dummy_fail: false      # Test job that fails at configurable progress
 
-  # Package management jobs run BEFORE folder_sync (D-17): apps are provisioned first,
+  # Package management jobs run BEFORE folder_sync (`PKG-FR-JOB-ORDER`): apps are provisioned first,
   # then their data lands on top of them (installing software writes default config/data
   # files; running folder_sync afterward lets the user's synced versions land on top of
   # those defaults). The orchestrator resolves sync_jobs in the order keys appear in this file, so

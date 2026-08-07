@@ -1,5 +1,5 @@
 """Unit tests for `ManualSnapSyncJob`: the sideloaded-snap half of what no package manager
-can reproduce (D-18) — the `x`-revision detection, the seam with `snap_sync`, what the
+can reproduce (`PKG-FR-MANUAL-SCOPE`) — the `x`-revision detection, the seam with `snap_sync`, what the
 target counts as already holding, and this job's validation.
 
 The shared half every unreproducible job inherits is covered in `test_unreproducible_jobs.py`.
@@ -67,7 +67,7 @@ def store_snap(name: str, revision: str = "42") -> tuple[str, str, str]:
 
 class TestSideloadDetection:
     """The `x`-revision scan: a snap whose bytes came from a local file becomes an
-    UNREPRODUCIBLE diff (D-18, `PKG-FR-SNAP-SIDELOAD`), and a store snap does not.
+    UNREPRODUCIBLE diff (`PKG-FR-MANUAL-SCOPE`, `PKG-FR-SNAP-SIDELOAD`), and a store snap does not.
     """
 
     @pytest.mark.asyncio
@@ -169,7 +169,8 @@ class TestSideloadDetection:
 
 
 class TestInertFiltering:
-    """An item recorded machine-specific on the source produces no diff (D-08/D-19)."""
+    """An item recorded machine-specific on the source produces no diff
+    (`PKG-FR-MACHINE-SPECIFIC`/`PKG-FR-MANUAL-DIFF`)."""
 
     @pytest.mark.asyncio
     async def test_machine_specific_item_is_filtered_before_becoming_a_diff(self) -> None:
@@ -192,7 +193,7 @@ class TestInertFiltering:
     async def test_a_snap_syncs_own_mark_on_the_same_snap_is_not_read(self) -> None:
         """G130 — a `snap:<name>` mark is `snap_sync`'s answer about converging that snap's
         revision, in that job's own file and id space, so it neither silences this job's
-        finding nor is read at all (D-09: one decision file per manager)."""
+        finding nor is read at all (`PKG-FR-MACHINE-SPECIFIC`: one decision file per manager)."""
         context, source, _target = make_context(
             source_responses={
                 SNAP_LIST: snap_list(sideload("mytool")),
@@ -268,7 +269,8 @@ class TestWhatTheTargetAlreadyHolds:
 
 
 class TestExecuteIndependentOfSnapSync:
-    """The job runs on its own enable flag, independent of snap_sync (D-15/D-18)."""
+    """The job runs on its own enable flag, independent of snap_sync
+    (`PKG-FR-JOB-INDEPENDENCE`/`PKG-FR-MANUAL-SCOPE`)."""
 
     @pytest.mark.asyncio
     async def test_plan_runs_with_snap_sync_absent_from_config(self) -> None:
@@ -290,7 +292,7 @@ class TestExecuteIndependentOfSnapSync:
         context, _source, target = make_context(
             source_responses={
                 SNAP_LIST: snap_list(sideload("mytool")),
-                # plan() classifies INSTALL from the SOURCE registry (D-23).
+                # plan() classifies INSTALL from the SOURCE registry (`PKG-FR-MANUAL-SAME-RUN`).
                 "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, MYTOOL_REGISTRY_YAML, ""),
             },
             target_responses={

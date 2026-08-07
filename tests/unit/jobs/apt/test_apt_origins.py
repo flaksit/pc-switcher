@@ -1,4 +1,5 @@
-"""Where a package comes from (D-34) and the post-refresh read-back that enforces it (D-35).
+"""Where a package comes from (`PKG-FR-APT-IDENTITY`) and the post-refresh read-back that enforces it
+(`PKG-FR-APT-ORIGIN-VERIFY`).
 
 Split out of the former single `test_apt_sync.py`.
 """
@@ -80,10 +81,10 @@ _TARGET_GH_NO_CANDIDATE = "gh:\n  Installed: (none)\n  Candidate: (none)\n  Vers
 
 
 class TestAPackageTheTargetCannotResolveYet:
-    """ADR-020 D-34 class 3 at plan time: the repository that supplies the package is derived
+    """`PKG-FR-APT-IDENTITY` class 3 at plan time: the repository that supplies the package is derived
     from the package's own approval and written during converge, so the target's apt has no
     candidate for the name while `plan()` runs and refuses to rehearse a transaction naming
-    it — with the same exit 100 a held dpkg lock produces (ADR-022 D-01).
+    it — with the same exit 100 a held dpkg lock produces (`PKG-FR-READ-FAILS-JOB`).
     """
 
     @pytest.mark.asyncio
@@ -202,7 +203,7 @@ _UBUNTU_SOURCES_ARCHIVE = "Types: deb\nURIs: http://archive.ubuntu.com/ubuntu\nS
 
 
 class TestOriginClassification:
-    """ADR-020 D-34 at plan time: a package replicates as (name, origin), so a name the
+    """`PKG-FR-APT-IDENTITY` at plan time: a package replicates as (name, origin), so a name the
     target could satisfy from a different vendor is not "already available".
     """
 
@@ -572,7 +573,7 @@ def _mozilla_source_responses() -> dict[str, CommandResult]:
 
 
 class TestOriginEnforcement:
-    """ADR-020 D-35 at converge time: whatever plan-time classification concluded and
+    """`PKG-FR-APT-ORIGIN-VERIFY` at converge time: whatever plan-time classification concluded and
     whatever `/etc/apt` work this run derived, the target may not install a package from a
     vendor the source does not use. Checked against the real post-`apt-get update` state.
     """
@@ -655,7 +656,7 @@ class TestOriginEnforcement:
 
     @pytest.mark.asyncio
     async def test_a_distribution_origin_package_is_not_origin_verified(self) -> None:
-        """A48 — D-35's exemption. The source has this package from its own Ubuntu mirror, so
+        """A48 — `PKG-FR-APT-ORIGIN-VERIFY`'s exemption. The source has this package from its own Ubuntu mirror, so
         whatever mirror the target answers with is the same vendor — and asking the question
         at all would refuse every package on a pair of machines with different mirrors.
         """

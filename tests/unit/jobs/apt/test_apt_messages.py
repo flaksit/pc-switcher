@@ -59,7 +59,7 @@ class TestOriginRefusalWording:
 
         assert detail == (
             "firefox was not installed: source-host has it from packages.mozilla.org/apt, but after this run's "
-            "apt-get update target-host would install it from ftp.belnet.be/ubuntu (ADR-020 D-35)"
+            "apt-get update target-host would install it from ftp.belnet.be/ubuntu (`PKG-FR-APT-ORIGIN-VERIFY`)"
         )
 
     def test_a_target_with_no_candidate_origin_says_so_rather_than_naming_nothing(self) -> None:
@@ -71,7 +71,7 @@ class TestOriginRefusalWording:
 
 
 class TestRepoUnavailableWording:
-    """`REPO_UNAVAILABLE`'s detail: the source's origin cannot be provided (ADR-020 D-25)."""
+    """`REPO_UNAVAILABLE`'s detail: the source's origin cannot be provided (`PKG-FR-APT-ORIGIN-UNREPLICABLE`)."""
 
     def test_build_repo_unavailable_detail_names_the_package_its_origin_and_the_cause(self) -> None:
         detail = build_repo_unavailable_detail(

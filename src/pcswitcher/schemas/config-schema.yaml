@@ -63,7 +63,7 @@ properties:
         type: boolean
         default: false
         description: "Test job that fails at configurable time"
-      # Package-sync jobs (D-17: run before folder_sync so apps are provisioned
+      # Package-sync jobs (`PKG-FR-JOB-ORDER`: run before folder_sync so apps are provisioned
       # before their data lands):
       apt_sync:
         type: boolean

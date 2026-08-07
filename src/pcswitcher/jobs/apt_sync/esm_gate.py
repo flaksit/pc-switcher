@@ -1,4 +1,4 @@
-"""The one question this job asks that is not about an item (ADR-020 D-38).
+"""The one question this job asks that is not about an item (`PKG-FR-DISTRO-FILES`).
 
 Writing the source's `ubuntu-esm-*` sources to a target with no Ubuntu Pro attachment is not
 harmless: `esm.ubuntu.com` serves its INDEX publicly, so `apt-get update` succeeds and the ESM
@@ -8,7 +8,7 @@ pc-switcher cannot attach the target itself, so it asks.
 
 Only the parsed `attached` boolean ever leaves this module: `pro status --format json` also
 names the subscriber's account, so nothing else may be logged, shown or put in a
-`JobSkipped` reason (D-38, and `PKG-FR-ESM-PRIVACY` is honoured by construction here rather
+`JobSkipped` reason (`PKG-FR-DISTRO-FILES`, and `PKG-FR-ESM-PRIVACY` is honoured by construction here rather
 than by filtering downstream).
 """
 
@@ -49,7 +49,7 @@ class EsmGate:
         self._manager_id = manager_id
         self._log = log
         # ESM sources the gate held back. Only ever non-empty under `--dry-run`: a real
-        # unattached run raises `JobSkipped` instead of writing a subset (D-38).
+        # unattached run raises `JobSkipped` instead of writing a subset (`PKG-FR-DISTRO-FILES`).
         self._withheld: frozenset[str] = frozenset()
 
     @property
@@ -82,7 +82,7 @@ class EsmGate:
         answer, True writes files that break the target's next install.
 
         The payload also carries the subscriber's account, so nothing but the parsed
-        boolean leaves this method (D-38).
+        boolean leaves this method (`PKG-FR-DISTRO-FILES`).
         """
         result = await self._probe.target_pro_attached(PRO_STATUS_COMMAND)
         if not result.success:
@@ -95,7 +95,7 @@ class EsmGate:
 
     async def allow(self, esm_files: Sequence[str], *, context: JobContext) -> bool:
         """Ask before putting `ubuntu-esm-*` sources on a target that is not Pro-attached
-        (D-38), and return whether they may travel.
+        (`PKG-FR-DISTRO-FILES`), and return whether they may travel.
 
         `context` is passed per call rather than held: the orchestrator injects the reviewer
         into `JobContext` after the job is constructed, and a `JobContext` is a frozen
