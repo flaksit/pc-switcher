@@ -16,6 +16,10 @@ Applies to any pc-switcher subsystem that shells out to a subprocess and reads i
 
 This ADR does not enumerate every read a subsystem must do or how each is classified — that is each subsystem's own responsibility, per the rules here.
 
+## Identifiers
+
+Each decision below carries an ID of the form `ADR-022-D-<name>`. These are the stable, greppable citations that code, tests and other docs use when they refer to a specific decision. Rejected alternatives are un-ID'd — cited by descriptive text if at all. Where a decision produces a specification article in [`docs/system/package-sync.md`](../system/package-sync.md), the section names the article inline for a bidirectional link.
+
 ## Additional implementation rules
 
 **Required**
@@ -44,7 +48,9 @@ The pattern was first surfaced by package sync: `snap list --all` failing on the
 
 ## Decision
 
-### The two categories
+### ADR-022-D-TWO-CATEGORIES — The two categories
+
+Codifies: `PKG-FR-READ-FAILS-JOB`
 
 **The tool did not answer.** A transient network failure, a package-manager lock, an interrupted subprocess, an unreadable status file, a daemon not running, an installation that cannot be opened, sudo unavailable. Nothing in pc-switcher explains any of these, nothing in the run repairs them, and every conclusion drawn from the result is unfounded. **Fail fast.**
 
@@ -52,7 +58,9 @@ The pattern was first surfaced by package sync: `snap list --all` failing on the
 
 The line is not "did the command succeed". It is **did the tool answer the question it was asked**.
 
-### Fail-fast at subsystem level, once
+### ADR-022-D-FAIL-FAST-SHAPE — Fail-fast at subsystem level, once
+
+Codifies: `PKG-FR-READ-FAILS-JOB`
 
 The exception a failed read raises sits outside the per-item exception hierarchy so it escapes per-item loops. It fails the subsystem once, naming the command and the tool's own stderr. Example:
 
@@ -60,7 +68,7 @@ The exception a failed read raises sits outside the per-item exception hierarchy
 
 Naming the command verbatim is the point. The pre-ADR behaviour produced a screenful of removal proposals with the real cause appearing nowhere.
 
-### Ambiguous exit codes → reshape the command
+### ADR-022-D-RESHAPE — Ambiguous exit codes → reshape the command
 
 Three measured shapes occur, and each is decided against the command's own tested behaviour:
 
@@ -70,7 +78,9 @@ Three measured shapes occur, and each is decided against the command's own teste
 
 **The exit code is ambiguous** — the same non-zero exit means both a legitimate state and a real failure. Reshape the command: narrow to arguments already known to succeed, or wrap in an outer test that answers absence unambiguously. Reshaping is preferred to parsing stderr text, which is locale-dependent and turns classification into a string match. A reshape's outer test must hold the same privilege as the wrapped query — measured, an unprivileged `test -d` on a directory inside an unsearchable parent exits 1, collapsing the whole `if` to exit 0 with no output.
 
-### Empty is data unless emptiness is impossible
+### ADR-022-D-EMPTY-IS-DATA — Empty is data unless emptiness is impossible
+
+Codifies: `PKG-FR-READ-FAILS-JOB` (empty-answer clause)
 
 Most reads have an ordinary empty answer — no items installed, no matching files. Promoting emptiness to a failure breaks those cases.
 
@@ -78,7 +88,9 @@ The exception is reads whose answer set is genuinely owed: those may treat "empt
 
 That exception is a judgement per read and must be recorded as one: a read that answered "I know none of these" and a read that died can print the same output.
 
-### Subsystem-level failure is the ceiling
+### ADR-022-D-SUBSYSTEM-CAP — Subsystem-level failure is the ceiling
+
+Codifies: `PKG-FR-READ-FAILS-JOB`, `PKG-FR-REGISTRY-CONSENT` (the run-ending escalation)
 
 A read failure fails its subsystem and no more; the orchestrator continues with the remaining subsystems. This assumes the subsystems are independent, which is a separate decision (currently GitHub issue #220).
 
@@ -102,11 +114,11 @@ A subsystem MAY escalate a specific read to a run-ending abort where nothing in 
 
 ## Alternatives Considered
 
-- **A blanket "non-zero exit fails the subsystem" rule** — rejected: several reads exit non-zero in their normal case, so the rule fails every ordinary run.
-- **A blanket "empty output means the read failed" rule** — rejected: a machine with no snaps, no packages, no matching files is ordinary.
-- **Parsing stderr to disambiguate** — rejected: locale-dependent string matching, and reshaping the command removes the ambiguity outright.
-- **Warn-and-continue on a failed read** — rejected: that is the defect this ADR closes.
-- **Retrying a failed read before failing** — deferred. It would help transient cases and mask persistent ones; the decision belongs with the wider failure-model work in GitHub #220.
+- **A blanket "non-zero exit fails the subsystem" rule** — Rejected: several reads exit non-zero in their normal case, so the rule fails every ordinary run.
+- **A blanket "empty output means the read failed" rule** — Rejected: a machine with no snaps, no packages, no matching files is ordinary.
+- **Parsing stderr to disambiguate** — Rejected: locale-dependent string matching, and reshaping the command removes the ambiguity outright.
+- **Warn-and-continue on a failed read** — Rejected: that is the defect this ADR closes.
+- **Retrying a failed read before failing** — Deferred: it would help transient cases and mask persistent ones; the decision belongs with the wider failure-model work in GitHub #220.
 
 ## References
 

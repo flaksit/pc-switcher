@@ -8,6 +8,12 @@ Date: 2026-07-23
 
 The source captures a manifest; the target diffs its own state against it and converges via `apt`, `snap` and `flatpak` themselves. Package databases are never rsynced. A package replicates as **(name, origin)**, not name alone. Seven independent jobs each run plan → review → apply inside their own `execute()`. Repositories, keys, pins, flatpak remotes and blocks (apt holds, snap refresh holds, flatpak masks) are derived from the packages approved from them and never reviewed directly.
 
+## Identifiers
+
+Each decision below carries an ID of the form `ADR-020-D-<name>`. These are the stable, greppable citations that code, tests and other docs use when they refer to a specific decision. Rejected alternatives are un-ID'd — they are cited by descriptive text if at all.
+
+Decisions that produce a specification article in [`docs/system/package-sync.md`](../system/package-sync.md) name the article inline, so the link is bidirectional: the ADR decision points at the `PKG-FR-*` rule it codifies, and the article's `Lineage:` points back at this ADR.
+
 ## Context
 
 Package sync must replicate presence, version and provenance of packages across apt, snap and flatpak, plus the repository/keyring/pin/remote configuration those installs depend on. Application data belongs to `folder_sync`.
@@ -16,67 +22,97 @@ Provenance is the hard part: `firefox` exists in Ubuntu's archive and in Mozilla
 
 ## Decision
 
-### Convergence model
+### ADR-020-D-CONVERGE-MODEL — Convergence model
+
+Codifies: `PKG-FR-MANAGER-CONVERGES`
 
 Source captures a manifest; target diffs and converges via the ecosystem's own tools. `/var/lib/dpkg`, `/var/lib/snapd` and the flatpak OSTree store are never rsynced.
 
-### Item model
+### ADR-020-D-ITEM-MODEL — Item model
 
-An item is something the user can decide about. Item classes: apt package, apt config file, snap, snap channel, flatpak ref, unreproducible install; for removal only, apt source and pin files. Flatpak remotes and blocks (holds, masks) are derived, not items.
+An item is something the user can decide about. Item classes: apt package, apt config file, snap, snap channel, flatpak ref, unreproducible install; for removal only, apt source and pin files. Flatpak remotes and blocks (holds, masks) are derived, not items (see `PKG-FR-BLOCKS-DERIVED`).
 
-### Version and manifest policy
+### ADR-020-D-VERSION-POLICY — Version and manifest policy
+
+Codifies: `PKG-FR-APT-SCOPE`, `PKG-FR-VERSION-FLOAT`, `PKG-FR-APT-HOLD-VERSION`
 
 Apt manifest carries `apt-mark showmanual`. Versions float; a mismatch is `REPORT_ONLY`. Held apt packages take the source's exact version — a hold blocks install, upgrade and removal alike.
 
-### Snap converges revision and channel
+### ADR-020-D-SNAP-REVISION — Snap converges revision and channel
+
+Codifies: `PKG-FR-SNAP-REVISION`, `PKG-FR-SNAP-REFRESH-PAUSE`
 
 Snap embeds the version in its per-user data path (`~/snap/<app>/<rev>`), so both machines must be on the same revision for `folder_sync` to mirror snap data cleanly. Snapd's automatic refresh is paused across the sync window on both hosts with a timeout, and each host's prior setting is restored on cleanup.
 
-### Decision shape
+### ADR-020-D-DECISION-SHAPE — Decision shape
+
+Codifies: `PKG-FR-SKIP-ONCE`, `PKG-FR-MACHINE-SPECIFIC`, `PKG-FR-NO-MARK-ON-SNAP-REVISION`
 
 Three-way by default: apply / skip once / skip always. Two-way (act / skip once, no record) for apt source removal, apt pin removal and repository-conflict overwrite prompts. `REPORT_ONLY` takes no answer.
 
-### Machine-local decision file
+### ADR-020-D-DECISION-FILE — Machine-local decision file
+
+Codifies: `PKG-FR-MACHINE-SPECIFIC`, `PKG-FR-MARK-LIFETIME`
 
 One file per manager at `~/.config/pc-switcher/<manager>.decisions.yaml`, never synced. An entry on machine M makes the item inert on M in both roles. An entry is dropped once M no longer has the item; a dead entry would refuse the item's return.
 
-### `/etc/apt` is derived, not mirrored
+### ADR-020-D-APT-CONFIG-DERIVED — `/etc/apt` is derived, not mirrored
+
+Codifies: `PKG-FR-REPO-DERIVED`, `PKG-FR-KEY-COPY`, `PKG-FR-APT-IGNORES`, `PKG-FR-DISTRO-FILES`
 
 Four buckets: derived from approved packages (repository files, keyrings, conflict-free overwrites); always synced (`preferences.d` pins, distribution source files); reviewed two-way (repository and pin removals, repository-conflict overwrite); reviewed three-way (`apt.conf.d`). Only files apt itself reads. Keys travel byte-for-byte from the source, never re-fetched. Derived writes precede the installs that need them.
 
-### Seven separate jobs
+### ADR-020-D-SEVEN-JOBS — Seven separate jobs
+
+Codifies: `PKG-FR-JOB-INDEPENDENCE`, `PKG-FR-JOB-ORDER`
 
 `apt_sync`, `snap_sync`, `flatpak_sync`, `manual_deb_sync`, `manual_snap_sync`, `manual_flatpak_sync`, `manual_installs_sync` are seven separate `SyncJob`s over one shared core. Each ships disabled. No review spans two managers. All seven run before `folder_sync`.
 
-### Unreproducible items
+### ADR-020-D-UNREPRODUCIBLE-ITEMS — Unreproducible items
+
+Codifies: `PKG-FR-VERSION-SNIPPET`, `PKG-FR-MANUAL-CONVERGE-LOOP`, `PKG-FR-MANUAL-REMOVE`
 
 Each item has two mandatory bodies: `install_body` (replayed on the target) and `version_body` (prints the installed version on whichever machine runs it). Version comparison drives convergence; there is no folder diff and no payload hash. `version_body` runs on both machines during `plan()`, ungated by `--confirm-each-command`. Replay loops until versions match or the user skips. No purge-and-retry answer; no uninstall snippets.
 
-### Batched review, rounds when correctness needs them
+### ADR-020-D-BATCHED-REVIEW — Batched review, rounds when correctness needs them
+
+Codifies: `PKG-FR-BATCHED`, `PKG-FR-ASK-AGAIN`
 
 Each job runs plan → review → apply in its own `execute()`. One screen per manager per action where the logic permits. `apt_sync` may ask in up to three rounds — the second round asks questions scoped to APPROVED work; the third asks collateral for an install whose repository this run itself writes.
 
-### Collateral protects the target's `apt-mark showmanual`
+### ADR-020-D-COLLATERAL — Collateral protects the target's `apt-mark showmanual`
+
+Codifies: `PKG-FR-COLLATERAL-MANUAL`, `PKG-FR-COLLATERAL-MARKED`, `PKG-FR-COLLATERAL-ATTRIBUTION`
 
 apt collateral affecting the target's own manually-installed set becomes its own reviewable item (act / skip now / stop the sync). Only APPROVED removals waive the protection.
 
-### (name, origin) enforced at the target's real state
+### ADR-020-D-ORIGIN-VERIFY — (name, origin) enforced at the target's real state
+
+Codifies: `PKG-FR-APT-IDENTITY`, `PKG-FR-DISTRO-ORIGIN`, `PKG-FR-APT-ORIGIN-VERIFY`
 
 The unit of replication for apt is (name, origin). After the `/etc/apt` group's single `apt-get update` and before the first install, one batched `apt-cache policy` re-reads target candidate origins; an install whose candidates do not intersect the source's fails as its own item. Distribution origins are per-machine exempt.
 
-### Pins always-sync
+### ADR-020-D-PINS-ALWAYS-SYNC — Pins always-sync
+
+Codifies: `PKG-FR-PIN-ALWAYS`
 
 `preferences.d` pin adds and updates sync silently. A pin naming an absent origin is inert.
 
-### Distribution source files and ESM
+### ADR-020-D-DISTRO-AND-ESM — Distribution source files and ESM
+
+Codifies: `PKG-FR-DISTRO-FILES`, `PKG-FR-ESM-GATE`, `PKG-FR-ESM-VERIFY`, `PKG-FR-ESM-SKIP-WHOLE-JOB`, `PKG-FR-ESM-NO-ASK`, `PKG-NG-ESM-SELF-ATTACH`
 
 `ubuntu.sources`, `/etc/apt/sources.list`, `ubuntu-esm-apps.sources`, `ubuntu-esm-infra.sources` are written when missing, overwritten when different, never removed. When the two ESM files would be written and the target reports unattached, `apt_sync` asks (attach and re-probe / skip `apt_sync`); non-interactive runs take the skip. pc-switcher cannot attach on the user's behalf.
 
-### Flatpak remotes derived from refs
+### ADR-020-D-FLATPAK-REMOTES — Flatpak remotes derived from refs
+
+Codifies: `PKG-FR-FLATPAK-REMOTE-DERIVED`, `PKG-FR-FLATPAK-IDENTITY`, `PKG-FR-FLATPAK-ORIGIN-DIFF`, `PKG-FR-FLATPAK-INSTALL-ORIGIN`
 
 A flatpak remote travels because an approved ref names it in that ref's scope. Ref identity is `<application>/<arch>/<branch>`; origin stays out of identity, so a ref on both machines from different remotes is `ORIGIN_MISMATCH` and never converged. Origin is compared by URL, never remote name.
 
-### Snap: nothing to derive
+### ADR-020-D-SNAP-NO-DERIVATION — Snap: nothing to derive
+
+Codifies: `PKG-FR-SNAP-IDENTITY`, `PKG-NG-SNAP-ORIGIN`
 
 One store per device, name→publisher pinned by canonical-signed `snap-declaration`. No repository or key decision.
 
@@ -88,7 +124,7 @@ One store per device, name→publisher pinned by canonical-signed `snap-declarat
 - The review asks only what the user can answer.
 
 **Negative (costly to reverse)**
-- Manifest schema, item identity and decision-file format are shaped by the convergence model above; switching to file-level replication later replaces the whole job core.
+- Manifest schema, item identity and decision-file format are shaped by `ADR-020-D-CONVERGE-MODEL`; switching to file-level replication later replaces the whole job core.
 - Package sync requires passwordless sudo on both machines.
 - A repository or remote feeding no synced item does not travel: the two machines converge for what packages need, not to identical configurations.
 - Pins always-sync, so a `preferences.d` file the user wanted on one machine returns every run unless deleted on the source.
@@ -96,25 +132,25 @@ One store per device, name→publisher pinned by canonical-signed `snap-declarat
 
 ## Alternatives Considered
 
-- **File-level replication of the package databases** — rejected: managers must stay authoritative.
-- **A single combined `package_sync` job** — rejected: independent enable flags, config, failure isolation.
-- **A `--delete` file mirror of `/etc/apt`** — rejected: wipes the target's own machine-specific sources.
-- **Repositories and remotes as reviewed items on top of an origin check** — rejected: keeps the unrepresentable "package ticked, repository unticked" pairing.
-- **Deriving pins per package rather than always-syncing** — rejected: a pin naming an absent origin is inert, so precision buys nothing.
-- **Always-syncing every flatpak remote** — rejected: a remote costs a summary fetch on every `flatpak update`.
-- **Writing ESM sources to an unattached target and only warning** — rejected: refresh succeeds, ESM suites win candidate selection, install fails with 401.
-- **Withholding the two ESM files silently** — rejected: pins travel regardless, so pins land over a repository set neither machine has.
-- **Refusing the whole run when an approved origin cannot be replicated** — rejected: contradicts `PKG-FR-OUTCOME-FAILED`'s continue-and-report model.
-- **Protecting the union of both machines' manual sets from collateral** — rejected: the union protects on the wrong machine's bookkeeping.
-- **A recursive folder diff or payload hash for a manual install** — rejected: version body replaces both.
-- **Comparing snippet body before version** — rejected: a cosmetic edit to a comment or mirror URL would raise a false review item.
-- **Letting the higher version decide sync direction** — rejected: sync goes source-to-target, always.
-- **A purge-and-replace answer beside retry** — rejected: with no folder diff, purging cannot change what the version body reports.
-- **Uninstall snippets** — rejected: ecosystem's own removal covers three jobs, `rm -rf` the fourth.
-- **A backwards-compatible registry defaulting the missing version body** — rejected: every such entry would silently converge on presence again.
-- **Gating `version_body` behind `--confirm-each-command`** — rejected: it runs before the run has proposed anything, so the confirm would arrive before the user had seen a single change.
-- **Pre-validating target sudo for the four unreproducible jobs** — rejected: only approved removals need it.
-- **Source-cache reuse for offline installs** — deferred.
+- **File-level replication of the package databases** — Rejected: managers must stay authoritative.
+- **A single combined `package_sync` job** — Rejected: independent enable flags, config, failure isolation.
+- **A `--delete` file mirror of `/etc/apt`** — Rejected: wipes the target's own machine-specific sources.
+- **Repositories and remotes as reviewed items on top of an origin check** — Rejected: keeps the unrepresentable "package ticked, repository unticked" pairing.
+- **Deriving pins per package rather than always-syncing** — Rejected: a pin naming an absent origin is inert, so precision buys nothing.
+- **Always-syncing every flatpak remote** — Rejected: a remote costs a summary fetch on every `flatpak update`.
+- **Writing ESM sources to an unattached target and only warning** — Rejected: refresh succeeds, ESM suites win candidate selection, install fails with 401.
+- **Withholding the two ESM files silently** — Rejected: pins travel regardless, so pins land over a repository set neither machine has.
+- **Refusing the whole run when an approved origin cannot be replicated** — Rejected: contradicts `PKG-FR-OUTCOME-FAILED`'s continue-and-report model.
+- **Protecting the union of both machines' manual sets from collateral** — Rejected: the union protects on the wrong machine's bookkeeping.
+- **A recursive folder diff or payload hash for a manual install** — Rejected: version body replaces both.
+- **Comparing snippet body before version** — Rejected: a cosmetic edit to a comment or mirror URL would raise a false review item.
+- **Letting the higher version decide sync direction** — Rejected: sync goes source-to-target, always.
+- **A purge-and-replace answer beside retry** — Rejected: with no folder diff, purging cannot change what the version body reports.
+- **Uninstall snippets** — Rejected: ecosystem's own removal covers three jobs, `rm -rf` the fourth.
+- **A backwards-compatible registry defaulting the missing version body** — Rejected: every such entry would silently converge on presence again.
+- **Gating `version_body` behind `--confirm-each-command`** — Rejected: it runs before the run has proposed anything, so the confirm would arrive before the user had seen a single change.
+- **Pre-validating target sudo for the four unreproducible jobs** — Rejected: only approved removals need it.
+- **Source-cache reuse for offline installs** — Deferred.
 
 ## References
 

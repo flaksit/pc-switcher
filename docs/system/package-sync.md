@@ -36,12 +36,12 @@ Decomposes [What package sync is for](../planning/package-sync-user-requirements
   Lineage: 002-package-sync  
   Impl: `sync_jobs` defaults in `config/schema.py`
 - **PKG-FR-JOB-INDEPENDENCE**: Each package sync job MUST be enableable, reviewable and failable on its own. Enabling one MUST NOT enable another, and no package sync job's behaviour may depend on whether another package sync job is enabled.  
-  Lineage: 002-package-sync
+  Lineage: 002-package-sync, ADR-020-D-SEVEN-JOBS
 - **PKG-FR-JOB-ORDER**: Every package job MUST run before `folder_sync`, and the system MUST refuse to start when they are ordered otherwise.  
-  Lineage: 002-package-sync  
+  Lineage: 002-package-sync, ADR-020-D-SEVEN-JOBS  
   Impl: `Orchestrator._check_package_jobs_precede_folder_sync`
 - **PKG-FR-APT-SCOPE**: `apt_sync` MUST cover the manually-installed apt package set, the repositories and pins that govern where those packages come from, apt's own behavioural configuration, and apt holds. Packages apt installed automatically to satisfy dependencies MUST NOT be items.  
-  Lineage: 002-package-sync  
+  Lineage: 002-package-sync, ADR-020-D-VERSION-POLICY  
   Impl: `apt_sync/` (base scope in `_covers`)
 - **PKG-FR-SNAP-SCOPE**: `snap_sync` MUST cover installed snaps with their revision, tracking channel, confinement mode and per-snap refresh holds.  
   Lineage: 002-package-sync  
@@ -65,26 +65,26 @@ Decomposes [The model](../planning/package-sync-user-requirements.md#the-model).
 - **PKG-FR-SOURCE-INTENT**: The source machine's state MUST be the only statement of intent, and the target MUST NOT decide anything. A sync MUST NOT change what software the source has, nor where it gets it from. The writes a sync does make on the source are exactly four, each required by an article of its own: a machine-specific mark (`PKG-FR-MACHINE-SPECIFIC`), a snippet the review authored (`PKG-FR-MANUAL-SAME-RUN`), the snap refresh pause (`PKG-FR-SNAP-REFRESH-PAUSE`), and the apt update-timer pause (`PKG-FR-APT-TIMER-PAUSE`). All four are covered by `PKG-FR-CONFIRM-EACH`.  
   Lineage: 002-package-sync
 - **PKG-FR-MANAGER-CONVERGES**: Software MUST be replicated by having the target's own package managers install and remove it. The system MUST NOT copy a package manager's database, store or unpacked files between machines.  
-  Lineage: 002-package-sync, ADR-020
+  Lineage: 002-package-sync, ADR-020-D-CONVERGE-MODEL
 - **PKG-FR-APT-IDENTITY**: An apt package MUST be identified by name and origin together. The system MUST NOT satisfy an approved install from an origin the source does not use.  
-  Lineage: 002-package-sync, ADR-020  
+  Lineage: 002-package-sync, ADR-020-D-ORIGIN-VERIFY  
   Impl: `apt_sync.origins.OriginClassifier`
 - **PKG-FR-DISTRO-ORIGIN**: All origins a machine's distribution source files declare MUST count as one origin, computed per machine.  
-  Lineage: 002-package-sync  
+  Lineage: 002-package-sync, ADR-020-D-ORIGIN-VERIFY  
   Impl: `OriginPlan.distribution_origins`
 - **PKG-FR-SNAP-IDENTITY**: A snap MUST be identified by name alone, and the system MUST NOT ask the user anything about where a snap comes from.  
-  Lineage: 002-package-sync, ADR-020
+  Lineage: 002-package-sync, ADR-020-D-SNAP-NO-DERIVATION
 - **PKG-FR-FLATPAK-IDENTITY**: A flatpak application MUST be identified by its installation scope and its full reference including branch. The same application in two scopes, or on two branches, MUST be treated as two independent items. This identity MUST hold for `manual_flatpak_sync` too.  
-  Lineage: 002-package-sync  
+  Lineage: 002-package-sync, ADR-020-D-FLATPAK-REMOTES  
   Impl: `FlatpakRefItem.item_id`
 - **PKG-FR-FLATPAK-ORIGIN-NOT-IDENTITY**: A flatpak application's origin remote MUST NOT be part of its identity.  
   Lineage: 002-package-sync
 - **PKG-FR-VERSION-FLOAT**: For apt and flatpak the system MUST install by name and accept whatever the target's own repositories offer. A version difference MUST be reported and MUST NOT be forced, upgraded or downgraded.  
-  Lineage: 002-package-sync, ADR-020
+  Lineage: 002-package-sync, ADR-020-D-VERSION-POLICY
 - **PKG-FR-SNAP-REVISION**: For snap the system MUST converge the target to the source's exact revision and tracking channel.  
-  Lineage: 002-package-sync, ADR-020
+  Lineage: 002-package-sync, ADR-020-D-SNAP-REVISION
 - **PKG-FR-BLOCKS-DERIVED**: An apt hold, a snap refresh hold and a flatpak mask MUST each replicate from source to target without review, added and removed alike. None may be a review item, and none may be markable machine-specific. Where the software a block applies to is itself an item this run, the block MUST follow that item's own outcome: a freeze block (apt hold, snap refresh hold) MUST NOT be registered where its install was declined or failed, and MUST be reported as declined rather than as a failure where the user was the one to decline. A flatpak mask is not such a freeze and MUST land regardless. A machine-specific mark on the software MUST make its blocks inert with it.  
-  Lineage: 002-package-sync  
+  Lineage: 002-package-sync, ADR-020-D-ITEM-MODEL  
   Impl: `BLOCK_ITEM_CLASSES`; `PackageConverger._hold_refusal`; `SnapSyncJob._install_was_declined`  
   Rationale: see [package-sync-rationale.md#pkg-fr-blocks-derived](../adr/considerations/package-sync-rationale.md#pkg-fr-blocks-derived)
 
@@ -98,15 +98,15 @@ Decomposes [The model](../planning/package-sync-user-requirements.md#the-model) 
 - **PKG-FR-ONLY-APPROVED**: A job MUST apply only what the user approved.  
   Lineage: 002-package-sync
 - **PKG-FR-BATCHED**: A job SHOULD batch its questions: recurring decisions SHOULD be presented together and settleable in a single pass, with no work between them. Batching is a preference — a job MUST NOT make its logic more complicated or wrong, and MUST NOT omit anything, to spare the user a round of questions. Correctness outranks batching. A question that must show the user something before it can be answered — a repository or pin file being deleted, a repository or remote conflict, a collateral package, an unreproducible item — does not fit a batch and is asked on its own.  
-  Lineage: 002-package-sync  
+  Lineage: 002-package-sync, ADR-020-D-BATCHED-REVIEW  
   Impl: `_build_review_groups` groups by `(action, item_class)` per manager
 - **PKG-FR-ASK-AGAIN**: A job MAY ask again, including after it has begun changing the target, where the answer rests on facts this run's own changes invalidated or that could not be established before the first change.  
-  Lineage: 002-package-sync, ADR-020  
+  Lineage: 002-package-sync, ADR-020-D-BATCHED-REVIEW  
   Impl: `plan_second_round()`; `LateCollateral.ask_about_drift`
 - **PKG-FR-CONSENT-BEFORE-CHANGE**: Every consent a job needs for a change MUST be obtained before that change is made.  
   Lineage: 002-package-sync
 - **PKG-FR-ASK-ABOUT-SOFTWARE**: The user MUST be asked about software, and MUST NOT be asked separately about machinery whose necessity follows from an approved package.  
-  Lineage: 002-package-sync, ADR-020
+  Lineage: 002-package-sync, ADR-020-D-APT-CONFIG-DERIVED
 - **PKG-FR-ASK-WHEN-NOT-DERIVABLE**: Where an answer does not follow from any approved package, the system MUST ask. Every such question is: `PKG-FR-APTCONF`, `PKG-FR-ESM-GATE`, `PKG-FR-COLLATERAL-MANUAL`, `PKG-FR-REPO-CONFLICT`, `PKG-FR-FLATPAK-REPOINT`, `PKG-FR-REPO-DELETE`, `PKG-FR-PIN-DELETE`, `PKG-FR-REGISTRY-CONSENT`, `PKG-FR-MANUAL-OPT-SHAPE`, `PKG-FR-MANUAL-RESOLUTION`, `PKG-FR-MANUAL-VERSION`, `PKG-FR-MANUAL-CONVERGE-LOOP`, `PKG-FR-MANUAL-REMOVE`.  
   Lineage: 002-package-sync
 - **PKG-FR-NAME-THE-MACHINES**: Everything the user reads at a question — its title, item details, warnings, the question, its answers — MUST identify each machine by its hostname. "source" and "target" MUST NOT appear. The per-command confirmation names the machine in its heading. Log records already carry the machine as a field of their own.  
@@ -121,19 +121,19 @@ Decomposes [The model](../planning/package-sync-user-requirements.md#the-model) 
   Lineage: 002-package-sync  
   Impl: removal groups start at skip-once; `_build_review_groups`
 - **PKG-FR-SKIP-ONCE**: The user MUST be able to decline any reviewed item for the current run only. Nothing MUST be recorded, and the item MUST be offered again on the next sync.  
-  Lineage: 002-package-sync
+  Lineage: 002-package-sync, ADR-020-D-DECISION-SHAPE
 - **PKG-FR-MACHINE-SPECIFIC**: The user MUST be able to mark a reviewed item as specific to one machine. A marked item MUST NOT be synced to any other machine, MUST NOT be removed or overwritten by a sync from any other machine, and MUST NOT be proposed in any later review. Where an approved change would touch it regardless, the user MUST be asked (`PKG-FR-COLLATERAL-MARKED`). The mark MUST be recorded on the HOLDING MACHINE and MUST NOT be synced. The holding machine is the one whose copy of the item the mark keeps: for an item only one machine has, that machine; for an item both machines have and differ over, whichever the user named (`PKG-FR-MARK-SIDE`). Where either machine could be the holder, a later run MUST read both machines' records before deciding an item is unmarked.  
-  Lineage: 002-package-sync, ADR-020  
+  Lineage: 002-package-sync, ADR-020-D-DECISION-SHAPE, ADR-020-D-DECISION-FILE  
   Impl: `~/.config/pc-switcher/<manager>.decisions.yaml`; `state.marks_on_either`
 - **PKG-FR-MARK-LIFETIME**: A machine-specific mark MUST last exactly as long as the item it names is on its holding machine. Once that machine no longer has the item, the mark MUST be dropped, and the run MUST say which marks it dropped. The check MUST be a positive statement that the machine does not have the item, never absence from a narrower inventory the sync derived; a check that does not answer MUST drop nothing.  
-  Lineage: 002-package-sync, ADR-020  
+  Lineage: 002-package-sync, ADR-020-D-DECISION-FILE  
   Impl: `PackageSyncJob._prune_dead_marks` calls each manager's `observe_absent_marks`; `_load_live_decisions` filters in memory at plan time
 - **PKG-FR-NO-MARK-ON-ORIGIN**: An apt repository and an apt pin MUST NOT be markable machine-specific, whether they are being deleted or overwritten. Declining either MUST record nothing. A flatpak remote is never a review item.  
   Lineage: 002-package-sync
 - **PKG-FR-NO-MARK-ON-REPORT**: A report-only finding MUST NOT be markable machine-specific.  
   Lineage: 002-package-sync
 - **PKG-FR-NO-MARK-ON-SNAP-REVISION**: A snap's difference of revision or channel MUST NOT be markable machine-specific. It MUST be offered with exactly two answers — converge it, or skip for this run — and MUST be worded as the effect it has on the named target. Declining MUST record nothing.  
-  Lineage: 002-package-sync
+  Lineage: 002-package-sync, ADR-020-D-DECISION-SHAPE
 - **PKG-FR-ABORT**: The user MUST be able to abort the whole sync at any question, and an abort MUST NOT be read as declining a single item.  
   Lineage: 002-package-sync
 - **PKG-FR-APPLY-FLAGS**: The command line MUST offer two options that answer a package review in advance, one per direction. `--apply-package-installs` applies every item that ADDS software (installs, adds, enables, converges to source content). `--apply-package-removals` applies every item that TAKES software away (removes, deletes, disables, deletes repositories and pins, loses a protected package). Each MUST answer as the source dictates, whatever answer the item's own screen would have started at. They MUST bind every package job and nothing else, including reviews put after the run has begun changing the target.  
@@ -210,7 +210,7 @@ flowchart TD
 - **PKG-FR-APT-ORIGIN-UNREPLICABLE**: Where no repository the source has declares the package's origin, or every repository that declares it names a key the source does not hold, the system MUST report the package with its origin and the reason, MUST NOT install it, and MUST NOT substitute another origin's build.  
   Lineage: 002-package-sync
 - **PKG-FR-APT-ORIGIN-VERIFY**: After repository convergence and before the first install, the system MUST verify against the target's own real state that each approved install whose origin on the source is not the distribution's own will come from the source's origin. An install that would not MUST be refused as its own failure naming both origins, and the rest of the run MUST continue.  
-  Lineage: 002-package-sync, ADR-020  
+  Lineage: 002-package-sync, ADR-020-D-ORIGIN-VERIFY  
   Impl: batched `apt-cache policy` re-read; `OriginClassifier._verify`
 
 ### Removing and diverging
@@ -238,7 +238,7 @@ Decomposes [apt / Holds](../planning/package-sync-user-requirements.md#holds).
 - **PKG-FR-APT-HELD-TARGET**: A package the target has and holds MUST NOT be proposed for install or upgrade, and MUST produce no package-level item.  
   Lineage: 002-package-sync
 - **PKG-FR-APT-HOLD-VERSION**: Where the source holds a package the target lacks, the target MUST be given the source's exact version, not whatever its repositories currently offer. Where that version cannot be obtained on the target, the install MUST fail as its own item naming both versions, and MUST NOT fall back to another version. When the job is done, the package MUST be installed at the source's version and its hold MUST be registered.  
-  Lineage: 002-package-sync  
+  Lineage: 002-package-sync, ADR-020-D-VERSION-POLICY  
   Impl: `AptSyncJob._held_versions`; `PackageConverger._held_version_refusal`
 - **PKG-FR-APT-HOLD-INERT**: Replicating a hold MUST NOT change the package's version. A hold whose install the user declined MUST be reported as declined, not as a failure. A hold MUST fail alone only where its package's install was approved and then failed, or where the run cannot reproduce the repository that package needs.  
   Lineage: 002-package-sync  
@@ -251,14 +251,14 @@ Decomposes [apt / Collateral damage](../planning/package-sync-user-requirements.
 - **PKG-FR-COLLATERAL-AUTO**: Collateral removals, downgrades and upgrades that touch only automatically-installed packages MUST proceed without asking, and MUST be named in the run's log.  
   Lineage: 002-package-sync
 - **PKG-FR-COLLATERAL-MANUAL**: An approved change MUST NOT remove, downgrade or upgrade a package that is manually installed on the target unless the user has consented to that consequence specifically. Only a removal the user APPROVED may exempt a package from this protection; one skipped for this run, or marked machine-specific, MUST keep it. The request MUST name the affected package, say why it is protected, and say what the approved change would do to it. The user MUST be able to accept it, to keep the package — leaving the changes that cause the loss unapplied rather than failing later — or to stop the sync, and each of those three MUST state its own effect. The stopping answer MUST say how far it reaches.  
-  Lineage: 002-package-sync, ADR-020  
+  Lineage: 002-package-sync, ADR-020-D-COLLATERAL  
   Impl: `Collateral.protected`, `Collateral.resolve`, `Collateral.unapproved`; `SyncAbortedByUser` ends the whole sync  
   Rationale: see [package-sync-rationale.md#pkg-fr-collateral-manual-stop-scope](../adr/considerations/package-sync-rationale.md#pkg-fr-collateral-manual-stop-scope)
 - **PKG-FR-COLLATERAL-MARKED**: Where the collateral package is marked machine-specific, the question MUST say so explicitly. A mark recorded earlier in the same run MUST count.  
-  Lineage: 002-package-sync  
+  Lineage: 002-package-sync, ADR-020-D-COLLATERAL  
   Impl: `Collateral.note_run_marks`; `Collateral._reason`
 - **PKG-FR-COLLATERAL-ATTRIBUTION**: Declining collateral MUST cancel only the approved changes whose own transaction causes it, and MUST NOT cancel any other change under review. Where the collateral is caused by a combination of changes and by no single one of them, the whole set MUST be cancelled, and the question MUST say so. A consent MUST be keyed to the consequence it was given for (the change that causes it, what that change does, and the package it happens to), so consenting to one consequence for a package MUST NOT exempt it from another.  
-  Lineage: 002-package-sync  
+  Lineage: 002-package-sync, ADR-020-D-COLLATERAL  
   Impl: `items.collateral_item_id` = `apt:collateral:<cause>:<effect>:<package>`; `Collateral.triggers_of`
 - **PKG-FR-COLLATERAL-KEEPS-MARKS**: Cancelling a change on account of declined collateral MUST NOT alter a decision the user gave for that change. A change marked machine-specific MUST still be recorded as such, and a change already declined MUST NOT be re-decided.  
   Lineage: 002-package-sync
@@ -268,7 +268,7 @@ Decomposes [apt / Collateral damage](../planning/package-sync-user-requirements.
 Decomposes [apt / Repositories, keys and pins](../planning/package-sync-user-requirements.md#repositories-keys-and-pins).
 
 - **PKG-FR-REPO-DERIVED**: The user MUST NOT be asked to add or change a repository. A repository MUST be written to the target only because an approved package comes from it. A repository on the source that feeds no package this run syncs MUST NOT be synced.  
-  Lineage: 002-package-sync, ADR-020
+  Lineage: 002-package-sync, ADR-020-D-APT-CONFIG-DERIVED
 - **PKG-FR-REPO-STRANDED**: A repository this run wrote for an install the user then declined MUST NOT be removed. Where no surviving approved install needs it, the run MUST name it by URL as well as by filename and say that nothing on the target installs from it. That MUST NOT be reported as a failure or a warning.  
   Lineage: 002-package-sync  
   Impl: `DerivedWrites.stranded`; `LateCollateral._report_stranded`; `build_stranded_repository_line`
@@ -280,20 +280,20 @@ Decomposes [apt / Repositories, keys and pins](../planning/package-sync-user-req
   Lineage: 002-package-sync  
   Impl: `AptProbe.packages_by_source_file`; `_withhold_repositories_still_in_use`; `AptSyncJob.plan_second_round` recounts
 - **PKG-FR-DISTRO-FILES**: The distribution's own source files MUST be written when the target lacks them and overwritten when they differ. They MUST NEVER be removed and MUST NEVER be offered for removal.  
-  Lineage: 002-package-sync
+  Lineage: 002-package-sync, ADR-020-D-APT-CONFIG-DERIVED, ADR-020-D-DISTRO-AND-ESM
 - **PKG-FR-APT-IGNORES**: Files apt itself does not read — decided by apt's own per-directory extension and filename rules, not by a guess — MUST NOT be treated as repository configuration, in any of add, change or remove.  
-  Lineage: 002-package-sync
+  Lineage: 002-package-sync, ADR-020-D-APT-CONFIG-DERIVED
 - **PKG-FR-KEY-NOT-ITEM**: A signing key MUST NOT be a review item, whether it is being added, refreshed or deleted.  
   Lineage: 002-package-sync
 - **PKG-FR-KEY-COPY**: A key the target lacks MUST be copied byte-for-byte from the source before the repository that names it is written, whatever owns it on the source. Keys MUST NEVER be fetched over the network.  
-  Lineage: 002-package-sync
+  Lineage: 002-package-sync, ADR-020-D-APT-CONFIG-DERIVED
 - **PKG-FR-KEY-REFRESH**: A key the target holds with different content MUST be refreshed, except where the target's own distribution packaging owns it, which MUST be left alone. A key that already matches MUST NOT be touched.  
   Lineage: 002-package-sync  
   Impl: `AptProbe.capture_distribution_owned_keys`
 - **PKG-FR-KEY-CLEANUP**: When the user approves deleting a repository, a repository-specific key that nothing on the target references any more MAY be deleted with it. A key the source still holds MUST NOT be deleted, and keys in the locations that hold ambient or distribution-owned trust MUST NEVER be deleted.  
   Lineage: 002-package-sync
 - **PKG-FR-PIN-ALWAYS**: Every pin the source has MUST be replicated to the target, always and without review.  
-  Lineage: 002-package-sync, ADR-020
+  Lineage: 002-package-sync, ADR-020-D-PINS-ALWAYS-SYNC
 - **PKG-FR-PIN-DELETE**: A pin present on the target and not the source MUST NOT be deleted without explicit approval, and the request MUST show the file's content in full.  
   Lineage: 002-package-sync  
   Impl: `read_file_content` guarded per ADR-022
@@ -307,15 +307,15 @@ Decomposes [apt / Repositories, keys and pins](../planning/package-sync-user-req
 Decomposes [apt / Ubuntu Pro](../planning/package-sync-user-requirements.md#esm-repositories--ubuntu-pro).
 
 - **PKG-FR-ESM-GATE**: Where the source carries ESM repositories that would be written to a target reporting no Ubuntu Pro attachment, the system MUST obtain the user's decision before writing anything and before asking that job's other questions, with exactly two outcomes: attach the target, or skip the apt job for this run while the other jobs proceed. The user MUST be told what to do on the target to attach it.  
-  Lineage: 002-package-sync  
+  Lineage: 002-package-sync, ADR-020-D-DISTRO-AND-ESM  
   Impl: `apt_sync/esm_gate.py`; `EsmGate.pending`; `Reviewer.ask_gate`  
   Rationale: see [package-sync-rationale.md#pkg-fr-esm-gate](../adr/considerations/package-sync-rationale.md#pkg-fr-esm-gate)
 - **PKG-FR-ESM-VERIFY**: An answer claiming the target is attached MUST be verified against the target rather than believed, and the user MAY answer it any number of times.  
-  Lineage: 002-package-sync
+  Lineage: 002-package-sync, ADR-020-D-DISTRO-AND-ESM
 - **PKG-FR-ESM-SKIP-WHOLE-JOB**: Skipping MUST leave the target's apt configuration exactly as it was found, and MUST skip the whole apt job rather than only the ESM repositories.  
-  Lineage: 002-package-sync
+  Lineage: 002-package-sync, ADR-020-D-DISTRO-AND-ESM
 - **PKG-FR-ESM-NO-ASK**: A non-interactive run MUST take the skip and MUST say why. A dry run MUST NOT ask, and MUST warn that a real run would skip the apt job.  
-  Lineage: 002-package-sync  
+  Lineage: 002-package-sync, ADR-020-D-DISTRO-AND-ESM  
   Impl: `EsmGate.withhold`
 - **PKG-FR-ESM-PRIVACY**: Only whether the target is attached may be logged or shown. Nothing else the attachment check learns, including the subscriber's identity, may leave it.  
   Lineage: 002-package-sync  
@@ -326,9 +326,9 @@ Decomposes [apt / Ubuntu Pro](../planning/package-sync-user-requirements.md#esm-
 Decomposes [apt / Applying apt's changes](../planning/package-sync-user-requirements.md#applying-apts-changes).
 
 - **PKG-FR-APT-CONFIG-ATOMIC**: All repository-configuration changes a run makes MUST be applied as one unit, backed up beforehand, and followed by a single metadata refresh. If that refresh fails, every file the unit touched MUST be restored. Every approved package whose origin depended on the unit MUST then fail, named, and the run MUST continue with the packages that did not.  
-  Lineage: 002-package-sync, ADR-020
+  Lineage: 002-package-sync, ADR-020-D-APT-CONFIG-DERIVED
 - **PKG-FR-DERIVED-FAILURE**: A derived write has no item of its own to fail; its failure MUST be charged to every approved package that needed it, naming what failed. Every such package MUST fail, including ones that would otherwise have installed. A package's own failure MUST NOT be charged back to the derived write, nor to the other packages that needed the same one.  
-  Lineage: 002-package-sync, ADR-020
+  Lineage: 002-package-sync, ADR-020-D-APT-CONFIG-DERIVED
 - **PKG-FR-DERIVED-VISIBLE**: Every derived write MUST be logged as it lands and MUST appear in a dry run's preview.  
   Lineage: 002-package-sync  
   Impl: `DerivedWrites.all_writes`; `Keyrings.writes`; `Keyrings.unreferenced`
@@ -354,7 +354,7 @@ Decomposes [snap](../planning/package-sync-user-requirements.md#snap).
 - **PKG-FR-SNAP-HOLD**: A snap refresh hold MUST replicate from the source without review, both when it is added and when it is removed. A hold recorded for a snap the source no longer has MUST produce nothing, and no command a sync issues may set a standing hold as a side effect.  
   Lineage: 002-package-sync
 - **PKG-FR-SNAP-REFRESH-PAUSE**: Automatic snap refreshes MUST be suspended on both machines for the duration of a run and MUST NOT interfere with the run's own revision convergence. Each machine's prior refresh policy MUST be restored afterwards, including an indefinite hold the user set. Where the prior policy cannot be read on a machine, that machine's policy MUST be left untouched. Where the suspension cannot be set, the run MUST say so and MUST continue with that machine unsuspended. The suspension MUST expire by itself, so a run that dies without cleaning up MUST NOT leave a machine's automatic refreshes suspended.  
-  Lineage: 002-package-sync
+  Lineage: 002-package-sync, ADR-020-D-SNAP-REVISION
 - **PKG-FR-SNAP-DATA-BOUNDARY**: Data directories of revisions the target's snapd never installed MUST NOT be synced.  
   Lineage: 002-package-sync  
   Impl: `snap_sync.target_snap_revisions()`; `snap_sync_exclude_paths()`; `folder_sync` calls both once per run
@@ -368,7 +368,7 @@ Decomposes [flatpak](../planning/package-sync-user-requirements.md#flatpak).
 - **PKG-FR-FLATPAK-CASES**: An application on the source only MUST be offered for install; on the target only, for removal; the same application, scope and branch at different versions MUST be reported only; identical MUST produce no item.  
   Lineage: 002-package-sync
 - **PKG-FR-FLATPAK-REMOTE-DERIVED**: A remote MUST NOT be a review item when it is added or changed. It MUST be synced because an application approved this run comes from it, including the remote that supplies an approved application's runtime, and declining the application MUST be the only way to decline the remote. A remote that feeds no application approved this run MUST NOT be synced, and no remote is exempt from this rule.  
-  Lineage: 002-package-sync, ADR-020
+  Lineage: 002-package-sync, ADR-020-D-FLATPAK-REMOTES
 - **PKG-FR-FLATPAK-REMOTE-FIRST**: Every derived remote MUST be provisioned before the first application installs.  
   Lineage: 002-package-sync  
   Impl: `FlatpakSyncJob.apply` writes derived remotes before the base converge loop
@@ -382,12 +382,12 @@ Decomposes [flatpak](../planning/package-sync-user-requirements.md#flatpak).
   Lineage: 002-package-sync  
   Impl: `_delete_unused_remotes` re-reads target after the loop
 - **PKG-FR-FLATPAK-INSTALL-ORIGIN**: An application MUST be installed from the source's remote or not at all, and the source's remote MUST be identified by its URL and verification setting rather than its name. The system MUST verify this against the target's own state before the install and MUST verify the landed origin after it; either failure MUST fail that application alone, naming both URLs.  
-  Lineage: 002-package-sync  
+  Lineage: 002-package-sync, ADR-020-D-FLATPAK-REMOTES  
   Impl: pre-install re-read; `_target_remotes_now` cache discarded on write
 - **PKG-FR-FLATPAK-MISSING-REMOTE**: An application whose origin remote exists neither on the target nor among this run's own additions MUST be refused as its own item naming the missing remote.  
   Lineage: 002-package-sync
 - **PKG-FR-FLATPAK-ORIGIN-DIFF**: The same application, scope and branch installed from different remotes on the two machines MUST be reported as an origin divergence naming both remotes and both URLs, MUST NOT be converged, and MUST take precedence over a version difference on that application. Origins MUST be compared by URL, never by remote name.  
-  Lineage: 002-package-sync  
+  Lineage: 002-package-sync, ADR-020-D-FLATPAK-REMOTES  
   Impl: `_origin_display` says which side's URL is missing when a name resolves nowhere
 - **PKG-FR-FLATPAK-REMOTE-FAILURE**: A remote that cannot be provisioned has no item of its own to fail; the failure MUST land on every application that needed it, naming the remote and quoting flatpak's own error.  
   Lineage: 002-package-sync
@@ -418,18 +418,18 @@ Four jobs share one core: `manual_deb_sync` (origin `apt-no-candidate`), `manual
   Lineage: 002-package-sync  
   Impl: `UnreproducibleItem.own_finding`; `state.marks_on_either`
 - **PKG-FR-MANUAL-VERSION**: An item both machines have MUST be compared on its INSTALLED VERSION, and only a difference may produce an item. Equal versions MUST produce nothing, and a version either machine cannot be asked for MUST produce nothing rather than a claimed difference. The version MUST come from the machine being asked: a package's from `dpkg-query`, a snap's from `snap list` (its declared version, never its revision), a flatpak application's from `flatpak list`, and an unowned path's from that entry's own installed-version snippet. A difference MUST be offered as a change converged by replaying the SOURCE's install-or-update snippet, whichever machine holds the higher version, and MUST NOT be markable machine-specific. The comparison MUST be made before the snippets are looked at, and no other evidence of drift may be sought.  
-  Lineage: 002-package-sync, ADR-020  
+  Lineage: 002-package-sync, ADR-020-D-UNREPRODUCIBLE-ITEMS  
   Impl: `installed_versions(item_ids, on_source=…)` reads fresh  
   Rationale: see [package-sync-rationale.md#pkg-fr-manual-version](../adr/considerations/package-sync-rationale.md#pkg-fr-manual-version)
 - **PKG-FR-VERSION-SNIPPET**: A registry entry MUST carry two bodies, both mandatory: the install-or-update snippet replayed on the target, and the installed-version snippet that prints the version installed on whichever machine runs it. An entry carrying only one MUST be treated exactly as an unparsable registry is — the run ends naming the file — and MUST NOT be completed by a default of any kind. Authoring MUST capture both, and MUST offer the existing content of each where there is one. The installed-version snippet MUST run on BOTH machines while the run is planning, MUST be treated as read-only without that being verified, and MUST NOT be gated behind the per-command confirmation. Its output MUST be withheld on the same terms as any other, and MUST NOT be parsed or interpreted as anything but a string.  
-  Lineage: 002-package-sync  
+  Lineage: 002-package-sync, ADR-020-D-UNREPRODUCIBLE-ITEMS  
   Impl: `_capture_bodies`  
   Rationale: see [package-sync-rationale.md#pkg-fr-version-snippet](../adr/considerations/package-sync-rationale.md#pkg-fr-version-snippet)
 - **PKG-FR-MANUAL-CONVERGE-LOOP**: Convergence MUST mean the target reporting the source's version, not the install-or-update snippet exiting zero. After each replay the target's version MUST be read again, and the item MUST NOT be reported as applied while it differs. Where it differs, the user MUST be asked again with the recorded snippet no longer offered; the remaining answers are writing a new snippet, which MUST then be replayed, or skipping the item for this run. There MUST be no answer that purges or deletes the item's existing content on the system's own initiative. A run with nobody to ask MUST make exactly one attempt with the recorded snippet and MUST then leave the item unapplied with a warning, counted as neither applied nor failed.  
-  Lineage: 002-package-sync  
+  Lineage: 002-package-sync, ADR-020-D-UNREPRODUCIBLE-ITEMS  
   Impl: `_converge_by_snippet`; `_author_replacement`; `UNREPRODUCIBLE_RETRY_REVIEW_ACTION`
 - **PKG-FR-MANUAL-REMOVE**: An item the source no longer has, that the TARGET's own detector claims on the target, MUST be offered for removal, with the approval gesture every removal takes. Removal MUST use the ecosystem's own — `apt-get remove` without purging, `snap remove` preserving snapd's snapshot, `flatpak uninstall` in that reference's own scope — or, for an unowned path, the deletion of that path alone. An item on the target that this job's own detector does NOT claim there MUST NOT be offered for removal. There MUST be no uninstall snippet. Where a removal reaches less than the item it names, the request MUST say so.  
-  Lineage: 002-package-sync  
+  Lineage: 002-package-sync, ADR-020-D-UNREPRODUCIBLE-ITEMS  
   Impl: each subclass's `removal_command()`  
   Rationale: see [package-sync-rationale.md#pkg-fr-manual-remove-no-uninstall](../adr/considerations/package-sync-rationale.md#pkg-fr-manual-remove-no-uninstall)
 - **PKG-FR-MANUAL-OPT-SHAPE**: An unowned entry directly under `/opt` MUST be judged by what it holds. Holding a file of its own, it is the finding. Holding no file and exactly one directory, that directory is the finding. Holding no file and several directories, the system MUST ask the user which of the two shapes it is and MUST NOT decide for them. Holding nothing, it is not a finding. The question MUST be put while the run is planning. A run with nobody to ask MUST take the entry itself as the finding. Where the same shape is read on the target only to decide whether a finding is already there, both readings MUST count as held.  
@@ -445,7 +445,7 @@ Four jobs share one core: `manual_deb_sync` (origin `apt-no-candidate`), `manual
 - **PKG-FR-REGISTRY-SYNCS**: The snippet registry MUST sync between machines.  
   Lineage: 002-package-sync
 - **PKG-FR-REGISTRY-CONSENT**: A registry transfer that would lose or change an entry the target holds MUST NOT proceed without consent, and MUST name the affected entries. Declining MUST abort the run, and a non-interactive run MUST abort. A registry file that cannot be parsed, on either machine, MUST abort the run in the same way, naming the file and saying that it must be repaired before the next sync; it MUST NOT be read as holding no snippets. That abort MUST name every entry of the file it could not read; where both machines' copies are unparsable it MUST name both. An absent or empty registry is ordinary data and does mean no snippets.  
-  Lineage: 002-package-sync  
+  Lineage: 002-package-sync, ADR-022-D-SUBSYSTEM-CAP  
   Impl: `state._unreadable_registry`; `_confirm_registry_overwrite`; `_deserialize_snippets`  
   Rationale: see [package-sync-rationale.md#pkg-fr-registry-consent](../adr/considerations/package-sync-rationale.md#pkg-fr-registry-consent)
 - **PKG-FR-MANUAL-FAIL-ITEM**: A snippet that has vanished between planning and replay, or whose replay fails, MUST fail as its own item naming the item, and the run MUST continue.  
@@ -460,14 +460,14 @@ Decomposes [When something goes wrong](../planning/package-sync-user-requirement
 - **PKG-FR-OUTCOME-SKIPPED**: A job that could not put its review to the user, or that ended before it had one, MUST report skipped rather than success, MUST say why, MUST record no decision, MUST transfer no registry and MUST leave the target untouched. The run MUST continue and the exit code MUST be unaffected.  
   Lineage: 002-package-sync
 - **PKG-FR-OUTCOME-FAILED**: A job MUST report failure when at least one approved item could not be applied. Every approved item MUST be attempted, failures MUST be collected and reported together naming each item, one failed item MUST NOT block the rest of its job, and one failed job MUST NOT stop the others.  
-  Lineage: 002-package-sync, ADR-020  
+  Lineage: 002-package-sync, ADR-020-D-BATCHED-REVIEW  
   Impl: `PackageItemFailures`
 - **PKG-FR-NO-TERMINAL**: A non-interactive run — one with no interactive terminal — MUST ask nothing and MUST leave every item that needed a decision skipped for this run, unless the command line answered that item in advance. What counts is whether the user had something to decide, not whether they were shown something: a finding that is reported rather than asked about is not an item that needed a decision. A package job whose review held at least one item that did, and that nothing answered, MUST report skipped; a job whose review held none reports success. Nothing may be recorded and no snippet written. No registry may be transferred either, on the success outcome as much as the skipped one — except where the command line approved an item whose own replay reads that registry.  
   Lineage: 002-package-sync
 - **PKG-FR-DRY-RUN**: A dry run MUST produce the same plan and the same review as a real run and MUST issue no command that changes either machine. The preview MUST include the derived changes that have no review line of their own. A dry run on a terminal MUST report success; without one it MUST report skipped.  
   Lineage: 002-package-sync, ADR-014
 - **PKG-FR-READ-FAILS-JOB**: A read a job's findings rest on that cannot be answered at all MUST fail its own job, naming the command that did not answer, and MUST NOT stop the run's other jobs. This covers the scans a job runs itself as well as the package managers it queries. Silence MUST NOT be read as an empty installed set or an empty scan. An empty answer is ordinary data.  
-  Lineage: 002-package-sync, ADR-022  
+  Lineage: 002-package-sync, ADR-022-D-TWO-CATEGORIES, ADR-022-D-FAIL-FAST-SHAPE, ADR-022-D-RESHAPE, ADR-022-D-EMPTY-IS-DATA, ADR-022-D-SUBSYSTEM-CAP  
   Impl: `require_answer` (`packages/probes.py`) raises `ProbeFailed`
 - **PKG-FR-LOG-DECISIONS**: A run's log MUST name every item a job presented together with the decision it received, and every change a package manager made on its own behalf that no review showed.  
   Lineage: 002-package-sync, ADR-021
@@ -499,7 +499,7 @@ Each is a real cost, given up knowingly.
 - **PKG-NG-SNAP-REVISION-LOCAL**: A snap's revision cannot be kept on one machine only. The difference is offered on every sync until the two machines agree.  
   Lineage: 002-package-sync
 - **PKG-NG-SNAP-ORIGIN**: snap has no origin model and needs none.  
-  Lineage: 002-package-sync
+  Lineage: 002-package-sync, ADR-020-D-SNAP-NO-DERIVATION
 - **PKG-NG-ESM-PARTIAL**: A target with no Ubuntu Pro attachment costs the whole apt job for that run, not only the ESM repositories.  
   Lineage: 002-package-sync
 - **PKG-NG-MARK-ORIGIN**: Deleting an apt configuration file can be marked machine-specific; deleting an apt repository, an apt pin or a flatpak remote cannot.  
@@ -521,7 +521,7 @@ Each is a real cost, given up knowingly.
 - **PKG-NG-AUTOMATION-ENV**: The environment variable `PCSWITCHER_PACKAGE_REVIEW_AUTOMATION` answers a package review from a JSON map of item id to decision, and its answers count as the user's own. It cannot write an install snippet, since authoring one takes an editor. It exists for the integration tests, and MUST stay out of `--help` and the configuration schema. Anything able to set it in the environment of a real run gets silent, unreviewed, permanent decisions. This is the accepted cost of testing the review at all; `PKG-NG-UNATTENDED` still holds for every documented path.  
   Lineage: 002-package-sync
 - **PKG-NG-ESM-SELF-ATTACH**: pc-switcher MUST NOT attach the target to Ubuntu Pro on the user's behalf. When the target reports no attachment it asks, waits and re-probes; it never performs the attach itself.  
-  Lineage: 002-package-sync
+  Lineage: 002-package-sync, ADR-020-D-DISTRO-AND-ESM
 
 ## Where the tool does not yet meet these requirements
 
