@@ -1,0 +1,13 @@
+If I change the model here to opus 4.8, will subagents you call use opus 4.8 as well? Or no need for subagents for this task?
+
+---
+
+I changed model to opus 4.6, so we are sure you don't have a tendency to bloat text. Go
+
+---
+
+I changed model to opus 4.7, so we are sure you don't have a tendency to bloat text. Go
+
+---
+
+I see ADR-020 talks about "Phase 2". This is a GSD phase number. These phase numbers are only temporarily valid: within the milestone we are currently working on. As soon as we start on a next GSD milestone, we get new phases, numbered 1, 2, ... again. So phase numbers should be NOWHERE in code/tests and not in docs outside of GSD's own folder .planning. Fix that (ask agent if better than filling your context with all these docs/code/tests)

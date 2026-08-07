@@ -1,0 +1,45 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "e875009d1d9e",
+  "session_id": "e6289418-34b5-468c-8217-5b109a3949a1",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-07T10:24:55.387980198Z",
+  "branch": "worktree-docs-debloat-271",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "docs/adr/adr-020-declarative-package-convergence.md",
+    "docs/system/package-sync.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "7c29e6d561af",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 135,
+    "cache_creation_tokens": 1036878,
+    "cache_read_tokens": 18306630,
+    "output_tokens": 107934,
+    "api_call_count": 90
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-07T10:24:55.249355164Z",
+    "agent_lines": 2,
+    "agent_removed": 2,
+    "human_added": 10,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 12,
+    "total_lines_changed": 24,
+    "agent_percentage": 16.666666666666664,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    }
+  ]
+}
