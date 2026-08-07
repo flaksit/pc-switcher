@@ -10,7 +10,7 @@ The source captures a manifest; the target diffs its own state against it and co
 
 ## Context
 
-Phase 2 must replicate presence, version and provenance of packages across apt, snap and flatpak, plus the repository/keyring/pin/remote configuration those installs depend on. Application data belongs to Phase 1 `folder_sync`.
+Package sync must replicate presence, version and provenance of packages across apt, snap and flatpak, plus the repository/keyring/pin/remote configuration those installs depend on. Application data belongs to `folder_sync`.
 
 Provenance is the hard part: `firefox` exists in Ubuntu's archive and in Mozilla's own repository; `org.mozilla.firefox` on Flathub and Flathub-beta. Matching by name alone replicates the name and inverts the provenance, silently, at exit 0.
 

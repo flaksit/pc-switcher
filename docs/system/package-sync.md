@@ -1,6 +1,6 @@
 # Package Sync Specification
 
-**Domain Code**: `PKG` (Package Management Sync, Phase 2)
+**Domain Code**: `PKG` (Package Management Sync)
 
 Seven `SyncJob`s — `apt_sync`, `snap_sync`, `flatpak_sync`, `manual_deb_sync`, `manual_snap_sync`, `manual_flatpak_sync`, `manual_installs_sync` — replicate *what is installed*: apt packages plus the `/etc/apt` state they depend on, snaps, flatpaks, and the software no package manager can reproduce. Application data is `folder_sync`'s.
 

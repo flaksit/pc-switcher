@@ -12,7 +12,7 @@ the control lists the items itself, so a panel above it said everything twice. T
 survives where there is nothing to answer: a report group, and the whole non-interactive
 path (D-26), where it IS the report.
 
-This composes with the single persistent Live display (Phase 1 plans 01-17/01-18) exactly
+This composes with the single persistent Live display exactly
 as `TerminalUIConfirmer.confirm` (`pcswitcher.confirmer`) does: pause the live region before
 the prompt, run the blocking prompt off the event loop via `asyncio.to_thread` (ADR-005 —
 no blocking calls on the event loop), and resume it in a `finally` so the terminal is always

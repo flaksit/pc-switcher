@@ -206,7 +206,7 @@ class SyncSession:
 
 ## Package Sync Entities
 
-Phase 2's package-sync subsystem (`apt_sync`, `snap_sync`, `flatpak_sync`, `manual_deb_sync`, `manual_snap_sync`, `manual_installs_sync`) adds its own item model and two on-disk data shapes. See the [Package Sync Spec](package-sync.md) for the pipeline these flow through.
+The package-sync subsystem (`apt_sync`, `snap_sync`, `flatpak_sync`, `manual_deb_sync`, `manual_snap_sync`, `manual_installs_sync`) adds its own item model and two on-disk data shapes. See the [Package Sync Spec](package-sync.md) for the pipeline these flow through.
 
 Only what more than one manager uses lives in the shared `jobs/packages/items.py`: the `ItemClass`/`DiffClass`/`DiffAction` taxonomy, `ItemDiff` and `Machines`. Each item class below lives in the job that constructs it (`jobs/apt_sync/items.py`, `jobs/snap_sync.py`, `jobs/flatpak_sync.py`) — the jobs are deliberately independent, and a registry of everyone's private shapes would couple them for nothing. `UnreproducibleItem` is the one shape two jobs construct, so it lives in the base they share (`jobs/packages/unreproducible.py`) rather than in either of them.
 

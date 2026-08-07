@@ -58,7 +58,7 @@ sync_jobs:
   manual_flatpak_sync: false  # Reproduce flatpak refs no remote can supply, via install snippets (destructive; opt-in)
   manual_installs_sync: false # Reproduce unowned installs under /usr/local and /opt, via install snippets (destructive; opt-in)
 
-  folder_sync: true          # Sync /home and /root directories (Phase 1)
+  folder_sync: true          # Sync /home and /root directories
   vscode_state_sync: true    # Sync VS Code editor state (your user only), except its per-machine secret store
 
 # =============================================================================

@@ -1,6 +1,6 @@
 # Issue triage — 2026-08-05
 
-Triage of every open GitHub issue that is not claimed by an open PR and does not carry `status:done` or `status:working`. 40 issues qualify. Excluded: the 29 issues linked as closing references on PR #206 (Phase 2) and PR #157, plus #118 and #216 (`status:working`).
+Triage of every open GitHub issue that is not claimed by an open PR and does not carry `status:done` or `status:working`. 40 issues qualify. Excluded: the 29 issues linked as closing references on PR #206 (package sync) and PR #157, plus #118 and #216 (`status:working`).
 
 ## Labels
 
@@ -56,7 +56,7 @@ Test and CI cluster, worth one push: #78 (integration lock not cleared when a ru
 
 Architecture milestone: #28 DAG, then #29 forever-running jobs, then #30 (one module, one job class), then #24 DiskSpaceMonitor. #23 (no btrfs), #26 (no Ubuntu 24.04 constraint) and #31 (rollback command) all need the snapshot job to become config-controlled first.
 
-After Phase 2 merges: #119 Feature 7 system configuration sync is the next milestone; #126 internal CLI (now including #217) is worth doing alongside it.
+After package sync merges: #119 Feature 7 system configuration sync is the next milestone; #126 internal CLI (now including #217) is worth doing alongside it.
 
 Backlog: #182 log viewer with #181, #178 pre-folder-sync hooks, #88 MADR migration.
 

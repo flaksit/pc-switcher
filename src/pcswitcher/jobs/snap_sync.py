@@ -3,7 +3,7 @@
 
 WARNING — `snap refresh --hold` with NO snap name is a MUTATING command: called that
 way it silently sets an INDEFINITE GLOBAL hold on auto-refresh for every snap on the
-machine (RESEARCH Pitfall 1 — discovered live against a real machine during Phase 2
+machine (RESEARCH Pitfall 1 — discovered live against a real machine during package-sync
 research, and only undone with a manual `snap refresh --unhold`). This module never
 calls it. Hold state is inspected only through the read-only `sudo snap get system
 refresh.hold` (`validate()`, informational only, never acted on; sudo because snapd
