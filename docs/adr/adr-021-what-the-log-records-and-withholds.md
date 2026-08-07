@@ -17,9 +17,9 @@ This ADR adds content rules to ADR-010's logging infrastructure. It is not the c
 **Required**
 
 - Log every reviewed item with its decision, including skipped items.
-- Log every self-directed change (apt resolving its own dependencies).
+- Log every self-directed change a tool makes on its own initiative (e.g. apt resolving its own dependencies during a package-sync install).
 - Log each command and its output at DEBUG.
-- **No credential may appear in the log.** Code MUST NOT compose a log line that carries a secret. For content the code does not fully control — command output, snippet bodies replayed through the executor, file bodies quoted for a decision — the log filter MUST redact URL `userinfo` (RFC 3986); expanding detection to other credential shapes is a future concern that does not weaken the rule.
+- **No credential may appear in the log.** Code MUST NOT compose a log line that carries a secret. For content the code does not fully control — command output, package-sync snippet bodies replayed through the executor, file bodies quoted for a decision — the log filter MUST redact URL `userinfo` (RFC 3986); expanding detection to other credential shapes is a future concern that does not weaken the rule.
 
 **Forbidden**
 
@@ -55,7 +55,7 @@ What appears in the log is byte-identical to what the command printed, except wh
 
 **The mechanism today**: code that composes its own log lines does not put secrets in them by construction, and everything else passes through a log filter that redacts URL `userinfo`. Redaction sits at that filter, once, rather than at each call site that builds a string.
 
-**The accepted gap**: a snippet body is user-authored shell that the tool does not parse. A credential the user writes into a snippet in a shape URL-userinfo redaction does not recognise may reach the log. Auto-detecting secrets in arbitrary shell is not in scope; expanding the redaction mechanism to catch more shapes may be, and would strengthen this ADR's guarantee without changing the rule.
+**The accepted gap**: a package-sync snippet body is user-authored shell the tool does not parse (see `PKG-FR-SNIPPET-VERBATIM`). A credential the user writes into such a snippet in a shape URL-userinfo redaction does not recognise may reach the log. Auto-detecting secrets in arbitrary user-authored shell is not in scope; expanding the redaction mechanism to catch more shapes may be, and would strengthen this ADR's guarantee without changing the rule.
 
 Display-time redaction — what the user sees at a prompt, a review line, a file body shown for a decision — is a separate concern and lives in the specs (`PKG-FR-CREDENTIAL-PRIVACY`).
 
@@ -71,7 +71,7 @@ Display-time redaction — what the user sees at a prompt, a review line, a file
 
 - Log volume grows.
 - The log-filter redaction sits on the path of every log write; a mistake there affects every job.
-- The mechanism protects URL credentials only. A secret that reaches a command another way — an environment variable echoed, a password on a command line, a token in a snippet — is not covered by today's redaction, though the rule still forbids it.
+- The mechanism protects URL credentials only. A secret that reaches a command another way — an environment variable echoed, a password on a command line, a token in a package-sync snippet — is not covered by today's redaction, though the rule still forbids it.
 
 ## Alternatives Considered
 
@@ -80,7 +80,7 @@ Display-time redaction — what the user sees at a prompt, a review line, a file
 - **Redact in each job** — rejected: leaves every new call site free to forget, and leaves the executor's command trace uncovered.
 - **Declare the debug log sensitive instead of redacting** — rejected: moves a tool problem onto the user.
 - **Withhold whole URLs** — rejected: origin divergence is reported by URL because names lie.
-- **Detect credentials in snippet bodies before logging them** — deferred: auto-detecting secrets in arbitrary shell is a large mechanism against a user-authored surface. The rule stands regardless of whether the mechanism is expanded.
+- **Detect credentials in package-sync snippet bodies before logging them** — deferred: auto-detecting secrets in arbitrary user-authored shell is a large mechanism against a user-authored surface. The rule stands regardless of whether the mechanism is expanded.
 
 ## References
 
