@@ -1,9 +1,11 @@
-"""No review title may print a job or manager identifier (#276).
+"""No text a user reads may print a job or manager identifier (#276).
 
 The defect this pins is a class, not three strings: the group title used to be assembled
 out of `manager_id`, so `manual_deb_sync` announced itself as "Remove manual_deb packages"
 and `manual_installs_sync` as "Remove manual packages" over a list of paths. Any future
-title built the same way fails here, whichever job grows it.
+title built the same way fails here, whichever job grows it. The same identifier reached
+the user through progress logging — "Applying 3 manual_deb change(s)" — which the last
+class of test here catches wherever it is written.
 
 The words a job is allowed to use are the ones it declares — `item_noun` and
 `item_noun_plural` — so the test is written against those rather than against a list of
@@ -12,6 +14,9 @@ and only a string that is NOT part of the job's own nouns is a leak.
 """
 
 from __future__ import annotations
+
+import ast
+from pathlib import Path
 
 import pytest
 
@@ -141,6 +146,61 @@ class TestNoTitleNamesAnIdentifier:
         """
         assert "item_noun" in job_cls.__dict__
         assert "item_noun_plural" in job_cls.__dict__
+
+
+# Where a job writes a sentence a human reads, and which argument of that call carries it:
+# `_log(host, level, message, **extra)` and `JobSkipped(name, reason)`. The identifier stays
+# on everything around them — the `job` field of the log record, the `[apt_sync]` prefix the
+# formatter prints, `JobSkipped`'s first argument — so only the message itself is checked.
+_USER_TEXT_ARGUMENT: dict[str, int] = {"_log": 2, "JobSkipped": 1}
+
+#: `self.<attr>` that names the job to a machine rather than to a person.
+_SELF_IDENTIFIERS = frozenset({"name", "manager_id"})
+
+
+def _call_name(node: ast.Call) -> str | None:
+    """`self._log(...)` -> `_log`, `JobSkipped(...)` -> `JobSkipped`, anything else -> None."""
+    if isinstance(node.func, ast.Attribute):
+        return node.func.attr
+    if isinstance(node.func, ast.Name):
+        return node.func.id
+    return None
+
+
+def _identifiers_in_user_text(path: Path) -> list[str]:
+    """Every `self.name`/`self.manager_id` this module interpolates into a sentence."""
+    leaks: list[str] = []
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+        if not isinstance(node, ast.Call):
+            continue
+        index = _USER_TEXT_ARGUMENT.get(_call_name(node) or "")
+        if index is None or len(node.args) <= index:
+            continue
+        leaks.extend(
+            f"{path.name}:{inner.lineno} self.{inner.attr}"
+            for inner in ast.walk(node.args[index])
+            if isinstance(inner, ast.Attribute)
+            and inner.attr in _SELF_IDENTIFIERS
+            and isinstance(inner.value, ast.Name)
+            and inner.value.id == "self"
+        )
+    return leaks
+
+
+def test_no_job_writes_its_identifier_into_a_message() -> None:
+    """#276 — the same identifier that used to head a review group also ran through
+    `apply()`'s progress lines ("Applying 3 manual_deb change(s)"). Those sentences are read
+    by the person who answered the review, so they take the same nouns the titles do.
+
+    Written over the source rather than over captured output because a log line only exists
+    when its branch runs: the branches that report declines, failures and an unreadable
+    decision file each need a machine in a particular state, and a message added to one of
+    them would otherwise ship unchecked.
+    """
+    jobs_root = Path(__file__).parents[3] / "src" / "pcswitcher" / "jobs"
+    leaks = [leak for path in sorted(jobs_root.rglob("*.py")) for leak in _identifiers_in_user_text(path)]
+
+    assert not leaks, f"identifiers in text a user reads: {leaks}"
 
 
 def test_a_package_job_without_nouns_is_refused_at_import() -> None:

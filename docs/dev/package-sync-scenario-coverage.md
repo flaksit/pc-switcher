@@ -1820,7 +1820,7 @@ Per machine, per job, for a package-manager query and for a job's own scan.
 | J104 | An approved install makes apt remove a package apt installed automatically | The removal is named in the log although nobody was asked | U | `test_apt_collateral:TestAutoCollateralIsLogged::test_auto_collateral_removal_is_named_in_the_log` |
 | J105 | An approved install makes apt change an automatically-installed package's version | The log names both versions, without a second command to compare them | U | `test_apt_collateral:TestAutoCollateralIsLogged::test_an_auto_version_change_is_logged_without_a_version_comparison` |
 | J106 | The same automatic collateral at apply time, from the transaction that actually happens | Logged there as well as at plan time | U | apt/collateral:`TestAutoCollateralIsLoggedFromTheTransactionThatHappens::test_the_same_casualty_is_logged_at_plan_time_and_again_from_the_real_transaction` |
-| J172 | An item a job applied | A line of its own naming the act, the item, the manager and the machine it happened on — beside the run's counts, not instead of them | U | `test_package_sync_core:TestAppliedItemsReachTheLog::test_every_applied_item_is_named_with_its_manager_and_machine` |
+| J172 | An item a job applied | A line of its own naming the act, the item and the machine it happened on — beside the run's counts, not instead of them | U | `test_package_sync_core:TestAppliedItemsReachTheLog::test_every_applied_item_is_named_with_its_act_and_machine` |
 | J173 | An item whose converge withdrew it after the review | Its own "not applied" line, and no applied line for it | U | `…::test_a_withdrawn_item_is_not_recorded_as_applied` |
 
 ### J.8 Verbatim manager output (article: PKG-FR-LOG-VERBATIM)

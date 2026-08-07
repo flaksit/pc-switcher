@@ -654,10 +654,12 @@ class TestAppliedItemsReachTheLog:
     """
 
     @pytest.mark.asyncio
-    async def test_every_applied_item_is_named_with_its_manager_and_machine(
+    async def test_every_applied_item_is_named_with_its_act_and_machine(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """J172 — one line per applied item, carrying all four of act, item, manager and machine."""
+        """J172 — one line per applied item, carrying act, item and machine. Which job wrote it
+        is the record's own `job` field, printed as the line's `[fake_sync]` prefix (#276).
+        """
         caplog.set_level(LogLevel.FULL.value, logger="pcswitcher.jobs.base")
         job = FakeSyncJob(make_context())
         diffs = (
@@ -668,8 +670,8 @@ class TestAppliedItemsReachTheLog:
 
         await job.apply()
 
-        assert "fake: install i1 on target-host" in caplog.messages
-        assert "fake: remove r1 on target-host" in caplog.messages
+        assert "install i1 on target-host" in caplog.messages
+        assert "remove r1 on target-host" in caplog.messages
 
     @pytest.mark.asyncio
     async def test_a_withdrawn_item_is_not_recorded_as_applied(self, caplog: pytest.LogCaptureFixture) -> None:
@@ -1560,7 +1562,7 @@ class _StubFailingPackageJob(PackageSyncJob):
         return PackagePlan(manager="stub-failing", diffs=(), groups=())
 
     async def execute(self) -> None:
-        raise PackageItemFailures("stub-failing", [])
+        raise PackageItemFailures(self.item_noun, self.item_noun_plural, [])
 
 
 class _StubAbortingPackageJob(PackageSyncJob):

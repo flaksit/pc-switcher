@@ -79,6 +79,7 @@ __all__ = [
     "PackageItemFailures",
     "PackagePlan",
     "PackageSyncJob",
+    "counted",
 ]
 
 # The `ReviewGroup.action` a snap's revision/channel convergence carries
@@ -92,6 +93,16 @@ __all__ = [
 # Not in `review`'s removal set either, so the rows still start applied: converging a
 # revision the user asked for overwrites nothing they authored (`PKG-FR-HARMLESS-DEFAULT`).
 SNAP_CHANGE_REVIEW_ACTION = "snap_change"
+
+
+def counted(count: int, noun: str, noun_plural: str) -> str:
+    """`1 apt package` / `3 apt packages` — a count and the word that agrees with it.
+
+    Every count a user reads goes through this rather than an `item(s)` suffix: these lines
+    carry the same nouns the review titles do (#276), and a job that says "1 snaps" reads
+    as a defect in the tool.
+    """
+    return f"{count} {noun if count == 1 else noun_plural}"
 
 
 class ConvergeItemFailed(RuntimeError):
@@ -130,11 +141,10 @@ class PackageItemFailures(RuntimeError):
     crashed" (abort the whole run, today's existing behavior for every other exception).
     """
 
-    def __init__(self, manager: str, failures: Sequence[tuple[ItemDiff, str]]) -> None:
-        self.manager = manager
+    def __init__(self, item_noun: str, item_noun_plural: str, failures: Sequence[tuple[ItemDiff, str]]) -> None:
         self.failures = tuple(failures)
         names = ", ".join(diff.label for diff, _stderr in failures)
-        super().__init__(f"{len(failures)} {manager} item(s) failed to converge: {names}")
+        super().__init__(f"{counted(len(failures), item_noun, item_noun_plural)} failed to converge: {names}")
 
 
 @dataclass(frozen=True)
@@ -409,7 +419,7 @@ class PackageSyncJob(SyncJob):
             self._log(
                 Host.SOURCE if on_source else Host.TARGET,
                 LogLevel.FULL,
-                f"could not check whether the {self.manager_id} marked items are still here ({exc}); "
+                f"could not check whether the marked {self.item_noun_plural} are still here ({exc}); "
                 "every mark is left as it is",
             )
             return frozenset()
@@ -832,10 +842,14 @@ class PackageSyncJob(SyncJob):
         total = len(apply_diffs)
 
         if total == 0:
-            self._log(Host.TARGET, LogLevel.INFO, f"{prefix}No {self.manager_id} changes to apply")
+            self._log(Host.TARGET, LogLevel.INFO, f"{prefix}No {self.item_noun_plural} to change")
             self._report_progress(ProgressUpdate(percent=100))
         else:
-            self._log(Host.TARGET, LogLevel.INFO, f"{prefix}Applying {total} {self.manager_id} change(s)")
+            self._log(
+                Host.TARGET,
+                LogLevel.INFO,
+                f"{prefix}Applying {counted(total, 'change', 'changes')} to {self.item_noun_plural}",
+            )
 
             for index, diff in enumerate(apply_diffs):
                 self._report_progress(ProgressUpdate(percent=int(index / total * 100), item=diff.label))
@@ -854,7 +868,7 @@ class PackageSyncJob(SyncJob):
             self._log(
                 Host.TARGET,
                 LogLevel.INFO,
-                f"{prefix}{succeeded}/{total} {self.manager_id} change(s) applied",
+                f"{prefix}{succeeded}/{total} changes applied to {self.item_noun_plural}",
             )
 
         # Outside the branch above: a run whose every converge declined still has to say so.
@@ -863,7 +877,8 @@ class PackageSyncJob(SyncJob):
             self._log(
                 Host.TARGET,
                 LogLevel.INFO,
-                f"{len(declined)} {self.manager_id} change(s) not applied, by the user's answer: {summary}",
+                f"{counted(len(declined), 'change', 'changes')} to {self.item_noun_plural} "
+                f"not applied, by the user's answer: {summary}",
             )
 
         # After the converge loop, so a mark this run's own changes emptied out is gone by
@@ -877,9 +892,9 @@ class PackageSyncJob(SyncJob):
             self._log(
                 Host.TARGET,
                 LogLevel.INFO,
-                f"{len(all_failures)} {self.manager_id} item(s) failed: {summary}",
+                f"{counted(len(all_failures), self.item_noun, self.item_noun_plural)} failed: {summary}",
             )
-            raise PackageItemFailures(self.manager_id, all_failures)
+            raise PackageItemFailures(self.item_noun, self.item_noun_plural, all_failures)
 
     def _log_decisions(self, plan: PackagePlan, decisions: Mapping[str, Decision]) -> None:
         """One FULL line per item this job presented, naming the decision it received
@@ -1023,7 +1038,7 @@ class PackageSyncJob(SyncJob):
             self._log(
                 Host.TARGET,
                 LogLevel.FULL,
-                f"{self.manager_id}: {diff.action.value} {diff.label} on {self.machines.target}",
+                f"{diff.action.value} {diff.label} on {self.machines.target}",
             )
         else:
             failures.append((diff, result.stderr))
@@ -1097,7 +1112,7 @@ class PackageSyncJob(SyncJob):
         if any(asks_for_a_decision(group) for group in groups) and not (outcome.was_interactive or answered_by_policy):
             raise JobSkipped(
                 self.name,
-                f"non-interactive run left every {self.manager_id} review item undecided",
+                f"non-interactive run left every {self.item_noun} review item undecided",
             )
         if second.groups:
             outcome = _merge_rounds(outcome, await self.context.reviewer.review(second.groups))

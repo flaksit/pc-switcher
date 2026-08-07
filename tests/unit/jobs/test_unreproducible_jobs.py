@@ -536,7 +536,7 @@ class TestClassificationAuthority:
             await job.execute()  # must not raise
 
         # Promoted: previewed as an install rather than reported as no-change.
-        assert "Applying 1 manual_deb change(s)" in caplog.text
+        assert "Applying 1 change to manual debs" in caplog.text
         # No replay reached the target and no source registry write happened.
         assert not [c.args[0] for c in target.run_command.call_args_list if c.args[0].startswith("bash -c")]
         source_writes = [

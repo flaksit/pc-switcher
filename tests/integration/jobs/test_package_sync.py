@@ -770,7 +770,8 @@ class TestARunWithNobodyToAsk:
                     f"{direction}-direction item {candidate} was not named as declined for this run.\n"
                     f"{combined_output}"
                 )
-            assert "Job apt_sync skipped: non-interactive run left every apt review item undecided" in collapsed, (
+            skipped_line = "Job apt_sync skipped: non-interactive run left every apt package review item undecided"
+            assert skipped_line in collapsed, (
                 f"the run did not report apt_sync as skipped (PKG-FR-NO-TERMINAL).\n{combined_output}"
             )
             # The same two skips again, read off the end-of-run block rather than the log
@@ -1594,7 +1595,7 @@ class TestAFailureCostsItsOwnItemAndNothingElse:
                 "the run failed, but not on this test's deliberate snippet -- it ended before reaching it.\n"
                 f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
             )
-            assert "1 snap item(s) failed" in collapsed, (
+            assert "1 snap failed" in collapsed, (
                 f"the run did not report exactly one failed snap item.\n{sync_result.stdout}\n{sync_result.stderr}"
             )
 
@@ -2828,9 +2829,9 @@ class TestOneManagerAtATime:
             )
 
             collapsed = collapse_run_output(fifth.stdout + fifth.stderr)
-            for manager in ("apt", "snap", "flatpak", "manual"):
-                assert f"No {manager} changes to apply" in collapsed, (
-                    f"{manager} did not report that it had nothing to apply.\n{collapsed}"
+            for noun_plural in ("apt packages", "snaps", "flatpaks", "manually installed apps"):
+                assert f"No {noun_plural} to change" in collapsed, (
+                    f"{noun_plural} did not report that there was nothing to apply.\n{collapsed}"
                 )
             # `reviewed <label> (` is the phrase the review's own decision pass logs per item,
             # and the whole phrase is the witness on both counts. `collapse_run_output` returns

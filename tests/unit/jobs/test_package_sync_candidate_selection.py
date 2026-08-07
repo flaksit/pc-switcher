@@ -79,7 +79,9 @@ class TestJobOutcomeStatuses:
         block = _rendered_block(
             [
                 _result("install_on_target", JobStatus.SUCCESS),
-                _result("apt_sync", JobStatus.SKIPPED, "non-interactive run left every apt review item undecided"),
+                _result(
+                    "apt_sync", JobStatus.SKIPPED, "non-interactive run left every apt package review item undecided"
+                ),
                 _result("snap_sync", JobStatus.FAILED, "one item failed"),
             ]
         )

@@ -2051,7 +2051,7 @@ class FlatpakSyncJob(PackageSyncJob):
             failures = list(exc.failures)
         await self._delete_unused_remotes()
         if failures:
-            raise PackageItemFailures(self.manager_id, failures)
+            raise PackageItemFailures(self.item_noun, self.item_noun_plural, failures)
 
     def _warn_about_trust(self, derived: _DerivedRemote) -> None:
         """One WARNING per derived remote whose trust a successful provisioning leaves
