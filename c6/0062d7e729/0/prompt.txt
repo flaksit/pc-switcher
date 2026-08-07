@@ -1,0 +1,141 @@
+I'm running it now. Do §1 and §2 yourself
+
+---
+
+remember the VMs are known on this laptop as pc1 and pc2, so I can just "ssh pc1"
+
+---
+
+do not change that in the runbook. I didn't tell you to.
+
+---
+
+§3 is not in order of appearance. Fix that
+
+---
+
+I ran in dry-run. Below my remarks. Fix remarks about the runbook directly. Create issues for the others, bundling remarks as you see fit.
+
+3.6:
+- question shows hashes of both files, not file content. Should show file content (each in their own block), just like some other question did in runbook 1
+- "Kept for good": keys are <h> and <o>. Unclear where that comes from. Why not <s> and <t> for source and target?
+- Possible to have no default? That would be best.
+
+---
+
+When a job has no questions, or it is just successful or skipped (don't know what the case here is), the statusline, progress lines and recent logs are repeated in the console scrollback. This is required behavior when questions are asked, but useless and confusing when no questions are asked. See below:
+
+? Kept for good — whose own version is it?
+  pc1 and pc2 both have these, with different content, so neither version travels from now on. Naming a machine says whose copy the answer is about, and the answer lasts as long as
+  that machine still has the item.
+   ● 99-pcsw-uat  both
+     pc1 has b1a4ab589bbdcbc5bad9efac95f1b953c12451edbbc2882ef6e5aeb53003d038, pc2 has 44a9572816592bff7858122ec224d8e7e53c198035faca54c94b1fed9ab02c98
+Connection: connected (0.0ms)   ⚠ 1  Step 10b/12 — snap_sync
+apt_sync                       ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━                                                                                                   100%         
+╭──────────────────────────────────────────────────────────────────────────────────── Recent Logs ────────────────────────────────────────────────────────────────────────────────────╮
+│ 17:24:59 [INFO] [btrfs_snapshots] (source) Completed pre-sync snapshots                                                                                                             │
+│ 17:24:59 [INFO] [orchestrator] (target) Ensuring pc-switcher is installed on target                                                                                                 │
+│ 17:25:00 [INFO] [install_on_target] (target) Target pc-switcher version matches source: 0.5.1.post632.dev0+18d2217, no install needed                                               │
+│ 17:25:00 [INFO] [orchestrator] (target) Syncing configuration to target                                                                                                             │
+│ 17:25:00 [INFO] [orchestrator] (target) Configuration sync completed                                                                                                                │
+│ 17:25:00 [INFO] [orchestrator] (source) Starting sync operations                                                                                                                    │
+│ 17:25:00 [INFO] [apt_sync] (source) Job apt_sync started                                                                                                                            │
+│ 17:45:27 [INFO] [apt_sync] (target) [dry-run] No apt changes to apply                                                                                                               │
+│ 17:45:27 [INFO] [orchestrator] (source) Job apt_sync completed successfully                                                                                                         │
+│ 17:45:27 [INFO] [snap_sync] (source) Job snap_sync started                                                                                                                          │
+╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+Connection: connected (0.0ms)   ⚠ 1  Step 10c/12 — flatpak_sync
+apt_sync                          ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━                                                                                                100%         
+snap_sync                         ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━                                                                                                100%         
+╭──────────────────────────────────────────────────────────────────────────────────── Recent Logs ────────────────────────────────────────────────────────────────────────────────────╮
+│ 17:25:00 [INFO] [orchestrator] (target) Syncing configuration to target                                                                                                             │
+│ 17:25:00 [INFO] [orchestrator] (target) Configuration sync completed                                                                                                                │
+│ 17:25:00 [INFO] [orchestrator] (source) Starting sync operations                                                                                                                    │
+│ 17:25:00 [INFO] [apt_sync] (source) Job apt_sync started                                                                                                                            │
+│ 17:45:27 [INFO] [apt_sync] (target) [dry-run] No apt changes to apply                                                                                                               │
+│ 17:45:27 [INFO] [orchestrator] (source) Job apt_sync completed successfully                                                                                                         │
+│ 17:45:27 [INFO] [snap_sync] (source) Job snap_sync started                                                                                                                          │
+│ 17:45:27 [INFO] [snap_sync] (target) [dry-run] No snap changes to apply                                                                                                             │
+│ 17:45:27 [INFO] [orchestrator] (source) Job snap_sync completed successfully                                                                                                        │
+│ 17:45:27 [INFO] [flatpak_sync] (source) Job flatpak_sync started                                                                                                                    │
+╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+Connection: connected (0.0ms)   ⚠ 1  Step 10d/12 — manual_deb_sync
+apt_sync                                  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━                                                                                         100%        
+snap_sync                                 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━                                                                                         100%        
+flatpak_sync                              ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━                                                                                         100%        
+╭──────────────────────────────────────────────────────────────────────────────────── Recent Logs ────────────────────────────────────────────────────────────────────────────────────╮
+│ 17:25:00 [INFO] [apt_sync] (source) Job apt_sync started                                                                                                                            │
+│ 17:45:27 [INFO] [apt_sync] (target) [dry-run] No apt changes to apply                                                                                                               │
+│ 17:45:27 [INFO] [orchestrator] (source) Job apt_sync completed successfully                                                                                                         │
+│ 17:45:27 [INFO] [snap_sync] (source) Job snap_sync started                                                                                                                          │
+│ 17:45:27 [INFO] [snap_sync] (target) [dry-run] No snap changes to apply                                                                                                             │
+│ 17:45:27 [INFO] [orchestrator] (source) Job snap_sync completed successfully                                                                                                        │
+│ 17:45:27 [INFO] [flatpak_sync] (source) Job flatpak_sync started                                                                                                                    │
+│ 17:45:28 [INFO] [flatpak_sync] (target) [dry-run] No flatpak changes to apply                                                                                                       │
+│ 17:45:28 [INFO] [orchestrator] (source) Job flatpak_sync completed successfully                                                                                                     │
+│ 17:45:28 [INFO] [manual_deb_sync] (source) Job manual_deb_sync started                                                                                                              │
+╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+? Remove manual_deb packages
+
+---
+
+3.4 (manual_deb)
+- Question "Remove manual_deb packages" not nice title. Better: "Remove manually installed .deb packages from pc2?"
+- The list of packages to remove shows "(installed from no configured repository)" for each package. This is useless. Just show the package name and version as apt-sync does. We know from the question title that it is about manually installed packages.
+
+---
+
+3.5 (manual_deb)
+- Question title not nice. "pc2 has a different version of pcsw-uat-drift (installed from no configured repository) — update it?" Better: "pc1 and pc2 have different versions of manually installed .deb package pcsw-uat-drift — update it on pc2?"
+- Must show current snippet in block (as some other question did in runbook 1), otherwise I don't know if the snippet needs updating or not.
+- Make option new-snippet yellow, not default like skip-now.
+- After submitting edited snippet, the snippet is shown to the right of the question. Should be below it because sometimes long lines and reads better when we have more horizontal space. Update that everywhere snippets are shown after creating/editing them. See below:
+
+? Install-or-update snippet for pcsw-uat-drift (installed from no configured repository):   set -eu
+                                                                                            b=/var/tmp/pcsw-uat-drift
+                                                                                            sudo mkdir -p "$b/DEBIAN"
+                                                                                            printf "Package: pcsw-uat-drift\nVersion: 2.0\nSection: misc\nPriority: optional\nArchitect
+                                                                                            ure: all\nMaintainer: pc-switcher UAT <noreply@example.invalid>\nDescription: A package ins
+                                                                                            talled by hand, which no repository can supply.\nThis is version 2.\n" | sudo tee "$b/DEBIA
+                                                                                            N/control" >/dev/null
+                                                                                            sudo dpkg-deb --build "$b" "$b.deb" >/dev/null
+                                                                                            sudo dpkg --install "$b.deb"
+
+- "The same screen for the three package-backed jobs asks for both bodies too": should not. No need for version snippet for deb/snap/flatpak and it is not used anyway, as the runbook says. (Is this true; should be?). Lazy code-writing using too much common code?
+
+---
+
+3.6
+- Title not nice: "Install pcsw-uat-deb (installed from no configured repository) on pc2?" Better: "Install manually installed .deb package pcsw-uat-deb on pc2?" Update all titles for all questions (not only 3.6); I won't repeat them here anymore. E.g. "Install sideloaded snap pcsw-uat-snap on pc2?"
+- Be consistent in ALL question titles: either mention the source or target host where applicable, or don't. Now we have a mix:
+  - "Remove manual_deb packages" (no host mentioned)
+  - "Install pcsw-uat-deb (installed from no configured repository) on pc2?" (target host mentioned)
+- "The same screen for the three package-backed jobs asks for both bodies too": should not. No need for version snippet for deb/snap/flatpak and it is not used anyway, as the runbook says. (Is this true; should be?). Lazy code-writing using too much common code?
+- Runbook doesn't tell what to answer for pcsw-uat-deb, pcsw-uat-snap and io.github.fragglet.sdl_sopwith/x86_64/stable.
+- For sideloaded snaps: no need to mention "revision x1" in the question title. It is not relevant for the user.
+- flatpak title not nice: "Install io.github.fragglet.sdl_sopwith/x86_64/stable (user, from pcsw-uat-src — no such remote is configured) on pc2?" Better: "Install manually installed flatpak io.github.fragglet.sdl_sopwith/x86_64/stable (user scope) on pc2?"
+
+---
+3.5
+- For sideloaded snaps: no need to mention "revision x1" (nowhere)
+- Runbook doesn't tell what to answer for pcsw-uat-snapdrift
+
+---
+3.4 manual
+- "Only the path itself is deleted on pc2. Whatever installed it may also have left a launcher, a symlink or a service unit outside these directories, and nothing here knows where; those stay." Better: "Only the path itself is deleted from pc2. There may be config or files in other folders, like a launcher, a symlink or a service unit outside these folders. Remove them manually."
+---
+3.7
+- runbook doesn't tell that this isn't present in dry-run.
+---
+Statusline and progress bars show the name of the module. Better have nice job names. Examples:
+"manual_deb_sync" > "Manually installed .deb packages"
+"folder_sync" > "Folder sync"
+"apt_sync" > "Apt packages"
+
+---
+For a user, it is more natural to think in install/update/remove order than remove/update/install. Is there are reason to ask the questions in the current order? If not, change it to install/update/remove.
+
+---
+
+Update #282: PKG-FR-VERSION-SNIPPET is just bad design decision. "invalid registry entry" only because 1 of the 4 needs a 2nd snippet! Needs to change.
