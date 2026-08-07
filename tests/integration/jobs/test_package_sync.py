@@ -2,13 +2,13 @@
 
 `apt_sync` (plan 02-03) claims that a package missing on the target travels source
 capture -> target query -> diff -> apt_sync's own batched review (each manager reviews
-its own diffs inside its own `execute()`, per the corrected D-24; there is no
+its own diffs inside its own `execute()`, per the corrected `PKG-FR-BATCHED`; there is no
 cross-manager coordinator) -> `apt-get install` on the target. Plan 02-03's own unit
 tests only prove that shape against a mocked executor; this module is the VM-level proof
 against real apt/dpkg/sudo.
 
 The tests drive each manager's review non-interactively through
-`PCSWITCHER_PACKAGE_REVIEW_AUTOMATION` (D-26's hidden test hook,
+`PCSWITCHER_PACKAGE_REVIEW_AUTOMATION` (`PKG-FR-NO-TERMINAL`'s hidden test hook,
 `jobs.packages.review`) rather than through a real TTY, and assert against the target's
 own package-manager or filesystem state (`apt-mark showmanual`, `/etc/apt`, `snap list`,
 the pushed snippet registry) -- never against pc-switcher's log text -- except where an
@@ -448,7 +448,7 @@ class TestARunWithNobodyToAsk:
         reset_pcswitcher_state: None,
     ) -> None:
         """H162, J9, J12, J14, J37, J44, J49, J103, A30, J98, G28, E113, E115, K88, E49, F90,
-        F93, J190 — and ADR-020 D-41's `ORIGIN_MISMATCH` at VM level.
+        F93, J190 — and `PKG-FR-FLATPAK-REMOTE-DERIVED`'s `ORIGIN_MISMATCH` at VM level.
 
         What the run must SAY and must not APPLY, over four seeded divergences:
 
@@ -457,12 +457,12 @@ class TestARunWithNobodyToAsk:
           either machine, both items are NAMED as declined, and the job itself is reported
           skipped;
         - an apt package pc1 installed from a `file:` repository pc2 has never heard of
-          (ADR-020 D-34 class 3): the target's apt refuses to rehearse any transaction
+          (`PKG-FR-APT-IDENTITY` class 3): the target's apt refuses to rehearse any transaction
           containing the name, and the whole run survives it -- proven by the review group
           that names the package rather than by a run that quietly dropped it;
         - the fixture flatpak installed on pc2 from the real Flathub with pc2's `flathub`
           then repointed at the beta repository's URL: both machines print the same origin
-          NAME, so a comparison by name is provably blind to it and only D-41's URL
+          NAME, so a comparison by name is provably blind to it and only `PKG-FR-FLATPAK-REMOTE-DERIVED`'s URL
           comparison can produce the finding, which is reported naming both vendors and
           converged by nothing;
         - one unowned `/opt` path on pc1 with no snippet of its own, so the unreproducible
@@ -724,14 +724,14 @@ class TestARunWithNobodyToAsk:
             manual_before = nonblank_lines(manual_before_result.stdout)
 
             # No automation env prefix and no pty on this exec -- genuinely non-interactive
-            # on both stdin and stdout, D-26's actual trigger condition.
+            # on both stdin and stdout, `PKG-FR-NO-TERMINAL`'s actual trigger condition.
             sync_result = await pc1_executor.run_command(
                 f"{SKIP_INSTALL_ON_TARGET} pc-switcher sync pc2 --yes --allow-first-sync",
                 timeout=900.0,
                 login_shell=True,
             )
             assert sync_result.success, (
-                "non-interactive sync unexpectedly failed (D-26's skip-all must not fail the job).\n"
+                "non-interactive sync unexpectedly failed (`PKG-FR-NO-TERMINAL`'s skip-all must not fail the job).\n"
                 f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
             )
 
@@ -744,7 +744,8 @@ class TestARunWithNobodyToAsk:
             )
             manual_after = nonblank_lines(manual_after_result.stdout)
             assert manual_after == manual_before, (
-                "non-interactive run changed pc2's apt-mark showmanual -- D-26 requires nothing applied"
+                "non-interactive run changed pc2's apt-mark showmanual"
+                " -- `PKG-FR-NO-TERMINAL` requires nothing applied"
             )
             assert flatpak_after == flatpak_before, (
                 "the run changed pc2's installed refs; an ORIGIN_MISMATCH is reported and converged by nothing."
@@ -921,7 +922,7 @@ class TestARunWithNobodyToAsk:
 
 
 class TestSkipAlwaysIsInertInBothRoles:
-    """D-08's permanent skip, recorded once and then held against every later run, in both
+    """`PKG-FR-MACHINE-SPECIFIC`'s permanent skip, recorded once and then held against every later run, in both
     roles a machine can play.
 
     The ordinary review checkbox has no UI path to SKIP_ALWAYS yet for a regular item
@@ -933,12 +934,12 @@ class TestSkipAlwaysIsInertInBothRoles:
 
     Two item shapes are recorded in the same first run: an ordinary apt package, which is
     source-held for the direction it was decided in, and a package installed straight from a
-    `.deb`, which is unreproducible and therefore always source-held (D-08a). One shape is
+    `.deb`, which is unreproducible and therefore always source-held (`PKG-FR-MACHINE-SPECIFIC`). One shape is
     what the hook can already express and the other is what the real UI already offers, and
     the same three runs settle both (#216).
 
     The last of the three is this module's only run in which pc1 is the TARGET, which is what
-    makes D-08's inertness observable from the other side of the same decision.
+    makes `PKG-FR-MACHINE-SPECIFIC`'s inertness observable from the other side of the same decision.
 
     A second, ordinary removal-direction item rides on the first two runs: pc2 has a package
     pc1 does not, declined in run 1 and approved in run 2. That is the same pair of runs,
@@ -955,9 +956,9 @@ class TestSkipAlwaysIsInertInBothRoles:
         pc2_with_pcswitcher: BashLoginRemoteExecutor,
         reset_pcswitcher_state: None,
     ) -> None:
-        """H125, H126, H166, N1, N2, G27, A54, H31, H114, N7 — D-08's permanent skip across
+        """H125, H126, H166, N1, N2, G27, A54, H31, H114, N7 — `PKG-FR-MACHINE-SPECIFIC`'s permanent skip across
         three runs, and a removal-direction item declined by the first of them and approved by
-        the second (D-07's own unticked group).
+        the second (`PKG-FR-SKIP-ONCE`'s own unticked group).
 
         Run 1 records SKIP_ALWAYS for both items and applies neither. The apt entry lands in
         pc1's apt decision file and the `.deb` entry in its manual one -- and that second
@@ -972,23 +973,23 @@ class TestSkipAlwaysIsInertInBothRoles:
         than on policy output a test author composed. Nothing marks it manually installed
         either -- `dpkg --install` is the whole setup -- and the scan reads the INSTALLED set.
 
-        Run 2 force-maps both items to APPLY in the same direction. If D-08's inertness
+        Run 2 force-maps both items to APPLY in the same direction. If `PKG-FR-MACHINE-SPECIFIC`'s inertness
         holds, neither becomes a diff at all, so the mapping has nothing to attach to:
         proven by the apt package staying absent from pc2 despite being asked for, and by the
         `.deb` entry still reading SKIP_ALWAYS rather than being presented again.
 
-        Run 3 reverses the roles. The decision lives on pc1, now the TARGET, and D-08
+        Run 3 reverses the roles. The decision lives on pc1, now the TARGET, and `PKG-FR-MACHINE-SPECIFIC`
         promises inertness there too -- so force-mapping the same apt item to APPLY (which,
         if a diff existed at all, would mean REMOVE, since pc1 genuinely still has the
         package) must still leave it untouched.
 
         A second apt package, seeded onto pc2 and off pc1, rides on runs 1 and 2 as an
         ordinary removal-direction item. Run 1 decides it SKIP_ONCE: it lands in its own
-        unticked group (D-07) and pc2 keeps the package, read off pc2's own `apt-mark
+        unticked group (`PKG-FR-SKIP-ONCE`) and pc2 keeps the package, read off pc2's own `apt-mark
         showmanual`, which is the only thing that distinguishes "the item was offered and
         declined" from "the item was applied". Nothing is recorded for it either -- a
         skip-once leaves no trace, so pc2's apt decision file, which is where a removal's
-        answer would be held (D-08a), names it nowhere.
+        answer would be held (`PKG-FR-MACHINE-SPECIFIC`), names it nowhere.
 
         Run 2 approves the same item and pc2 loses the package. Two things follow from one
         outcome: the decline was a decision about that run rather than a deferral of the item
@@ -1062,7 +1063,8 @@ class TestSkipAlwaysIsInertInBothRoles:
 
             apt_entries = await DecisionFile("apt", pc1_executor).load()
             assert apt_item_id in apt_entries, (
-                f"{candidate} not recorded in pc1's apt decision file after a skip-always decision (D-08a)"
+                f"{candidate} not recorded in pc1's apt decision file"
+                " after a skip-always decision (`PKG-FR-MACHINE-SPECIFIC`)"
             )
             manual_entries = await DecisionFile("manual_deb", pc1_executor).load()
             assert deb_item_id in manual_entries, (
@@ -1086,11 +1088,11 @@ class TestSkipAlwaysIsInertInBothRoles:
             assert candidate not in pc2_manual_after_first, "skip-always must not itself install the item"
             assert removal in pc2_manual_after_first, (
                 f"{removal} was removed from pc2 although the run declined it -- a removal-direction item takes "
-                "effect only when the user ticks it (D-07)"
+                "effect only when the user ticks it (`PKG-FR-SKIP-ONCE`)"
             )
             assert removal_item_id not in await DecisionFile("apt", pc2_executor).load(), (
                 f"declining {removal} for this run recorded something on pc2, the machine a removal's answer is held "
-                "on (D-08a) -- a skip-once must leave no trace at all"
+                "on (`PKG-FR-MACHINE-SPECIFIC`) -- a skip-once must leave no trace at all"
             )
 
             # -- run 2: same direction, forced, and the declined removal approved --------
@@ -1112,7 +1114,7 @@ class TestSkipAlwaysIsInertInBothRoles:
             pc2_manual_after_second = nonblank_lines(still_absent_2.stdout)
             assert candidate not in pc2_manual_after_second, (
                 f"{candidate} was installed on pc2 despite a source-held skip-always decision -- "
-                "the item produced a diff when it should have been filtered out entirely (D-08)"
+                "the item produced a diff when it should have been filtered out entirely (`PKG-FR-MACHINE-SPECIFIC`)"
             )
             assert removal not in pc2_manual_after_second, (
                 f"{removal} is still on pc2 after being approved -- the item declined last run was not diffed and "
@@ -1124,7 +1126,7 @@ class TestSkipAlwaysIsInertInBothRoles:
             deb_entries_now = await DecisionFile("manual_deb", pc1_executor).load()
             assert deb_entries_now[deb_item_id] == manual_entries[deb_item_id], (
                 f"{hand_deb}'s recorded decision was rewritten by the second run -- the item was presented again, "
-                "when D-08 makes it inert"
+                "when `PKG-FR-MACHINE-SPECIFIC` makes it inert"
             )
 
             # -- run 3: reversed roles ---------------------------------------------------
@@ -1145,7 +1147,7 @@ class TestSkipAlwaysIsInertInBothRoles:
             )
             assert candidate in pc1_manual_after, (
                 f"{candidate} was removed from pc1 despite a target-held skip-always decision -- "
-                "the item produced a diff when it should have been filtered out entirely (D-08)"
+                "the item produced a diff when it should have been filtered out entirely (`PKG-FR-MACHINE-SPECIFIC`)"
             )
         finally:
             if hand_deb:
@@ -1401,7 +1403,7 @@ class TestWhatARealRemovalTakesWithIt:
 
 
 class TestAFailureCostsItsOwnItemAndNothingElse:
-    """D-27, `PKG-FR-JOB-INDEPENDENCE` and `PKG-FR-SNAP-FAIL-ITEM` in the one run that can
+    """`PKG-FR-OUTCOME-FAILED`, `PKG-FR-JOB-INDEPENDENCE` and `PKG-FR-SNAP-FAIL-ITEM` in the one run that can
     show all three: a job that fails on its own middle item, a snap install its target's
     snapd cannot carry out, and every item and job ordered after either still reviewing and
     converging its own diff.
@@ -1425,7 +1427,7 @@ class TestAFailureCostsItsOwnItemAndNothingElse:
 
     Both failures must genuinely reach the converge path. A package name that resolves to
     nothing is classified REPO_UNAVAILABLE/REPORT_ONLY (plan 02-05) and short-circuits before
-    ever touching the target, so it would prove nothing about D-27 -- hence a snippet that
+    ever touching the target, so it would prove nothing about `PKG-FR-OUTCOME-FAILED` -- hence a snippet that
     deliberately exits non-zero. The snap failure is real snapd's, not a mock's: pc2 is put
     offline as far as the store is concerned (`snap set system store.access=offline`), which
     is precisely the split `PKG-FR-SNAP-FAIL-ITEM` needs -- an install has to reach the store
@@ -1457,7 +1459,7 @@ class TestAFailureCostsItsOwnItemAndNothingElse:
         snippet's stderr lands in the run's own summary.
 
         The witnesses are pc2's own package managers, as everywhere else in this module. The
-        snippet ordered AFTER the failing one installed its package, which is D-27's
+        snippet ordered AFTER the failing one installed its package, which is `PKG-FR-OUTCOME-FAILED`'s
         "continue, collect, report" promise. The apt package is back in `apt-mark showmanual`
         and the snap removal ordered after the failed install has taken its snap off `snap
         list`, each of which could only happen if that manager reviewed its own diff and then
@@ -1578,7 +1580,8 @@ class TestAFailureCostsItsOwnItemAndNothingElse:
                 login_shell=True,
             )
             assert not sync_result.success, (
-                "a run with a failed item and a failed job must exit non-zero (D-27, PKG-FR-OUTCOME-FAILED).\n"
+                "a run with a failed item and a failed job must exit non-zero"
+                " (`PKG-FR-OUTCOME-FAILED`).\n"
                 f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
             )
             # Read before pc2's managers are: a non-zero exit says the run failed, not that it
@@ -1598,7 +1601,7 @@ class TestAFailureCostsItsOwnItemAndNothingElse:
             # The end-of-run block over a run that ended three ways at once
             # (`CORE-FR-SUMMARY`): the two failed jobs and, in the same block, the job whose
             # approved work landed anyway. A block that named only the failures would read as
-            # "the run failed" and lose exactly what D-27 promises.
+            # "the run failed" and lose exactly what `PKG-FR-OUTCOME-FAILED` promises.
             outcomes = job_outcome_statuses(sync_result.stdout + sync_result.stderr)
             assert (outcomes.get("manual_installs_sync"), outcomes.get("snap_sync"), outcomes.get("apt_sync")) == (
                 "failed",
@@ -1619,7 +1622,7 @@ class TestAFailureCostsItsOwnItemAndNothingElse:
             assert snippet_first in after_lines, f"{snippet_first} (before the failing item) not installed on pc2"
             assert snippet_second in after_lines, (
                 f"{snippet_second} (after the failing item) not installed on pc2 -- "
-                "D-27's 'continue, collect, report' promise did not hold"
+                "`PKG-FR-OUTCOME-FAILED`'s 'continue, collect, report' promise did not hold"
             )
             assert apt_candidate in after_lines, (
                 f"{apt_candidate} not reinstalled on pc2 -- apt_sync's approved work did not survive the earlier "
@@ -1657,7 +1660,7 @@ class TestAFailureCostsItsOwnItemAndNothingElse:
 
 
 class TestTheESMAttachmentGateOnVMs:
-    """ADR-020 D-38 at VM level: a source carrying the two `ubuntu-esm-*` sources and a
+    """`PKG-FR-DISTRO-FILES` at VM level: a source carrying the two `ubuntu-esm-*` sources and a
     target with no Ubuntu Pro attachment.
 
     Only the SKIP arm is testable here, and that is a statement about the fixtures, not a
@@ -2864,7 +2867,7 @@ class TestAHandInstalledItemIsKeptUpToDate:
     """#207's own mechanism, against a real filesystem: an item BOTH machines hold is
     compared on the version each one reports, and a difference converges by replaying the
     source's install-or-update snippet (`PKG-FR-MANUAL-VERSION`,
-    `PKG-FR-MANUAL-CONVERGE-LOOP`, ADR-020 D-22).
+    `PKG-FR-MANUAL-CONVERGE-LOOP`, `PKG-FR-VERSION-SNIPPET`).
 
     Only a VM can carry this. The unit tests prove the diff and the loop against a mocked
     executor, which is exactly where they prove least: what is at stake here is that a body

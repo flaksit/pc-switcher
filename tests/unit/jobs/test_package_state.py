@@ -300,7 +300,7 @@ class TestDecisionFileRecord:
     @pytest.mark.asyncio
     async def test_target_side_write_issues_no_local_filesystem_write(self) -> None:
         """The write travels entirely through the executor; nothing here ever opens a
-        local file, which is what makes this method correct for BOTH roles (D-08a)."""
+        local file, which is what makes this method correct for BOTH roles (`PKG-FR-MACHINE-SPECIFIC`)."""
         executor = MagicMock()
         executor.run_command = AsyncMock(return_value=CommandResult(0, "", ""))
         store = DecisionFile("apt", executor)
@@ -363,7 +363,7 @@ class TestRelpathConstants:
         assert DECISION_FILE_GLOB_RELPATH == ".config/pc-switcher/*.decisions.yaml"
 
     def test_no_default_machine_specific_package_hardcoded(self) -> None:
-        """D-10: no default entry lives in Python — grep-verifiable, mirrors the plan's
+        """`PKG-FR-MARK-SIDE`: no default entry lives in Python — grep-verifiable, mirrors the plan's
         own acceptance criterion."""
         source = package_state.__file__
         assert source is not None
@@ -788,10 +788,10 @@ def _apt_context(
 # The source's own `apt-cache policy` answer about its manual set. A source apt that
 # prints nothing is a broken probe, not a machine with unusual packages (`ProbeFailed`),
 # so these fixtures state the answer a real source gives. The origin is the distribution
-# archive, which keeps every package exempt from the D-35 origin check.
+# archive, which keeps every package exempt from the `PKG-FR-APT-ORIGIN-VERIFY` origin check.
 _SOURCE_SCAN_CMD = "-exec awk"
 # The `ubuntu.sources` that makes the archive above a DISTRIBUTION origin, so `pkg-a` stays
-# exempt from the D-35 origin check and remains an ordinary install.
+# exempt from the `PKG-FR-APT-ORIGIN-VERIFY` origin check and remains an ordinary install.
 _SOURCE_SCAN_UBUNTU = "/etc/apt/sources.list.d/ubuntu.sources\tURIs: http://ftp.belnet.be/ubuntu\n"
 
 _SOURCE_POLICY_PKG_A = (
@@ -812,7 +812,7 @@ _TARGET_POLICY_PKG_A = (
 class TestDecisionScopeReachesCollateral:
     """D20 / decision 8: a machine-local decision makes an item inert in the DIFF — and,
     per `PKG-FR-COLLATERAL-MARKED`, protects it from collateral as well. The two inputs are
-    independent: the TARGET's `apt-mark showmanual` set (ADR-020 D-40) and that machine's
+    independent: the TARGET's `apt-mark showmanual` set (`PKG-FR-COLLATERAL-MANUAL`) and that machine's
     own marks, either of which alone protects a package.
 
     Both tests share one decision file and differ only in the target's manual set, which is
@@ -884,7 +884,7 @@ class TestDecisionScopeReachesCollateral:
 
 
 # ---------------------------------------------------------------------------
-# config_sync never transfers a decision file (D-09) — verified, not assumed.
+# config_sync never transfers a decision file (`PKG-FR-MACHINE-SPECIFIC`) — verified, not assumed.
 # ---------------------------------------------------------------------------
 
 
@@ -909,7 +909,8 @@ class TestConfigSyncScope:
 
 
 # ---------------------------------------------------------------------------
-# SnippetRegistry — the shared, synced counterpart to DecisionFile (D-20, D-23).
+# SnippetRegistry — the shared, synced counterpart to DecisionFile (`PKG-FR-SNIPPET-VERBATIM`,
+# `PKG-FR-MANUAL-SAME-RUN`).
 # ---------------------------------------------------------------------------
 
 

@@ -8,9 +8,9 @@ drifts here does not merely misfile an item: a ref `flatpak_sync` excludes and t
 does not flag is replicated by nobody and reported nowhere.
 
 Shared here rather than duplicated per job, and here rather than on `PackageSyncJob`, for
-the reason `packages/apt_policy.py` records: D-15 forbids one manager's diff on the shared
+the reason `packages/apt_policy.py` records: `PKG-FR-JOB-INDEPENDENCE` forbids one manager's diff on the shared
 base class, this module defines no class and sits in no job's MRO, and
-`manual_flatpak_sync` never imports `flatpak_sync` (D-18) because both import a third
+`manual_flatpak_sync` never imports `flatpak_sync` (`PKG-FR-MANUAL-SCOPE`) because both import a third
 module instead.
 
 ## The predicate, and how it was established
@@ -59,7 +59,7 @@ origins back into `flatpak_sync`'s remote derivation, which is the bug being fix
 
 Scope is part of the question, not context around it: flatpak tracks remotes per
 installation, so `flathub` configured system-wide says nothing about a user-scope ref whose
-origin is `flathub` (D-14). The lookup is therefore always keyed on `(scope, origin)`.
+origin is `flathub` (`PKG-FR-APT-ORIGIN-DERIVED`). The lookup is therefore always keyed on `(scope, origin)`.
 """
 
 from __future__ import annotations
@@ -76,7 +76,7 @@ __all__ = [
     "scope_flag",
 ]
 
-#: The two installation scopes this project's item model represents (D-14). Flatpak permits
+#: The two installation scopes this project's item model represents (`PKG-FR-APT-ORIGIN-DERIVED`). Flatpak permits
 #: further named installations; a machine using one would need its own modelling decision,
 #: not a silent default (`flatpak_sync._parse_flatpak_list`).
 SCOPES: tuple[Literal["user", "system"], ...] = ("user", "system")

@@ -1,4 +1,4 @@
-"""Unit tests for D-07's third answer on the decision screen: "always skip", which records
+"""Unit tests for `PKG-FR-SKIP-ONCE`'s third answer on the decision screen: "always skip", which records
 `Decision.SKIP_ALWAYS` for an item the user is declaring specific to this machine.
 
 It used to be a second checkbox over whatever the apply list left unticked. It is now the
@@ -172,7 +172,7 @@ class TestThePermanentAnswer:
 
 @pytest.mark.asyncio
 class TestGroupsNeverOfferedPermanence:
-    """The two-answer screens (D-07). Same widget, one option short — the difference the
+    """The two-answer screens (`PKG-FR-SKIP-ONCE`). Same widget, one option short — the difference the
     user sees is a missing answer, not a different flow.
     """
 
@@ -251,7 +251,7 @@ class TestGroupsNeverOfferedPermanence:
         assert outcome.decisions == {"apt:package:pkg-a": Decision.SKIP_ONCE}
 
     async def test_non_interactive_run_prompts_nothing(self) -> None:
-        """H135, H160 — D-26: no TTY -> no screen at all, everything skip-once, nothing permanent."""
+        """H135, H160 — `PKG-FR-NO-TERMINAL`: no TTY -> no screen at all, everything skip-once, nothing permanent."""
         console, _ = captured_console()
         ui = MagicMock()
         group = _group("install", [_entry("a"), _entry("b")])
@@ -412,7 +412,7 @@ class TestWhichMachineKeepsItsCopy:
         assert outcome.mark_sides == {}
 
     async def test_a_run_with_no_terminal_reaches_no_follow_up(self) -> None:
-        """H256 — D-26: nothing permanent is answered without a human, so there is no side to
+        """H256 — `PKG-FR-NO-TERMINAL`: nothing permanent is answered without a human, so there is no side to
         choose and no screen is built."""
         console, _ = captured_console()
         ui = MagicMock()

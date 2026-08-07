@@ -1,5 +1,6 @@
 """`manual_installs_sync`: software an install script dropped straight onto the filesystem,
-which no package manager knows about at all (D-15, D-18, D-19, D-20, D-21).
+which no package manager knows about at all (`PKG-FR-JOB-INDEPENDENCE`, `PKG-FR-MANUAL-SCOPE`, `PKG-FR-MANUAL-DIFF`,
+`PKG-FR-SNIPPET-VERBATIM`, `PKG-FR-MANUAL-RESOLUTION`).
 
 One detector, run on BOTH machines (`PKG-FR-MANUAL-DIFF`) — the source's findings are the
 candidates, and a finding the target already holds is dropped rather than presented: paths
@@ -11,10 +12,10 @@ is judged by its own shape, which can take a question (`PKG-FR-MANUAL-OPT-SHAPE`
 
 Hand-installed `.deb` packages are the OTHER thing no package manager can reproduce, and
 they are `manual_deb_sync`'s (`PKG-FR-DEB-OWNERSHIP`) — a package, reproducible by a
-snippet, but a package. This job's half is not apt's business at all, which is D-18's whole
+snippet, but a package. This job's half is not apt's business at all, which is `PKG-FR-MANUAL-SCOPE`'s whole
 argument for keeping it off `apt_sync`: folding it in would make disabling apt silently
 disable it with nothing telling the user. It does its OWN `dpkg` queries rather than
-sharing anyone else's, so ownership stays clean — it never imports `apt_sync` (D-18) and
+sharing anyone else's, so ownership stays clean — it never imports `apt_sync` (`PKG-FR-MANUAL-SCOPE`) and
 never imports `manual_deb_sync`.
 
 `ManualInstallsSyncJob` subclasses `UnreproducibleSyncJob`, which owns everything from the
@@ -104,7 +105,7 @@ _DIRECTORY = "d"
 # Matches one `dpkg --search` "owned" line: `<package>[,<package>...]: <path>`. A path dpkg does
 # not own produces no such line at all (its "no path found" diagnostic goes to stderr,
 # which this scan never inspects) — absence from stdout is the only signal
-# `_owned_paths_from_dpkg_s` needs. A private copy of apt_sync's identical regex: D-18
+# `_owned_paths_from_dpkg_s` needs. A private copy of apt_sync's identical regex: `PKG-FR-MANUAL-SCOPE`
 # keeps ownership clean by NOT importing apt_sync, and this parser is small enough that
 # one duplicated line is cheaper than a shared-core coupling.
 _DPKG_S_OWNED_RE = re.compile(r"^[^:]+:\s+(?P<path>/\S.*)$")
@@ -118,11 +119,11 @@ _DPKG_OWNERSHIP_WITNESS = "/usr/bin/dpkg"
 
 
 def _owned_paths_from_dpkg_s(output: str) -> frozenset[str]:
-    """Every path `dpkg --search` reports as owned, parsed from its stdout alone (D-19's
+    """Every path `dpkg --search` reports as owned, parsed from its stdout alone (`PKG-FR-MANUAL-DIFF`'s
     unowned-install scan). A queried path dpkg does NOT own is simply absent from this set
     — its "no path found matching pattern" diagnostic is a stderr message this scan never
     reads, so a batched multi-path `dpkg --search` degrades cleanly even when some paths are
-    unowned and others are not. A private copy of apt_sync's identical parser (D-18).
+    unowned and others are not. A private copy of apt_sync's identical parser (`PKG-FR-MANUAL-SCOPE`).
     """
     owned: set[str] = set()
     for line in output.splitlines():
@@ -153,7 +154,8 @@ def _typed_entries(output: str) -> list[tuple[str, str]]:
 
 class ManualInstallsSyncJob(UnreproducibleSyncJob):
     """Detect, review and reproduce software no package owns under `/usr/local` and `/opt`
-    (D-15/D-18/D-19), on this job's own enable flag independent of `apt_sync`'s and of
+    (`PKG-FR-JOB-INDEPENDENCE`/`PKG-FR-MANUAL-SCOPE`/`PKG-FR-MANUAL-DIFF`), on this job's own enable flag independent
+    of `apt_sync`'s and of
     `manual_deb_sync`'s.
 
     Supplies the two detection hooks `UnreproducibleSyncJob` leaves abstract; everything
@@ -174,7 +176,7 @@ class ManualInstallsSyncJob(UnreproducibleSyncJob):
         "additionalProperties": False,
     }
 
-    # -- Detection (D-19), run on both machines (`PKG-FR-MANUAL-DIFF`) -------------------
+    # -- Detection (`PKG-FR-MANUAL-DIFF`), run on both machines (`PKG-FR-MANUAL-DIFF`) -------------------
 
     async def _scan_unowned_installs(
         self, executor: Executor, machine: str, *, ask_when_ambiguous: bool
@@ -384,7 +386,7 @@ class ManualInstallsSyncJob(UnreproducibleSyncJob):
 
     @override
     async def capture_source_items(self) -> Sequence[UnreproducibleItem]:
-        """The source's unowned installs under this scan's roots (D-19)."""
+        """The source's unowned installs under this scan's roots (`PKG-FR-MANUAL-DIFF`)."""
         return await self._scan_unowned_installs(self.source, self.machines.source, ask_when_ambiguous=True)
 
     @override
@@ -406,7 +408,7 @@ class ManualInstallsSyncJob(UnreproducibleSyncJob):
 
     @override
     async def installed_versions(self, item_ids: Collection[str], *, on_source: bool) -> Mapping[str, str | None]:
-        """Each item's version, from its own `version_body` run on one machine (D-22).
+        """Each item's version, from its own `version_body` run on one machine (`PKG-FR-VERSION-SNIPPET`).
 
         One command per id, unlike the three manager-backed jobs: there is no listing to
         batch, because what "installed version" means for an unowned path is whatever its
@@ -500,8 +502,8 @@ class ManualInstallsSyncJob(UnreproducibleSyncJob):
         the target, which is read too for what it already holds and for the paths the source
         has dropped (`PKG-FR-MANUAL-DIFF`, `PKG-FR-MANUAL-REMOVE`). Both machines are only
         ever read for detection, so no sudo is needed for it. A snippet's own sudo needs are
-        unpredictable (an opaque blob, D-20), so this job does NOT pre-validate target sudo;
-        a snippet that needs it and lacks it fails as a per-item converge failure (D-27),
+        unpredictable (an opaque blob, `PKG-FR-SNIPPET-VERBATIM`), so this job does NOT pre-validate target sudo;
+        a snippet that needs it and lacks it fails as a per-item converge failure (`PKG-FR-OUTCOME-FAILED`),
         reported like any other. An approved `rm --recursive --force` under `/opt` needs it
         too and is treated the same way: a run that approves no removal needs no privilege at
         all, and demanding it up front would refuse the job to every user who only installs.

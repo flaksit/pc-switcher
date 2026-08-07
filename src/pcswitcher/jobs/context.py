@@ -30,7 +30,7 @@ class JobContext:
     # Interactive confirmation gate for destructive job actions (ADR-015 refinement).
     # Optional so lightweight test contexts can omit it; jobs that prompt assert it is set.
     confirmer: Confirmer | None = None
-    # Per-manager batched review for package jobs (D-24). Optional for the same reason
+    # Per-manager batched review for package jobs (`PKG-FR-BATCHED`). Optional for the same reason
     # `confirmer` is: lightweight unit-test contexts construct `JobContext` without one, so
     # tests that never reach a review keep working; a `PackageSyncJob.execute()` that does
     # reach one asserts it is set rather than silently applying unreviewed diffs.

@@ -1,12 +1,13 @@
-"""Shared package-sync pipeline: `PackageSyncJob`'s plan()/review/apply() split (D-15, D-16, D-24).
+"""Shared package-sync pipeline: `PackageSyncJob`'s plan()/review/apply() split (`PKG-FR-JOB-INDEPENDENCE`,
+`PKG-FR-JOB-INDEPENDENCE`, `PKG-FR-BATCHED`).
 
 Every package job (`apt_sync`, `snap_sync`, `flatpak_sync`, `manual_deb_sync`,
-`manual_installs_sync`) is independent (D-15): its own config, enable flag, failure
+`manual_installs_sync`) is independent (`PKG-FR-JOB-INDEPENDENCE`): its own config, enable flag, failure
 isolation and progress. What is here is what they all genuinely share — the
 plan/review/apply ORDER, the decision-file rules, the review grouping and the converge
 loop. A manager's own item shapes, its own diff and the facts only it can collect live in
 that manager's module, not here: a base class holding one manager's logic makes every
-other job inherit a surface it never uses and cannot change. D-24 requires each job to present its
+other job inherit a surface it never uses and cannot change. `PKG-FR-BATCHED` requires each job to present its
 own batched review before that job's own first mutating command — the batching is per
 manager, never across managers. The split of `plan()` from `apply()` exists to make that
 review-before-any-change ordering checkable and testable per job:
@@ -28,8 +29,8 @@ review-before-any-change ordering checkable and testable per job:
   Whether the block actually lands is then its own manager's business: a freeze block
   whose software this run did not put on the target is refused by that manager's converger.
 - `apply()` converges the `APPLY`-decided diffs, one item at a time, catching and
-  collecting per-item failures (D-27) so one bad item never stops the rest. It also
-  persists a permanent decision (D-08a) for every `SKIP_ALWAYS`-decided item, on
+  collecting per-item failures (`PKG-FR-OUTCOME-FAILED`) so one bad item never stops the rest. It also
+  persists a permanent decision (`PKG-FR-MACHINE-SPECIFIC`) for every `SKIP_ALWAYS`-decided item, on
   whichever machine holds it, and — after the loop, so this run's own removals count —
   drops the marks whose item has left the machine holding them (`_prune_dead_marks`).
 - `execute()` — the `SyncJob` entry point the orchestrator's sequential loop calls — is
@@ -94,7 +95,7 @@ SNAP_CHANGE_REVIEW_ACTION = "snap_change"
 
 class ConvergeItemFailed(RuntimeError):
     """Raised by a `converge()` implementation to fail exactly one item without stopping
-    the loop (D-27) — e.g. `AptSyncJob.converge`'s apt-transaction guard refusing an item
+    the loop (`PKG-FR-OUTCOME-FAILED`) — e.g. `AptSyncJob.converge`'s apt-transaction guard refusing an item
     whose simulated transaction would remove an unreviewed package.
 
     Distinct from a converge command simply exiting non-zero (which `apply()` also treats
@@ -120,7 +121,7 @@ class ConvergeItemDeclined(RuntimeError):
 
 
 class PackageItemFailures(RuntimeError):
-    """Raised once, after `apply()`'s per-item loop completes, when 1+ items failed (D-27).
+    """Raised once, after `apply()`'s per-item loop completes, when 1+ items failed (`PKG-FR-OUTCOME-FAILED`).
 
     A named type rather than a bare `RuntimeError` so the orchestrator's per-job except
     chain can distinguish "this job's items failed" (continue running the remaining
@@ -140,7 +141,7 @@ class PackagePlan:
     """The read-only product of one job's `plan()`, handed to that job's own review.
 
     `groups` are pre-built `ReviewGroup`s (one per action, removals in their own group,
-    per D-07/D-24) so `execute()` passes them straight to the reviewer without re-deriving
+    per `PKG-FR-SKIP-ONCE`/`PKG-FR-BATCHED`) so `execute()` passes them straight to the reviewer without re-deriving
     them — the FIRST round's groups, since a question scoped to approved work has no
     answers to be built from yet.
 
@@ -154,7 +155,7 @@ class PackagePlan:
     groups: tuple[ReviewGroup, ...]
 
 
-# The concrete converge verb for one (item_class, action) pair (D-07, D-24): "apply" is
+# The concrete converge verb for one (item_class, action) pair (`PKG-FR-SKIP-ONCE`, `PKG-FR-BATCHED`): "apply" is
 # never shown to the user, because it is the destructive branch as often as the
 # additive one. An apt package REMOVE reads as "remove"; a snap channel CHANGE reads as
 # "retrack". Data, not per-job string formatting, is what makes "the review names the
@@ -165,7 +166,7 @@ class PackagePlan:
 # class the engine produces gets SOME review presentation).
 #
 # `APT_SOURCE`/`APT_PIN` are deliberately absent: their only surviving direction is
-# removal, and ADR-020 D-07 route that through `AptSyncJob`'s own
+# removal, and `PKG-FR-SKIP-ONCE` route that through `AptSyncJob`'s own
 # `REPO_REMOVAL_REVIEW_ACTION` groups, which supply their own title and verb before this
 # table is ever consulted.
 _ACTION_VOCABULARY: dict[tuple[ItemClass, DiffAction], str] = {
@@ -174,7 +175,7 @@ _ACTION_VOCABULARY: dict[tuple[ItemClass, DiffAction], str] = {
     (ItemClass.APT_PACKAGE, DiffAction.REMOVE): "remove",
     (ItemClass.APT_PACKAGE, DiffAction.REPORT_ONLY): "report",
     # `/etc/apt/apt.conf.d` is the one non-package class reviewed in all three directions
-    # (ADR-020 D-37), so all three need a verb — without them a config file reads
+    # (`PKG-FR-APTCONF`), so all three need a verb — without them a config file reads
     # "Install/Change/Remove apt packages", which is wrong about both the verb and the
     # thing. Paired with `_ITEM_CLASS_NOUN` below, which fixes the second half.
     (ItemClass.APT_CONFIG, DiffAction.INSTALL): "add",
@@ -320,7 +321,7 @@ class PackageSyncJob(SyncJob):
         converges, so `plan()` runs before the user has approved anything — including the
         decision files, which `_load_live_decisions` only reads and filters in memory.
         An implementation MUST take both machines' decision files from
-        `_load_live_decisions` and filter each side's items through its OWN file (D-08),
+        `_load_live_decisions` and filter each side's items through its OWN file (`PKG-FR-MACHINE-SPECIFIC`),
         then run the resulting diffs through
         `_drop_inert_diffs` to catch the recorded items no input-side filter can see —
         the block-state membership items (`apt:hold:`, `snap:hold:`) and anything else
@@ -345,7 +346,7 @@ class PackageSyncJob(SyncJob):
         """Hook: which of `entries` name something ONE machine — the one holding this file —
         no longer has. Read-only, and asked of that machine alone.
 
-        A mark keeps the holding machine's own copy of an item (D-08a), so the item is on
+        A mark keeps the holding machine's own copy of an item (`PKG-FR-MACHINE-SPECIFIC`), so the item is on
         that machine when the mark is written; an answer of "absent" therefore means the
         mark has outlived what it was given to protect and `_prune_dead_marks` takes it out.
         `entries` is that machine's whole file, so an implementation picks out the item
@@ -461,7 +462,7 @@ class PackageSyncJob(SyncJob):
     @staticmethod
     def _mark_holders(action: DiffAction) -> tuple[bool, ...]:
         """Every machine a machine-specific mark on a diff of this action can sit on, as
-        "is it the source" flags (D-08a, `PKG-FR-MACHINE-SPECIFIC`).
+        "is it the source" flags (`PKG-FR-MACHINE-SPECIFIC`, `PKG-FR-MACHINE-SPECIFIC`).
 
         The READ path's definition (`_drop_inert_diffs` looks the item up in every file
         this names), and the superset the WRITE path chooses from: whatever
@@ -487,7 +488,7 @@ class PackageSyncJob(SyncJob):
 
     def _mark_recipients(self, action: DiffAction, side: MarkSide | None) -> tuple[Executor, ...]:
         """The machines whose decision file gets the entry for one `SKIP_ALWAYS` answer —
-        the WRITE half of `_mark_holders` (D-08a, `PKG-FR-MARK-SIDE`).
+        the WRITE half of `_mark_holders` (`PKG-FR-MACHINE-SPECIFIC`, `PKG-FR-MARK-SIDE`).
 
         An `INSTALL` is on the source alone and a `REMOVE` on the target alone, so the
         action names the holder and `side` is not consulted. A `CHANGE` is on both, so the
@@ -517,7 +518,7 @@ class PackageSyncJob(SyncJob):
         target_decisions: Mapping[str, DecisionEntry],
     ) -> tuple[ItemDiff, ...]:
         """Drop every diff whose `item_id` is recorded "skip always" on a machine that could
-        hold it (`_mark_holders`, D-08/D-08a) — the post-diff counterpart to `filter_inert`.
+        hold it (`_mark_holders`, `PKG-FR-MACHINE-SPECIFIC`) — the post-diff counterpart to `filter_inert`.
 
         Required for any diff whose identity does not exist on an input item and so cannot
         be filtered at the diff-input boundary: the block-state membership items
@@ -558,7 +559,7 @@ class PackageSyncJob(SyncJob):
 
     def _build_review_groups(self, diffs: Sequence[ItemDiff]) -> tuple[ReviewGroup, ...]:
         """One `ReviewGroup` per `(action, item_class)` present in `diffs`, keyed on
-        `(manager, action)` for the reviewer's removal-direction test (D-24) so removals
+        `(manager, action)` for the reviewer's removal-direction test (`PKG-FR-BATCHED`) so removals
         never share a group with installs. The title's verb and every entry's
         `action_label` come from `_ACTION_VOCABULARY`, keyed by the group's own item class.
         `_ITEM_CLASS_NOUN` does the same for the title's OBJECT, so the one reviewed class
@@ -715,7 +716,7 @@ class PackageSyncJob(SyncJob):
 
         No-op on the base — the three managers that produce no unreproducible items (apt,
         snap, flatpak) need nothing between review and converge. Only
-        `packages.unreproducible.UnreproducibleSyncJob` overrides it (D-23): it pushes the
+        `packages.unreproducible.UnreproducibleSyncJob` overrides it (`PKG-FR-MANUAL-SAME-RUN`): it pushes the
         freshly reconciled install-snippet registry to the target here, so a snippet the
         user authored during THIS run's review is on the target before `apply()` replays
         it. Keeping the hook on the base leaves `execute()`
@@ -736,9 +737,9 @@ class PackageSyncJob(SyncJob):
 
         A per-item failure (`ConvergeItemFailed`, or a converge command that
         exits non-zero) is caught, logged with its stderr as structured context, and
-        collected — the loop always completes (D-27) — then `PackageItemFailures` is
+        collected — the loop always completes (`PKG-FR-OUTCOME-FAILED`) — then `PackageItemFailures` is
         raised once, after the loop, if anything failed OR anything is left unresolved
-        (D-21) — even when `total` is zero, since an interactive run whose ONLY diffs
+        (`PKG-FR-MANUAL-RESOLUTION`) — even when `total` is zero, since an interactive run whose ONLY diffs
         were unreproducible items never has any INSTALL/CHANGE/REMOVE work to do, and
         must still fail if one of them ended up unresolved.
 
@@ -751,15 +752,16 @@ class PackageSyncJob(SyncJob):
         prefix, carrying the diff's own detail, and no converge command is ever issued.
 
         `REPORT_ONLY` diffs are excluded here regardless of decision: they imply no
-        converge verb (D-25's version-mismatch, repo-unavailable, origin-mismatch and
+        converge verb (the diff-class taxonomy's version-mismatch, repo-unavailable, origin-mismatch and
         unreproducible classes are informational), so `converge()` is never called
         for one even if something recorded `APPLY` against it.
 
         Before converging anything, `_record_permanent_skips` persists a `DecisionEntry`
-        for every `SKIP_ALWAYS`-decided item (D-08). The `_finalize_unreproducible` hook
+        for every `SKIP_ALWAYS`-decided item (`PKG-FR-MACHINE-SPECIFIC`). The `_finalize_unreproducible` hook
         then persists this run's authored snippets and unreproducible-item skip-always
-        decisions (D-20/D-21/D-23); it is a no-op on the base and only the unreproducible
-        jobs implement it (D-18), but the call site stays here so both run before any
+        decisions (`PKG-FR-SNIPPET-VERBATIM`/`PKG-FR-MANUAL-RESOLUTION`/`PKG-FR-MANUAL-SAME-RUN`); it is a no-op on the
+         base and only the unreproducible
+        jobs implement it (`PKG-FR-MANUAL-SCOPE`), but the call site stays here so both run before any
         converge, independent of whether this run applies anything else (a run with zero
         installs but one newly-authored snippet still records it). The
         `_unresolved_as_failures` hook (also no-op on the base) supplies the
@@ -871,12 +873,12 @@ class PackageSyncJob(SyncJob):
             )
 
     def _unresolved_as_failures(self, plan: PackagePlan, outcome: ReviewOutcome) -> list[tuple[ItemDiff, str]]:
-        """Hook: this job's genuinely-undecided items that fail an interactive run (D-27).
+        """Hook: this job's genuinely-undecided items that fail an interactive run (`PKG-FR-OUTCOME-FAILED`).
 
         No-op on the base — it returns an empty list, so the three managers that produce
         no unreproducible items (apt, snap, flatpak) never fail on this basis. The
-        unreproducible jobs do not override it either (D-21 decision 10): an interactive
-        review leaves no item genuinely undecided. The D-27 converge-failure contract in
+        unreproducible jobs do not override it either (`PKG-FR-MANUAL-RESOLUTION` decision 10): an interactive
+        review leaves no item genuinely undecided. The `PKG-FR-OUTCOME-FAILED` converge-failure contract in
         `apply()` is unchanged — converge failures fail the job regardless of what this
         hook returns.
         """
@@ -884,9 +886,9 @@ class PackageSyncJob(SyncJob):
 
     async def _finalize_unreproducible(self, plan: PackagePlan, outcome: ReviewOutcome) -> None:
         """Hook: persist this job's unreproducible-item snippet authoring and skip-always
-        decisions (D-20/D-21/D-23).
+        decisions (`PKG-FR-SNIPPET-VERBATIM`/`PKG-FR-MANUAL-RESOLUTION`/`PKG-FR-MANUAL-SAME-RUN`).
 
-        No-op on the base — only the unreproducible jobs produce such items (D-18), and
+        No-op on the base — only the unreproducible jobs produce such items (`PKG-FR-MANUAL-SCOPE`), and
         `packages.unreproducible.UnreproducibleSyncJob` overrides this hook with the real
         persistence; the three managers that never do inherit this no-op so the base
         `apply()` stays generic.
@@ -896,7 +898,7 @@ class PackageSyncJob(SyncJob):
     async def _record_permanent_skips(self, plan: PackagePlan, decisions: Mapping[str, Decision]) -> None:
         """Persist a `DecisionEntry` for every `SKIP_ALWAYS`-decided, actionable diff.
 
-        D-08a decides WHICH machine's file gets the entry by which machine HOLDS the item,
+        `PKG-FR-MACHINE-SPECIFIC` decides WHICH machine's file gets the entry by which machine HOLDS the item,
         and `_mark_recipients` is that choice: an `INSTALL` diff is source-held, since only
         the source has the item, and a `REMOVE` is target-held for the same reason. A
         `CHANGE` is on both machines, so the review's own follow-up says whose copy the
@@ -906,7 +908,7 @@ class PackageSyncJob(SyncJob):
 
         `REPORT_ONLY` diffs are skipped: they carry no converge verb (version-mismatch,
         repo-unavailable, origin-mismatch and unreproducible are informational only), so
-        there is no "holder" for D-08a to record against.
+        there is no "holder" for `PKG-FR-MACHINE-SPECIFIC` to record against.
 
         Blocks and a snap's revision change are excluded whatever the decisions say
         (`PKG-FR-BLOCKS-DERIVED`, `PKG-FR-NO-MARK-ON-SNAP-REVISION`): neither is offered the
@@ -915,7 +917,7 @@ class PackageSyncJob(SyncJob):
         review's automation hook or from a caller assembling a `ReviewOutcome` by hand.
 
         Two guards, both required before anything is ever written: never for a
-        non-interactive outcome (D-26 — nothing is recorded permanently when nothing
+        non-interactive outcome (`PKG-FR-NO-TERMINAL` — nothing is recorded permanently when nothing
         was actually decided by a human), and never during a dry run (ADR-014 — a
         rehearsal must leave no trace).
         """
@@ -997,10 +999,10 @@ class PackageSyncJob(SyncJob):
     async def execute(self) -> None:
         """The `SyncJob` entry point the orchestrator's sequential job loop calls.
 
-        Self-contained (D-24): plan this job's diffs, review its own groups through the
+        Self-contained (`PKG-FR-BATCHED`): plan this job's diffs, review its own groups through the
         injected `JobContext.reviewer`, put the second round `plan_second_round()` builds out
         of those answers, accept the merged outcome, run the `after_review()` hook (the seam
-        where an unreproducible job pushes its snippet registry, D-23), then apply. No
+        where an unreproducible job pushes its snippet registry, `PKG-FR-MANUAL-SAME-RUN`), then apply. No
         component outside the job owns its review, and no fallback applies diffs that never
         came back from one — a missing reviewer fails loudly here rather than silently
         skipping the review and converging unreviewed diffs (T-02-38).
@@ -1013,7 +1015,7 @@ class PackageSyncJob(SyncJob):
         handling attributes it to this job's own `JobResult`.
 
         A run whose review held something to DECIDE and that NOBODY answered raises
-        `JobSkipped`: D-26 forces every such item to SKIP_ONCE with nobody present, so
+        `JobSkipped`: `PKG-FR-NO-TERMINAL` forces every such item to SKIP_ONCE with nobody present, so
         continuing would converge nothing and report SUCCESS. It is raised before any
         mutating command, as `JobSkipped` requires, and before the second round is put:
         asking a screen nobody can answer would print the same items twice for nothing.

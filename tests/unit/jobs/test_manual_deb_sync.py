@@ -1,5 +1,5 @@
 """Unit tests for `ManualDebSyncJob`: the hand-installed `.deb` half of what no package
-manager can reproduce (D-18) — the no-candidate detection, its diff and its validation.
+manager can reproduce (`PKG-FR-MANUAL-SCOPE`) — the no-candidate detection, its diff and its validation.
 
 The shared half every unreproducible job inherits is covered in `test_unreproducible_jobs.py`.
 All executor interactions are mocked; no real dpkg/apt-cache/sudo commands run.
@@ -39,7 +39,7 @@ from tests.unit.jobs.unreproducible_harness import (
 
 class TestNoCandidateDetection:
     """apt-no-candidate scan: a manually-installed package no configured repository can
-    supply becomes an UNREPRODUCIBLE diff (D-18).
+    supply becomes an UNREPRODUCIBLE diff (`PKG-FR-MANUAL-SCOPE`).
 
     The predicate is the INSTALLED version's repository origins, never the `Candidate:`
     line: dpkg's own status entry makes apt report a hand-installed package's version as
@@ -219,7 +219,7 @@ class TestNoCandidateDetection:
 
     @pytest.mark.asyncio
     async def test_a_policy_read_that_printed_no_block_at_all_fails_the_job(self) -> None:
-        """G10, J82 — the `blocks` half of ADR-022 D-04, which `apt_sync._source_policy` puts on the
+        """G10, J82 — the `blocks` half of `PKG-FR-READ-FAILS-JOB`, which `apt_sync._source_policy` puts on the
         BYTE-IDENTICAL command — same names, same host, same probe. apt prints one block per
         name it knows and every name here is installed on this machine, so zero blocks at
         exit 0 is apt not answering. The two jobs disagreeing about that
@@ -283,7 +283,8 @@ class TestNoCandidateDetection:
 
 
 class TestInertFiltering:
-    """An item recorded machine-specific on the source produces no diff (D-08/D-19)."""
+    """An item recorded machine-specific on the source produces no diff
+    (`PKG-FR-MACHINE-SPECIFIC`/`PKG-FR-MANUAL-DIFF`)."""
 
     @pytest.mark.asyncio
     async def test_machine_specific_item_is_filtered_before_becoming_a_diff(self) -> None:
@@ -341,7 +342,8 @@ class TestInertFiltering:
 
 
 class TestExecuteIndependentOfApt:
-    """The job runs on its own enable flag, independent of apt_sync (D-15/D-18)."""
+    """The job runs on its own enable flag, independent of apt_sync
+    (`PKG-FR-JOB-INDEPENDENCE`/`PKG-FR-MANUAL-SCOPE`)."""
 
     @pytest.mark.asyncio
     async def test_plan_runs_with_apt_absent_from_config_and_manual_enabled(self) -> None:
@@ -368,7 +370,7 @@ class TestExecuteIndependentOfApt:
             source_responses={
                 STATUS_QUERY: installed_on("brscan3"),
                 "apt-cache policy": CommandResult(0, hand_deb_policy("brscan3"), ""),
-                # plan() classifies INSTALL from the SOURCE registry (corrected D-23).
+                # plan() classifies INSTALL from the SOURCE registry (corrected `PKG-FR-MANUAL-SAME-RUN`).
                 "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, BRSCAN3_REGISTRY_YAML, ""),
             },
             target_responses={

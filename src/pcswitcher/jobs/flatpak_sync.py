@@ -1,5 +1,5 @@
-"""`flatpak_sync`: flatpak ref/remote convergence with scope as identity (D-06, D-14,
-D-29, ADR-020).
+"""`flatpak_sync`: flatpak ref/remote convergence with scope as identity
+(`PKG-FR-SNAP-REVISION`, `PKG-FR-APT-ORIGIN-DERIVED`, `PKG-FR-SNAP-DATA-BOUNDARY`, ADR-020).
 
 Scope (user vs. system) is part of a flatpak item's identity, not just a field on it:
 this project's own reference machine has several runtimes installed in BOTH scopes
@@ -19,9 +19,9 @@ BRANCH is identity for the same reason (`FlatpakItem`): a ref is identified by i
 application id. Origin is deliberately NOT identity — see `FlatpakItem` for why the two
 go opposite ways.
 
-A remote is DERIVED from the refs approved from it, never ticked (ADR-020 D-41, which is
-D-37's rule for apt repositories in a second ecosystem). `flatpak install` refuses outright when
-the remote it names is not configured in the scope being installed into (D-14), so
+A remote is DERIVED from the refs approved from it, never ticked (`PKG-FR-FLATPAK-REMOTE-DERIVED`, which is
+`PKG-FR-REPO-DERIVED`'s rule for apt repositories in a second ecosystem). `flatpak install` refuses outright when
+the remote it names is not configured in the scope being installed into (`PKG-FR-APT-ORIGIN-DERIVED`), so
 "ref ticked, its remote unticked" was an unrepresentable pairing offered as two independent
 review lines — and worse, "ref ticked, its remote's URL change declined" silently installed
 another vendor's build. `accept_review()` therefore turns the approved ref installs into
@@ -32,11 +32,11 @@ never-removed distribution sources, because a fresh flatpak install configures Z
 and a machine with none is a perfectly ordinary machine (measured), so even Flathub travels
 only as a consequence of something needing it. A derived write has no item of its own, so a
 failure is recorded against the remote and charged to every approved ref that depended on
-it (D-39). Deletion is derived by the same rule (`_delete_unused_remotes`), so a remote is
+it (`PKG-FR-DERIVED-FAILURE`). Deletion is derived by the same rule (`_delete_unused_remotes`), so a remote is
 never a review item in any direction.
 
-Repointing a remote is silent too, with ADR-020 D-41's single exception, which this job
-applies to remotes exactly as `apt_sync` applies D-37's to repository files: a remote whose URL
+Repointing a remote is silent too, with `PKG-FR-FLATPAK-REMOTE-DERIVED`'s single exception, which this job
+applies to remotes exactly as `apt_sync` applies `PKG-FR-REPO-DERIVED`'s to repository files: a remote whose URL
 or verification setting differs is overwritten without a word UNLESS a ref the TARGET
 recorded skip-always takes it as its origin, in which case both configurations are shown and
 the answer is overwrite or skip-once (`_capture_remote_conflicts`,
@@ -44,7 +44,7 @@ the answer is overwrite or skip-once (`_capture_remote_conflicts`,
 skip-always ref is structurally invisible — `filter_inert` keeps it out of the manifest, so
 it produces no diff in any run — and repointing the remote it updates from moves software
 the user explicitly told this tool to leave alone. Two answers, nothing recorded. A skipped
-conflict keeps the remote out of the write set but NOT out of the D-39 attribution map, so
+conflict keeps the remote out of the write set but NOT out of the `PKG-FR-DERIVED-FAILURE` attribution map, so
 every approved ref that needed the source's URL fails naming the decision rather than
 installing from the URL the target still has.
 
@@ -77,7 +77,7 @@ setting and the digest of its own ostree keyring, and convergence replicates bot
 only when the SOURCE remote is itself unverified. Without this a replicated remote is
 configured but unusable: flatpak refuses every install from it with `Can't check
 signature: public key not found`. The key bytes are synced byte-for-byte from the source
-machine and are never re-fetched from a vendor (ADR-020 D-12's rule for apt signing
+machine and are never re-fetched from a vendor (`PKG-FR-KEY-COPY`'s rule for apt signing
 keys), staged under the target's `~/.cache/pc-switcher/` exactly as `apt_sync` stages
 `/etc/apt` content, because SFTP reaches only the SSH user's own home.
 
@@ -143,15 +143,15 @@ produce — an unreachable remote, a filter file it refuses to parse — says no
 ends no run: the abort needs certainty, and `remote-modify --filter` reports that file's real
 error later.
 
-The flatpak OSTree store stays authoritative for its own state (D-01): this job never
+The flatpak OSTree store stays authoritative for its own state (`PKG-FR-MANAGER-CONVERGES`): this job never
 WRITES into `/var/lib/flatpak` or `~/.local/share/flatpak`, only shells out to `flatpak`
 itself. It does READ one file there, `<installation>/repo/<remote>.trustedkeys.gpg`,
 because no flatpak command prints or exports a remote's key and libostree's own CLI is
 not installed alongside flatpak on Ubuntu. `flatpak_sync_exclude_paths()` exports
 `~/.local/share/flatpak` so `folder_sync` stops mirroring the store this job owns
-(D-29, ADR-018) — but NOT `~/.var/app`, which is per-application USER DATA that stays
+(`PKG-FR-SNAP-DATA-BOUNDARY`, ADR-018) — but NOT `~/.var/app`, which is per-application USER DATA that stays
 folder_sync's territory;
-D-17's job-before-folder_sync ordering exists precisely so `flatpak install` creates
+`PKG-FR-JOB-ORDER`'s job-before-folder_sync ordering exists precisely so `flatpak install` creates
 the store first and folder_sync's data lands on top of it, never the reverse.
 
 `FlatpakSyncJob` subclasses `PackageSyncJob` and implements the abstract `plan()`, for the
@@ -159,20 +159,20 @@ same reason `SnapSyncJob` does: what a diff even IS differs per manager, so the 
 holds no diff to inherit. apt's own diff is apt-package-shaped — one item class,
 `MISSING_ON_TARGET`/`EXTRA_ON_TARGET`/`VERSION_MISMATCH` only, no notion of derived work
 that must land ahead of an item. `plan()` here reuses every manager-agnostic building
-block the shared core provides — `DecisionFile`/`filter_inert` (D-08's machine-local
-skip-always filtering) and `PackageSyncJob._build_review_groups` (D-24's action-grouped
+block the shared core provides — `DecisionFile`/`filter_inert` (`PKG-FR-MACHINE-SPECIFIC`'s machine-local
+skip-always filtering) and `PackageSyncJob._build_review_groups` (`PKG-FR-BATCHED`'s action-grouped
 review) — so only capture, diff and converge are genuinely flatpak-specific.
 `accept_review()` is overridden to turn the approved refs into the derived remote set,
 and `apply()` to write those remotes before the base converge loop reaches its first ref.
 `execute()` is inherited unchanged and is where this job's own single review happens,
 before its own first mutating command: there is no coordinator and no review spanning two
-managers (D-15, D-24).
+managers (`PKG-FR-JOB-INDEPENDENCE`, `PKG-FR-BATCHED`).
 
-Flatpak ref VERSIONS are captured for reporting only (D-04, like apt package
+Flatpak ref VERSIONS are captured for reporting only (`PKG-FR-VERSION-FLOAT`, like apt package
 versions): a version difference on a ref present in the same scope on both machines
 is a `REPORT_ONLY` diff, never something this job installs or removes to force.
 
-A ref's ORIGIN is reported the same way and outranks it (`_diff_flatpak_refs`, D-41). The
+A ref's ORIGIN is reported the same way and outranks it (`_diff_flatpak_refs`, `PKG-FR-FLATPAK-REMOTE-DERIVED`). The
 two install-time refusals above guard an install, and a ref already present on BOTH machines
 issues none — so the already-diverged case they cannot see is `ORIGIN_MISMATCH`: same scope,
 same `<application>/<arch>/<branch>`, two vendors. It is compared by the remotes' URLs rather
@@ -258,7 +258,7 @@ _FLATPAK_RUNTIME_CMD_TEMPLATE = "flatpak info {flag} --show-runtime {ref}"
 
 # Same reasoning for `flatpak remotes`, but flatpak tracks remotes PER INSTALLATION —
 # even a byte-identical `flathub` URL is two separate configuration entries — so this
-# is run once per scope rather than once combined (module docstring, D-14). Two of the four
+# is run once per scope rather than once combined (module docstring, `PKG-FR-APT-ORIGIN-DERIVED`). Two of the four
 # columns are configuration this job replicates rather than identity:
 #
 # `options` is the only place flatpak exposes a remote's GPG-verification state (#215): a
@@ -315,7 +315,7 @@ _NO_GPG_VERIFY_OPTION = "no-gpg-verify"
 # 2024.5). Nothing in flatpak's CLI prints or exports that key, and the `ostree` binary
 # is not installed by a flatpak install on Ubuntu — so the digest is read straight off
 # the file. This is the one place this job looks INSIDE the OSTree store, and it is a
-# read: D-01's "flatpak stays authoritative for its own state" bars WRITING there, which
+# read: `PKG-FR-MANAGER-CONVERGES`'s "flatpak stays authoritative for its own state" bars WRITING there, which
 # convergence still does exclusively through `flatpak remote-add`/`remote-modify`.
 _TRUSTEDKEYS_SUFFIX = ".trustedkeys.gpg"
 
@@ -373,7 +373,7 @@ _OSTREE_TRUSTED_ANCHOR_DIR = Path("/usr/share/ostree/trusted.gpg.d")
 _ANCHOR_FILES_LIBOSTREE_IGNORES = frozenset({"trustdb.gpg", "secring.gpg"})
 
 
-# Masks are ALSO per-installation (#208, D-10), listed one pattern per line with no
+# Masks are ALSO per-installation (#208, `PKG-FR-MARK-SIDE`), listed one pattern per line with no
 # header — but the scope flag MUST precede the `mask` subcommand: bare `flatpak mask`
 # omits --user masks and defaults to --system (RESEARCH: verified live, Flatpak 1.14.6),
 # so this always names its scope explicitly, once per scope like remotes.
@@ -391,7 +391,7 @@ _REMOTE_ITEM_ID_PREFIX = "flatpak:remote:"
 # so the ID is what says which is which, not the `item_class` recorded beside it.
 _REF_ITEM_ID_PREFIX = "flatpak:ref:"
 
-# Identity of a remote-CONFLICT review entry (ADR-020 D-41). Deliberately not a
+# Identity of a remote-CONFLICT review entry (`PKG-FR-FLATPAK-REMOTE-DERIVED`). Deliberately not a
 # `flatpak:remote:` id, because it is not the same question: that one asks whether to DELETE
 # a remote the source no longer has, this one asks which of two configurations of a remote
 # BOTH machines have should win. It names no diff and reaches no decision file — a conflict
@@ -423,7 +423,7 @@ _DERIVED_REASON_WORDS: dict[str, str] = {
 # user-scope flatpak operations need no root at all (ASVS V4, T-02-23).
 _TARGET_SUDO_COMMANDS = ("/usr/bin/flatpak",)
 
-# Directory this job owns and exports to folder_sync (D-29): the OSTree store and
+# Directory this job owns and exports to folder_sync (`PKG-FR-SNAP-DATA-BOUNDARY`): the OSTree store and
 # flatpak's own per-installation metadata, NOT `~/.var/app` (per-application user
 # data, folder_sync's territory — module docstring).
 _FLATPAK_DATA_RELPATH = Path(".local") / "share" / "flatpak"
@@ -437,7 +437,7 @@ _FLATPAK_DATA_RELPATH = Path(".local") / "share" / "flatpak"
 
 @dataclass(frozen=True)
 class FlatpakItem:
-    """One installed flatpak application ref (D-06), scoped user or system.
+    """One installed flatpak application ref (`PKG-FR-SNAP-REVISION`), scoped user or system.
 
     `scope` lives inside the identity string, not just as a field: this project's own
     machine has several runtimes installed in both scopes with the same application
@@ -485,7 +485,7 @@ class FlatpakItem:
 
 @dataclass(frozen=True)
 class FlatpakRemoteItem:
-    """One configured flatpak remote (D-11/D-14), scoped user or system.
+    """One configured flatpak remote (`PKG-FR-REPO-DERIVED`/`PKG-FR-APT-ORIGIN-DERIVED`), scoped user or system.
 
     Flatpak tracks remotes per-installation: `flathub` commonly exists in both scopes
     with a byte-identical URL, yet the two are separate configuration the target must
@@ -509,7 +509,7 @@ class FlatpakRemoteItem:
     the review and the decision file, all of which want an identity and a comparison,
     never a payload; the bytes themselves are synced
     separately and byte-for-byte (`flatpak_sync` stages the source's keyring file and
-    passes it to `flatpak remote-add --gpg-import`), which is ADR-020 D-12's rule that
+    passes it to `flatpak remote-add --gpg-import`), which is `PKG-FR-KEY-COPY`'s rule that
     key material is copied from the source machine and never re-fetched from a vendor.
     """
 
@@ -547,10 +547,10 @@ class FlatpakRemoteItem:
 
 @dataclass(frozen=True)
 class FlatpakMaskItem:
-    """One flatpak mask pattern (#208, D-10), scoped user or system.
+    """One flatpak mask pattern (#208, `PKG-FR-MARK-SIDE`), scoped user or system.
 
     A mask is a pattern flatpak refuses to install or update (`flatpak mask <pattern>`),
-    replicated as a PURE pattern — never filtered to installed refs (D-10) — so a mask
+    replicated as a PURE pattern — never filtered to installed refs (`PKG-FR-MARK-SIDE`) — so a mask
     edit reads as remove-old + add-new and a scope split as add + remove, reported as
     found rather than normalised. `scope` lives inside `item_id` (same reasoning as
     `FlatpakItem`/`FlatpakRemoteItem`) so the same pattern masked in both scopes falls
@@ -576,7 +576,7 @@ def _origin_display(name: str, url: str | None) -> str:
     """One side of an origin comparison, as the user meets it: the remote NAME they see in
     `flatpak list --columns=origin`, and the URL that decides which vendor it actually is.
 
-    The URL is what the comparison runs on (ADR-020 D-41), but a bare URL names nothing the
+    The URL is what the comparison runs on (`PKG-FR-FLATPAK-REMOTE-DERIVED`), but a bare URL names nothing the
     user configured, and a bare name is exactly the string that reads identical on both
     machines in the same-name-different-origin case.
 
@@ -591,14 +591,14 @@ def _origin_display(name: str, url: str | None) -> str:
 def build_flatpak_origin_mismatch_detail(
     source_origin: str, source_url: str | None, target_origin: str, target_url: str | None, machines: Machines
 ) -> str:
-    """Detail for a ref's `ORIGIN_MISMATCH` diff: the same ref, two vendors (ADR-020 D-41).
+    """Detail for a ref's `ORIGIN_MISMATCH` diff: the same ref, two vendors (`PKG-FR-FLATPAK-REMOTE-DERIVED`).
 
     Same shape and same reason as `apt_sync`'s `build_origin_mismatch_detail` — report only,
     both sides named, because neither machine is wrong and only the user can say which one
     is the odd one out. Converging it is not on the table at all here: `flatpak install
     <other remote> <installed ref>` refuses with `already installed from remote <name>`
     (measured), so the only mechanical resolution would be uninstall-then-reinstall, which
-    is a cross-vendor replacement of an app the user has, not a float (D-04).
+    is a cross-vendor replacement of an app the user has, not a float (`PKG-FR-VERSION-FLOAT`).
     """
     source = _origin_display(source_origin, source_url)
     target = _origin_display(target_origin, target_url)
@@ -893,7 +893,7 @@ def _remove_ref_diff(item: FlatpakItem) -> ItemDiff:
 def _version_mismatch_ref_diff(
     item_id: str, source_item: FlatpakItem, target_item: FlatpakItem, machines: Machines
 ) -> ItemDiff:
-    """D-04: a flatpak ref's version floats like an apt package's does — reported,
+    """`PKG-FR-VERSION-FLOAT`: a flatpak ref's version floats like an apt package's does — reported,
     never force-installed/removed to converge it. Only reachable for two items sharing the
     same `item_id`, i.e. the same ref (application, arch AND branch) in the same scope: a
     scope or branch difference is never this diff (`FlatpakItem` — it is two distinct
@@ -918,7 +918,7 @@ def _origin_mismatch_ref_diff(  # noqa: PLR0913 - sibling of _version_mismatch_r
     source_url: str | None,
     target_url: str | None,
 ) -> ItemDiff:
-    """ADR-020 D-41: a ref present on both machines from different remotes is reported and
+    """`PKG-FR-FLATPAK-REMOTE-DERIVED`: a ref present on both machines from different remotes is reported and
     never converged.
 
     `REPORT_ONLY` is forced by flatpak itself, not chosen for symmetry with `VERSION_MISMATCH`:
@@ -956,7 +956,7 @@ def _remote_names_by_scope(remotes: Sequence[FlatpakRemoteItem]) -> dict[str, fr
 
 def _remote_urls_by_scope_and_name(remotes: Sequence[FlatpakRemoteItem]) -> dict[tuple[str, str], str]:
     """`(scope, remote name) -> url`, the lookup that turns a ref's `origin` column into the
-    vendor it actually names (ADR-020 D-41).
+    vendor it actually names (`PKG-FR-FLATPAK-REMOTE-DERIVED`).
     """
     return {(item.scope, item.name): item.url for item in remotes}
 
@@ -969,7 +969,7 @@ def _same_vendor(
 ) -> bool:
     """Whether the two machines' copies of one ref provably come from the same vendor.
 
-    ADR-020 D-41: origin is compared by the remote's URL, never by its name. Both directions
+    `PKG-FR-FLATPAK-REMOTE-DERIVED`: origin is compared by the remote's URL, never by its name. Both directions
     of that rule matter here and pull opposite ways, which is why neither comparison alone is
     the answer:
 
@@ -1049,7 +1049,7 @@ def _diff_flatpak_refs(
 
 @dataclass(frozen=True)
 class _DerivedRemote:
-    """One remote this run must provision because an approved ref needs it (ADR-020 D-41).
+    """One remote this run must provision because an approved ref needs it (`PKG-FR-FLATPAK-REMOTE-DERIVED`).
 
     Not an `ItemDiff` and never in a review group: the user decided about a ref, and the
     remote is the mechanism that delivers it. `reason` is carried so a failure can say why
@@ -1066,7 +1066,7 @@ class _DerivedRemote:
 @dataclass(frozen=True)
 class _RemoteConflict:
     """One remote this run would repoint that a machine-specific target ref takes as its
-    origin (ADR-020 D-41) — the only remote CHANGE that is still a question.
+    origin (`PKG-FR-FLATPAK-REMOTE-DERIVED`) — the only remote CHANGE that is still a question.
 
     Both configurations are carried, never a rendering of the difference between them, for
     the reason `_remote_conflict_versions` documents. Unlike apt's file-level counterpart
@@ -1112,7 +1112,7 @@ def _derive_remotes(
     into. Deriving one remote too many in the rare cross-scope case costs a
     `flatpak remote-add`; deriving one too few costs the install.
 
-    The attribution map is D-39's: a derived write has no item to fail, so it fails every
+    The attribution map is `PKG-FR-DERIVED-FAILURE`'s: a derived write has no item to fail, so it fails every
     approved ref that named it.
     """
     derived: dict[str, _DerivedRemote] = {}
@@ -1205,7 +1205,7 @@ def _verification_word(item: FlatpakRemoteItem) -> str:
 
 def build_remote_conflict_detail(name: str, scope: str, refs: Sequence[str], machines: Machines) -> str:
     """Detail for a remote-conflict entry: why THIS differing remote is being put to the user
-    when every other one is repointed silently (ADR-020 D-41).
+    when every other one is repointed silently (`PKG-FR-FLATPAK-REMOTE-DERIVED`).
 
     The named refs are the whole reason. They are recorded skip-always, so `filter_inert`
     keeps them out of the target manifest and they produce no diff of their own in any run —
@@ -1300,7 +1300,7 @@ def _remove_mask_diff(item: FlatpakMaskItem) -> ItemDiff:
 def _diff_flatpak_masks(
     source_items: Sequence[FlatpakMaskItem], target_items: Sequence[FlatpakMaskItem]
 ) -> list[ItemDiff]:
-    """One diff per mask `item_id` (scope + pattern) present on either side (#208, D-10).
+    """One diff per mask `item_id` (scope + pattern) present on either side (#208, `PKG-FR-MARK-SIDE`).
 
     Pure membership, no `CHANGE`: a mask has no value to change, only presence — so
     source-has & target-lacks -> `INSTALL` (add the mask on target); target-has &
@@ -1331,12 +1331,12 @@ def _diff_flatpak_masks(
 
 
 def flatpak_sync_exclude_paths() -> list[Path]:
-    """The single absolute path this job owns (D-29), resolved against `Path.home()`
+    """The single absolute path this job owns (`PKG-FR-SNAP-DATA-BOUNDARY`), resolved against `Path.home()`
     at call time exactly like `vscode_state_exclude_paths()`/`snap_sync_exclude_paths()`.
 
     Returns `~/.local/share/flatpak` ONLY — never `~/.var/app`, which is
     per-application user data that stays folder_sync's territory (module docstring).
-    D-17's job-before-folder_sync ordering is what lets `flatpak install` create this
+    `PKG-FR-JOB-ORDER`'s job-before-folder_sync ordering is what lets `flatpak install` create this
     store before folder_sync's own data lands on top of it.
     """
     return [Path.home() / _FLATPAK_DATA_RELPATH]
@@ -1389,7 +1389,7 @@ class FlatpakSyncJob(PackageSyncJob):
         self._source_trust_anchors: dict[str, str] = {}
         self._target_trust_anchor_digests: frozenset[str] = frozenset()
         # Set by `accept_review()` from the approved ref installs, consumed by `apply()`:
-        # the remotes to provision, which approved ref depended on each (D-39), and the
+        # the remotes to provision, which approved ref depended on each (`PKG-FR-DERIVED-FAILURE`), and the
         # writes that failed, keyed by remote_id.
         self._derived_remotes: tuple[_DerivedRemote, ...] = ()
         self._ref_derived_remote_ids: dict[str, frozenset[str]] = {}
@@ -1414,7 +1414,7 @@ class FlatpakSyncJob(PackageSyncJob):
         self._target_home: str | None = None
 
     async def capture_source_items(self) -> Sequence[FlatpakItem]:  # pyright: ignore[reportIncompatibleMethodOverride]
-        """`flatpak list --app` on the source (D-06).
+        """`flatpak list --app` on the source (`PKG-FR-SNAP-REVISION`).
 
         This job overrides `plan()` and never routes through `PackageSyncJob.
         diff_items`'s apt-package-shaped dispatch (module docstring), so widening this
@@ -1475,7 +1475,7 @@ class FlatpakSyncJob(PackageSyncJob):
         return _parse_flatpak_remotes(result.stdout, scope, _parse_keyring_digests(keys.stdout))
 
     async def _capture_all_source_remotes(self) -> list[FlatpakRemoteItem]:
-        """Both scopes, one call each (D-14): flatpak tracks remotes per-installation
+        """Both scopes, one call each (`PKG-FR-APT-ORIGIN-DERIVED`): flatpak tracks remotes per-installation
         even when the URL is identical, so `flathub` in both scopes needs two reads.
         """
         remotes: list[FlatpakRemoteItem] = []
@@ -1502,7 +1502,7 @@ class FlatpakSyncJob(PackageSyncJob):
         return _parse_flatpak_masks(result.stdout, scope)
 
     async def _capture_all_source_masks(self) -> list[FlatpakMaskItem]:
-        """Both scopes, one call each (D-10): masks are per-installation like remotes,
+        """Both scopes, one call each (`PKG-FR-MARK-SIDE`): masks are per-installation like remotes,
         so a pattern masked in both scopes is two independent reads.
         """
         masks: list[FlatpakMaskItem] = []
@@ -1651,7 +1651,7 @@ class FlatpakSyncJob(PackageSyncJob):
 
         Diffs are ordered refs -> masks in the returned `diffs` tuple: a mask applied before
         its refs could suppress an auto-pulled dependency of a ref being installed the same
-        run (D-08). Remotes are not in this ordering at all: `apply()` writes the derived
+        run (`PKG-FR-MACHINE-SPECIFIC`). Remotes are not in this ordering at all: `apply()` writes the derived
         ones ahead of the whole loop and deletes the unused ones after it.
 
         Ruling 6's conflicts are computed here too and cost no command at all: every fact
@@ -1736,7 +1736,7 @@ class FlatpakSyncJob(PackageSyncJob):
             self.machines,
         )
         mask_diffs = _diff_flatpak_masks(source_masks, target_masks)
-        # Ordering (D-08): refs -> masks. A mask must land AFTER the refs so it can never
+        # Ordering (`PKG-FR-MACHINE-SPECIFIC`): refs -> masks. A mask must land AFTER the refs so it can never
         # suppress an auto-pulled dependency of a ref being installed the same run;
         # converge() carries the pattern fully in the item_id, so masks (unlike refs) need no
         # source-side cache.
@@ -1836,7 +1836,7 @@ class FlatpakSyncJob(PackageSyncJob):
         installed_target_refs: Sequence[FlatpakItem],
         target_decisions: Mapping[str, DecisionEntry],
     ) -> None:
-        """Find the repoints ADR-020 D-41 turns into a question instead of a silent
+        """Find the repoints `PKG-FR-FLATPAK-REMOTE-DERIVED` turns into a question instead of a silent
         write: a remote this run may repoint, whose URL or verification setting differs, and
         which a MACHINE-SPECIFIC target ref takes as its origin in that same scope.
 
@@ -1899,7 +1899,7 @@ class FlatpakSyncJob(PackageSyncJob):
 
     @override
     def _build_review_groups(self, diffs: Sequence[ItemDiff]) -> tuple[ReviewGroup, ...]:
-        """The base groups, plus D-41's conflict screen when `_capture_remote_conflicts`
+        """The base groups, plus `PKG-FR-FLATPAK-REMOTE-DERIVED`'s conflict screen when `_capture_remote_conflicts`
         found one.
 
         That screen is the two-answer one (`REPO_CONFLICT_REVIEW_ACTION`), preceded by both
@@ -1939,7 +1939,7 @@ class FlatpakSyncJob(PackageSyncJob):
         is built where it is: the input is the set of APPROVED items, which does not exist
         until the review returns. Every fact it reads was captured in `plan()`, so this stays synchronous.
 
-        A conflict the user declined (ruling 6) leaves the derived set but stays in the D-39
+        A conflict the user declined (ruling 6) leaves the derived set but stays in the `PKG-FR-DERIVED-FAILURE`
         attribution map, and that asymmetry IS the rule: the remote is not repointed, and
         every approved ref that named it fails saying so instead of being installed from the
         URL the target still has. `_origin_refusal` would refuse those installs anyway — it
@@ -1961,7 +1961,10 @@ class FlatpakSyncJob(PackageSyncJob):
             self._source_runtime_by_ref_id,
         )
         skipped = {
-            remote_id: f"the user chose to keep {self.machines.target}'s own version of it for now (ADR-020 D-41)"
+            remote_id: (
+                f"the user chose to keep {self.machines.target}'s own version of it for now "
+                "(`PKG-FR-FLATPAK-REMOTE-DERIVED`)"
+            )
             for remote_id in self._remote_conflicts
             if outcome.decisions.get(_conflict_id(remote_id)) != Decision.APPLY
         }
@@ -1971,7 +1974,7 @@ class FlatpakSyncJob(PackageSyncJob):
 
     @override
     async def _record_permanent_skips(self, plan: PackagePlan, decisions: Mapping[str, Decision]) -> None:
-        """The base recording pass, minus every `flatpak:remote:` id (ADR-020 D-41).
+        """The base recording pass, minus every `flatpak:remote:` id (`PKG-FR-FLATPAK-REMOTE-DERIVED`).
 
         The interactive flow already cannot produce a `SKIP_ALWAYS` for one — the removal
         group is absent from `_PROMOTABLE_ACTIONS`, so the promotion screen never offers it
@@ -1998,7 +2001,7 @@ class FlatpakSyncJob(PackageSyncJob):
 
         The ordering `plan()` used to carry in its `diffs` tuple lives here now, and has to:
         no remote is a diff in any direction, so nothing in the base loop would reach one.
-        Remote, then filter, then install (`PKG-FR-FLATPAK-FILTER`) — the first two are D-14's
+        Remote, then filter, then install (`PKG-FR-FLATPAK-FILTER`) — the first two are `PKG-FR-APT-ORIGIN-DERIVED`'s
         guarantee that everything an approved ref depends on is in place before the loop issues
         its first `flatpak install`, and the filter is one of those things rather than an
         afterthought put back once the installs are safely past. `_delete_unused_remotes` is
@@ -2063,7 +2066,7 @@ class FlatpakSyncJob(PackageSyncJob):
         `--confirm-each-command`; this is what tells an ordinary run.
 
         Keyed on the derived set rather than the source's remote list: a remote no approved
-        ref needs is never provisioned (D-41). `_derived_remotes` is deduplicated by remote
+        ref needs is never provisioned (`PKG-FR-FLATPAK-REMOTE-DERIVED`). `_derived_remotes` is deduplicated by remote
         id, so a remote several approved refs need still warns once.
         """
         source_item = self._source_remotes_by_id.get(derived.remote_id)
@@ -2098,7 +2101,7 @@ class FlatpakSyncJob(PackageSyncJob):
 
         A failure is recorded against the remote, never raised: there is no item to fail
         here, so it is charged to the approved refs that needed it (`_derived_remote_failure`,
-        D-39). The exit code is not treated as proof of success either — `_origin_refusal`
+        `PKG-FR-DERIVED-FAILURE`). The exit code is not treated as proof of success either — `_origin_refusal`
         re-reads the target before each install, which is what actually catches a
         `remote-add --if-not-exists` that exited 0 and changed nothing.
         """
@@ -2161,7 +2164,7 @@ class FlatpakSyncJob(PackageSyncJob):
 
     def _derived_remote_failure(self, item_id: str) -> str | None:
         """Why an approved ref cannot be installed because a remote it needed did not get
-        provisioned (D-39) — the derived write has no item of its own to carry the failure.
+        provisioned (`PKG-FR-DERIVED-FAILURE`) — the derived write has no item of its own to carry the failure.
         """
         for remote_id in sorted(self._ref_derived_remote_ids.get(item_id, frozenset())):
             reason = self._failed_derived_remotes.get(remote_id)
@@ -2429,8 +2432,9 @@ class FlatpakSyncJob(PackageSyncJob):
     @override
     async def converge(self, diff: ItemDiff) -> CommandResult:
         """Add/install/remove/delete, dispatched by item class then action — the only
-        D-06/D-14-safe verbs (module docstring). One item per invocation (D-27) so a
-        single bad item cannot fail the whole batch. Every command is prefixed with
+        `PKG-FR-SNAP-REVISION`/`PKG-FR-APT-ORIGIN-DERIVED`-safe verbs (module docstring).
+        One item per invocation (`PKG-FR-OUTCOME-FAILED`) so a single bad item cannot fail
+        the whole batch. Every command is prefixed with
         `sudo` if and only if the item's own scope is `system` (`_sudo_prefix`,
         T-02-23): a `--user` command never runs as root, and a `--system` command
         always does, regardless of which of the four verbs it is.
@@ -2471,7 +2475,7 @@ class FlatpakSyncJob(PackageSyncJob):
                     f"no ref captured from {self.machines.source} for {diff.label} (item_id={diff.item_id!r}); "
                     "was plan() run before converge()?"
                 )
-            # D-39 first: a derived write that failed has no item of its own, and its own
+            # `PKG-FR-DERIVED-FAILURE` first: a derived write that failed has no item of its own, and its own
             # stderr says far more than the symptom `_origin_refusal` would report.
             blocked = self._derived_remote_failure(diff.item_id) or self._remote_filter_failure(source_item)
             if blocked is not None:
@@ -2493,11 +2497,11 @@ class FlatpakSyncJob(PackageSyncJob):
 
         raise ConvergeItemFailed(
             f"FlatpakSyncJob.converge: unsupported action {diff.action.value!r} for a flatpak ref ({diff.label}) "
-            "— version mismatches are report_only per D-04 and never reach converge()"
+            "— version mismatches are report_only per `PKG-FR-VERSION-FLOAT` and never reach converge()"
         )
 
     async def _converge_mask(self, diff: ItemDiff) -> CommandResult:
-        """Add or remove one flatpak mask (#208, D-10). Scope + pattern come entirely
+        """Add or remove one flatpak mask (#208, `PKG-FR-MARK-SIDE`). Scope + pattern come entirely
         from the item_id (no source-side lookup, unlike refs/remotes): a mask is a pure
         pattern, so `_split_flatpak_item_id(..., "mask")` recovers everything converge
         needs. `sudo` iff system scope (`_sudo_prefix`), the pattern `shlex.quote`d.
@@ -2506,7 +2510,7 @@ class FlatpakSyncJob(PackageSyncJob):
         the remove direction only ever targets a pattern the target scope actually
         reported (it came from a REMOVE diff against the target's own mask set), so
         `mask --remove` never hits the exit-1 non-existent-pattern path. Exit code alone
-        decides pass/fail (D-27).
+        decides pass/fail (`PKG-FR-OUTCOME-FAILED`).
         """
         scope, pattern = _split_flatpak_item_id(diff.item_id, "mask")
         flag = scope_flag(scope)
@@ -2552,7 +2556,7 @@ class FlatpakSyncJob(PackageSyncJob):
         `flatpak remote-add --gpg-import` only READS the file, and a system-scope converge
         runs under sudo, where root reads the staged copy in the user's cache without it ever
         being moved into a root-owned directory. The bytes are the source's own (ADR-020
-        D-12) — never re-fetched from a vendor — and `_discard_staged_file` removes the copies
+        `PKG-FR-KEY-COPY`) — never re-fetched from a vendor — and `_discard_staged_file` removes the copies
         afterwards.
         """
         if not item.gpg_verify:
@@ -2704,7 +2708,7 @@ class FlatpakSyncJob(PackageSyncJob):
         ref — different commit, different collection id, different binary — and
         `flatpak install --assumeyes flathub <ref>` installs it at exit 0 with no warning,
         while `flatpak list --columns=origin` reports `flathub` on both machines. Only the
-        URL separates the two, so the URL is what is compared (ADR-020 D-41: an origin is
+        URL separates the two, so the URL is what is compared (`PKG-FR-FLATPAK-REMOTE-DERIVED`: an origin is
         a remote's URL, never its name).
 
         GPG verification is compared too: a ref the source takes from a verified remote,
@@ -2719,11 +2723,14 @@ class FlatpakSyncJob(PackageSyncJob):
         if source_remote is None:
             return (
                 f"{self.machines.source} has no {scope}-scope remote named {origin!r}, so the ref's own origin "
-                "cannot be replicated (ADR-020 D-41)"
+                "cannot be replicated (`PKG-FR-FLATPAK-REMOTE-DERIVED`)"
             )
         target_remote = (await self._target_remotes_now()).get(remote_id)
         if target_remote is None:
-            return f"origin remote {origin!r} ({scope}) is not configured on {self.machines.target} (D-14)"
+            return (
+                f"origin remote {origin!r} ({scope}) is not configured on {self.machines.target} "
+                "(`PKG-FR-APT-ORIGIN-DERIVED`)"
+            )
         if target_remote.url != source_remote.url:
             return (
                 f"{self.machines.target}'s {scope}-scope remote {origin!r} points at {target_remote.url}, "
@@ -2744,11 +2751,11 @@ class FlatpakSyncJob(PackageSyncJob):
 
     async def _installed_origin_refusal(self, scope: str, ref: str, expected_origin: str) -> str | None:
         """`None` if `ref` really did land in `scope` from `expected_origin`'s repository,
-        otherwise why not — read back off the target AFTER the install (ADR-020 D-41's
-        "checked, not inferred", the flatpak counterpart of D-35).
+        otherwise why not — read back off the target AFTER the install (`PKG-FR-FLATPAK-REMOTE-DERIVED`'s
+        "checked, not inferred", the flatpak counterpart of `PKG-FR-APT-ORIGIN-VERIFY`).
 
         The read is `_FLATPAK_LIST_CMD`, not `flatpak info --show-origin`, because ADR-022
-        D-03 forbids an ambiguous discriminator and `flatpak info` exits 1 both for a ref
+        `PKG-FR-APT-SCOPE` forbids an ambiguous discriminator and `flatpak info` exits 1 both for a ref
         that is not installed (data — this function's own finding) and for an installation
         that cannot be opened (a probe that did not answer). The listing separates them: a
         ref that is not installed is simply an absent row at exit 0, so a non-zero exit
@@ -2800,7 +2807,7 @@ class FlatpakSyncJob(PackageSyncJob):
         """Whether ANY system-scope ref, remote or mask exists on either machine — the
         gate for `validate()`'s sudo check (T-02-23, ASVS V4): user-scope flatpak
         operations need no root at all, so this job never asks for a privilege it
-        will not use. A system-scope mask on either machine (#208, D-07) writes into
+        will not use. A system-scope mask on either machine (#208, `PKG-FR-SKIP-ONCE`) writes into
         `/var/lib/flatpak` just like a system remote, so it too requires target sudo.
         """
         if any(item.scope == "system" for item in await self.capture_source_items()):

@@ -483,7 +483,7 @@ class TestStateWritesReachTheGate:
 
     `docs/jobs/package-sync.md` promises the gate covers the machine-local decision files
     on BOTH machines and the snippet registry, and both stores are constructed with either
-    executor depending on which machine holds the item (D-08a) — so the assertion has to be
+    executor depending on which machine holds the item (`PKG-FR-MACHINE-SPECIFIC`) — so the assertion has to be
     made per role, not once. A read of either file must not prompt: the whole store would
     become unusable at the gate if `load()` asked too.
     """

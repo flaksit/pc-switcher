@@ -108,7 +108,7 @@ Several groups are excluded from the mirror and cannot be re-included by any fil
 Unconditional:
 
 - pc-switcher's own runtime state — `~/.local/share/pc-switcher/` (lock file, sync history, logs) — so a sync never disturbs the target's sync state or per-machine logs (ADR-017); its install itself (uv tool venv and `~/.local/bin` shim) mirrors like any other file, so it stays consistent with the interpreter it depends on.
-- pc-switcher's machine-specific package decision files — `~/.config/pc-switcher/*.decisions.yaml` (one file per package manager) — regardless of which package jobs are enabled, so a machine-specific package list is never accidentally pushed to a peer (D-09; see [Package Sync](package-sync.md#machine-specific-packages)).
+- pc-switcher's machine-specific package decision files — `~/.config/pc-switcher/*.decisions.yaml` (one file per package manager) — regardless of which package jobs are enabled, so a machine-specific package list is never accidentally pushed to a peer (`PKG-FR-MACHINE-SPECIFIC`; see [Package Sync](package-sync.md#machine-specific-packages)).
 - the VS Code state DBs (`state.vscdb` and `state.vscdb.backup` for Code, Antigravity, Cursor, VSCodium, plus the install-shared `~/.vscode-shared/sharedStorage/`) — `vscode_state_sync` merges them selectively so machine-bound account entries are never clobbered, and hiding them from the mirror is what makes that merge authoritative (ADR-018; see [VS Code state sync](vscode-state-sync.md)).
 
 Conditional — excluding a path nobody manages would strand it rather than protect it, so these apply only with their owning job enabled:

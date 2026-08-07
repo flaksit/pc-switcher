@@ -383,7 +383,7 @@ Every executor call that is not purely read-only passes `mutates="<phrase>"`, wh
 
 ### Sequential Execution
 
-Sync jobs run one at a time, in config order, with no dependency graph. The one ordering rule is validated rather than resolved: the seven package jobs must be listed before `folder_sync` (D-17), otherwise config validation fails.
+Sync jobs run one at a time, in config order, with no dependency graph. The one ordering rule is validated rather than resolved: the seven package jobs must be listed before `folder_sync` (`PKG-FR-JOB-ORDER`), otherwise config validation fails.
 
 The two `DiskSpaceMonitorJob`s run concurrently in the same `TaskGroup` and are cancelled when the job loop ends.
 

@@ -248,7 +248,7 @@ _POLICY_NO_CANDIDATE = "pkg-a:\n  Installed: (none)\n  Candidate: (none)\n  Vers
 def foo_source_responses(**overrides: CommandResult) -> dict[str, CommandResult]:
     """A source machine whose `pkg-a` comes from the repository `foo.sources` declares.
 
-    The only shape that makes a repository travel now (ADR-020 D-37): a source file is
+    The only shape that makes a repository travel now (`PKG-FR-REPO-CONFLICT`): a source file is
     derived from the packages approved from it, so a test that wants `foo.sources` written
     must give the source a package whose origin `foo.sources` serves. `foo.gpg` is the key
     that file names, present on the source, so the repository is writable.
@@ -271,7 +271,7 @@ def foo_target_side_effect(
 
     Two different answers to one command, which is the run's real shape: the plan-time
     policy read is what derives the repository (no candidate -> the source's origin has to
-    be replicated), and the post-`apt-get update` read is what D-35 verifies the install
+    be replicated), and the post-`apt-get update` read is what `PKG-FR-APT-ORIGIN-VERIFY` verifies the install
     against. A fixture answering both the same way could not tell the two apart.
     """
     return respond_with_policy_sequence(
@@ -291,7 +291,7 @@ _VENDOR_LIST = "deb [signed-by=/etc/apt/keyrings/vendor.gpg] https://vendor.exam
 
 
 def decision_file(*item_ids: str) -> str:
-    """A decision file recording each id skip-always as an apt package (D-08)."""
+    """A decision file recording each id skip-always as an apt package (`PKG-FR-MACHINE-SPECIFIC`)."""
     body = "".join(
         f'  "{item_id}":\n'
         "    item_class: apt_package\n"

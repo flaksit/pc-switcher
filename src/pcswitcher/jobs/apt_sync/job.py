@@ -250,18 +250,19 @@ class AptSyncJob(PackageSyncJob):
     @override
     async def plan(self) -> PackagePlan:
         """Read-only. The package diff, extended with plan-time transaction-collateral
-        classification (D-30) and the `/etc/apt` item classes (D-11/D-12/D-13).
+        classification (`PKG-FR-COLLATERAL-MANUAL`) and the `/etc/apt` item classes
+        (`PKG-FR-REPO-DERIVED`/`PKG-FR-KEY-COPY`/`PKG-FR-APT-IGNORES`).
 
-        Unreproducible detection is NOT apt's business (D-18): it moved to
+        Unreproducible detection is NOT apt's business (`PKG-FR-MANUAL-SCOPE`): it moved to
         `manual_installs_sync` with its own enable flag, so this job never emits an
         `UNREPRODUCIBLE` diff.
 
         The origin state is captured FIRST, ahead of the package diff: a package's diff class
-        depends on which repository file on the source declares its origin (D-34), so the
+        depends on which repository file on the source declares its origin (`PKG-FR-APT-IDENTITY`), so the
         `/etc/apt` reference scans are an input to the package diff rather than a by-product of
         the repository one.
 
-        The ESM gate (D-38) runs next, for three reasons that each rule out a later spot:
+        The ESM gate (`PKG-FR-DISTRO-FILES`) runs next, for three reasons that each rule out a later spot:
         one of its answers ends the job, so it must precede the expensive planning and a
         review the user would otherwise answer for nothing; its probe is a read, and this is
         the last read-only phase; and it puts the target's environment problem and its
@@ -311,7 +312,7 @@ class AptSyncJob(PackageSyncJob):
         # rank (e.g. every APT_PACKAGE diff, or every APT_PIN/APT_CONFIG diff) the
         # original relative order — base diff, then collateral, then repo diffs — is
         # preserved.
-        # This job's OWN extra diffs (repo files) also need the D-08a inertness pass the
+        # This job's OWN extra diffs (repo files) also need the `PKG-FR-MACHINE-SPECIFIC` inertness pass the
         # package half already ran over its diffs — they are derived from directory digests,
         # so no input item carried their id into `filter_inert`. The decision files
         # `_plan_packages` just read are reused rather than re-read.
@@ -332,7 +333,7 @@ class AptSyncJob(PackageSyncJob):
         with any mark whose package or config file that machine no longer has left out
         (`_load_live_decisions`), and each side's captured/queried items are filtered
         through its OWN file before
-        diffing (D-08): an item recorded on the source is dropped from the source
+        diffing (`PKG-FR-MACHINE-SPECIFIC`): an item recorded on the source is dropped from the source
         manifest so it is never pushed to a peer again; an item recorded on the target
         is dropped from the target query so it is never proposed for
         install/remove/change again — either way it produces no `ItemDiff` and never
@@ -542,12 +543,13 @@ class AptSyncJob(PackageSyncJob):
         package_diffs: Sequence[ItemDiff],
     ) -> list[ItemDiff]:
         """Capture the two remaining `/etc/apt` directories and diff the item classes that
-        still HAVE a review direction (D-11/D-13, ADR-020 D-37), by whole-file digest.
+        still HAVE a review direction (`PKG-FR-REPO-DERIVED`/`PKG-FR-APT-IGNORES`/`PKG-FR-REPO-CONFLICT`), by
+        whole-file digest.
 
         Two of the three are now removal-only. A repository or pin the source has travels
         because a package needs it or because pins always travel, neither of which is a
         question; apt config keeps all three directions, because no package implies whether
-        a proxy or a `no-install-recommends` policy should be replicated (D-37).
+        a proxy or a `no-install-recommends` policy should be replicated (`PKG-FR-APTCONF`).
 
         Both surviving repository questions are narrowed here, against what the TARGET still
         installs, before any diff is built — and narrowed AGAIN in `plan_second_round`, which
@@ -566,7 +568,7 @@ class AptSyncJob(PackageSyncJob):
           gate `flatpak_sync._capture_remote_conflicts` applies). Whether it becomes a
           question is the second round's, against the approved installs
           (`PKG-FR-REPO-CONFLICT`). Every other differing file is overwritten silently under
-          D-37, so asking about it would put a decision to the user that changes nothing.
+          `PKG-FR-APTCONF`, so asking about it would put a decision to the user that changes nothing.
 
         This is also where the collaborators that need the full `/etc/apt` picture are
         assembled, since every fact they decide over exists by the end of it.
@@ -661,11 +663,11 @@ class AptSyncJob(PackageSyncJob):
         """Carve apt's non-standard screens out of the ordinary decision groups — the FIRST
         round's share of them.
 
-        Pin DELETIONS (ADR-020 D-07) become a `REPO_REMOVAL_REVIEW_ACTION` group: the same
+        Pin DELETIONS (`PKG-FR-SKIP-ONCE`) become a `REPO_REMOVAL_REVIEW_ACTION` group: the same
         decision screen starting at skip-once, but offered only two answers because a
         permanent machine-local mark on a file whose purpose is to feed packages would
         silently change where those packages come from forever. Manual-collateral diffs
-        (D-30) become a `COLLATERAL_REVIEW_ACTION` group whose entries take the three-way
+        (`PKG-FR-COLLATERAL-MANUAL`) become a `COLLATERAL_REVIEW_ACTION` group whose entries take the three-way
         apply / keep-the-package / stop-the-sync resolution.
 
         Both trail the base groups — packages and apt config — so the user sees the bulk of
@@ -677,7 +679,7 @@ class AptSyncJob(PackageSyncJob):
         `plan_second_round`. A repository removal diff is still carved out of the ordinary
         groups, so it never reaches a checkbox screen on the way past.
 
-        The unreproducible carve-out is gone (D-18: that concern moved to
+        The unreproducible carve-out is gone (`PKG-FR-MANUAL-SCOPE`: that concern moved to
         `manual_installs_sync`).
         """
         collateral = [diff for diff in diffs if is_collateral_diff(diff)]
@@ -883,7 +885,7 @@ class AptSyncJob(PackageSyncJob):
         everything else (`apply()`'s existing loop) instead of being a special case bolted
         onto the end.
 
-        Runs AFTER `plan()` (so decisions exist) and is exactly where D-24's review
+        Runs AFTER `plan()` (so decisions exist) and is exactly where `PKG-FR-BATCHED`'s review
         already stopped being relevant for THIS item — the refresh is infrastructure
         the user never ticks, not a repository they decided about. Positioned immediately
         after the last non-package diff (repository group already sorted
@@ -892,13 +894,13 @@ class AptSyncJob(PackageSyncJob):
         from it.
 
         The marker is ALSO what carries the work no diff represents: the derived writes
-        (ADR-020 D-37/D-38 — a repository, a pin or a distribution file travels without a
+        (`PKG-FR-REPO-DERIVED`/`PKG-FR-DISTRO-FILES` — a repository, a pin or a distribution file travels without a
         review line, so nothing else would ever route into the repository unit), and a
         rotated keyring, which changes no source file at all. `Keyrings.pending_work` is a
         superset test — the unit recomputes the exact set from the real decisions and returns
         early if it is empty — so the cost of a false positive is one no-op call.
 
-        Manual-collateral decisions (D-30) are resolved first: applying a
+        Manual-collateral decisions (`PKG-FR-COLLATERAL-MANUAL`) are resolved first: applying a
         collateral item marks its package approved so the apply-time guard lets the
         removal through, while a skip is translated into `SKIP_ONCE` on the approved
         packages that cause that collateral, so a declined collateral cleanly leaves them
@@ -998,7 +1000,7 @@ class AptSyncJob(PackageSyncJob):
 
     @override
     async def _record_permanent_skips(self, plan: PackagePlan, decisions: Mapping[str, Decision]) -> None:
-        """The base recording pass, minus every `apt:source:`/`apt:pin:` id (ADR-020 D-07).
+        """The base recording pass, minus every `apt:source:`/`apt:pin:` id (`PKG-FR-SKIP-ONCE`).
 
         The interactive flow already cannot produce a `SKIP_ALWAYS` for one — their groups
         are absent from `_PROMOTABLE_ACTIONS`, so the promotion screen never offers them —
@@ -1009,7 +1011,7 @@ class AptSyncJob(PackageSyncJob):
 
         `apt:config:` is deliberately not filtered: it keeps the full three-way decision and
         the machine-local registry, because no approved package implies whether a proxy or a
-        recommends policy should travel (D-37).
+        recommends policy should travel (`PKG-FR-APTCONF`).
         """
         recordable = PackagePlan(
             manager=plan.manager,
@@ -1071,7 +1073,7 @@ class AptSyncJob(PackageSyncJob):
         `apt-get install` dispatch (#208, D4). Repository-group items (pins, apt config,
         sources) and the synthetic metadata-refresh marker converge as one ordered,
         transactional unit instead — the unit that also provisions and collects signing keys
-        around its own writes. Unreproducible items are not apt's concern (D-18) —
+        around its own writes. Unreproducible items are not apt's concern (`PKG-FR-MANUAL-SCOPE`) —
         `manual_installs_sync` owns their snippet replay — so this only ever sees hold,
         repository-group, `INSTALL` or `REMOVE` diffs.
         """

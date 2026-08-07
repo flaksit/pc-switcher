@@ -1,4 +1,4 @@
-"""Signing keys: provisioned before a repository is written, collected after one is removed (D-12).
+"""Signing keys: provisioned before a repository is written, collected after one is removed (`PKG-FR-KEY-COPY`).
 
 Split out of the former single `test_apt_sync.py`.
 """
@@ -608,7 +608,7 @@ _TARGET_UBUNTU_SOURCES = f"Types: deb\nURIs: {_ARCHIVE}\nSuites: noble\nComponen
 def _owned_by(package: str, origin: str) -> dict[str, CommandResult]:
     """What the TARGET answers about a package that OWNS one of its keys: where its
     installed version came from, and — through the target's own `ubuntu.sources` — which
-    origins count as the distribution's on that machine (D-35).
+    origins count as the distribution's on that machine (`PKG-FR-APT-ORIGIN-VERIFY`).
     """
     return {
         f"apt-cache policy {package}": CommandResult(0, _policy_block(package, origin), ""),
@@ -858,7 +858,7 @@ class TestSharedKeyringsDirectory:
 
     @pytest.mark.asyncio
     async def test_a_genuinely_missing_key_is_still_reported_dangling(self) -> None:
-        """C86 — the check must still bite, and it bites on the PACKAGE now (D-39): `ghost.gpg`
+        """C86 — the check must still bite, and it bites on the PACKAGE now (`PKG-FR-DERIVED-FAILURE`): `ghost.gpg`
         exists in no key directory on the source, so the only file that could deliver
         `pkg-a`'s origin cannot be written and the package is reported, not installed.
 

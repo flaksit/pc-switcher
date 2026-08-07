@@ -156,7 +156,7 @@ def _make_home_filter() -> str:
     """Central `merge` filter for the /home folder_sync entry (#166).
 
     `- .local/share/flatpak` is here purely for cost. The shipped `home.filter` ships no
-    such rule on purpose (D-29: enabling `sync_jobs.flatpak_sync` excludes that store
+    such rule on purpose (`PKG-FR-SNAP-DATA-BOUNDARY`: enabling `sync_jobs.flatpak_sync` excludes that store
     non-overridably, and a user who does not enable it legitimately wants it mirrored), but
     the calling test's config does NOT enable flatpak_sync, and the test VMs carry a ~2.8 GB Flathub
     runtime under it (`vm-test-fixtures.sh`). Mirroring it would add gigabytes to a test

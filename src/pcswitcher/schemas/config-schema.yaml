@@ -63,8 +63,8 @@ properties:
         type: boolean
         default: false
         description: "Test job that fails at configurable time"
-      # Jobs implemented in Phase 2 (package management sync, D-17: run before folder_sync
-      # so apps are provisioned before their data lands):
+      # Package-sync jobs (`PKG-FR-JOB-ORDER`: run before folder_sync so apps are provisioned
+      # before their data lands):
       apt_sync:
         type: boolean
         default: false
@@ -93,7 +93,7 @@ properties:
         type: boolean
         default: false
         description: "Detect and reproduce unowned installs under /usr/local and /opt, after a batched review (destructive; opt-in)"
-      # Jobs implemented in Phase 1:
+      # Folder-sync jobs:
       folder_sync:
         type: boolean
         default: false

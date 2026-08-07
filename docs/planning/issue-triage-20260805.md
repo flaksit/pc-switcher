@@ -1,6 +1,6 @@
 # Issue triage — 2026-08-05
 
-Triage of every open GitHub issue that is not claimed by an open PR and does not carry `status:done` or `status:working`. 40 issues qualify. Excluded: the 29 issues linked as closing references on PR #206 (Phase 2) and PR #157, plus #118 and #216 (`status:working`).
+Triage of every open GitHub issue that is not claimed by an open PR and does not carry `status:done` or `status:working`. 40 issues qualify. Excluded: the 29 issues linked as closing references on PR #206 and PR #157, plus #118 and #216 (`status:working`).
 
 ## Labels
 
@@ -29,7 +29,7 @@ Two deliberate non-additions:
 
 #210 "Output executed commands to DEBUG" is implemented in PR #206 by two commits: `6d162411` (every command, transfer and background process traced verbatim at DEBUG before it runs, plus `declare_modification()` for in-process writes) and `9d646821` (each command's stdout and stderr traced verbatim after it). The trace lives in `Executor`, the single funnel, enforced by `tests/unit/test_mutates_audit.py`. The one exception is `withhold=` for the ESM subscriber payload (`PKG-FR-ESM-PRIVACY`), where the command and the reason are still logged.
 
-#211 "Package sources/keys/channels follow package selection" is implemented in PR #206 under ADR-020 D-11–D-14, D-34, D-36, D-41, D-02. Repository files, keyrings, pins, flatpak remotes and blocks are derived from the packages or refs approved in the review and provisioned before the install that needs them; "package ticked, its repository unticked" is unrepresentable (`diffing.py:351-357`, `flatpak_sync.py:22-35`). Removal still asks, which is the one case the issue wanted kept. A failed derived write fails every item that depended on it, naming the file or the remote.
+#211 "Package sources/keys/channels follow package selection" is implemented in PR #206 under ADR-020 (repository files, keyrings, pins, flatpak remotes and blocks are all derived; see `PKG-FR-REPO-DERIVED`, `PKG-FR-KEY-COPY`, `PKG-FR-PIN-ALWAYS`, `PKG-FR-FLATPAK-REMOTE-DERIVED`, `PKG-FR-BLOCKS-DERIVED`). Repository files, keyrings, pins, flatpak remotes and blocks are derived from the packages or refs approved in the review and provisioned before the install that needs them; "package ticked, its repository unticked" is unrepresentable (`diffing.py:351-357`, `flatpak_sync.py:22-35`). Removal still asks, which is the one case the issue wanted kept. A failed derived write fails every item that depended on it, naming the file or the remote.
 
 Both are now `Closes #NNN` references on PR #206 and labelled `status:done`; they close when it merges.
 
@@ -56,7 +56,7 @@ Test and CI cluster, worth one push: #78 (integration lock not cleared when a ru
 
 Architecture milestone: #28 DAG, then #29 forever-running jobs, then #30 (one module, one job class), then #24 DiskSpaceMonitor. #23 (no btrfs), #26 (no Ubuntu 24.04 constraint) and #31 (rollback command) all need the snapshot job to become config-controlled first.
 
-After Phase 2 merges: #119 Feature 7 system configuration sync is the next milestone; #126 internal CLI (now including #217) is worth doing alongside it.
+After package sync merges: #119 Feature 7 system configuration sync is the next milestone; #126 internal CLI (now including #217) is worth doing alongside it.
 
 Backlog: #182 log viewer with #181, #178 pre-folder-sync hooks, #88 MADR migration.
 

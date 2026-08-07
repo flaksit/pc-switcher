@@ -1,5 +1,6 @@
 """Unit tests for `ManualInstallsSyncJob`: the filesystem half of what no package manager
-can reproduce (D-18/D-19) — the bounded unowned scan under `/usr/local` and `/opt`, the
+can reproduce (`PKG-FR-MANUAL-SCOPE`/`PKG-FR-MANUAL-DIFF`) — the bounded unowned scan under `/usr/local` and `/opt`,
+the
 `/opt` shape question, this job's own validation, and the marks it keeps about paths.
 
 Hand-installed `.deb` packages are `manual_deb_sync`'s (`test_manual_deb_sync.py`), and
@@ -38,7 +39,7 @@ from tests.unit.jobs.unreproducible_harness import (
     scan_finds,
 )
 
-# A registry entry for the /opt/az unowned path, with both bodies (D-22).
+# A registry entry for the /opt/az unowned path, with both bodies (`PKG-FR-VERSION-SNIPPET`).
 AZ_REGISTRY_YAML = (
     "snippets:\n"
     "  unreproducible:unowned-path:/opt/az:\n"
@@ -722,7 +723,7 @@ class TestRemovingAPathTheSourceDropped:
 
 class TestTheInstalledVersionSnippet:
     """`PKG-FR-VERSION-SNIPPET`: what "installed version" means for an unowned path is
-    whatever the entry's own `version_body` prints on the machine running it (D-22)."""
+    whatever the entry's own `version_body` prints on the machine running it (`PKG-FR-VERSION-SNIPPET`)."""
 
     @staticmethod
     def _both_hold(registry: str, source_version: str, target_version: str) -> tuple[JobContext, MagicMock, MagicMock]:

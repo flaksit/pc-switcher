@@ -1,8 +1,3 @@
-# CLAUDE.md
-
-This file provides guidance to AI agents when working with code in this repository.
-
-
 ## Project Overview
 
 **PC-switcher** is a synchronization system for seamless switching between Linux desktop machines (laptops, workstations). The goal is near-complete system-state replication rather than simple user data sync.

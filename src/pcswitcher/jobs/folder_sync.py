@@ -110,7 +110,7 @@ def _pass_display(path: str, label: str) -> str:
 #      or home layout — it just translates each absolute path from vscode_state_exclude_paths()
 #      into an rsync filter for the folder being synced (see _vscode_state_exclude_filters).
 #   3. every manager's machine-local decision file (`~/.config/pc-switcher/*.decisions.yaml`),
-#      whose home-relative GLOB is owned by packages.state (D-08/D-09). A decision file states
+#      whose home-relative GLOB is owned by packages.state (`PKG-FR-MACHINE-SPECIFIC`). A decision file states
 #      what ONE machine considers machine-specific; mirroring it would silently impose that
 #      machine's hardware exclusions on a peer. Unconditional — never gated on any package job
 #      being enabled, since a decision file must never travel even on a run where the package
@@ -124,7 +124,7 @@ def _pass_display(path: str, label: str) -> str:
 #      PKG-FR-NO-TERMINAL). A mirror of the same file would be that transfer without the
 #      question, so it is unconditional for the same reason group 3 is: with the job off there
 #      is no consent gate at all, which makes mirroring it worse, not safer.
-#   5. the `~/snap/<app>/<revision>` data dirs snap_sync owns (D-29), translated from
+#   5. the `~/snap/<app>/<revision>` data dirs snap_sync owns (`PKG-FR-SNAP-DATA-BOUNDARY`), translated from
 #      snap_sync_exclude_paths() the same way (see _snap_sync_exclude_filters). An app's
 #      active-revision dir is excluded UNLESS the target is itself on that revision, which
 #      `execute` establishes by reading the target's own `snap list` after the package jobs
@@ -133,7 +133,7 @@ def _pass_display(path: str, label: str) -> str:
 #      revision the target's snapd never installed (PKG-FR-SNAP-DATA-BOUNDARY). Unconditional,
 #      like groups 3-4: the target's own state answers the question, so a disabled or failed
 #      snap_sync changes what may be mirrored rather than whether the rule applies.
-#   6. `~/.local/share/flatpak`, which flatpak_sync owns (D-29), translated from
+#   6. `~/.local/share/flatpak`, which flatpak_sync owns (`PKG-FR-DATA-BOUNDARY`), translated from
 #      flatpak_sync_exclude_paths() the same way (see _flatpak_sync_exclude_filters) —
 #      the one group gated on its job (sync_jobs.flatpak_sync): with flatpak_sync off nobody
 #      manages that store, and excluding it anyway would strand the data unmirrored rather
@@ -465,7 +465,7 @@ class FolderSyncJob(SyncJob):
     @staticmethod
     def _decision_file_exclude_filters(folder_path: str) -> list[str]:
         """rsync `--filter` arg excluding every package manager's machine-local decision file
-        that falls under `folder_path` (D-08, D-09).
+        that falls under `folder_path` (`PKG-FR-MACHINE-SPECIFIC`).
 
         The home-relative GLOB (covers every `<manager>.decisions.yaml`, one filter
         for all of them) comes from `packages.state.DECISION_FILE_GLOB_RELPATH` —
@@ -522,7 +522,7 @@ class FolderSyncJob(SyncJob):
     @staticmethod
     def _snap_sync_exclude_filters(folder_path: str, target_snap_revisions: Mapping[str, str] | None) -> list[str]:
         """rsync `--filter` args excluding the `~/snap/<app>/<revision>` data dirs that fall
-        under `folder_path` and hold data for a revision the target is not on (D-29).
+        under `folder_path` and hold data for a revision the target is not on (`PKG-FR-SNAP-DATA-BOUNDARY`).
 
         The absolute paths come from `snap_sync_exclude_paths()` — `snap_sync` owns which
         revision directories to exclude, and keeps an app's active-revision data dir OUT of
@@ -551,7 +551,7 @@ class FolderSyncJob(SyncJob):
     @staticmethod
     def _flatpak_sync_exclude_filters(folder_path: str) -> list[str]:
         """rsync `--filter` arg excluding `~/.local/share/flatpak` when it falls under
-        `folder_path` (D-29).
+        `folder_path` (`PKG-FR-DATA-BOUNDARY`).
 
         The absolute path comes from `flatpak_sync_exclude_paths()` — `flatpak_sync`
         owns it; folder_sync only translates it into a root-anchored, first-match
@@ -628,7 +628,7 @@ class FolderSyncJob(SyncJob):
         # shlex.join quotes individual tokens (handles spaces in paths).
         # shlex.quote wraps the assembled command for the outer --rsh argument.
         ssh_cmd = shlex.join(ssh_tokens)
-        # Root on target via passwordless sudo scoped to /usr/bin/rsync (D-05).
+        # Root on target via passwordless sudo scoped to /usr/bin/rsync (ADR-013).
         return [f"--rsh={shlex.quote(ssh_cmd)}", f"--rsync-path={shlex.quote('sudo rsync')}"]
 
     async def _needs_copy_pass(self, folder: FolderEntry) -> bool:
@@ -675,17 +675,17 @@ class FolderSyncJob(SyncJob):
         - Runs as root on source via `sudo --preserve-env rsync` (preserves SSH_AUTH_SOCK
           so the ssh agent socket remains accessible).
         - Elevates to root on target via `--rsync-path='sudo rsync'` over the
-          normal-user SSH connection (D-05); root SSH login stays disabled.
-        - Uses the D-13 flag baseline (ADR-013 spells it `-aAXHS`):
+          normal-user SSH connection (ADR-013); root SSH login stays disabled.
+        - Uses ADR-013's flag baseline `-aAXHS`:
           --archive --acls --xattrs --hard-links --sparse + --numeric-ids + --delete.
-        - Adds --dry-run only when `dry_run` is True (D-12).
+        - Adds --dry-run only when `dry_run` is True (ADR-014).
         - Omits --delete when `delete` is False: `execute` runs a no-delete copy
           pass first (when the tree has per-directory filters) so every source
           `.pcswitcher-filter` reaches the target before the deleting mirror — a
           dir-merge rule only protects the target once the filter file is on the
           receiver, else --delete would remove (not protect) the files it names.
-        - Never includes --delete-excluded (excluded files must survive on target
-          — D-06) or --checksum (rsync's built-in verification is trusted — D-14).
+        - Never includes --delete-excluded (excluded files must survive on target,
+          ADR-013) or --checksum (rsync's built-in verification is trusted, ADR-013).
 
         All config-derived values (folder path, exclude patterns, target hostname)
         are shlex.quote'd to prevent shell injection (T-05-01).
@@ -739,15 +739,15 @@ class FolderSyncJob(SyncJob):
 
         # GLOBAL-FIRST filter precedence: the un-overridable excludes come first —
         # pc-switcher's runtime state (ADR-017), the VS Code state DBs (ADR-018),
-        # every manager's machine-local decision file (D-08/D-09), the install-snippet
+        # every manager's machine-local decision file (`PKG-FR-MACHINE-SPECIFIC`), the install-snippet
         # registry (whose own job carries it, under consent), the snap revision dirs the
         # target is not on, and — only when its job is enabled — the flatpak data dir
-        # (D-29); the folder's central `merge` filter (when configured) comes next so
+        # (`PKG-FR-DATA-BOUNDARY`); the folder's central `merge` filter (when configured) comes next so
         # its rules win over any per-directory file under first-match-wins; the
         # tree-wide `dir-merge /.pcswitcher-filter` is always last and gives users a
         # per-directory (gitignore-like) authoring surface. DO NOT add
         # --delete-excluded — excluded files (e.g. .ssh/id_*, .config/tailscale) must
-        # survive on the target (D-06).
+        # survive on the target (ADR-013).
         parts.extend(self._runtime_exclude_filters(folder.path))
         parts.extend(self._vscode_state_exclude_filters(folder.path))
         parts.extend(self._decision_file_exclude_filters(folder.path))
@@ -826,7 +826,7 @@ class FolderSyncJob(SyncJob):
                     continue
                 m = _PROGRESS2_RE.search(line)
                 if m:
-                    # Progress2 line: update TUI (D-15) and capture transferred bytes (WR-01).
+                    # Progress2 line: update TUI (ADR-013) and capture transferred bytes (WR-01).
                     # Groups: 1=size 2=percent (unused, see below) 3=files_xfr
                     #         4=chk prefix 5=to-check 6=total
                     # Last progress line wins — rsync emits these as running totals so the
@@ -870,7 +870,7 @@ class FolderSyncJob(SyncJob):
                             )
                         )
                 elif line[0] in (">", "<", "*", ".", "c", "h"):
-                    # Per-file --out-format line (format: "%i %n%L") — log at FULL (D-16).
+                    # Per-file --out-format line (format: "%i %n%L") — log at FULL (ADR-013).
                     # Change-type characters (rsync %i first char):
                     #   > sent to remote   < received from remote   * special message
                     #   . attribute-only   c created (dir/symlink/device)   h hard link (IN-03)
@@ -903,8 +903,8 @@ class FolderSyncJob(SyncJob):
         """Run one rsync pass: spawn, stream progress/logs, and raise on non-zero exit.
 
         Spawns rsync as an async subprocess (ADR-005 — no blocking calls), streams
-        stdout through `_stream_rsync` for TUI progress (D-15) and per-file FULL logs
-        (D-16), then checks the exit code.  Returns the pass's
+        stdout through `_stream_rsync` for TUI progress (ADR-013) and per-file FULL logs
+        (ADR-013), then checks the exit code.  Returns the pass's
         (files_transferred, bytes_transferred, files_deleted).  Shared by every pass
         `execute` runs, which name themselves via `label` (`copy` / `delete` / `mirror`).
 
@@ -934,7 +934,7 @@ class FolderSyncJob(SyncJob):
     async def execute(self) -> None:
         """Sync each active folder via rsync-over-SSH.
 
-        For each active folder (D-10):
+        For each active folder (ADR-013):
         1. When this is a real sync and the source's per-directory `.pcswitcher-filter`
            files are not already reflected on the target (`_needs_copy_pass`), runs a
            copy pass first — the same mirror WITHOUT `--delete` — so every source
@@ -946,10 +946,10 @@ class FolderSyncJob(SyncJob):
            mirror that follows is left with only deletions.  Both passes apply the
            identical filter chain, so the central `filter_file` and per-directory rules
            are respected exactly.  Skipped in dry-run (must not write to the target,
-           D-12), which makes the dry-run deletion preview pessimistic for
+           ADR-014), which makes the dry-run deletion preview pessimistic for
            per-dir-protected paths (the safe direction), and skipped when the
            per-directory filters already match on both ends (the steady state).
-        2. Runs the deleting mirror (D-13 baseline, D-11 filters, D-12 dry-run toggle).
+        2. Runs the deleting mirror (ADR-013 baseline and filters, ADR-014 dry-run toggle).
            Named `delete` when a copy pass preceded it and `mirror` when it ran alone
            and therefore did both halves of the job.
         3. On non-zero exit from either pass, logs CRITICAL and raises RuntimeError.
@@ -1009,7 +1009,7 @@ class FolderSyncJob(SyncJob):
             files_transferred = copy_files + mirror_files
             bytes_transferred = copy_bytes + mirror_bytes
 
-            # Per-folder summary (D-16). Human-readable size at INFO; exact byte
+            # Per-folder summary (ADR-013). Human-readable size at INFO; exact byte
             # count kept at DEBUG for precise diagnostics (#189).
             self._log(
                 Host.SOURCE,

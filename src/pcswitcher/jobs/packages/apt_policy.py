@@ -2,10 +2,10 @@
 
 Two jobs ask apt three different questions off the same command, and all three need the
 same version-table walk to answer them: `apt_sync` asks what repository an INSTALLED
-package came from (C26's source-removal impact, and ADR-020 D-34's provenance comparison)
-and what repository the version the TARGET would install comes from (D-34's origin
+package came from (C26's source-removal impact, and `PKG-FR-APT-IDENTITY`'s provenance comparison)
+and what repository the version the TARGET would install comes from (`PKG-FR-APT-IDENTITY`'s origin
 classification); `manual_deb_sync` asks whether a package on the SOURCE came from any
-repository at all (D-18).
+repository at all (`PKG-FR-MANUAL-SCOPE`).
 
 The installed and the candidate row are DIFFERENT rows and answer different questions —
 apt happily offers a package from one vendor while a second vendor's copy is the one
@@ -13,10 +13,10 @@ installed — so the two live behind one walker (`_origins_by_package`) that dif
 which version row it collects from.
 
 Shared here rather than duplicated per job, and here rather than on `PackageSyncJob`.
-D-15 forbids one manager's diff on the shared BASE CLASS (adr-020, "Job split into one job
+`PKG-FR-JOB-INDEPENDENCE` forbids one manager's diff on the shared BASE CLASS (adr-020, "Job split into one job
 per kind of finding"): this module defines no class and sits in no job's MRO, so the other
 managers inherit nothing from it. `manual_deb_sync`'s own rule — it never imports `apt_sync`
-(D-18) — also still holds, since both jobs import a third module instead. What is NOT
+(`PKG-FR-MANUAL-SCOPE`) — also still holds, since both jobs import a third module instead. What is NOT
 worth duplicating is a stateful indentation walker with three separate subtle rules
 (installed-block tracking, eight-space origin rows, the `/var/lib/dpkg/status` pseudo
 -origin); `apt_sync._parse_pin_file`'s docstring records what one earlier duplicated
@@ -72,7 +72,7 @@ def installed_origins_by_package(policy_output: str) -> dict[str, frozenset[str]
 
 def candidate_origins_by_package(policy_output: str) -> dict[str, frozenset[str]]:
     """Parse a batched `apt-cache policy <name...>` run into `{package: origin URIs of the
-    version apt WOULD install}` (ADR-020 D-34).
+    version apt WOULD install}` (`PKG-FR-APT-IDENTITY`).
 
     Not the same rows as `installed_origins_by_package`, and the difference is the whole
     point: a machine can have vendor A's copy installed while apt's candidate is vendor B's,
@@ -135,7 +135,7 @@ def _origins_by_package(policy_output: str, *, of_candidate: bool) -> dict[str, 
 
 def packages_installed_from_no_repository(policy_output: str, queried_names: Sequence[str]) -> frozenset[str]:
     """The `queried_names` whose INSTALLED version comes from no configured repository —
-    a bare `.deb` put on the machine with `dpkg --install` (D-18).
+    a bare `.deb` put on the machine with `dpkg --install` (`PKG-FR-MANUAL-SCOPE`).
 
     Callers MUST pass only names known to be installed (`apt-mark showmanual` on the
     machine `policy_output` came from). A name that is not installed is indistinguishable

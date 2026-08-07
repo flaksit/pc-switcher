@@ -194,13 +194,13 @@ async def simulate_apt_transaction(
     trustworthy (WR-01) — refuse rather than silently degrade.
 
     `ConvergeItemFailed` and not `ProbeFailed`, which is the deliberate boundary of ADR-022
-    D-01: apt gives this command ONE failure code for both categories. Measured in a stock
+    `PKG-FR-MANAGER-CONVERGES`: apt gives this command ONE failure code for both categories. Measured in a stock
     `ubuntu:24.04`, a name apt cannot locate exits 100 with `E: Unable to locate package`,
     which is byte-for-byte the exit code a held dpkg lock produces, and no rewrite of the
     command's SYNTAX separates them — apt offers no second code and no second mode.
 
     Apply time simulates one approved install or removal, where apt's refusal is a fact
-    about that request (ADR-020 D-27). Plan time removes the ambiguity from its ARGUMENTS
+    about that request (`PKG-FR-OUTCOME-FAILED`). Plan time removes the ambiguity from its ARGUMENTS
     instead: it rehearses only names the target's `apt-cache policy` gave a candidate for
     (`origins.OriginClassifier.target_resolvable`), so "unable to locate" is not among the
     failures it can meet. What remains there — a lock, a broken apt, an unresolvable

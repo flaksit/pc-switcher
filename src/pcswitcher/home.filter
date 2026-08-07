@@ -9,7 +9,7 @@
 # See docs/configuration.md "Filter rules" and "Coming from .gitignore" for the
 # full syntax and the anchored-vs-floating distinction.
 
-# Package-store excludes (Phase 2, D-29): no snap or flatpak rule is needed or
+# Package-store excludes (`PKG-FR-SNAP-DATA-BOUNDARY`): no snap or flatpak rule is needed or
 # shipped here. Enabling sync_jobs.snap_sync automatically and non-overridably
 # excludes the retained OLD ~/snap/<app>/<revision> data dirs while MIRRORING the
 # current revision's data dir (both machines are converged onto the same revision

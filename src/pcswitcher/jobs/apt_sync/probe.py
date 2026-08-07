@@ -164,7 +164,7 @@ def parse_source_file(
     Standard Stack). Parsed just far enough to extract these — never rewritten,
     normalised, or migrated between formats (RESEARCH Pitfall 3, deferred ideas).
 
-    One parser, three consumers: the keyring refs drive D-12's dangling-reference check
+    One parser, three consumers: the keyring refs drive `PKG-FR-KEY-COPY`'s dangling-reference check
     and keyring garbage collection, the URIs drive the source-removal impact (C26) by
     matching against the origin `apt-cache policy` reports for an installed package.
 
@@ -226,7 +226,7 @@ class SourceFileRefs:
     def files_serving(self, origins: frozenset[str]) -> frozenset[str]:
         """Every file whose repository URIs intersect `origins` — the files that would have
         to travel for a package from those origins to be installable from the same place on
-        the other machine (ADR-020 D-34).
+        the other machine (`PKG-FR-APT-IDENTITY`).
 
         The UNION, not a pick: a package's installed version can genuinely list several
         origins (a vendor repository and a security pocket both carrying it), and every one of
@@ -235,7 +235,7 @@ class SourceFileRefs:
         return frozenset(filename for filename, (_refs, uris) in self.by_filename.items() if origins & frozenset(uris))
 
     def distribution_origins(self) -> frozenset[str]:
-        """The URIs this machine's own distribution source files declare (ADR-020 D-35).
+        """The URIs this machine's own distribution source files declare (`PKG-FR-APT-ORIGIN-VERIFY`).
 
         Computed per machine rather than matched against a list of known Ubuntu hostnames:
         the whole reason the exemption exists is that two machines legitimately point at
@@ -283,7 +283,7 @@ class KeyDigests:
         """Every key filename this machine has, across the three directories. A `Signed-By:`
         reference resolves against this set, so it is what decides whether a repository file
         can be written on the target at all — and therefore whether a package that needs that
-        repository is replicable (D-34 class 4).
+        repository is replicable (`PKG-FR-APT-IDENTITY` class 4).
         """
         return frozenset(name for digests in self.by_dir.values() for name in digests)
 
@@ -300,7 +300,7 @@ class KeyDigests:
 
     def path_of(self, ref: str) -> str | None:
         """Where this machine keeps the key a reference names, or `None` when it has no such
-        key at all — D-12's dangling reference, already reported on the REPOSITORY item.
+        key at all — `PKG-FR-KEY-COPY`'s dangling reference, already reported on the REPOSITORY item.
         """
         name = Path(ref).name
         return next((f"{directory}/{name}" for directory, digests in self.dirs() if name in digests), None)
@@ -308,7 +308,7 @@ class KeyDigests:
 
 @dataclass(frozen=True)
 class OriginFacts:
-    """One machine's `/etc/apt` state as the PACKAGE diff needs it (ADR-020 D-34/D-35).
+    """One machine's `/etc/apt` state as the PACKAGE diff needs it (`PKG-FR-APT-IDENTITY`/`PKG-FR-APT-ORIGIN-VERIFY`).
 
     Captured before the package diff runs, because which repository file declares a
     package's origin, which of those files are the distribution's own, and whether the
@@ -322,7 +322,7 @@ class OriginFacts:
     sources_list_digest: str | None
     """`/etc/apt/sources.list`'s digest, or `None` where the file is absent. Captured
     separately from the directories because it is a single file: it has no `find` listing to
-    appear in, and it is one of the files written and updated but never removed (D-38)."""
+    appear in, and it is one of the files written and updated but never removed (`PKG-FR-DISTRO-FILES`)."""
     refs: SourceFileRefs
 
     @classmethod
@@ -373,7 +373,7 @@ class TargetPolicy:
 @dataclass(frozen=True)
 class RepoConflict:
     """One repository file the two machines disagree about that feeds packages the target
-    keeps (ADR-020 D-37) — the only `/etc/apt` CHANGE that is still a question.
+    keeps (`PKG-FR-APTCONF`) — the only `/etc/apt` CHANGE that is still a question.
 
     Both whole versions are carried, never a diff of them: the question is which of two
     configurations the machine should have, and the user's position is that a diff of two
@@ -457,7 +457,7 @@ async def read_file_content(run: Run, path: str, machine: str) -> str:
     makes it exit non-zero, so a non-zero exit here is only ever a real failure. What the
     silence would otherwise become is file CONTENT: the repository-conflict review shows
     this text as the two machines' versions of a file it is asking permission to overwrite
-    (ADR-020 D-37), and two empty panes are an overwrite approved off a diff nobody
+    (`PKG-FR-APTCONF`), and two empty panes are an overwrite approved off a diff nobody
     could read. An empty answer at exit 0 stays data — an empty source file is a legitimate
     file.
     """
@@ -474,7 +474,7 @@ async def scan_source_file_references(run: Run, machine: str) -> SourceFileRefs:
     Machine-agnostic by construction (it takes the `run` callable and names no host), and
     run against BOTH machines: the target's answer drives the two consumers below, the
     source's answer is what maps a package's origin URIs back to the repository file that
-    would have to travel for it (ADR-020 D-34).
+    would have to travel for it (`PKG-FR-APT-IDENTITY`).
 
     Two target-side consumers, both of which need a fact no diff carries. The source-removal
     impact (C26) needs the repository URIs of a file whose deletion is offered. Keyring
@@ -565,7 +565,7 @@ class AptProbe:
         per package), as raw stdout for the caller to parse for both facts it answers.
 
         The bare-`.deb` half uses the same predicate `manual_installs_sync` uses, from the
-        same shared parser rather than a shared result: D-15/D-16 keep the four jobs
+        same shared parser rather than a shared result: `PKG-FR-JOB-INDEPENDENCE` keep the four jobs
         independent, so both jobs pay their own batched call instead of one importing the
         other. Apt cannot install a bare-`.deb` package anywhere — the target's repositories
         have never heard the name, so it would fall through to a proposed `INSTALL` that
@@ -574,7 +574,7 @@ class AptProbe:
 
         Guarded, because BOTH facts read out of it fail silently and in the dangerous
         direction: an unanswered probe leaves the origin map empty, which exempts every
-        package from the D-35 origin check, and leaves the bare-`.deb` set empty, which
+        package from the `PKG-FR-APT-ORIGIN-VERIFY` origin check, and leaves the bare-`.deb` set empty, which
         offers `manual_installs_sync`'s packages as apt installs that cannot work. Every
         name here came from `apt-mark showmanual`, so every name IS installed on the source
         and apt owes a block for each — which is what makes `blocks` unambiguous here.
@@ -592,9 +592,9 @@ class AptProbe:
         return result.stdout
 
     async def capture_source_items(self) -> tuple[list[AptPackageItem], Mapping[str, frozenset[str]]]:
-        """Manually-installed apt packages on the source with versions (D-03), minus the
+        """Manually-installed apt packages on the source with versions (`PKG-FR-APT-SCOPE`), minus the
         bare-`.deb` installs `manual_installs_sync` owns, plus `{package: origin URIs of its
-        INSTALLED version}` — the provenance ADR-020 D-34 replicates.
+        INSTALLED version}` — the provenance `PKG-FR-APT-IDENTITY` replicates.
 
         The exclusion happens at CAPTURE and nowhere downstream: an item that never enters
         the manifest cannot become an `ItemDiff`, reach a review group, reach the collateral
@@ -605,7 +605,7 @@ class AptProbe:
 
         The one batched `apt-cache policy` this needs answers two questions, so it is issued
         once and parsed twice: which names came from no repository at all (the exclusion),
-        and where each of the rest came from (the left-hand side of every ADR-020 D-34
+        and where each of the rest came from (the left-hand side of every `PKG-FR-APT-IDENTITY`
         comparison). A second call over the same names would cost a second full policy run to
         learn something already on screen.
         """
@@ -761,7 +761,7 @@ class AptProbe:
         questions are asked of the same output: what the target would install for a name it
         lacks, and where the copy it already has came from — the second is what makes a
         package installed on both machines from two different vendors visible at all
-        (ADR-020 D-34). `target_names` adds the third: which of the target's own packages
+        (`PKG-FR-APT-IDENTITY`). `target_names` adds the third: which of the target's own packages
         came from no repository at all, which is `PKG-FR-DEB-OWNERSHIP`'s exclusion on the
         machine the source-side one cannot see.
 
@@ -787,12 +787,12 @@ class AptProbe:
 
     async def capture_target_manual_set(self) -> frozenset[str]:
         """The target's `apt-mark showmanual` set — one batched command, the single
-        source of the auto-versus-manual collateral split (D-30). This is the same set
+        source of the auto-versus-manual collateral split (`PKG-FR-COLLATERAL-MANUAL`). This is the same set
         apt itself consults to decide what it may remove, so classifying a collateral
         package by membership here matches apt's own notion of "the user chose this".
 
         Guarded (ADR-022): an unanswered read leaves the set empty, which classifies every
-        collateral package as automatic and so switches D-30's protection off entirely,
+        collateral package as automatic and so switches `PKG-FR-COLLATERAL-MANUAL`'s protection off entirely,
         silently and in the direction that removes packages.
         """
         command = "apt-mark showmanual"
@@ -807,7 +807,7 @@ class AptProbe:
         runs. Returns `(source, target)`.
 
         They are captured here rather than with the rest of `/etc/apt` because the origin
-        classification (ADR-020 D-34) consumes them: which repository file declares a
+        classification (`PKG-FR-APT-IDENTITY`) consumes them: which repository file declares a
         package's origin, which of those files are the distribution's own, and whether the
         file's `Signed-By:` resolves to a key the source actually has are all inputs to the
         package's diff class, and the package diff runs first.
@@ -817,7 +817,7 @@ class AptProbe:
         EVERY source file on the target, not just the ones a diff implicates.
 
         The two source-file digest sets are captured here for a second reason: the ESM gate
-        (D-38) reads them to decide whether it must ask, and it asks before the package diff
+        (`PKG-FR-DISTRO-FILES`) reads them to decide whether it must ask, and it asks before the package diff
         runs so a "skip" answer does not cost the user the whole planning pass and a review
         they would answer for nothing.
         """
@@ -899,7 +899,7 @@ class AptProbe:
 
         The distribution test is the origin its owning package's INSTALLED version came
         from, matched against the origins this machine's own distribution source files
-        declare (`SourceFileRefs.distribution_origins`, D-35) — the same per-machine
+        declare (`SourceFileRefs.distribution_origins`, `PKG-FR-APT-ORIGIN-VERIFY`) — the same per-machine
         definition every other origin question here uses, so a machine on a local mirror is
         not read as a vendor. A vendor's `.deb` that ships a keyring — `tailscale-archive
         -keyring` from `https://pkgs.tailscale.com/stable/ubuntu`, measured on the
@@ -1028,7 +1028,7 @@ class AptProbe:
 
     async def target_pro_attached(self, status_command: str) -> CommandResult:
         """The raw `pro status` result. Parsing stays in `esm_gate` — the payload names the
-        subscriber's account, so only the parsed boolean may ever leave it (D-38).
+        subscriber's account, so only the parsed boolean may ever leave it (`PKG-FR-DISTRO-FILES`).
 
         `withhold_output` is what keeps that true of the executor's own debug trace, which
         otherwise records every command's stdout verbatim (`PKG-FR-LOG-VERBATIM`): the

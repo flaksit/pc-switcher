@@ -1,4 +1,4 @@
-"""The diff classes apt produces — the whole of D-25 as apt expresses it.
+"""The diff classes apt produces — the whole diff-class taxonomy as apt expresses it.
 
 Split out of the former single `test_apt_sync.py`.
 """
@@ -68,7 +68,7 @@ class TestDiff:
 
 
 class TestNoUnreproducibleDetectionInApt:
-    """D-18: apt_sync no longer detects, reviews or converges unreproducible items —
+    """`PKG-FR-MANUAL-SCOPE`: apt_sync no longer detects, reviews or converges unreproducible items —
     that ownership moved to manual_installs_sync. An input that previously produced an
     UNREPRODUCIBLE diff (a source package with no apt candidate) now produces none.
     """
@@ -98,7 +98,7 @@ class TestNoUnreproducibleDetectionInApt:
 
 
 class TestDiffEngine:
-    """`diff_apt_packages` produces every D-25 diff class."""
+    """`diff_apt_packages` produces every diff class."""
 
     def test_missing_on_target_yields_install(self) -> None:
         source_items = [AptPackageItem(name="pkg-a", version="1.0")]
@@ -215,14 +215,14 @@ class TestDiffEngine:
 
     def test_the_diff_takes_no_pin_input_at_all(self) -> None:
         """The signature is the deletion, made structural: with no pin argument there is no
-        way to reintroduce the echo without changing every caller (ADR-020 D-25).
+        way to reintroduce the echo without changing every caller (`PKG-FR-APT-VERSION-DIFF`).
         """
         parameters = inspect.signature(diff_apt_packages).parameters
 
         assert not any("pin" in name for name in parameters)
 
     def test_an_origin_no_source_file_declares_yields_repo_unavailable_not_install(self) -> None:
-        """A33 — ADR-020 D-34 class 4, the only remaining meaning of `REPO_UNAVAILABLE`: the
+        """A33 — `PKG-FR-APT-IDENTITY` class 4, the only remaining meaning of `REPO_UNAVAILABLE`: the
         source has the package from a repository that has since been deleted from the
         source's own `/etc/apt`, so the origin cannot be handed to the target at all.
         """

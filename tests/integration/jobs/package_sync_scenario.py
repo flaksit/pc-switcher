@@ -385,7 +385,7 @@ async def write_apt_sync_config(executor: BashLoginRemoteExecutor) -> None:
 
 async def decision_file_exists(executor: BashLoginRemoteExecutor, manager: str) -> bool:
     """Whether `manager`'s machine-local decision file currently exists on `executor`'s
-    machine (D-09) -- used to prove a non-interactive run records nothing (D-26).
+    machine (`PKG-FR-MACHINE-SPECIFIC`) -- used to prove a non-interactive run records nothing (`PKG-FR-NO-TERMINAL`).
     """
     relpath = shlex.quote(DECISION_FILE_RELPATH_TEMPLATE.format(manager=manager))
     result = await executor.run_command(f"test -f ~/{relpath}", login_shell=False, timeout=10.0)
@@ -394,7 +394,7 @@ async def decision_file_exists(executor: BashLoginRemoteExecutor, manager: str) 
 
 def automation_env_assignment_multi(decisions_by_item_id: Mapping[str, Decision]) -> str:
     """Shell-safe `VAR='{...}'` prefix pre-answering the review with one decision per
-    item id (D-26's hidden hook -- `package_review.PACKAGE_REVIEW_AUTOMATION_ENV`).
+    item id (`PKG-FR-NO-TERMINAL`'s hidden hook -- `package_review.PACKAGE_REVIEW_AUTOMATION_ENV`).
 
     The automation hook accepts any `Decision` value for any item id present in the
     review's groups, regardless of whether the interactive checkbox UI can produce that
@@ -408,14 +408,15 @@ def automation_env_assignment_multi(decisions_by_item_id: Mapping[str, Decision]
 
 def automation_env_assignment(item_id: str) -> str:
     """Shell-safe `VAR='{...}'` prefix pre-answering the review with one APPLY decision for
-    `item_id` (D-26's hidden hook -- `package_review.PACKAGE_REVIEW_AUTOMATION_ENV`).
+    `item_id` (`PKG-FR-NO-TERMINAL`'s hidden hook -- `package_review.PACKAGE_REVIEW_AUTOMATION_ENV`).
     """
     return automation_env_assignment_multi({item_id: Decision.APPLY})
 
 
 # ---------------------------------------------------------------------------------
 # `TestAFailureCostsItsOwnItemAndNothingElse`: three "unowned install" snippets authored
-# directly into pc1's registry (D-18/D-20/D-21) -- two that genuinely `apt-get install` a
+# directly into pc1's registry (`PKG-FR-MANUAL-SCOPE`/`PKG-FR-SNIPPET-VERBATIM`/`PKG-FR-MANUAL-RESOLUTION`) -- two that
+# genuinely `apt-get install` a
 # real package, one that deliberately exits non-zero.
 # `ManualInstallsSyncJob._scan_unowned_installs` sorts its findings alphabetically by path,
 # which is what places the failing item strictly BETWEEN the two installs in convergence
@@ -498,9 +499,10 @@ async def author_snippet(
     body: str,
     version_body: str = "echo 1.0",
 ) -> None:
-    """Author one registry entry directly into `executor`'s registry (D-20, D-22), bypassing
-    the interactive per-entry capture prompt entirely -- the test does not depend on that
-    UI path, only on the registry's own read/write contract (`package_state.py`).
+    """Author one registry entry directly into `executor`'s registry
+    (`PKG-FR-SNIPPET-VERBATIM`, `PKG-FR-VERSION-SNIPPET`), bypassing the interactive
+    per-entry capture prompt entirely -- the test does not depend on that UI path, only on
+    the registry's own read/write contract (`package_state.py`).
 
     `version_body` defaults to a constant, so a scenario that is not about drift reports the
     same version on both machines and produces no update item.
@@ -631,7 +633,7 @@ async def snap_subject(pc1_executor: BashLoginRemoteExecutor, pc2_executor: Bash
 async def alternate_snap_revision(executor: BashLoginRemoteExecutor, name: str, current_revision: str) -> str:
     """An installable revision of `name` distinct from `current_revision`, read from
     `snap info`'s channel table -- what a test moves the target to so the sync has a real
-    revision divergence to converge (D-06).
+    revision divergence to converge (`PKG-FR-SNAP-REVISION`).
 
     Read rather than hardcoded: pinning a revision number would rot the moment the store
     published a new one. `FIXTURE_SNAPS[0]` is chosen precisely because it carries
@@ -948,8 +950,8 @@ async def flatpak_subject(
     executor: BashLoginRemoteExecutor,
 ) -> tuple[str, str, Literal["user", "system"], str, str, str]:
     """`(application, version, scope, remote_name, remote_url, ref)` for the fixture
-    flatpak ref installed on `executor` (the source), used to prove D-06/D-14 convergence
-    for a real ref+remote pair.
+    flatpak ref installed on `executor` (the source), used to prove
+    `PKG-FR-SNAP-REVISION`/`PKG-FR-APT-ORIGIN-DERIVED` convergence for a real ref+remote pair.
 
     Read off `flatpak list`/`flatpak remotes` rather than assembled from the constants
     above so the tuple carries the machine's own idea of the ref (notably `version`,
@@ -1165,7 +1167,7 @@ FLATPAK_FILTER_BODY = f"allow {FIXTURE_FLATPAK_APP}\n"
 FLATPAK_FILTERED_OPTION = "filtered"
 
 
-# -- apt repository-state helpers (D-11/D-12): synthesize a repo+key divergence -----
+# -- apt repository-state helpers (`PKG-FR-REPO-DERIVED`/`PKG-FR-KEY-COPY`): synthesize a repo+key divergence -----
 #
 # The two `/etc/apt` directories the apt-repository-state test touches (apt_sync.py owns
 # the full five-directory set).
@@ -1250,7 +1252,7 @@ async def create_synthetic_repo_and_key(executor: BashLoginRemoteExecutor) -> tu
     Both directories are root-owned and `/etc/apt/keyrings` is absent on a fresh Ubuntu
     24.04, so `mkdir --parents` runs first (the shipped invariant) and every write goes through
     `sudo tee`. Filenames are uuid-suffixed so the pair is unique and the fresh target
-    provably lacks it. Dummy key bytes are fine: D-12 copies keys verbatim without
+    provably lacks it. Dummy key bytes are fine: `PKG-FR-KEY-COPY` copies keys verbatim without
     validating, and `SYNTHETIC_REPO_HOST` never resolves, so an `apt-get update` that
     sees this repo can only fail to fetch its index -- it can never install anything from
     it, on a dry run or a real one.
@@ -1283,7 +1285,7 @@ async def install_from_a_repo_the_target_lacks(executor: BashLoginRemoteExecutor
     repository, declare that repository, and install the package from it. Returns
     `(package_name, repo_dir, list_filename)`.
 
-    The only construction that produces ADR-020 D-34's class 3 on real machines: a package
+    The only construction that produces `PKG-FR-APT-IDENTITY`'s class 3 on real machines: a package
     the source has FROM A REPOSITORY IT DECLARES whose name the target's apt has never
     heard. `create_synthetic_repo_and_key`'s repository cannot do it — its host does not
     resolve, so no package can be installed from it, and a repository feeding no package
@@ -1446,7 +1448,7 @@ async def create_synthetic_pin(executor: BashLoginRemoteExecutor) -> str:
     """Create a uuid-suffixed `/etc/apt/preferences.d` file the target lacks, and return its
     filename.
 
-    A pin is in ADR-020 D-36's always-sync bucket: it travels with no review line and no
+    A pin is in `PKG-FR-PIN-ALWAYS`'s always-sync bucket: it travels with no review line and no
     derivation predicate, which makes it the cheapest real subject for the derived-write
     preview. Its stanza names a package and an origin neither machine has, so it is inert
     wherever it lands — a pin naming an absent origin changes nothing about apt's choices.
@@ -1995,7 +1997,7 @@ async def remove_the_rival_candidate(
     )
 
 
-# The two files ADR-020 D-38 gates on the target's Ubuntu Pro attachment, with the real
+# The two files `PKG-FR-DISTRO-FILES` gates on the target's Ubuntu Pro attachment, with the real
 # stanzas `pro enable` writes. Their `Signed-By:` keyrings ship with `ubuntu-pro-client`
 # on every Ubuntu 24.04, attached or not, so this is the file set a genuinely attached
 # source carries — not an approximation of it.
@@ -2617,13 +2619,13 @@ async def assert_every_manager_converged(
 
     apt installs what the target lost, removes what the source lost, and registers the
     source's hold with no review line of its own (`PKG-FR-BLOCKS-DERIVED`). snap lands the
-    target on the source's revision without either machine's `refresh.hold` moving (D-06),
+    target on the source's revision without either machine's `refresh.hold` moving (`PKG-FR-SNAP-REVISION`),
     and the source's per-snap hold reaches the target's `snap list` Notes through the very
     window the orchestrator holds snapd in (#208 D9). flatpak provisions the remote BEFORE
-    installing the ref that needs it (D-14), carrying the real signing key (#215) and the
+    installing the ref that needs it (`PKG-FR-APT-ORIGIN-DERIVED`), carrying the real signing key (#215) and the
     source's ref filter, deletes the target-only remote together with its keyring, and leaves
     the unused remote -- which no approved ref comes from -- on the source alone. manual
-    installs pushes the registry and replays the snippet in the same run (D-23).
+    installs pushes the registry and replays the snippet in the same run (`PKG-FR-MANUAL-SAME-RUN`).
 
     The source's own `MachinePackageState` is identical across all of it
     (`PKG-FR-SOURCE-INTENT`): a run that genuinely installs, removes and re-revisions on the
@@ -2665,8 +2667,9 @@ async def assert_every_manager_converged(
     )
     for hold_after, machine in ((source_hold_after, "the source"), (target_hold_after, "the target")):
         assert hold_after is not None, (
-            f"the run left {machine} without the refresh.hold this scenario engaged -- D-06 forbids the convergence "
-            "mechanism from touching either machine's auto-refresh policy"
+            f"the run left {machine} without the refresh.hold this scenario engaged -- "
+            "`PKG-FR-SNAP-REVISION` forbids the convergence mechanism from touching either "
+            "machine's auto-refresh policy"
         )
 
     after_remotes = nonblank_lines(
@@ -2718,7 +2721,7 @@ async def assert_every_manager_converged(
     ref_index = run_output.find(ref_marker)
     assert remote_index != -1, f"derived remote write log line not found: {remote_marker!r}"
     assert ref_index != -1, f"ref converge log line not found: {ref_marker!r}"
-    assert remote_index < ref_index, "remote must be provisioned before the ref installs (D-14)"
+    assert remote_index < ref_index, "remote must be provisioned before the ref installs (`PKG-FR-APT-ORIGIN-DERIVED`)"
 
     registry_exists = await target.run_command(f"test -f {seed.registry_relpath}", login_shell=False, timeout=10.0)
     assert registry_exists.success, (
