@@ -1,0 +1,43 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "f500f175c06b",
+  "strategy": "manual-commit",
+  "branch": "worktree-docs-debloat-271",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "docs/dev/package-sync-scenario-coverage.md",
+    "docs/system/core.md",
+    "docs/system/package-sync.md",
+    "src/pcswitcher/jobs/packages/apt_policy.py",
+    "tests/integration/jobs/package_sync_scenario.py",
+    "tests/integration/jobs/test_package_sync.py",
+    "tests/integration/scripts/internal/vm-test-fixtures.sh",
+    "tests/integration/scripts/select-ci-tests.sh",
+    "tests/integration/test_dry_run.py",
+    "tests/integration/test_end_to_end_sync.py",
+    "tests/manual-playbook.md",
+    "tests/unit/jobs/test_manual_deb_sync.py",
+    "tests/unit/jobs/test_manual_snap_sync.py",
+    "tests/unit/jobs/test_package_state.py",
+    "tests/unit/jobs/test_package_sync_candidate_selection.py",
+    "tests/unit/jobs/test_review_skip_always.py",
+    "tests/unit/orchestrator/test_job_outcome_summary.py",
+    "tests/unit/test_scenario_coverage_matrix.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/f5/00f175c06b/0/metadata.json",
+      "transcript": "/f5/00f175c06b/0/full.jsonl",
+      "compact_transcript": "/f5/00f175c06b/0/transcript.jsonl",
+      "content_hash": "/f5/00f175c06b/0/content_hash.txt",
+      "prompt": "/f5/00f175c06b/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 510,
+    "cache_creation_tokens": 1793412,
+    "cache_read_tokens": 142620146,
+    "output_tokens": 260692,
+    "api_call_count": 346
+  }
+}

@@ -1,0 +1,135 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "f500f175c06b",
+  "session_id": "e6289418-34b5-468c-8217-5b109a3949a1",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-07T14:09:02.012591926Z",
+  "branch": "worktree-docs-debloat-271",
+  "checkpoints_count": 2,
+  "save_step_count": 2,
+  "files_touched": [
+    "docs/dev/package-sync-scenario-coverage.md",
+    "docs/system/core.md",
+    "docs/system/package-sync.md",
+    "src/pcswitcher/jobs/packages/apt_policy.py",
+    "tests/integration/jobs/package_sync_scenario.py",
+    "tests/integration/jobs/test_package_sync.py",
+    "tests/integration/scripts/internal/vm-test-fixtures.sh",
+    "tests/integration/scripts/select-ci-tests.sh",
+    "tests/integration/test_dry_run.py",
+    "tests/integration/test_end_to_end_sync.py",
+    "tests/manual-playbook.md",
+    "tests/unit/jobs/test_manual_deb_sync.py",
+    "tests/unit/jobs/test_manual_snap_sync.py",
+    "tests/unit/jobs/test_package_state.py",
+    "tests/unit/jobs/test_package_sync_candidate_selection.py",
+    "tests/unit/jobs/test_review_skip_always.py",
+    "tests/unit/orchestrator/test_job_outcome_summary.py",
+    "tests/unit/test_scenario_coverage_matrix.py"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "935658757d98",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 510,
+    "cache_creation_tokens": 1793412,
+    "cache_read_tokens": 142620146,
+    "output_tokens": 260692,
+    "api_call_count": 346
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-merge-main-2026-08-07T13:52:42.440048126Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "merge-main"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "be1492929a65",
+      "timestamp": "2026-08-07T13:52:42.440048126Z",
+      "native": {
+        "command": "/merge-main"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/merge-main",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 16
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-07T14:09:01.751984486Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 1241,
+    "human_modified": 156,
+    "human_removed": 0,
+    "total_committed": 1241,
+    "total_lines_changed": 1400,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 1394,
+      "user_lines_removed": 156,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        "docs/dev/package-sync-scenario-coverage.md": 58,
+        "docs/system/core.md": 1,
+        "docs/system/package-sync.md": 7,
+        "src/pcswitcher/jobs/packages/apt_policy.py": 3,
+        "tests/integration/jobs/package_sync_scenario.py": 427,
+        "tests/integration/jobs/test_package_sync.py": 611,
+        "tests/integration/scripts/internal/vm-test-fixtures.sh": 1,
+        "tests/integration/scripts/select-ci-tests.sh": 2,
+        "tests/integration/test_dry_run.py": 1,
+        "tests/integration/test_end_to_end_sync.py": 28,
+        "tests/manual-playbook.md": 24,
+        "tests/unit/jobs/test_manual_deb_sync.py": 3,
+        "tests/unit/jobs/test_manual_snap_sync.py": 6,
+        "tests/unit/jobs/test_package_state.py": 2,
+        "tests/unit/jobs/test_package_sync_candidate_selection.py": 109,
+        "tests/unit/jobs/test_review_skip_always.py": 10,
+        "tests/unit/orchestrator/test_job_outcome_summary.py": 3,
+        "tests/unit/test_scenario_coverage_matrix.py": 98
+      },
+      "user_removed_per_file": {
+        "docs/dev/package-sync-scenario-coverage.md": 46,
+        "docs/system/core.md": 1,
+        "docs/system/package-sync.md": 1,
+        "src/pcswitcher/jobs/packages/apt_policy.py": 3,
+        "tests/integration/jobs/package_sync_scenario.py": 16,
+        "tests/integration/jobs/test_package_sync.py": 28,
+        "tests/integration/scripts/internal/vm-test-fixtures.sh": 1,
+        "tests/integration/scripts/select-ci-tests.sh": 1,
+        "tests/integration/test_end_to_end_sync.py": 1,
+        "tests/unit/jobs/test_manual_deb_sync.py": 3,
+        "tests/unit/jobs/test_manual_snap_sync.py": 6,
+        "tests/unit/jobs/test_package_state.py": 2,
+        "tests/unit/jobs/test_package_sync_candidate_selection.py": 1,
+        "tests/unit/jobs/test_review_skip_always.py": 10,
+        "tests/unit/orchestrator/test_job_outcome_summary.py": 1,
+        "tests/unit/test_scenario_coverage_matrix.py": 35
+      }
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 1395,
+      "agent_lines_removed": 156
+    }
+  ]
+}
