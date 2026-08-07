@@ -16,6 +16,7 @@ from rich.console import Console
 from pcswitcher.models import JobResult, JobStatus
 from pcswitcher.orchestrator import Orchestrator
 from tests.integration.jobs.package_sync_scenario import (
+    job_display_name,
     job_outcome_statuses,
     nonblank_lines,
     parse_dpkg_installed,
@@ -40,11 +41,16 @@ def _rendered_block(results: list[JobResult], *, width: int = 80) -> str:
 
 
 def _result(job_name: str, status: JobStatus, reason: str | None = None) -> JobResult:
-    """A `JobResult` for `job_name`; the timestamps are immaterial to the block."""
+    """A `JobResult` for `job_name`; the timestamps are immaterial to the block.
+
+    The display name is the job's real one, not the identifier: the block prints that
+    (`CORE-FR-JOB-DISPLAY-NAME`) and it holds spaces, which is what the parser has to read
+    past to reach the status word.
+    """
     moment = datetime(2026, 1, 1, tzinfo=UTC)
     return JobResult(
         job_name=job_name,
-        job_display_name=job_name,
+        job_display_name=job_display_name(job_name),
         status=status,
         started_at=moment,
         ended_at=moment,
@@ -86,9 +92,9 @@ class TestJobOutcomeStatuses:
             ]
         )
         assert job_outcome_statuses(block) == {
-            "install_on_target": "success",
-            "apt_sync": "skipped",
-            "snap_sync": "failed",
+            "Install on target": "success",
+            "Apt packages": "skipped",
+            "Snaps": "failed",
         }
 
     def test_a_reason_folded_across_lines_adds_no_job(self) -> None:
@@ -98,17 +104,17 @@ class TestJobOutcomeStatuses:
         reason = " ".join(f"word{index}" for index in range(40))
         block = _rendered_block([_result("apt_sync", JobStatus.FAILED, reason)], width=40)
         assert len(block.strip().splitlines()) > 2, "the reason did not fold, so this asserts nothing"
-        assert job_outcome_statuses(block) == {"apt_sync": "failed"}
+        assert job_outcome_statuses(block) == {"Apt packages": "failed"}
 
     def test_a_reason_quoting_a_status_word_is_not_read_as_a_row(self) -> None:
         """Package-manager stderr may contain the word `failed`; only a glyph starts a row."""
         block = _rendered_block([_result("apt_sync", JobStatus.SKIPPED, "dpkg said: install failed")])
-        assert job_outcome_statuses(block) == {"apt_sync": "skipped"}
+        assert job_outcome_statuses(block) == {"Apt packages": "skipped"}
 
     def test_output_before_the_header_is_ignored(self) -> None:
         block = _rendered_block([_result("apt_sync", JobStatus.SUCCESS)])
         noise = "  ✔ not_a_job success\nJob outcomes are printed at the end.\n"
-        assert job_outcome_statuses(noise + block) == {"apt_sync": "success"}
+        assert job_outcome_statuses(noise + block) == {"Apt packages": "success"}
 
     def test_a_run_that_printed_no_block_yields_nothing(self) -> None:
         assert job_outcome_statuses("sync complete\n") == {}

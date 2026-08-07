@@ -2,7 +2,7 @@
 
 Every command below is for you to run. `pc1` is the source, `pc2` the target; every title, answer and message prints those two hostnames, and "source" or "target" naming a machine anywhere you read is a finding.
 
-This runbook covers what changed after the phase-2 UAT: the split of `manual_installs_sync` into four jobs, the second snippet every registry entry now carries, version convergence and its retry loop, removals of unreproducible items, the two unattended apply flags, the machine-specific follow-up question, the apt update-timer pause, and the end-of-run outcome block. What it does not cover is in §8. `02-UAT-01-RUNBOOK.md` remains the runbook for the base review.
+This runbook covers what changed after the phase-2 UAT: the split of `manual_installs_sync` into four jobs, the second snippet an unowned-path registry entry carries and no other kind does, version convergence and its retry loop, removals of unreproducible items, the two unattended apply flags, the machine-specific follow-up question, the apt update-timer pause, and the end-of-run outcome block. What it does not cover is in §8. `02-UAT-01-RUNBOOK.md` remains the runbook for the base review.
 
 ## 1. Machines
 
@@ -87,7 +87,8 @@ echo 2.0 | sudo tee /opt/pcsw-uat-loop/version >/dev/null
 # the verb "update". So the two drifting package items get real entries, and
 # /opt/pcsw-uat-loop gets one whose install body exits 0 and moves nothing. Only the
 # unowned path carries a version_body: dpkg and snap answer that question for the
-# other two, and an entry of theirs carrying one is malformed.
+# other two, and an entry of theirs carrying one is malformed. Substitute the same
+# base snap in the snapdrift body as above — it is replayed on pc2 in §3.5.
 cat > ~/.config/pc-switcher/package-snippets.yaml <<'YAML'
 snippets:
   "unreproducible:unowned-path:/opt/pcsw-uat-loop":
@@ -113,7 +114,7 @@ snippets:
       set -eu
       d=/var/tmp/pcsw-uat-snapdrift
       sudo mkdir -p "$d/meta"
-      printf "name: pcsw-uat-snapdrift\nversion: '2.0'\nsummary: pc-switcher UAT sideload\ndescription: A snap installed from local bytes.\nbase: core20\nconfinement: strict\ngrade: stable\n" | sudo tee "$d/meta/snap.yaml" >/dev/null
+      printf "name: pcsw-uat-snapdrift\nversion: '2.0'\nsummary: pc-switcher UAT sideload\ndescription: A snap installed from local bytes.\nbase: <that base snap>\nconfinement: strict\ngrade: stable\n" | sudo tee "$d/meta/snap.yaml" >/dev/null
       sudo snap try "$d"
     authored_at: "2026-08-01T00:00:00+00:00"
     authored_on: pc1
@@ -165,11 +166,13 @@ pc-switcher sync pc2 --dry-run --yes --allow-first-sync
 pc-switcher sync pc2 --yes --allow-first-sync
 ```
 
-A dry run converges nothing, so three things below cannot happen in it: no snippet is recorded, no registry is pushed, and the converge loop of §3.7 never opens — `_converge_one` is not called at all (`jobs/packages/sync_core.py:804`). Walk the dry run for the screens, then answer the real run for the outcomes.
+A dry run converges nothing, so three things below cannot happen in it: no snippet is recorded, no registry is pushed, and the converge loop of §3.7 never opens — `_converge_one` (`jobs/packages/sync_core.py`) is not called at all. Walk the dry run for the screens, then answer the real run for the outcomes.
 
-Every finding raised from an earlier walk of these fixtures is fixed — review copy and titles (#276), the follow-up's keys and default (#278), the repeated scrollback frames (#279), the snippet screens of §3.5, §3.6 and §3.7 (#281) and the group order of §3.2 (#283). This runbook says what to expect instead: seeing the old behaviour is a regression.
+Every finding raised from an earlier walk of these fixtures is fixed — review copy and titles (#276), the file bodies of §3.3 (#277), the follow-up's keys and default (#278), the repeated scrollback frames (#279), the job names below (#280), the snippet screens of §3.5, §3.6 and §3.7 (#281), the registry's two entry types (#282) and the group order of §3.2 (#283). None of them is still an open defect to observe: this runbook says what to expect instead, and seeing the old behaviour is a regression.
 
 The status line, the progress bars and the outcome block name jobs the way a user would (#280 is fixed): `Apt packages`, `Snaps`, `Flatpaks`, `Manual debs`, `Sideloaded snaps`, `Manual flatpaks`, `Manually installed apps`, `Folder sync`, `Install on target`. A module name such as `manual_deb_sync` on screen is a regression. Config keys and the `job` field in the log file stay the module name, so §4's log greps are unaffected.
+
+The Recent Logs panel follows the same rule in its message text (#276): a job counts its work in the same words its screens use — `Applying 1 change to manual debs`, `No snaps to change`, `1 manually installed app failed` — and the module name appears only in the `[manual_deb_sync]` prefix each line already carries.
 
 ### 3.1 The three exclusions
 
@@ -295,7 +298,7 @@ Answer them with an install-or-update body each, `<y>` then one editor:
 
 ### 3.7 The converge loop
 
-**Real run only.** This is not a review screen: it is put while `manual_installs_sync` applies what you approved, and a dry run applies nothing — `_converge_one` is never reached (`jobs/packages/sync_core.py:804`), so no snippet is replayed, no version is re-read and this screen cannot appear. Seeing it in a dry run is a finding.
+**Real run only.** This is not a review screen: it is put while `manual_installs_sync` applies what you approved, and a dry run applies nothing — `_converge_one` (`jobs/packages/sync_core.py`) is never reached, so no snippet is replayed, no version is re-read and this screen cannot appear. Seeing it in a dry run is a finding.
 
 `/opt/pcsw-uat-loop` is the item whose recorded install body is `true` — it exits zero and moves nothing — and §3.5 is where you answered `<y>` on it. Confirm:
 

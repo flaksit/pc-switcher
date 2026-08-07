@@ -14,6 +14,7 @@ claims. The apt subjects it names (`FIXTURE_APT_SUBJECTS`) are handed out by the
 from __future__ import annotations
 
 import asyncio
+import importlib
 import json
 import re
 import shlex
@@ -25,6 +26,7 @@ from uuid import uuid4
 
 from pcswitcher.executor import BashLoginRemoteExecutor
 from pcswitcher.jobs.apt_sync.items import AptPackageItem, collateral_item_id
+from pcswitcher.jobs.base import Job
 from pcswitcher.jobs.flatpak_sync import FlatpakItem
 from pcswitcher.jobs.packages.items import carries_version_body
 from pcswitcher.jobs.packages.review import PACKAGE_REVIEW_AUTOMATION_ENV, Decision
@@ -109,15 +111,32 @@ def collapse_run_output(text: str) -> str:
 
 
 # The end-of-run block's header, and one row of it: the indent and glyph
-# `orchestrator._JOB_OUTCOME_MARKS` prints, then the job name, then the status word.
-# Restated here rather than imported so a change to either the glyphs or the status
+# `orchestrator._JOB_OUTCOME_MARKS` prints, then the job's display name, then the status
+# word. Restated here rather than imported so a change to either the glyphs or the status
 # vocabulary fails these tests instead of travelling silently into them.
+#
+# The name is matched non-greedily rather than as one token: the block prints
+# `display_name` (`CORE-FR-JOB-DISPLAY-NAME`), which is prose and holds spaces.
 JOB_OUTCOME_HEADER = "Job outcomes:"
-JOB_OUTCOME_ROW = re.compile(r"^\s*[✔⏭✖]\s+(\S+)\s+(success|skipped|failed)(?:\s|$)")
+JOB_OUTCOME_ROW = re.compile(r"^\s*[✔⏭✖]\s+(.+?)\s+(success|skipped|failed)(?:\s|$)")
+
+
+def job_display_name(job_name: str) -> str:
+    """The wording the outcome block prints for a `sync_jobs` key.
+
+    The block names a job the way a user would, so a test keyed on the config key needs the
+    translation. Read off the class rather than tabulated here, so improving a job's wording
+    never leaves a stale table behind.
+    """
+    module = importlib.import_module(f"pcswitcher.jobs.{job_name}")
+    for attr in vars(module).values():
+        if isinstance(attr, type) and issubclass(attr, Job) and getattr(attr, "name", None) == job_name:
+            return attr.display_name
+    raise AssertionError(f"no Job class named {job_name!r} in pcswitcher.jobs.{job_name}")
 
 
 def job_outcome_statuses(run_output: str) -> dict[str, str]:
-    """Job name -> status word, read off the run's end-of-run `Job outcomes:` block.
+    """Job display name -> status word, read off the run's end-of-run `Job outcomes:` block.
 
     Read from the RAW output rather than through `collapse_run_output`: the block is one
     row per LINE, and collapsing the whole run to a single line would let a job name meet

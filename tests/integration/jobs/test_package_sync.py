@@ -184,6 +184,7 @@ from tests.integration.jobs.package_sync_scenario import (
     install_local_deb,
     install_snippet_body,
     installed_base_snap,
+    job_display_name,
     job_outcome_statuses,
     machine_utc_now,
     marker_version,
@@ -770,7 +771,7 @@ class TestARunWithNobodyToAsk:
                     f"{direction}-direction item {candidate} was not named as declined for this run.\n"
                     f"{combined_output}"
                 )
-            skipped_line = "Job apt_sync skipped: non-interactive run left every apt package review item undecided"
+            skipped_line = "Job Apt packages skipped: non-interactive run left every apt package review item undecided"
             assert skipped_line in collapsed, (
                 f"the run did not report apt_sync as skipped (PKG-FR-NO-TERMINAL).\n{combined_output}"
             )
@@ -780,11 +781,13 @@ class TestARunWithNobodyToAsk:
             # only the block carries `install_on_target` — which every run in this module
             # skips, and which recorded no JobResult at all before it did.
             outcomes = job_outcome_statuses(combined_output)
-            assert outcomes.get("apt_sync") == "skipped", (
-                f"the outcome block reports apt_sync as {outcomes.get('apt_sync')!r}.\n{combined_output}"
+            apt_outcome = outcomes.get(job_display_name("apt_sync"))
+            assert apt_outcome == "skipped", (
+                f"the outcome block reports apt_sync as {apt_outcome!r}.\n{combined_output}"
             )
-            assert outcomes.get("install_on_target") == "skipped", (
-                f"the outcome block reports install_on_target as {outcomes.get('install_on_target')!r}; the step "
+            install_outcome = outcomes.get(job_display_name("install_on_target"))
+            assert install_outcome == "skipped", (
+                f"the outcome block reports install_on_target as {install_outcome!r}; the step "
                 f"records a JobResult whether or not it runs.\n{combined_output}"
             )
 
@@ -1604,7 +1607,11 @@ class TestAFailureCostsItsOwnItemAndNothingElse:
             # approved work landed anyway. A block that named only the failures would read as
             # "the run failed" and lose exactly what `PKG-FR-OUTCOME-FAILED` promises.
             outcomes = job_outcome_statuses(sync_result.stdout + sync_result.stderr)
-            assert (outcomes.get("manual_installs_sync"), outcomes.get("snap_sync"), outcomes.get("apt_sync")) == (
+            assert (
+                outcomes.get(job_display_name("manual_installs_sync")),
+                outcomes.get(job_display_name("snap_sync")),
+                outcomes.get(job_display_name("apt_sync")),
+            ) == (
                 "failed",
                 "failed",
                 "success",
@@ -1870,8 +1877,9 @@ class TestTheCommandLineAnswersOneDirectionOfTheReview:
             f"record an item as specific to a machine"
         )
         outcomes = job_outcome_statuses(first.stdout + first.stderr)
-        assert outcomes.get("apt_sync") == "success", (
-            f"apt_sync is {outcomes.get('apt_sync')!r} in the outcome block, not success: a no-terminal run whose "
+        apt_outcome = outcomes.get(job_display_name("apt_sync"))
+        assert apt_outcome == "success", (
+            f"apt_sync is {apt_outcome!r} in the outcome block, not success: a no-terminal run whose "
             f"review the command line answered converged something, so skipped would misreport it. {outcomes}\n"
             f"stdout: {first.stdout}\nstderr: {first.stderr}"
         )
