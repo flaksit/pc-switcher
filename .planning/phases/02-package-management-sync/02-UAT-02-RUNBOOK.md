@@ -167,7 +167,7 @@ pc-switcher sync pc2 --yes --allow-first-sync
 
 A dry run converges nothing, so three things below cannot happen in it: no snippet is recorded, no registry is pushed, and the converge loop of §3.7 never opens — `_converge_one` is not called at all (`jobs/packages/sync_core.py:804`). Walk the dry run for the screens, then answer the real run for the outcomes.
 
-Findings already raised from a walk of these fixtures, so they need no re-reporting — check they still read as described and move on: review copy and titles (#276), the keys and default of §3.3's follow-up (#278), the repeated scrollback frames (#279), the snippet screens of §3.5 and §3.6 (#281), and the group order of §3.2 (#283).
+Findings already raised from a walk of these fixtures, so they need no re-reporting — check they still read as described and move on: review copy and titles (#276), the snippet screens of §3.5 and §3.6 (#281), and the group order of §3.2 (#283). The follow-up's keys and default (#278) and the repeated scrollback frames (#279) are fixed, and this runbook now says what to expect instead: seeing the old behaviour is a regression.
 
 The status line, the progress bars and the outcome block name jobs the way a user would (#280 is fixed): `Apt packages`, `Snaps`, `Flatpaks`, `Manual debs`, `Sideloaded snaps`, `Manual flatpaks`, `Manually installed apps`, `Folder sync`, `Install on target`. A module name such as `manual_deb_sync` on screen is a regression. Config keys and the `job` field in the log file stay the module name, so §4's log greps are unaffected.
 
@@ -226,9 +226,9 @@ The first question of the run, in `apt_sync`. `/etc/apt/apt.conf.d/99-pcsw-uat` 
 Answer `<x>` on it. Then a further screen must appear — not folded into this one — titled `Kept for good — whose own version is it?`, with one row per permanently-kept conflicting item. Confirm:
 
 - Both panels are printed again above its table, this time with the source's titled plainly `On pc1`: the overwrite has just been declined for good, so nothing there would replace anything.
-- Three answers, keyed and worded as the two hostnames and `both`: `pc1`, `pc2`, `both`.
+- Three answers, worded as the two hostnames and `both`: `pc1`, `pc2`, `both`. The keys are `<s>` for the source machine, `<t>` for the target and `<b>` for both (#278 is fixed) — `<h>`/`<o>` are gone, and `<s>` meaning something other than `skip now` here is deliberate: this screen offers no skip.
 - Each hint says how long the mark lasts on that machine — `it is pc1's own version; nothing overwrites it while pc1 has it`, and for `both`, that each version is its own machine's.
-- The row defaults to `pc2`, so confirming the screen unread records what the permanent answer already said in its own words.
+- Every row reads `not answered`, and the legend says `<enter> confirm, once every row is answered`. Press `<enter>` before answering: nothing must happen, and a line must appear naming the rows still unanswered.
 - Its explanation names both machines and says the answer lasts as long as that machine still has the item.
 
 Answer `both` on this run, so §4 can check that a mark landed on each machine.

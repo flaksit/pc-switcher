@@ -30,12 +30,14 @@ from pcswitcher.config import (  # pyright: ignore[reportPrivateUsage]
 )
 from pcswitcher.jobs.context import JobContext
 from pcswitcher.jobs.manual_deb_sync import ManualDebSyncJob
+from pcswitcher.jobs.packages.decision_list import UNANSWERED
 from pcswitcher.jobs.packages.items import DiffAction, DiffClass, ItemClass, ItemDiff
 from pcswitcher.jobs.packages.review import (
     COLLATERAL_REVIEW_ACTION,
     PACKAGE_REVIEW_AUTOMATION_ENV,
     REPO_CONFLICT_REVIEW_ACTION,
     REPO_REMOVAL_REVIEW_ACTION,
+    SKIP_NOW_WORD,
     UNREPRODUCIBLE_REVIEW_ACTION,
     Decision,
     MarkSide,
@@ -115,6 +117,11 @@ def _screen_defaults(call: Any) -> dict[str, str]:
 def _screen_words(call: Any) -> list[str]:
     """The decision words one built screen offers, in legend order."""
     return [option.word for option in call.kwargs["options"]]
+
+
+def _screen_keys(call: Any) -> list[str]:
+    """The keys one built screen binds, in legend order."""
+    return [option.key for option in call.kwargs["options"]]
 
 
 def _unreproducible_group(entries: Sequence[ReviewEntry]) -> ReviewGroup:
@@ -2059,6 +2066,91 @@ class TestAptConfigOverwriteScreen:
         # Nothing is being replaced any more — the overwrite was declined for good.
         assert printed.count("would replace it") == 1
         assert outcome.mark_sides == {"apt:config:99-pcsw-uat": MarkSide.BOTH}
+
+
+@pytest.mark.asyncio
+class TestTheMachineSpecificFollowUp:
+    """#278 — the screen's keys name the machines it shows, and nothing on it is
+    pre-answered (`PKG-FR-MARK-SIDE`, `PKG-FR-HARMLESS-DEFAULT`)."""
+
+    @staticmethod
+    async def _follow_up_call() -> Any:
+        """Build the follow-up by answering the conflicting file permanently, and return the
+        `decision_list` call that built it."""
+        console = _interactive_console()
+        screen = _fake_prompt(
+            ask_side_effect=[{"apt:config:99-pcsw-uat": "skip_always"}, {"apt:config:99-pcsw-uat": "both"}]
+        )
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen) as decision_list,
+        ):
+            await review_items([_apt_config_group([_apt_config_entry()])], console=console, ui=MagicMock(), **HOSTS)
+        return decision_list.call_args_list[1]
+
+    async def test_the_keys_name_the_machines_the_screen_shows(self) -> None:
+        """H260 — the keys name what the column already shows. "Here" and "other" are the
+        code's frame, and which machine is which depends on the end the run was launched
+        from."""
+        call = await self._follow_up_call()
+
+        assert _screen_keys(call) == ["s", "t", "b"]
+        assert _screen_words(call) == ["atlas", "nomad", "both"]
+
+    async def test_the_source_key_is_the_skip_key_of_every_other_screen_and_this_one_has_no_skip(self) -> None:
+        """H260 — the collision is accepted deliberately: no single key means two things in
+        one place, because this screen offers no skip at all; every answer here is
+        recorded."""
+        call = await self._follow_up_call()
+
+        assert SKIP_NOW_WORD not in _screen_words(call)
+        assert all(option.is_permanent for option in call.kwargs["options"])
+
+    async def test_no_row_starts_answered(self) -> None:
+        """H258 — neither machine is the holder by right (that is why the screen exists) and
+        the record it writes is permanent, so a confirmed-unread screen must not be
+        indistinguishable from a decision."""
+        call = await self._follow_up_call()
+
+        assert _screen_defaults(call) == {"apt:config:99-pcsw-uat": UNANSWERED}
+
+    async def test_a_run_with_no_terminal_asks_nothing_and_records_no_mark(self) -> None:
+        """H256 — `PKG-FR-MARK-SIDE`: never asked where no human answered. The
+        non-interactive return comes before the screen, which is also what keeps a screen
+        that now refuses a bare `<enter>` off a path with nobody to press a key."""
+        console = _non_interactive_console()
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(False)),
+            patch("pcswitcher.jobs.packages.review.decision_list") as decision_list,
+        ):
+            outcome = await review_items(
+                [_apt_config_group([_apt_config_entry()])], console=console, ui=MagicMock(), **HOSTS
+            )
+
+        decision_list.assert_not_called()
+        assert outcome.mark_sides == {}
+        assert outcome.decisions == {"apt:config:99-pcsw-uat": Decision.SKIP_ONCE}
+
+    async def test_an_automation_answered_run_records_no_mark_even_on_a_permanent_answer(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """H256 — the one path that CAN produce the permanent answer without a human. It
+        returns before the screen, so the mark it would raise is never given a side."""
+        monkeypatch.setenv(PACKAGE_REVIEW_AUTOMATION_ENV, json.dumps({"apt:config:99-pcsw-uat": "skip_always"}))
+        console = _interactive_console()
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.decision_list") as decision_list,
+        ):
+            outcome = await review_items(
+                [_apt_config_group([_apt_config_entry()])], console=console, ui=MagicMock(), **HOSTS
+            )
+
+        decision_list.assert_not_called()
+        assert outcome.decisions == {"apt:config:99-pcsw-uat": Decision.SKIP_ALWAYS}
+        assert outcome.mark_sides == {}
 
 
 @pytest.mark.asyncio

@@ -178,9 +178,9 @@ Decomposes the validation and review paragraphs of [What happens during a sync](
   Lineage: 002-package-sync  
   Impl: orchestrator `_suspend_apt_timers`, `_defer_pending_apt_timer_restore`, `_settle_outstanding_apt_timer_restore`; transient unit via `systemd-run --on-active`  
   Rationale: see [package-sync-rationale.md#pkg-fr-apt-timer-pause](../adr/considerations/package-sync-rationale.md#pkg-fr-apt-timer-pause)
-- **PKG-FR-HARMLESS-DEFAULT**: Every reviewed item's default answer MUST be the action that does no harm — apply for an install, skip for anything that removes or overwrites.  
+- **PKG-FR-HARMLESS-DEFAULT**: Every reviewed item's default answer MUST be the action that does no harm — apply for an install, skip for anything that removes or overwrites. Where NO answer is harmless — every one of them writes a record that outlives the run — no item MUST start answered, and confirming MUST be refused until every item carries an answer, naming those that do not.  
   Lineage: 002-package-sync  
-  Impl: `_default_decision`; `ReviewGroup.overwrites_authored_content` set for `APT_CONFIG` CHANGE
+  Impl: `_default_decision`; `ReviewGroup.overwrites_authored_content` set for `APT_CONFIG` CHANGE; `decision_list.UNANSWERED` on `_ask_mark_sides`, the one screen with no harmless answer
 
 ## apt
 

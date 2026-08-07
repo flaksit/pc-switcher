@@ -85,7 +85,9 @@ Some findings are only reported, not asked about: version differences, origin di
 
 Choosing `x` marks the item as belonging to *this specific machine*. The mark is written on the **holding machine** (the one whose copy the answer keeps) and never synced.
 
-Where both machines have the item and their copies differ, you get one follow-up screen asking whose own version this is — one machine, the other, or both. Naming both records one on each, so the answer survives either machine losing its copy. Both versions are printed again above that screen: by then the screen that showed them has scrolled away, and a filename is not something you can answer this from.
+Where both machines have the item and their copies differ, you get one follow-up screen asking whose own version this is — one machine, the other, or both. The keys are `s` for the source machine, `t` for the target and `b` for both, and the column shows the two hostnames. Naming both records one on each, so the answer survives either machine losing its copy. Both versions are printed again above that screen: by then the screen that showed them has scrolled away, and a filename is not something you can answer this from.
+
+It is the one screen that starts on no answer at all. `<enter>` does nothing until every row has a key, and says which rows are still outstanding — neither machine is the holder by right, and the record it writes is permanent.
 
 The mark lasts as long as the software is on the holding machine. Once it is gone, the mark is dropped and the run says so.
 

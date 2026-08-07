@@ -50,7 +50,9 @@ the two machines and both — and the chosen `MarkSide` comes back in
 one batched screen because the widget takes any number of answers per row, and it is a
 follow-up rather than a fourth answer on the batch because the question only exists for the
 rows that were answered permanently. A run that reaches no such answer never sees it, and a
-run with nobody to ask never gets that far.
+run with nobody to ask never gets that far. It is also the one screen that starts on no
+answer at all and refuses `<enter>` until every row has one: neither machine is the holder
+by right, so there is nothing harmless to default to.
 A `REPORT_ONLY` group is not answerable at all: nothing converges either way and no machine
 holds an informational item, so `_print_report_group` prints it and the review moves on.
 
@@ -146,7 +148,7 @@ from rich.panel import Panel
 from rich.text import Text
 
 from pcswitcher.jobs.packages import prompt_navigation
-from pcswitcher.jobs.packages.decision_list import DecisionOption, DecisionRow, decision_list
+from pcswitcher.jobs.packages.decision_list import UNANSWERED, DecisionOption, DecisionRow, decision_list
 from pcswitcher.jobs.packages.items import carries_version_body
 from pcswitcher.jobs.packages.state import SnippetBodies, VersionedSnippetBodies
 from pcswitcher.models import SyncAbortedByUser
@@ -1392,11 +1394,16 @@ async def _review_decision_group(
 
 # The keys of the follow-up screen's three answers. Letters rather than the hostnames' own
 # initials: two machines can share one, an initial can be `a` (Abort's letter, which
-# `decision_list` rejects) or not a lowercase letter at all. `h` and `o` are here and other
-# — the review runs on the machine the sync was launched from, which is the source — and
-# neither word appears on the screen, where the answers are the hostnames themselves.
-_MARK_HERE_KEY = "h"
-_MARK_OTHER_KEY = "o"
+# `decision_list` rejects) or not a lowercase letter at all. They name the two ROLES the
+# screen itself already shows — source and target — rather than "here" and "other", which
+# are the code's frame and depend on which end the run was launched from.
+#
+# `s` is `skip now` on every other screen, and that collision is DELIBERATE: this screen
+# has no skip — every answer here is recorded — so no single key ever means two things in
+# one place, and the alternative was a key with no relation to anything on screen. Do not
+# "fix" it by moving the source off `s`.
+_MARK_SOURCE_KEY = "s"
+_MARK_TARGET_KEY = "t"
 _MARK_BOTH_KEY = "b"
 
 # Left half / right half / whole. Which side of the pair the answer keeps is the whole
@@ -1426,7 +1433,7 @@ def _mark_side_options(source_hostname: str, target_hostname: str) -> tuple[Deci
     return (
         DecisionOption(
             value=MarkSide.SOURCE,
-            key=_MARK_HERE_KEY,
+            key=_MARK_SOURCE_KEY,
             word=source_hostname,
             glyph=_MARK_SOURCE_GLYPH,
             is_permanent=True,
@@ -1434,7 +1441,7 @@ def _mark_side_options(source_hostname: str, target_hostname: str) -> tuple[Deci
         ),
         DecisionOption(
             value=MarkSide.TARGET,
-            key=_MARK_OTHER_KEY,
+            key=_MARK_TARGET_KEY,
             word=target_hostname,
             glyph=_MARK_TARGET_GLYPH,
             is_permanent=True,
@@ -1487,10 +1494,14 @@ async def _ask_mark_sides(
     every conflict row — three of them the same decision under three names — and asked about
     a side on rows that will never have a mark.
 
-    The default is `TARGET`: an unread screen then records what the permanent answer on the
-    batch already said in its own words ("do not change on <target> for good; it is
-    <target>'s own"), so confirming without choosing changes nothing about how the tool has
-    always behaved.
+    NO row starts answered (`decision_list.UNANSWERED`), and `<enter>` is refused until
+    every one carries a key, naming the rows that do not. This screen exists precisely
+    because neither machine is the holder by right, so any default would pick one of the two
+    real answers on the user's behalf — and the answer is permanent, deciding which machine
+    keeps its copy and how long the mark survives. A confirmed-unread screen must not be
+    indistinguishable from a decision. It is the one screen with no harmless answer to start
+    on, which is why `PKG-FR-HARMLESS-DEFAULT` names it rather than being contradicted by
+    it.
 
     Ctrl-C aborts the whole sync like every other screen in the review.
 
@@ -1524,7 +1535,7 @@ async def _ask_mark_sides(
     prompt = decision_list(
         "Kept for good — whose own version is it?",
         rows=[
-            DecisionRow(row_id=entry.item_id, label=entry.label, default=MarkSide.TARGET, detail=entry.detail)
+            DecisionRow(row_id=entry.item_id, label=entry.label, default=UNANSWERED, detail=entry.detail)
             for entry in entries
         ],
         explanation=(

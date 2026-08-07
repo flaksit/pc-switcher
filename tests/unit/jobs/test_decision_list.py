@@ -28,6 +28,7 @@ from prompt_toolkit.output.plain_text import PlainTextOutput
 
 from pcswitcher.jobs.packages.decision_list import (
     PREFIX_WIDTH,
+    UNANSWERED,
     DecisionOption,
     DecisionRow,
     decision_list,
@@ -64,6 +65,11 @@ _CTRL_C = "\x03"
 
 def _row(row_id: str, label: str = "pkg", **kwargs: Any) -> DecisionRow:
     return DecisionRow(row_id=row_id, label=label, default="apply", **kwargs)
+
+
+def _open_row(row_id: str, label: str = "pkg") -> DecisionRow:
+    """A row on the screen that must not pre-answer anything (`UNANSWERED`)."""
+    return DecisionRow(row_id=row_id, label=label, default=UNANSWERED)
 
 
 def _plain(tokens: list[tuple[str, str]]) -> str:
@@ -435,6 +441,93 @@ class TestTheAnsweredFrame:
 
         assert "up/down move" not in frame
         assert "<enter> confirm" not in frame
+
+
+class TestAScreenThatPreAnswersNothing:
+    """`UNANSWERED` (#278) — the opt-in for a screen where no answer is harmless enough to
+    start on. It is opt-in per ROW default, so every other screen keeps the harmless start
+    `PKG-FR-HARMLESS-DEFAULT` requires and none of them changes behaviour.
+    """
+
+    @staticmethod
+    def _run(keys: str, rows: list[DecisionRow]) -> tuple[str, Any]:
+        """The rendered screen, plus what `.ask()` finally answered.
+
+        Keys arrive as one batch, so prompt_toolkit paints once at the end rather than per
+        keystroke: a refusal is asserted on a run whose LAST key leaves it standing.
+        """
+        buffer = io.StringIO()
+        with create_pipe_input() as pipe:
+            pipe.send_text(keys)
+            with create_app_session(input=pipe, output=PlainTextOutput(buffer)):
+                answered = decision_list("Whose own version is it?", rows=rows, options=THREE_ANSWERS).ask()
+        return buffer.getvalue(), answered
+
+    def test_an_unanswered_row_says_so_instead_of_showing_an_answer(self) -> None:
+        tokens = render_rows(
+            [_open_row("a", "sl")], THREE_ANSWERS, decisions={"a": UNANSWERED}, focused=0, total_width=80
+        )
+
+        assert "not answered" in _plain(tokens)
+        assert not any(option.word in _plain(tokens) for option in THREE_ANSWERS)
+
+    def test_the_decision_column_does_not_move_as_rows_are_answered(self) -> None:
+        """H258 — the width is reserved from the DEFAULTS, so a table whose column shifts under the
+        user's own keystrokes is impossible."""
+        rows = [_open_row("a", "sl")]
+        _, column = layout_widths(rows, THREE_ANSWERS, total_width=80)
+
+        assert column == layout_widths([_row("a", "sl")], THREE_ANSWERS, total_width=80)[1]
+
+    def test_the_legend_says_up_front_that_enter_needs_every_row(self) -> None:
+        assert "<enter> confirm, once every row is answered" in legend(THREE_ANSWERS, every_row_required=True)
+        assert "<enter> confirm\n" in f"{legend(THREE_ANSWERS)}\n"
+
+    def test_a_refused_enter_names_every_row_still_unanswered(self) -> None:
+        """H258 — "answer everything first" on a list longer than the screen is not an
+        instruction anyone can act on without hunting for the rows it means."""
+        rendered, answered = self._run(f"{_ENTER}{_CTRL_C}", [_open_row("a", "sl"), _open_row("b", "cmatrix")])
+
+        assert answered is None, "the refused <enter> left the screen up; only Ctrl-C ended it"
+        assert "Not answered yet: sl, cmatrix." in rendered
+
+    def test_the_refusal_stops_naming_a_row_the_user_has_since_answered(self) -> None:
+        rendered, _ = self._run(f"{_ENTER}y{_ENTER}{_CTRL_C}", [_open_row("a", "sl"), _open_row("b", "cmatrix")])
+
+        assert "Not answered yet: cmatrix." in rendered
+        assert "Not answered yet: sl, cmatrix." not in rendered
+
+    def test_enter_is_accepted_once_every_row_carries_an_answer(self) -> None:
+        """H258 — the leading `<enter>` is refused, so what comes back is the answers given
+        after it, never the unanswered value a screen that confirmed early would return."""
+        _, answered = self._run(f"{_ENTER}y{_DOWN}s{_ENTER}", [_open_row("a", "sl"), _open_row("b", "cmatrix")])
+
+        assert answered == {"a": "apply", "b": "skip_once"}
+
+    def test_a_screen_whose_rows_all_start_answered_still_confirms_on_a_bare_enter(self) -> None:
+        """H259 — the unanswered start is opt-in per screen, so no other screen changes."""
+        rendered, answered = self._run(_ENTER, [_row("a", "sl")])
+
+        assert "Not answered yet" not in rendered
+        assert answered == {"a": "apply"}
+
+    def test_space_on_an_unanswered_row_steps_to_the_first_answer(self) -> None:
+        """Unanswered is not one of the states being cycled: cycling back into it would let
+        the user leave a row on a value `<enter>` refuses."""
+        assert _drive(f" {_ENTER}", rows=[_open_row("a")]) == {"a": "apply"}
+
+    def test_no_answer_may_take_the_value_that_means_nobody_answered(self) -> None:
+        stolen = DecisionOption(value=UNANSWERED, key="u", word="unanswered", glyph="?")
+
+        with pytest.raises(ValueError, match="cannot be an answer"):
+            decision_list("t", rows=[_row("a")], options=(*THREE_ANSWERS, stolen))
+
+    def test_a_row_may_not_start_on_an_answer_the_screen_does_not_offer(self) -> None:
+        """Otherwise it is a KeyError deep in the token stream — including the one a
+        misspelt sentinel would cause."""
+        with pytest.raises(ValueError, match="must be an offered answer"):
+            misspelt = DecisionRow(row_id="a", label="sl", default="__unanswerd__")
+            decision_list("t", rows=[misspelt], options=TWO_ANSWERS)
 
 
 class TestTheExplanation:
