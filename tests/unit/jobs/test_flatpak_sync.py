@@ -3788,7 +3788,7 @@ class TestRemoteFilterReplicates:
     @pytest.mark.asyncio
     async def test_a_remote_no_approved_ref_needs_carries_no_filter_either(self, tmp_path: Path) -> None:
         """F105 — A remote nothing derives is not provisioned (`PKG-FR-FLATPAK-REMOTE-DERIVED`), so there is nothing to
-         filter."""
+        filter."""
         path = self._filter_file(tmp_path)
         context, _source, target = make_context(
             source_responses=self._source(
