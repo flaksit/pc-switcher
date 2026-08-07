@@ -1,0 +1,5 @@
+are claude.md line 1 and 3 useful for claude? Humans don't read this file anyway
+
+---
+
+drop

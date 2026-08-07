@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "4c9e37d9277e",
+  "strategy": "manual-commit",
+  "branch": "worktree-docs-debloat-271",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "CLAUDE.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/4c/9e37d9277e/0/metadata.json",
+      "transcript": "/4c/9e37d9277e/0/full.jsonl",
+      "compact_transcript": "/4c/9e37d9277e/0/transcript.jsonl",
+      "content_hash": "/4c/9e37d9277e/0/content_hash.txt",
+      "prompt": "/4c/9e37d9277e/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 20,
+    "cache_creation_tokens": 965,
+    "cache_read_tokens": 294057,
+    "output_tokens": 619,
+    "api_call_count": 5
+  }
+}
