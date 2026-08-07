@@ -114,6 +114,12 @@ def pin_filename(item_id: str) -> str:
     return item_id.removeprefix(APT_PIN_ID_PREFIX)
 
 
+def config_filename(item_id: str) -> str:
+    """`apt:config:<filename>` -> `<filename>`, for looking a config file's captured bodies
+    back up."""
+    return item_id.removeprefix(APT_CONFIG_ID_PREFIX)
+
+
 def hold_name(item_id: str) -> str:
     """`apt:hold:<name>` -> `<name>`."""
     return item_id.removeprefix(APT_HOLD_ID_PREFIX)
@@ -258,9 +264,12 @@ class AptPinItem:
 class AptConfigItem:
     """One apt behavior-configuration file under `/etc/apt/apt.conf.d` (`PKG-FR-APT-IGNORES`).
 
-    Synced as an opaque item — whole-file digest only, no parsing of apt's config
-    grammar — since these files are plain, hand-authored `Acquire::.../APT::...`
-    stanzas with no sub-item this phase needs to address individually.
+    Synced as an opaque item — the whole-file digest is the whole comparison, and apt's
+    config grammar is never parsed — since these files are plain, hand-authored
+    `Acquire::.../APT::...` stanzas with no sub-item this phase needs to address
+    individually. The digest carried here is the comparison and is not what the user is
+    shown: a file both machines hold with different content is reviewed against both
+    bodies, read once the diff finds it changed (`diff_apt_configs`).
     """
 
     filename: str

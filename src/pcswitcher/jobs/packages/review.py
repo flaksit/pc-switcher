@@ -84,13 +84,18 @@ unreachable for it and nothing about it is ever recorded. That is why `_REMOVAL_
 entry carrying `ReviewEntry.content` prints that whole file first: a pin file's name says
 nothing about what it does, and its name is all a decision row can show.
 
-A `ReviewGroup` whose `action` is `REPO_CONFLICT_REVIEW_ACTION` is the same two-answer screen
-(`PKG-FR-REPO-CONFLICT`) preceded by its own content: something that differs on the two machines and
-feeds an item the target recorded machine-specific — a repository file for `apt_sync`, a
-remote for `flatpak_sync` — is printed as both versions, never a unified diff, before the one
-screen that answers overwrite or skip-once for all of them. Nothing is recorded either way,
-and it starts at skip-once: an overwrite moves software the target explicitly marked
-machine-specific, so it is chosen, never defaulted.
+A `ReviewGroup` whose entries carry `ReviewEntry.versions` is resolved one entry at a time,
+each preceded by both machines' whole versions of it — never a unified diff. Two groups take
+that shape. `REPO_CONFLICT_REVIEW_ACTION` (`PKG-FR-REPO-CONFLICT`) is the two-answer one:
+something that differs on the two machines and feeds an item the target recorded
+machine-specific — a repository file for `apt_sync`, a remote for `flatpak_sync` — answered
+overwrite or skip-once, recorded neither way, starting at skip-once because an overwrite moves
+software the target explicitly marked machine-specific. The ordinary CHANGE group for
+`/etc/apt/apt.conf.d` (`PKG-FR-APTCONF`) is the three-answer one, and it is here for the same
+reason: replacing a file the target's own user wrote is a question nobody can answer from a
+filename, and it can be answered for good. Its two bodies are what the row used to carry as
+two SHA-256 digests (#277). The answers still come from the group itself, so which screen
+offers permanence is decided where every other group's answers are.
 
 A `ReviewGroup` whose `action` is `SNAP_CHANGE_REVIEW_ACTION` (defined in `sync_core`, where
 the snap job builds it) is the ordinary decision screen with the third answer missing: it is
@@ -494,6 +499,17 @@ def _is_collateral_group(action: str) -> bool:
 
 def _is_repo_conflict_group(action: str) -> bool:
     return action == REPO_CONFLICT_REVIEW_ACTION
+
+
+def _shows_both_versions(group: ReviewGroup) -> bool:
+    """Whether this group's screen prints two whole file bodies per entry.
+
+    Asked of the ENTRIES rather than of the action, so a group qualifies by carrying the
+    evidence rather than by being on a list: `apt_sync`'s `apt.conf.d` change group is an
+    ordinary CHANGE group with its bodies attached, and the conflict groups reach the same
+    screen through their own sentinel below.
+    """
+    return any(entry.versions is not None for entry in group.entries)
 
 
 def _is_repo_removal_group(action: str) -> bool:
@@ -911,6 +927,59 @@ def _bare_item_name(label: str) -> str:
     `label()` in the codebase shares, and a label that has none is returned untouched.
     """
     return _TRAILING_PARENTHETICAL.sub("", label)
+
+
+# How many lines of one file body a decision screen prints. Generous for what these files
+# actually are — an `apt.conf.d` fragment, a pin, a repository definition are a handful of
+# lines each — and a cap at all because the body is whatever the machine turned out to hold:
+# a file long enough to scroll its own question off the terminal is as unanswerable as the
+# digest this printing replaced.
+_MAX_BODY_LINES = 60
+
+
+def _file_body(body: str) -> Text:
+    """One file's content as a decision screen prints it — never a bare `str`, so a
+    bracketed line inside a configuration file cannot reach Rich as markup (T-02-02).
+
+    Says in words when there is nothing to print. An empty panel reads as "this file is
+    empty", and that is a claim about the machine which a blank box should not be making on
+    its own. A read that FAILED never gets this far — the probe fails the job on a non-zero
+    exit (ADR-022) — so an empty body here is only ever a file that really is empty.
+
+    The body's own trailing newline is dropped: inside a panel border it renders as an empty
+    last line. A body past `_MAX_BODY_LINES` is cut, and the cut says how much is missing so
+    what is on screen is never taken for the whole file.
+    """
+    stripped = body.rstrip("\n")
+    if not stripped.strip():
+        return Text("(this file has no content)", style="dim italic")
+    lines = stripped.split("\n")
+    if len(lines) <= _MAX_BODY_LINES:
+        return Text(stripped)
+    shown = Text("\n".join(lines[:_MAX_BODY_LINES]))
+    shown.append(f"\n… {len(lines) - _MAX_BODY_LINES} more lines not shown", style="dim")
+    return shown
+
+
+def _print_both_versions(
+    entry: ReviewEntry, *, console: Console, source_hostname: str, target_hostname: str, replacing: bool
+) -> None:
+    """Print one entry's two whole versions, the target's first, under its own name.
+
+    The target's copy leads because it is the one an approval would replace. `replacing`
+    says whether an approval is still on the table: on a decision screen the source's panel
+    states what its answer would do, which is what makes the row's skip-once start legible
+    rather than arbitrary (`_default_decision`, `PKG-FR-HARMLESS-DEFAULT`). The
+    machine-specific follow-up passes False — nothing there replaces anything, the overwrite
+    having already been declined for good, and a panel saying otherwise would contradict the
+    answer the user just gave.
+    """
+    if entry.versions is None:
+        return
+    target_version, source_version = entry.versions
+    source_title = f"On {source_hostname} — would replace it" if replacing else f"On {source_hostname}"
+    console.print(Panel(_file_body(target_version), title=Text(f"On {target_hostname} now"), border_style="yellow"))
+    console.print(Panel(_file_body(source_version), title=Text(source_title), border_style="cyan"))
 
 
 def _render_group_panel(group: ReviewGroup) -> Panel:
@@ -1399,6 +1468,7 @@ def _conflicting_permanent_entries(
 async def _ask_mark_sides(
     groups: Sequence[ReviewGroup],
     *,
+    console: Console,
     source_hostname: str,
     target_hostname: str,
     decisions: Mapping[str, Decision],
@@ -1422,13 +1492,34 @@ async def _ask_mark_sides(
     <target>'s own"), so confirming without choosing changes nothing about how the tool has
     always behaved.
 
-    Ctrl-C aborts the whole sync like every other screen in the review. The rows carry each
-    item's own detail — normally "<atlas> has X, <nomad> has Y" — because that difference is
-    what the question is about and the batch screen is already off the top of the terminal.
+    Ctrl-C aborts the whole sync like every other screen in the review.
+
+    What the question is about is REPRINTED above the table, per row, in the shape the row's
+    own screen used: the item's name and both machines' whole versions of it. The question
+    is "whose copy is this one", which nobody can answer from a filename, and by the time
+    this screen appears the screen that showed the bodies is off the top of the terminal.
+    They go above the table rather than into a `detail` column because a column cannot hold
+    a file, and the rows stay one batch because `PKG-FR-MARK-SIDE` asks the question once
+    for every such item of a review together. An entry with no bodies to reprint — a
+    subject whose difference was never two files — falls back to its own detail line on the
+    row, as before.
     """
     entries = _conflicting_permanent_entries(groups, decisions)
     if not entries:
         return {}
+
+    for entry in entries:
+        if entry.versions is None:
+            continue
+        console.print()
+        console.print(Text(entry.label, style="bold"))
+        _print_both_versions(
+            entry,
+            console=console,
+            source_hostname=source_hostname,
+            target_hostname=target_hostname,
+            replacing=False,
+        )
 
     prompt = decision_list(
         "Kept for good — whose own version is it?",
@@ -1582,23 +1673,22 @@ async def _review_removal_group(
     An entry with no `content` (a repository file, whose URLs are in its detail line) prints
     nothing extra; its row's detail carries the finding as on any other screen.
 
-    The body's own trailing newline is dropped: inside a panel border it renders as an empty
-    last line. Wrapped in `Text` like every other untrusted string (T-02-02).
+    The body is rendered by `_file_body`, which is where the trailing newline, the cap and
+    the empty-file wording live, and which wraps it in `Text` like every other untrusted
+    string (T-02-02).
     """
     options = _options_for(group, source_hostname=source_hostname, target_hostname=target_hostname)
     for entry in group.entries:
         console.print()
         console.print(Text(entry.label, style="bold"))
         if entry.content is not None:
-            console.print(
-                Panel(Text(entry.content.rstrip("\n")), title=Text(f"On {target_hostname}"), border_style="yellow")
-            )
+            console.print(Panel(_file_body(entry.content), title=Text(f"On {target_hostname}"), border_style="yellow"))
         decisions[entry.item_id] = Decision(
             await _ask_about_one_item(entry, title=group.title, options=options, default=_default_decision(group))
         )
 
 
-async def _review_repo_conflict_group(
+async def _review_two_version_group(
     group: ReviewGroup,
     *,
     console: Console,
@@ -1606,52 +1696,43 @@ async def _review_repo_conflict_group(
     target_hostname: str,
     decisions: dict[str, Decision],
 ) -> None:
-    """Resolve one `REPO_CONFLICT_REVIEW_ACTION` group with the two-way choice `PKG-FR-REPO-CONFLICT`
-    requires: overwrite the target's version with the source's, or skip for now.
+    """Resolve one group whose items are on BOTH machines with different content: each
+    entry's two whole versions, then the question about that entry.
 
     Both versions are printed, the target's first, never a unified diff — the user's own
-    position is that a diff of two repository definitions is not readable, and the question
-    is which of two configurations the machine should have, not what changed between them.
-    One file at a time, also ruled by the user: two whole file bodies are long enough that a
-    batched screen asked about definitions that had already scrolled away.
+    position is that a diff of two configurations is not readable, and the question is which
+    of the two the machine should have, not what changed between them. One entry at a time,
+    also ruled by the user: two whole file bodies are long enough that a batched screen
+    asked about definitions that had already scrolled away.
 
-    Ecosystem-neutral wording throughout, because two managers raise this screen about two
-    different subjects: `apt_sync` about a repository file, whose versions are the two whole
-    file bodies, and `flatpak_sync` about a remote, whose versions are its differing fields.
-    The entry's own `detail` is where the subject is named.
+    Ecosystem-neutral wording throughout, because three subjects reach this screen: a
+    repository file (`apt_sync`) and a remote (`flatpak_sync`) that feed something the
+    target recorded machine-specific (`PKG-FR-REPO-CONFLICT`), and an `/etc/apt/apt.conf.d`
+    file the target's own user wrote (`PKG-FR-APTCONF`). The entry's own `detail`, where it
+    has one, is what names the subject.
 
-    Two answers, not three. Skip-always is deliberately absent: a permanent mark on a
-    repository file would permanently change where the packages it feeds come from, and the
-    remedy for two machines whose definitions have drifted is consolidating them.
-
-    `Decision.APPLY` puts the file in the write set; `Decision.SKIP_ONCE` keeps it out AND
-    fails every approved package whose origin depended on it (the caller's job) — a skipped
-    conflict is not the same as no conflict, because the package the user approved cannot be
-    delivered from the origin they were promised. Skip-once is also where each row STARTS
-    (`_default_decision`), because an overwrite displaces software the target explicitly
-    marked machine-specific.
+    The ANSWERS come from the group, not from this screen: the conflict has two
+    (`PKG-FR-REPO-CONFLICT` forbids recording the answer, since a permanent mark on a
+    repository would permanently change where the packages it feeds come from), and the apt
+    configuration file has the ordinary three. Both start at skip-once
+    (`_default_decision`): one displaces software the target marked machine-specific, the
+    other replaces content that machine's user authored.
 
     Every untrusted string — the filename, the detail, and both file bodies — is wrapped in
-    `Text` before it reaches the console, so a bracketed line inside a repository definition
-    cannot trigger the Rich markup crash (T-02-02). A file body's own trailing newline is
-    dropped for display: inside a panel border it renders as an empty last line.
+    `Text` before it reaches the console, so a bracketed line inside a configuration file
+    cannot trigger the Rich markup crash (T-02-02).
     """
     options = _options_for(group, source_hostname=source_hostname, target_hostname=target_hostname)
     for entry in group.entries:
         console.print()
         console.print(Text(entry.label, style="bold"))
-        if entry.versions is not None:
-            target_version, source_version = entry.versions
-            console.print(
-                Panel(
-                    Text(target_version.rstrip("\n")),
-                    title=Text(f"On {target_hostname} now"),
-                    border_style="yellow",
-                )
-            )
-            console.print(
-                Panel(Text(source_version.rstrip("\n")), title=Text(f"On {source_hostname}"), border_style="cyan")
-            )
+        _print_both_versions(
+            entry,
+            console=console,
+            source_hostname=source_hostname,
+            target_hostname=target_hostname,
+            replacing=True,
+        )
         decisions[entry.item_id] = Decision(
             await _ask_about_one_item(entry, title=group.title, options=options, default=_default_decision(group))
         )
@@ -1790,8 +1871,8 @@ async def review_items(  # noqa: PLR0913 - review surface plus both machine name
                 )
                 continue
 
-            if _is_repo_conflict_group(group.action):
-                await _review_repo_conflict_group(
+            if _is_repo_conflict_group(group.action) or _shows_both_versions(group):
+                await _review_two_version_group(
                     group,
                     console=console,
                     source_hostname=source_hostname,
@@ -1820,6 +1901,7 @@ async def review_items(  # noqa: PLR0913 - review surface plus both machine name
         # questions, which is what `PKG-FR-BATCHED` constrains.
         mark_sides = await _ask_mark_sides(
             groups,
+            console=console,
             source_hostname=source_hostname,
             target_hostname=target_hostname,
             decisions=decisions,

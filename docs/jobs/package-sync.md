@@ -77,7 +77,7 @@ A snap's revision/channel change also takes two answers: nobody keeps a revision
 
 **Removal groups start at skip-now.** A bulk confirm can never silently delete something. So do groups that would overwrite an `apt.conf.d` file the target already holds.
 
-Some questions come one-per-screen because they have to show you something first: a file body, a collateral package, an unreproducible item.
+Some questions come one-per-screen because they have to show you something first: a file body, a collateral package, an unreproducible item. Where both machines hold the file and their copies differ — an `apt.conf.d` file, a repository file — you see both versions whole, the target's first, because that is the one it would replace.
 
 Some findings are only reported, not asked about: version differences, origin divergences, repositories the source cannot reproduce. Neither answering nor declining would change anything, so there is nothing to answer.
 
@@ -85,7 +85,7 @@ Some findings are only reported, not asked about: version differences, origin di
 
 Choosing `x` marks the item as belonging to *this specific machine*. The mark is written on the **holding machine** (the one whose copy the answer keeps) and never synced.
 
-Where both machines have the item and their copies differ, you get one follow-up screen asking whose own version this is — one machine, the other, or both. Naming both records one on each, so the answer survives either machine losing its copy.
+Where both machines have the item and their copies differ, you get one follow-up screen asking whose own version this is — one machine, the other, or both. Naming both records one on each, so the answer survives either machine losing its copy. Both versions are printed again above that screen: by then the screen that showed them has scrolled away, and a filename is not something you can answer this from.
 
 The mark lasts as long as the software is on the holding machine. Once it is gone, the mark is dropped and the run says so.
 

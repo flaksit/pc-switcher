@@ -38,6 +38,7 @@ from pcswitcher.jobs.packages.review import (
     REPO_REMOVAL_REVIEW_ACTION,
     UNREPRODUCIBLE_REVIEW_ACTION,
     Decision,
+    MarkSide,
     ReviewEntry,
     ReviewGroup,
     ReviewOutcome,
@@ -1909,6 +1910,155 @@ class TestRepoConflictGroupResolution:
         decision_list.assert_not_called()
         assert outcome.decisions == {"apt:conflict:vendor.list": Decision.SKIP_ONCE}
         assert outcome.unresolved == ()
+
+
+_CONF_TARGET_BODY = 'APT::Install-Recommends "true";\n'
+_CONF_SOURCE_BODY = 'APT::Install-Recommends "false";\n'
+
+
+def _apt_config_group(entries: Sequence[ReviewEntry]) -> ReviewGroup:
+    """The ordinary CHANGE group for `/etc/apt/apt.conf.d`, as `sync_core` builds it: three
+    answers, and `overwrites_authored_content` because replacing a file the target's own
+    user wrote is as irreversible as a deletion."""
+    return ReviewGroup(
+        manager="apt",
+        action="change",
+        title="Update apt configuration files on nomad?",
+        entries=tuple(entries),
+        overwrites_authored_content=True,
+    )
+
+
+def _apt_config_entry(
+    *,
+    item_id: str = "apt:config:99-pcsw-uat",
+    label: str = "99-pcsw-uat",
+    target_version: str = _CONF_TARGET_BODY,
+    source_version: str = _CONF_SOURCE_BODY,
+) -> ReviewEntry:
+    return ReviewEntry(item_id=item_id, label=label, action_label="update", versions=(target_version, source_version))
+
+
+@pytest.mark.asyncio
+class TestAptConfigOverwriteScreen:
+    """#277: an `apt.conf.d` file both machines hold is answered off the two file bodies,
+    on the same two-panel screen the repository conflict uses — but with its own three
+    answers, since this one CAN be recorded (`PKG-FR-APTCONF`).
+    """
+
+    async def test_each_file_is_answered_right_after_its_own_two_bodies(self) -> None:
+        """C182 — one screen per file, not a batch: two whole bodies per entry scroll the
+        earlier ones away, which is the same reason the conflict screen is per file."""
+        console, out = captured_console(terminal=True)
+        ui = MagicMock()
+        second = _apt_config_entry(item_id="apt:config:98-other", label="98-other", target_version="Y\n")
+        screen = _fake_prompt(
+            ask_side_effect=[
+                {"apt:config:99-pcsw-uat": "skip_always"},
+                {"apt:config:98-other": "apply"},
+                {"apt:config:99-pcsw-uat": "target"},
+            ]
+        )
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen) as decision_list,
+        ):
+            outcome = await review_items(
+                [_apt_config_group([_apt_config_entry(), second])], console=console, ui=ui, **HOSTS
+            )
+
+        printed = out.getvalue()
+        assert [len(call.kwargs["rows"]) for call in decision_list.call_args_list[:2]] == [1, 1]
+        assert printed.index('"true"') < printed.index('"false"'), "the target's copy leads; it is what is replaced"
+        assert "On nomad now" in printed
+        assert "On atlas — would replace it" in printed
+        assert outcome.decisions["apt:config:98-other"] == Decision.APPLY
+
+    async def test_the_permanent_answer_survives_the_move_to_the_two_panel_screen(self) -> None:
+        """C182 — this file is still the one apt item a user can settle for good, and its row
+        still starts at skip-once (`PKG-FR-HARMLESS-DEFAULT`): the bodies are evidence, not a
+        change of what the screen offers."""
+        console = _interactive_console()
+        ui = MagicMock()
+        screen = _fake_prompt(ask_return={"apt:config:99-pcsw-uat": "skip_once"})
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen) as decision_list,
+        ):
+            outcome = await review_items([_apt_config_group([_apt_config_entry()])], console=console, ui=ui, **HOSTS)
+
+        assert _screen_words(decision_list.call_args) == ["update", "skip now", "never update"]
+        assert _screen_defaults(decision_list.call_args) == {"apt:config:99-pcsw-uat": Decision.SKIP_ONCE}
+        assert outcome.decisions == {"apt:config:99-pcsw-uat": Decision.SKIP_ONCE}
+
+    async def test_an_empty_file_says_so_rather_than_printing_an_empty_panel(self) -> None:
+        """C183 — an empty box reads as "this file is empty", which is a claim about the
+        machine. A read that failed never gets here (the probe fails the job on it), so the
+        words are true whenever they appear."""
+        console, out = captured_console(terminal=True)
+        ui = MagicMock()
+        screen = _fake_prompt(ask_return={"apt:config:99-pcsw-uat": "skip_once"})
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen),
+        ):
+            await review_items(
+                [_apt_config_group([_apt_config_entry(target_version="\n \n")])], console=console, ui=ui, **HOSTS
+            )
+
+        assert "this file has no content" in out.getvalue()
+
+    async def test_a_file_too_long_to_print_is_cut_and_says_how_much_is_missing(self) -> None:
+        """C184 — the body is whatever the machine turned out to hold. A file long enough to
+        scroll its own question off the terminal is as unanswerable as the digest this
+        printing replaced, so it is cut and the cut is stated."""
+        console, out = captured_console(terminal=True)
+        ui = MagicMock()
+        body = "".join(f'APT::Line-{index} "x";\n' for index in range(200))
+        screen = _fake_prompt(ask_return={"apt:config:99-pcsw-uat": "skip_once"})
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen),
+        ):
+            await review_items(
+                [_apt_config_group([_apt_config_entry(target_version=body)])], console=console, ui=ui, **HOSTS
+            )
+
+        printed = out.getvalue()
+        assert "APT::Line-59" in printed
+        assert "APT::Line-60" not in printed
+        assert "140 more lines not shown" in printed
+
+    async def test_the_bodies_are_reprinted_on_the_machine_specific_follow_up(self) -> None:
+        """C185 — "whose own version is it?" is unanswerable from a filename, and by then the
+        screen that showed the bodies is off the top of the terminal. The rows stay one
+        batch (`PKG-FR-MARK-SIDE`); the bodies go above the table, where a file fits."""
+        console, out = captured_console(terminal=True)
+        ui = MagicMock()
+        screen = _fake_prompt(
+            ask_side_effect=[{"apt:config:99-pcsw-uat": "skip_always"}, {"apt:config:99-pcsw-uat": "both"}]
+        )
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen) as decision_list,
+        ):
+            outcome = await review_items([_apt_config_group([_apt_config_entry()])], console=console, ui=ui, **HOSTS)
+
+        follow_up = decision_list.call_args_list[1]
+        assert follow_up.args[0] == "Kept for good — whose own version is it?"
+        assert len(follow_up.kwargs["rows"]) == 1
+        printed = out.getvalue()
+        # Once for the decision screen, once above the follow-up's table.
+        assert printed.count('"true"') == 2
+        assert printed.count('"false"') == 2
+        # Nothing is being replaced any more — the overwrite was declined for good.
+        assert printed.count("would replace it") == 1
+        assert outcome.mark_sides == {"apt:config:99-pcsw-uat": MarkSide.BOTH}
 
 
 @pytest.mark.asyncio

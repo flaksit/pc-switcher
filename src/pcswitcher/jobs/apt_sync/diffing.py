@@ -5,9 +5,10 @@ This is apt's own, not the base class's (`PKG-FR-JOB-INDEPENDENCE`): while the p
 ids they never fill in, and each wrote its own diff anyway — because what a diff even IS
 differs per ecosystem. `packages/items.py` keeps the taxonomy every manager is keyed on.
 
-Pure over captured facts, with two exceptions that read a file: a pin and a repository
-offered for DELETION are shown to the user whole, and a filename alone gives them nothing to
-decide from. Both fetch content only for the files their own direction implicates.
+Pure over captured facts, with three exceptions that read a file: a pin and a repository
+offered for DELETION, and an `apt.conf.d` file offered for OVERWRITE, are shown to the user
+whole — a filename, or a digest of it, gives them nothing to decide from. Each fetches
+content only for the files its own direction implicates.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from pcswitcher.jobs.apt_sync.items import (
+    APT_CONF_DIR,
     APT_PREFERENCES_DIR,
     APT_SOURCES_DIR,
     DISTRO_SOURCE_FILENAMES,
@@ -320,12 +322,38 @@ async def diff_apt_pins(
     return diffs, contents
 
 
-def diff_apt_configs(
-    source_digests: Mapping[str, str], target_digests: Mapping[str, str], machines: Machines
-) -> list[ItemDiff]:
-    """Config-file diffs — opaque, digest-only, filename identity."""
+async def diff_apt_configs(
+    source_run: Run,
+    target_run: Run,
+    source_digests: Mapping[str, str],
+    target_digests: Mapping[str, str],
+    machines: Machines,
+) -> tuple[list[ItemDiff], dict[str, tuple[str, str]]]:
+    """Config-file diffs — filename identity, whole-file digest comparison — plus both
+    machines' bodies for each file they disagree about, keyed by filename and target-first
+    (`ReviewEntry.versions`' own order).
+
+    The digest stays the comparison and stops being the evidence (#277). Two SHA-256 strings
+    on a review row asked the user to approve replacing a file they had not seen, and the
+    answer is one they can record for good — this is the group that starts at skip-once
+    precisely because it overwrites what the target's own user wrote. So the CHANGE
+    direction carries no detail line at all: the two bodies are printed above the question,
+    and a sentence restating that the file differs would be the only thing on screen the
+    user could not check.
+
+    Two `sudo cat`s per file the diff finds CHANGED — never per file in the directory, and
+    nothing at all on a run where the two directories agree, which is nearly every run. Same
+    trade `PKG-FR-PIN-DELETE` already accepts, and the same guarded read
+    (`read_file_content`, ADR-022): silence there fails the job rather than showing an empty
+    panel the user would read as an empty file.
+
+    The other two directions read nothing. A file only one machine has is decided by its
+    own presence: adding what the source has and removing what it no longer has are the
+    ordinary converge, and neither displaces content the other machine wrote.
+    """
     names = diff_filenames(source_digests, target_digests)
     diffs: list[ItemDiff] = []
+    bodies: dict[str, tuple[str, str]] = {}
 
     for filename in sorted(names.missing):
         item = AptConfigItem(filename=filename, digest=source_digests[filename])
@@ -335,9 +363,13 @@ def diff_apt_configs(
         diffs.append(file_diff(item, DiffClass.EXTRA_ON_TARGET, DiffAction.REMOVE))
     for filename in sorted(names.changed):
         item = AptConfigItem(filename=filename, digest=source_digests[filename])
-        detail = build_version_mismatch_detail(source_digests[filename], target_digests[filename], machines)
-        diffs.append(file_diff(item, DiffClass.VERSION_MISMATCH, DiffAction.CHANGE, detail=detail))
-    return diffs
+        path = f"{APT_CONF_DIR}/{filename}"
+        bodies[filename] = (
+            await read_file_content(target_run, path, machines.target),
+            await read_file_content(source_run, path, machines.source),
+        )
+        diffs.append(file_diff(item, DiffClass.VERSION_MISMATCH, DiffAction.CHANGE))
+    return diffs, bodies
 
 
 async def diff_apt_sources(

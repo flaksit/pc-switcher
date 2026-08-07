@@ -80,6 +80,27 @@ GROUPS = [
         ],
         note=f"These converge on their own: run `sudo apt update && sudo apt upgrade` on {TARGET_HOST}.",
     ),
+    # The other two-panel screen, and the only one whose answer can be permanent: answering
+    # `never update` here raises the machine-specific follow-up, which reprints these same
+    # two bodies above its table. Rehearsed because that pair of screens is the one route to
+    # a recorded answer about a file, and neither can be read from a filename.
+    ReviewGroup(
+        "apt",
+        "change",
+        f"Update apt configuration files on {TARGET_HOST}?",
+        [
+            ReviewEntry(
+                "apt:config:99-pcsw-uat",
+                "99-pcsw-uat",
+                "update",
+                versions=(
+                    'APT::Install-Recommends "true";\nAPT::Get::Assume-Yes "false";\n',
+                    'APT::Install-Recommends "false";\n',
+                ),
+            )
+        ],
+        overwrites_authored_content=True,
+    ),
     # TWO conflicting files, because one screen answers a whole batch and the shape of that
     # is the thing a rehearsal has to show: both files' versions are printed first, in pairs,
     # and the single screen underneath carries a row per file.

@@ -167,7 +167,7 @@ pc-switcher sync pc2 --yes --allow-first-sync
 
 A dry run converges nothing, so three things below cannot happen in it: no snippet is recorded, no registry is pushed, and the converge loop of §3.7 never opens — `_converge_one` is not called at all (`jobs/packages/sync_core.py:804`). Walk the dry run for the screens, then answer the real run for the outcomes.
 
-Findings already raised from a walk of these fixtures, so they need no re-reporting — check they still read as described and move on: review copy and titles (#276), the `apt.conf.d` digests of §3.3 (#277), that screen's keys and default (#278), the repeated scrollback frames (#279), the snippet screens of §3.5 and §3.6 (#281), and the group order of §3.2 (#283).
+Findings already raised from a walk of these fixtures, so they need no re-reporting — check they still read as described and move on: review copy and titles (#276), the keys and default of §3.3's follow-up (#278), the repeated scrollback frames (#279), the snippet screens of §3.5 and §3.6 (#281), and the group order of §3.2 (#283).
 
 The status line, the progress bars and the outcome block name jobs the way a user would (#280 is fixed): `Apt packages`, `Snaps`, `Flatpaks`, `Manual debs`, `Sideloaded snaps`, `Manual flatpaks`, `Manually installed apps`, `Folder sync`, `Install on target`. A module name such as `manual_deb_sync` on screen is a regression. Config keys and the `job` field in the log file stay the module name, so §4's log greps are unaffected.
 
@@ -215,12 +215,17 @@ pc1 has manual debs that no package manager can put on pc2?
 Update sideloaded snap versions on pc2?
 ```
 
-### 3.3 The machine-specific follow-up
+### 3.3 The two file bodies, and the machine-specific follow-up
 
-The first question of the run, in `apt_sync`. `/etc/apt/apt.conf.d/99-pcsw-uat` is on both machines with different content, so its row starts at **skip now** — replacing a file pc2's own user wrote is as irreversible as a deletion. Answer `<x>` on it.
+The first question of the run, in `apt_sync`. `/etc/apt/apt.conf.d/99-pcsw-uat` is on both machines with different content, so it is asked on a screen of its own, preceded by both machines' whole copies of it — never a digest of either (#277 is fixed). Confirm:
 
-After the batch screen is confirmed — not folded into it — a further screen must appear, titled `Kept for good — whose own version is it?`, with one row per permanently-kept conflicting item. Confirm:
+- A yellow panel titled `On pc2 now` holding pc2's `APT::Install-Recommends "true";`, then a cyan `On pc1 — would replace it` holding pc1's `"false";`. That order and that wording are what make the row's starting position readable.
+- No 64-character hexadecimal string anywhere on the screen.
+- The row starts at **skip now** — replacing a file pc2's own user wrote is as irreversible as a deletion.
 
+Answer `<x>` on it. Then a further screen must appear — not folded into this one — titled `Kept for good — whose own version is it?`, with one row per permanently-kept conflicting item. Confirm:
+
+- Both panels are printed again above its table, this time with the source's titled plainly `On pc1`: the overwrite has just been declined for good, so nothing there would replace anything.
 - Three answers, keyed and worded as the two hostnames and `both`: `pc1`, `pc2`, `both`.
 - Each hint says how long the mark lasts on that machine — `it is pc1's own version; nothing overwrites it while pc1 has it`, and for `both`, that each version is its own machine's.
 - The row defaults to `pc2`, so confirming the screen unread records what the permanent answer already said in its own words.

@@ -668,12 +668,26 @@ class PackageSyncJob(SyncJob):
                                 label=diff.label,
                                 action_label=verb,
                                 detail=diff.detail,
+                                versions=self._entry_versions(diff),
                             )
                             for diff in entries
                         ),
                     )
                 )
         return tuple(groups)
+
+    def _entry_versions(self, diff: ItemDiff) -> tuple[str, str] | None:
+        """The two whole bodies a row's question is about — the target's first — or `None`
+        for an item whose difference is not a file both machines hold (`PKG-FR-APTCONF`).
+
+        A hook rather than a field on `ItemDiff`: a body shown for a decision deliberately
+        never travels through the diff shape, whose strings are the one-line kind
+        (`ItemDiff` docstring), and only the job that read the files knows where they are
+        kept. `apt_sync` overrides it for the `apt.conf.d` files both machines have with
+        different content; every other manager has nothing of the kind, so the base answers
+        `None` and their screens are unchanged.
+        """
+        return None
 
     # -- plan() / accept_review() / apply() / execute() -------------------------------
 

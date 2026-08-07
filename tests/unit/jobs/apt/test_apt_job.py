@@ -1372,6 +1372,104 @@ class TestAptConfigVocabulary:
         assert not any("packages" in group.title for group in config_groups)
 
 
+# Two real SHA-256 strings, so an assertion that no digest reaches a screen cannot pass on a
+# fixture whose "digests" are short words no review line would look wrong carrying.
+_CONF_SOURCE_DIGEST = "b1a4ab589bbdcbc5bad9efac95f1b953c12451edbbc2882ef6e5aeb53003d038"
+_CONF_TARGET_DIGEST = "44a9572816592bff7858122ec224d8e7e53c198035faca54c94b1fed9ab02c98"
+_CONF_SHARED_DIGEST = "9f2c0a6f7d1b4e3a8c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f80912a3b"
+_CONF_SOURCE_BODY = 'APT::Install-Recommends "false";\n'
+_CONF_TARGET_BODY = 'APT::Install-Recommends "true";\n'
+_SHA256_RUN = re.compile(r"\b[0-9a-f]{64}\b")
+
+
+class TestAptConfigEvidence:
+    """#277: an `apt.conf.d` file both machines hold with different content is decided from
+    the two file BODIES. The digest stays the comparison and never reaches the user, who
+    cannot tell two of them apart and whose answer here can be recorded for good.
+    """
+
+    @staticmethod
+    def _four_files() -> tuple[JobContext, MagicMock, MagicMock]:
+        """One file per case: `10add` on the source only, `20update` on both and differing,
+        `30delete` on the target only, `50same` on both and identical."""
+        return make_context(
+            source_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/apt.conf.d": CommandResult(
+                    0,
+                    sha256_line("a1", "10add")
+                    + sha256_line(_CONF_SOURCE_DIGEST, "20update")
+                    + sha256_line(_CONF_SHARED_DIGEST, "50same"),
+                    "",
+                ),
+                "cat /etc/apt/apt.conf.d/20update": CommandResult(0, _CONF_SOURCE_BODY, ""),
+            },
+            target_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/apt.conf.d": CommandResult(
+                    0,
+                    sha256_line(_CONF_TARGET_DIGEST, "20update")
+                    + sha256_line("d1", "30delete")
+                    + sha256_line(_CONF_SHARED_DIGEST, "50same"),
+                    "",
+                ),
+                "cat /etc/apt/apt.conf.d/20update": CommandResult(0, _CONF_TARGET_BODY, ""),
+            },
+        )
+
+    @pytest.mark.asyncio
+    async def test_the_overwrite_row_carries_both_whole_bodies_target_first(self) -> None:
+        """C179 — the review's own two-panel screen reads `ReviewEntry.versions` as
+        `(what the target has now, what would replace it)`."""
+        context, _source, _target = self._four_files()
+
+        plan = await AptSyncJob(context).plan()
+
+        change = next(
+            group
+            for group in plan.groups
+            if group.action == "change" and group.entries[0].item_id.startswith("apt:config")
+        )
+        assert [entry.versions for entry in change.entries] == [(_CONF_TARGET_BODY, _CONF_SOURCE_BODY)]
+
+    @pytest.mark.asyncio
+    async def test_no_digest_reaches_any_review_screen(self) -> None:
+        """C180 — the measured defect: two SHA-256 strings were the whole evidence for an
+        overwrite nobody could judge. Asserted over every string every screen prints, not
+        only the one row, so the digest cannot come back through a detail line or a title.
+        """
+        context, _source, _target = self._four_files()
+
+        plan = await AptSyncJob(context).plan()
+
+        printed = " ".join(
+            text
+            for group in plan.groups
+            for entry in group.entries
+            for text in (group.title, group.note or "", entry.label, entry.detail or "", *(entry.versions or ()))
+        )
+        assert _CONF_SOURCE_DIGEST not in printed
+        assert _CONF_TARGET_DIGEST not in printed
+        assert _SHA256_RUN.search(printed) is None
+
+    @pytest.mark.asyncio
+    async def test_the_bodies_are_read_only_for_the_file_that_differs(self) -> None:
+        """C181 — one `sudo cat` per side per DIFFERING file, never per file in the
+        directory: an addition, a deletion and a file both machines already agree on are
+        each decided without reading anything.
+        """
+        context, source, target = self._four_files()
+
+        await AptSyncJob(context).plan()
+
+        assert [call for call in all_calls(source) if "apt.conf.d" in call and call.startswith("sudo cat")] == [
+            "sudo cat /etc/apt/apt.conf.d/20update"
+        ]
+        assert [call for call in all_calls(target) if "apt.conf.d" in call and call.startswith("sudo cat")] == [
+            "sudo cat /etc/apt/apt.conf.d/20update"
+        ]
+
+
 class TestRepositoryConflicts:
     """Ruling 6: a repository file present on both machines with different content is
     overwritten silently — EXCEPT when it feeds a package the target recorded

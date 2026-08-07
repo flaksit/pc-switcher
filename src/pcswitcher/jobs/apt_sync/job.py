@@ -45,6 +45,7 @@ from pcswitcher.jobs.apt_sync.items import (
     REPO_GROUP_CLASSES,
     REPO_REMOVAL_VERBS,
     UNRECORDABLE_ITEM_ID_PREFIXES,
+    config_filename,
     is_collateral_diff,
     is_repo_removal_diff,
     package_name,
@@ -138,6 +139,11 @@ class AptSyncJob(PackageSyncJob):
         # `diff_apt_pins` and shown whole on that screen — a pin filename alone gives the
         # user nothing to decide from.
         self._pin_contents: dict[str, str] = {}
+        # `{filename: (the target's body, the source's body)}` for the `apt.conf.d` files
+        # both machines have with different content, read by `diff_apt_configs` and printed
+        # whole on the screen that offers the overwrite — target-first, the order
+        # `ReviewEntry.versions` is defined in.
+        self._conf_bodies: dict[str, tuple[str, str]] = {}
         # `{package name: the version the SOURCE holds it at}` for the packages this run
         # proposes to install and the source holds (`PKG-FR-APT-HOLD-VERSION`).
         self._held_versions: dict[str, str] = {}
@@ -659,7 +665,14 @@ class AptSyncJob(PackageSyncJob):
             self._probe.target_run, source_repo.pin_digests, target_repo.pin_digests, self.machines
         )
         diffs.extend(pin_diffs)
-        diffs.extend(diff_apt_configs(source_repo.conf_digests, target_repo.conf_digests, self.machines))
+        config_diffs, self._conf_bodies = await diff_apt_configs(
+            self._probe.source_run,
+            self._probe.target_run,
+            source_repo.conf_digests,
+            target_repo.conf_digests,
+            self.machines,
+        )
+        diffs.extend(config_diffs)
         return diffs
 
     @override
@@ -698,6 +711,19 @@ class AptSyncJob(PackageSyncJob):
         if collateral:
             groups.append(self._collateral_group(collateral))
         return tuple(groups)
+
+    @override
+    def _entry_versions(self, diff: ItemDiff) -> tuple[str, str] | None:
+        """Both machines' bodies for an `apt.conf.d` file they disagree about, so the row
+        that offers the overwrite prints the two files instead of their digests (#277).
+
+        Only the CHANGE direction has a pair: `_conf_bodies` holds exactly the files
+        `diff_apt_configs` found changed, so an addition or a deletion looks itself up and
+        finds nothing.
+        """
+        if diff.item_class is not ItemClass.APT_CONFIG:
+            return None
+        return self._conf_bodies.get(config_filename(diff.item_id))
 
     def _repo_removal_groups(self, removals: Sequence[ItemDiff], *classes: ItemClass) -> list[ReviewGroup]:
         """The two-answer deletion screens for the named `/etc/apt` classes, in
