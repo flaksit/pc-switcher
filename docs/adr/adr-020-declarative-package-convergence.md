@@ -54,7 +54,7 @@ Four buckets: derived from approved packages (repository files, keyrings, confli
 
 ### ADR-020-D-UNREPRODUCIBLE-ITEMS — Unreproducible items
 
-Each item has two mandatory bodies: `install_body` (replayed on the target) and `version_body` (prints the installed version on whichever machine runs it). Version comparison drives convergence; there is no folder diff and no payload hash. `version_body` runs on both machines during `plan()`, ungated by `--confirm-each-command`. Replay loops until versions match or the user skips. No purge-and-retry answer; no uninstall snippets.
+Every item carries an install-or-update body, replayed on the target; it is mandatory for every kind. A second body, printing the version installed on whichever machine runs it, exists only where the kind has no version source of its own — an install under a path no package manager owns. For a hand-installed package, a sideloaded snap and a bundle-installed flatpak the manager itself answers the version question, so those items have no version body at all. Version comparison drives convergence; there is no folder diff and no payload hash. A version body runs on both machines during `plan()`, ungated by `--confirm-each-command`. Replay loops until versions match or the user skips. No purge-and-retry answer; no uninstall snippets.
 
 ### ADR-020-D-BATCHED-REVIEW — Batched review, rounds when correctness needs them
 
@@ -110,12 +110,13 @@ One store per device, name→publisher pinned by canonical-signed `snap-declarat
 - **Withholding the two ESM files silently** — Rejected: pins travel regardless, so pins land over a repository set neither machine has.
 - **Refusing the whole run when an approved origin cannot be replicated** — Rejected: contradicts `PKG-FR-OUTCOME-FAILED`'s continue-and-report model.
 - **Protecting the union of both machines' manual sets from collateral** — Rejected: the union protects on the wrong machine's bookkeeping.
-- **A recursive folder diff or payload hash for a manual install** — Rejected: version body replaces both.
+- **A recursive folder diff or payload hash for an install under an unowned path** — Rejected: its version body replaces both.
 - **Comparing snippet body before version** — Rejected: a cosmetic edit to a comment or mirror URL would raise a false review item.
 - **Letting the higher version decide sync direction** — Rejected: sync goes source-to-target, always.
-- **A purge-and-replace answer beside retry** — Rejected: with no folder diff, purging cannot change what the version body reports.
+- **A purge-and-replace answer beside retry** — Rejected: with no folder diff, purging cannot change the version the machine reports.
 - **Uninstall snippets** — Rejected: ecosystem's own removal covers three jobs, `rm -rf` the fourth.
-- **A backwards-compatible registry defaulting the missing version body** — Rejected: every such entry would silently converge on presence again.
+- **Defaulting the missing version body of an unowned-path entry** — Rejected: nothing else can answer that item's version question, so every such entry would silently converge on presence again.
+- **A version body on every kind, for one uniform registry shape** — Rejected: three kinds never run it, so the user writes a command that never runs and an entry complete for its kind reads as malformed.
 - **Gating `version_body` behind `--confirm-each-command`** — Rejected: it runs before the run has proposed anything, so the confirm would arrive before the user had seen a single change.
 - **Pre-validating target sudo for the four unreproducible jobs** — Rejected: only approved removals need it.
 - **Source-cache reuse for offline installs** — Deferred.
