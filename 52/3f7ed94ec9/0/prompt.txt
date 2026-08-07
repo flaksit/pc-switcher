@@ -1,0 +1,55 @@
+If I change the model here to opus 4.8, will subagents you call use opus 4.8 as well? Or no need for subagents for this task?
+
+---
+
+I changed model to opus 4.6, so we are sure you don't have a tendency to bloat text. Go
+
+---
+
+I changed model to opus 4.7, so we are sure you don't have a tendency to bloat text. Go
+
+---
+
+I see ADR-020 talks about "Phase 2". This is a GSD phase number. These phase numbers are only temporarily valid: within the milestone we are currently working on. As soon as we start on a next GSD milestone, we get new phases, numbered 1, 2, ... again. So phase numbers should be NOWHERE in code/tests and not in docs outside of GSD's own folder .planning. Fix that (ask agent if better than filling your context with all these docs/code/tests)
+
+---
+
+you committed changes that weren't yours
+
+---
+
+Is line 18 relevant in adr-021? Seems not related to logging
+
+---
+
+adr-021 isn't about reading. It's about logging. Or am I wrong weing so strict?
+
+---
+
+adr-021 isn't about reading. It's about logging. Or am I wrong being so strict?
+Snippets should not be in log at all, I think. And if they would, credentials should be redacted because we don't want them in a log file.
+
+---
+
+1: ok, snippets end up indirectly because we log each command. ALL log output MUST be redacted for credentials (in so far we can detect them): including DEBUG log of commands. So "verbatim" is not entirely true.
+
+---
+
+The general ADR-rule should read that all creds should be redacted from the log. Our current, pragmatic implementation only filters urls. Code must do all they can to prevent creds to go in log. Snippets are a bit of an exception because not controlled by code but by user. User can put anything. And we don't want expensive tooling that auto-detects what word in a snippet could be a cred.
+
+---
+
+Ok, with one extra: now, ADR-021 tl;dr and "required" read as an exhaustive list of what must be logged and makes reader think other things MUST NOT be logged. That is not true. ADR-021 only talks about SOME types of log messages. Should be clear that ADR-021 does not define the complete set of what must be logged and what not: it only gives SOME musts and SOME must-nots.
+
+---
+
+ok.
+No need to refer explicitly to package sync ("that package sync forced onto the log") because that could read as not applicable to other code/jobs. The rules are generally applicable.
+
+---
+
+continue
+
+---
+
+ADR-021 is not specifically about package-sync. So be clear when mentioning package-sync specific concepts, like "snippets": e.g; "package-sync snippets"
