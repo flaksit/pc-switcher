@@ -165,6 +165,10 @@ pc-switcher sync pc2 --dry-run --yes --allow-first-sync
 pc-switcher sync pc2 --yes --allow-first-sync
 ```
 
+A dry run converges nothing, so three things below cannot happen in it: no snippet is recorded, no registry is pushed, and the converge loop of §3.7 never opens — `_converge_one` is not called at all (`jobs/packages/sync_core.py:802`). Walk the dry run for the screens, then answer the real run for the outcomes.
+
+Findings already raised from a walk of these fixtures, so they need no re-reporting — check they still read as described and move on: review copy and titles (#276), the `apt.conf.d` digests of §3.3 (#277), that screen's keys and default (#278), the repeated scrollback frames (#279), job names in the status line (#280), the snippet screens of §3.5 and §3.6 (#281), the second editor of §3.6 (#282), and the group order of §3.2 (#283).
+
 ### 3.1 The three exclusions
 
 Each pair of jobs decides its boundary by one shared rule, so a finding claimed by the snippet job must be silent in the package-manager job — on **both** machines, not just on pc1.
@@ -226,7 +230,7 @@ Nothing else in this run reaches that screen: an install is on pc1 alone and a r
 
 The first screen of `manual_deb_sync`, and again of `manual_installs_sync`. `pcsw-uat-gone` and `/opt/pcsw-uat-orphan` are on pc2 only. Each is offered for removal by the job whose own detector claims it there, and by no other. Confirm each row starts at **skip now**, and that the path deletion's screen carries the line saying its reach is smaller than its name: `Only the path itself is deleted on pc2. Whatever installed it may also have left a launcher, a symlink or a service unit outside these directories, and nothing here knows where; those stay.`
 
-Approve both.
+Approve both. The warning's wording is #276's; what to check here is that it appears at all, on the path deletion and not on the package one.
 
 ### 3.5 Version convergence
 
@@ -236,11 +240,13 @@ Follows the removal group in each job that has one. Three items reach this scree
 - `<w> new snippet` — `rewrite the snippet first, then run it on pc2`
 - `<s> skip now` — `leave pc2's version as it is for now; will be asked again next sync`
 
-The snap's line must name its **version**, `2.0` against `1.0`, and never its revision — both machines are at `x1`, so a screen quoting revisions would have nothing to say. The revision may appear on the line as context; a comparison made on it is a finding.
+The comparison must be made on the snap's **version**, `2.0` against `1.0`, and never on its revision — both machines are at `x1`, so a run comparing revisions would find nothing to do. The revision must not be printed either: it is not something the user decides on (#276).
 
-On `pcsw-uat-drift` answer `<w>` and confirm the editor opens **on the recorded body**, not empty — that is what makes a rewrite an edit. Escape without changing it, or retype it, then let it run.
+Answer, in the order the three come:
 
-Answer `<y>` on `/opt/pcsw-uat-loop`. Its recorded body cannot converge it, which is what §3.7 is about — but nothing says so yet, and the screen that does comes much later.
+- `pcsw-uat-drift` (deb) — `<w>`, to confirm the editor opens **on the recorded body** rather than empty, which is what makes a rewrite an edit. Change the `Description:` line so the body is provably yours, submit both editors, and let it run.
+- `pcsw-uat-snapdrift` (snap) — `<y>`, the plain replay of a recorded snippet, with no editor in the way.
+- `/opt/pcsw-uat-loop` (path) — `<y>`. Its recorded body cannot converge it, which is what §3.7 is about; nothing says so yet, and the screen that does comes much later.
 
 ### 3.6 The two editors
 
@@ -260,11 +266,23 @@ sudo mkdir -p /opt/pcsw-uat-app && echo hi | sudo tee /opt/pcsw-uat-app/README >
 echo 1.0
 ```
 
-The same screen for the three package-backed jobs asks for both bodies too, even though only `manual_installs_sync` ever runs the version body — the other three ask `dpkg`, `snap` and `flatpak` instead. Confirm the second editor is still required there: one file holds every job's entries, and a half-filled entry cannot be read at all.
+The same screen for the three package-backed jobs asks for both bodies too, even though only `manual_installs_sync` ever runs the version body — the other three ask `dpkg`, `snap` and `flatpak` instead. That is the shipped design, not a slip: one file holds every job's entries and a half-filled entry cannot be read at all. Whether it should stay that way is #282; confirm here only that the second editor is required.
+
+Answer the other three like this, each `<y>` followed by both editors:
+
+| Item | Install-or-update body | Installed-version body |
+|---|---|---|
+| `pcsw-uat-deb` | rebuild and `dpkg --install` it, as §2.1 does — copy that block with the name changed | `dpkg-query -W -f='${Version}' pcsw-uat-deb` |
+| `pcsw-uat-snap` | `snap try` a directory you write, as §2.1 does | `snap list pcsw-uat-snap \| awk 'NR==2 {print $2}'` |
+| `io.github.fragglet.sdl_sopwith/x86_64/stable` | `flatpak install --user --assumeyes flathub io.github.fragglet.sdl_sopwith` — pc2 still has flathub, which is what makes this one reproducible by hand | `flatpak list --user --columns=application,version \| awk '/sdl_sopwith/ {print $2}'` |
+
+None of the three version bodies is ever executed, so their exactness is not what is under test — that the editor demands one, and rejects an empty one, is.
 
 ### 3.7 The converge loop
 
-Not a review screen: it is put while `manual_installs_sync` applies what you approved, after every screen that job asked. `/opt/pcsw-uat-loop` is the item whose recorded install body is `true` — it exits zero and moves nothing — and §3.5 is where you answered `<y>` on it. Confirm:
+**Real run only.** This is not a review screen: it is put while `manual_installs_sync` applies what you approved, and a dry run applies nothing — `_converge_one` is never reached (`jobs/packages/sync_core.py:802`), so no snippet is replayed, no version is re-read and this screen cannot appear. Seeing it in a dry run is a finding.
+
+`/opt/pcsw-uat-loop` is the item whose recorded install body is `true` — it exits zero and moves nothing — and §3.5 is where you answered `<y>` on it. Confirm:
 
 - The version is read again on pc2 after the replay.
 - The item is **not** reported as applied.
