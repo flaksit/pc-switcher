@@ -173,11 +173,27 @@ Each pair of jobs decides its boundary by one shared rule, so a finding claimed 
 - `snap_sync` names `pcsw-uat-snap` and `pcsw-uat-snapdrift` nowhere, and says nothing about a hold on either.
 - `flatpak_sync` names `io.github.fragglet.sdl_sopwith` nowhere and derives no remote for it — in particular it does not try to add a remote with an empty URL.
 
-`snap_sync` and `flatpak_sync` therefore have nothing of their own to do in this run and must report `success`, not `skipped`: a review holding nothing to decide is the goal already met. `apt_sync`'s only item is the `apt.conf.d` file of §3.6.
+`snap_sync` and `flatpak_sync` therefore have nothing of their own to do in this run and must report `success`, not `skipped`: a review holding nothing to decide is the goal already met. `apt_sync`'s only item is the `apt.conf.d` file of §3.3.
 
-### 3.2 The seven reviews
+### 3.2 The seven reviews, and the order the screens come in
 
-The jobs run in the order the config lists them — apt, snap, flatpak, manual_deb, manual_snap, manual_flatpak, manual_installs, then the folder mirror — and each one's questions come before the next one plans.
+The jobs run in the order the config lists them — apt, snap, flatpak, manual_deb, manual_snap, manual_flatpak, manual_installs, then the folder mirror — and each one's questions come before the next one plans. Inside one snippet job the groups come in a fixed order: **removal first, then the version differences, then the items needing a snippet.**
+
+The sections below follow the order you will meet the screens. On these fixtures that is:
+
+| # | Job | Screen | Section |
+|---|-----|--------|---------|
+| 1 | `apt_sync` | `Update apt configuration files` → the follow-up it raises | §3.3 |
+| 2 | `manual_deb_sync` | `Remove manual_deb packages` | §3.4 |
+| 3 | `manual_deb_sync` | version difference, `pcsw-uat-drift` | §3.5 |
+| 4 | `manual_deb_sync` | resolution, `pcsw-uat-deb` — two editors | §3.6 |
+| 5 | `manual_snap_sync` | version difference, then resolution | §3.5, §3.6 |
+| 6 | `manual_flatpak_sync` | resolution, `sdl_sopwith` | §3.6 |
+| 7 | `manual_installs_sync` | `Remove manual packages`, then version difference, then resolution | §3.4, §3.5, §3.6 |
+| 8 | `manual_installs_sync` | the converge-loop retry, during apply | §3.7 |
+| 9 | — | `Job outcomes:` | §3.8 |
+
+The converge-loop retry is last because it is not a review screen at all: it is put while the job is applying what you approved, after every screen that job asked.
 
 - Each of the four snippet jobs puts its own review. A job's findings never appear in another's.
 - The group offering software pc2 cannot get is titled `pc1 has these and no package manager can reproduce them on pc2 (<manager>)`, where `<manager>` is `manual_deb`, `manual_snap`, `manual_flatpak` or `manual`.
@@ -191,9 +207,44 @@ pc1 has these and no package manager can reproduce them on pc2 (manual_deb)
 pc1 and pc2 have these at different versions (manual_snap)
 ```
 
-### 3.3 The two editors
+### 3.3 The machine-specific follow-up
 
-Four items have no recorded snippet and so are asked how to reproduce them, one screen each: `pcsw-uat-deb`, `pcsw-uat-snap`, `io.github.fragglet.sdl_sopwith/x86_64/stable` and `/opt/pcsw-uat-app`. On `Install /opt/pcsw-uat-app on pc2?` answer `<y>` and confirm that **two** editors open in sequence, not one:
+The first question of the run, in `apt_sync`. `/etc/apt/apt.conf.d/99-pcsw-uat` is on both machines with different content, so its row starts at **skip now** — replacing a file pc2's own user wrote is as irreversible as a deletion. Answer `<x>` on it.
+
+After the batch screen is confirmed — not folded into it — a further screen must appear, titled `Kept for good — whose own version is it?`, with one row per permanently-kept conflicting item. Confirm:
+
+- Three answers, keyed and worded as the two hostnames and `both`: `pc1`, `pc2`, `both`.
+- Each hint says how long the mark lasts on that machine — `it is pc1's own version; nothing overwrites it while pc1 has it`, and for `both`, that each version is its own machine's.
+- The row defaults to `pc2`, so confirming the screen unread records what the permanent answer already said in its own words.
+- Its explanation names both machines and says the answer lasts as long as that machine still has the item.
+
+Answer `both` on this run, so §4 can check that a mark landed on each machine.
+
+Nothing else in this run reaches that screen: an install is on pc1 alone and a removal on pc2 alone, so for those the action already names the holder. A version difference must not reach it either — it has no permanent answer at all.
+
+### 3.4 Removals
+
+The first screen of `manual_deb_sync`, and again of `manual_installs_sync`. `pcsw-uat-gone` and `/opt/pcsw-uat-orphan` are on pc2 only. Each is offered for removal by the job whose own detector claims it there, and by no other. Confirm each row starts at **skip now**, and that the path deletion's screen carries the line saying its reach is smaller than its name: `Only the path itself is deleted on pc2. Whatever installed it may also have left a launcher, a symlink or a service unit outside these directories, and nothing here knows where; those stay.`
+
+Approve both.
+
+### 3.5 Version convergence
+
+Follows the removal group in each job that has one. Three items reach this screen, one per ecosystem, and they are exactly the three that have a recorded snippet: `pcsw-uat-drift` (deb), `pcsw-uat-snapdrift` (snap) and `/opt/pcsw-uat-loop` (path). Each is asked on its own screen titled `pc2 has a different version of <item> — update it?`, with exactly three answers and **no** `<x>`:
+
+- `<y> update` — `run the recorded snippet on pc2`
+- `<w> new snippet` — `rewrite the snippet first, then run it on pc2`
+- `<s> skip now` — `leave pc2's version as it is for now; will be asked again next sync`
+
+The snap's line must name its **version**, `2.0` against `1.0`, and never its revision — both machines are at `x1`, so a screen quoting revisions would have nothing to say. The revision may appear on the line as context; a comparison made on it is a finding.
+
+On `pcsw-uat-drift` answer `<w>` and confirm the editor opens **on the recorded body**, not empty — that is what makes a rewrite an edit. Escape without changing it, or retype it, then let it run.
+
+Answer `<y>` on `/opt/pcsw-uat-loop`. Its recorded body cannot converge it, which is what §3.7 is about — but nothing says so yet, and the screen that does comes much later.
+
+### 3.6 The two editors
+
+The last group of each snippet job. Four items have no recorded snippet and so are asked how to reproduce them, one screen each: `pcsw-uat-deb`, `pcsw-uat-snap`, `io.github.fragglet.sdl_sopwith/x86_64/stable` and `/opt/pcsw-uat-app`. On `Install /opt/pcsw-uat-app on pc2?` answer `<y>` and confirm that **two** editors open in sequence, not one:
 
 1. `Install-or-update snippet for /opt/pcsw-uat-app:` — its own screen states the install-or-update contract, that the body is replayed onto a machine which may already hold an older version.
 2. `Installed-version snippet for /opt/pcsw-uat-app:` — its own screen states that this one runs on both machines on every sync while the run is still planning, and must be read-only.
@@ -211,21 +262,9 @@ echo 1.0
 
 The same screen for the three package-backed jobs asks for both bodies too, even though only `manual_installs_sync` ever runs the version body — the other three ask `dpkg`, `snap` and `flatpak` instead. Confirm the second editor is still required there: one file holds every job's entries, and a half-filled entry cannot be read at all.
 
-### 3.4 Version convergence
+### 3.7 The converge loop
 
-Three items reach this screen, one per ecosystem, and they are exactly the three that have a recorded snippet: `pcsw-uat-drift` (deb), `pcsw-uat-snapdrift` (snap) and `/opt/pcsw-uat-loop` (path). Each is asked on its own screen titled `pc2 has a different version of <item> — update it?`, with exactly three answers and **no** `<x>`:
-
-- `<y> update` — `run the recorded snippet on pc2`
-- `<w> new snippet` — `rewrite the snippet first, then run it on pc2`
-- `<s> skip now` — `leave pc2's version as it is for now; will be asked again next sync`
-
-The snap's line must name its **version**, `2.0` against `1.0`, and never its revision — both machines are at `x1`, so a screen quoting revisions would have nothing to say. The revision may appear on the line as context; a comparison made on it is a finding.
-
-On `pcsw-uat-drift` answer `<w>` and confirm the editor opens **on the recorded body**, not empty — that is what makes a rewrite an edit. Escape without changing it, or retype it, then let it run.
-
-### 3.5 The converge loop
-
-`/opt/pcsw-uat-loop` is the item whose recorded install body is `true`: it exits zero and moves nothing. Answer `<y> update` on it, then confirm:
+Not a review screen: it is put while `manual_installs_sync` applies what you approved, after every screen that job asked. `/opt/pcsw-uat-loop` is the item whose recorded install body is `true` — it exits zero and moves nothing — and §3.5 is where you answered `<y>` on it. Confirm:
 
 - The version is read again on pc2 after the replay.
 - The item is **not** reported as applied.
@@ -237,27 +276,6 @@ Answer `<w>` and write a body that actually converges, then confirm the item com
 ```bash
 echo 2.0 | sudo tee /opt/pcsw-uat-loop/version >/dev/null
 ```
-
-### 3.6 The machine-specific follow-up
-
-`/etc/apt/apt.conf.d/99-pcsw-uat` is on both machines with different content, so its row starts at **skip now** — replacing a file pc2's own user wrote is as irreversible as a deletion. Answer `<x>` on it.
-
-After the batch screen is confirmed — not folded into it — a further screen must appear, titled `Kept for good — whose own version is it?`, with one row per permanently-kept conflicting item. Confirm:
-
-- Three answers, keyed and worded as the two hostnames and `both`: `pc1`, `pc2`, `both`.
-- Each hint says how long the mark lasts on that machine — `it is pc1's own version; nothing overwrites it while pc1 has it`, and for `both`, that each version is its own machine's.
-- The row defaults to `pc2`, so confirming the screen unread records what the permanent answer already said in its own words.
-- Its explanation names both machines and says the answer lasts as long as that machine still has the item.
-
-Answer `both` on this run, so §6 can check that a mark landed on each machine.
-
-Nothing else in this run reaches that screen: an install is on pc1 alone and a removal on pc2 alone, so for those the action already names the holder. A version difference must not reach it either — it has no permanent answer at all.
-
-### 3.7 Removals
-
-`pcsw-uat-gone` and `/opt/pcsw-uat-orphan` are on pc2 only. Each is offered for removal by the job whose own detector claims it there, and by no other. Confirm each row starts at **skip now**, and that the path deletion's screen carries the line saying its reach is smaller than its name: `Only the path itself is deleted on pc2. Whatever installed it may also have left a launcher, a symlink or a service unit outside these directories, and nothing here knows where; those stay.`
-
-Approve both.
 
 ### 3.8 The end of the run
 
