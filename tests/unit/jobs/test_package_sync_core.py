@@ -149,6 +149,8 @@ class FakeSyncJob(PackageSyncJob):
 
     name: ClassVar[str] = "fake_sync"
     manager_id: ClassVar[str] = "fake"
+    item_noun: ClassVar[str] = "fake package"
+    item_noun_plural: ClassVar[str] = "fake packages"
     CONFIG_SCHEMA: ClassVar[dict[str, Any]] = {}
 
     def __init__(
@@ -194,13 +196,14 @@ class FakeSyncJob(PackageSyncJob):
         return CommandResult(0, "", "")
 
 
-def _job_for_manager(manager_id: str) -> FakeSyncJob:
-    """A `FakeSyncJob` wearing a real manager's id, for the strings keyed on it."""
+def _job_with_nouns(plural: str, *, origins: str = "repositories") -> FakeSyncJob:
+    """A `FakeSyncJob` wearing a real job's user-facing nouns, for the titles built from them."""
 
     class _Named(FakeSyncJob):
         pass
 
-    _Named.manager_id = manager_id
+    _Named.item_noun_plural = plural
+    _Named.origin_noun_plural = origins
     return _Named(make_context())
 
 
@@ -383,26 +386,49 @@ class TestReviewGroupsByAction:
         assert "apply" not in install_group.title.lower()
 
     def test_each_manager_names_its_own_software_and_its_own_origins(self) -> None:
-        """H86 — `PKG-NG-ORIGIN-CONVERGE` covers apt packages and flatpak applications alike, and
+        """H86 — `PKG-NG-ORIGIN-CONVERGE` covers apt packages and flatpaks alike, and
         the narrative calls what a flatpak comes from a remote, never a repository. One
         `ORIGIN_MISMATCH` title said "repositories" and "packages" for both, so the flatpak
         group named two things flatpak does not have.
         """
         diffs = [_diff("o1", DiffAction.REPORT_ONLY, DiffClass.ORIGIN_MISMATCH)]
 
-        apt_group = _job_for_manager("apt")._build_review_groups(diffs)[0]
-        flatpak_group = _job_for_manager("flatpak")._build_review_groups(diffs)[0]
+        apt_group = _job_with_nouns("apt packages")._build_review_groups(diffs)[0]
+        flatpak_group = _job_with_nouns("flatpaks", origins="remotes")._build_review_groups(diffs)[0]
 
         assert apt_group.title == "Installed from different repositories (apt packages)"
-        assert flatpak_group.title == "Installed from different remotes (flatpak applications)"
+        assert flatpak_group.title == "Installed from different remotes (flatpaks)"
 
-    def test_a_flatpak_action_group_says_applications_too(self) -> None:
-        """H86 — The noun is the manager's, not the report group's: an install screen names the
+    def test_a_flatpak_action_group_says_flatpaks_too(self) -> None:
+        """H86 — The noun is the job's, not the report group's: an install screen names the
         same things the report does.
         """
-        groups = _job_for_manager("flatpak")._build_review_groups([_diff("i1", DiffAction.INSTALL)])
+        groups = _job_with_nouns("flatpaks")._build_review_groups([_diff("i1", DiffAction.INSTALL)])
 
-        assert groups[0].title == "Install flatpak applications"
+        assert groups[0].title == "Install flatpaks on target-host?"
+
+    def test_every_action_title_names_the_machine_the_change_lands_on(self) -> None:
+        """#276, `PKG-FR-NAME-THE-MACHINES` — a screenful of titles where some name a machine
+        and some do not leaves the user to guess which is which. Every title that asks about
+        a change names the target, and the preposition follows the direction: software goes
+        ON a machine and comes OFF it.
+        """
+        job = FakeSyncJob(make_context())
+        diffs = [_diff("i1", DiffAction.INSTALL), _diff("r1", DiffAction.REMOVE, DiffClass.EXTRA_ON_TARGET)]
+
+        titles = [group.title for group in job._build_review_groups(diffs)]
+
+        assert titles == ["Install fake packages on target-host?", "Remove fake packages from target-host?"]
+
+    def test_a_report_group_asks_nothing_and_names_no_machine_it_changes(self) -> None:
+        """#276 — a reported condition changes nothing anywhere, so a trailing "on target-host?"
+        would promise a decision the screen does not take.
+        """
+        job = FakeSyncJob(make_context())
+
+        groups = job._build_review_groups([_diff("v1", DiffAction.REPORT_ONLY, DiffClass.VERSION_MISMATCH)])
+
+        assert groups[0].title == "Version differences (fake packages)"
 
 
 class TestConvergeDispatchByAction:
@@ -1463,6 +1489,8 @@ class _StubFailingPackageJob(PackageSyncJob):
 
     name: ClassVar[str] = "stub_failing_package"
     manager_id: ClassVar[str] = "stub-failing"
+    item_noun: ClassVar[str] = "stub item"
+    item_noun_plural: ClassVar[str] = "stub items"
 
     async def converge(self, diff: ItemDiff) -> CommandResult:
         raise NotImplementedError
@@ -1484,6 +1512,8 @@ class _StubAbortingPackageJob(PackageSyncJob):
 
     name: ClassVar[str] = "stub_aborting_package"
     manager_id: ClassVar[str] = "stub-aborting"
+    item_noun: ClassVar[str] = "stub item"
+    item_noun_plural: ClassVar[str] = "stub items"
 
     async def converge(self, diff: ItemDiff) -> CommandResult:
         raise NotImplementedError

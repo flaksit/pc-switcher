@@ -334,9 +334,12 @@ class RemovalVocabulary(NamedTuple):
 # the decision column, where the group title above it already says what is being deleted, so
 # the longer phrase said the noun once per row and pushed the column halfway across the
 # screen. The title keeps the noun; the answer keeps the verb.
+# `plural` is the WHOLE noun, "apt" included: these are apt's own files rather than the
+# packages `AptSyncJob.item_noun_plural` names, so the group title reads them out of here
+# instead of assembling one out of the job's manager id.
 REPO_REMOVAL_VERBS: dict[ItemClass, RemovalVocabulary] = {
-    ItemClass.APT_SOURCE: RemovalVocabulary("remove", "repositories"),
-    ItemClass.APT_PIN: RemovalVocabulary("remove", "pin files"),
+    ItemClass.APT_SOURCE: RemovalVocabulary("remove", "apt repositories"),
+    ItemClass.APT_PIN: RemovalVocabulary("remove", "apt pin files"),
 }
 
 

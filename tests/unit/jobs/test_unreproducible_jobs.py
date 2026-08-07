@@ -313,7 +313,7 @@ class TestPermanentMarkWrites:
         writes = decision_file_writes(source, "manual_deb")
         assert len(writes) == 1
         assert item_id in writes[0]
-        assert "brscan3 (installed from no configured repository)" in writes[0]
+        assert "brscan3 (1.0)" in writes[0]
         assert decision_file_writes(target, "manual_deb") == []
 
     @pytest.mark.asyncio
@@ -567,7 +567,7 @@ class TestClassificationAuthority:
         with caplog.at_level(logging.DEBUG):
             await job.execute()
 
-        assert "Would install brscan3 (installed from no configured repository)" in caplog.text
+        assert "Would install brscan3 (1.0)" in caplog.text
         assert not [cmd for cmd in all_calls(target) if cmd.startswith("bash -c")]
 
 

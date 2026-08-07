@@ -65,6 +65,7 @@ from pcswitcher.jobs.packages.review import (
     ReviewEntry,
     ReviewGroup,
     ReviewOutcome,
+    change_title,
 )
 from pcswitcher.jobs.packages.state import DecisionEntry, filter_inert, marks_on_either
 from pcswitcher.jobs.packages.sync_core import ConvergeItemFailed, PackagePlan, PackageSyncJob
@@ -100,6 +101,8 @@ class AptSyncJob(PackageSyncJob):
     name: ClassVar[str] = "apt_sync"
     display_name: ClassVar[str] = "Apt packages"
     manager_id: ClassVar[str] = "apt"
+    item_noun: ClassVar[str] = "apt package"
+    item_noun_plural: ClassVar[str] = "apt packages"
 
     # No configurable properties yet: this slice needs nothing beyond the enable flag in
     # sync_jobs. `enabled_item_classes`-style filtering is premature until more item
@@ -718,7 +721,7 @@ class AptSyncJob(PackageSyncJob):
                     action=REPO_REMOVAL_REVIEW_ACTION,
                     # The manager belongs INSIDE the sentence — "apt repositories" is what
                     # the files are, while a trailing "(apt)" reads as a tag on the question.
-                    title=f"Delete {self.manager_id} {words.plural} {self.machines.source} no longer has",
+                    title=change_title("delete", words.plural, self.machines.target),
                     entries=tuple(
                         ReviewEntry(
                             item_id=diff.item_id,
@@ -758,7 +761,7 @@ class AptSyncJob(PackageSyncJob):
         return ReviewGroup(
             manager=self.manager_id,
             action=REPO_CONFLICT_REVIEW_ACTION,
-            title=f"Resolve {self.manager_id} repository conflicts",
+            title=change_title("resolve", "apt repository conflicts", self.machines.target),
             entries=tuple(
                 ReviewEntry(
                     item_id=f"{CONFLICT_ID_PREFIX}{filename}",

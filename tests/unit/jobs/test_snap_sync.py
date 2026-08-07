@@ -757,9 +757,9 @@ class TestHoldsReachNoReviewGroup:
         install_group = self._group_holding(plan, "snap:alpha")
         remove_group = self._group_holding(plan, "snap:delta")
 
-        assert install_group.title == "Install snap packages"
+        assert install_group.title == "Install snaps on target-host?"
         assert [e.action_label for e in install_group.entries] == ["install"]
-        assert remove_group.title == "Remove snap packages"
+        assert remove_group.title == "Remove snaps from target-host?"
         assert [e.action_label for e in remove_group.entries] == ["remove"]
         assert not any(e.item_id.startswith("snap:hold:") for e in (*install_group.entries, *remove_group.entries))
 
@@ -787,7 +787,7 @@ class TestAFullSnapReview:
 
         change_group = next(g for g in plan.groups if any(e.item_id == "snap:beta" for e in g.entries))
 
-        assert change_group.title == "Align snap package versions"
+        assert change_group.title == "Align snap versions on target-host?"
         assert [e.action_label for e in change_group.entries] == ["align"]
         assert {e.item_id for e in change_group.entries} == {"snap:beta"}
         assert not _is_removal_direction(change_group.action)

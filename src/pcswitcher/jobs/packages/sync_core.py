@@ -49,7 +49,7 @@ from abc import abstractmethod
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from pcswitcher.jobs.base import SyncJob
 from pcswitcher.jobs.context import JobContext
@@ -63,6 +63,7 @@ from pcswitcher.jobs.packages.review import (
     ReviewOutcome,
     ReviewPolicy,
     asks_for_a_decision,
+    change_title,
     policy_answers_any,
 )
 from pcswitcher.jobs.packages.state import DecisionEntry, DecisionFile
@@ -190,28 +191,18 @@ _ACTION_VOCABULARY: dict[tuple[ItemClass, DiffAction], str] = {
 }
 
 # What a group's title calls the things it lists, when the ACTION changes the noun too.
-# `_ITEM_CLASS_NOUN` cannot say this: the same class's install and removal groups ARE about
-# the packages, and only the change group is about their versions.
+# `PackageSyncJob.item_noun_plural` cannot say this: the same job's install and removal
+# groups ARE about the snaps, and only the change group is about their versions.
 _ACTION_CLASS_NOUN: dict[tuple[ItemClass, DiffAction], str] = {
-    (ItemClass.SNAP, DiffAction.CHANGE): "snap package versions",
+    (ItemClass.SNAP, DiffAction.CHANGE): "snap versions",
 }
 
-# What a group's title calls the things it lists, when they are not packages. A verb alone
-# cannot make an apt-config title true: the title reads "<verb> <manager> packages", so
-# every `/etc/apt/apt.conf.d` group would still end in "apt packages".
+# What a group's title calls the things it lists, when they are not the job's own software.
+# A verb alone cannot make an apt-config title true: the title would otherwise read
+# "<verb> apt packages" over a screenful of `/etc/apt/apt.conf.d` files.
 _ITEM_CLASS_NOUN: dict[ItemClass, str] = {
     ItemClass.APT_CONFIG: "apt configuration files",
 }
-
-# What a manager calls the software it syncs, where "packages" is not that word. flatpak
-# syncs applications (the narrative's own term) and apt and snap sync packages, so only
-# flatpak is listed. Keyed on the manager rather than the item class so one entry covers
-# every flatpak group — refs and masks alike.
-_MANAGER_NOUN: dict[str, str] = {"flatpak": "applications"}
-
-# What a manager calls the place software comes from, for the `ORIGIN_MISMATCH` title.
-# Never "vendor" (the user's ruling): apt has repositories, flatpak has remotes.
-_MANAGER_ORIGIN_NOUN: dict[str, str] = {"flatpak": "remotes"}
 
 # The `ReviewGroup.action` a given (item_class, action) pair asks under, where the raw
 # `DiffAction` value would offer the wrong set of answers. One entry today.
@@ -229,9 +220,9 @@ _ACTION_ORDER: tuple[DiffAction, ...] = (
     DiffAction.REPORT_ONLY,
 )
 
-# What a report group is called, per cause. `{origins}` is the manager's own word for where
-# software comes from (`_MANAGER_ORIGIN_NOUN`), so a flatpak group says "remotes" where an
-# apt one says "repositories".
+# What a report group is called, per cause. `{origins}` is the job's own word for where
+# software comes from (`PackageSyncJob.origin_noun_plural`), so a flatpak group says
+# "remotes" where an apt one says "repositories".
 _REPORT_TITLES: dict[DiffClass, str] = {
     DiffClass.VERSION_MISMATCH: "Version differences",
     DiffClass.ORIGIN_MISMATCH: "Installed from different {origins}",
@@ -292,6 +283,35 @@ class PackageSyncJob(SyncJob):
     """
 
     manager_id: ClassVar[str]
+
+    # What the user calls the things this job syncs, singular and plural. Beside
+    # `display_name` so one class body holds every word a user reads about this job, and
+    # declared rather than defaulted: the fallback these replace built the noun out of
+    # `manager_id` and so put `manual_deb` on the screen (#276). Declared with no value, so
+    # a job that omits them is rejected at import (`__init_subclass__`) rather than silently
+    # naming itself after its identifier again.
+    item_noun: ClassVar[str]
+    item_noun_plural: ClassVar[str]
+
+    # What this job calls the place software comes from, for the `ORIGIN_MISMATCH` report
+    # title. Never "vendor" (the user's ruling): apt has repositories, flatpak has remotes.
+    # Defaulted, unlike the nouns above, because it names a thing most jobs never report on
+    # and "repositories" is not an identifier if it does leak.
+    origin_noun_plural: ClassVar[str] = "repositories"
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        """Refuse a discoverable package job that does not say what its items are called.
+
+        Only classes declaring their own `name` are checked: `UnreproducibleSyncJob` and
+        `PackageSyncJob` itself are abstract, invisible to job discovery and have no items
+        of their own to name.
+        """
+        super().__init_subclass__(**kwargs)
+        if "name" not in cls.__dict__:
+            return
+        missing = sorted(attr for attr in ("item_noun", "item_noun_plural") if not getattr(cls, attr, ""))
+        if missing:
+            raise TypeError(f"{cls.__name__} must declare {' and '.join(missing)}: every review title needs them")
 
     def __init__(self, context: JobContext) -> None:
         super().__init__(context)
@@ -562,10 +582,13 @@ class PackageSyncJob(SyncJob):
         `(manager, action)` for the reviewer's removal-direction test (`PKG-FR-BATCHED`) so removals
         never share a group with installs. The title's verb and every entry's
         `action_label` come from `_ACTION_VOCABULARY`, keyed by the group's own item class.
-        `_ITEM_CLASS_NOUN` does the same for the title's OBJECT, so the one reviewed class
-        that is not a package — `/etc/apt/apt.conf.d` — is not announced as one, and
-        `_ACTION_CLASS_NOUN` overrides it where one action's group is about something
-        narrower than the class itself (a snap CHANGE moves versions, not packages). Grouping by
+        The title's OBJECT is this job's `item_noun_plural`, overridden by `_ITEM_CLASS_NOUN`
+        so the one reviewed class that is not the job's own software — `/etc/apt/apt.conf.d`
+        — is not announced as it, and by `_ACTION_CLASS_NOUN` where one action's group is
+        about something narrower than the class itself (a snap CHANGE moves versions, not
+        snaps). `change_title` puts the target machine in every one of them
+        (`PKG-FR-NAME-THE-MACHINES`); a report-only group names no machine and asks nothing,
+        so it keeps its own shape. Grouping by
         item class as well as action is what keeps that verb correct when one action mixes
         item classes; the group's `action` value is normally the raw `DiffAction`, so
         add-direction stays default-checked and remove-direction lands in its own unticked
@@ -610,14 +633,15 @@ class PackageSyncJob(SyncJob):
                 # `action.value`, unchanged.
                 default_verb = "report" if action == DiffAction.REPORT_ONLY else action.value
                 verb = _ACTION_VOCABULARY.get((item_class, action), default_verb)
-                default_noun = f"{self.manager_id} {_MANAGER_NOUN.get(self.manager_id, 'packages')}"
-                noun = _ACTION_CLASS_NOUN.get((item_class, action)) or _ITEM_CLASS_NOUN.get(item_class, default_noun)
-                title = f"{verb.capitalize()} {noun}"
+                noun = _ACTION_CLASS_NOUN.get((item_class, action)) or _ITEM_CLASS_NOUN.get(
+                    item_class, self.item_noun_plural
+                )
+                title = change_title(verb, noun, self.machines.target)
                 note = None
                 if cause is not None:
                     cause_title = _REPORT_TITLES.get(cause, "Reported").format(
                         target=self.machines.target,
-                        origins=_MANAGER_ORIGIN_NOUN.get(self.manager_id, "repositories"),
+                        origins=self.origin_noun_plural,
                     )
                     title = f"{cause_title} ({noun})"
                     # A manager with no upgrade command of its own gets no note rather than

@@ -215,8 +215,8 @@ class TestHoldsReachNoReviewGroup:
         assert not any(item_id.startswith("apt:hold:") for item_id in group_of)
 
         # The package diffs still read as install/remove — the holds are simply not there.
-        assert group_of["apt:package:pkg-install"].title == "Install apt packages"
-        assert group_of["apt:package:pkg-extra"].title == "Remove apt packages"
+        assert group_of["apt:package:pkg-install"].title == "Install apt packages on target-host?"
+        assert group_of["apt:package:pkg-extra"].title == "Remove apt packages from target-host?"
 
 
 class TestAHoldWithoutItsPackageEndsTheRun:
@@ -1168,8 +1168,9 @@ class TestTwoAnswerRemovals:
     @pytest.mark.asyncio
     async def test_each_two_answer_screen_is_titled_in_correct_english(self) -> None:
         """C57, C110 — the title names the plural of the OBJECT, not a verb phrase with an `s` glued on
-        the end — "repositorys" is what the latter produces — and says which manager's
-        repositories inside the sentence (#228), where a trailing "(apt)" read as a tag.
+        the end — "repositorys" is what the latter produces — says which manager's
+        repositories inside the sentence (#228), where a trailing "(apt)" read as a tag, and
+        names the machine the files come off (#276).
         """
         context, _source, _target = self._target_only_repo_state()
 
@@ -1177,8 +1178,8 @@ class TestTwoAnswerRemovals:
 
         titles = {group.title for group in groups if group.action == REPO_REMOVAL_REVIEW_ACTION}
         assert titles == {
-            "Delete apt repositories source-host no longer has",
-            "Delete apt pin files source-host no longer has",
+            "Delete apt repositories from target-host?",
+            "Delete apt pin files from target-host?",
         }
 
     @pytest.mark.asyncio
@@ -1354,9 +1355,9 @@ class TestAptConfigVocabulary:
 
         by_action = {group.action: group for group in plan.groups if group.entries[0].item_id.startswith("apt:config")}
         assert [(group.title, group.entries[0].action_label) for _action, group in sorted(by_action.items())] == [
-            ("Update apt configuration files", "update"),
-            ("Add apt configuration files", "add"),
-            ("Delete apt configuration files", "delete"),
+            ("Update apt configuration files on target-host?", "update"),
+            ("Add apt configuration files on target-host?", "add"),
+            ("Delete apt configuration files from target-host?", "delete"),
         ]
 
     @pytest.mark.asyncio

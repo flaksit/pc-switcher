@@ -118,9 +118,10 @@ def _screen_words(call: Any) -> list[str]:
 
 def _unreproducible_group(entries: Sequence[ReviewEntry]) -> ReviewGroup:
     return ReviewGroup(
-        manager="apt",
+        manager="manual_deb",
         action=UNREPRODUCIBLE_REVIEW_ACTION,
-        title="Resolve apt items with no reproducible install",
+        title="atlas has manual debs that no package manager can put on nomad?",
+        item_noun="manual deb",
         entries=tuple(entries),
     )
 
@@ -142,7 +143,9 @@ class TestNonInteractive:
         """H160, J35, J36 — no terminal: no screen is built at all and every item comes back declined for this run."""
         console = _non_interactive_console()
         ui = MagicMock()
-        groups = [ReviewGroup(manager="apt", action="install", title="Install packages", entries=[_entry("a")])]
+        groups = [
+            ReviewGroup(manager="apt", action="install", title="Install apt packages on nomad?", entries=[_entry("a")])
+        ]
 
         with (
             patch.object(sys, "stdin", _mock_isatty(False)),
@@ -161,7 +164,12 @@ class TestNonInteractive:
         console, buffer = captured_console()
         ui = MagicMock()
         groups = [
-            ReviewGroup(manager="apt", action="install", title="Install packages", entries=[_entry("a"), _entry("b")])
+            ReviewGroup(
+                manager="apt",
+                action="install",
+                title="Install apt packages on nomad?",
+                entries=[_entry("a"), _entry("b")],
+            )
         ]
         logger = MagicMock()
 
@@ -178,7 +186,12 @@ class TestNonInteractive:
         """A newline after the last entry renders as an empty final line inside the border."""
         console, buffer = captured_console(width=60)
         groups = [
-            ReviewGroup(manager="apt", action="install", title="Install packages", entries=[_entry("a"), _entry("b")])
+            ReviewGroup(
+                manager="apt",
+                action="install",
+                title="Install apt packages on nomad?",
+                entries=[_entry("a"), _entry("b")],
+            )
         ]
 
         with patch.object(sys, "stdin", _mock_isatty(False)):
@@ -221,7 +234,7 @@ class TestNonInteractive:
         group = ReviewGroup(
             manager="apt",
             action="install",
-            title="Install apt packages",
+            title="Install apt packages on nomad?",
             entries=[ReviewEntry(item_id="apt:package:sl", label="sl (5.02-1)", action_label="install")],
         )
         with patch.object(sys, "stdin", _mock_isatty(False)):
@@ -242,7 +255,7 @@ class TestInteractive:
             ReviewGroup(
                 manager="apt",
                 action="install",
-                title="Install packages",
+                title="Install apt packages on nomad?",
                 entries=[_entry("a"), _entry("b"), _entry("c")],
             )
         ]
@@ -269,7 +282,9 @@ class TestInteractive:
         again to promote what was left."""
         console = _interactive_console()
         ui = MagicMock()
-        groups = [ReviewGroup(manager="apt", action="install", title="Install packages", entries=[_entry("a")])]
+        groups = [
+            ReviewGroup(manager="apt", action="install", title="Install apt packages on nomad?", entries=[_entry("a")])
+        ]
         screen = _fake_prompt(ask_return={"a": "skip_once"})
 
         with (
@@ -289,7 +304,7 @@ class TestInteractive:
             ReviewGroup(
                 manager="apt",
                 action="install",
-                title="Install packages",
+                title="Install apt packages on nomad?",
                 entries=[_entry("a", label="cmatrix (2.0-6)")],
             )
         ]
@@ -309,7 +324,9 @@ class TestInteractive:
         """H156 — a raising screen still hands the live display back, from the `finally`."""
         console = _interactive_console()
         ui = MagicMock()
-        groups = [ReviewGroup(manager="apt", action="install", title="Install packages", entries=[_entry("a")])]
+        groups = [
+            ReviewGroup(manager="apt", action="install", title="Install apt packages on nomad?", entries=[_entry("a")])
+        ]
         prompt = _fake_prompt(ask_side_effect=KeyboardInterrupt)
 
         with (
@@ -328,8 +345,10 @@ class TestInteractive:
         console = _interactive_console()
         ui = MagicMock()
         groups = [
-            ReviewGroup(manager="apt", action="install", title="Install packages", entries=[_entry("a")]),
-            ReviewGroup(manager="snap", action="install", title="Install snaps", entries=[_entry("b")]),
+            ReviewGroup(
+                manager="apt", action="install", title="Install apt packages on nomad?", entries=[_entry("a")]
+            ),
+            ReviewGroup(manager="snap", action="install", title="Install snaps on nomad?", entries=[_entry("b")]),
         ]
         aborted = _fake_prompt(ask_return=None)
         later = _fake_prompt(ask_return={"b": "apply"})
@@ -353,9 +372,14 @@ class TestInteractive:
         """H98, H102 — install rows open at the act; removal rows open declined."""
         console = _interactive_console()
         ui = MagicMock()
-        install_group = ReviewGroup(manager="apt", action="install", title="Install packages", entries=[_entry("a")])
+        install_group = ReviewGroup(
+            manager="apt", action="install", title="Install apt packages on nomad?", entries=[_entry("a")]
+        )
         removal_group = ReviewGroup(
-            manager="apt", action="remove", title="Remove packages", entries=[_entry("b", action_label="remove")]
+            manager="apt",
+            action="remove",
+            title="Remove apt packages from nomad?",
+            entries=[_entry("b", action_label="remove")],
         )
         prompt = _fake_prompt(ask_side_effect=[{"a": "apply"}, {"b": "skip_once"}])
 
@@ -379,12 +403,15 @@ class TestInteractive:
         config_group = ReviewGroup(
             manager="apt",
             action="change",
-            title="Update apt configuration files",
+            title="Update apt configuration files on nomad?",
             entries=[_entry("cfg", action_label="update")],
             overwrites_authored_content=True,
         )
         snap_group = ReviewGroup(
-            manager="snap", action="change", title="Change snaps", entries=[_entry("snp", action_label="change")]
+            manager="snap",
+            action="change",
+            title="Align snap versions on nomad?",
+            entries=[_entry("snp", action_label="change")],
         )
         prompt = _fake_prompt(ask_side_effect=[{"cfg": "skip_once"}, {"snp": "apply"}])
 
@@ -405,14 +432,19 @@ class TestInteractive:
         console = _interactive_console()
         ui = MagicMock()
         groups = [
-            ReviewGroup(manager="apt", action="install", title="Install packages", entries=[_entry("a")]),
             ReviewGroup(
-                manager="apt", action="remove", title="Remove packages", entries=[_entry("b", action_label="remove")]
+                manager="apt", action="install", title="Install apt packages on nomad?", entries=[_entry("a")]
+            ),
+            ReviewGroup(
+                manager="apt",
+                action="remove",
+                title="Remove apt packages from nomad?",
+                entries=[_entry("b", action_label="remove")],
             ),
             ReviewGroup(
                 manager="apt",
                 action="change",
-                title="Update apt configuration files",
+                title="Update apt configuration files on nomad?",
                 entries=[_entry("c", action_label="update")],
                 overwrites_authored_content=True,
             ),
@@ -449,10 +481,13 @@ class TestInteractive:
         console = _interactive_console()
         ui = MagicMock()
         install_group = ReviewGroup(
-            manager="apt", action="install", title="Install packages", entries=[_entry("a"), _entry("c")]
+            manager="apt", action="install", title="Install apt packages on nomad?", entries=[_entry("a"), _entry("c")]
         )
         removal_group = ReviewGroup(
-            manager="apt", action="remove", title="Remove packages", entries=[_entry("b", action_label="remove")]
+            manager="apt",
+            action="remove",
+            title="Remove apt packages from nomad?",
+            entries=[_entry("b", action_label="remove")],
         )
         change_group = ReviewGroup(
             manager="snap", action="change", title="Change snap channels", entries=[_entry("d", action_label="change")]
@@ -480,7 +515,10 @@ class TestInteractive:
     async def test_removal_group_title_names_concrete_verb(self) -> None:
         """H83, H99 — a removal group's title says the deletion verb, so the screen says what it deletes."""
         group = ReviewGroup(
-            manager="apt", action="remove", title="Remove packages", entries=[_entry("a", action_label="remove")]
+            manager="apt",
+            action="remove",
+            title="Remove apt packages from nomad?",
+            entries=[_entry("a", action_label="remove")],
         )
         console = _interactive_console()
         ui = MagicMock()
@@ -493,7 +531,7 @@ class TestInteractive:
             await review_items([group], console=console, ui=ui, **HOSTS)
 
         message = decision_list.call_args.args[0]
-        assert message == "Remove packages"
+        assert message == "Remove apt packages from nomad?"
         assert message != "Apply"
 
     async def test_a_row_does_not_repeat_the_verb_its_group_title_already_names(self) -> None:
@@ -502,7 +540,7 @@ class TestInteractive:
         group = ReviewGroup(
             manager="apt",
             action="remove",
-            title="Remove packages",
+            title="Remove apt packages from nomad?",
             entries=[_entry("a", label="fortunes-min", action_label="remove")],
         )
         prompt = _fake_prompt(ask_return={"a": "skip_once"})
@@ -556,7 +594,7 @@ class TestInteractive:
         group = ReviewGroup(
             manager="apt",
             action=REPO_REMOVAL_REVIEW_ACTION,
-            title="Delete apt repositories atlas no longer has",
+            title="Delete apt repositories from nomad?",
             entries=[_entry("apt:source:vendor.list", action_label="delete repository")],
         )
         prompt = _fake_prompt(ask_return={"apt:source:vendor.list": "skip_once"})
@@ -609,7 +647,9 @@ class TestTerminalUIReviewer:
         ui = MagicMock()
         logger = MagicMock()
         reviewer = TerminalUIReviewer(console, ui, logger=logger, **HOSTS)
-        groups = [ReviewGroup(manager="apt", action="install", title="Install packages", entries=[_entry("a")])]
+        groups = [
+            ReviewGroup(manager="apt", action="install", title="Install apt packages on nomad?", entries=[_entry("a")])
+        ]
         sentinel_outcome = ReviewOutcome(decisions={"a": Decision.APPLY}, was_interactive=True)
 
         with patch(
@@ -627,7 +667,9 @@ class TestTerminalUIReviewer:
         console = _interactive_console()
         policy = ReviewPolicy(apply_installs=True)
         reviewer = TerminalUIReviewer(console, MagicMock(), policy=policy, **HOSTS)
-        groups = [ReviewGroup(manager="apt", action="install", title="Install packages", entries=[_entry("a")])]
+        groups = [
+            ReviewGroup(manager="apt", action="install", title="Install apt packages on nomad?", entries=[_entry("a")])
+        ]
 
         with patch(
             "pcswitcher.jobs.packages.review.review_items",
@@ -645,7 +687,9 @@ class TestTerminalUIReviewer:
         console = _interactive_console()
         ui = MagicMock()
         reviewer = TerminalUIReviewer(console, ui, **HOSTS)
-        groups = [ReviewGroup(manager="apt", action="install", title="Install packages", entries=[_entry("a")])]
+        groups = [
+            ReviewGroup(manager="apt", action="install", title="Install apt packages on nomad?", entries=[_entry("a")])
+        ]
         prompt = _fake_prompt(ask_side_effect=KeyboardInterrupt)
 
         with (
@@ -785,7 +829,9 @@ class TestBlockingPromptOffLoop:
     async def test_synchronous_sleep_in_ask_does_not_block_loop(self) -> None:
         console = _interactive_console()
         ui = MagicMock()
-        groups = [ReviewGroup(manager="apt", action="install", title="Install packages", entries=[_entry("a")])]
+        groups = [
+            ReviewGroup(manager="apt", action="install", title="Install apt packages on nomad?", entries=[_entry("a")])
+        ]
 
         def _blocking_ask() -> dict[str, str]:
             time.sleep(0.2)
@@ -987,7 +1033,12 @@ class TestAutomationEnv:
         console = _non_interactive_console()
         ui = MagicMock()
         groups = [
-            ReviewGroup(manager="apt", action="install", title="Install packages", entries=[_entry("a"), _entry("b")])
+            ReviewGroup(
+                manager="apt",
+                action="install",
+                title="Install apt packages on nomad?",
+                entries=[_entry("a"), _entry("b")],
+            )
         ]
         env = {PACKAGE_REVIEW_AUTOMATION_ENV: json.dumps({"a": "apply"})}
 
@@ -1010,7 +1061,9 @@ class TestAutomationEnv:
         """
         console = _interactive_console()
         ui = MagicMock()
-        groups = [ReviewGroup(manager="apt", action="install", title="Install packages", entries=[_entry("a")])]
+        groups = [
+            ReviewGroup(manager="apt", action="install", title="Install apt packages on nomad?", entries=[_entry("a")])
+        ]
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
@@ -1039,7 +1092,9 @@ class TestAutomationEnv:
         """
         console = _non_interactive_console()
         ui = MagicMock()
-        groups = [ReviewGroup(manager="apt", action="install", title="Install packages", entries=[_entry("a")])]
+        groups = [
+            ReviewGroup(manager="apt", action="install", title="Install apt packages on nomad?", entries=[_entry("a")])
+        ]
 
         with (
             patch.dict("os.environ", {PACKAGE_REVIEW_AUTOMATION_ENV: "{not json"}),
@@ -1061,7 +1116,9 @@ class TestAutomationEnv:
         """
         console = _non_interactive_console()
         ui = MagicMock()
-        groups = [ReviewGroup(manager="apt", action="install", title="Install packages", entries=[_entry("a")])]
+        groups = [
+            ReviewGroup(manager="apt", action="install", title="Install apt packages on nomad?", entries=[_entry("a")])
+        ]
 
         with (
             patch.dict("os.environ", {PACKAGE_REVIEW_AUTOMATION_ENV: json.dumps({"a": "apply_everything"})}),
@@ -1401,8 +1458,9 @@ class TestUnreproducibleGroupResolution:
         assert options[1].hint == "do not install on nomad for now; will be asked again next sync"
         assert options[2].hint == "do not install on nomad for good; it is atlas's own, and will not be asked again"
         # #230: the title is the decision the three answers offer. "How should nomad get
-        # brscan3?" matched only the first of them.
-        assert decision_list.call_args.args[0] == "Install brscan3 on nomad?"
+        # brscan3?" matched only the first of them. #276: it names what brscan3 is, which the
+        # label no longer repeats.
+        assert decision_list.call_args.args[0] == "Install manual deb brscan3 on nomad?"
 
     async def test_ui_resumed_when_snippet_capture_raises(self) -> None:
         console = _interactive_console()
@@ -1865,11 +1923,13 @@ class TestAnswerSentencesNameTheMachineAsASet:
     """
 
     _GROUPS: ClassVar[dict[str, ReviewGroup]] = {
-        "install": ReviewGroup(manager="apt", action="install", title="Install apt packages", entries=(_entry("a"),)),
+        "install": ReviewGroup(
+            manager="apt", action="install", title="Install apt packages on nomad?", entries=(_entry("a"),)
+        ),
         "change": ReviewGroup(
             manager="snap",
             action="change",
-            title="Change snaps",
+            title="Align snap versions on nomad?",
             entries=(_entry("a", action_label="change"),),
         ),
         "remove": ReviewGroup(
@@ -2248,7 +2308,7 @@ class TestCredentialsInAReviewLine:
         group = ReviewGroup(
             manager="apt",
             action="install",
-            title="Install apt packages",
+            title="Install apt packages on nomad?",
             entries=[
                 ReviewEntry(
                     item_id="apt:package:vendor-tool",

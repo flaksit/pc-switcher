@@ -42,7 +42,7 @@ GROUPS = [
     ReviewGroup(
         "apt",
         "install",
-        "Install apt packages",
+        f"Install apt packages on {TARGET_HOST}?",
         [
             ReviewEntry("apt:package:sl", "sl (5.02-1)", "install"),
             ReviewEntry("apt:package:cmatrix", "cmatrix (2.0-6)", "install", "from download.example.com"),
@@ -54,7 +54,7 @@ GROUPS = [
     ReviewGroup(
         "apt",
         "remove",
-        "Remove apt packages",
+        f"Remove apt packages from {TARGET_HOST}?",
         [ReviewEntry("apt:package:fortunes-min", "fortunes-min (1:1.99.1-7.3build1)", "remove")],
     ),
     # Reported, not asked: this group is printed and the review moves straight on. Its
@@ -86,7 +86,7 @@ GROUPS = [
     ReviewGroup(
         "apt",
         REPO_CONFLICT_REVIEW_ACTION,
-        "Resolve apt repository conflicts",
+        f"Resolve apt repository conflicts on {TARGET_HOST}?",
         [
             ReviewEntry(
                 "apt:conflict:ubuntu.sources",
@@ -117,7 +117,7 @@ GROUPS = [
     ReviewGroup(
         "apt",
         REPO_REMOVAL_REVIEW_ACTION,
-        f"Delete apt repositories {SOURCE_HOST} no longer has",
+        f"Delete apt repositories from {TARGET_HOST}?",
         [
             ReviewEntry(
                 "apt:source:99-pcsw-uat.list",
@@ -141,7 +141,7 @@ GROUPS = [
     ReviewGroup(
         "apt",
         REPO_REMOVAL_REVIEW_ACTION,
-        f"Delete apt pin files {SOURCE_HOST} no longer has",
+        f"Delete apt pin files from {TARGET_HOST}?",
         [
             ReviewEntry(
                 "apt:pin:99-pcsw-uat.pref",
@@ -210,11 +210,12 @@ GROUPS = [
     ReviewGroup(
         "manual",
         UNREPRODUCIBLE_REVIEW_ACTION,
-        f"{SOURCE_HOST} has these and no package manager can install them on {TARGET_HOST} (manual)",
+        f"{SOURCE_HOST} has manually installed apps that no package manager can put on {TARGET_HOST}?",
         [
             ReviewEntry("unreproducible:unowned-path:/opt/pcsw-uat-app", "/opt/pcsw-uat-app", "resolve"),
             ReviewEntry("unreproducible:unowned-path:/usr/local/bin/mytool", "/usr/local/bin/mytool", "resolve"),
         ],
+        item_noun="manually installed app",
     ),
 ]
 

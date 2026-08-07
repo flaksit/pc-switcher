@@ -81,6 +81,7 @@ from pcswitcher.jobs.packages.review import (
     ReviewEntry,
     ReviewGroup,
     ReviewOutcome,
+    change_title,
 )
 from pcswitcher.jobs.packages.state import (
     SNIPPET_REGISTRY_RELPATH,
@@ -664,10 +665,8 @@ class UnreproducibleSyncJob(PackageSyncJob):
                 ReviewGroup(
                     manager=self.manager_id,
                     action=UNREPRODUCIBLE_UPDATE_REVIEW_ACTION,
-                    title=(
-                        f"{self.machines.source} and {self.machines.target} have these at different versions "
-                        f"({self.manager_id})"
-                    ),
+                    title=change_title("update", f"{self.item_noun} versions", self.machines.target),
+                    item_noun=self.item_noun,
                     entries=tuple(
                         ReviewEntry(item_id=diff.item_id, label=diff.label, action_label="update", detail=diff.detail)
                         for diff in updates
@@ -685,9 +684,10 @@ class UnreproducibleSyncJob(PackageSyncJob):
                     manager=self.manager_id,
                     action=UNREPRODUCIBLE_REVIEW_ACTION,
                     title=(
-                        f"{self.machines.source} has these and no package manager can reproduce them on "
-                        f"{self.machines.target} ({self.manager_id})"
+                        f"{self.machines.source} has {self.item_noun_plural} that no package manager can put on "
+                        f"{self.machines.target}?"
                     ),
+                    item_noun=self.item_noun,
                     entries=tuple(
                         ReviewEntry(
                             item_id=diff.item_id,
@@ -824,7 +824,11 @@ class UnreproducibleSyncJob(PackageSyncJob):
                 ReviewGroup(
                     manager=self.manager_id,
                     action=UNREPRODUCIBLE_RETRY_REVIEW_ACTION,
-                    title=f"{diff.label} on {self.machines.target} is still {landed}, not {expected}",
+                    # A statement, not a question: the screen below it offers the answers, and
+                    # what the user needs first is the fact the replay did not change.
+                    title=f"{self.item_noun.capitalize()} {diff.label} on {self.machines.target} is still "
+                    f"{landed}, not {expected}",
+                    item_noun=self.item_noun,
                     entries=(
                         ReviewEntry(
                             item_id=diff.item_id,

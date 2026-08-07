@@ -61,6 +61,8 @@ class ManualSnapSyncJob(UnreproducibleSyncJob):
     name: ClassVar[str] = "manual_snap_sync"
     display_name: ClassVar[str] = "Sideloaded snaps"
     manager_id: ClassVar[str] = "manual_snap"
+    item_noun: ClassVar[str] = "sideloaded snap"
+    item_noun_plural: ClassVar[str] = "sideloaded snaps"
 
     # No configurable properties: mirrors SnapSyncJob's empty schema — only the enable flag
     # in sync_jobs is needed. A job earns a config SECTION only when it has a real key, so
@@ -100,16 +102,12 @@ class ManualSnapSyncJob(UnreproducibleSyncJob):
         would make each reinstall a brand-new item: the user's install snippet would stop
         resolving and their "never install this on the other machine" mark would be
         orphaned, both silently, and the snap would be put back in front of them as if it
-        had never been answered about. The revision is carried in the LABEL instead, where
-        it tells the user which build they are being asked about without becoming part of
-        what the answer is filed under.
+        had never been answered about. It is not in the LABEL either: an `x<N>` is a local
+        install counter, nothing the user decides on and nothing comparable between the two
+        machines, so it says nothing on a screen asking whether to reproduce the snap.
         """
         return [
-            UnreproducibleItem(
-                origin=_ORIGIN,
-                identifier=item.name,
-                label=f"{item.name} (sideloaded snap, revision {item.revision})",
-            )
+            UnreproducibleItem(origin=_ORIGIN, identifier=item.name, label=item.name)
             for item in sorted(await self._installed_snaps(self.source, self.machines.source), key=lambda i: i.name)
             if is_sideloaded(item)
         ]
@@ -141,12 +139,7 @@ class ManualSnapSyncJob(UnreproducibleSyncJob):
         path it is on.
         """
         return [
-            UnreproducibleItem(
-                origin=_ORIGIN,
-                identifier=item.name,
-                label=f"{item.name} (sideloaded snap, revision {item.revision})" if is_sideloaded(item) else item.name,
-                own_finding=is_sideloaded(item),
-            )
+            UnreproducibleItem(origin=_ORIGIN, identifier=item.name, label=item.name, own_finding=is_sideloaded(item))
             for item in await self._installed_snaps(self.target, self.machines.target)
         ]
 

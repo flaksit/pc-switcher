@@ -369,6 +369,8 @@ class SnapSyncJob(PackageSyncJob):
     name: ClassVar[str] = "snap_sync"
     display_name: ClassVar[str] = "Snaps"
     manager_id: ClassVar[str] = "snap"
+    item_noun: ClassVar[str] = "snap"
+    item_noun_plural: ClassVar[str] = "snaps"
 
     # No configurable properties: mirrors AptSyncJob's empty schema — only the enable
     # flag in sync_jobs is needed for this slice.

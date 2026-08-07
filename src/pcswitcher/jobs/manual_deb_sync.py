@@ -54,6 +54,16 @@ __all__ = ["ManualDebSyncJob"]
 _ORIGIN = "apt-no-candidate"
 
 
+def _label(name: str, version: str) -> str:
+    """`name (version)`, as `AptPackageItem.label` builds it.
+
+    No "(installed from no configured repository)" clause: it is true of every row in the
+    group and the group's own title already says so, so it was a constant repeated once per
+    line. The version is what differs between rows and is what an update question is about.
+    """
+    return f"{name} ({version})" if version else name
+
+
 class ManualDebSyncJob(UnreproducibleSyncJob):
     """Detect, review and reproduce apt packages installed from no configured repository,
     on this job's own enable flag independent of `apt_sync`'s and of
@@ -67,6 +77,8 @@ class ManualDebSyncJob(UnreproducibleSyncJob):
     name: ClassVar[str] = "manual_deb_sync"
     display_name: ClassVar[str] = "Manual debs"
     manager_id: ClassVar[str] = "manual_deb"
+    item_noun: ClassVar[str] = "manual deb"
+    item_noun_plural: ClassVar[str] = "manual debs"
 
     def __init__(self, context: JobContext) -> None:
         super().__init__(context)
@@ -187,11 +199,7 @@ class ManualDebSyncJob(UnreproducibleSyncJob):
             sorted(installed), self.source, self.machines.source
         )
         return [
-            UnreproducibleItem(
-                origin=_ORIGIN,
-                identifier=name,
-                label=f"{name} (installed from no configured repository)",
-            )
+            UnreproducibleItem(origin=_ORIGIN, identifier=name, label=_label(name, installed[name]))
             for name in sorted(no_repository)
         ]
 
@@ -221,7 +229,7 @@ class ManualDebSyncJob(UnreproducibleSyncJob):
             UnreproducibleItem(
                 origin=_ORIGIN,
                 identifier=name,
-                label=f"{name} (installed from no configured repository)" if name in no_repository else name,
+                label=_label(name, installed[name]),
                 own_finding=name in no_repository,
             )
             for name in sorted(installed)

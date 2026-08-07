@@ -328,6 +328,36 @@ class ReviewEntry:
             object.__setattr__(self, "answer_hints", tuple(redact_credentials(hint) for hint in self.answer_hints))
 
 
+# The verbs that take software OFF a machine. Their titles read "from {target}"; every
+# other verb puts something there and reads "on {target}".
+_TAKES_FROM: frozenset[str] = frozenset({"remove", "delete"})
+
+
+def change_title(verb: str, noun: str, target: str) -> str:
+    """`{Verb} {noun} on|from {target}?` — the shape every title that asks about a change
+    takes, group and single item alike (`PKG-FR-NAME-THE-MACHINES`).
+
+    One builder rather than an f-string per site because the rule the sites kept getting
+    wrong is which machine a title names: some named the source, some named nobody, and a
+    user reading a screenful of them cannot tell which of those means "on this machine".
+    A per-item title passes `f"{singular noun} {label}"` as the noun.
+
+    Report-only groups do not come through here: they announce a condition rather than ask
+    about a change, so they take no machine and no question mark.
+    """
+    return f"{verb.capitalize()} {noun} {'from' if verb in _TAKES_FROM else 'on'} {target}?"
+
+
+def version_mismatch_title(noun: str, label: str, source: str, target: str) -> str:
+    """The per-item title for one thing both machines have at different versions.
+
+    Names both machines rather than the target alone: which version wins is the whole
+    question, and "pc2 has a different version" left the user to work out what it would be
+    changed to.
+    """
+    return f"{source} and {target} have different versions of {noun} {label} — update it on {target}?"
+
+
 @dataclass(frozen=True)
 class ReviewGroup:
     """One screen's worth of same-manager, same-direction entries.
@@ -351,6 +381,11 @@ class ReviewGroup:
     answer that rewrites a snippet opens its editors on that content instead of on nothing
     (`PKG-FR-VERSION-SNIPPET`). Only the two groups whose items HAVE a recorded snippet supply it; this module
     never reads a registry itself, exactly as it never reads a repository file.
+
+    `item_noun` is the SINGULAR word for one of these entries ("manual deb"), carried only
+    by the groups this module titles per item — the whole-group screens are titled once, by
+    the caller. It travels on the group because the noun belongs to the job and the sentence
+    belongs here.
     """
 
     manager: str
@@ -360,6 +395,7 @@ class ReviewGroup:
     note: str | None = None
     overwrites_authored_content: bool = False
     recorded_bodies: Mapping[str, SnippetBodies] | None = None
+    item_noun: str = ""
 
 
 class Decision(StrEnum):
@@ -1198,7 +1234,7 @@ async def _review_snippet_group(  # noqa: PLR0913 - screen content plus the two 
         verb = entry.action_label
         if is_update:
             options = _update_options(target_hostname)
-            title = f"{target_hostname} has a different version of {entry.label} — update it?"
+            title = version_mismatch_title(group.item_noun, entry.label, source_hostname, target_hostname)
             default = Decision.APPLY.value
         elif is_retry:
             options = _retry_options(target_hostname)
@@ -1206,7 +1242,7 @@ async def _review_snippet_group(  # noqa: PLR0913 - screen content plus the two 
             default = _ADD_SNIPPET_VALUE
         else:
             options = _unreproducible_options(source_hostname, target_hostname, verb)
-            title = f"{verb.capitalize()} {entry.label} on {target_hostname}?"
+            title = change_title(verb, f"{group.item_noun} {entry.label}", target_hostname)
             default = _ADD_SNIPPET_VALUE
 
         # Re-prompt until the entry is resolved by real bodies or an explicit answer. An

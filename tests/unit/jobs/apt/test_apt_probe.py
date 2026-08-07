@@ -170,7 +170,7 @@ class TestManifestIsShowmanualOnly:
         assert all(d.diff_class == DiffClass.EXTRA_ON_TARGET and d.action == DiffAction.REMOVE for d in plan.diffs)
         assert len(plan.groups) == 1
         assert plan.groups[0].action in _REMOVAL_ACTIONS
-        assert plan.groups[0].title == "Remove apt packages"
+        assert plan.groups[0].title == "Remove apt packages from target-host?"
 
 
 class TestHoldPinCapture:

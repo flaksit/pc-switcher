@@ -96,14 +96,15 @@ class TestSideloadDetection:
         assert [d.item_id for d in plan.diffs] == ["unreproducible:snap-sideload:mytool"]
 
     @pytest.mark.asyncio
-    async def test_the_item_label_names_the_revision_the_source_holds(self) -> None:
-        """G124 — the revision is what the user needs to recognise the build being asked
-        about, so it is in the label even though it is deliberately not in the identity."""
+    async def test_the_item_label_is_the_bare_name_and_never_the_revision(self) -> None:
+        """G124 — a sideload's `x<N>` is a local install counter: not comparable between the
+        two machines and not something the user decides on, so it appears nowhere (#276). The
+        label is the name, and the group's title already says these are sideloaded snaps."""
         context, _source, _target = make_context(source_responses={SNAP_LIST: snap_list(sideload("mytool", "x3"))})
 
         plan = await ManualSnapSyncJob(context).plan()
 
-        assert plan.diffs[0].label == "mytool (sideloaded snap, revision x3)"
+        assert plan.diffs[0].label == "mytool"
 
     @pytest.mark.asyncio
     async def test_reinstalling_a_sideload_at_a_new_revision_keeps_its_identity(self) -> None:

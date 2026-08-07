@@ -57,6 +57,8 @@ All seven package jobs **must** be listed before `folder_sync` in your `sync_job
 
 Each enabled job shows you a review before it changes anything. Every screen names the two machines by hostname (`atlas`, `nomad`) — never "source" and "target".
 
+Every question is titled `<Verb> <what> on nomad?`, or `from nomad?` where the change takes something off it: `Install apt packages on nomad?`, `Remove sideloaded snaps from nomad?`, `Align snap versions on nomad?`. A one-item screen names the item too — `Install manual deb pcsw-uat-deb on nomad?`. The reported-only groups are the exception: they ask nothing, so they are titled by the condition instead (`Version differences (apt packages)`).
+
 Most items take three answers:
 
 | Key | Answer | Effect |

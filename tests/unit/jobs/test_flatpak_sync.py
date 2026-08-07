@@ -2886,8 +2886,8 @@ class TestMasksReachNoReviewGroup:
         ref_install = self._group_holding(plan, "flatpak:ref:user:org.example.SourceOnly/x86_64/stable")
         ref_remove = self._group_holding(plan, "flatpak:ref:user:org.example.TargetOnly/x86_64/stable")
 
-        assert ref_install.title == "Install flatpak applications"
-        assert ref_remove.title == "Remove flatpak applications"
+        assert ref_install.title == "Install flatpaks on target-host?"
+        assert ref_remove.title == "Remove flatpaks from target-host?"
         # Refs have no vocabulary entry of their own, so they fall back to the bare
         # DiffAction verb — which is exactly the verb a mask must NOT inherit.
         assert {e.action_label for e in ref_install.entries} == {"install"}

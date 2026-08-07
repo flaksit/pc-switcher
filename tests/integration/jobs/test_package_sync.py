@@ -804,7 +804,7 @@ class TestARunWithNobodyToAsk:
             # any report group at all. The discriminating pair: a VERSION_MISMATCH -- what
             # this diverged pair would produce if the vendor comparison missed -- names two
             # versions and no URL at all.
-            assert "Installed from different remotes (flatpak applications)" in collapsed, (
+            assert "Installed from different remotes (flatpaks)" in collapsed, (
                 f"the mismatch reached no origin-mismatch review group.\n{combined_output}"
             )
             assert ref in combined_output, f"the report does not name the ref {ref}.\n{combined_output}"

@@ -189,28 +189,30 @@ The sections below follow the order you will meet the screens. On these fixtures
 
 | # | Job | Screen | Section |
 |---|-----|--------|---------|
-| 1 | `apt_sync` | `Update apt configuration files` → the follow-up it raises | §3.3 |
-| 2 | `manual_deb_sync` | `Remove manual_deb packages` | §3.4 |
+| 1 | `apt_sync` | `Update apt configuration files on pc2?` → the follow-up it raises | §3.3 |
+| 2 | `manual_deb_sync` | `Remove manual debs from pc2?` | §3.4 |
 | 3 | `manual_deb_sync` | version difference, `pcsw-uat-drift` | §3.5 |
 | 4 | `manual_deb_sync` | resolution, `pcsw-uat-deb` — one editor | §3.6 |
 | 5 | `manual_snap_sync` | version difference, then resolution | §3.5, §3.6 |
 | 6 | `manual_flatpak_sync` | resolution, `sdl_sopwith` | §3.6 |
-| 7 | `manual_installs_sync` | `Remove manual packages`, then version difference, then resolution | §3.4, §3.5, §3.6 |
+| 7 | `manual_installs_sync` | `Remove manually installed apps from pc2?`, then version difference, then resolution | §3.4, §3.5, §3.6 |
 | 8 | `manual_installs_sync` | the converge-loop retry, during apply | §3.7 |
 | 9 | — | `Job outcomes:` | §3.8 |
 
 The converge-loop retry is last because it is not a review screen at all: it is put while the job is applying what you approved, after every screen that job asked.
 
 - Each of the four snippet jobs puts its own review. A job's findings never appear in another's.
-- The group offering software pc2 cannot get is titled `pc1 has these and no package manager can reproduce them on pc2 (<manager>)`, where `<manager>` is `manual_deb`, `manual_snap`, `manual_flatpak` or `manual`.
-- The group for an item both machines have at different versions is titled `pc1 and pc2 have these at different versions (<manager>)`.
-- **The removal group titles are a confirmed finding, not a pass.** They are built from the internal manager id and default to the noun "packages". A dry run on these fixtures prints `Remove manual packages` for the `/opt/pcsw-uat-orphan` path deletion — wrong about both words — and `Remove manual_deb packages`, which leaks an internal id at the user. `manual_flatpak` would say "packages" where flatpak says "applications". Confirm the strings on your run and record them.
+- Every title names the machine the change lands on and ends in `?`. Nothing on any screen may print a job or manager identifier — `manual_deb`, `manual_flatpak`, `manual` or a job name — and seeing one is a finding (#276).
+- The group offering software pc2 cannot get is titled `pc1 has <plural noun> that no package manager can put on pc2?`, where the noun is `manual debs`, `sideloaded snaps`, `manual flatpaks` or `manually installed apps`.
+- The group for items both machines have at different versions is titled `Update <singular noun> versions on pc2?`.
 
-The group titles that ARE right, and worth confirming read well on a real terminal:
+The titles to confirm read well on a real terminal:
 
 ```plain
-pc1 has these and no package manager can reproduce them on pc2 (manual_deb)
-pc1 and pc2 have these at different versions (manual_snap)
+Remove manual debs from pc2?
+Remove manually installed apps from pc2?
+pc1 has manual debs that no package manager can put on pc2?
+Update sideloaded snap versions on pc2?
 ```
 
 ### 3.3 The machine-specific follow-up
@@ -230,13 +232,13 @@ Nothing else in this run reaches that screen: an install is on pc1 alone and a r
 
 ### 3.4 Removals
 
-The first screen of `manual_deb_sync`, and again of `manual_installs_sync`. `pcsw-uat-gone` and `/opt/pcsw-uat-orphan` are on pc2 only. Each is offered for removal by the job whose own detector claims it there, and by no other. Confirm each row starts at **skip now**, and that the path deletion's screen carries the line saying its reach is smaller than its name: `Only the path itself is deleted on pc2. Whatever installed it may also have left a launcher, a symlink or a service unit outside these directories, and nothing here knows where; those stay.`
+The first screen of `manual_deb_sync`, and again of `manual_installs_sync`. `pcsw-uat-gone` and `/opt/pcsw-uat-orphan` are on pc2 only. Each is offered for removal by the job whose own detector claims it there, and by no other. Confirm each row starts at **skip now**, and that the path deletion's screen carries the line saying its reach is smaller than its name: `Only the path itself is deleted from pc2. There may be config or files in other folders, like a launcher, a symlink or a service unit outside these folders. Remove them manually.`
 
-Approve both. The warning's wording is #276's; what to check here is that it appears at all, on the path deletion and not on the package one.
+Approve both. What to check here is that the warning appears at all, on the path deletion and not on the package one.
 
 ### 3.5 Version convergence
 
-Follows the removal group in each job that has one. Three items reach this screen, one per ecosystem, and they are exactly the three that have a recorded snippet: `pcsw-uat-drift` (deb), `pcsw-uat-snapdrift` (snap) and `/opt/pcsw-uat-loop` (path). Each is asked on its own screen titled `pc2 has a different version of <item> — update it?`, with exactly three answers and **no** `<x>`:
+Follows the removal group in each job that has one. Three items reach this screen, one per ecosystem, and they are exactly the three that have a recorded snippet: `pcsw-uat-drift` (deb), `pcsw-uat-snapdrift` (snap) and `/opt/pcsw-uat-loop` (path). Each is asked on its own screen titled `pc1 and pc2 have different versions of <singular noun> <item> — update it on pc2?`, with exactly three answers and **no** `<x>`:
 
 - `<y> update` — `run the recorded snippet on pc2`
 - `<w> new snippet` — `rewrite the snippet first, then run it on pc2`
@@ -254,7 +256,7 @@ Answer, in the order the three come:
 
 The last group of each snippet job. Four items have no recorded snippet and so are asked how to reproduce them, one screen each: `pcsw-uat-deb`, `pcsw-uat-snap`, `io.github.fragglet.sdl_sopwith/x86_64/stable` and `/opt/pcsw-uat-app`.
 
-`/opt/pcsw-uat-app` is the one kind with no package manager to ask for a version, so it is the only one that takes two editors. On `Install /opt/pcsw-uat-app on pc2?` answer `<y>` and confirm that **two** editors open in sequence:
+`/opt/pcsw-uat-app` is the one kind with no package manager to ask for a version, so it is the only one that takes two editors. On `Install manually installed app /opt/pcsw-uat-app on pc2?` answer `<y>` and confirm that **two** editors open in sequence:
 
 1. `Install-or-update snippet for /opt/pcsw-uat-app:` — its own screen states the install-or-update contract, that the body is replayed onto a machine which may already hold an older version.
 2. `Installed-version snippet for /opt/pcsw-uat-app:` — its own screen states that this one runs on both machines on every sync while the run is still planning, and must be read-only.
@@ -288,7 +290,7 @@ Answer them with an install-or-update body each, `<y>` then one editor:
 
 - The version is read again on pc2 after the replay.
 - The item is **not** reported as applied.
-- A second screen appears, titled `/opt/pcsw-uat-loop on pc2 is still 1.0, not 2.0`, offering exactly **two** answers — `<w> new snippet` and `<s> skip now`. The replay answer is gone, because replaying the same bytes cannot change the outcome.
+- A second screen appears, titled `Manually installed app /opt/pcsw-uat-loop on pc2 is still 1.0, not 2.0`, offering exactly **two** answers — `<w> new snippet` and `<s> skip now`. The replay answer is gone, because replaying the same bytes cannot change the outcome.
 - Its editor opens on the body that just failed.
 
 Answer `<w>` and write a body that actually converges, then confirm the item comes out applied:

@@ -118,16 +118,16 @@ def _item(row: _InstalledRef, *, own_finding: bool = True) -> UnreproducibleItem
 
     `own_finding` is False for a target row some remote CAN supply: it is software that is
     there, so the source's copy of it is never offered for install, but it is
-    `flatpak_sync`'s to remove rather than this job's (`PKG-FR-MANUAL-REMOVE`). Its label
-    then says only what it is, since the origin clause would be a false statement about a
-    remote that is configured.
+    `flatpak_sync`'s to remove rather than this job's (`PKG-FR-MANUAL-REMOVE`).
+
+    The label is the ref and its scope, and the scope stays because the same application can
+    be installed in both and the two are different items. The dead origin does not: it is
+    the same statement on every row of the group, which the group's title already makes.
     """
     return UnreproducibleItem(
         origin=_ORIGIN,
         identifier=_identifier(row),
-        label=f"{row.ref} ({row.scope}, from {row.origin} — no such remote is configured)"
-        if own_finding
-        else f"{row.ref} ({row.scope})",
+        label=f"{row.ref} ({row.scope} scope)",
         own_finding=own_finding,
     )
 
@@ -144,6 +144,9 @@ class ManualFlatpakSyncJob(UnreproducibleSyncJob):
     name: ClassVar[str] = "manual_flatpak_sync"
     display_name: ClassVar[str] = "Manual flatpaks"
     manager_id: ClassVar[str] = "manual_flatpak"
+    item_noun: ClassVar[str] = "manual flatpak"
+    item_noun_plural: ClassVar[str] = "manual flatpaks"
+    origin_noun_plural: ClassVar[str] = "remotes"
 
     # No configurable properties, mirroring the other package jobs: only the enable flag in
     # sync_jobs is needed. A job earns a config SECTION only when it has a real key, so there is
