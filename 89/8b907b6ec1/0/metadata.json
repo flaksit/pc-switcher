@@ -1,0 +1,44 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "898b907b6ec1",
+  "session_id": "3cd144d3-98e0-4cf7-af0c-0582503dd4ca",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-07T14:13:28.753790017Z",
+  "branch": "worktree-uat-02-deltas",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/02-package-management-sync/02-UAT-02-RUNBOOK.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "84c1a1bc6988",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 207,
+    "cache_creation_tokens": 471486,
+    "cache_read_tokens": 21793539,
+    "output_tokens": 79576,
+    "api_call_count": 112
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-07T14:13:28.667595845Z",
+    "agent_lines": 59,
+    "agent_removed": 7,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 59,
+    "total_lines_changed": 66,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    }
+  ]
+}

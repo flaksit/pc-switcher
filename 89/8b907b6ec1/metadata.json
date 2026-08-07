@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "898b907b6ec1",
+  "strategy": "manual-commit",
+  "branch": "worktree-uat-02-deltas",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/02-package-management-sync/02-UAT-02-RUNBOOK.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/89/8b907b6ec1/0/metadata.json",
+      "transcript": "/89/8b907b6ec1/0/full.jsonl",
+      "compact_transcript": "/89/8b907b6ec1/0/transcript.jsonl",
+      "content_hash": "/89/8b907b6ec1/0/content_hash.txt",
+      "prompt": "/89/8b907b6ec1/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 207,
+    "cache_creation_tokens": 471486,
+    "cache_read_tokens": 21793539,
+    "output_tokens": 79576,
+    "api_call_count": 112
+  }
+}
