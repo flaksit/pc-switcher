@@ -65,6 +65,7 @@ class ManualDebSyncJob(UnreproducibleSyncJob):
     """
 
     name: ClassVar[str] = "manual_deb_sync"
+    display_name: ClassVar[str] = "Manual debs"
     manager_id: ClassVar[str] = "manual_deb"
 
     def __init__(self, context: JobContext) -> None:
@@ -342,6 +343,7 @@ class ManualDebSyncJob(UnreproducibleSyncJob):
         dropped."""
         return FirstSyncScope(
             job_name=cls.name,
+            job_display_name=cls.display_name,
             scope_items=[
                 "hand-installed .deb packages (via recorded install snippets)",
                 "hand-installed .deb packages the source no longer has (apt-get remove)",

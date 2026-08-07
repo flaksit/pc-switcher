@@ -42,7 +42,14 @@ def _rendered_block(results: list[JobResult], *, width: int = 80) -> str:
 def _result(job_name: str, status: JobStatus, reason: str | None = None) -> JobResult:
     """A `JobResult` for `job_name`; the timestamps are immaterial to the block."""
     moment = datetime(2026, 1, 1, tzinfo=UTC)
-    return JobResult(job_name=job_name, status=status, started_at=moment, ended_at=moment, error_message=reason)
+    return JobResult(
+        job_name=job_name,
+        job_display_name=job_name,
+        status=status,
+        started_at=moment,
+        ended_at=moment,
+        error_message=reason,
+    )
 
 
 class TestNonblankLines:

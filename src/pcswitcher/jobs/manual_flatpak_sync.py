@@ -142,6 +142,7 @@ class ManualFlatpakSyncJob(UnreproducibleSyncJob):
     """
 
     name: ClassVar[str] = "manual_flatpak_sync"
+    display_name: ClassVar[str] = "Manual flatpaks"
     manager_id: ClassVar[str] = "manual_flatpak"
 
     # No configurable properties, mirroring the other package jobs: only the enable flag in
@@ -325,6 +326,7 @@ class ManualFlatpakSyncJob(UnreproducibleSyncJob):
         dropped."""
         return FirstSyncScope(
             job_name=cls.name,
+            job_display_name=cls.display_name,
             scope_items=[
                 "flatpak refs no remote can supply (via recorded install snippets)",
                 "flatpak refs no remote can supply that the source no longer has (flatpak uninstall)",

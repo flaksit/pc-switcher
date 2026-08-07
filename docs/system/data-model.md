@@ -169,7 +169,8 @@ class JobStatus(StrEnum):
 
 @dataclass(frozen=True)
 class JobResult:
-    job_name: str
+    job_name: str                 # the identifier: config key, module, log field
+    job_display_name: str         # the same job worded for a human
     status: JobStatus
     started_at: datetime          # UTC
     ended_at: datetime            # UTC
@@ -197,7 +198,7 @@ class SyncSession:
 | ---- | ---- | ------- |
 | `ConfigError` | dataclass (`job`, `path`, `message`) | Schema or job-config validation failure; `job` is `None` for global config. |
 | `ValidationError` | dataclass (`job`, `host`, `message`) | System-state validation failure on one machine. |
-| `FirstSyncScope` | dataclass (`job_name`, `scope_items`, `mechanism`) | A `SyncJob`'s self-described first-sync overwrite scope (ADR-015). |
+| `FirstSyncScope` | dataclass (`job_name`, `job_display_name`, `scope_items`, `mechanism`) | A `SyncJob`'s self-described first-sync overwrite scope (ADR-015). |
 | `DiskSpaceCriticalError` | exception | Free space fell below the critical threshold during the run. |
 | `SyncAborted` | exception | pc-switcher ended the run on its own, or the site cannot tell whether a human answered. Reported once at WARNING, never CRITICAL. |
 | `SyncAbortedByUser` | exception (`SyncAborted`) | A human chose to stop. The only kind anything may report as the user's doing. |

@@ -8,6 +8,7 @@ from typing import Any
 
 from rich.console import Console, Group, RenderableType
 from rich.live import Live
+from rich.markup import escape
 from rich.panel import Panel
 from rich.progress import BarColumn, Progress, TaskID, TaskProgressColumn, TextColumn
 from rich.table import Table
@@ -276,6 +277,7 @@ class TerminalUI:
         self,
         job: str,
         update: ProgressUpdate,
+        display_name: str | None = None,
     ) -> None:
         """Update progress for a specific job.
 
@@ -283,18 +285,29 @@ class TerminalUI:
         value, each kept for the rest of the run, so sequential units of work stay
         visible at their final state instead of being overwritten (see ProgressUpdate).
 
+        Bars are keyed on the identifier and labelled with the display name, so
+        rewording a job never splits its bar in two.
+
+        Both the label and `update.item` are escaped before being interpolated into the
+        Rich markup a description is: an item is a package name, path or stderr
+        fragment, and a bracketed one (`[installed]`, `[/opt/foo]`) would otherwise
+        vanish or raise MarkupError and crash the run.
+
         Args:
-            job: Job name
+            job: Job identifier (the `name` ClassVar)
             update: Progress information to display
+            display_name: Human-readable job name for the bar label. Defaults to `job`.
         """
         key = job if update.track is None else f"{job}\x00{update.track}"
+        label = escape(display_name if display_name is not None else job)
+        item = escape(update.item) if update.item else None
 
         # Create task if it doesn't exist
         if key not in self._job_tasks:
             # Determine total based on update type
             total = 100 if update.percent is not None else (update.total or 100)
             self._job_tasks[key] = self._progress.add_task(
-                f"[cyan]{job}[/cyan]",
+                f"[cyan]{label}[/cyan]",
                 total=total,
             )
 
@@ -303,9 +316,9 @@ class TerminalUI:
         # Update task based on ProgressUpdate type
         if update.percent is not None:
             # Percent-based progress
-            description = f"[cyan]{job}[/cyan]"
-            if update.item:
-                description += f": {update.item}"
+            description = f"[cyan]{label}[/cyan]"
+            if item:
+                description += f": {item}"
             self._progress.update(
                 task_id,
                 completed=update.percent,
@@ -316,9 +329,9 @@ class TerminalUI:
             )
         elif update.current is not None and update.total is not None:
             # Count-based progress (current/total)
-            description = f"[cyan]{job}[/cyan]: {update.current}/{update.total} items"
-            if update.item:
-                description += f" - {update.item}"
+            description = f"[cyan]{label}[/cyan]: {update.current}/{update.total} items"
+            if item:
+                description += f" - {item}"
             self._progress.update(
                 task_id,
                 completed=update.current,
@@ -329,7 +342,7 @@ class TerminalUI:
             # Current only: the job is making countable progress towards an unknown
             # end. `item`, when given, replaces the generic count so the job can word
             # its own status line.
-            description = f"[cyan]{job}[/cyan]: {update.item or f'{update.current} items'}"
+            description = f"[cyan]{label}[/cyan]: {item or f'{update.current} items'}"
             self._set_indeterminate(task_id)
             self._progress.update(
                 task_id,
@@ -339,9 +352,9 @@ class TerminalUI:
         elif update.heartbeat:
             # Activity only, no countable unit yet (e.g. rsync building its file list
             # emits nothing at all): pulse the bar rather than leave it parked at 0%.
-            description = f"[cyan]{job}[/cyan]"
-            if update.item:
-                description += f": {update.item}"
+            description = f"[cyan]{label}[/cyan]"
+            if item:
+                description += f": {item}"
             self._set_indeterminate(task_id)
             self._progress.update(
                 task_id,
@@ -470,7 +483,7 @@ class TerminalUI:
                 break
 
             if isinstance(event, ProgressEvent):
-                self.update_job_progress(event.job, event.update)
+                self.update_job_progress(event.job, event.update, event.display_name)
 
             elif isinstance(event, ConnectionEvent):
                 self.set_connection_status(event.status, event.latency)

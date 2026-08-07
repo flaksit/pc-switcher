@@ -31,6 +31,7 @@ class DiskSpaceMonitorJob(BackgroundJob):
     """
 
     name: ClassVar[str] = "disk_space_monitor"
+    display_name: ClassVar[str] = "Disk space monitor"
 
     CONFIG_SCHEMA: ClassVar[dict[str, Any]] = {
         "type": "object",

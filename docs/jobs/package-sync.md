@@ -8,15 +8,17 @@ For what package sync is for, read [package-sync-user-requirements.md](../planni
 
 Seven independent jobs share one review model. Each has its own enable flag, its own review, and its own failure isolation.
 
-| Flag | Covers |
-| --- | --- |
-| `apt_sync` | Manually-installed apt packages, plus the `/etc/apt` state they depend on: repositories, pins, keys, apt config, holds |
-| `snap_sync` | Store snaps, converged to the source's exact revision and channel |
-| `flatpak_sync` | Flatpak refs (per user/system scope), the remotes they need, and mask patterns |
-| `manual_deb_sync` | apt packages installed by hand from a downloaded `.deb` |
-| `manual_snap_sync` | Sideloaded snaps installed from a local `.snap` file |
-| `manual_flatpak_sync` | Flatpak apps installed from a local bundle or a since-deleted remote |
-| `manual_installs_sync` | Unowned software under `/usr/local` and `/opt` |
+The flag is the config key; the second column is the name the run shows you on screen.
+
+| Flag | Shown as | Covers |
+| --- | --- | --- |
+| `apt_sync` | Apt packages | Manually-installed apt packages, plus the `/etc/apt` state they depend on: repositories, pins, keys, apt config, holds |
+| `snap_sync` | Snaps | Store snaps, converged to the source's exact revision and channel |
+| `flatpak_sync` | Flatpaks | Flatpak refs (per user/system scope), the remotes they need, and mask patterns |
+| `manual_deb_sync` | Manual debs | apt packages installed by hand from a downloaded `.deb` |
+| `manual_snap_sync` | Sideloaded snaps | Sideloaded snaps installed from a local `.snap` file |
+| `manual_flatpak_sync` | Manual flatpaks | Flatpak apps installed from a local bundle or a since-deleted remote |
+| `manual_installs_sync` | Manually installed apps | Unowned software under `/usr/local` and `/opt` |
 
 All seven ship **disabled**. Enable them individually:
 
@@ -112,7 +114,7 @@ The registry syncs between machines with each snippet job's push. A transfer tha
 
 ## Ubuntu Pro and ESM
 
-If your source uses Ubuntu Pro's ESM repositories and your target is not attached, `apt_sync` asks before writing anything. Two answers: attach the target (pc-switcher gives you the `sudo pro attach <token>` and `sudo pro enable esm-apps esm-infra` commands to run there, plus a link to [Ubuntu's tutorial](https://documentation.ubuntu.com/pro/attach-tutorial/)) or skip `apt_sync` for this run. Every other job still runs.
+If your source uses Ubuntu Pro's ESM repositories and your target is not attached, `apt_sync` asks before writing anything. Two answers: attach the target (pc-switcher gives you the `sudo pro attach <token>` and `sudo pro enable esm-apps esm-infra` commands to run there, plus a link to [Ubuntu's tutorial](https://documentation.ubuntu.com/pro/attach-tutorial/)) or skip Apt packages for this run. Every other job still runs.
 
 Skipping costs the whole apt job, not just the two ESM files: pins always-sync, so the source's ESM pins would reach a target without the sources they name, leaving a candidate selection matching neither machine.
 

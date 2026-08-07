@@ -167,7 +167,9 @@ pc-switcher sync pc2 --yes --allow-first-sync
 
 A dry run converges nothing, so three things below cannot happen in it: no snippet is recorded, no registry is pushed, and the converge loop of §3.7 never opens — `_converge_one` is not called at all (`jobs/packages/sync_core.py:804`). Walk the dry run for the screens, then answer the real run for the outcomes.
 
-Findings already raised from a walk of these fixtures, so they need no re-reporting — check they still read as described and move on: review copy and titles (#276), the `apt.conf.d` digests of §3.3 (#277), that screen's keys and default (#278), the repeated scrollback frames (#279), job names in the status line (#280), the snippet screens of §3.5 and §3.6 (#281), and the group order of §3.2 (#283).
+Findings already raised from a walk of these fixtures, so they need no re-reporting — check they still read as described and move on: review copy and titles (#276), the `apt.conf.d` digests of §3.3 (#277), that screen's keys and default (#278), the repeated scrollback frames (#279), the snippet screens of §3.5 and §3.6 (#281), and the group order of §3.2 (#283).
+
+The status line, the progress bars and the outcome block name jobs the way a user would (#280 is fixed): `Apt packages`, `Snaps`, `Flatpaks`, `Manual debs`, `Sideloaded snaps`, `Manual flatpaks`, `Manually installed apps`, `Folder sync`, `Install on target`. A module name such as `manual_deb_sync` on screen is a regression. Config keys and the `job` field in the log file stay the module name, so §4's log greps are unaffected.
 
 ### 3.1 The three exclusions
 
@@ -177,7 +179,7 @@ Each pair of jobs decides its boundary by one shared rule, so a finding claimed 
 - `snap_sync` names `pcsw-uat-snap` and `pcsw-uat-snapdrift` nowhere, and says nothing about a hold on either.
 - `flatpak_sync` names `io.github.fragglet.sdl_sopwith` nowhere and derives no remote for it — in particular it does not try to add a remote with an empty URL.
 
-`snap_sync` and `flatpak_sync` therefore have nothing of their own to do in this run and must report `success`, not `skipped`: a review holding nothing to decide is the goal already met. `apt_sync`'s only item is the `apt.conf.d` file of §3.3.
+`snap_sync` and `flatpak_sync` therefore have nothing of their own to do in this run and must report `success`, not `skipped` (as `Snaps` and `Flatpaks` in the outcome block): a review holding nothing to decide is the goal already met. `apt_sync`'s only item is the `apt.conf.d` file of §3.3.
 
 ### 3.2 The seven reviews, and the order the screens come in
 
@@ -297,7 +299,7 @@ echo 2.0 | sudo tee /opt/pcsw-uat-loop/version >/dev/null
 
 ### 3.8 The end of the run
 
-The last block must be headed `Job outcomes:` and give one line per job in execution order — a mark (`✔`, `⏭`, `✖`), the job name, its status (`success`, `skipped`, `failed`), and for a skipped or failed job the reason that job recorded. Confirm the failures are printed **once**: nothing else prints them again in a second shape.
+The last block must be headed `Job outcomes:` and give one line per job in execution order — a mark (`✔`, `⏭`, `✖`), the job's display name (`Apt packages`, not `apt_sync`), its status (`success`, `skipped`, `failed`), and for a skipped or failed job the reason that job recorded. Confirm the failures are printed **once**: nothing else prints them again in a second shape.
 
 Then check the apt timers were suspended for the run and put back:
 
@@ -380,7 +382,7 @@ ssh testuser@"$PC2" 'grep -c "label: cowsay" ~/.config/pc-switcher/apt.decisions
 ssh testuser@"$PC1" 'grep -c "pcsw-uat-flag" ~/.config/pc-switcher/package-snippets.yaml' # 0
 ```
 
-- The four things neither flag answers are each named in a warning and left for this run: the `98-pcsw-flag` apt.conf.d file pc2 already holds, `/opt/pcsw-uat-flag` which needs a snippet nobody can write, a repository conflict if one arises, and the Ubuntu Pro gate if the target is unattached. `manual_installs_sync` must therefore report `skipped` with `/opt/pcsw-uat-flag` named, in the same run where the other jobs report `success`.
+- The four things neither flag answers are each named in a warning and left for this run: the `98-pcsw-flag` apt.conf.d file pc2 already holds, `/opt/pcsw-uat-flag` which needs a snippet nobody can write, a repository conflict if one arises, and the Ubuntu Pro gate if the target is unattached. `manual_installs_sync` must therefore report `skipped` (as `Manually installed apps` in the outcome block) with `/opt/pcsw-uat-flag` named, in the same run where the other jobs report `success`.
 
 ```bash
 ssh testuser@"$PC2" 'cat /etc/apt/apt.conf.d/98-pcsw-flag'    # still pc2's own "true"

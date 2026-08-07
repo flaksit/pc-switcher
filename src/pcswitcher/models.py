@@ -202,9 +202,13 @@ class FirstSyncScope:
     names what it will destructively replace on the target (scope_items) and
     how (mechanism), instead of the orchestrator hardcoding one job's config
     shape and transport wording.
+
+    `job_name` is the job's identifier, `job_display_name` its `display_name` ClassVar:
+    the warning this feeds is read by a human, so it prints the latter.
     """
 
     job_name: str
+    job_display_name: str
     scope_items: list[str]
     mechanism: str
 
@@ -310,9 +314,16 @@ class JobStatus(StrEnum):
 
 @dataclass(frozen=True)
 class JobResult:
-    """Result of executing a single job."""
+    """Result of executing a single job.
+
+    Carries the job under both spellings, because a result is read both ways: `job_name`
+    is the identifier the config key and log records use, `job_display_name` its
+    `display_name` ClassVar, printed in the `Job outcomes:` block and in the session's
+    failure reason. Both are stored so neither reader has to look the other up.
+    """
 
     job_name: str
+    job_display_name: str
     status: JobStatus
     started_at: datetime  # UTC timezone
     ended_at: datetime  # UTC timezone

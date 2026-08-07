@@ -30,8 +30,26 @@ class Job(ABC):
     """
 
     name: ClassVar[str]
+    display_name: ClassVar[str]
     required: ClassVar[bool] = False
     CONFIG_SCHEMA: ClassVar[dict[str, Any]] = {}
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        """Default `display_name` to `name` for any job that does not declare one.
+
+        `name` is an identifier and cannot be prettified: it is the `sync_jobs` config
+        key, the module a job is imported from (`CORE-FR-JOB-LOAD`), the `job` field of
+        every log record (`LOG-FR-JSON`) and what `PKG-FR-JOB-ORDER`'s config error
+        names. `display_name` is the same job worded for a human and is read ONLY where
+        a human reads it — status line, progress bars, `Job outcomes:` block, review and
+        gate prose. Anything a machine matches on keeps `name`.
+
+        Defaulted here rather than at each read site so a job that has no better wording
+        (test fixtures) still answers `display_name`.
+        """
+        super().__init_subclass__(**kwargs)
+        if "display_name" not in cls.__dict__ and "name" in cls.__dict__:
+            cls.display_name = cls.name
 
     def __init__(self, context: JobContext) -> None:
         """Initialize job with context.
@@ -155,6 +173,7 @@ class Job(ABC):
         self.context.event_bus.publish(
             ProgressEvent(
                 job=self.name,
+                display_name=self.display_name,
                 update=update,
             )
         )

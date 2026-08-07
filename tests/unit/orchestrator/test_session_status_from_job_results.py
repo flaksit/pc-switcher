@@ -32,6 +32,7 @@ from pcswitcher.orchestrator import _summarize_job_outcomes
 def _job_result(job_name: str, status: JobStatus, error_message: str | None = None) -> JobResult:
     return JobResult(
         job_name=job_name,
+        job_display_name=job_name,
         status=status,
         started_at=datetime(2025, 1, 15, 10, 0, 0, tzinfo=UTC),
         ended_at=datetime(2025, 1, 15, 10, 1, 0, tzinfo=UTC),

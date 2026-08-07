@@ -222,14 +222,14 @@ GROUPS = [
 # the target, and a rehearsal that abbreviates that away cannot show whether the instructions
 # read well on screen — which is the one thing this harness exists to check.
 GATE_MESSAGE = build_esm_gate_message(
-    ("ubuntu-esm-apps.sources", "ubuntu-esm-infra.sources"), Machines(SOURCE_HOST, TARGET_HOST), "apt_sync"
+    ("ubuntu-esm-apps.sources", "ubuntu-esm-infra.sources"), Machines(SOURCE_HOST, TARGET_HOST), "Apt packages"
 )
 
 # `ask_gate` answers with a bare bool (or None), which says nothing on its own in a
 # rehearsal transcript. These are what each answer MEANS to the run.
 GATE_ANSWERS = {
-    True: "continue — apt_sync runs and re-checks the attachment",
-    False: "skip apt_sync this run — other jobs continue",
+    True: "continue — Apt packages runs and re-checks the attachment",
+    False: "skip Apt packages this run — other jobs continue",
     None: "not asked — no TTY, the caller owns the fallback",
 }
 
@@ -243,7 +243,7 @@ async def main() -> None:
             title=f"{TARGET_HOST} needs an Ubuntu Pro attachment",
             message=GATE_MESSAGE,
             proceed_label=f"I have attached {TARGET_HOST} — check again and continue",
-            stop_label="Skip apt_sync this run (every other job still runs)",
+            stop_label="Skip Apt packages this run (every other job still runs)",
             console=console,
             ui=ui,
         )

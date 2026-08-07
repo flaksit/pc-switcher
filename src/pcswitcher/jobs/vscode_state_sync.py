@@ -236,6 +236,7 @@ class VscodeStateSyncJob(SyncJob):
     """
 
     name: ClassVar[str] = "vscode_state_sync"
+    display_name: ClassVar[str] = "VS Code state"
 
     @classmethod
     @override
@@ -248,6 +249,7 @@ class VscodeStateSyncJob(SyncJob):
         """
         return FirstSyncScope(
             job_name=cls.name,
+            job_display_name=cls.display_name,
             scope_items=list(VSCODE_STATE_DB_RELPATHS),
             mechanism="sqlite merge + atomic mv",
         )

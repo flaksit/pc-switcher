@@ -142,6 +142,7 @@ class TestFR044OrchestratorForwardsProgress:
             """Job that reports progress during execution."""
 
             name = "progress_job"
+            display_name = "Progress job"
 
             async def validate(self) -> list[ValidationError]:
                 return []
@@ -163,6 +164,7 @@ class TestFR044OrchestratorForwardsProgress:
         first_event = first_call[0][0]
         assert isinstance(first_event, ProgressEvent)
         assert first_event.job == "progress_job"
+        assert first_event.display_name == "Progress job"
         assert first_event.update.percent == 50
         assert first_event.update.item == "Processing file.txt"
 
@@ -171,6 +173,7 @@ class TestFR044OrchestratorForwardsProgress:
         second_event = second_call[0][0]
         assert isinstance(second_event, ProgressEvent)
         assert second_event.job == "progress_job"
+        assert second_event.display_name == "Progress job"
         assert second_event.update.percent == 100
         assert second_event.update.item == "Complete"
 
@@ -189,12 +192,14 @@ class TestFR048LogSyncSummary:
         job_results: list[JobResult] = [
             JobResult(
                 job_name="job1",
+                job_display_name="Job one",
                 status=JobStatus.SUCCESS,
                 started_at=datetime(2025, 1, 15, 10, 0, 0, tzinfo=UTC),
                 ended_at=datetime(2025, 1, 15, 10, 1, 0, tzinfo=UTC),
             ),
             JobResult(
                 job_name="job2",
+                job_display_name="Job two",
                 status=JobStatus.SUCCESS,
                 started_at=datetime(2025, 1, 15, 10, 1, 0, tzinfo=UTC),
                 ended_at=datetime(2025, 1, 15, 10, 2, 30, tzinfo=UTC),
@@ -338,6 +343,7 @@ class TestEdgeCases:
         results.append(
             JobResult(
                 job_name=job1.name,
+                job_display_name=job1.display_name,
                 status=JobStatus.SUCCESS,
                 started_at=started_at,
                 ended_at=ended_at,
@@ -357,6 +363,7 @@ class TestEdgeCases:
             results.append(
                 JobResult(
                     job_name=job2.name,
+                    job_display_name=job2.display_name,
                     status=JobStatus.FAILED,
                     started_at=started_at,
                     ended_at=ended_at,

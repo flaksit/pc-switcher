@@ -156,7 +156,7 @@ Lineage: 001-US-9
 
 1. **Given** a job reports progress, **Then** the display shows that job's bar with percentage or item counts, and a spinner for heartbeat-only updates
 
-2. **Given** the job loop is running, **Then** the step counter reads `Step 10a/12`, `Step 10b/12`, … — one letter sub-step per job. The denominator is `len(SyncStep)` and is fixed regardless of how many jobs are enabled
+2. **Given** the job loop is running, **Then** the step counter reads `Step 10a/12`, `Step 10b/12`, … — one letter sub-step per job, labelled with the job's display name (`Step 10d/12 — Manual debs`). The denominator is `len(SyncStep)` and is fixed regardless of how many jobs are enabled
 
 3. **Given** a record at or above `logging.tui`, **Then** it appears in the Recent Logs panel, colour-coded by level; every record at or above WARNING is also captured and reprinted as an end-of-run summary block after the Live display stops
 
@@ -192,8 +192,11 @@ Lineage: 001-core edge cases, 003-core-tests edge cases
 
 #### Job Architecture
 
-- **CORE-FR-JOB-IFACE** `[Deliberate Simplicity]` `[Reliability Without Compromise]`: `Job` MUST define the whole orchestrator/job contract: the `name` and `required` ClassVars, the `CONFIG_SCHEMA` ClassVar, `validate_config()`, `validate()`, `execute()`, `_log()` and `_report_progress()`  
+- **CORE-FR-JOB-IFACE** `[Deliberate Simplicity]` `[Reliability Without Compromise]`: `Job` MUST define the whole orchestrator/job contract: the `name`, `display_name` and `required` ClassVars, the `CONFIG_SCHEMA` ClassVar, `validate_config()`, `validate()`, `execute()`, `_log()` and `_report_progress()`  
   Lineage: 001-FR-001
+
+- **CORE-FR-JOB-DISPLAY-NAME** `[Frictionless Command UX]`: Everything a human reads — the step label, the progress bars, the `Job outcomes:` block, the first-sync warning, the failure summary and the job-lifecycle log messages — MUST name a job by its `display_name`, which defaults to `name` when a job declares none. Everything a machine matches on — the `sync_jobs` key, the module path, the `job` field of a log record, `ConfigError.job`, `ValidationError.job`, the `active_job` trace label — MUST keep `name`, so improving the wording never invalidates a config or a log query  
+  Lineage: 02-UAT-02
 
 - **CORE-FR-LIFECYCLE** `[Reliability Without Compromise]`: The orchestrator MUST call `validate_config()` for every enabled job, then `validate()` for every job that passed, then `execute()` one job at a time in config order  
   Lineage: 001-FR-002
@@ -359,10 +362,10 @@ Lineage: 001-core Key Entities, 003-core-tests Key Entities
 
 Field-level definitions live in the [Data Model](data-model.md); this is the vocabulary.
 
-- **Job** — abstract base for every sync component. Subclasses: **SystemJob** (required, orchestrator-run), **SyncJob** (configurable through `sync_jobs`), **BackgroundJob** (runs concurrently in the job TaskGroup)
+- **Job** — abstract base for every sync component. Subclasses: **SystemJob** (required, orchestrator-run), **SyncJob** (configurable through `sync_jobs`), **BackgroundJob** (runs concurrently in the job TaskGroup). Named twice: `name` is the identifier, `display_name` the wording a user reads (`CORE-FR-JOB-DISPLAY-NAME`)
 - **JobContext** — everything a job is given: its config section, both executors, the event bus, session id, both hostnames, `dry_run`, `allow_first_sync`, the confirmer, the reviewer, the target username, and the full `sync_jobs` enablement map
 - **SyncSession** — one sync run: session id, timestamps, both hostnames, status and the collected `JobResult`s
-- **JobResult** — one job's outcome: name, SUCCESS/SKIPPED/FAILED, start and end timestamps, and an error or skip reason (see [Job outcomes](#job-outcomes))
+- **JobResult** — one job's outcome: both spellings of its name, SUCCESS/SKIPPED/FAILED, start and end timestamps, and an error or skip reason (see [Job outcomes](#job-outcomes))
 - **Snapshot** — a btrfs snapshot: subvolume, phase, UTC timestamp, session id, host and path; parseable back out of its path
 - **ProgressUpdate** — percentage, item counts, item description, heartbeat flag and optional sub-bar track
 - **Configuration** — the parsed and validated config: `logging`, `sync_jobs`, `disk`, `btrfs_snapshots` and the per-job sections
@@ -457,7 +460,7 @@ Two things still end the run: a `SyncLockedError`, because the machine is no lon
 
 The end-of-run message names each failed job with the reason it recorded, not the job names alone — one line per failed job, so a job that names forty failed items still costs one line. That message is the session's own record: it is logged and stored on the session, and it is what the exit code is derived from.
 
-What the user reads is the outcome block the run prints last, beside the warning summary and after the live display has stopped. It gives one line per job in execution order — a mark, the job name, its status, and for SKIPPED and FAILED the reason that job recorded. It is the only place outcomes are printed: the same failures rendered twice in two shapes read as two different things having gone wrong. It is printed for every ending, not only a clean one, because an aborted or interrupted run still did whatever it did before it stopped. Reasons quote text pc-switcher did not author — package-manager stderr, file paths — so they are rendered literally rather than as Rich markup, where `[installed]` would silently vanish and `[/usr/bin/apt]` would crash the run after all its work was done.
+What the user reads is the outcome block the run prints last, beside the warning summary and after the live display has stopped. It gives one line per job in execution order — a mark, the job's display name, its status, and for SKIPPED and FAILED the reason that job recorded. It is the only place outcomes are printed: the same failures rendered twice in two shapes read as two different things having gone wrong. It is printed for every ending, not only a clean one, because an aborted or interrupted run still did whatever it did before it stopped. Reasons quote text pc-switcher did not author — package-manager stderr, file paths — so they are rendered literally rather than as Rich markup, where `[installed]` would silently vanish and `[/usr/bin/apt]` would crash the run after all its work was done.
 
 Dry-run is not a reason to report SKIPPED on its own: a rehearsal that completes did succeed. A rehearsal that hits one of the situations above is skipped like any other run.
 

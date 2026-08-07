@@ -344,7 +344,7 @@ def _summarize_job_outcomes(job_results: list[JobResult]) -> tuple[SessionStatus
     failures = [r for r in job_results if r.status is JobStatus.FAILED]
     if not failures:
         return SessionStatus.COMPLETED, None
-    lines = [f"{r.job_name} — {r.error_message or 'no reason recorded'}" for r in failures]
+    lines = [f"{r.job_display_name} — {r.error_message or 'no reason recorded'}" for r in failures]
     return SessionStatus.FAILED, "\n".join(lines)
 
 
@@ -868,6 +868,7 @@ class Orchestrator:
             self._job_results.append(
                 JobResult(
                     job_name=install_job.name,
+                    job_display_name=install_job.display_name,
                     status=JobStatus.SKIPPED,
                     started_at=started_at,
                     ended_at=datetime.now(UTC),
@@ -876,7 +877,7 @@ class Orchestrator:
             )
             self._logger.warning(
                 "Job %s skipped: %s",
-                e.job_name,
+                install_job.display_name,
                 e.reason,
                 extra={"job": "orchestrator", "host": "target"},
             )
@@ -884,6 +885,7 @@ class Orchestrator:
             self._job_results.append(
                 JobResult(
                     job_name=install_job.name,
+                    job_display_name=install_job.display_name,
                     status=JobStatus.SUCCESS,
                     started_at=started_at,
                     ended_at=datetime.now(UTC),
@@ -1028,7 +1030,8 @@ class Orchestrator:
         scopes = self._first_sync_scopes()
         if scopes:
             scope_line = "\n\n".join(
-                f"  {scope.job_name} ({scope.mechanism}):\n" + "\n".join(f"    {item}" for item in scope.scope_items)
+                f"  {scope.job_display_name} ({scope.mechanism}):\n"
+                + "\n".join(f"    {item}" for item in scope.scope_items)
                 for scope in scopes
             )
         else:
@@ -1254,6 +1257,9 @@ class Orchestrator:
                 unresolved.append(
                     JobResult(
                         job_name=job_name,
+                        # No class resolved, so no `display_name` to ask for: the config
+                        # key is all this run knows the job by.
+                        job_display_name=job_name,
                         status=JobStatus.SKIPPED,
                         started_at=now,
                         ended_at=now,
@@ -1500,18 +1506,22 @@ class Orchestrator:
                 for job_index, job in enumerate(jobs):
                     # Jobs are sub-steps of SyncStep.RUN_JOBS, sub-labelled 10a, 10b, …
                     # (letters suffice for any realistic job count; fall back to a
-                    # numeric suffix past 'z'), labelled with the job name so the TUI
-                    # shows what is running.
+                    # numeric suffix past 'z'), labelled with the job's display name so
+                    # the TUI shows what is running as the user knows it.
                     substep = chr(ord("a") + job_index) if job_index < 26 else str(job_index + 1)
-                    self._ui.set_current_step(SyncStep.RUN_JOBS, job.name, substep=substep)
+                    self._ui.set_current_step(SyncStep.RUN_JOBS, job.display_name, substep=substep)
                     started_at = datetime.now(UTC)
                     try:
+                        # These four lifecycle lines are read in the Recent Logs panel, so
+                        # their message names the job the way the user knows it; the
+                        # structured `job` field stays the identifier a log filter matches.
+                        #
                         # Tagged with the job's own name, not "orchestrator": this line opens
                         # the run of log lines the job itself emits, so it reads as the first
                         # of them rather than as a separate orchestrator remark.
                         self._logger.info(
                             "Job %s started",
-                            job.name,
+                            job.display_name,
                             extra={"job": job.name, "host": "source"},
                         )
                         # Labels this job's executor traffic in the debug trace (#210) and
@@ -1523,6 +1533,7 @@ class Orchestrator:
                         results.append(
                             JobResult(
                                 job_name=job.name,
+                                job_display_name=job.display_name,
                                 status=JobStatus.SUCCESS,
                                 started_at=started_at,
                                 ended_at=ended_at,
@@ -1530,7 +1541,7 @@ class Orchestrator:
                         )
                         self._logger.info(
                             "Job %s completed successfully",
-                            job.name,
+                            job.display_name,
                             extra={"job": "orchestrator", "host": "source"},
                         )
 
@@ -1551,6 +1562,7 @@ class Orchestrator:
                         results.append(
                             JobResult(
                                 job_name=job.name,
+                                job_display_name=job.display_name,
                                 status=JobStatus.SKIPPED,
                                 started_at=started_at,
                                 ended_at=ended_at,
@@ -1559,7 +1571,7 @@ class Orchestrator:
                         )
                         self._logger.warning(
                             "Job %s skipped: %s",
-                            job.name,
+                            job.display_name,
                             e.reason,
                             extra={"job": "orchestrator", "host": "source"},
                         )
@@ -1568,6 +1580,7 @@ class Orchestrator:
                         results.append(
                             JobResult(
                                 job_name=job.name,
+                                job_display_name=job.display_name,
                                 status=JobStatus.FAILED,
                                 started_at=started_at,
                                 ended_at=ended_at,
@@ -1576,7 +1589,7 @@ class Orchestrator:
                         )
                         self._logger.critical(
                             "Job %s failed: %s",
-                            job.name,
+                            job.display_name,
                             e,
                             extra={"job": "orchestrator", "host": "source"},
                         )
@@ -2320,7 +2333,7 @@ class Orchestrator:
             reason = result.error_message if result.status is not JobStatus.SUCCESS else None
             grid.add_row(
                 Text(f"  {glyph}", style=style),
-                Text(result.job_name),
+                Text(result.job_display_name),
                 Text(result.status.value, style=style),
                 Text(reason, style="dim") if reason else "",
             )

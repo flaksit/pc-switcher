@@ -59,6 +59,7 @@ class ManualSnapSyncJob(UnreproducibleSyncJob):
     """
 
     name: ClassVar[str] = "manual_snap_sync"
+    display_name: ClassVar[str] = "Sideloaded snaps"
     manager_id: ClassVar[str] = "manual_snap"
 
     # No configurable properties: mirrors SnapSyncJob's empty schema — only the enable flag
@@ -247,6 +248,7 @@ class ManualSnapSyncJob(UnreproducibleSyncJob):
         snippets for sideloaded snaps, and removing the ones the source has dropped."""
         return FirstSyncScope(
             job_name=cls.name,
+            job_display_name=cls.display_name,
             scope_items=[
                 "sideloaded snaps (via recorded install snippets)",
                 "sideloaded snaps the source no longer has (snap remove)",

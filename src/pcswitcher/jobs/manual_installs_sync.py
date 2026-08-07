@@ -164,6 +164,7 @@ class ManualInstallsSyncJob(UnreproducibleSyncJob):
     """
 
     name: ClassVar[str] = "manual_installs_sync"
+    display_name: ClassVar[str] = "Manually installed apps"
     manager_id: ClassVar[str] = "manual"
 
     # No configurable properties: mirrors AptSyncJob's empty schema — only the enable flag
@@ -539,6 +540,7 @@ class ManualInstallsSyncJob(UnreproducibleSyncJob):
         the source has dropped."""
         return FirstSyncScope(
             job_name=cls.name,
+            job_display_name=cls.display_name,
             scope_items=[
                 "unowned installs under /usr/local and /opt (via recorded install snippets)",
                 "unowned paths under /usr/local and /opt the source no longer has (rm --recursive --force)",

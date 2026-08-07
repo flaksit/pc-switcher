@@ -1353,6 +1353,7 @@ class FlatpakSyncJob(PackageSyncJob):
     """
 
     name: ClassVar[str] = "flatpak_sync"
+    display_name: ClassVar[str] = "Flatpaks"
     manager_id: ClassVar[str] = "flatpak"
 
     # No configurable properties: mirrors AptSyncJob/SnapSyncJob's empty schema — only
@@ -2875,6 +2876,7 @@ class FlatpakSyncJob(PackageSyncJob):
         """Name this job's destructive first-sync scope (ADR-015): flatpak refs, remotes and masks."""
         return FirstSyncScope(
             job_name=cls.name,
+            job_display_name=cls.display_name,
             scope_items=[
                 "installed flatpak refs (per user/system scope)",
                 "flatpak mask patterns (per scope)",

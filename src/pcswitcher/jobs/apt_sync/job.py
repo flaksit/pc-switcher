@@ -98,6 +98,7 @@ class AptSyncJob(PackageSyncJob):
     """
 
     name: ClassVar[str] = "apt_sync"
+    display_name: ClassVar[str] = "Apt packages"
     manager_id: ClassVar[str] = "apt"
 
     # No configurable properties yet: this slice needs nothing beyond the enable flag in
@@ -119,7 +120,7 @@ class AptSyncJob(PackageSyncJob):
             probe=self._probe,
             machines=self.machines,
             job_name=self.name,
-            manager_id=self.manager_id,
+            job_display_name=self.display_name,
             log=self._log,
         )
         # `{filename: RepoConflict}` for the differing repository files that feed
@@ -1171,6 +1172,7 @@ class AptSyncJob(PackageSyncJob):
         """Name this job's destructive first-sync scope (ADR-015): the manual-install set."""
         return FirstSyncScope(
             job_name=cls.name,
+            job_display_name=cls.display_name,
             scope_items=["apt packages (manually-installed set)"],
             mechanism="apt-get install/remove per item, after review",
         )

@@ -40,13 +40,15 @@ class EsmGate:
         probe: AptProbe,
         machines: Machines,
         job_name: str,
-        manager_id: str,
+        job_display_name: str,
         log: Log,
     ) -> None:
         self._probe = probe
         self._machines = machines
+        # Both spellings: the identifier goes into the `JobSkipped` this gate raises, the
+        # display name into every sentence the user reads here.
         self._job_name = job_name
-        self._manager_id = manager_id
+        self._job_display_name = job_display_name
         self._log = log
         # ESM sources the gate held back. Only ever non-empty under `--dry-run`: a real
         # unattached run raises `JobSkipped` instead of writing a subset (`PKG-FR-DISTRO-FILES`).
@@ -125,22 +127,23 @@ class EsmGate:
                 Host.TARGET,
                 LogLevel.WARNING,
                 f"[dry-run] {self._machines.target} reports no Ubuntu Pro attachment, so {named} would not be "
-                f"written: a real run would skip {self._job_name} entirely and leave every other job running.",
+                f"written: a real run would skip {self._job_display_name} entirely and leave every other job "
+                "running.",
             )
             return False
 
         assert context.reviewer is not None, (
-            f"{self._manager_id} sync has no reviewer; the orchestrator must inject one "
+            f"{self._job_name} has no reviewer; the orchestrator must inject one "
             "through JobContext.reviewer before plan()."
         )
         target = self._machines.target
-        message = build_esm_gate_message(esm_files, self._machines, self._job_name)
+        message = build_esm_gate_message(esm_files, self._machines, self._job_display_name)
         while True:
             answer = await context.reviewer.ask_gate(
                 title=f"{target} needs an Ubuntu Pro attachment",
                 message=message,
                 proceed_label=f"I have attached {target} — check again and continue",
-                stop_label=f"Skip {self._job_name} this run (every other job still runs)",
+                stop_label=f"Skip {self._job_display_name} this run (every other job still runs)",
             )
             if answer is None:
                 raise JobSkipped(
