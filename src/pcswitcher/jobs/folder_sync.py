@@ -196,6 +196,7 @@ class FolderSyncJob(SyncJob):
     """
 
     name: ClassVar[str] = "folder_sync"
+    display_name: ClassVar[str] = "Folder sync"
 
     CONFIG_SCHEMA: ClassVar[dict[str, Any]] = {
         "type": "object",
@@ -305,6 +306,7 @@ class FolderSyncJob(SyncJob):
             return None
         return FirstSyncScope(
             job_name=cls.name,
+            job_display_name=cls.display_name,
             scope_items=paths,
             mechanism="rsync --delete",
         )

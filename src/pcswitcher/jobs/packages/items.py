@@ -23,17 +23,51 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Literal
 
 from pcswitcher.redaction import redact_credentials
 
 __all__ = [
+    "UNOWNED_PATH_ORIGIN",
     "DiffAction",
     "DiffClass",
     "ItemClass",
     "ItemDiff",
     "Machines",
+    "UnreproducibleOrigin",
     "build_version_mismatch_detail",
+    "carries_version_body",
+    "unreproducible_id_prefix",
 ]
+
+#: The origins an `UnreproducibleItem` can be found under. One per detector, and part of
+#: identity rather than a field alongside it — see `UnreproducibleItem`.
+UnreproducibleOrigin = Literal["apt-no-candidate", "flatpak-no-remote", "unowned-path", "snap-sideload"]
+
+#: The one origin no package manager can be asked for a version: an install under a path
+#: nobody owns. Only its registry entry carries an installed-version body
+#: (`ADR-020-D-UNREPRODUCIBLE-ITEMS`, `PKG-FR-VERSION-SNIPPET`).
+UNOWNED_PATH_ORIGIN: UnreproducibleOrigin = "unowned-path"
+
+
+def unreproducible_id_prefix(origin: UnreproducibleOrigin) -> str:
+    """What every `item_id` of one origin starts with, so a caller matching on origin
+    (a job picking its own items out of a decision file that also holds another job's)
+    builds the prefix from the same expression `item_id` does.
+    """
+    return f"unreproducible:{origin}:"
+
+
+def carries_version_body(item_id: str) -> bool:
+    """Whether this item's registry entry carries an installed-version body — true for an
+    unowned path and false for the three kinds a package manager tracks
+    (`PKG-FR-MANUAL-VERSION`, `PKG-FR-VERSION-SNIPPET`).
+
+    Read off the `item_id` rather than passed in, because the two places that must agree —
+    the parse that reads a registry file and the review that authors an entry — hold an id
+    and nothing else. Origin is inside identity (`UnreproducibleItem`), so the id is enough.
+    """
+    return item_id.startswith(unreproducible_id_prefix(UNOWNED_PATH_ORIGIN))
 
 
 @dataclass(frozen=True)

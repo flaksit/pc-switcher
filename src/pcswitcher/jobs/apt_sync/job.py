@@ -45,6 +45,7 @@ from pcswitcher.jobs.apt_sync.items import (
     REPO_GROUP_CLASSES,
     REPO_REMOVAL_VERBS,
     UNRECORDABLE_ITEM_ID_PREFIXES,
+    config_filename,
     is_collateral_diff,
     is_repo_removal_diff,
     package_name,
@@ -65,6 +66,7 @@ from pcswitcher.jobs.packages.review import (
     ReviewEntry,
     ReviewGroup,
     ReviewOutcome,
+    change_title,
 )
 from pcswitcher.jobs.packages.state import DecisionEntry, filter_inert, marks_on_either
 from pcswitcher.jobs.packages.sync_core import ConvergeItemFailed, PackagePlan, PackageSyncJob
@@ -98,7 +100,10 @@ class AptSyncJob(PackageSyncJob):
     """
 
     name: ClassVar[str] = "apt_sync"
+    display_name: ClassVar[str] = "Apt packages"
     manager_id: ClassVar[str] = "apt"
+    item_noun: ClassVar[str] = "apt package"
+    item_noun_plural: ClassVar[str] = "apt packages"
 
     # No configurable properties yet: this slice needs nothing beyond the enable flag in
     # sync_jobs. `enabled_item_classes`-style filtering is premature until more item
@@ -119,7 +124,7 @@ class AptSyncJob(PackageSyncJob):
             probe=self._probe,
             machines=self.machines,
             job_name=self.name,
-            manager_id=self.manager_id,
+            job_display_name=self.display_name,
             log=self._log,
         )
         # `{filename: RepoConflict}` for the differing repository files that feed
@@ -134,6 +139,11 @@ class AptSyncJob(PackageSyncJob):
         # `diff_apt_pins` and shown whole on that screen — a pin filename alone gives the
         # user nothing to decide from.
         self._pin_contents: dict[str, str] = {}
+        # `{filename: (the target's body, the source's body)}` for the `apt.conf.d` files
+        # both machines have with different content, read by `diff_apt_configs` and printed
+        # whole on the screen that offers the overwrite — target-first, the order
+        # `ReviewEntry.versions` is defined in.
+        self._conf_bodies: dict[str, tuple[str, str]] = {}
         # `{package name: the version the SOURCE holds it at}` for the packages this run
         # proposes to install and the source holds (`PKG-FR-APT-HOLD-VERSION`).
         self._held_versions: dict[str, str] = {}
@@ -356,13 +366,20 @@ class AptSyncJob(PackageSyncJob):
         # unmatched — an install of a package the target already has, or a removal of one
         # the source still has.
         marked = marks_on_either(source_decisions, target_decisions)
-        captured, source_origins = await self._probe.capture_source_items()
-        source_items = await filter_inert(captured, marked)
-        # Both manifests drop the hand-`.deb` installs `manual_installs_sync` owns before
-        # anything is diffed (`PKG-FR-DEB-OWNERSHIP`), and the target's exclusion rides in
-        # the same batched policy call that answers this run's origin questions.
+        captured, source_origins, source_no_repository = await self._probe.capture_source_items()
+        # ONE verdict per NAME, applied to BOTH manifests (`PKG-FR-DEB-OWNERSHIP`): the
+        # source's answer decides for every name the source HAS, and only a name the source
+        # does not have is decided by the target's own. Asking each machine separately gives
+        # one name two verdicts, and a name withheld from one manifest while the other keeps
+        # it is exactly a removal — which is what an installed version the archive had
+        # superseded produced on whichever machine lagged a phased update (#285).
+        source_names = {item.name for item in captured}
+        source_items = [item for item in await filter_inert(captured, marked) if item.name not in source_no_repository]
+        # The target is asked about the surviving source names only: a name already withheld
+        # must reach no downstream target read, the policy probe included.
         target_captured, policy = await self._probe.capture_target_items([item.name for item in source_items])
-        target_items = await filter_inert(target_captured, marked)
+        withheld = source_no_repository | {n for n in policy.no_repository_can_install if n not in source_names}
+        target_items = [item for item in await filter_inert(target_captured, marked) if item.name not in withheld]
         source_hold_names, target_hold_names = await self._probe.collect_hold_sets()
         await self._refuse_holds_without_their_package(source_hold_names, target_hold_names)
         origin_plan = origins.classify(source_items, target_items, policy, source_origins)
@@ -655,7 +672,14 @@ class AptSyncJob(PackageSyncJob):
             self._probe.target_run, source_repo.pin_digests, target_repo.pin_digests, self.machines
         )
         diffs.extend(pin_diffs)
-        diffs.extend(diff_apt_configs(source_repo.conf_digests, target_repo.conf_digests, self.machines))
+        config_diffs, self._conf_bodies = await diff_apt_configs(
+            self._probe.source_run,
+            self._probe.target_run,
+            source_repo.conf_digests,
+            target_repo.conf_digests,
+            self.machines,
+        )
+        diffs.extend(config_diffs)
         return diffs
 
     @override
@@ -695,6 +719,19 @@ class AptSyncJob(PackageSyncJob):
             groups.append(self._collateral_group(collateral))
         return tuple(groups)
 
+    @override
+    def _entry_versions(self, diff: ItemDiff) -> tuple[str, str] | None:
+        """Both machines' bodies for an `apt.conf.d` file they disagree about, so the row
+        that offers the overwrite prints the two files instead of their digests (#277).
+
+        Only the CHANGE direction has a pair: `_conf_bodies` holds exactly the files
+        `diff_apt_configs` found changed, so an addition or a deletion looks itself up and
+        finds nothing.
+        """
+        if diff.item_class is not ItemClass.APT_CONFIG:
+            return None
+        return self._conf_bodies.get(config_filename(diff.item_id))
+
     def _repo_removal_groups(self, removals: Sequence[ItemDiff], *classes: ItemClass) -> list[ReviewGroup]:
         """The two-answer deletion screens for the named `/etc/apt` classes, in
         `REPO_REMOVAL_VERBS` order.
@@ -717,7 +754,7 @@ class AptSyncJob(PackageSyncJob):
                     action=REPO_REMOVAL_REVIEW_ACTION,
                     # The manager belongs INSIDE the sentence — "apt repositories" is what
                     # the files are, while a trailing "(apt)" reads as a tag on the question.
-                    title=f"Delete {self.manager_id} {words.plural} {self.machines.source} no longer has",
+                    title=change_title("delete", words.plural, self.machines.target),
                     entries=tuple(
                         ReviewEntry(
                             item_id=diff.item_id,
@@ -757,7 +794,7 @@ class AptSyncJob(PackageSyncJob):
         return ReviewGroup(
             manager=self.manager_id,
             action=REPO_CONFLICT_REVIEW_ACTION,
-            title=f"Resolve {self.manager_id} repository conflicts",
+            title=change_title("resolve", "apt repository conflicts", self.machines.target),
             entries=tuple(
                 ReviewEntry(
                     item_id=f"{CONFLICT_ID_PREFIX}{filename}",
@@ -1171,6 +1208,7 @@ class AptSyncJob(PackageSyncJob):
         """Name this job's destructive first-sync scope (ADR-015): the manual-install set."""
         return FirstSyncScope(
             job_name=cls.name,
+            job_display_name=cls.display_name,
             scope_items=["apt packages (manually-installed set)"],
             mechanism="apt-get install/remove per item, after review",
         )

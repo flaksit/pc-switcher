@@ -184,6 +184,7 @@ from tests.integration.jobs.package_sync_scenario import (
     install_local_deb,
     install_snippet_body,
     installed_base_snap,
+    job_display_name,
     job_outcome_statuses,
     machine_utc_now,
     marker_version,
@@ -770,7 +771,8 @@ class TestARunWithNobodyToAsk:
                     f"{direction}-direction item {candidate} was not named as declined for this run.\n"
                     f"{combined_output}"
                 )
-            assert "Job apt_sync skipped: non-interactive run left every apt review item undecided" in collapsed, (
+            skipped_line = "Job Apt packages skipped: non-interactive run left every apt package review item undecided"
+            assert skipped_line in collapsed, (
                 f"the run did not report apt_sync as skipped (PKG-FR-NO-TERMINAL).\n{combined_output}"
             )
             # The same two skips again, read off the end-of-run block rather than the log
@@ -779,11 +781,13 @@ class TestARunWithNobodyToAsk:
             # only the block carries `install_on_target` — which every run in this module
             # skips, and which recorded no JobResult at all before it did.
             outcomes = job_outcome_statuses(combined_output)
-            assert outcomes.get("apt_sync") == "skipped", (
-                f"the outcome block reports apt_sync as {outcomes.get('apt_sync')!r}.\n{combined_output}"
+            apt_outcome = outcomes.get(job_display_name("apt_sync"))
+            assert apt_outcome == "skipped", (
+                f"the outcome block reports apt_sync as {apt_outcome!r}.\n{combined_output}"
             )
-            assert outcomes.get("install_on_target") == "skipped", (
-                f"the outcome block reports install_on_target as {outcomes.get('install_on_target')!r}; the step "
+            install_outcome = outcomes.get(job_display_name("install_on_target"))
+            assert install_outcome == "skipped", (
+                f"the outcome block reports install_on_target as {install_outcome!r}; the step "
                 f"records a JobResult whether or not it runs.\n{combined_output}"
             )
 
@@ -804,7 +808,7 @@ class TestARunWithNobodyToAsk:
             # any report group at all. The discriminating pair: a VERSION_MISMATCH -- what
             # this diverged pair would produce if the vendor comparison missed -- names two
             # versions and no URL at all.
-            assert "Installed from different remotes (flatpak applications)" in collapsed, (
+            assert "Installed from different remotes (flatpaks)" in collapsed, (
                 f"the mismatch reached no origin-mismatch review group.\n{combined_output}"
             )
             assert ref in combined_output, f"the report does not name the ref {ref}.\n{combined_output}"
@@ -1594,7 +1598,7 @@ class TestAFailureCostsItsOwnItemAndNothingElse:
                 "the run failed, but not on this test's deliberate snippet -- it ended before reaching it.\n"
                 f"stdout: {sync_result.stdout}\nstderr: {sync_result.stderr}"
             )
-            assert "1 snap item(s) failed" in collapsed, (
+            assert "1 snap failed" in collapsed, (
                 f"the run did not report exactly one failed snap item.\n{sync_result.stdout}\n{sync_result.stderr}"
             )
 
@@ -1603,7 +1607,11 @@ class TestAFailureCostsItsOwnItemAndNothingElse:
             # approved work landed anyway. A block that named only the failures would read as
             # "the run failed" and lose exactly what `PKG-FR-OUTCOME-FAILED` promises.
             outcomes = job_outcome_statuses(sync_result.stdout + sync_result.stderr)
-            assert (outcomes.get("manual_installs_sync"), outcomes.get("snap_sync"), outcomes.get("apt_sync")) == (
+            assert (
+                outcomes.get(job_display_name("manual_installs_sync")),
+                outcomes.get(job_display_name("snap_sync")),
+                outcomes.get(job_display_name("apt_sync")),
+            ) == (
                 "failed",
                 "failed",
                 "success",
@@ -1730,7 +1738,9 @@ class TestTheESMAttachmentGateOnVMs:
             )
 
             combined_output = sync_result.stdout + sync_result.stderr
-            assert "apt_sync skipped" in combined_output, f"apt_sync was not reported as skipped.\n{combined_output}"
+            assert "Job Apt packages skipped:" in combined_output, (
+                f"apt_sync was not reported as skipped.\n{combined_output}"
+            )
             for name in ESM_SOURCE_BODIES:
                 assert name in combined_output, f"the skip reason does not name {name}.\n{combined_output}"
             assert "snap_sync" in combined_output, (
@@ -1869,8 +1879,9 @@ class TestTheCommandLineAnswersOneDirectionOfTheReview:
             f"record an item as specific to a machine"
         )
         outcomes = job_outcome_statuses(first.stdout + first.stderr)
-        assert outcomes.get("apt_sync") == "success", (
-            f"apt_sync is {outcomes.get('apt_sync')!r} in the outcome block, not success: a no-terminal run whose "
+        apt_outcome = outcomes.get(job_display_name("apt_sync"))
+        assert apt_outcome == "success", (
+            f"apt_sync is {apt_outcome!r} in the outcome block, not success: a no-terminal run whose "
             f"review the command line answered converged something, so skipped would misreport it. {outcomes}\n"
             f"stdout: {first.stdout}\nstderr: {first.stderr}"
         )
@@ -2828,9 +2839,9 @@ class TestOneManagerAtATime:
             )
 
             collapsed = collapse_run_output(fifth.stdout + fifth.stderr)
-            for manager in ("apt", "snap", "flatpak", "manual"):
-                assert f"No {manager} changes to apply" in collapsed, (
-                    f"{manager} did not report that it had nothing to apply.\n{collapsed}"
+            for noun_plural in ("apt packages", "snaps", "flatpaks", "manually installed apps"):
+                assert f"No {noun_plural} to change" in collapsed, (
+                    f"{noun_plural} did not report that there was nothing to apply.\n{collapsed}"
                 )
             # `reviewed <label> (` is the phrase the review's own decision pass logs per item,
             # and the whole phrase is the witness on both counts. `collapse_run_output` returns

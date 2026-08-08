@@ -149,7 +149,6 @@ class TestPromptingSnippetCannotHang:
             f"  {item_id}:\n"
             "    label: brother-driver (no apt candidate)\n"
             f"    install_body: {body}\n"
-            "    version_body: echo v\n"
             "    authored_at: '2026-01-01T00:00:00+00:00'\n"
             "    authored_on: laptop\n"
         )
@@ -314,7 +313,7 @@ class TestPermanentMarkWrites:
         writes = decision_file_writes(source, "manual_deb")
         assert len(writes) == 1
         assert item_id in writes[0]
-        assert "brscan3 (installed from no configured repository)" in writes[0]
+        assert "brscan3 (1.0)" in writes[0]
         assert decision_file_writes(target, "manual_deb") == []
 
     @pytest.mark.asyncio
@@ -438,11 +437,10 @@ class TestSameRunApplication:
             f"  {item_id}:\n"
             "    label: falco-app (no apt candidate)\n"
             f"    install_body: {body}\n"
-            "    version_body: echo v\n"
             "    authored_at: '2026-01-01T00:00:00+00:00'\n"
             "    authored_on: laptop\n"
         )
-        reviewer = FakeReviewer(snippets={item_id: SnippetBodies(install_body=body, version_body="echo v")})
+        reviewer = FakeReviewer(snippets={item_id: SnippetBodies(install_body=body)})
         context, _source, target = make_context(
             source_responses={
                 STATUS_QUERY: installed_on("falco-app"),
@@ -522,7 +520,7 @@ class TestClassificationAuthority:
         `package-snippets.yaml`) runs — a rehearsal leaves no trace and touches nothing."""
         item_id = "unreproducible:apt-no-candidate:falco-app"
         body = "sudo dpkg --install /tmp/falco.deb"
-        reviewer = FakeReviewer(snippets={item_id: SnippetBodies(install_body=body, version_body="echo v")})
+        reviewer = FakeReviewer(snippets={item_id: SnippetBodies(install_body=body)})
         context, source, target = make_context(
             source_responses={
                 STATUS_QUERY: installed_on("falco-app"),
@@ -538,7 +536,7 @@ class TestClassificationAuthority:
             await job.execute()  # must not raise
 
         # Promoted: previewed as an install rather than reported as no-change.
-        assert "Applying 1 manual_deb change(s)" in caplog.text
+        assert "Applying 1 change to manual debs" in caplog.text
         # No replay reached the target and no source registry write happened.
         assert not [c.args[0] for c in target.run_command.call_args_list if c.args[0].startswith("bash -c")]
         source_writes = [
@@ -569,7 +567,7 @@ class TestClassificationAuthority:
         with caplog.at_level(logging.DEBUG):
             await job.execute()
 
-        assert "Would install brscan3 (installed from no configured repository)" in caplog.text
+        assert "Would install brscan3 (1.0)" in caplog.text
         assert not [cmd for cmd in all_calls(target) if cmd.startswith("bash -c")]
 
 
@@ -664,13 +662,11 @@ class TestContinueOnFailure:
             "  unreproducible:apt-no-candidate:brscan3:\n"
             "    label: brscan3 (no apt candidate)\n"
             "    install_body: sudo dpkg --install /tmp/brscan3.deb\n"
-            "    version_body: echo v\n"
             "    authored_at: '2026-01-01T00:00:00+00:00'\n"
             "    authored_on: laptop\n"
             "  unreproducible:apt-no-candidate:cnpg:\n"
             "    label: cnpg (no apt candidate)\n"
             "    install_body: sudo dpkg --install /tmp/cnpg.deb\n"
-            "    version_body: echo v\n"
             "    authored_at: '2026-01-01T00:00:00+00:00'\n"
             "    authored_on: laptop\n"
         )
@@ -714,7 +710,6 @@ class TestContinueOnFailure:
             "  unreproducible:apt-no-candidate:brscan3:\n"
             "    label: brscan3 (no apt candidate)\n"
             "    install_body: sudo dpkg --install /tmp/brscan3.deb\n"
-            "    version_body: echo v\n"
             "    authored_at: '2026-01-01T00:00:00+00:00'\n"
             "    authored_on: laptop\n"
         )
@@ -935,7 +930,6 @@ class TestSnippetPush:
             f"  {item_id}:\n"
             "    label: falco-app (no apt candidate)\n"
             f"    install_body: {body}\n"
-            "    version_body: echo v\n"
             "    authored_at: '2026-01-01T00:00:00+00:00'\n"
             "    authored_on: laptop\n"
         )
@@ -949,7 +943,7 @@ class TestSnippetPush:
                 "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(0, target_registry_yaml, ""),
                 f"bash -c '{body}'": CommandResult(0, "falco installed\n", ""),
             },
-            reviewer=FakeReviewer(snippets={item_id: SnippetBodies(install_body=body, version_body="echo v")}),
+            reviewer=FakeReviewer(snippets={item_id: SnippetBodies(install_body=body)}),
         )
         job = ManualDebSyncJob(context)
 
@@ -968,7 +962,6 @@ class TestSnippetPush:
             "  unreproducible:apt-no-candidate:cnpg:\n"
             "    label: cnpg (no apt candidate)\n"
             "    install_body: sudo dpkg --install /tmp/cnpg.deb\n"
-            "    version_body: echo v\n"
             "    authored_at: '2026-01-01T00:00:00+00:00'\n"
             "    authored_on: laptop\n"
         )
@@ -1052,9 +1045,7 @@ class TestSnippetPush:
             ReviewOutcome(
                 decisions={item_id: Decision.SKIP_ONCE},
                 was_interactive=True,
-                snippets={
-                    item_id: SnippetBodies(install_body="sudo dpkg --install /tmp/brscan3.deb", version_body="echo v")
-                },
+                snippets={item_id: SnippetBodies(install_body="sudo dpkg --install /tmp/brscan3.deb")},
             ),
         )
         await job.after_review()
@@ -1113,7 +1104,6 @@ TARGET_WITH_EXTRA_YAML = BRSCAN3_REGISTRY_YAML + (
     "  unreproducible:apt-no-candidate:cnpg:\n"
     "    label: cnpg (no apt candidate)\n"
     "    install_body: sudo dpkg --install /tmp/cnpg.deb\n"
-    "    version_body: echo v\n"
     "    authored_at: '2026-01-01T00:00:00+00:00'\n"
     "    authored_on: workstation\n"
 )
@@ -1124,7 +1114,6 @@ SOURCE_WITH_CREDENTIAL_YAML = BRSCAN3_REGISTRY_YAML + (
     "  unreproducible:apt-no-candidate:acme-agent:\n"
     "    label: acme-agent (no apt candidate)\n"
     "    install_body: curl --output /tmp/a.deb https://bearer:s0urce-token@dl.example.test/acme-2.deb\n"
-    "    version_body: echo v\n"
     "    authored_at: '2026-01-01T00:00:00+00:00'\n"
     "    authored_on: laptop\n"
 )
@@ -1133,7 +1122,6 @@ TARGET_WITH_CREDENTIAL_YAML = BRSCAN3_REGISTRY_YAML + (
     "  unreproducible:apt-no-candidate:acme-agent:\n"
     "    label: acme-agent (no apt candidate)\n"
     "    install_body: curl --output /tmp/a.deb https://bearer:t4rget-token@dl.example.test/acme-1.deb\n"
-    "    version_body: echo v\n"
     "    authored_at: '2026-01-01T00:00:00+00:00'\n"
     "    authored_on: workstation\n"
 )
@@ -1156,7 +1144,6 @@ TARGET_CHANGED_BODY_YAML = (
     "  unreproducible:apt-no-candidate:brscan3:\n"
     "    label: brscan3 (no apt candidate)\n"
     "    install_body: sudo dpkg --install /tmp/brscan3-OLD.deb\n"
-    "    version_body: echo v\n"
     "    authored_at: '2026-01-01T00:00:00+00:00'\n"
     "    authored_on: workstation\n"
 )
@@ -1168,7 +1155,6 @@ TARGET_SAME_BODY_OTHER_AUTHORING_YAML = (
     "  unreproducible:apt-no-candidate:brscan3:\n"
     "    label: brscan3 (no apt candidate)\n"
     "    install_body: sudo dpkg --install /tmp/brscan3.deb\n"
-    "    version_body: echo v\n"
     "    authored_at: '2025-06-30T09:15:00+00:00'\n"
     "    authored_on: workstation\n"
 )
@@ -1179,7 +1165,6 @@ TARGET_SAME_BODY_OTHER_LABEL_YAML = (
     "  unreproducible:apt-no-candidate:brscan3:\n"
     "    label: brscan3 scanner driver\n"
     "    install_body: sudo dpkg --install /tmp/brscan3.deb\n"
-    "    version_body: echo v\n"
     "    authored_at: '2026-01-01T00:00:00+00:00'\n"
     "    authored_on: laptop\n"
 )
@@ -1190,7 +1175,6 @@ TARGET_WITH_TWO_LOST_AND_ONE_CHANGED_YAML = TARGET_CHANGED_BODY_YAML + (
     "  unreproducible:apt-no-candidate:cnpg:\n"
     "    label: cnpg (no apt candidate)\n"
     "    install_body: sudo dpkg --install /tmp/cnpg.deb\n"
-    "    version_body: echo v\n"
     "    authored_at: '2026-01-01T00:00:00+00:00'\n"
     "    authored_on: workstation\n"
     "  unreproducible:unowned-path:/opt/az:\n"
@@ -1871,6 +1855,60 @@ class TestVersionDrift:
         assert plan.diffs == ()
 
 
+class TestTheOrderTheGroupsComeIn:
+    """The order a snippet job's review puts its questions in: what arrives, what moves, what
+    goes away."""
+
+    @pytest.mark.asyncio
+    async def test_a_job_holding_all_four_kinds_asks_install_then_update_then_remove(self) -> None:
+        """G194 — one run producing every group this job can build: an item to resolve, a
+        version difference with a snippet, an install with one, and a removal. Removals came
+        first and installs last, which put the run's most destructive question on the opening
+        screen and matched nobody's mental model (#283).
+
+        Pinned as one assertion over the whole list because the order is kept by two
+        independent lists — `_ACTION_ORDER` in the base builder and the sequence this
+        override appends in — and either drifting alone breaks it.
+        """
+        source_holds = {"a-install": "1.0", "b-update": "2.0", "c-resolve": "1.0"}
+        context, _source, _target = make_context(
+            source_responses={
+                STATUS_QUERY: installed_at(source_holds),
+                "apt-cache policy": CommandResult(
+                    0, "".join(hand_deb_policy(name, version) for name, version in source_holds.items()), ""
+                ),
+                "cat ~/.config/pc-switcher/package-snippets.yaml": CommandResult(
+                    0,
+                    "snippets:\n"
+                    + "".join(
+                        f"  unreproducible:apt-no-candidate:{name}:\n"
+                        f"    label: {name}\n"
+                        "    install_body: true\n"
+                        "    authored_at: '2026-01-01T00:00:00+00:00'\n"
+                        "    authored_on: source-host\n"
+                        for name in ("a-install", "b-update")
+                    ),
+                    "",
+                ),
+            },
+            target_responses={
+                STATUS_QUERY: installed_at({"b-update": "1.0", "d-gone": "1.0"}),
+                "apt-cache policy": CommandResult(
+                    0, hand_deb_policy("b-update", "1.0") + hand_deb_policy("d-gone", "1.0"), ""
+                ),
+            },
+        )
+
+        plan = await ManualDebSyncJob(context).plan()
+
+        assert [(group.action, [entry.label for entry in group.entries]) for group in plan.groups] == [
+            (UNREPRODUCIBLE_REVIEW_ACTION, ["c-resolve (1.0)"]),
+            (UNREPRODUCIBLE_UPDATE_REVIEW_ACTION, ["b-update (2.0)"]),
+            (DiffAction.INSTALL.value, ["a-install (1.0)"]),
+            (DiffAction.REMOVE.value, ["d-gone (1.0)"]),
+        ]
+
+
 class TestRemovingWhatTheSourceDropped:
     """`PKG-FR-MANUAL-REMOVE`: an item only the target holds, that the target's OWN detector
     claims, becomes a removal."""
@@ -2009,7 +2047,6 @@ class TestTheConvergeLoop:
             snippets={
                 "unreproducible:apt-no-candidate:brscan3": SnippetBodies(
                     install_body="sudo rm -rf /opt/brscan3 && sudo dpkg --install /tmp/brscan3.deb",
-                    version_body="echo v",
                 )
             }
         )
@@ -2030,11 +2067,7 @@ class TestTheConvergeLoop:
         entry, so pushing again would put a consent question in front of the change the user
         had just made."""
         reviewer = FakeReviewer(
-            snippets={
-                "unreproducible:apt-no-candidate:brscan3": SnippetBodies(
-                    install_body="echo rewritten", version_body="echo v"
-                )
-            }
+            snippets={"unreproducible:apt-no-candidate:brscan3": SnippetBodies(install_body="echo rewritten")}
         )
         job, target = self._updating_job(["1.0", "1.0", "2.0"], reviewer=reviewer)
         plan = await job.plan()

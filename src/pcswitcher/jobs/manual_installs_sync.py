@@ -164,7 +164,10 @@ class ManualInstallsSyncJob(UnreproducibleSyncJob):
     """
 
     name: ClassVar[str] = "manual_installs_sync"
+    display_name: ClassVar[str] = "Manually installed apps"
     manager_id: ClassVar[str] = "manual"
+    item_noun: ClassVar[str] = "manually installed app"
+    item_noun_plural: ClassVar[str] = "manually installed apps"
 
     # No configurable properties: mirrors AptSyncJob's empty schema — only the enable flag
     # in sync_jobs is needed. A job earns a config SECTION only when it has a real key, so there
@@ -443,12 +446,13 @@ class ManualInstallsSyncJob(UnreproducibleSyncJob):
         The scan names a path; the snippet that created it will usually also have dropped a
         `.desktop` file, a symlink in `/usr/local/bin` or a systemd unit somewhere this scan
         never looks. Deleting the path leaves those behind, and the user is the only one who
-        can know where they are — pc-switcher records nothing about what a snippet put where.
+        can know where they are — pc-switcher records nothing about what a snippet put where,
+        so the warning ends in what to do rather than in what the tool cannot see.
         """
         return (
-            f"Only the path itself is deleted on {self.machines.target}. Whatever installed it may also have "
-            "left a launcher, a symlink or a service unit outside these directories, and nothing here knows "
-            "where; those stay."
+            f"Only the path itself is deleted from {self.machines.target}. There may be config or files in "
+            "other folders, like a launcher, a symlink or a service unit outside these folders. Remove them "
+            "manually."
         )
 
     @override
@@ -539,6 +543,7 @@ class ManualInstallsSyncJob(UnreproducibleSyncJob):
         the source has dropped."""
         return FirstSyncScope(
             job_name=cls.name,
+            job_display_name=cls.display_name,
             scope_items=[
                 "unowned installs under /usr/local and /opt (via recorded install snippets)",
                 "unowned paths under /usr/local and /opt the source no longer has (rm --recursive --force)",

@@ -286,8 +286,9 @@ _READ_ONLY_CALLS: dict[str, int] = {
 _TOLERATED_SIDE_EFFECTS: dict[str, _ToleratedSideEffect] = {
     "jobs/packages/state.py::SnippetRegistry.installed_version::run_command": _ToleratedSideEffect(
         1,
-        "the entry's `version_body`, run on both machines during `plan()` to read which version of the item is "
-        "installed there (`PKG-FR-VERSION-SNIPPET`). It is the user's OWN shell code, so "
+        "an unowned-path entry's `version_body` — the one kind that carries one — run on both machines during "
+        "`plan()` to read which version of the item is installed there (`PKG-FR-VERSION-SNIPPET`). It is the "
+        "user's OWN shell code, so "
         "nothing static can prove it state-free — "
         "the read-only obligation is the author's, stated in the editor's own note and in the registry header, "
         "and `PKG-FR-VERSION-SNIPPET` puts it there deliberately. Gating it is refused rather than omitted: it "
@@ -496,8 +497,11 @@ _SOURCE_WRITES: dict[str, str] = {
     "jobs/packages/state.py::DecisionFile._write::run_command": (
         "PKG-FR-MACHINE-SPECIFIC — the machine-specific mark, on the holding machine"
     ),
-    "jobs/packages/state.py::SnippetRegistry.add::run_command": (
-        "PKG-FR-MANUAL-SAME-RUN — a snippet the review authored, into the source's registry"
+    # One call site for both directions of the same write, as `DecisionFile._write` is:
+    # `add` puts a snippet the review authored into the registry, and `remove` takes out the
+    # entry an answer gave back to the package manager.
+    "jobs/packages/state.py::SnippetRegistry._write::run_command": (
+        "PKG-FR-MANUAL-SAME-RUN, PKG-FR-DEB-AMBIGUITY — the review's own writes to the source's registry"
     ),
     # One key, two calls: the local branch is the source's half of the pause, the remote
     # branch the target's. Both are the same write, applied on both machines.
@@ -662,7 +666,7 @@ class TestSourceWrites:
         """
         assert set(_SOURCE_WRITES) == {
             "jobs/packages/state.py::DecisionFile._write::run_command",
-            "jobs/packages/state.py::SnippetRegistry.add::run_command",
+            "jobs/packages/state.py::SnippetRegistry._write::run_command",
             "orchestrator.py::Orchestrator._run_snap_hold_command::run_command",
             "orchestrator.py::Orchestrator._run_apt_timer_command::run_command",
         }

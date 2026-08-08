@@ -39,6 +39,7 @@ class InstallOnTargetJob(SystemJob):
     """
 
     name: ClassVar[str] = "install_on_target"
+    display_name: ClassVar[str] = "Install on target"
 
     def __init__(self, context: JobContext) -> None:
         """Initialize install job with context.

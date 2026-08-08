@@ -16,6 +16,7 @@ import sys
 import time
 from collections.abc import Sequence
 from dataclasses import fields
+from io import StringIO
 from typing import Any, ClassVar, TypedDict
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -30,14 +31,20 @@ from pcswitcher.config import (  # pyright: ignore[reportPrivateUsage]
 )
 from pcswitcher.jobs.context import JobContext
 from pcswitcher.jobs.manual_deb_sync import ManualDebSyncJob
+from pcswitcher.jobs.packages.decision_list import UNANSWERED
 from pcswitcher.jobs.packages.items import DiffAction, DiffClass, ItemClass, ItemDiff
 from pcswitcher.jobs.packages.review import (
     COLLATERAL_REVIEW_ACTION,
     PACKAGE_REVIEW_AUTOMATION_ENV,
     REPO_CONFLICT_REVIEW_ACTION,
     REPO_REMOVAL_REVIEW_ACTION,
+    SKIP_NOW_WORD,
+    SNIPPET_OWNERSHIP_REVIEW_ACTION,
+    UNREPRODUCIBLE_RETRY_REVIEW_ACTION,
     UNREPRODUCIBLE_REVIEW_ACTION,
+    UNREPRODUCIBLE_UPDATE_REVIEW_ACTION,
     Decision,
+    MarkSide,
     ReviewEntry,
     ReviewGroup,
     ReviewOutcome,
@@ -47,10 +54,11 @@ from pcswitcher.jobs.packages.review import (
     policy_decision,
     review_items,
 )
-from pcswitcher.jobs.packages.state import SnippetBodies
+from pcswitcher.jobs.packages.state import SnippetBodies, VersionedSnippetBodies
 from pcswitcher.jobs.packages.sync_core import SNAP_CHANGE_REVIEW_ACTION, PackagePlan
 from pcswitcher.models import CommandResult, SyncAbortedByUser
 from pcswitcher.orchestrator import Orchestrator
+from pcswitcher.ui import TerminalUI
 from tests.unit.console_capture import captured_console
 
 
@@ -65,6 +73,12 @@ class _Hosts(TypedDict):
 # The two machine names every screen says out loud. Deliberately concrete and distinct, so
 # an assertion that a message names the right one cannot pass on the other's text.
 HOSTS: _Hosts = {"source_hostname": "atlas", "target_hostname": "nomad"}
+
+# The two unreproducible entry types, told apart by the origin in the id: a package manager
+# reports the version of the first, and only the second's own snippet can report the second's
+# (`PKG-FR-VERSION-SNIPPET`).
+PACKAGE_BACKED_ID = "unreproducible:apt-no-candidate:brscan3"
+UNOWNED_PATH_ID = "unreproducible:unowned-path:/opt/az"
 
 
 def _mock_isatty(interactive: bool) -> MagicMock:
@@ -110,11 +124,17 @@ def _screen_words(call: Any) -> list[str]:
     return [option.word for option in call.kwargs["options"]]
 
 
+def _screen_keys(call: Any) -> list[str]:
+    """The keys one built screen binds, in legend order."""
+    return [option.key for option in call.kwargs["options"]]
+
+
 def _unreproducible_group(entries: Sequence[ReviewEntry]) -> ReviewGroup:
     return ReviewGroup(
-        manager="apt",
+        manager="manual_deb",
         action=UNREPRODUCIBLE_REVIEW_ACTION,
-        title="Resolve apt items with no reproducible install",
+        title="atlas has manual debs that no package manager can put on nomad?",
+        item_noun="manual deb",
         entries=tuple(entries),
     )
 
@@ -136,7 +156,9 @@ class TestNonInteractive:
         """H160, J35, J36 — no terminal: no screen is built at all and every item comes back declined for this run."""
         console = _non_interactive_console()
         ui = MagicMock()
-        groups = [ReviewGroup(manager="apt", action="install", title="Install packages", entries=[_entry("a")])]
+        groups = [
+            ReviewGroup(manager="apt", action="install", title="Install apt packages on nomad?", entries=[_entry("a")])
+        ]
 
         with (
             patch.object(sys, "stdin", _mock_isatty(False)),
@@ -155,7 +177,12 @@ class TestNonInteractive:
         console, buffer = captured_console()
         ui = MagicMock()
         groups = [
-            ReviewGroup(manager="apt", action="install", title="Install packages", entries=[_entry("a"), _entry("b")])
+            ReviewGroup(
+                manager="apt",
+                action="install",
+                title="Install apt packages on nomad?",
+                entries=[_entry("a"), _entry("b")],
+            )
         ]
         logger = MagicMock()
 
@@ -172,7 +199,12 @@ class TestNonInteractive:
         """A newline after the last entry renders as an empty final line inside the border."""
         console, buffer = captured_console(width=60)
         groups = [
-            ReviewGroup(manager="apt", action="install", title="Install packages", entries=[_entry("a"), _entry("b")])
+            ReviewGroup(
+                manager="apt",
+                action="install",
+                title="Install apt packages on nomad?",
+                entries=[_entry("a"), _entry("b")],
+            )
         ]
 
         with patch.object(sys, "stdin", _mock_isatty(False)):
@@ -215,7 +247,7 @@ class TestNonInteractive:
         group = ReviewGroup(
             manager="apt",
             action="install",
-            title="Install apt packages",
+            title="Install apt packages on nomad?",
             entries=[ReviewEntry(item_id="apt:package:sl", label="sl (5.02-1)", action_label="install")],
         )
         with patch.object(sys, "stdin", _mock_isatty(False)):
@@ -236,7 +268,7 @@ class TestInteractive:
             ReviewGroup(
                 manager="apt",
                 action="install",
-                title="Install packages",
+                title="Install apt packages on nomad?",
                 entries=[_entry("a"), _entry("b"), _entry("c")],
             )
         ]
@@ -263,7 +295,9 @@ class TestInteractive:
         again to promote what was left."""
         console = _interactive_console()
         ui = MagicMock()
-        groups = [ReviewGroup(manager="apt", action="install", title="Install packages", entries=[_entry("a")])]
+        groups = [
+            ReviewGroup(manager="apt", action="install", title="Install apt packages on nomad?", entries=[_entry("a")])
+        ]
         screen = _fake_prompt(ask_return={"a": "skip_once"})
 
         with (
@@ -283,7 +317,7 @@ class TestInteractive:
             ReviewGroup(
                 manager="apt",
                 action="install",
-                title="Install packages",
+                title="Install apt packages on nomad?",
                 entries=[_entry("a", label="cmatrix (2.0-6)")],
             )
         ]
@@ -303,7 +337,9 @@ class TestInteractive:
         """H156 — a raising screen still hands the live display back, from the `finally`."""
         console = _interactive_console()
         ui = MagicMock()
-        groups = [ReviewGroup(manager="apt", action="install", title="Install packages", entries=[_entry("a")])]
+        groups = [
+            ReviewGroup(manager="apt", action="install", title="Install apt packages on nomad?", entries=[_entry("a")])
+        ]
         prompt = _fake_prompt(ask_side_effect=KeyboardInterrupt)
 
         with (
@@ -322,8 +358,10 @@ class TestInteractive:
         console = _interactive_console()
         ui = MagicMock()
         groups = [
-            ReviewGroup(manager="apt", action="install", title="Install packages", entries=[_entry("a")]),
-            ReviewGroup(manager="snap", action="install", title="Install snaps", entries=[_entry("b")]),
+            ReviewGroup(
+                manager="apt", action="install", title="Install apt packages on nomad?", entries=[_entry("a")]
+            ),
+            ReviewGroup(manager="snap", action="install", title="Install snaps on nomad?", entries=[_entry("b")]),
         ]
         aborted = _fake_prompt(ask_return=None)
         later = _fake_prompt(ask_return={"b": "apply"})
@@ -347,9 +385,14 @@ class TestInteractive:
         """H98, H102 — install rows open at the act; removal rows open declined."""
         console = _interactive_console()
         ui = MagicMock()
-        install_group = ReviewGroup(manager="apt", action="install", title="Install packages", entries=[_entry("a")])
+        install_group = ReviewGroup(
+            manager="apt", action="install", title="Install apt packages on nomad?", entries=[_entry("a")]
+        )
         removal_group = ReviewGroup(
-            manager="apt", action="remove", title="Remove packages", entries=[_entry("b", action_label="remove")]
+            manager="apt",
+            action="remove",
+            title="Remove apt packages from nomad?",
+            entries=[_entry("b", action_label="remove")],
         )
         prompt = _fake_prompt(ask_side_effect=[{"a": "apply"}, {"b": "skip_once"}])
 
@@ -373,12 +416,15 @@ class TestInteractive:
         config_group = ReviewGroup(
             manager="apt",
             action="change",
-            title="Update apt configuration files",
+            title="Update apt configuration files on nomad?",
             entries=[_entry("cfg", action_label="update")],
             overwrites_authored_content=True,
         )
         snap_group = ReviewGroup(
-            manager="snap", action="change", title="Change snaps", entries=[_entry("snp", action_label="change")]
+            manager="snap",
+            action="change",
+            title="Align snap versions on nomad?",
+            entries=[_entry("snp", action_label="change")],
         )
         prompt = _fake_prompt(ask_side_effect=[{"cfg": "skip_once"}, {"snp": "apply"}])
 
@@ -399,14 +445,19 @@ class TestInteractive:
         console = _interactive_console()
         ui = MagicMock()
         groups = [
-            ReviewGroup(manager="apt", action="install", title="Install packages", entries=[_entry("a")]),
             ReviewGroup(
-                manager="apt", action="remove", title="Remove packages", entries=[_entry("b", action_label="remove")]
+                manager="apt", action="install", title="Install apt packages on nomad?", entries=[_entry("a")]
+            ),
+            ReviewGroup(
+                manager="apt",
+                action="remove",
+                title="Remove apt packages from nomad?",
+                entries=[_entry("b", action_label="remove")],
             ),
             ReviewGroup(
                 manager="apt",
                 action="change",
-                title="Update apt configuration files",
+                title="Update apt configuration files on nomad?",
                 entries=[_entry("c", action_label="update")],
                 overwrites_authored_content=True,
             ),
@@ -443,10 +494,13 @@ class TestInteractive:
         console = _interactive_console()
         ui = MagicMock()
         install_group = ReviewGroup(
-            manager="apt", action="install", title="Install packages", entries=[_entry("a"), _entry("c")]
+            manager="apt", action="install", title="Install apt packages on nomad?", entries=[_entry("a"), _entry("c")]
         )
         removal_group = ReviewGroup(
-            manager="apt", action="remove", title="Remove packages", entries=[_entry("b", action_label="remove")]
+            manager="apt",
+            action="remove",
+            title="Remove apt packages from nomad?",
+            entries=[_entry("b", action_label="remove")],
         )
         change_group = ReviewGroup(
             manager="snap", action="change", title="Change snap channels", entries=[_entry("d", action_label="change")]
@@ -474,7 +528,10 @@ class TestInteractive:
     async def test_removal_group_title_names_concrete_verb(self) -> None:
         """H83, H99 — a removal group's title says the deletion verb, so the screen says what it deletes."""
         group = ReviewGroup(
-            manager="apt", action="remove", title="Remove packages", entries=[_entry("a", action_label="remove")]
+            manager="apt",
+            action="remove",
+            title="Remove apt packages from nomad?",
+            entries=[_entry("a", action_label="remove")],
         )
         console = _interactive_console()
         ui = MagicMock()
@@ -487,7 +544,7 @@ class TestInteractive:
             await review_items([group], console=console, ui=ui, **HOSTS)
 
         message = decision_list.call_args.args[0]
-        assert message == "Remove packages"
+        assert message == "Remove apt packages from nomad?"
         assert message != "Apply"
 
     async def test_a_row_does_not_repeat_the_verb_its_group_title_already_names(self) -> None:
@@ -496,7 +553,7 @@ class TestInteractive:
         group = ReviewGroup(
             manager="apt",
             action="remove",
-            title="Remove packages",
+            title="Remove apt packages from nomad?",
             entries=[_entry("a", label="fortunes-min", action_label="remove")],
         )
         prompt = _fake_prompt(ask_return={"a": "skip_once"})
@@ -550,7 +607,7 @@ class TestInteractive:
         group = ReviewGroup(
             manager="apt",
             action=REPO_REMOVAL_REVIEW_ACTION,
-            title="Delete apt repositories atlas no longer has",
+            title="Delete apt repositories from nomad?",
             entries=[_entry("apt:source:vendor.list", action_label="delete repository")],
         )
         prompt = _fake_prompt(ask_return={"apt:source:vendor.list": "skip_once"})
@@ -592,6 +649,92 @@ class TestInteractive:
 
 
 @pytest.mark.asyncio
+class TestTheLiveDisplayIsHandedOverOnlyForAQuestion:
+    """#279 — `ui.pause()` costs one frame in the scrollback (status line, every progress
+    bar, the whole Recent Logs panel), left there on purpose as the context a question is
+    answered in. A review that asks nothing needs no such frame; with seven package jobs
+    enabled, a run with one question between them printed seven.
+    """
+
+    @staticmethod
+    def _report_group() -> ReviewGroup:
+        return ReviewGroup(
+            manager="snap",
+            action="report_only",
+            title="Version differences (snaps)",
+            entries=[_entry("snap:vlc", label="vlc", action_label="report")],
+        )
+
+    async def test_an_empty_review_hands_the_display_over_to_nothing(self) -> None:
+        """H261."""
+        console = _interactive_console()
+        ui = MagicMock()
+
+        with patch.object(sys, "stdin", _mock_isatty(True)):
+            outcome = await review_items([], console=console, ui=ui, **HOSTS)
+
+        ui.pause.assert_not_called()
+        ui.resume.assert_not_called()
+        assert outcome.was_interactive is True
+
+    async def test_a_review_of_report_only_groups_prints_them_without_pausing(self) -> None:
+        """H261 — a report needs printing, not the live region: nothing blocks on input."""
+        console, out = captured_console(terminal=True)
+        ui = MagicMock()
+
+        with patch.object(sys, "stdin", _mock_isatty(True)):
+            outcome = await review_items([self._report_group()], console=console, ui=ui, **HOSTS)
+
+        ui.pause.assert_not_called()
+        ui.resume.assert_not_called()
+        printed = out.getvalue()
+        assert "Version differences (snaps)" in printed
+        assert "vlc" in printed
+        assert outcome.decisions == {"snap:vlc": Decision.SKIP_ONCE}
+
+    async def test_a_review_holding_one_question_still_pauses_once(self) -> None:
+        """H262 — the frame above a prompt is deliberate and stays: one group asking makes
+        the whole review a paused one, report-only neighbours included."""
+        console = _interactive_console()
+        ui = MagicMock()
+        asked = ReviewGroup(
+            manager="apt", action="install", title="Install apt packages on nomad?", entries=[_entry("a")]
+        )
+        screen = _fake_prompt(ask_return={"a": "apply"})
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen),
+        ):
+            await review_items([self._report_group(), asked], console=console, ui=ui, **HOSTS)
+
+        ui.pause.assert_called_once()
+        ui.resume.assert_called_once()
+
+    async def test_a_report_only_review_renders_its_panels_while_the_live_display_runs(self) -> None:
+        """H263 — the half most likely to render wrong: unpaused, the panel is printed THROUGH a
+        running Rich `Live`, which has to place it above its own region rather than let the
+        next refresh overwrite it.
+
+        A plain `StringIO` rather than `captured_console`: a real `Live` on a terminal
+        console emits cursor-control escapes, which that buffer refuses by design.
+        """
+        output = StringIO()
+        console = Console(file=output, force_terminal=True, width=120, color_system=None, highlight=False)
+        ui = TerminalUI(console=console, max_log_lines=5)
+        ui.start()
+        try:
+            with patch.object(sys, "stdin", _mock_isatty(True)):
+                await review_items([self._report_group()], console=console, ui=ui, **HOSTS)
+        finally:
+            ui.stop()
+
+        printed = output.getvalue()
+        assert "Version differences (snaps)" in printed
+        assert "Nothing on nomad changes for these." in printed
+
+
+@pytest.mark.asyncio
 class TestTerminalUIReviewer:
     """`TerminalUIReviewer` is a thin adapter: it forwards to `review_items` with the
     console, ui, logger and review policy it was constructed with, and returns the outcome
@@ -603,7 +746,9 @@ class TestTerminalUIReviewer:
         ui = MagicMock()
         logger = MagicMock()
         reviewer = TerminalUIReviewer(console, ui, logger=logger, **HOSTS)
-        groups = [ReviewGroup(manager="apt", action="install", title="Install packages", entries=[_entry("a")])]
+        groups = [
+            ReviewGroup(manager="apt", action="install", title="Install apt packages on nomad?", entries=[_entry("a")])
+        ]
         sentinel_outcome = ReviewOutcome(decisions={"a": Decision.APPLY}, was_interactive=True)
 
         with patch(
@@ -621,7 +766,9 @@ class TestTerminalUIReviewer:
         console = _interactive_console()
         policy = ReviewPolicy(apply_installs=True)
         reviewer = TerminalUIReviewer(console, MagicMock(), policy=policy, **HOSTS)
-        groups = [ReviewGroup(manager="apt", action="install", title="Install packages", entries=[_entry("a")])]
+        groups = [
+            ReviewGroup(manager="apt", action="install", title="Install apt packages on nomad?", entries=[_entry("a")])
+        ]
 
         with patch(
             "pcswitcher.jobs.packages.review.review_items",
@@ -639,7 +786,9 @@ class TestTerminalUIReviewer:
         console = _interactive_console()
         ui = MagicMock()
         reviewer = TerminalUIReviewer(console, ui, **HOSTS)
-        groups = [ReviewGroup(manager="apt", action="install", title="Install packages", entries=[_entry("a")])]
+        groups = [
+            ReviewGroup(manager="apt", action="install", title="Install apt packages on nomad?", entries=[_entry("a")])
+        ]
         prompt = _fake_prompt(ask_side_effect=KeyboardInterrupt)
 
         with (
@@ -779,7 +928,9 @@ class TestBlockingPromptOffLoop:
     async def test_synchronous_sleep_in_ask_does_not_block_loop(self) -> None:
         console = _interactive_console()
         ui = MagicMock()
-        groups = [ReviewGroup(manager="apt", action="install", title="Install packages", entries=[_entry("a")])]
+        groups = [
+            ReviewGroup(manager="apt", action="install", title="Install apt packages on nomad?", entries=[_entry("a")])
+        ]
 
         def _blocking_ask() -> dict[str, str]:
             time.sleep(0.2)
@@ -851,11 +1002,14 @@ class TestWhichGroupsAFlagAnswers:
         assert policy_decision(_group("install"), _BOTH) is Decision.APPLY
         assert policy_decision(_group("remove"), _BOTH) is Decision.APPLY
 
-    @pytest.mark.parametrize("action", [REPO_CONFLICT_REVIEW_ACTION, UNREPRODUCIBLE_REVIEW_ACTION])
+    @pytest.mark.parametrize(
+        "action", [REPO_CONFLICT_REVIEW_ACTION, UNREPRODUCIBLE_REVIEW_ACTION, SNIPPET_OWNERSHIP_REVIEW_ACTION]
+    )
     def test_no_flag_answers_a_question_the_source_cannot_settle(self, action: str) -> None:
-        """H227, H229 — a repository conflict moves where machine-specific software comes
-        from, and an unreproducible item's answer is an authored snippet; neither flag
-        answers either.
+        """H227, H229, G202 — a repository conflict moves where machine-specific software
+        comes from, an unreproducible item's answer is an authored snippet, and who installed
+        a package is a fact about the past the source's current state cannot settle — which
+        is why it is asked at all. No flag answers any of them.
         """
         assert policy_decision(_group(action), _BOTH) is None
 
@@ -981,7 +1135,12 @@ class TestAutomationEnv:
         console = _non_interactive_console()
         ui = MagicMock()
         groups = [
-            ReviewGroup(manager="apt", action="install", title="Install packages", entries=[_entry("a"), _entry("b")])
+            ReviewGroup(
+                manager="apt",
+                action="install",
+                title="Install apt packages on nomad?",
+                entries=[_entry("a"), _entry("b")],
+            )
         ]
         env = {PACKAGE_REVIEW_AUTOMATION_ENV: json.dumps({"a": "apply"})}
 
@@ -1004,7 +1163,9 @@ class TestAutomationEnv:
         """
         console = _interactive_console()
         ui = MagicMock()
-        groups = [ReviewGroup(manager="apt", action="install", title="Install packages", entries=[_entry("a")])]
+        groups = [
+            ReviewGroup(manager="apt", action="install", title="Install apt packages on nomad?", entries=[_entry("a")])
+        ]
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
@@ -1033,7 +1194,9 @@ class TestAutomationEnv:
         """
         console = _non_interactive_console()
         ui = MagicMock()
-        groups = [ReviewGroup(manager="apt", action="install", title="Install packages", entries=[_entry("a")])]
+        groups = [
+            ReviewGroup(manager="apt", action="install", title="Install apt packages on nomad?", entries=[_entry("a")])
+        ]
 
         with (
             patch.dict("os.environ", {PACKAGE_REVIEW_AUTOMATION_ENV: "{not json"}),
@@ -1055,7 +1218,9 @@ class TestAutomationEnv:
         """
         console = _non_interactive_console()
         ui = MagicMock()
-        groups = [ReviewGroup(manager="apt", action="install", title="Install packages", entries=[_entry("a")])]
+        groups = [
+            ReviewGroup(manager="apt", action="install", title="Install apt packages on nomad?", entries=[_entry("a")])
+        ]
 
         with (
             patch.dict("os.environ", {PACKAGE_REVIEW_AUTOMATION_ENV: json.dumps({"a": "apply_everything"})}),
@@ -1104,12 +1269,12 @@ class TestUnreproducibleGroupResolution:
     """
 
     @staticmethod
-    async def _captured(body: str) -> SnippetBodies:
-        """Both bodies `review_items` hands back when the user submits `body` at each of the
-        two editors — the install-or-update snippet and the installed-version snippet, which
-        are authored together and are both mandatory (`PKG-FR-VERSION-SNIPPET`)."""
-        group = _unreproducible_group([_entry("u1", label="brscan3")])
-        screen = _fake_prompt(ask_return={"u1": "add_snippet"})
+    async def _captured(body: str, item_id: str = PACKAGE_BACKED_ID) -> SnippetBodies:
+        """What `review_items` hands back when the user submits `body` at every editor this
+        item opens — one for a package-backed kind, two for an unowned path
+        (`PKG-FR-VERSION-SNIPPET`)."""
+        group = _unreproducible_group([_entry(item_id, label="brscan3")])
+        screen = _fake_prompt(ask_return={item_id: "add_snippet"})
         text_prompt = _fake_prompt(ask_return=body)
 
         with (
@@ -1119,16 +1284,25 @@ class TestUnreproducibleGroupResolution:
         ):
             outcome = await review_items([group], console=_interactive_console(), ui=MagicMock(), **HOSTS)
 
-        assert "u1" not in outcome.unresolved
-        return outcome.snippets["u1"]
+        assert item_id not in outcome.unresolved
+        return outcome.snippets[item_id]
 
     async def test_add_snippet_choice_captures_the_body_the_user_wrote(self) -> None:
         """G31, G182 — everything between the first and last thing typed is kept: blank lines,
-        indentation, and the order of the commands.
+        indentation, and the order of the commands. A package-backed kind records the install
+        body alone.
         """
         body = "sudo dpkg --install /tmp/x.deb\n\n  sudo apt-get install --fix-broken --assume-yes"
 
-        assert await self._captured(body) == SnippetBodies(install_body=body, version_body=body)
+        assert await self._captured(body) == SnippetBodies(install_body=body)
+
+    async def test_an_unowned_path_records_both_bodies(self) -> None:
+        """G182 — the one kind with no package manager to ask records the version body too."""
+        body = "sudo /opt/az/install.sh"
+
+        captured = await self._captured(body, item_id=UNOWNED_PATH_ID)
+
+        assert captured == VersionedSnippetBodies(install_body=body, version_body=body)
 
     async def test_the_whitespace_around_the_body_is_dropped_at_capture(self) -> None:
         """#237 — the editor's own trailing newlines are not part of the command, and a body
@@ -1138,40 +1312,33 @@ class TestUnreproducibleGroupResolution:
         stripped = "sudo dpkg --install /tmp/x.deb"
 
         assert await self._captured("\n\n  sudo dpkg --install /tmp/x.deb  \n\n") == SnippetBodies(
-            install_body=stripped, version_body=stripped
+            install_body=stripped
         )
 
     @staticmethod
-    async def _editor_screen() -> tuple[str, str, str, str]:
-        """Run one snippet capture and return what the two editors' own screens carry.
+    async def _editor_screens(
+        item_id: str = UNOWNED_PATH_ID, body: str = "sudo dpkg --install /tmp/x.deb"
+    ) -> tuple[list[Any], str]:
+        """Run one snippet capture and return one call record per editor it opened, plus the
+        scrollback.
 
-        Four things: each editor's header while it is open and on prompt_toolkit's final
-        `is_done` render, plus everything printed to the console around them (the
-        scrollback). Two editors, because authoring is always the pair (`PKG-FR-VERSION-SNIPPET`).
+        How many editors is the item's own business (`PKG-FR-VERSION-SNIPPET`), which is what
+        the caller asserts on; each record carries the message and the keyword arguments the
+        editor was built with.
         """
         console, sink = captured_console(terminal=True)
-        group = _unreproducible_group([_entry("u1", label="brscan3")])
-        screen = _fake_prompt(ask_return={"u1": "add_snippet"})
-        text_prompt = _fake_prompt(ask_return="sudo dpkg --install /tmp/x.deb")
-        headers: list[str] = []
-
-        def open_editor(*_args: object, **kwargs: object) -> MagicMock:
-            instruction = kwargs["instruction"]
-            headers.append(format(instruction))
-            with patch("pcswitcher.jobs.packages.review.is_done", return_value=True):
-                headers.append(format(instruction))
-            return text_prompt
+        group = _unreproducible_group([_entry(item_id, label="brscan3")])
+        screen = _fake_prompt(ask_return={item_id: "add_snippet"})
+        text_prompt = _fake_prompt(ask_return=body)
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
             patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen),
-            patch("pcswitcher.jobs.packages.review.questionary.text", side_effect=open_editor),
+            patch("pcswitcher.jobs.packages.review.questionary.text", return_value=text_prompt) as text,
         ):
             await review_items([group], console=console, ui=MagicMock(), **HOSTS)
 
-        install_open, install_answered, version_open, version_answered = headers
-        assert install_answered == version_answered == ""
-        return install_open, version_open, install_answered, sink.getvalue()
+        return text.call_args_list, sink.getvalue()
 
     async def test_the_authoring_warning_is_on_the_editors_own_screen(self) -> None:
         """G61, G183 — the user is warned while they can still act on it. A snippet that asks a
@@ -1183,7 +1350,8 @@ class TestUnreproducibleGroupResolution:
         without showing them what that looks like leaves them to discover
         `DEBIAN_FRONTEND` as a stuck sync.
         """
-        install_open, version_open, _once_answered, _scrollback = await self._editor_screen()
+        editors, _scrollback = await self._editor_screens()
+        install_open, version_open = (call.kwargs["instruction"] for call in editors)
 
         assert "nomad" in install_open
         assert "nobody watching" in install_open
@@ -1200,18 +1368,59 @@ class TestUnreproducibleGroupResolution:
         assert "must change nothing" in version_open
 
     async def test_the_answered_editor_keeps_only_the_question_and_the_body(self) -> None:
-        """#236 — every other review screen collapses to its title and the answer once
-        answered. This one used to keep the whole authoring note plus questionary's
-        `(Ctrl-D to finish)` marker in the scrollback: the note because it was printed
-        above the editor, the marker because `questionary.text` appends `instruction` on
-        every render with no `is_done` check. Neither survives the answer now, and nothing
-        is printed around the editor for the scrollback to hold.
+        """G61, G191 — every other review screen collapses to its title and the answer once
+        answered. This one keeps neither the authoring note nor questionary's `(Ctrl-D to
+        finish)` marker: the editor is erased whole when it closes, and the review prints the
+        title and the body itself. That printing is also what takes the body out of the narrow
+        column questionary echoes an answer into.
         """
-        _install_open, _version_open, once_answered, scrollback = await self._editor_screen()
+        editors, scrollback = await self._editor_screens()
 
-        assert once_answered == ""
+        assert [call.kwargs["erase_when_done"] for call in editors] == [True, True]
         assert "nobody watching" not in scrollback
         assert "Ctrl-D" not in scrollback
+        assert "Install-or-update snippet for brscan3" in scrollback
+        assert "sudo dpkg --install /tmp/x.deb" in scrollback
+
+    async def test_the_captured_body_is_printed_full_width_and_whole(self) -> None:
+        """G191 — questionary echoes an answer in the column right of the prompt's own text,
+        which wrapped a shell line mid-token under a title naming the item. The review prints
+        the body itself instead, so a long line survives the scrollback as one line and is
+        the record of what was written.
+        """
+        long_line = "sudo DEBIAN_FRONTEND=noninteractive dpkg --install /var/tmp/pcsw-uat-drift/pcsw-uat-drift_2.0.deb"
+
+        _editors, scrollback = await self._editor_screens(item_id=PACKAGE_BACKED_ID, body=long_line)
+
+        assert long_line in scrollback
+
+    async def test_an_empty_capture_records_nothing(self) -> None:
+        """G192 — the body is printed as the record of what the user wrote, and an editor that
+        came back empty wrote nothing: the caller re-prompts, and a block asserting otherwise
+        would be a record of an answer that was refused.
+        """
+        console, sink = captured_console(terminal=True)
+        group = _unreproducible_group([_entry(PACKAGE_BACKED_ID, label="brscan3")])
+        screen = _fake_prompt(ask_side_effect=[{PACKAGE_BACKED_ID: "add_snippet"}, {PACKAGE_BACKED_ID: "skip_once"}])
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen),
+            patch("pcswitcher.jobs.packages.review.questionary.text", return_value=_fake_prompt(ask_return="")),
+        ):
+            await review_items([group], console=console, ui=MagicMock(), **HOSTS)
+
+        assert "Install-or-update snippet for brscan3" not in sink.getvalue()
+
+    async def test_a_package_backed_kind_opens_one_editor(self) -> None:
+        """G182 — dpkg, snap and flatpak answer the version question for their own kind
+        (`PKG-FR-MANUAL-VERSION`), so authoring one of those asks for the install body and
+        stops there rather than for a command nothing would ever run.
+        """
+        editors, _scrollback = await self._editor_screens(item_id=PACKAGE_BACKED_ID)
+
+        assert len(editors) == 1
+        assert "must change nothing" not in editors[0].kwargs["instruction"]
 
     async def test_skip_always_choice_yields_skip_always_decision_and_no_snippet(self) -> None:
         """G32."""
@@ -1297,8 +1506,8 @@ class TestUnreproducibleGroupResolution:
         group = _unreproducible_group([_entry("u1", label="brscan3")])
         body = "sudo dpkg --install /tmp/x.deb"
         screen = _fake_prompt(ask_side_effect=[{"u1": "add_snippet"}, {"u1": "add_snippet"}])
-        # Empty install body (which never reaches the second editor), then the real pair.
-        text_prompt = _fake_prompt(ask_side_effect=["", body, body])
+        # Empty install body, then the real one.
+        text_prompt = _fake_prompt(ask_side_effect=["", body])
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
@@ -1307,7 +1516,7 @@ class TestUnreproducibleGroupResolution:
         ):
             outcome = await review_items([group], console=console, ui=ui, **HOSTS)
 
-        assert outcome.snippets == {"u1": SnippetBodies(install_body=body, version_body=body)}
+        assert outcome.snippets == {"u1": SnippetBodies(install_body=body)}
         assert outcome.unresolved == ()
 
     async def test_a_whitespace_only_snippet_is_not_a_resolution(self) -> None:
@@ -1376,8 +1585,9 @@ class TestUnreproducibleGroupResolution:
         assert options[1].hint == "do not install on nomad for now; will be asked again next sync"
         assert options[2].hint == "do not install on nomad for good; it is atlas's own, and will not be asked again"
         # #230: the title is the decision the three answers offer. "How should nomad get
-        # brscan3?" matched only the first of them.
-        assert decision_list.call_args.args[0] == "Install brscan3 on nomad?"
+        # brscan3?" matched only the first of them. #276: it names what brscan3 is, which the
+        # label no longer repeats.
+        assert decision_list.call_args.args[0] == "Install manual deb brscan3 on nomad?"
 
     async def test_ui_resumed_when_snippet_capture_raises(self) -> None:
         console = _interactive_console()
@@ -1454,6 +1664,200 @@ class TestUnreproducibleGroupResolution:
 
         assert decision_list.call_count == 2
         assert [len(call.kwargs["rows"]) for call in decision_list.call_args_list] == [1, 1]
+
+
+RECORDED_BODY = "sudo dpkg --install /var/tmp/pcsw-uat-drift.deb"
+
+
+def _update_group(item_id: str = PACKAGE_BACKED_ID) -> ReviewGroup:
+    """The version-difference screen's group: one item both machines have, with the body the
+    registry already holds for it."""
+    return ReviewGroup(
+        manager="manual_deb",
+        action=UNREPRODUCIBLE_UPDATE_REVIEW_ACTION,
+        title="Update manual deb versions on nomad?",
+        item_noun="manual deb",
+        entries=(ReviewEntry(item_id=item_id, label="pcsw-uat-drift (2.0)", action_label="update", detail=None),),
+        recorded_bodies={item_id: SnippetBodies(install_body=RECORDED_BODY)},
+    )
+
+
+@pytest.mark.asyncio
+class TestTheRecordedSnippetIsOnScreen:
+    """#281: the two screens that offer to replay a body already on record show that body
+    above their answers. "Is the recorded snippet still right" is what they ask, and an item's
+    name is not enough to answer it."""
+
+    @staticmethod
+    async def _screen(group: ReviewGroup) -> tuple[Any, str]:
+        console, sink = captured_console(terminal=True)
+        item_id = group.entries[0].item_id
+        screen = _fake_prompt(ask_return={item_id: "skip_once"})
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen) as decision_list,
+        ):
+            await review_items([group], console=console, ui=MagicMock(), **HOSTS)
+
+        return decision_list.call_args, sink.getvalue()
+
+    async def test_the_version_difference_screen_prints_the_recorded_install_body(self) -> None:
+        """G165 — the answers are "run the recorded snippet" and "rewrite it first", and choosing
+        between them means reading it. The block says which machine would run it, because that
+        is the machine the answer changes."""
+        _call, scrollback = await self._screen(_update_group())
+
+        assert RECORDED_BODY in scrollback
+        assert "would run on nomad" in scrollback
+
+    async def test_the_retry_screen_prints_the_body_that_moved_no_version(self) -> None:
+        """G173 — same need, one screen over: the replay left the version where it was, so the body
+        is what the user is being asked to replace."""
+        group = ReviewGroup(
+            manager="manual_deb",
+            action=UNREPRODUCIBLE_RETRY_REVIEW_ACTION,
+            title="Manual deb pcsw-uat-drift on nomad is still 1.0, not 2.0",
+            item_noun="manual deb",
+            entries=(ReviewEntry(item_id=PACKAGE_BACKED_ID, label="pcsw-uat-drift", action_label="update"),),
+            recorded_bodies={PACKAGE_BACKED_ID: SnippetBodies(install_body=RECORDED_BODY)},
+        )
+
+        _call, scrollback = await self._screen(group)
+
+        assert RECORDED_BODY in scrollback
+
+    async def test_the_resolve_screen_prints_no_block(self) -> None:
+        """G193 — an item with nothing recorded has nothing to show: the screen asks the user to
+        write the first body, not to judge one."""
+        _call, scrollback = await self._screen(_unreproducible_group([_entry(PACKAGE_BACKED_ID, label="brscan3")]))
+
+        assert "would run on nomad" not in scrollback
+
+    async def test_writing_a_new_snippet_is_an_act(self) -> None:
+        """G165 — the rewritten body is RUN on nomad, so the answer changes the machine as
+        much as replaying the recorded one does. Unmarked it rendered in the skip colour,
+        which is also what the retry screen's identical answer already contradicted."""
+        call, _scrollback = await self._screen(_update_group())
+
+        assert [(option.key, option.word, option.is_act) for option in call.kwargs["options"]] == [
+            ("y", "update", True),
+            ("w", "new snippet", True),
+            ("s", SKIP_NOW_WORD, False),
+        ]
+
+
+def _ownership_group(*, label: str = "qemu-guest-agent (1:8.2.2+ds-0ubuntu1.18)") -> ReviewGroup:
+    return ReviewGroup(
+        manager="manual_deb",
+        action=SNIPPET_OWNERSHIP_REVIEW_ACTION,
+        title="atlas has install snippets for packages apt can install too",
+        item_noun="manual deb",
+        entries=(
+            ReviewEntry(
+                item_id=PACKAGE_BACKED_ID,
+                label=label,
+                action_label="drop the snippet",
+                detail="apt would install it from http://ftp.belnet.be/ubuntu",
+            ),
+        ),
+        recorded_bodies={PACKAGE_BACKED_ID: SnippetBodies(install_body=RECORDED_BODY)},
+    )
+
+
+@pytest.mark.asyncio
+class TestWhoInstalledItScreen:
+    """`PKG-FR-DEB-AMBIGUITY`: a snippet on record for a package apt can install too is a
+    state nothing on either machine resolves, so the screen asks who put it there — two
+    answers, neither of them recorded anywhere.
+    """
+
+    @staticmethod
+    async def _screen(answer: str, *, group: ReviewGroup | None = None) -> tuple[Any, str, ReviewOutcome]:
+        console, sink = captured_console(terminal=True)
+        screen = _fake_prompt(ask_return={PACKAGE_BACKED_ID: answer})
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen) as decision_list,
+        ):
+            outcome = await review_items(
+                [group if group is not None else _ownership_group()], console=console, ui=MagicMock(), **HOSTS
+            )
+
+        return decision_list.call_args, sink.getvalue(), outcome
+
+    async def test_two_answers_and_the_row_starts_on_keeping_the_snippet(self) -> None:
+        """G196 — the act deletes the user's own work, so it is chosen rather than defaulted,
+        and there is no permanent answer: nothing here may be recorded, which is what makes
+        the question come back while the state does.
+        """
+        call, _scrollback, _outcome = await self._screen("skip_once")
+
+        assert [(option.key, option.word, option.is_permanent) for option in call.kwargs["options"]] == [
+            ("y", "apt did", False),
+            ("k", "I did", False),
+        ]
+        assert _screen_defaults(call) == {PACKAGE_BACKED_ID: Decision.SKIP_ONCE}
+
+    async def test_the_recorded_snippet_and_apts_own_answer_are_both_on_screen(self) -> None:
+        """G197 — the question is which of the two put the package there, so both claims are
+        printed: the body on record, and the repository apt says it would install from."""
+        call, scrollback, _outcome = await self._screen("skip_once")
+
+        assert RECORDED_BODY in scrollback
+        assert call.kwargs["rows"][0].detail == "apt would install it from http://ftp.belnet.be/ubuntu"
+        assert "atlas" in call.args[0]
+
+    async def test_saying_apt_did_it_records_the_act(self) -> None:
+        """G198 — the answer that gives the package back to apt is `APPLY`, which the job then
+        turns into the deletion of the entry."""
+        _call, _scrollback, outcome = await self._screen("apply")
+
+        assert outcome.decisions == {PACKAGE_BACKED_ID: Decision.APPLY}
+
+    async def test_keeping_the_snippet_prints_how_to_stop_being_asked(self) -> None:
+        """G199 — keeping it leaves both machines exactly as they were, which is the state the
+        question is raised on; without the pin the user answers and is asked again next sync.
+        """
+        _call, scrollback, outcome = await self._screen("skip_once")
+
+        assert outcome.decisions == {PACKAGE_BACKED_ID: Decision.SKIP_ONCE}
+        assert "/etc/apt/preferences.d/keep-qemu-guest-agent" in scrollback
+        assert "Pin-Priority: -1" in scrollback
+        # The weaker lever is named as weaker, never as an equivalent.
+        assert "'apt-mark hold' is the weaker lever" in scrollback
+
+    async def test_giving_the_package_back_to_apt_prints_no_pin_guidance(self) -> None:
+        """G200 — the entry is about to be deleted, so there is nothing left to be asked about
+        and a pin file in front of the user would be advice against their own answer."""
+        _call, scrollback, _outcome = await self._screen("apply")
+
+        assert "preferences.d" not in scrollback
+
+    async def test_each_package_is_answered_right_after_its_snippet_is_shown(self) -> None:
+        """G201 — one screen per package, for the reason every screen that prints a body is:
+        a batch would print three or four and then ask about all of them at once."""
+        second = ReviewEntry(item_id=UNOWNED_PATH_ID, label="other (2.0)", action_label="drop the snippet")
+        group = ReviewGroup(
+            manager="manual_deb",
+            action=SNIPPET_OWNERSHIP_REVIEW_ACTION,
+            title="atlas has install snippets for packages apt can install too",
+            item_noun="manual deb",
+            entries=(*_ownership_group().entries, second),
+            recorded_bodies={PACKAGE_BACKED_ID: SnippetBodies(install_body=RECORDED_BODY)},
+        )
+        console = _interactive_console()
+        screen = _fake_prompt(ask_side_effect=[{PACKAGE_BACKED_ID: "apply"}, {UNOWNED_PATH_ID: "skip_once"}])
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen) as decision_list,
+        ):
+            outcome = await review_items([group], console=console, ui=MagicMock(), **HOSTS)
+
+        assert [len(call.kwargs["rows"]) for call in decision_list.call_args_list] == [1, 1]
+        assert outcome.decisions == {PACKAGE_BACKED_ID: Decision.APPLY, UNOWNED_PATH_ID: Decision.SKIP_ONCE}
 
 
 @pytest.mark.asyncio
@@ -1828,6 +2232,240 @@ class TestRepoConflictGroupResolution:
         assert outcome.unresolved == ()
 
 
+_CONF_TARGET_BODY = 'APT::Install-Recommends "true";\n'
+_CONF_SOURCE_BODY = 'APT::Install-Recommends "false";\n'
+
+
+def _apt_config_group(entries: Sequence[ReviewEntry]) -> ReviewGroup:
+    """The ordinary CHANGE group for `/etc/apt/apt.conf.d`, as `sync_core` builds it: three
+    answers, and `overwrites_authored_content` because replacing a file the target's own
+    user wrote is as irreversible as a deletion."""
+    return ReviewGroup(
+        manager="apt",
+        action="change",
+        title="Update apt configuration files on nomad?",
+        entries=tuple(entries),
+        overwrites_authored_content=True,
+    )
+
+
+def _apt_config_entry(
+    *,
+    item_id: str = "apt:config:99-pcsw-uat",
+    label: str = "99-pcsw-uat",
+    target_version: str = _CONF_TARGET_BODY,
+    source_version: str = _CONF_SOURCE_BODY,
+) -> ReviewEntry:
+    return ReviewEntry(item_id=item_id, label=label, action_label="update", versions=(target_version, source_version))
+
+
+@pytest.mark.asyncio
+class TestAptConfigOverwriteScreen:
+    """#277: an `apt.conf.d` file both machines hold is answered off the two file bodies,
+    on the same two-panel screen the repository conflict uses — but with its own three
+    answers, since this one CAN be recorded (`PKG-FR-APTCONF`).
+    """
+
+    async def test_each_file_is_answered_right_after_its_own_two_bodies(self) -> None:
+        """C182 — one screen per file, not a batch: two whole bodies per entry scroll the
+        earlier ones away, which is the same reason the conflict screen is per file."""
+        console, out = captured_console(terminal=True)
+        ui = MagicMock()
+        second = _apt_config_entry(item_id="apt:config:98-other", label="98-other", target_version="Y\n")
+        screen = _fake_prompt(
+            ask_side_effect=[
+                {"apt:config:99-pcsw-uat": "skip_always"},
+                {"apt:config:98-other": "apply"},
+                {"apt:config:99-pcsw-uat": "target"},
+            ]
+        )
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen) as decision_list,
+        ):
+            outcome = await review_items(
+                [_apt_config_group([_apt_config_entry(), second])], console=console, ui=ui, **HOSTS
+            )
+
+        printed = out.getvalue()
+        assert [len(call.kwargs["rows"]) for call in decision_list.call_args_list[:2]] == [1, 1]
+        assert printed.index('"true"') < printed.index('"false"'), "the target's copy leads; it is what is replaced"
+        assert "On nomad now" in printed
+        assert "On atlas — would replace it" in printed
+        assert outcome.decisions["apt:config:98-other"] == Decision.APPLY
+
+    async def test_the_permanent_answer_survives_the_move_to_the_two_panel_screen(self) -> None:
+        """C182 — this file is still the one apt item a user can settle for good, and its row
+        still starts at skip-once (`PKG-FR-HARMLESS-DEFAULT`): the bodies are evidence, not a
+        change of what the screen offers."""
+        console = _interactive_console()
+        ui = MagicMock()
+        screen = _fake_prompt(ask_return={"apt:config:99-pcsw-uat": "skip_once"})
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen) as decision_list,
+        ):
+            outcome = await review_items([_apt_config_group([_apt_config_entry()])], console=console, ui=ui, **HOSTS)
+
+        assert _screen_words(decision_list.call_args) == ["update", "skip now", "never update"]
+        assert _screen_defaults(decision_list.call_args) == {"apt:config:99-pcsw-uat": Decision.SKIP_ONCE}
+        assert outcome.decisions == {"apt:config:99-pcsw-uat": Decision.SKIP_ONCE}
+
+    async def test_an_empty_file_says_so_rather_than_printing_an_empty_panel(self) -> None:
+        """C183 — an empty box reads as "this file is empty", which is a claim about the
+        machine. A read that failed never gets here (the probe fails the job on it), so the
+        words are true whenever they appear."""
+        console, out = captured_console(terminal=True)
+        ui = MagicMock()
+        screen = _fake_prompt(ask_return={"apt:config:99-pcsw-uat": "skip_once"})
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen),
+        ):
+            await review_items(
+                [_apt_config_group([_apt_config_entry(target_version="\n \n")])], console=console, ui=ui, **HOSTS
+            )
+
+        assert "this file has no content" in out.getvalue()
+
+    async def test_a_file_too_long_to_print_is_cut_and_says_how_much_is_missing(self) -> None:
+        """C184 — the body is whatever the machine turned out to hold. A file long enough to
+        scroll its own question off the terminal is as unanswerable as the digest this
+        printing replaced, so it is cut and the cut is stated."""
+        console, out = captured_console(terminal=True)
+        ui = MagicMock()
+        body = "".join(f'APT::Line-{index} "x";\n' for index in range(200))
+        screen = _fake_prompt(ask_return={"apt:config:99-pcsw-uat": "skip_once"})
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen),
+        ):
+            await review_items(
+                [_apt_config_group([_apt_config_entry(target_version=body)])], console=console, ui=ui, **HOSTS
+            )
+
+        printed = out.getvalue()
+        assert "APT::Line-59" in printed
+        assert "APT::Line-60" not in printed
+        assert "140 more lines not shown" in printed
+
+    async def test_the_bodies_are_reprinted_on_the_machine_specific_follow_up(self) -> None:
+        """C185 — "whose own version is it?" is unanswerable from a filename, and by then the
+        screen that showed the bodies is off the top of the terminal. The rows stay one
+        batch (`PKG-FR-MARK-SIDE`); the bodies go above the table, where a file fits."""
+        console, out = captured_console(terminal=True)
+        ui = MagicMock()
+        screen = _fake_prompt(
+            ask_side_effect=[{"apt:config:99-pcsw-uat": "skip_always"}, {"apt:config:99-pcsw-uat": "both"}]
+        )
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen) as decision_list,
+        ):
+            outcome = await review_items([_apt_config_group([_apt_config_entry()])], console=console, ui=ui, **HOSTS)
+
+        follow_up = decision_list.call_args_list[1]
+        assert follow_up.args[0] == "Kept for good — whose own version is it?"
+        assert len(follow_up.kwargs["rows"]) == 1
+        printed = out.getvalue()
+        # Once for the decision screen, once above the follow-up's table.
+        assert printed.count('"true"') == 2
+        assert printed.count('"false"') == 2
+        # Nothing is being replaced any more — the overwrite was declined for good.
+        assert printed.count("would replace it") == 1
+        assert outcome.mark_sides == {"apt:config:99-pcsw-uat": MarkSide.BOTH}
+
+
+@pytest.mark.asyncio
+class TestTheMachineSpecificFollowUp:
+    """#278 — the screen's keys name the machines it shows, and nothing on it is
+    pre-answered (`PKG-FR-MARK-SIDE`, `PKG-FR-HARMLESS-DEFAULT`)."""
+
+    @staticmethod
+    async def _follow_up_call() -> Any:
+        """Build the follow-up by answering the conflicting file permanently, and return the
+        `decision_list` call that built it."""
+        console = _interactive_console()
+        screen = _fake_prompt(
+            ask_side_effect=[{"apt:config:99-pcsw-uat": "skip_always"}, {"apt:config:99-pcsw-uat": "both"}]
+        )
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen) as decision_list,
+        ):
+            await review_items([_apt_config_group([_apt_config_entry()])], console=console, ui=MagicMock(), **HOSTS)
+        return decision_list.call_args_list[1]
+
+    async def test_the_keys_name_the_machines_the_screen_shows(self) -> None:
+        """H260 — the keys name what the column already shows. "Here" and "other" are the
+        code's frame, and which machine is which depends on the end the run was launched
+        from."""
+        call = await self._follow_up_call()
+
+        assert _screen_keys(call) == ["s", "t", "b"]
+        assert _screen_words(call) == ["atlas", "nomad", "both"]
+
+    async def test_the_source_key_is_the_skip_key_of_every_other_screen_and_this_one_has_no_skip(self) -> None:
+        """H260 — the collision is accepted deliberately: no single key means two things in
+        one place, because this screen offers no skip at all; every answer here is
+        recorded."""
+        call = await self._follow_up_call()
+
+        assert SKIP_NOW_WORD not in _screen_words(call)
+        assert all(option.is_permanent for option in call.kwargs["options"])
+
+    async def test_no_row_starts_answered(self) -> None:
+        """H258 — neither machine is the holder by right (that is why the screen exists) and
+        the record it writes is permanent, so a confirmed-unread screen must not be
+        indistinguishable from a decision."""
+        call = await self._follow_up_call()
+
+        assert _screen_defaults(call) == {"apt:config:99-pcsw-uat": UNANSWERED}
+
+    async def test_a_run_with_no_terminal_asks_nothing_and_records_no_mark(self) -> None:
+        """H256 — `PKG-FR-MARK-SIDE`: never asked where no human answered. The
+        non-interactive return comes before the screen, which is also what keeps a screen
+        that now refuses a bare `<enter>` off a path with nobody to press a key."""
+        console = _non_interactive_console()
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(False)),
+            patch("pcswitcher.jobs.packages.review.decision_list") as decision_list,
+        ):
+            outcome = await review_items(
+                [_apt_config_group([_apt_config_entry()])], console=console, ui=MagicMock(), **HOSTS
+            )
+
+        decision_list.assert_not_called()
+        assert outcome.mark_sides == {}
+        assert outcome.decisions == {"apt:config:99-pcsw-uat": Decision.SKIP_ONCE}
+
+    async def test_an_automation_answered_run_records_no_mark_even_on_a_permanent_answer(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """H256 — the one path that CAN produce the permanent answer without a human. It
+        returns before the screen, so the mark it would raise is never given a side."""
+        monkeypatch.setenv(PACKAGE_REVIEW_AUTOMATION_ENV, json.dumps({"apt:config:99-pcsw-uat": "skip_always"}))
+        console = _interactive_console()
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.decision_list") as decision_list,
+        ):
+            outcome = await review_items(
+                [_apt_config_group([_apt_config_entry()])], console=console, ui=MagicMock(), **HOSTS
+            )
+
+        decision_list.assert_not_called()
+        assert outcome.decisions == {"apt:config:99-pcsw-uat": Decision.SKIP_ALWAYS}
+        assert outcome.mark_sides == {}
+
+
 @pytest.mark.asyncio
 class TestAnswerSentencesNameTheMachineAsASet:
     """`PKG-FR-ANSWERS-AS-A-SET`: the answers on one screen are read together, so the
@@ -1840,11 +2478,13 @@ class TestAnswerSentencesNameTheMachineAsASet:
     """
 
     _GROUPS: ClassVar[dict[str, ReviewGroup]] = {
-        "install": ReviewGroup(manager="apt", action="install", title="Install apt packages", entries=(_entry("a"),)),
+        "install": ReviewGroup(
+            manager="apt", action="install", title="Install apt packages on nomad?", entries=(_entry("a"),)
+        ),
         "change": ReviewGroup(
             manager="snap",
             action="change",
-            title="Change snaps",
+            title="Align snap versions on nomad?",
             entries=(_entry("a", action_label="change"),),
         ),
         "remove": ReviewGroup(
@@ -2223,7 +2863,7 @@ class TestCredentialsInAReviewLine:
         group = ReviewGroup(
             manager="apt",
             action="install",
-            title="Install apt packages",
+            title="Install apt packages on nomad?",
             entries=[
                 ReviewEntry(
                     item_id="apt:package:vendor-tool",

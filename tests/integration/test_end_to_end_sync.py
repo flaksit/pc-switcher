@@ -209,12 +209,16 @@ class TestEndToEndSync:
             # AND lets `install_on_target` run, so it is the only place that step's own
             # JobResult can be anything but skipped.
             outcomes = package_sync_scenario.job_outcome_statuses(sync_ab.stdout + sync_ab.stderr)
-            assert set(_PIPELINE_JOBS) <= set(outcomes), (
+            # The block names jobs the way a user would, so the configured keys are translated
+            # before they are looked for (`CORE-FR-JOB-DISPLAY-NAME`).
+            expected = {package_sync_scenario.job_display_name(job) for job in _PIPELINE_JOBS}
+            assert expected <= set(outcomes), (
                 f"the outcome block names {sorted(outcomes)}, missing "
-                f"{sorted(set(_PIPELINE_JOBS) - set(outcomes))} of the jobs this run configured"
+                f"{sorted(expected - set(outcomes))} of the jobs this run configured"
             )
-            assert outcomes.get("install_on_target") == "success", (
-                f"install_on_target is {outcomes.get('install_on_target')!r} in the outcome block; the step that "
+            install_outcome = outcomes.get(package_sync_scenario.job_display_name("install_on_target"))
+            assert install_outcome == "success", (
+                f"install_on_target is {install_outcome!r} in the outcome block; the step that "
                 f"puts pc-switcher on the target records a JobResult of its own, not only when it is skipped"
             )
             # Which jobs report `success` rather than `skipped` depends on what this run's

@@ -20,11 +20,13 @@ from pcswitcher.jobs.packages.review import (
     REPO_CONFLICT_REVIEW_ACTION,
     REPO_REMOVAL_REVIEW_ACTION,
     UNREPRODUCIBLE_REVIEW_ACTION,
+    UNREPRODUCIBLE_UPDATE_REVIEW_ACTION,
     ReviewEntry,
     ReviewGroup,
     ask_gate,
     review_items,
 )
+from pcswitcher.jobs.packages.state import SnippetBodies
 from pcswitcher.models import SyncAbortedByUser
 from pcswitcher.ui import TerminalUI
 
@@ -42,7 +44,7 @@ GROUPS = [
     ReviewGroup(
         "apt",
         "install",
-        "Install apt packages",
+        f"Install apt packages on {TARGET_HOST}?",
         [
             ReviewEntry("apt:package:sl", "sl (5.02-1)", "install"),
             ReviewEntry("apt:package:cmatrix", "cmatrix (2.0-6)", "install", "from download.example.com"),
@@ -54,7 +56,7 @@ GROUPS = [
     ReviewGroup(
         "apt",
         "remove",
-        "Remove apt packages",
+        f"Remove apt packages from {TARGET_HOST}?",
         [ReviewEntry("apt:package:fortunes-min", "fortunes-min (1:1.99.1-7.3build1)", "remove")],
     ),
     # Reported, not asked: this group is printed and the review moves straight on. Its
@@ -80,13 +82,34 @@ GROUPS = [
         ],
         note=f"These converge on their own: run `sudo apt update && sudo apt upgrade` on {TARGET_HOST}.",
     ),
+    # The other two-panel screen, and the only one whose answer can be permanent: answering
+    # `never update` here raises the machine-specific follow-up, which reprints these same
+    # two bodies above its table. Rehearsed because that pair of screens is the one route to
+    # a recorded answer about a file, and neither can be read from a filename.
+    ReviewGroup(
+        "apt",
+        "change",
+        f"Update apt configuration files on {TARGET_HOST}?",
+        [
+            ReviewEntry(
+                "apt:config:99-pcsw-uat",
+                "99-pcsw-uat",
+                "update",
+                versions=(
+                    'APT::Install-Recommends "true";\nAPT::Get::Assume-Yes "false";\n',
+                    'APT::Install-Recommends "false";\n',
+                ),
+            )
+        ],
+        overwrites_authored_content=True,
+    ),
     # TWO conflicting files, because one screen answers a whole batch and the shape of that
     # is the thing a rehearsal has to show: both files' versions are printed first, in pairs,
     # and the single screen underneath carries a row per file.
     ReviewGroup(
         "apt",
         REPO_CONFLICT_REVIEW_ACTION,
-        "Resolve apt repository conflicts",
+        f"Resolve apt repository conflicts on {TARGET_HOST}?",
         [
             ReviewEntry(
                 "apt:conflict:ubuntu.sources",
@@ -117,7 +140,7 @@ GROUPS = [
     ReviewGroup(
         "apt",
         REPO_REMOVAL_REVIEW_ACTION,
-        f"Delete apt repositories {SOURCE_HOST} no longer has",
+        f"Delete apt repositories from {TARGET_HOST}?",
         [
             ReviewEntry(
                 "apt:source:99-pcsw-uat.list",
@@ -141,7 +164,7 @@ GROUPS = [
     ReviewGroup(
         "apt",
         REPO_REMOVAL_REVIEW_ACTION,
-        f"Delete apt pin files {SOURCE_HOST} no longer has",
+        f"Delete apt pin files from {TARGET_HOST}?",
         [
             ReviewEntry(
                 "apt:pin:99-pcsw-uat.pref",
@@ -210,11 +233,36 @@ GROUPS = [
     ReviewGroup(
         "manual",
         UNREPRODUCIBLE_REVIEW_ACTION,
-        f"{SOURCE_HOST} has these and no package manager can install them on {TARGET_HOST} (manual)",
+        f"{SOURCE_HOST} has manually installed apps that no package manager can put on {TARGET_HOST}?",
         [
             ReviewEntry("unreproducible:unowned-path:/opt/pcsw-uat-app", "/opt/pcsw-uat-app", "resolve"),
             ReviewEntry("unreproducible:unowned-path:/usr/local/bin/mytool", "/usr/local/bin/mytool", "resolve"),
         ],
+        item_noun="manually installed app",
+    ),
+    # The one screen that prints a body it did not just capture: the recorded snippet goes
+    # above the answers, because "run it or rewrite it" cannot be answered from a name.
+    ReviewGroup(
+        "manual_deb",
+        UNREPRODUCIBLE_UPDATE_REVIEW_ACTION,
+        f"Update manual deb versions on {TARGET_HOST}?",
+        [
+            ReviewEntry(
+                "unreproducible:apt-no-candidate:pcsw-uat-drift",
+                "pcsw-uat-drift (2.0)",
+                "update",
+                f"{SOURCE_HOST} has 2.0, {TARGET_HOST} has 1.0",
+            )
+        ],
+        item_noun="manual deb",
+        recorded_bodies={
+            "unreproducible:apt-no-candidate:pcsw-uat-drift": SnippetBodies(
+                install_body="set -eu\n"
+                "b=/var/tmp/pcsw-uat-drift\n"
+                'printf "Package: pcsw-uat-drift\\nVersion: 2.0\\nArchitecture: all\\n" > "$b/DEBIAN/control"\n'
+                "sudo DEBIAN_FRONTEND=noninteractive dpkg --install /var/tmp/pcsw-uat-drift_2.0_all.deb"
+            )
+        },
     ),
 ]
 
@@ -222,14 +270,14 @@ GROUPS = [
 # the target, and a rehearsal that abbreviates that away cannot show whether the instructions
 # read well on screen — which is the one thing this harness exists to check.
 GATE_MESSAGE = build_esm_gate_message(
-    ("ubuntu-esm-apps.sources", "ubuntu-esm-infra.sources"), Machines(SOURCE_HOST, TARGET_HOST), "apt_sync"
+    ("ubuntu-esm-apps.sources", "ubuntu-esm-infra.sources"), Machines(SOURCE_HOST, TARGET_HOST), "Apt packages"
 )
 
 # `ask_gate` answers with a bare bool (or None), which says nothing on its own in a
 # rehearsal transcript. These are what each answer MEANS to the run.
 GATE_ANSWERS = {
-    True: "continue — apt_sync runs and re-checks the attachment",
-    False: "skip apt_sync this run — other jobs continue",
+    True: "continue — Apt packages runs and re-checks the attachment",
+    False: "skip Apt packages this run — other jobs continue",
     None: "not asked — no TTY, the caller owns the fallback",
 }
 
@@ -243,7 +291,7 @@ async def main() -> None:
             title=f"{TARGET_HOST} needs an Ubuntu Pro attachment",
             message=GATE_MESSAGE,
             proceed_label=f"I have attached {TARGET_HOST} — check again and continue",
-            stop_label="Skip apt_sync this run (every other job still runs)",
+            stop_label="Skip Apt packages this run (every other job still runs)",
             console=console,
             ui=ui,
         )

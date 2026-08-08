@@ -12,7 +12,7 @@ reasons that have nothing to do with the shared pipeline.
 from __future__ import annotations
 
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any, ClassVar
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -149,6 +149,8 @@ class FakeSyncJob(PackageSyncJob):
 
     name: ClassVar[str] = "fake_sync"
     manager_id: ClassVar[str] = "fake"
+    item_noun: ClassVar[str] = "fake package"
+    item_noun_plural: ClassVar[str] = "fake packages"
     CONFIG_SCHEMA: ClassVar[dict[str, Any]] = {}
 
     def __init__(
@@ -194,13 +196,14 @@ class FakeSyncJob(PackageSyncJob):
         return CommandResult(0, "", "")
 
 
-def _job_for_manager(manager_id: str) -> FakeSyncJob:
-    """A `FakeSyncJob` wearing a real manager's id, for the strings keyed on it."""
+def _job_with_nouns(plural: str, *, origins: str = "repositories") -> FakeSyncJob:
+    """A `FakeSyncJob` wearing a real job's user-facing nouns, for the titles built from them."""
 
     class _Named(FakeSyncJob):
         pass
 
-    _Named.manager_id = manager_id
+    _Named.item_noun_plural = plural
+    _Named.origin_noun_plural = origins
     return _Named(make_context())
 
 
@@ -383,26 +386,49 @@ class TestReviewGroupsByAction:
         assert "apply" not in install_group.title.lower()
 
     def test_each_manager_names_its_own_software_and_its_own_origins(self) -> None:
-        """H86 — `PKG-NG-ORIGIN-CONVERGE` covers apt packages and flatpak applications alike, and
+        """H86 — `PKG-NG-ORIGIN-CONVERGE` covers apt packages and flatpaks alike, and
         the narrative calls what a flatpak comes from a remote, never a repository. One
         `ORIGIN_MISMATCH` title said "repositories" and "packages" for both, so the flatpak
         group named two things flatpak does not have.
         """
         diffs = [_diff("o1", DiffAction.REPORT_ONLY, DiffClass.ORIGIN_MISMATCH)]
 
-        apt_group = _job_for_manager("apt")._build_review_groups(diffs)[0]
-        flatpak_group = _job_for_manager("flatpak")._build_review_groups(diffs)[0]
+        apt_group = _job_with_nouns("apt packages")._build_review_groups(diffs)[0]
+        flatpak_group = _job_with_nouns("flatpaks", origins="remotes")._build_review_groups(diffs)[0]
 
         assert apt_group.title == "Installed from different repositories (apt packages)"
-        assert flatpak_group.title == "Installed from different remotes (flatpak applications)"
+        assert flatpak_group.title == "Installed from different remotes (flatpaks)"
 
-    def test_a_flatpak_action_group_says_applications_too(self) -> None:
-        """H86 — The noun is the manager's, not the report group's: an install screen names the
+    def test_a_flatpak_action_group_says_flatpaks_too(self) -> None:
+        """H86 — The noun is the job's, not the report group's: an install screen names the
         same things the report does.
         """
-        groups = _job_for_manager("flatpak")._build_review_groups([_diff("i1", DiffAction.INSTALL)])
+        groups = _job_with_nouns("flatpaks")._build_review_groups([_diff("i1", DiffAction.INSTALL)])
 
-        assert groups[0].title == "Install flatpak applications"
+        assert groups[0].title == "Install flatpaks on target-host?"
+
+    def test_every_action_title_names_the_machine_the_change_lands_on(self) -> None:
+        """#276, `PKG-FR-NAME-THE-MACHINES` — a screenful of titles where some name a machine
+        and some do not leaves the user to guess which is which. Every title that asks about
+        a change names the target, and the preposition follows the direction: software goes
+        ON a machine and comes OFF it.
+        """
+        job = FakeSyncJob(make_context())
+        diffs = [_diff("i1", DiffAction.INSTALL), _diff("r1", DiffAction.REMOVE, DiffClass.EXTRA_ON_TARGET)]
+
+        titles = [group.title for group in job._build_review_groups(diffs)]
+
+        assert titles == ["Install fake packages on target-host?", "Remove fake packages from target-host?"]
+
+    def test_a_report_group_asks_nothing_and_names_no_machine_it_changes(self) -> None:
+        """#276 — a reported condition changes nothing anywhere, so a trailing "on target-host?"
+        would promise a decision the screen does not take.
+        """
+        job = FakeSyncJob(make_context())
+
+        groups = job._build_review_groups([_diff("v1", DiffAction.REPORT_ONLY, DiffClass.VERSION_MISMATCH)])
+
+        assert groups[0].title == "Version differences (fake packages)"
 
 
 class TestConvergeDispatchByAction:
@@ -628,10 +654,12 @@ class TestAppliedItemsReachTheLog:
     """
 
     @pytest.mark.asyncio
-    async def test_every_applied_item_is_named_with_its_manager_and_machine(
+    async def test_every_applied_item_is_named_with_its_act_and_machine(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """J172 — one line per applied item, carrying all four of act, item, manager and machine."""
+        """J172 — one line per applied item, carrying act, item and machine. Which job wrote it
+        is the record's own `job` field, printed as the line's `[fake_sync]` prefix (#276).
+        """
         caplog.set_level(LogLevel.FULL.value, logger="pcswitcher.jobs.base")
         job = FakeSyncJob(make_context())
         diffs = (
@@ -642,8 +670,8 @@ class TestAppliedItemsReachTheLog:
 
         await job.apply()
 
-        assert "fake: install i1 on target-host" in caplog.messages
-        assert "fake: remove r1 on target-host" in caplog.messages
+        assert "install i1 on target-host" in caplog.messages
+        assert "remove r1 on target-host" in caplog.messages
 
     @pytest.mark.asyncio
     async def test_a_withdrawn_item_is_not_recorded_as_applied(self, caplog: pytest.LogCaptureFixture) -> None:
@@ -796,6 +824,64 @@ class _ThreeScreenJob(FakeSyncJob):
             _diff("r1", DiffAction.REMOVE, DiffClass.EXTRA_ON_TARGET),
         )
         return PackagePlan(manager=self.manager_id, diffs=diffs, groups=self._build_review_groups(diffs))
+
+
+@pytest.mark.asyncio
+class TestAJobThatAsksNothingLeavesNoFrame:
+    """#279 — a job's review is consulted whatever its plan holds, so what decides whether
+    the live display is handed over is whether a QUESTION follows. Each handover leaves one
+    frame — status line, every progress bar, the whole Recent Logs panel — in the scrollback
+    on purpose, as the context a question is answered in; seven package jobs and one
+    question between them left seven.
+
+    Driven through the real `TerminalUIReviewer`, because the decision lives inside
+    `review_items` and a fake reviewer never reaches it.
+    """
+
+    @staticmethod
+    def _declining_screen(_title: str, *, rows: Sequence[Any], **_kwargs: Any) -> MagicMock:
+        """A screen that declines whatever rows it is handed, so the answer cannot go stale
+        when an item's id changes."""
+        prompt = MagicMock()
+        prompt.ask = MagicMock(return_value={row.row_id: Decision.SKIP_ONCE.value for row in rows})
+        return prompt
+
+    @classmethod
+    async def _run(cls, job_factory: Callable[[JobContext], PackageSyncJob]) -> MagicMock:
+        """Execute one job through a real reviewer and return the UI it was given."""
+        console, _ = captured_console(terminal=True)
+        ui = MagicMock()
+        reviewer = TerminalUIReviewer(console, ui, source_hostname="atlas", target_hostname="nomad")
+        stdin = MagicMock()
+        stdin.isatty.return_value = True
+        with (
+            patch.object(sys, "stdin", stdin),
+            patch("pcswitcher.jobs.packages.review.decision_list", side_effect=cls._declining_screen),
+        ):
+            await job_factory(make_context(reviewer=reviewer)).execute()
+        return ui
+
+    async def test_a_job_whose_plan_is_empty_never_takes_the_display(self) -> None:
+        """H261."""
+        ui = await self._run(lambda context: _OrderRecordingJob(context, []))
+
+        ui.pause.assert_not_called()
+        ui.resume.assert_not_called()
+
+    async def test_a_job_holding_only_report_only_findings_never_takes_it_either(self) -> None:
+        """H261 — neither answering nor declining a reported condition changes anything, so
+        there is nothing to answer and nothing to answer it in front of."""
+        ui = await self._run(lambda context: _ReportOnlyRecordingJob(context, []))
+
+        ui.pause.assert_not_called()
+        ui.resume.assert_not_called()
+
+    async def test_a_job_with_a_real_question_still_takes_it(self) -> None:
+        """H262."""
+        ui = await self._run(lambda context: _OrderRecordingJob(context, [], source_items=[FakeItem("pkg-a")]))
+
+        ui.pause.assert_called_once()
+        ui.resume.assert_called_once()
 
 
 class TestNoWorkBetweenTheQuestionsOfOneRound:
@@ -989,11 +1075,7 @@ class TestFinalizeUnreproducible:
             ReviewOutcome(
                 decisions={},
                 was_interactive=True,
-                snippets={
-                    diff.item_id: SnippetBodies(
-                        install_body="sudo dpkg --install /tmp/x.deb", version_body="dpkg-query --show brscan3"
-                    )
-                },
+                snippets={diff.item_id: SnippetBodies(install_body="sudo dpkg --install /tmp/x.deb")},
             ),
         )
 
@@ -1034,7 +1116,7 @@ class TestFinalizeUnreproducible:
             ReviewOutcome(
                 decisions={diff.item_id: Decision.SKIP_ALWAYS},
                 was_interactive=True,
-                snippets={diff.item_id: SnippetBodies(install_body="echo x", version_body="echo v")},
+                snippets={diff.item_id: SnippetBodies(install_body="echo x")},
             ),
         )
 
@@ -1055,7 +1137,7 @@ class TestFinalizeUnreproducible:
             ReviewOutcome(
                 decisions={diff.item_id: Decision.SKIP_ALWAYS},
                 was_interactive=False,
-                snippets={diff.item_id: SnippetBodies(install_body="echo x", version_body="echo v")},
+                snippets={diff.item_id: SnippetBodies(install_body="echo x")},
             ),
         )
 
@@ -1092,7 +1174,7 @@ class TestBaseHooksAreNoOps:
             ReviewOutcome(
                 decisions={diff.item_id: Decision.SKIP_ALWAYS},
                 was_interactive=True,
-                snippets={diff.item_id: SnippetBodies(install_body="echo x", version_body="echo v")},
+                snippets={diff.item_id: SnippetBodies(install_body="echo x")},
             ),
         )
 
@@ -1467,6 +1549,8 @@ class _StubFailingPackageJob(PackageSyncJob):
 
     name: ClassVar[str] = "stub_failing_package"
     manager_id: ClassVar[str] = "stub-failing"
+    item_noun: ClassVar[str] = "stub item"
+    item_noun_plural: ClassVar[str] = "stub items"
 
     async def converge(self, diff: ItemDiff) -> CommandResult:
         raise NotImplementedError
@@ -1478,7 +1562,7 @@ class _StubFailingPackageJob(PackageSyncJob):
         return PackagePlan(manager="stub-failing", diffs=(), groups=())
 
     async def execute(self) -> None:
-        raise PackageItemFailures("stub-failing", [])
+        raise PackageItemFailures(self.item_noun, self.item_noun_plural, [])
 
 
 class _StubAbortingPackageJob(PackageSyncJob):
@@ -1488,6 +1572,8 @@ class _StubAbortingPackageJob(PackageSyncJob):
 
     name: ClassVar[str] = "stub_aborting_package"
     manager_id: ClassVar[str] = "stub-aborting"
+    item_noun: ClassVar[str] = "stub item"
+    item_noun_plural: ClassVar[str] = "stub items"
 
     async def converge(self, diff: ItemDiff) -> CommandResult:
         raise NotImplementedError

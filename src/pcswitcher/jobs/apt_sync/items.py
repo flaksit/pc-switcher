@@ -114,6 +114,12 @@ def pin_filename(item_id: str) -> str:
     return item_id.removeprefix(APT_PIN_ID_PREFIX)
 
 
+def config_filename(item_id: str) -> str:
+    """`apt:config:<filename>` -> `<filename>`, for looking a config file's captured bodies
+    back up."""
+    return item_id.removeprefix(APT_CONFIG_ID_PREFIX)
+
+
 def hold_name(item_id: str) -> str:
     """`apt:hold:<name>` -> `<name>`."""
     return item_id.removeprefix(APT_HOLD_ID_PREFIX)
@@ -258,9 +264,12 @@ class AptPinItem:
 class AptConfigItem:
     """One apt behavior-configuration file under `/etc/apt/apt.conf.d` (`PKG-FR-APT-IGNORES`).
 
-    Synced as an opaque item — whole-file digest only, no parsing of apt's config
-    grammar — since these files are plain, hand-authored `Acquire::.../APT::...`
-    stanzas with no sub-item this phase needs to address individually.
+    Synced as an opaque item — the whole-file digest is the whole comparison, and apt's
+    config grammar is never parsed — since these files are plain, hand-authored
+    `Acquire::.../APT::...` stanzas with no sub-item this phase needs to address
+    individually. The digest carried here is the comparison and is not what the user is
+    shown: a file both machines hold with different content is reviewed against both
+    bodies, read once the diff finds it changed (`diff_apt_configs`).
     """
 
     filename: str
@@ -334,9 +343,12 @@ class RemovalVocabulary(NamedTuple):
 # the decision column, where the group title above it already says what is being deleted, so
 # the longer phrase said the noun once per row and pushed the column halfway across the
 # screen. The title keeps the noun; the answer keeps the verb.
+# `plural` is the WHOLE noun, "apt" included: these are apt's own files rather than the
+# packages `AptSyncJob.item_noun_plural` names, so the group title reads them out of here
+# instead of assembling one out of the job's manager id.
 REPO_REMOVAL_VERBS: dict[ItemClass, RemovalVocabulary] = {
-    ItemClass.APT_SOURCE: RemovalVocabulary("remove", "repositories"),
-    ItemClass.APT_PIN: RemovalVocabulary("remove", "pin files"),
+    ItemClass.APT_SOURCE: RemovalVocabulary("remove", "apt repositories"),
+    ItemClass.APT_PIN: RemovalVocabulary("remove", "apt pin files"),
 }
 
 

@@ -79,9 +79,13 @@ Version-first, before looking at the bodies: a snippet edited to change a commen
 
 No machine-specific mark: `PKG-FR-NO-MARK-ON-SNAP-REVISION` one ecosystem over — nobody holds a version as a standing preference about one machine, and a mark would leave the two machines' records disagreeing about software neither would raise again.
 
-## `PKG-FR-VERSION-SNIPPET`: both bodies mandatory, no fallback
+## `PKG-FR-VERSION-SNIPPET`: the bodies a kind requires, no fallback
 
-An entry whose version is guessed states something about what is installed that nobody established. One whose version is defaulted to "unknown" silently converges on presence again — the behaviour the second body exists to replace.
+An unowned-path entry whose version is guessed states something about what is installed that nobody established. One whose version is defaulted to "unknown" silently converges on presence again — the behaviour the second body exists to replace.
+
+Why only that kind carries one: `dpkg-query`, `snap list` and `flatpak list` already answer the version question for the other three (`PKG-FR-MANUAL-VERSION`), so requiring a version body there would have the user write a command nothing ever runs, and would call an entry complete for its kind malformed.
+
+Why a redundant one is malformed rather than ignored: accepting it lets the file drift back to a shape the review no longer authors, and a body sitting in the registry unread reads to its author as something the sync uses.
 
 Why the version snippet is not gated by `--confirm-each-command`: it runs on every sync, on both machines, before the run has proposed anything. A confirmation would put a question per item per machine in front of the user before they had been shown a single change. The obligation moves to the author instead, and the editor screen says so.
 
@@ -90,6 +94,18 @@ Why the version snippet is not gated by `--confirm-each-command`: it runs on eve
 Three of the four jobs have a manager whose own removal is exact (`apt-get remove`, `snap remove`, `flatpak uninstall`). The fourth has a path (`rm -rf`).
 
 A second authored body would buy the one direction the user can always carry out by hand, at the price of an entry nobody can complete — every existing entry becomes malformed under the new schema. The tradeoff was rejected: `PKG-NG-MANUAL-REMOVE-REACH` names the limit instead.
+
+## `PKG-FR-DEB-AMBIGUITY`
+
+The detection predicate answers "can apt install this name". That answer is complete for every state but one: a snippet on record for a name apt CAN install. Either the user hand-installed the package and apt merely also carries the name, or it is an ordinary apt package with a snippet left over from before. The evidence is identical in both cases, so a tool that picks one is guessing — and both guesses are expensive. "Leftover" deletes the user's own work; "hand-installed" leaves a run replaying a snippet over software apt already maintains.
+
+Nothing is recorded because there is nothing a record could say. An answer of "I installed it" does not change the state that produced the question — apt goes on offering the package — so a marker would only suppress a question whose ground still holds, and the next reader of the registry would have no way to tell a settled entry from a stale one. The question returning every sync is the intended outcome: it is the tool saying the machine is still in an ambiguous state, and the user ends it by acting on the machine.
+
+The suggested pin is not a violation of `PKG-FR-PIN-NOT-INVENTORY`, which stands unamended. That article forbids reading a pin as a statement about the packages it names, and nothing here does: pc-switcher asks apt whether it has a repository it can install the package from, and `Candidate: (none)` is apt's own answer to apt's own question. The pin is an input to that computation, exactly as a repository list is. What the guidance offers the user is a way to change what apt concludes, not a channel for annotating an inventory.
+
+`apt-mark hold` is named as the weaker lever rather than as an alternative: it defers apt's own automatic action and an explicit `apt install` overrides it, so it does not make the repository copy ineligible and does not move apt's candidate. Neither lever removes the repository rows from `apt-cache policy`'s version table.
+
+apt only. snapd assigns an `x<N>` revision only to a local-file install and a flatpak ref carries the remote name recorded at install, so in both ecosystems the manager's own record already says how the software got there and a snippet cannot contradict it — there is no tie for the user to break.
 
 ## `PKG-FR-REGISTRY-CONSENT`: abort, not fail
 

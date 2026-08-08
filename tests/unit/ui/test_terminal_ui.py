@@ -163,6 +163,45 @@ def test_track_gives_each_unit_of_work_its_own_persistent_bar() -> None:
     assert root.completed == 30
 
 
+def test_a_bar_is_keyed_on_the_identifier_and_labelled_with_the_display_name() -> None:
+    """#280: the bar reads as prose, but rewording a job must not split its bar in two."""
+    output = StringIO()
+    console = Console(file=output, force_terminal=True, width=120)
+    ui = TerminalUI(console=console, max_log_lines=5, total_steps=None)
+
+    ui.update_job_progress("manual_deb_sync", ProgressUpdate(percent=10), "Manual debs")
+    ui.update_job_progress("manual_deb_sync", ProgressUpdate(percent=90), "Manual debs")
+
+    assert list(ui._job_tasks) == ["manual_deb_sync"]
+    description = ui._progress._tasks[ui._job_tasks["manual_deb_sync"]].description
+    assert "Manual debs" in description
+    assert "manual_deb_sync" not in description
+
+
+async def test_a_bar_renders_markup_like_content_literally() -> None:
+    """A description is Rich markup, so bracketed labels and items must be escaped.
+
+    An item is a package name, path or stderr fragment: `[installed]` would silently
+    vanish and `[/opt/foo]` would raise MarkupError mid-run, exactly as an unwrapped log
+    line once did to the Recent Logs panel.
+    """
+    output = StringIO()
+    console = Console(file=output, force_terminal=True, width=200)
+    ui = TerminalUI(console=console, max_log_lines=5, total_steps=1)
+
+    ui.start()
+    try:
+        ui.update_job_progress("stub", ProgressUpdate(percent=50, item="[/opt/foo] [installed]"), "[Widgets]")
+        # Forces a full render plus the teardown frame; neither may raise.
+        ui.stop()
+        rendered = output.getvalue()
+    finally:
+        ui.stop()
+
+    assert "[Widgets]" in rendered
+    assert "[/opt/foo] [installed]" in rendered
+
+
 def test_untracked_updates_share_one_bar_per_job() -> None:
     """Without `track`, a job keeps a single bar — unchanged behaviour for other jobs."""
     output = StringIO()
@@ -492,6 +531,7 @@ async def test_core_us_tui_as3_progress_and_connection_events() -> None:
         consume_task = asyncio.create_task(ui.consume_events(queue))
 
         # Simulate job execution with progress and connection events
+        job_id = "package_sync"
         job_name = "Package Sync"
 
         # Connection event
@@ -500,7 +540,8 @@ async def test_core_us_tui_as3_progress_and_connection_events() -> None:
         # Progress event
         event_bus.publish(
             ProgressEvent(
-                job=job_name,
+                job=job_id,
+                display_name=job_name,
                 update=ProgressUpdate(percent=25, item="Installing nginx"),
             )
         )
@@ -508,7 +549,8 @@ async def test_core_us_tui_as3_progress_and_connection_events() -> None:
         # Progress event
         event_bus.publish(
             ProgressEvent(
-                job=job_name,
+                job=job_id,
+                display_name=job_name,
                 update=ProgressUpdate(percent=75, item="Configuring packages"),
             )
         )
@@ -516,7 +558,8 @@ async def test_core_us_tui_as3_progress_and_connection_events() -> None:
         # Final progress
         event_bus.publish(
             ProgressEvent(
-                job=job_name,
+                job=job_id,
+                display_name=job_name,
                 update=ProgressUpdate(percent=100, item="Sync complete"),
             )
         )
@@ -536,8 +579,8 @@ async def test_core_us_tui_as3_progress_and_connection_events() -> None:
         # Verify connection status appears
         assert "connect" in rendered.lower(), "Connection status should appear"
 
-        # Verify job is tracked internally
-        assert job_name in ui._job_tasks, "UI should track job in internal state"
+        # Bars are keyed on the identifier, labelled with the display name.
+        assert job_id in ui._job_tasks, "UI should track job in internal state"
 
     finally:
         ui.stop()

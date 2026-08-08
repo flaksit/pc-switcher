@@ -367,7 +367,10 @@ class SnapSyncJob(PackageSyncJob):
     """
 
     name: ClassVar[str] = "snap_sync"
+    display_name: ClassVar[str] = "Snaps"
     manager_id: ClassVar[str] = "snap"
+    item_noun: ClassVar[str] = "snap"
+    item_noun_plural: ClassVar[str] = "snaps"
 
     # No configurable properties: mirrors AptSyncJob's empty schema — only the enable
     # flag in sync_jobs is needed for this slice.
@@ -741,6 +744,7 @@ class SnapSyncJob(PackageSyncJob):
         """Name this job's destructive first-sync scope (ADR-015): installed snaps."""
         return FirstSyncScope(
             job_name=cls.name,
+            job_display_name=cls.display_name,
             scope_items=["installed snaps (name, channel, revision)"],
             mechanism="snap install/refresh/remove per item, after review",
         )

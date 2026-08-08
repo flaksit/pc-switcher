@@ -12,6 +12,10 @@ move, one key per option sets the focused row, Enter confirms the screen. A scre
 offers two answers is the same widget with one option missing, so the difference the user
 sees is a shorter legend rather than a different flow.
 
+Every row starts on an answer, which is what makes Enter alone a valid response — except on
+a screen that opts out with `UNANSWERED`, where no answer is harmless enough to start on and
+Enter is refused until every row has been answered.
+
 Shaped after `questionary.prompts.checkbox` so it composes with the paused Rich Live
 display exactly as the other prompts do: a `FormattedTextControl` whose token stream
 carries `[SetCursorPosition]` for the focused row (which is what makes prompt_toolkit
@@ -48,6 +52,7 @@ from pcswitcher.jobs.packages.prompt_navigation import step
 
 __all__ = [
     "PREFIX_WIDTH",
+    "UNANSWERED",
     "DecisionOption",
     "DecisionRow",
     "decision_list",
@@ -61,6 +66,27 @@ __all__ = [
 # decision — least of all the one that is recorded and never asked again. `decision_list` rejects
 # it rather than trusting every future caller to remember.
 FORBIDDEN_KEY = "a"
+
+# The `DecisionRow.default` for a row that must not start answered, and the value the
+# control carries for it until a key sets a real one. Opt-in per screen: a row that names
+# a real option value behaves exactly as it always has, so a screen with a harmless answer
+# keeps starting on it (`PKG-FR-HARMLESS-DEFAULT`).
+#
+# It is for the screen where NO answer is harmless — every one of them writes a record that
+# outlives the run — so there is nothing safe to start on and a confirmed-unread screen must
+# not be indistinguishable from a decision. `<enter>` is refused while any row still carries
+# it, and the refusal names the rows.
+#
+# Not a value any option may take: it must be unreachable by a keypress, and the guard has
+# to be able to tell "nobody has answered this" from every answer on offer.
+UNANSWERED = "__unanswered__"
+
+# What an unanswered row shows in the decision column. Yellow, the one place this widget
+# spends the colour the rest of the TUI uses for warnings and gates: an unanswered row IS
+# the thing standing between the user and confirming, and the glyph is a question because
+# the row is still a question.
+_UNANSWERED_WORD = "not answered"
+_UNANSWERED_GLYPH = "?"
 
 _POINTER = "»"
 # " » " / "   " — the pointer cell, then one glyph and its trailing space.
@@ -108,6 +134,8 @@ _DECISION_STYLE = Style(
         # destructive answer here is routinely the green one ("remove", "delete
         # repository"), so red would point at the wrong row.
         ("decision-permanent", "fg:#d75f87 bold"),
+        ("decision-unanswered", "fg:#d7af00 bold"),
+        ("unanswered-notice", "fg:#d7af00"),
         ("detail", "fg:#8a8a8a"),
     ]
 )
@@ -140,9 +168,18 @@ class DecisionOption:
     hint: str = ""
 
 
+# Never in a screen's `options`: it is not an answer, so it has no key and no keybinding.
+# It exists so the column, the glyph and the style of an unanswered row are decided by the
+# same code that decides them for every real answer.
+_UNANSWERED_OPTION = DecisionOption(value=UNANSWERED, key="", word=_UNANSWERED_WORD, glyph=_UNANSWERED_GLYPH)
+
+
 @dataclass(frozen=True)
 class DecisionRow:
     """One item awaiting a decision on a screen.
+
+    `default` is the option value the row starts on, or `UNANSWERED` for a screen that must
+    not pre-answer anything.
 
     `prefix` is set only when this row's action differs from the group's — the group title
     already names the common one, so repeating it on every row is noise. `act_word`
@@ -165,6 +202,18 @@ def _cell(row: DecisionRow, option: DecisionOption) -> str:
     return row.act_word if option.is_act and row.act_word else option.word
 
 
+def _column_options(rows: Sequence[DecisionRow], options: Sequence[DecisionOption]) -> tuple[DecisionOption, ...]:
+    """`options`, plus the unanswered pseudo-option where a row starts unanswered.
+
+    Read off the DEFAULTS rather than off the current decisions so the decision column
+    cannot move as rows are answered: a table whose column shifts under the user's own
+    keystrokes is unreadable, and nothing ever sets a row back to unanswered.
+    """
+    if any(row.default == UNANSWERED for row in rows):
+        return (*options, _UNANSWERED_OPTION)
+    return tuple(options)
+
+
 def layout_widths(
     rows: Sequence[DecisionRow],
     options: Sequence[DecisionOption],
@@ -178,7 +227,9 @@ def layout_widths(
     to `item_width`, which then becomes the longest item — so the column position is the
     same computation either way.
     """
-    decision_width = max((len(_cell(row, option)) for row in rows for option in options), default=0)
+    decision_width = max(
+        (len(_cell(row, option)) for row in rows for option in _column_options(rows, options)), default=0
+    )
     budget = total_width - PREFIX_WIDTH - _COLUMN_GAP - decision_width - _RIGHT_MARGIN
     item_width = max(budget, _MIN_ITEM_WIDTH)
     longest = max((len(_row_text(row)) for row in rows), default=0)
@@ -197,6 +248,8 @@ def wrap_label(label: str, width: int) -> list[str]:
 def _decision_class(option: DecisionOption) -> str:
     """The style class for a chosen answer's glyph and column word — one per state, so the
     glyph and the word always agree and a colourless terminal loses nothing but the tint."""
+    if option.value == UNANSWERED:
+        return "decision-unanswered"
     if option.is_act:
         return "decision-act"
     return "decision-permanent" if option.is_permanent else "decision-skip"
@@ -216,7 +269,7 @@ def render_rows(
     control below calls exactly this. `focused` outside `range(len(rows))` (the control
     uses -1 once answered) renders no pointer and no `[SetCursorPosition]`.
     """
-    by_value = {option.value: option for option in options}
+    by_value = {option.value: option for option in _column_options(rows, options)}
     item_width, column = layout_widths(rows, options, total_width=total_width)
     tokens: list[tuple[str, str]] = []
 
@@ -258,7 +311,7 @@ def render_rows(
     return tokens
 
 
-def legend(options: Sequence[DecisionOption], *, width: int = 0) -> str:
+def legend(options: Sequence[DecisionOption], *, width: int = 0, every_row_required: bool = False) -> str:
     """The instruction block under the title: one line per ANSWER, then the editing keys.
 
     An answer gets a line of its own because the column word cannot carry what the answer
@@ -279,6 +332,10 @@ def legend(options: Sequence[DecisionOption], *, width: int = 0) -> str:
     `width` wraps: an answer's hint continues under itself, and the editing keys break
     BETWEEN entries (left to the terminal that wrap lands mid-phrase, "shift+key sets /
     every row"). 0 means no wrapping at all.
+
+    `every_row_required` says so on the `<enter>` entry itself, for the screen where no row
+    starts answered (`UNANSWERED`). The refusal names the rows, but only after the user has
+    pressed a key that did nothing — telling them up front is what stops the press.
     """
     keyed = [f"<{option.key}> {option.word}" for option in options]
     hint_column = max((len(text) for text in keyed), default=0) + len(_HINT_GAP)
@@ -302,7 +359,8 @@ def legend(options: Sequence[DecisionOption], *, width: int = 0) -> str:
         else:
             lines.append(answer)
 
-    editing = ["<space> cycles", "<shift+key> sets every row", "<enter> confirm"]
+    confirm = "<enter> confirm, once every row is answered" if every_row_required else "<enter> confirm"
+    editing = ["<space> cycles", "<shift+key> sets every row", confirm]
     if width <= 0:
         return "\n".join([*lines, _LEGEND_SEPARATOR.join(editing)])
 
@@ -335,6 +393,11 @@ class _DecisionListControl(FormattedTextControl):
         self.options = tuple(options)
         self.decisions: dict[str, str] = {row.row_id: row.default for row in rows}
         self.focused = 0
+        # Header state, held here because the header is rebuilt from it on every frame:
+        # whether the screen has been confirmed (which takes the legend off), and the
+        # refusal a rejected `<enter>` leaves standing.
+        self.answered = False
+        self.notice: str | None = None
         self._width_of_screen = width_of_screen
         # The pointer marks the focused row; a terminal cursor blinking on top of the glyph
         # would be a second, competing marker. `[SetCursorPosition]` is still emitted — it
@@ -350,6 +413,16 @@ class _DecisionListControl(FormattedTextControl):
             total_width=self._width_of_screen(),
         )
 
+    def set_decision(self, row_id: str, value: str) -> None:
+        """Answer one row, dropping any refusal that named it: a notice still listing a row
+        the user has just answered is worse than none."""
+        self.decisions[row_id] = value
+        self.notice = None
+
+    def set_every_decision(self, value: str) -> None:
+        self.decisions = dict.fromkeys(self.decisions, value)
+        self.notice = None
+
 
 def _validate(rows: Sequence[DecisionRow], options: Sequence[DecisionOption]) -> None:
     """Reject a screen no caller should be able to build — including one that would steal
@@ -363,6 +436,15 @@ def _validate(rows: Sequence[DecisionRow], options: Sequence[DecisionOption]) ->
         raise ValueError(f"{FORBIDDEN_KEY!r} is conventionally abort and cannot set a decision")
     if any(len(key) != 1 or not key.islower() for key in keys):
         raise ValueError(f"decision keys must be single lowercase letters, got {keys}")
+    values = {option.value for option in options}
+    if UNANSWERED in values:
+        raise ValueError(f"{UNANSWERED!r} marks a row nobody has answered and cannot be an answer")
+    # A row starting on a value no option offers renders as a KeyError deep in the token
+    # stream, which is a stack trace rather than a message. Caught here so the sentinel
+    # cannot be misspelt into one either.
+    unknown = {row.default for row in rows} - values - {UNANSWERED}
+    if unknown:
+        raise ValueError(f"a row's default must be an offered answer or {UNANSWERED!r}, got {sorted(unknown)}")
 
 
 def _hang(text: str, width: int) -> str:
@@ -373,6 +455,47 @@ def _hang(text: str, width: int) -> str:
     """
     lines = [line for paragraph in text.split("\n") for line in (textwrap.wrap(paragraph, max(width, 1)) or [""])]
     return "\n".join(f"{_LEGEND_INDENT}{line}" for line in lines)
+
+
+def _unanswered_notice(rows: Sequence[DecisionRow], decisions: Mapping[str, str]) -> str | None:
+    """The line a refused `<enter>` puts up, naming every row still unanswered — or None
+    when there are none and the screen may be confirmed.
+
+    Names them because "answer everything first" on a list longer than the screen is not an
+    instruction anyone can act on without hunting for the rows it means.
+    """
+    pending = [_row_text(row) for row in rows if decisions[row.row_id] == UNANSWERED]
+    if not pending:
+        return None
+    return f"Every row needs an answer before <enter>. Not answered yet: {', '.join(pending)}."
+
+
+def _header_tokens(
+    control: _DecisionListControl,
+    *,
+    message: str,
+    explanation: str | None,
+    every_row_required: bool,
+    width: int,
+) -> list[tuple[str, str]]:
+    """The block above the table: the question, its ground, the key legend, and any refusal
+    a rejected `<enter>` left standing. Rebuilt every frame, so it reads the control's own
+    state rather than a snapshot taken when the screen was built.
+    """
+    tokens = [("class:qmark", "?"), ("class:question", f" {message}")]
+    if explanation:
+        tokens.append(("class:detail", f"\n{_hang(explanation, width)}"))
+    if not control.answered:
+        # Already wrapped by `legend`, whose continuation lines carry their own hanging
+        # indent — so this only prepends the block indent, never re-wraps.
+        packed = legend(control.options, width=width, every_row_required=every_row_required)
+        hung = "\n".join(f"{_LEGEND_INDENT}{line}" for line in packed.split("\n"))
+        tokens.append(("class:instruction", f"\n{hung}"))
+    if control.notice:
+        # Last, so it sits against the table it is about rather than above the legend the
+        # user has already read past.
+        tokens.append(("class:unanswered-notice", f"\n{_hang(control.notice, width)}"))
+    return tokens
 
 
 def decision_list(
@@ -394,23 +517,24 @@ def decision_list(
     read as an annotation on an answer the user had not made yet. It survives the answer,
     unlike the legend — the ground the decision was taken on is part of what the scrollback
     records.
+
+    A row whose `default` is `UNANSWERED` starts on no answer at all, and `<enter>` is
+    REFUSED while any such row is left — with a line naming the ones still outstanding,
+    directly above the table where they are. Without it a key that does nothing is
+    indistinguishable from a screen that has hung.
     """
     _validate(rows, options)
     control = _DecisionListControl(rows, options, _screen_width)
-    answered = False
+    starts_unanswered = any(row.default == UNANSWERED for row in rows)
 
     def header_tokens() -> list[tuple[str, str]]:
-        tokens = [("class:qmark", "?"), ("class:question", f" {message}")]
-        width = _screen_width() - len(_LEGEND_INDENT)
-        if explanation:
-            tokens.append(("class:detail", f"\n{_hang(explanation, width)}"))
-        if not answered:
-            # Already wrapped by `legend`, whose continuation lines carry their own hanging
-            # indent — so this only prepends the block indent, never re-wraps.
-            packed = legend(options, width=width)
-            hung = "\n".join(f"{_LEGEND_INDENT}{line}" for line in packed.split("\n"))
-            tokens.append(("class:instruction", f"\n{hung}"))
-        return tokens
+        return _header_tokens(
+            control,
+            message=message,
+            explanation=explanation,
+            every_row_required=starts_unanswered,
+            width=_screen_width() - len(_LEGEND_INDENT),
+        )
 
     bindings = KeyBindings()
 
@@ -435,13 +559,13 @@ def decision_list(
 
     def _setter(value: str) -> Callable[[KeyPressEvent], None]:
         def set_focused(_event: KeyPressEvent) -> None:
-            control.decisions[control.rows[control.focused].row_id] = value
+            control.set_decision(control.rows[control.focused].row_id, value)
 
         return set_focused
 
     def _set_all(value: str) -> Callable[[KeyPressEvent], None]:
         def set_every(_event: KeyPressEvent) -> None:
-            control.decisions = dict.fromkeys(control.decisions, value)
+            control.set_every_decision(value)
 
         return set_every
 
@@ -450,14 +574,23 @@ def decision_list(
         bindings.add(option.key.upper(), eager=True)(_set_all(option.value))
 
     def _cycle(_event: KeyPressEvent) -> None:
-        """Step the focused row through the options, for a user who has not read the legend."""
+        """Step the focused row through the options, for a user who has not read the legend.
+
+        An unanswered row steps to the FIRST option: unanswered is not one of the states
+        being cycled, and cycling back into it would let the user leave a row on a value
+        `<enter>` refuses.
+        """
         values = [option.value for option in options]
         row_id = control.rows[control.focused].row_id
-        control.decisions[row_id] = values[(values.index(control.decisions[row_id]) + 1) % len(values)]
+        current = control.decisions[row_id]
+        following = values[(values.index(current) + 1) % len(values)] if current in values else values[0]
+        control.set_decision(row_id, following)
 
     def _confirm(event: KeyPressEvent) -> None:
-        nonlocal answered
-        answered = True
+        control.notice = _unanswered_notice(control.rows, control.decisions)
+        if control.notice is not None:
+            return
+        control.answered = True
         # The answered list stays in the scrollback as the record of what was decided, so
         # the pointer and the legend — both meaningless once it is answered — come off it.
         control.focused = -1

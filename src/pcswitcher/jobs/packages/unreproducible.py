@@ -58,7 +58,7 @@ from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import ClassVar, Literal, override
+from typing import ClassVar, override
 
 from rich.markup import escape
 
@@ -69,7 +69,9 @@ from pcswitcher.jobs.packages.items import (
     DiffClass,
     ItemClass,
     ItemDiff,
+    UnreproducibleOrigin,
     build_version_mismatch_detail,
+    unreproducible_id_prefix,
 )
 from pcswitcher.jobs.packages.review import (
     UNREPRODUCIBLE_RETRY_REVIEW_ACTION,
@@ -79,6 +81,7 @@ from pcswitcher.jobs.packages.review import (
     ReviewEntry,
     ReviewGroup,
     ReviewOutcome,
+    change_title,
 )
 from pcswitcher.jobs.packages.state import (
     SNIPPET_REGISTRY_RELPATH,
@@ -87,19 +90,17 @@ from pcswitcher.jobs.packages.state import (
     Snippet,
     SnippetBodies,
     SnippetRegistry,
+    VersionedSnippet,
     filter_inert,
     load_snippets_from_text,
     marks_on_either,
+    snippet_from_bodies,
 )
 from pcswitcher.jobs.packages.sync_core import ConvergeItemDeclined, PackagePlan, PackageSyncJob
 from pcswitcher.models import CommandResult, Host, LogLevel, SyncAborted
 from pcswitcher.redaction import redact_credentials
 
 __all__ = ["UnreproducibleItem", "UnreproducibleSyncJob", "lines_of"]
-
-#: The origins an `UnreproducibleItem` can be found under. One per detector, and part of
-#: identity rather than a field alongside it — see `UnreproducibleItem`.
-UnreproducibleOrigin = Literal["apt-no-candidate", "flatpak-no-remote", "unowned-path", "snap-sideload"]
 
 
 def lines_of(output: str) -> list[str]:
@@ -161,7 +162,7 @@ class UnreproducibleItem:
         (a job picking its own items out of a decision file that also holds another job's)
         builds the prefix from the same expression `item_id` does.
         """
-        return f"unreproducible:{origin}:"
+        return unreproducible_id_prefix(origin)
 
     @property
     def item_id(self) -> str:
@@ -203,6 +204,10 @@ class UnreproducibleSyncJob(PackageSyncJob):
         # that rewrites a snippet opens its editors on that content rather than on nothing.
         # Collected in `plan()`, where the registry is already being read per item.
         self._recorded_bodies: dict[str, SnippetBodies] = {}
+        # The registry entries this run put `PKG-FR-DEB-AMBIGUITY`'s question about, so
+        # `after_review()` can act on the answers without re-deriving which entries they were
+        # about. Empty for every job but `manual_deb_sync`.
+        self._ownership_ids: frozenset[str] = frozenset()
 
     # -- Detection, supplied per job ----------------------------------------------------
 
@@ -236,8 +241,8 @@ class UnreproducibleSyncJob(PackageSyncJob):
         rather than a field captured with the item.
 
         `None` for an id this machine cannot answer for, and every reason collapses into
-        that one value: the item is not installed here, the manager printed no version, the
-        entry has no `version_body`, or that body failed. A comparison needs two answers, so
+        that one value: the item is not installed here, the manager printed no version, an
+        unowned path has no registry entry, or its `version_body` failed. A comparison needs two answers, so
         a `None` on either side produces no item rather than a claimed difference.
 
         Batched: an implementation issues one command over the whole set wherever its
@@ -257,6 +262,26 @@ class UnreproducibleSyncJob(PackageSyncJob):
         worth.
         """
         ...
+
+    async def ownership_questions(self, marks: Mapping[str, DecisionEntry]) -> Sequence[ReviewGroup]:
+        """Hook: the groups asking who put a registry-backed item on the source, where this
+        job's package manager can account for it after all (`PKG-FR-DEB-AMBIGUITY`).
+
+        Nothing on the base, and only `manual_deb_sync` overrides it. apt is the one
+        ecosystem whose own record a snippet can contradict without either being wrong: a
+        name apt can install may still have been put there by hand, and apt says nothing
+        about which. snapd's `x<N>` revision proves a local-file install and a flatpak
+        origin names the remote the bytes came from, so for those three a snippet either
+        agrees with the manager or names something the manager does not have — never a state
+        the user has to break a tie in.
+
+        `marks` is the run's own `marks_on_either` set, so an item recorded machine-specific
+        is not asked about: the mark already puts that item out of the run, and a question
+        about who installed it would be asked about software the user has said not to touch.
+
+        Read-only, like everything else `plan()` reaches.
+        """
+        return ()
 
     def removal_warning(self) -> str | None:
         """What the removal screen says above the rows, where the removal reaches further
@@ -290,12 +315,58 @@ class UnreproducibleSyncJob(PackageSyncJob):
         Two enabled unreproducible jobs each push the same shared file. The second push is
         additive by construction — it sends a superset of what its own predecessor sent —
         so `_guard_registry_overwrite` passes it silently and no question is put twice.
+
+        `_drop_snippets_the_package_manager_owns` sits between the finalize and the push,
+        for the reason `_author_replacement` writes to both registries directly: an entry
+        deleted on the source alone is exactly what `_guard_registry_overwrite` calls a lost
+        entry, so the push would put a consent question in front of the user about the
+        deletion they had just asked for.
         """
         assert self._accepted_plan is not None
         assert self._accepted_outcome is not None
         await self._finalize_unreproducible(self._accepted_plan, self._accepted_outcome)
+        await self._drop_snippets_the_package_manager_owns()
         await self._push_snippet_registry()
         self._promote_authored_snippets_to_install()
+
+    async def _drop_snippets_the_package_manager_owns(self) -> None:
+        """Delete every registry entry this run's user said was the package manager's after
+        all (`PKG-FR-DEB-AMBIGUITY`).
+
+        Deleted on BOTH machines rather than on the source and then pushed. The push is a
+        whole-file overwrite gated on being additive, and a source entry the target still
+        holds is what that gate calls a LOST entry (`_guard_registry_overwrite`) — so a
+        source-only delete would ask the user to consent to their own answer. Writing the
+        same deletion on both leaves the two copies equal, which is the state the gate exists
+        to protect. `PKG-FR-REGISTRY-CONSENT` is satisfied rather than bypassed: it gates a
+        transfer that would lose an entry the user has not been shown, and here the entry was
+        on screen and its deletion is the answer.
+
+        Nothing is deleted where nobody answered (`PKG-FR-NO-TERMINAL` — the command line
+        cannot answer this question either, so an outcome that was not interactive carries
+        only the default) or during a dry run (ADR-014). One INFO line per entry, for
+        `PKG-FR-LOG-DECISIONS`'s reason: a registry entry is the user's own work, and it does
+        not disappear silently.
+        """
+        assert self._accepted_outcome is not None
+        outcome = self._accepted_outcome
+        if self.context.dry_run or not outcome.was_interactive:
+            return
+
+        given_to_apt = sorted(
+            item_id for item_id in self._ownership_ids if outcome.decisions.get(item_id) is Decision.APPLY
+        )
+        if not given_to_apt:
+            return
+
+        for machine, executor in ((self.machines.source, self.source), (self.machines.target, self.target)):
+            await SnippetRegistry(executor, machine).remove(given_to_apt)
+        for item_id in given_to_apt:
+            self._log(
+                Host.SOURCE,
+                LogLevel.INFO,
+                f"dropped the install snippet for {item_id}: the package is the package manager's",
+            )
 
     def _promote_authored_snippets_to_install(self) -> None:
         """Reclassify every on-the-fly-authored item's diff `REPORT_ONLY -> INSTALL`/`CHANGE`
@@ -510,17 +581,25 @@ class UnreproducibleSyncJob(PackageSyncJob):
         `item_id` is absent because the pair is matched on it. `authored_at` and `authored_on`
         are rendered as ONE `authored` field: they are two halves of a single authoring
         record, and naming them apart would put two lines in front of the user for one fact.
+
+        The installed-version row appears only for an unowned path, the one kind that has
+        such a body. Both copies are the same `item_id`, so either both carry one or neither
+        does.
         """
-        return [
+        fields = [
             ("label", target_snippet.label, source_snippet.label),
             ("install snippet", target_snippet.install_body, source_snippet.install_body),
-            ("installed-version snippet", target_snippet.version_body, source_snippet.version_body),
+        ]
+        if isinstance(target_snippet, VersionedSnippet) and isinstance(source_snippet, VersionedSnippet):
+            fields.append(("installed-version snippet", target_snippet.version_body, source_snippet.version_body))
+        fields.append(
             (
                 "authored",
                 f"{target_snippet.authored_at} on {target_snippet.authored_on}",
                 f"{source_snippet.authored_at} on {source_snippet.authored_on}",
-            ),
-        ]
+            )
+        )
+        return fields
 
     # -- plan() / converge() ------------------------------------------------------------
 
@@ -576,9 +655,7 @@ class UnreproducibleSyncJob(PackageSyncJob):
         for item_id, item in source_items.items():
             snippet = await registry.get(item_id)
             if snippet is not None:
-                self._recorded_bodies[item_id] = SnippetBodies(
-                    install_body=snippet.install_body, version_body=snippet.version_body
-                )
+                self._recorded_bodies[item_id] = snippet.bodies
             if item_id not in target_items:
                 diffs.append(self._diff_for(item, DiffAction.INSTALL, snippet is not None, detail=None))
                 continue
@@ -599,7 +676,11 @@ class UnreproducibleSyncJob(PackageSyncJob):
         diffs.extend(self._diff_for(item, DiffAction.REMOVE, True, detail=None) for item in self._removable.values())
 
         all_diffs = self._drop_inert_diffs(tuple(diffs), source_decisions, target_decisions)
-        groups = self._build_review_groups(all_diffs)
+        # Last, after every group that moves software: this one moves none, and #283's rule
+        # about the order the screens come in is about what a run DOES to the machines.
+        ownership = tuple(await self.ownership_questions(marks))
+        self._ownership_ids = frozenset(entry.item_id for group in ownership for entry in group.entries)
+        groups = (*self._build_review_groups(all_diffs), *ownership)
         return PackagePlan(manager=self.manager_id, diffs=all_diffs, groups=groups)
 
     def _diff_for(
@@ -627,15 +708,20 @@ class UnreproducibleSyncJob(PackageSyncJob):
         build the rest.
 
         - still-unresolved diffs (`action=REPORT_ONLY`, `PKG-FR-MANUAL-RESOLUTION`) go to
-          `UNREPRODUCIBLE_REVIEW_ACTION`, whose act opens an editor. Presented after any
-          resolved install group, so the user sees what is already answerable before being
-          asked to answer the rest. Each entry's `action_label` says which of the two cases
-          it is — an item the target lacks is installed, one whose version differs is
-          updated — because the screen is titled with that verb and "install" would be a
-          false statement about software that is already there.
+          `UNREPRODUCIBLE_REVIEW_ACTION`, whose act opens an editor. Each entry's
+          `action_label` says which of the two cases it is — an item the target lacks is
+          installed, one whose version differs is updated — because the screen is titled with
+          that verb and "install" would be a false statement about software that is already
+          there.
         - snippet-backed version differences (`action=CHANGE`) go to
           `UNREPRODUCIBLE_UPDATE_REVIEW_ACTION`, which offers a third answer no ordinary
           decision row has: replace the recorded body before replaying it.
+
+        Both are emitted BEFORE the base groups: what arrives, then what moves, then what
+        goes away, which is the order the base's own `_ACTION_ORDER` already puts install,
+        change and remove in. Carving these two out and appending them left a snippet job
+        asking about removals first and installs last (#283) — the most destructive question
+        of the run as its opening screen, and an order nobody had decided.
 
         A snippet-backed INSTALL and a REMOVE both flow through the base grouping like any
         other item of their direction; the removal group picks up this job's own warning as
@@ -651,37 +737,18 @@ class UnreproducibleSyncJob(PackageSyncJob):
         ]
         carved_ids = {diff.item_id for diff in (*needs_resolution, *updates)}
         rest = [diff for diff in diffs if diff.item_id not in carved_ids]
-        groups = [self._with_removal_warning(group) for group in super()._build_review_groups(rest)]
+        groups: list[ReviewGroup] = []
 
-        if updates:
-            groups.append(
-                ReviewGroup(
-                    manager=self.manager_id,
-                    action=UNREPRODUCIBLE_UPDATE_REVIEW_ACTION,
-                    title=(
-                        f"{self.machines.source} and {self.machines.target} have these at different versions "
-                        f"({self.manager_id})"
-                    ),
-                    entries=tuple(
-                        ReviewEntry(item_id=diff.item_id, label=diff.label, action_label="update", detail=diff.detail)
-                        for diff in updates
-                    ),
-                    recorded_bodies={
-                        diff.item_id: self._recorded_bodies[diff.item_id]
-                        for diff in updates
-                        if diff.item_id in self._recorded_bodies
-                    },
-                )
-            )
         if needs_resolution:
             groups.append(
                 ReviewGroup(
                     manager=self.manager_id,
                     action=UNREPRODUCIBLE_REVIEW_ACTION,
                     title=(
-                        f"{self.machines.source} has these and no package manager can reproduce them on "
-                        f"{self.machines.target} ({self.manager_id})"
+                        f"{self.machines.source} has {self.item_noun_plural} that no package manager can put on "
+                        f"{self.machines.target}?"
                     ),
+                    item_noun=self.item_noun,
                     entries=tuple(
                         ReviewEntry(
                             item_id=diff.item_id,
@@ -693,6 +760,25 @@ class UnreproducibleSyncJob(PackageSyncJob):
                     ),
                 )
             )
+        if updates:
+            groups.append(
+                ReviewGroup(
+                    manager=self.manager_id,
+                    action=UNREPRODUCIBLE_UPDATE_REVIEW_ACTION,
+                    title=change_title("update", f"{self.item_noun} versions", self.machines.target),
+                    item_noun=self.item_noun,
+                    entries=tuple(
+                        ReviewEntry(item_id=diff.item_id, label=diff.label, action_label="update", detail=diff.detail)
+                        for diff in updates
+                    ),
+                    recorded_bodies={
+                        diff.item_id: self._recorded_bodies[diff.item_id]
+                        for diff in updates
+                        if diff.item_id in self._recorded_bodies
+                    },
+                )
+            )
+        groups.extend(self._with_removal_warning(group) for group in super()._build_review_groups(rest))
         return tuple(groups)
 
     def _with_removal_warning(self, group: ReviewGroup) -> ReviewGroup:
@@ -812,13 +898,17 @@ class UnreproducibleSyncJob(PackageSyncJob):
         if recorded is None:
             return False
 
-        bodies_now = SnippetBodies(install_body=recorded.install_body, version_body=recorded.version_body)
+        bodies_now = recorded.bodies
         outcome = await self.context.reviewer.review(
             (
                 ReviewGroup(
                     manager=self.manager_id,
                     action=UNREPRODUCIBLE_RETRY_REVIEW_ACTION,
-                    title=f"{diff.label} on {self.machines.target} is still {landed}, not {expected}",
+                    # A statement, not a question: the screen below it offers the answers, and
+                    # what the user needs first is the fact the replay did not change.
+                    title=f"{self.item_noun.capitalize()} {diff.label} on {self.machines.target} is still "
+                    f"{landed}, not {expected}",
+                    item_noun=self.item_noun,
                     entries=(
                         ReviewEntry(
                             item_id=diff.item_id,
@@ -835,11 +925,10 @@ class UnreproducibleSyncJob(PackageSyncJob):
         if bodies is None:
             return False
 
-        snippet = Snippet(
+        snippet = snippet_from_bodies(
             item_id=diff.item_id,
             label=recorded.label,
-            install_body=bodies.install_body,
-            version_body=bodies.version_body,
+            bodies=bodies,
             authored_at=datetime.now(UTC).isoformat(),
             authored_on=self.context.source_hostname,
         )
@@ -893,11 +982,10 @@ class UnreproducibleSyncJob(PackageSyncJob):
                 diff = by_id.get(item_id)
                 label = diff.label if diff is not None else item_id
                 await registry.add(
-                    Snippet(
+                    snippet_from_bodies(
                         item_id=item_id,
                         label=label,
-                        install_body=bodies.install_body,
-                        version_body=bodies.version_body,
+                        bodies=bodies,
                         authored_at=authored_at,
                         authored_on=self.context.source_hostname,
                     )

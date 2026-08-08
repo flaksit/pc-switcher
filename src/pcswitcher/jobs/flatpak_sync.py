@@ -209,6 +209,7 @@ from pcswitcher.jobs.packages.review import (
     ReviewEntry,
     ReviewGroup,
     ReviewOutcome,
+    change_title,
 )
 from pcswitcher.jobs.packages.state import DecisionEntry, filter_inert, marks_on_either
 from pcswitcher.jobs.packages.sync_core import (
@@ -1353,7 +1354,11 @@ class FlatpakSyncJob(PackageSyncJob):
     """
 
     name: ClassVar[str] = "flatpak_sync"
+    display_name: ClassVar[str] = "Flatpaks"
     manager_id: ClassVar[str] = "flatpak"
+    item_noun: ClassVar[str] = "flatpak"
+    item_noun_plural: ClassVar[str] = "flatpaks"
+    origin_noun_plural: ClassVar[str] = "remotes"
 
     # No configurable properties: mirrors AptSyncJob/SnapSyncJob's empty schema — only
     # the enable flag in sync_jobs is needed for this slice.
@@ -1914,7 +1919,7 @@ class FlatpakSyncJob(PackageSyncJob):
             ReviewGroup(
                 manager=self.manager_id,
                 action=REPO_CONFLICT_REVIEW_ACTION,
-                title=f"Resolve {self.manager_id} remote conflicts",
+                title=change_title("resolve", "flatpak remote conflicts", self.machines.target),
                 entries=tuple(
                     ReviewEntry(
                         item_id=_conflict_id(remote_id),
@@ -2046,7 +2051,7 @@ class FlatpakSyncJob(PackageSyncJob):
             failures = list(exc.failures)
         await self._delete_unused_remotes()
         if failures:
-            raise PackageItemFailures(self.manager_id, failures)
+            raise PackageItemFailures(self.item_noun, self.item_noun_plural, failures)
 
     def _warn_about_trust(self, derived: _DerivedRemote) -> None:
         """One WARNING per derived remote whose trust a successful provisioning leaves
@@ -2875,6 +2880,7 @@ class FlatpakSyncJob(PackageSyncJob):
         """Name this job's destructive first-sync scope (ADR-015): flatpak refs, remotes and masks."""
         return FirstSyncScope(
             job_name=cls.name,
+            job_display_name=cls.display_name,
             scope_items=[
                 "installed flatpak refs (per user/system scope)",
                 "flatpak mask patterns (per scope)",

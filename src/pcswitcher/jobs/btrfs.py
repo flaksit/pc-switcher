@@ -53,6 +53,7 @@ class BtrfsSnapshotJob(SystemJob):
     """
 
     name: ClassVar[str] = "btrfs_snapshots"
+    display_name: ClassVar[str] = "Btrfs snapshots"
 
     def __init__(self, context: JobContext) -> None:
         """Initialize snapshot job with context.

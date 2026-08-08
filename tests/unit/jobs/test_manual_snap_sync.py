@@ -38,7 +38,6 @@ MYTOOL_REGISTRY_YAML = (
     "  unreproducible:snap-sideload:mytool:\n"
     "    label: mytool (sideloaded snap, revision x1)\n"
     "    install_body: sudo snap install --dangerous /tmp/mytool.snap\n"
-    "    version_body: snap list mytool\n"
     "    authored_at: '2026-01-01T00:00:00+00:00'\n"
     "    authored_on: laptop\n"
 )
@@ -97,14 +96,15 @@ class TestSideloadDetection:
         assert [d.item_id for d in plan.diffs] == ["unreproducible:snap-sideload:mytool"]
 
     @pytest.mark.asyncio
-    async def test_the_item_label_names_the_revision_the_source_holds(self) -> None:
-        """G124 — the revision is what the user needs to recognise the build being asked
-        about, so it is in the label even though it is deliberately not in the identity."""
+    async def test_the_item_label_is_the_bare_name_and_never_the_revision(self) -> None:
+        """G124 — a sideload's `x<N>` is a local install counter: not comparable between the
+        two machines and not something the user decides on, so it appears nowhere (#276). The
+        label is the name, and the group's title already says these are sideloaded snaps."""
         context, _source, _target = make_context(source_responses={SNAP_LIST: snap_list(sideload("mytool", "x3"))})
 
         plan = await ManualSnapSyncJob(context).plan()
 
-        assert plan.diffs[0].label == "mytool (sideloaded snap, revision x3)"
+        assert plan.diffs[0].label == "mytool"
 
     @pytest.mark.asyncio
     async def test_reinstalling_a_sideload_at_a_new_revision_keeps_its_identity(self) -> None:
@@ -166,6 +166,25 @@ class TestSideloadDetection:
 
         assert [d.item_id for d in snap_plan.diffs] == ["snap:firefox"]
         assert [d.item_id for d in manual_plan.diffs] == ["unreproducible:snap-sideload:mytool"]
+
+    @pytest.mark.asyncio
+    async def test_a_store_snap_the_two_machines_hold_at_different_revisions_is_neither_jobs_finding(self) -> None:
+        """G210 — #285's shape cannot arise here, and this is why: the evidence is snapd's own
+        `x` prefix, which records HOW the snap was installed, not what the store still
+        serves. A revision the channel has moved past is still a store revision, so neither
+        machine's copy is claimed by this job and `snap_sync` keeps the pair in both
+        manifests as one change.
+        """
+        context, _source, _target = make_context(
+            source_responses={SNAP_LIST: snap_list(store_snap("firefox", "15"))},
+            target_responses={SNAP_LIST: snap_list(store_snap("firefox", "20"))},
+        )
+
+        manual_plan = await ManualSnapSyncJob(context).plan()
+        snap_plan = await SnapSyncJob(context).plan()
+
+        assert manual_plan.diffs == ()
+        assert [(d.item_id, d.action) for d in snap_plan.diffs] == [("snap:firefox", DiffAction.CHANGE)]
 
 
 class TestInertFiltering:

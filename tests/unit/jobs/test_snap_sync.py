@@ -757,9 +757,9 @@ class TestHoldsReachNoReviewGroup:
         install_group = self._group_holding(plan, "snap:alpha")
         remove_group = self._group_holding(plan, "snap:delta")
 
-        assert install_group.title == "Install snap packages"
+        assert install_group.title == "Install snaps on target-host?"
         assert [e.action_label for e in install_group.entries] == ["install"]
-        assert remove_group.title == "Remove snap packages"
+        assert remove_group.title == "Remove snaps from target-host?"
         assert [e.action_label for e in remove_group.entries] == ["remove"]
         assert not any(e.item_id.startswith("snap:hold:") for e in (*install_group.entries, *remove_group.entries))
 
@@ -787,7 +787,7 @@ class TestAFullSnapReview:
 
         change_group = next(g for g in plan.groups if any(e.item_id == "snap:beta" for e in g.entries))
 
-        assert change_group.title == "Align snap package versions"
+        assert change_group.title == "Align snap versions on target-host?"
         assert [e.action_label for e in change_group.entries] == ["align"]
         assert {e.item_id for e in change_group.entries} == {"snap:beta"}
         assert not _is_removal_direction(change_group.action)
@@ -1406,6 +1406,26 @@ class TestSideloadedSnaps:
 
         assert not any(d.item_id.startswith("snap:hold:") for d in plan.diffs)
         assert plan.diffs == ()
+
+    @pytest.mark.asyncio
+    async def test_a_store_snap_at_two_revisions_is_never_read_as_a_sideload_on_either(self) -> None:
+        """E120 — snap's answer to #285's shape. The two machines sit at different store
+        revisions, which is what a staggered refresh leaves behind, and the older one is a
+        revision the channel no longer serves. Neither becomes a sideload: snapd assigns
+        `x<N>` only to a local-file install, so a store snap keeps its numeric revision
+        whatever the channel does. One change item, on both manifests, and no removal.
+        """
+        source = _HEADER + "beta      1.0        15     latest/stable   pub✓         -\n"
+        target = _HEADER + "beta      2.0        20     latest/stable   pub✓         -\n"
+        context, _source, _target = make_context(
+            source_responses={"snap list --all": CommandResult(0, source, "")},
+            target_responses={"snap list --all": CommandResult(0, target, "")},
+        )
+        job = SnapSyncJob(context)
+
+        plan = await job.plan()
+
+        assert [(d.item_id, d.action) for d in plan.diffs] == [("snap:beta", DiffAction.CHANGE)]
 
     @pytest.mark.asyncio
     async def test_sideloaded_snap_present_on_both_is_not_proposed_for_removal(self) -> None:

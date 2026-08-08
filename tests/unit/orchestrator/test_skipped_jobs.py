@@ -90,6 +90,7 @@ class _StubInstallJob:
     """Stands in for InstallOnTargetJob: the orchestrator's bookkeeping is what is tested."""
 
     name: ClassVar[str] = "install_on_target"
+    display_name: ClassVar[str] = "Install on target"
     skip_reason: ClassVar[str | None] = None
 
     def __init__(self, context: JobContext) -> None:
