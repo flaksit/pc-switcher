@@ -1408,6 +1408,26 @@ class TestSideloadedSnaps:
         assert plan.diffs == ()
 
     @pytest.mark.asyncio
+    async def test_a_store_snap_at_two_revisions_is_never_read_as_a_sideload_on_either(self) -> None:
+        """E120 — snap's answer to #285's shape. The two machines sit at different store
+        revisions, which is what a staggered refresh leaves behind, and the older one is a
+        revision the channel no longer serves. Neither becomes a sideload: snapd assigns
+        `x<N>` only to a local-file install, so a store snap keeps its numeric revision
+        whatever the channel does. One change item, on both manifests, and no removal.
+        """
+        source = _HEADER + "beta      1.0        15     latest/stable   pub✓         -\n"
+        target = _HEADER + "beta      2.0        20     latest/stable   pub✓         -\n"
+        context, _source, _target = make_context(
+            source_responses={"snap list --all": CommandResult(0, source, "")},
+            target_responses={"snap list --all": CommandResult(0, target, "")},
+        )
+        job = SnapSyncJob(context)
+
+        plan = await job.plan()
+
+        assert [(d.item_id, d.action) for d in plan.diffs] == [("snap:beta", DiffAction.CHANGE)]
+
+    @pytest.mark.asyncio
     async def test_sideloaded_snap_present_on_both_is_not_proposed_for_removal(self) -> None:
         """E40 — dropping the source snap must not orphan the target's copy into an
         EXTRA_ON_TARGET removal — "cannot reproduce this" must never become "delete it".

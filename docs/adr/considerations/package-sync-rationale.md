@@ -95,6 +95,18 @@ Three of the four jobs have a manager whose own removal is exact (`apt-get remov
 
 A second authored body would buy the one direction the user can always carry out by hand, at the price of an entry nobody can complete — every existing entry becomes malformed under the new schema. The tradeoff was rejected: `PKG-NG-MANUAL-REMOVE-REACH` names the limit instead.
 
+## `PKG-FR-DEB-AMBIGUITY`
+
+The detection predicate answers "can apt install this name". That answer is complete for every state but one: a snippet on record for a name apt CAN install. Either the user hand-installed the package and apt merely also carries the name, or it is an ordinary apt package with a snippet left over from before. The evidence is identical in both cases, so a tool that picks one is guessing — and both guesses are expensive. "Leftover" deletes the user's own work; "hand-installed" leaves a run replaying a snippet over software apt already maintains.
+
+Nothing is recorded because there is nothing a record could say. An answer of "I installed it" does not change the state that produced the question — apt goes on offering the package — so a marker would only suppress a question whose ground still holds, and the next reader of the registry would have no way to tell a settled entry from a stale one. The question returning every sync is the intended outcome: it is the tool saying the machine is still in an ambiguous state, and the user ends it by acting on the machine.
+
+The suggested pin is not a violation of `PKG-FR-PIN-NOT-INVENTORY`, which stands unamended. That article forbids reading a pin as a statement about the packages it names, and nothing here does: pc-switcher asks apt whether it has a repository it can install the package from, and `Candidate: (none)` is apt's own answer to apt's own question. The pin is an input to that computation, exactly as a repository list is. What the guidance offers the user is a way to change what apt concludes, not a channel for annotating an inventory.
+
+`apt-mark hold` is named as the weaker lever rather than as an alternative: it defers apt's own automatic action and an explicit `apt install` overrides it, so it does not make the repository copy ineligible and does not move apt's candidate. Neither lever removes the repository rows from `apt-cache policy`'s version table.
+
+apt only. snapd assigns an `x<N>` revision only to a local-file install and a flatpak ref carries the remote name recorded at install, so in both ecosystems the manager's own record already says how the software got there and a snippet cannot contradict it — there is no tie for the user to break.
+
 ## `PKG-FR-REGISTRY-CONSENT`: abort, not fail
 
 Aborting lets the user consolidate the two registries by hand; the alternative silently drops the target's snippets. An unreadable file says nothing about which entries exist, so the comparison cannot be made at all — and the reading that costs least to implement, "no snippets", is exactly the one that makes a wholesale push discard every entry nobody could see.

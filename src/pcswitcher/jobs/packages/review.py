@@ -165,6 +165,7 @@ __all__ = [
     "PACKAGE_REVIEW_AUTOMATION_ENV",
     "REPO_CONFLICT_REVIEW_ACTION",
     "REPO_REMOVAL_REVIEW_ACTION",
+    "SNIPPET_OWNERSHIP_REVIEW_ACTION",
     "UNREPRODUCIBLE_RETRY_REVIEW_ACTION",
     "UNREPRODUCIBLE_REVIEW_ACTION",
     "UNREPRODUCIBLE_UPDATE_REVIEW_ACTION",
@@ -281,6 +282,18 @@ COLLATERAL_REVIEW_ACTION = "collateral"
 # remedy is consolidating the two files, not recording a preference. `ReviewEntry.versions`
 # carries both file contents, printed as two panels rather than a unified diff.
 REPO_CONFLICT_REVIEW_ACTION = "repo_conflict"
+
+# Sentinel `ReviewGroup.action` for the one question the registry itself raises
+# (`PKG-FR-DEB-AMBIGUITY`): a snippet is on record for an apt package the source's own apt
+# can install from a repository. Either the user installed it by hand and apt happens to
+# carry the name too, or it is an ordinary apt package with a snippet left over — and
+# nothing on either machine tells the two apart, so the user does.
+#
+# Its own sentinel rather than an ordinary screen because it decides nothing about software:
+# no diff exists for it, no converge follows it, and neither answer may be recorded anywhere
+# (which is what makes the question come back while the state does). One item per screen, so
+# the recorded snippet can be printed above the question that is about it.
+SNIPPET_OWNERSHIP_REVIEW_ACTION = "snippet_ownership"
 
 
 class PausableUI(Protocol):
@@ -533,6 +546,10 @@ def _is_repo_conflict_group(action: str) -> bool:
     return action == REPO_CONFLICT_REVIEW_ACTION
 
 
+def _is_snippet_ownership_group(action: str) -> bool:
+    return action == SNIPPET_OWNERSHIP_REVIEW_ACTION
+
+
 def _shows_both_versions(group: ReviewGroup) -> bool:
     """Whether this group's screen prints two whole file bodies per entry.
 
@@ -668,7 +685,11 @@ def policy_decision(group: ReviewGroup, policy: ReviewPolicy) -> Decision | None
       machine-specific comes from;
     - an unreproducible item still to be resolved (`PKG-FR-MANUAL-RESOLUTION`), and the narrowed menu the converge
       loop puts after a body that changed no version (`PKG-FR-VERSION-SNIPPET`): the only answers either offers
-      are an authored shell body and a skip, and no flag can write one.
+      are an authored shell body and a skip, and no flag can write one;
+    - which of apt and the user put a package on the source (`PKG-FR-DEB-AMBIGUITY`), which
+      is a fact about the past that the source's current state is precisely unable to
+      settle — it is why the question exists — and whose act deletes a registry entry rather
+      than adding or removing software, so neither direction flag speaks for it.
 
     A version difference whose body the source already holds is NOT in that list: replaying
     a recorded body is an install-direction act needing nothing authored, so
@@ -685,7 +706,11 @@ def policy_decision(group: ReviewGroup, policy: ReviewPolicy) -> Decision | None
         return None
     if group.overwrites_authored_content:
         return None
-    if _is_repo_conflict_group(group.action) or _asks_for_an_authored_body(group.action):
+    if (
+        _is_repo_conflict_group(group.action)
+        or _asks_for_an_authored_body(group.action)
+        or _is_snippet_ownership_group(group.action)
+    ):
         return None
     if _is_removal_direction(group.action) or _is_collateral_group(group.action):
         return Decision.APPLY if policy.apply_removals else None
@@ -1426,6 +1451,126 @@ async def _review_snippet_group(  # noqa: PLR0913 - screen content plus the two 
             console.print(Text(_empty_snippet_refusal(entry.item_id), style="yellow"))
 
 
+# The key for "I installed it myself" on the ownership screen. `k` for keep, not `s`: `s` is
+# `skip now` on every other screen and this answer is not a skip — it settles the question
+# for this run by keeping the snippet, and the run goes on to say how to end the question for
+# good.
+_KEEP_SNIPPET_KEY = "k"
+
+
+def _snippet_ownership_options(source_hostname: str, target_hostname: str) -> tuple[DecisionOption, ...]:
+    """The two answers to "who put this package here" (`PKG-FR-DEB-AMBIGUITY`).
+
+    No permanent answer, and neither of these is recorded anywhere: the question is about a
+    fact on the source, and while that fact holds it is asked again every sync. Answering
+    "apt did" removes the snippet, which is what ends the question by construction — nothing
+    is left to contradict apt. Answering "I did" leaves both machines exactly as they were,
+    so the screen that follows it says how to make apt stop offering the package.
+    """
+    return (
+        DecisionOption(
+            value=Decision.APPLY,
+            key=_APPLY_KEY,
+            word="apt did",
+            glyph=_APPLY_GLYPH,
+            is_act=True,
+            hint=f"drop the snippet on {source_hostname} and {target_hostname}; the package is apt's on both",
+        ),
+        DecisionOption(
+            value=Decision.SKIP_ONCE,
+            key=_KEEP_SNIPPET_KEY,
+            word="I did",
+            glyph=_SKIP_ONCE_GLYPH,
+            hint=f"keep the snippet; asked again every sync while apt on {source_hostname} still offers the package",
+        ),
+    )
+
+
+def _pin_guidance(package: str, source_hostname: str) -> Text:
+    """How to make apt stop offering `package`, printed after the "I installed it" answer.
+
+    The answer keeps a snippet for a package apt can still install, which is exactly the
+    state the question is raised on — so without this the user has answered and learnt
+    nothing about why they will be asked again next sync.
+
+    Every claim here is one apt actually makes. A negative pin is what produces
+    `Candidate: (none)`, which is the answer pc-switcher reads; it also makes the repository
+    copy ineligible for an explicit `apt install`, which `apt-mark hold` does not — a hold
+    defers apt's own automatic action and an explicit install overrides it. Neither takes the
+    repository rows out of the version table, and the pin makes the package's security
+    updates the user's to apply.
+    """
+    body = Text()
+    body.append(f"apt on {source_hostname} still offers {package}, so this question comes back every sync.\n\n")
+    body.append(f"To end it, write /etc/apt/preferences.d/keep-{package} on {source_hostname}:\n\n")
+    body.append(f"    Package: {package}\n    Pin: release *\n    Pin-Priority: -1\n\n", style="bold")
+    body.append(
+        f"apt then answers 'Candidate: (none)' for {package}, pc-switcher reads the package as yours, and the "
+        "question stops. That negative pin also makes the repository copy ineligible for an explicit "
+        "'apt install'; 'apt-mark hold' is the weaker lever, deferring apt's automatic action only, and an "
+        "explicit 'apt install' overrides it. Neither takes the repository rows out of 'apt-cache policy'. "
+        f"Security updates for {package} become yours to apply."
+    )
+    return body
+
+
+async def _review_snippet_ownership_group(
+    group: ReviewGroup,
+    *,
+    console: Console,
+    source_hostname: str,
+    target_hostname: str,
+    decisions: dict[str, Decision],
+) -> None:
+    """Ask, one package at a time, whether a recorded snippet or apt is what put it on the
+    source (`PKG-FR-DEB-AMBIGUITY`).
+
+    One item per screen for the reason the deletion screens are: the recorded snippet is
+    printed whole above the question, and it is the evidence the question is answered on. A
+    batch would print three or four bodies and then ask about all of them at once, by which
+    point the first is off the top of the terminal.
+
+    The two answers map onto `Decision` values so this screen needs no outcome field of its
+    own and so the automation hook can drive it: `APPLY` is "apt did", the act that deletes
+    the entry, and `SKIP_ONCE` is "I did", which changes nothing. `SKIP_ONCE` is also what an
+    unanswered run leaves behind everywhere else, so the answer nobody gave is the one that
+    keeps the snippet.
+
+    The guidance is printed under the answer rather than above the question: it is what to do
+    NEXT about a state the user has just confirmed, and printing it in front of the question
+    would put a pin file in front of someone who is about to say the package is apt's.
+
+    `entry.detail` (apt's own answer, composed by the job) and `entry.label` are untrusted
+    package-manager text and reach the console only inside `Text` (T-02-02).
+    """
+    recorded = group.recorded_bodies or {}
+    options = _snippet_ownership_options(source_hostname, target_hostname)
+    for entry in group.entries:
+        package = _bare_item_name(entry.label)
+        _print_recorded_snippet(recorded.get(entry.item_id), console=console, target_hostname=target_hostname)
+        selected = await _ask_about_one_item(
+            entry,
+            title=f"Who put {package} on {source_hostname}?",
+            explanation=(
+                f"{source_hostname} has an install snippet on record for it, and apt on {source_hostname} can "
+                "install the package from a repository. Which of the two put it there is not something "
+                "pc-switcher can tell."
+            ),
+            options=options,
+            default=Decision.SKIP_ONCE,
+        )
+        decisions[entry.item_id] = Decision(selected)
+        if Decision(selected) is Decision.SKIP_ONCE:
+            console.print()
+            console.print(
+                Panel(
+                    _pin_guidance(package, source_hostname),
+                    title=Text(f"Keeping the snippet for {package}"),
+                    border_style="cyan",
+                )
+            )
+
+
 def _print_report_group(group: ReviewGroup, *, console: Console, target_hostname: str) -> None:
     """Print one report group — the conditions this manager found and cannot converge.
 
@@ -1970,6 +2115,16 @@ async def review_items(  # noqa: PLR0913 - review surface plus both machine name
             if _is_collateral_group(group.action):
                 await _review_collateral_group(
                     group, console=console, target_hostname=target_hostname, decisions=decisions
+                )
+                continue
+
+            if _is_snippet_ownership_group(group.action):
+                await _review_snippet_ownership_group(
+                    group,
+                    console=console,
+                    source_hostname=source_hostname,
+                    target_hostname=target_hostname,
+                    decisions=decisions,
                 )
                 continue
 

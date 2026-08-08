@@ -167,6 +167,25 @@ class TestSideloadDetection:
         assert [d.item_id for d in snap_plan.diffs] == ["snap:firefox"]
         assert [d.item_id for d in manual_plan.diffs] == ["unreproducible:snap-sideload:mytool"]
 
+    @pytest.mark.asyncio
+    async def test_a_store_snap_the_two_machines_hold_at_different_revisions_is_neither_jobs_finding(self) -> None:
+        """G210 — #285's shape cannot arise here, and this is why: the evidence is snapd's own
+        `x` prefix, which records HOW the snap was installed, not what the store still
+        serves. A revision the channel has moved past is still a store revision, so neither
+        machine's copy is claimed by this job and `snap_sync` keeps the pair in both
+        manifests as one change.
+        """
+        context, _source, _target = make_context(
+            source_responses={SNAP_LIST: snap_list(store_snap("firefox", "15"))},
+            target_responses={SNAP_LIST: snap_list(store_snap("firefox", "20"))},
+        )
+
+        manual_plan = await ManualSnapSyncJob(context).plan()
+        snap_plan = await SnapSyncJob(context).plan()
+
+        assert manual_plan.diffs == ()
+        assert [(d.item_id, d.action) for d in snap_plan.diffs] == [("snap:firefox", DiffAction.CHANGE)]
+
 
 class TestInertFiltering:
     """An item recorded machine-specific on the source produces no diff

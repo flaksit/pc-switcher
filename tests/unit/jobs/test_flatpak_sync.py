@@ -756,6 +756,23 @@ class TestRefOriginMismatch:
         assert [d.diff_class for d in plan.diffs] == [DiffClass.ORIGIN_MISMATCH]
 
     @pytest.mark.asyncio
+    async def test_two_versions_from_one_still_configured_remote_produce_no_removal(self) -> None:
+        """F160 — flatpak's answer to #285's shape. The two machines hold the same ref at
+        different versions from a remote both still configure, which is what a staggered
+        update leaves behind. The origin is the remote NAME recorded at install and stays
+        resolvable while the remote exists, so neither copy becomes unreproducible and
+        neither manifest loses the ref: one version report, no removal, no install.
+        """
+        context, _source, _target = origin_pair_context(source_version="128.0", target_version="129.0")
+        job = FlatpakSyncJob(context)
+
+        plan = await job.plan()
+
+        assert [(d.item_id, d.diff_class, d.action) for d in plan.diffs] == [
+            (_FIREFOX_ID, DiffClass.VERSION_MISMATCH, DiffAction.REPORT_ONLY)
+        ]
+
+    @pytest.mark.asyncio
     async def test_a_side_with_no_url_says_so_rather_than_printing_a_bare_name(self) -> None:
         """F92 — Both sides name `flathub`, so a detail that printed the names alone would report a
         divergence and show two identical strings. The missing URL is the finding.

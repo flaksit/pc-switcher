@@ -37,13 +37,23 @@ from __future__ import annotations
 
 import shlex
 from collections.abc import Collection, Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any, ClassVar, override
 
 from pcswitcher.executor import Executor
 from pcswitcher.jobs.context import JobContext
-from pcswitcher.jobs.packages.apt_policy import installed_origins_by_package, packages_no_repository_can_install
+from pcswitcher.jobs.packages.apt_policy import (
+    candidate_origins_by_package,
+    installed_origins_by_package,
+    packages_no_repository_can_install,
+)
 from pcswitcher.jobs.packages.probes import require_answer
-from pcswitcher.jobs.packages.state import DecisionEntry
+from pcswitcher.jobs.packages.review import (
+    SNIPPET_OWNERSHIP_REVIEW_ACTION,
+    ReviewEntry,
+    ReviewGroup,
+)
+from pcswitcher.jobs.packages.state import DecisionEntry, SnippetRegistry
 from pcswitcher.jobs.packages.unreproducible import UnreproducibleItem, UnreproducibleSyncJob, lines_of
 from pcswitcher.models import FirstSyncScope, Host, ValidationError
 
@@ -53,6 +63,21 @@ __all__ = ["ManualDebSyncJob"]
 # that belongs to it. Named once: detection and the mark reconciliation key on the same
 # string.
 _ORIGIN = "apt-no-candidate"
+
+
+@dataclass(frozen=True)
+class _PolicyScan:
+    """What one batched `apt-cache policy` says about the names it was handed.
+
+    Two answers off one read, because both are wanted about the SOURCE and a second read
+    would cost a second full policy run: which names apt can install from no repository (the
+    detection, `PKG-FR-MANUAL-SCOPE`), and where apt WOULD take each of the rest from
+    (`PKG-FR-DEB-AMBIGUITY`'s evidence — the repositories the question puts in front of the
+    user). The target's caller reads the first alone.
+    """
+
+    no_repository: frozenset[str]
+    candidate_origins: Mapping[str, frozenset[str]]
 
 
 def _label(name: str, version: str) -> str:
@@ -88,6 +113,10 @@ class ManualDebSyncJob(UnreproducibleSyncJob):
         # the target's names the source does not have — and the source is the machine a sync
         # never changes, so one read answers both whichever order they are called in.
         self._source_installed_cache: dict[str, str] | None = None
+        # The SOURCE's policy answers, as `capture_source_items` read them. `plan()` calls
+        # that hook before it asks for the ownership questions, which are about the same
+        # read: a name apt CAN install is the half of it detection throws away.
+        self._source_scan: _PolicyScan | None = None
 
     # No configurable properties: mirrors AptSyncJob's empty schema — only the enable flag
     # in sync_jobs is needed. A job earns a config SECTION only when it has a real key, so
@@ -103,7 +132,7 @@ class ManualDebSyncJob(UnreproducibleSyncJob):
 
     async def _scan_no_candidate_apt_packages(
         self, installed_names: Sequence[str], executor: Executor, machine: str
-    ) -> frozenset[str]:
+    ) -> _PolicyScan:
         """`PKG-FR-MANUAL-SCOPE`: of `installed_names`, those `machine`'s apt has no repository to install
         from — put there by `dpkg --install` of a bare `.deb`, or left with no repository apt
         will take the name from at all.
@@ -142,7 +171,7 @@ class ManualDebSyncJob(UnreproducibleSyncJob):
         handed to it is installed on the machine being asked.
         """
         if not installed_names:
-            return frozenset()
+            return _PolicyScan(no_repository=frozenset(), candidate_origins={})
 
         quoted = " ".join(shlex.quote(name) for name in installed_names)
         command = f"apt-cache policy {quoted}"
@@ -156,7 +185,10 @@ class ManualDebSyncJob(UnreproducibleSyncJob):
             answers=len(installed_origins_by_package(result.stdout)),
             answer_noun="package block",
         )
-        return frozenset(packages_no_repository_can_install(result.stdout, installed_names))
+        return _PolicyScan(
+            no_repository=frozenset(packages_no_repository_can_install(result.stdout, installed_names)),
+            candidate_origins=candidate_origins_by_package(result.stdout),
+        )
 
     async def _installed(self, executor: Executor, machine: str) -> dict[str, str]:
         """`name -> installed version` for everything dpkg reports as INSTALLED on `machine`.
@@ -198,12 +230,11 @@ class ManualDebSyncJob(UnreproducibleSyncJob):
         installed set here and its result feeds the no-candidate scan.
         """
         installed = await self._source_installed()
-        no_repository = await self._scan_no_candidate_apt_packages(
-            sorted(installed), self.source, self.machines.source
-        )
+        scan = await self._scan_no_candidate_apt_packages(sorted(installed), self.source, self.machines.source)
+        self._source_scan = scan
         return [
             UnreproducibleItem(origin=_ORIGIN, identifier=name, label=_label(name, installed[name]))
-            for name in sorted(no_repository)
+            for name in sorted(scan.no_repository)
         ]
 
     @override
@@ -227,16 +258,84 @@ class ManualDebSyncJob(UnreproducibleSyncJob):
         installed = await self._installed(self.target, self.machines.target)
         source_installed = await self._source_installed()
         target_only = sorted(name for name in installed if name not in source_installed)
-        no_repository = await self._scan_no_candidate_apt_packages(target_only, self.target, self.machines.target)
+        scan = await self._scan_no_candidate_apt_packages(target_only, self.target, self.machines.target)
         return [
             UnreproducibleItem(
                 origin=_ORIGIN,
                 identifier=name,
                 label=_label(name, installed[name]),
-                own_finding=name in no_repository,
+                own_finding=name in scan.no_repository,
             )
             for name in sorted(installed)
         ]
+
+    @override
+    async def ownership_questions(self, marks: Mapping[str, DecisionEntry]) -> Sequence[ReviewGroup]:
+        """`PKG-FR-DEB-AMBIGUITY`: one screen per package the registry has a snippet for that
+        the SOURCE's apt can install from a repository.
+
+        That state is the one thing the detection predicate cannot resolve. A package apt can
+        install may still have been put there by hand — apt merely also carries the name —
+        and a snippet may equally be a leftover from a package that has since become
+        ordinary apt business. Both readings fit the same evidence, so the tool asks rather
+        than picking one: choosing "leftover" would delete the user's own work, and choosing
+        "hand-installed" would leave a run replaying a snippet over software apt already
+        maintains.
+
+        Asked on the SOURCE's verdict alone, which is the same one-verdict-per-name rule
+        `PKG-FR-DEB-OWNERSHIP` binds detection to: the source is the machine being
+        replicated, and asking each machine separately is what let one name get two answers.
+        A name the source does not have installed is not asked about at all — nothing on the
+        source is claiming to be it.
+
+        Nothing here is recorded, so the same state raises the same question next run
+        (`PKG-FR-DEB-AMBIGUITY`). What ends it is the user's own answer: apt's, which deletes
+        the entry, or theirs, which is answered with the pin that makes apt stop offering the
+        package.
+
+        Costs no command of its own beyond the registry read every run already needs: the
+        source's policy answers are `capture_source_items`'s, which `plan()` has called by
+        the time this runs.
+        """
+        scan = self._source_scan
+        if scan is None:
+            return ()
+
+        installed = await self._source_installed()
+        registry = await SnippetRegistry(self.source, self.machines.source).load()
+        prefix = UnreproducibleItem.id_prefix(_ORIGIN)
+
+        entries: list[ReviewEntry] = []
+        bodies = {}
+        for item_id, snippet in sorted(registry.items()):
+            if not item_id.startswith(prefix) or item_id in marks:
+                continue
+            name = item_id.removeprefix(prefix)
+            if name not in installed or name in scan.no_repository:
+                continue
+            origins = scan.candidate_origins.get(name, frozenset())
+            entries.append(
+                ReviewEntry(
+                    item_id=item_id,
+                    label=_label(name, installed[name]),
+                    action_label="drop the snippet",
+                    detail=f"apt would install it from {', '.join(sorted(origins))}" if origins else None,
+                )
+            )
+            bodies[item_id] = snippet.bodies
+
+        if not entries:
+            return ()
+        return (
+            ReviewGroup(
+                manager=self.manager_id,
+                action=SNIPPET_OWNERSHIP_REVIEW_ACTION,
+                title=f"{self.machines.source} has install snippets for packages apt can install too",
+                item_noun=self.item_noun,
+                entries=tuple(entries),
+                recorded_bodies=bodies,
+            ),
+        )
 
     @override
     async def installed_versions(self, item_ids: Collection[str], *, on_source: bool) -> Mapping[str, str | None]:

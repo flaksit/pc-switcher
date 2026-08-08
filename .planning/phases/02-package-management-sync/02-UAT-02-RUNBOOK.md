@@ -2,7 +2,7 @@
 
 Every command below is for you to run. `pc1` is the source, `pc2` the target; every title, answer and message prints those two hostnames, and "source" or "target" naming a machine anywhere you read is a finding.
 
-This runbook covers what changed after the phase-2 UAT: the split of `manual_installs_sync` into four jobs, the second snippet an unowned-path registry entry carries and no other kind does, version convergence and its retry loop, removals of unreproducible items, the two unattended apply flags, the machine-specific follow-up question, the apt update-timer pause, and the end-of-run outcome block. What it does not cover is in §8. `02-UAT-01-RUNBOOK.md` remains the runbook for the base review.
+This runbook covers what changed after the phase-2 UAT: the split of `manual_installs_sync` into four jobs, the second snippet an unowned-path registry entry carries and no other kind does, version convergence and its retry loop, removals of unreproducible items, the two unattended apply flags, the machine-specific follow-up question, the apt update-timer pause, the question a snippet for an apt-installable package raises, and the end-of-run outcome block. What it does not cover is in §9. `02-UAT-01-RUNBOOK.md` remains the runbook for the base review.
 
 ## 1. Machines
 
@@ -36,6 +36,25 @@ Confirm the config was accepted before diverging anything — a key the schema d
 ```bash
 ssh testuser@"$PC1" '~/.local/bin/pc-switcher sync pc2 --dry-run --yes --allow-first-sync --allow-out-of-order'
 ```
+
+### 1.1 Level the two machines' phased updates
+
+The two baselines were built on different days, so Ubuntu's phased rollouts have reached them differently: a package at `1:8.2.2+ds-0ubuntu1.17` on one machine and `.18` on the other is neither machine's fault and no fixture's doing. It produces real version-difference items that no step below asks for, so level it first and read every later screen as the fixtures' own (#285):
+
+```bash
+for h in "$PC1" "$PC2"; do ssh testuser@"$h" 'sudo apt-get update'; done
+ssh testuser@"$PC1" "dpkg-query --show --showformat='\${Package}\t\${Version}\n'" | sort > /tmp/pc1.versions
+ssh testuser@"$PC2" "dpkg-query --show --showformat='\${Package}\t\${Version}\n'" | sort > /tmp/pc2.versions
+comm -3 /tmp/pc1.versions /tmp/pc2.versions
+```
+
+Every name `comm` prints is a package the two machines disagree about before any fixture exists. Upgrade each of them on whichever machine is behind — the rollout will serve it, since the other machine already has it:
+
+```bash
+ssh testuser@"$PC1" 'sudo apt-get install --only-upgrade --assume-yes <package> …'
+```
+
+Re-run the `comm` line until it prints nothing. Rebuilt baselines taken the same day would remove the step; until then it is part of the setup.
 
 ## 2. Diverge the two machines
 
@@ -456,7 +475,51 @@ The same ending, naming the same file and this entry.
 ssh testuser@"$PC1" 'rm ~/.config/pc-switcher/package-snippets.yaml'
 ```
 
-## 7. Cleanup
+## 7. A snippet for a package apt can install too
+
+The one state the detection rule cannot resolve (#285): the registry claims a package that apt on pc1 can install from a repository. Take any ordinary repository package pc1 has installed — `tree` here — and write a snippet claiming it:
+
+```bash
+ssh testuser@"$PC1" 'sudo apt-get install --assume-yes tree'
+ssh testuser@"$PC1" 'printf "snippets:\n  \"unreproducible:apt-no-candidate:tree\":\n    label: tree\n    install_body: \"sudo dpkg --install /tmp/tree.deb\"\n    authored_at: \"2026-08-01T00:00:00+00:00\"\n    authored_on: pc1\n" > ~/.config/pc-switcher/package-snippets.yaml'
+ssh testuser@"$PC1" '~/.local/bin/pc-switcher sync pc2 --allow-out-of-order'
+```
+
+`manual_deb_sync`'s last screen must ask **Who put tree on pc1?**, with the recorded snippet body printed above it and the row's detail naming the repository apt would install from. Exactly two answers, `y` "apt did" and `k` "I did", and no third — `x` must do nothing.
+
+Answer `k`. The run must print the pin file — `/etc/apt/preferences.d/keep-tree`, `Pin-Priority: -1` — and say `apt-mark hold` is the weaker lever. Then check nothing was recorded:
+
+```bash
+ssh testuser@"$PC1" 'cat ~/.config/pc-switcher/package-snippets.yaml; cat ~/.config/pc-switcher/manual_deb.decisions.yaml 2>/dev/null'
+```
+
+The entry is still there and the decision file holds nothing about `tree`. Run the same sync again: the same question must be put again, unchanged.
+
+Now answer `y`, and the entry must be gone from BOTH machines with no consent question about the registry push in between:
+
+```bash
+ssh testuser@"$PC1" 'cat ~/.config/pc-switcher/package-snippets.yaml'
+ssh testuser@"$PC2" 'cat ~/.config/pc-switcher/package-snippets.yaml'
+```
+
+Neither file names `tree`, and `tree` is still installed on pc1 — the answer deletes a registry entry, never software. A third sync must ask nothing.
+
+Finally, prove the pin ends the question the other way: rewrite the entry, write the pin file on pc1, and sync again.
+
+```bash
+ssh testuser@"$PC1" 'printf "snippets:\n  \"unreproducible:apt-no-candidate:tree\":\n    label: tree\n    install_body: \"sudo dpkg --install /tmp/tree.deb\"\n    authored_at: \"2026-08-01T00:00:00+00:00\"\n    authored_on: pc1\n" > ~/.config/pc-switcher/package-snippets.yaml'
+ssh testuser@"$PC1" 'printf "Package: tree\nPin: release *\nPin-Priority: -1\n" | sudo tee /etc/apt/preferences.d/keep-tree'
+ssh testuser@"$PC1" 'apt-cache policy tree'
+ssh testuser@"$PC1" '~/.local/bin/pc-switcher sync pc2 --allow-out-of-order'
+```
+
+`apt-cache policy` must report `Candidate: (none)`, and the run must no longer ask who installed it: `tree` is now an ordinary `manual_deb_sync` item resolved by its own snippet.
+
+```bash
+ssh testuser@"$PC1" 'sudo rm /etc/apt/preferences.d/keep-tree; rm ~/.config/pc-switcher/package-snippets.yaml'
+```
+
+## 8. Cleanup
 
 ```bash
 tests/integration/scripts/reset-vm.sh pc1
@@ -464,7 +527,7 @@ tests/integration/scripts/reset-vm.sh pc2
 tests/integration/scripts/internal/lock.sh release "janfr-uat-02-02"
 ```
 
-## 8. Not exercised here
+## 9. Not exercised here
 
 The base review, which `02-UAT-01-RUNBOOK.md` covers and whose code has not changed: credential redaction, apt repository deletion, the apt collateral cascade and its second round, the flatpak filter and its ordering against the installs it governs, the repository-conflict question, the Ubuntu Pro gate, and the folder-mirror boundary against the package jobs.
 

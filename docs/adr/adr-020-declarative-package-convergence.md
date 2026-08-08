@@ -72,6 +72,8 @@ The unit of replication for apt is (name, origin). After the `/etc/apt` group's 
 
 A package belongs to `manual_deb_sync` rather than `apt_sync` when apt has no repository it can install that name from — read off apt's own `Candidate:` row, whose origins are empty exactly when apt would install nothing from a repository. Version is not part of it. The verdict is reached once per name and withholds that name from both machines' apt manifests: the source's answer decides for a name the source has, the target's own for a name only the target has.
 
+One state that predicate cannot resolve: a snippet on record for a name apt CAN install. The user is asked, on the source's verdict, every run while the state holds; nothing about the question or its answer is recorded. Answering that apt installed it deletes the entry from both machines' registries, which removes the ambiguity by construction; answering that they installed it keeps the entry and shows the negative pin (`Pin-Priority: -1`) that makes apt report `Candidate: (none)` and so ends the question. apt only: snapd's `x<N>` revision and a flatpak ref's recorded remote already say how the software got there, so no snippet can contradict them.
+
 ### ADR-020-D-PINS-ALWAYS-SYNC — Pins always-sync
 
 `preferences.d` pin adds and updates sync silently. A pin naming an absent origin is inert.
@@ -116,6 +118,8 @@ One store per device, name→publisher pinned by canonical-signed `snap-declarat
 - **Protecting the union of both machines' manual sets from collateral** — Rejected: the union protects on the wrong machine's bookkeeping.
 - **Reading ownership off the INSTALLED version's origins** — Rejected: a phased update leaves an installed version no repository carries any more, which would read every laggard as a hand `.deb`.
 - **Unioning the two machines' exclusion sets** — Rejected: it hides the symptom of two verdicts for one name while leaving the package misclassified on the machine that produced the wrong one.
+- **Deciding the snippet-plus-installable-name case without asking** — Rejected: both readings fit the same evidence, and each guess is expensive — deleting the user's own snippet, or replaying one over software apt already maintains.
+- **Recording the answer to that question** — Rejected: "I installed it" leaves the state that raised the question exactly as it was, so a marker would suppress a live question and no later reader could tell a settled entry from a stale one.
 - **A recursive folder diff or payload hash for an install under an unowned path** — Rejected: its version body replaces both.
 - **Comparing snippet body before version** — Rejected: a cosmetic edit to a comment or mirror URL would raise a false review item.
 - **Letting the higher version decide sync direction** — Rejected: sync goes source-to-target, always.

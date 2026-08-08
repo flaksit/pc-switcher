@@ -122,6 +122,25 @@ Convergence means the target reading back the source's version, not the snippet 
 
 The registry syncs between machines with each snippet job's push. A transfer that would lose or change an entry the target holds asks you to confirm; declining aborts the run so you can consolidate the two registries by hand.
 
+### When apt can install a package you have a snippet for
+
+apt is the one ecosystem where your snippet and the package manager can both account for the same package, and nothing on either machine says which of you installed it. When the registry has a snippet for an apt package your source machine has installed **and** apt there can install that name from a repository, `manual_deb_sync` shows you the snippet, the repository apt would install from, and two answers:
+
+- `y` — apt installed it. The snippet is deleted from both machines' registries, and the package is apt's from then on.
+- `k` — you installed it. The snippet stays.
+
+Nothing is recorded either way, so you are asked again on every sync while the state lasts. To end it, make apt stop offering the package — write `/etc/apt/preferences.d/keep-<package>` on the source machine:
+
+```plain
+Package: <package>
+Pin: release *
+Pin-Priority: -1
+```
+
+apt then reports `Candidate: (none)` for it, pc-switcher reads the package as yours, and the question stops. The negative pin also makes the repository copy ineligible for an explicit `apt install`; `apt-mark hold` is weaker — it defers apt's automatic action only, and an explicit `apt install` overrides it. Neither takes the repository rows out of `apt-cache policy`'s version table, and either way that package's security updates become yours to apply.
+
+snap and flatpak never ask this: a sideloaded snap's `x`-prefixed revision and a flatpak app's recorded remote already say how the software got there.
+
 ## Ubuntu Pro and ESM
 
 If your source uses Ubuntu Pro's ESM repositories and your target is not attached, `apt_sync` asks before writing anything. Two answers: attach the target (pc-switcher gives you the `sudo pro attach <token>` and `sudo pro enable esm-apps esm-infra` commands to run there, plus a link to [Ubuntu's tutorial](https://documentation.ubuntu.com/pro/attach-tutorial/)) or skip Apt packages for this run. Every other job still runs.

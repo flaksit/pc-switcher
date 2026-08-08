@@ -662,8 +662,47 @@ class SnippetRegistry:
         """
         entries = await self.load()
         entries[snippet.item_id] = snippet
-        content = _serialize_snippets(entries)
+        await self._write(
+            _serialize_snippets(entries),
+            mutates=f"record install snippet for {snippet.label} in {self._display_path}",
+            failure=f"failed to add snippet for {snippet.item_id!r} in",
+        )
 
+    async def remove(self, item_ids: Collection[str]) -> frozenset[str]:
+        """Take `item_ids` out of this registry and write it back; returns what was actually
+        removed, which is `item_ids` minus anything the file did not hold.
+
+        The counterpart to `add`, for the one answer that says a registry entry describes
+        software the package manager owns after all (`PKG-FR-DEB-AMBIGUITY`). Deleting the
+        entry is what makes that answer settle the question for good: the entry is the whole
+        of what made the name ambiguous, so with it gone nothing asks again.
+
+        Writes nothing at all where the file holds none of `item_ids`, and reads nothing
+        where `item_ids` is empty — which is every run with no such answer to carry out. A
+        caller removing the same ids from BOTH machines therefore issues one command per
+        machine that actually has the entry.
+        """
+        if not item_ids:
+            return frozenset()
+
+        entries = await self.load()
+        removed = frozenset(item_id for item_id in item_ids if item_id in entries)
+        if not removed:
+            return frozenset()
+
+        remaining = {item_id: entry for item_id, entry in entries.items() if item_id not in removed}
+        labels = ", ".join(sorted(entries[item_id].label for item_id in removed))
+        await self._write(
+            _serialize_snippets(remaining),
+            mutates=f"drop the install snippet for {labels} from {self._display_path}",
+            failure=f"failed to drop {sorted(removed)} from",
+        )
+        return removed
+
+    async def _write(self, content: str, *, mutates: str, failure: str) -> None:
+        """Replace this file's content atomically — the same
+        `mkdir --parents && printf … > tmp && mv --force` shape `DecisionFile._write` uses,
+        so an interrupted write can never leave a truncated registry."""
         dir_relpath = shlex.quote(_DECISION_DIR_RELPATH)
         tmp_expr = f"{self._path_expr}.pcswitcher-tmp"
         cmd = (
@@ -671,13 +710,9 @@ class SnippetRegistry:
             f"printf '%s' {shlex.quote(content)} > {tmp_expr} && "
             f"mv --force {tmp_expr} {self._path_expr}"
         )
-        result = await self._executor.run_command(
-            cmd, mutates=f"record install snippet for {snippet.label} in {self._display_path}"
-        )
+        result = await self._executor.run_command(cmd, mutates=mutates)
         if not result.success:
-            raise RuntimeError(
-                f"failed to add snippet for {snippet.item_id!r} in {self._display_path}: {result.stderr.strip()}"
-            )
+            raise RuntimeError(f"{failure} {self._display_path}: {result.stderr.strip()}")
 
     async def installed_version(self, item_id: str, executor: Executor) -> str | None:
         """What this item's `version_body` prints on `executor`'s machine, or `None` where

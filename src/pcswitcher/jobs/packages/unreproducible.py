@@ -204,6 +204,10 @@ class UnreproducibleSyncJob(PackageSyncJob):
         # that rewrites a snippet opens its editors on that content rather than on nothing.
         # Collected in `plan()`, where the registry is already being read per item.
         self._recorded_bodies: dict[str, SnippetBodies] = {}
+        # The registry entries this run put `PKG-FR-DEB-AMBIGUITY`'s question about, so
+        # `after_review()` can act on the answers without re-deriving which entries they were
+        # about. Empty for every job but `manual_deb_sync`.
+        self._ownership_ids: frozenset[str] = frozenset()
 
     # -- Detection, supplied per job ----------------------------------------------------
 
@@ -259,6 +263,26 @@ class UnreproducibleSyncJob(PackageSyncJob):
         """
         ...
 
+    async def ownership_questions(self, marks: Mapping[str, DecisionEntry]) -> Sequence[ReviewGroup]:
+        """Hook: the groups asking who put a registry-backed item on the source, where this
+        job's package manager can account for it after all (`PKG-FR-DEB-AMBIGUITY`).
+
+        Nothing on the base, and only `manual_deb_sync` overrides it. apt is the one
+        ecosystem whose own record a snippet can contradict without either being wrong: a
+        name apt can install may still have been put there by hand, and apt says nothing
+        about which. snapd's `x<N>` revision proves a local-file install and a flatpak
+        origin names the remote the bytes came from, so for those three a snippet either
+        agrees with the manager or names something the manager does not have — never a state
+        the user has to break a tie in.
+
+        `marks` is the run's own `marks_on_either` set, so an item recorded machine-specific
+        is not asked about: the mark already puts that item out of the run, and a question
+        about who installed it would be asked about software the user has said not to touch.
+
+        Read-only, like everything else `plan()` reaches.
+        """
+        return ()
+
     def removal_warning(self) -> str | None:
         """What the removal screen says above the rows, where the removal reaches further
         than the item it names (`PKG-FR-MANUAL-REMOVE`).
@@ -291,12 +315,58 @@ class UnreproducibleSyncJob(PackageSyncJob):
         Two enabled unreproducible jobs each push the same shared file. The second push is
         additive by construction — it sends a superset of what its own predecessor sent —
         so `_guard_registry_overwrite` passes it silently and no question is put twice.
+
+        `_drop_snippets_the_package_manager_owns` sits between the finalize and the push,
+        for the reason `_author_replacement` writes to both registries directly: an entry
+        deleted on the source alone is exactly what `_guard_registry_overwrite` calls a lost
+        entry, so the push would put a consent question in front of the user about the
+        deletion they had just asked for.
         """
         assert self._accepted_plan is not None
         assert self._accepted_outcome is not None
         await self._finalize_unreproducible(self._accepted_plan, self._accepted_outcome)
+        await self._drop_snippets_the_package_manager_owns()
         await self._push_snippet_registry()
         self._promote_authored_snippets_to_install()
+
+    async def _drop_snippets_the_package_manager_owns(self) -> None:
+        """Delete every registry entry this run's user said was the package manager's after
+        all (`PKG-FR-DEB-AMBIGUITY`).
+
+        Deleted on BOTH machines rather than on the source and then pushed. The push is a
+        whole-file overwrite gated on being additive, and a source entry the target still
+        holds is what that gate calls a LOST entry (`_guard_registry_overwrite`) — so a
+        source-only delete would ask the user to consent to their own answer. Writing the
+        same deletion on both leaves the two copies equal, which is the state the gate exists
+        to protect. `PKG-FR-REGISTRY-CONSENT` is satisfied rather than bypassed: it gates a
+        transfer that would lose an entry the user has not been shown, and here the entry was
+        on screen and its deletion is the answer.
+
+        Nothing is deleted where nobody answered (`PKG-FR-NO-TERMINAL` — the command line
+        cannot answer this question either, so an outcome that was not interactive carries
+        only the default) or during a dry run (ADR-014). One INFO line per entry, for
+        `PKG-FR-LOG-DECISIONS`'s reason: a registry entry is the user's own work, and it does
+        not disappear silently.
+        """
+        assert self._accepted_outcome is not None
+        outcome = self._accepted_outcome
+        if self.context.dry_run or not outcome.was_interactive:
+            return
+
+        given_to_apt = sorted(
+            item_id for item_id in self._ownership_ids if outcome.decisions.get(item_id) is Decision.APPLY
+        )
+        if not given_to_apt:
+            return
+
+        for machine, executor in ((self.machines.source, self.source), (self.machines.target, self.target)):
+            await SnippetRegistry(executor, machine).remove(given_to_apt)
+        for item_id in given_to_apt:
+            self._log(
+                Host.SOURCE,
+                LogLevel.INFO,
+                f"dropped the install snippet for {item_id}: the package is the package manager's",
+            )
 
     def _promote_authored_snippets_to_install(self) -> None:
         """Reclassify every on-the-fly-authored item's diff `REPORT_ONLY -> INSTALL`/`CHANGE`
@@ -606,7 +676,11 @@ class UnreproducibleSyncJob(PackageSyncJob):
         diffs.extend(self._diff_for(item, DiffAction.REMOVE, True, detail=None) for item in self._removable.values())
 
         all_diffs = self._drop_inert_diffs(tuple(diffs), source_decisions, target_decisions)
-        groups = self._build_review_groups(all_diffs)
+        # Last, after every group that moves software: this one moves none, and #283's rule
+        # about the order the screens come in is about what a run DOES to the machines.
+        ownership = tuple(await self.ownership_questions(marks))
+        self._ownership_ids = frozenset(entry.item_id for group in ownership for entry in group.entries)
+        groups = (*self._build_review_groups(all_diffs), *ownership)
         return PackagePlan(manager=self.manager_id, diffs=all_diffs, groups=groups)
 
     def _diff_for(

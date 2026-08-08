@@ -7,18 +7,25 @@ All executor interactions are mocked; no real dpkg/apt-cache/sudo commands run.
 
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
 
 from pcswitcher.config import Configuration
+from pcswitcher.jobs.context import JobContext
 from pcswitcher.jobs.manual_deb_sync import ManualDebSyncJob
 from pcswitcher.jobs.packages.apt_policy import installed_origins_by_package
 from pcswitcher.jobs.packages.items import DiffAction, DiffClass, ItemClass
 from pcswitcher.jobs.packages.probes import ProbeFailed
-from pcswitcher.jobs.packages.review import Decision, ReviewOutcome
+from pcswitcher.jobs.packages.review import (
+    SNIPPET_OWNERSHIP_REVIEW_ACTION,
+    Decision,
+    ReviewGroup,
+    ReviewOutcome,
+)
 from pcswitcher.jobs.packages.sync_core import PackagePlan
-from pcswitcher.models import CommandResult, Host, ValidationError
+from pcswitcher.models import CommandResult, Host, JobSkipped, ValidationError
 from pcswitcher.orchestrator import Orchestrator
 from tests.unit.jobs.unreproducible_harness import (
     BRSCAN3_REGISTRY_YAML,
@@ -28,13 +35,17 @@ from tests.unit.jobs.unreproducible_harness import (
     POLICY_PHASED_UPDATE_LAGGARD,
     POLICY_PINNED_NO_CANDIDATE,
     POLICY_REPO_INSTALLED,
+    QEMU_REGISTRY_YAML,
+    REGISTRY_QUERY,
     STATUS_QUERY,
     Answer,
     FakeReviewer,
     all_calls,
+    decision_file_writes,
     hand_deb_policy,
     installed_on,
     make_context,
+    registry_writes,
 )
 
 
@@ -436,6 +447,147 @@ class TestWhatTheTargetAlreadyHolds:
         assert plan.diffs == ()
         # No second origin analysis on the target: its installed set answers the question.
         assert not [cmd for cmd in all_calls(target) if cmd.startswith("apt-cache policy")]
+
+
+class TestWhoInstalledIt:
+    """`PKG-FR-DEB-AMBIGUITY`: a snippet on record for a package the SOURCE's apt can install
+    from a repository fits two readings — a hand install apt happens to carry the name for,
+    or an ordinary apt package with a leftover snippet — and nothing on either machine
+    settles it, so the run asks.
+    """
+
+    @staticmethod
+    def _ownership_groups(plan: PackagePlan) -> list[ReviewGroup]:
+        return [group for group in plan.groups if group.action == SNIPPET_OWNERSHIP_REVIEW_ACTION]
+
+    @staticmethod
+    def _context(
+        *,
+        registry: str = QEMU_REGISTRY_YAML,
+        policy: str = POLICY_PHASED_UPDATE_LAGGARD,
+        installed: str = "qemu-guest-agent",
+        source_responses: dict[str, Answer] | None = None,
+        **kwargs: Any,
+    ) -> tuple[JobContext, MagicMock, MagicMock]:
+        return make_context(
+            source_responses={
+                STATUS_QUERY: installed_on(installed),
+                "apt-cache policy": CommandResult(0, policy, ""),
+                REGISTRY_QUERY: CommandResult(0, registry, ""),
+                **(source_responses or {}),
+            },
+            target_responses={REGISTRY_QUERY: CommandResult(0, registry, "")},
+            **kwargs,
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_snippet_for_a_package_apt_can_install_is_asked_about(self) -> None:
+        """G196, G197 — the question names apt's own answer, so the user is judging the two
+        claims rather than a package name: the snippet on record, and the repository apt
+        would take the package from."""
+        context, _source, _target = self._context()
+
+        plan = await ManualDebSyncJob(context).plan()
+
+        groups = self._ownership_groups(plan)
+        assert len(groups) == 1
+        entry = groups[0].entries[0]
+        assert entry.item_id == "unreproducible:apt-no-candidate:qemu-guest-agent"
+        assert entry.detail is not None
+        assert "ftp.belnet.be" in entry.detail
+        assert groups[0].recorded_bodies is not None
+        assert "dpkg --install" in groups[0].recorded_bodies[entry.item_id].install_body
+
+    @pytest.mark.asyncio
+    async def test_a_snippet_for_a_package_apt_cannot_install_is_not_ambiguous(self) -> None:
+        """G203 — the ordinary hand-`.deb`: apt has no repository for the name, so the snippet
+        contradicts nothing and the package is already this job's own item."""
+        context, _source, _target = self._context(
+            registry=BRSCAN3_REGISTRY_YAML, policy=hand_deb_policy("brscan3"), installed="brscan3"
+        )
+
+        plan = await ManualDebSyncJob(context).plan()
+
+        assert self._ownership_groups(plan) == []
+
+    @pytest.mark.asyncio
+    async def test_a_snippet_for_a_package_the_source_does_not_have_is_not_asked_about(self) -> None:
+        """G204 — the verdict is the source's (`PKG-FR-DEB-OWNERSHIP`), and a package the
+        source does not have installed makes no claim about what put it there."""
+        context, _source, _target = self._context(installed="coreutils", policy=hand_deb_policy("coreutils"))
+
+        plan = await ManualDebSyncJob(context).plan()
+
+        assert self._ownership_groups(plan) == []
+
+    @pytest.mark.asyncio
+    async def test_a_machine_specific_item_is_not_asked_about(self) -> None:
+        """G205 — the mark already puts the item out of the run, so asking who installed it
+        would be a question about software the user said not to touch."""
+        decisions = _manual_decisions("unreproducible:apt-no-candidate:qemu-guest-agent")
+        context, _source, _target = self._context(
+            source_responses={"manual_deb.decisions.yaml": CommandResult(0, decisions, "")}
+        )
+
+        plan = await ManualDebSyncJob(context).plan()
+
+        assert self._ownership_groups(plan) == []
+
+    @pytest.mark.asyncio
+    async def test_answering_apt_deletes_the_entry_from_both_registries(self) -> None:
+        """G206 — the deletion goes to BOTH copies, not to the source's followed by a push: a
+        source-only delete is what `_guard_registry_overwrite` calls a lost entry, so the push
+        would ask the user to consent to the answer they had just given."""
+        item_id = "unreproducible:apt-no-candidate:qemu-guest-agent"
+        context, source, target = self._context(reviewer=FakeReviewer(decisions={item_id: Decision.APPLY}))
+
+        await ManualDebSyncJob(context).execute()
+
+        for machine in (source, target):
+            writes = registry_writes(machine)
+            assert len(writes) == 1
+            assert "qemu-guest-agent" not in writes[0]
+
+    @pytest.mark.asyncio
+    async def test_keeping_the_snippet_writes_nothing_anywhere(self) -> None:
+        """G207 — the answer that keeps it records nothing: no marker, no decision-file entry
+        and no registry flag, which is what makes the same state ask again next run."""
+        item_id = "unreproducible:apt-no-candidate:qemu-guest-agent"
+        context, source, target = self._context(reviewer=FakeReviewer(decisions={item_id: Decision.SKIP_ONCE}))
+
+        await ManualDebSyncJob(context).execute()
+
+        assert registry_writes(source) == []
+        assert registry_writes(target) == []
+        assert decision_file_writes(source, "manual_deb") == []
+
+    @pytest.mark.asyncio
+    async def test_a_dry_run_asks_and_deletes_nothing(self) -> None:
+        """G208 — ADR-014: a rehearsal leaves no trace, the registry included."""
+        item_id = "unreproducible:apt-no-candidate:qemu-guest-agent"
+        context, source, target = self._context(
+            reviewer=FakeReviewer(decisions={item_id: Decision.APPLY}), dry_run=True
+        )
+
+        await ManualDebSyncJob(context).execute()
+
+        assert registry_writes(source) == []
+        assert registry_writes(target) == []
+
+    @pytest.mark.asyncio
+    async def test_a_run_nobody_answered_deletes_nothing(self) -> None:
+        """G209 — `PKG-FR-NO-TERMINAL`: no flag answers this question either, so an outcome
+        nobody gave carries only the default and the entry stays where it is."""
+        item_id = "unreproducible:apt-no-candidate:qemu-guest-agent"
+        context, source, target = self._context(
+            reviewer=FakeReviewer(decisions={item_id: Decision.APPLY}, was_interactive=False)
+        )
+
+        with pytest.raises(JobSkipped):
+            await ManualDebSyncJob(context).execute()
+
+        assert registry_writes(source) == []
+        assert registry_writes(target) == []
 
 
 class TestValidate:

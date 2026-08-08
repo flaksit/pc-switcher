@@ -30,6 +30,8 @@ __all__ = [
     "POLICY_PHASED_UPDATE_LAGGARD",
     "POLICY_PINNED_NO_CANDIDATE",
     "POLICY_REPO_INSTALLED",
+    "QEMU_REGISTRY_YAML",
+    "REGISTRY_QUERY",
     "STATUS_QUERY",
     "TARGET_HOLDS_NOTHING_OF_INTEREST",
     "Answer",
@@ -179,6 +181,22 @@ BRSCAN3_REGISTRY_YAML = (
     "    authored_at: '2026-01-01T00:00:00+00:00'\n"
     "    authored_on: laptop\n"
 )
+
+# The registry half of `PKG-FR-DEB-AMBIGUITY`'s state: a snippet on record for a package
+# apt can install too. Paired with `POLICY_PHASED_UPDATE_LAGGARD`, whose candidate origins
+# are a real repository, that is the pair nothing on either machine can tell apart.
+QEMU_REGISTRY_YAML = (
+    "snippets:\n"
+    "  unreproducible:apt-no-candidate:qemu-guest-agent:\n"
+    "    label: qemu-guest-agent (1:8.2.2+ds-0ubuntu1.17)\n"
+    "    install_body: sudo dpkg --install /tmp/qemu-guest-agent.deb\n"
+    "    authored_at: '2026-01-01T00:00:00+00:00'\n"
+    "    authored_on: laptop\n"
+)
+
+# The `cat` both registries answer, keyed on the path so a write of the same file never
+# matches it.
+REGISTRY_QUERY = "cat ~/.config/pc-switcher/package-snippets.yaml"
 
 
 # The `dpkg-query` that names a machine's installed set, matched by its one distinctive

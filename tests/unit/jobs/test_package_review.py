@@ -39,6 +39,7 @@ from pcswitcher.jobs.packages.review import (
     REPO_CONFLICT_REVIEW_ACTION,
     REPO_REMOVAL_REVIEW_ACTION,
     SKIP_NOW_WORD,
+    SNIPPET_OWNERSHIP_REVIEW_ACTION,
     UNREPRODUCIBLE_RETRY_REVIEW_ACTION,
     UNREPRODUCIBLE_REVIEW_ACTION,
     UNREPRODUCIBLE_UPDATE_REVIEW_ACTION,
@@ -1001,11 +1002,14 @@ class TestWhichGroupsAFlagAnswers:
         assert policy_decision(_group("install"), _BOTH) is Decision.APPLY
         assert policy_decision(_group("remove"), _BOTH) is Decision.APPLY
 
-    @pytest.mark.parametrize("action", [REPO_CONFLICT_REVIEW_ACTION, UNREPRODUCIBLE_REVIEW_ACTION])
+    @pytest.mark.parametrize(
+        "action", [REPO_CONFLICT_REVIEW_ACTION, UNREPRODUCIBLE_REVIEW_ACTION, SNIPPET_OWNERSHIP_REVIEW_ACTION]
+    )
     def test_no_flag_answers_a_question_the_source_cannot_settle(self, action: str) -> None:
-        """H227, H229 — a repository conflict moves where machine-specific software comes
-        from, and an unreproducible item's answer is an authored snippet; neither flag
-        answers either.
+        """H227, H229, G202 — a repository conflict moves where machine-specific software
+        comes from, an unreproducible item's answer is an authored snippet, and who installed
+        a package is a fact about the past the source's current state cannot settle — which
+        is why it is asked at all. No flag answers any of them.
         """
         assert policy_decision(_group(action), _BOTH) is None
 
@@ -1741,6 +1745,119 @@ class TestTheRecordedSnippetIsOnScreen:
             ("w", "new snippet", True),
             ("s", SKIP_NOW_WORD, False),
         ]
+
+
+def _ownership_group(*, label: str = "qemu-guest-agent (1:8.2.2+ds-0ubuntu1.18)") -> ReviewGroup:
+    return ReviewGroup(
+        manager="manual_deb",
+        action=SNIPPET_OWNERSHIP_REVIEW_ACTION,
+        title="atlas has install snippets for packages apt can install too",
+        item_noun="manual deb",
+        entries=(
+            ReviewEntry(
+                item_id=PACKAGE_BACKED_ID,
+                label=label,
+                action_label="drop the snippet",
+                detail="apt would install it from http://ftp.belnet.be/ubuntu",
+            ),
+        ),
+        recorded_bodies={PACKAGE_BACKED_ID: SnippetBodies(install_body=RECORDED_BODY)},
+    )
+
+
+@pytest.mark.asyncio
+class TestWhoInstalledItScreen:
+    """`PKG-FR-DEB-AMBIGUITY`: a snippet on record for a package apt can install too is a
+    state nothing on either machine resolves, so the screen asks who put it there — two
+    answers, neither of them recorded anywhere.
+    """
+
+    @staticmethod
+    async def _screen(answer: str, *, group: ReviewGroup | None = None) -> tuple[Any, str, ReviewOutcome]:
+        console, sink = captured_console(terminal=True)
+        screen = _fake_prompt(ask_return={PACKAGE_BACKED_ID: answer})
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen) as decision_list,
+        ):
+            outcome = await review_items(
+                [group if group is not None else _ownership_group()], console=console, ui=MagicMock(), **HOSTS
+            )
+
+        return decision_list.call_args, sink.getvalue(), outcome
+
+    async def test_two_answers_and_the_row_starts_on_keeping_the_snippet(self) -> None:
+        """G196 — the act deletes the user's own work, so it is chosen rather than defaulted,
+        and there is no permanent answer: nothing here may be recorded, which is what makes
+        the question come back while the state does.
+        """
+        call, _scrollback, _outcome = await self._screen("skip_once")
+
+        assert [(option.key, option.word, option.is_permanent) for option in call.kwargs["options"]] == [
+            ("y", "apt did", False),
+            ("k", "I did", False),
+        ]
+        assert _screen_defaults(call) == {PACKAGE_BACKED_ID: Decision.SKIP_ONCE}
+
+    async def test_the_recorded_snippet_and_apts_own_answer_are_both_on_screen(self) -> None:
+        """G197 — the question is which of the two put the package there, so both claims are
+        printed: the body on record, and the repository apt says it would install from."""
+        call, scrollback, _outcome = await self._screen("skip_once")
+
+        assert RECORDED_BODY in scrollback
+        assert call.kwargs["rows"][0].detail == "apt would install it from http://ftp.belnet.be/ubuntu"
+        assert "atlas" in call.args[0]
+
+    async def test_saying_apt_did_it_records_the_act(self) -> None:
+        """G198 — the answer that gives the package back to apt is `APPLY`, which the job then
+        turns into the deletion of the entry."""
+        _call, _scrollback, outcome = await self._screen("apply")
+
+        assert outcome.decisions == {PACKAGE_BACKED_ID: Decision.APPLY}
+
+    async def test_keeping_the_snippet_prints_how_to_stop_being_asked(self) -> None:
+        """G199 — keeping it leaves both machines exactly as they were, which is the state the
+        question is raised on; without the pin the user answers and is asked again next sync.
+        """
+        _call, scrollback, outcome = await self._screen("skip_once")
+
+        assert outcome.decisions == {PACKAGE_BACKED_ID: Decision.SKIP_ONCE}
+        assert "/etc/apt/preferences.d/keep-qemu-guest-agent" in scrollback
+        assert "Pin-Priority: -1" in scrollback
+        # The weaker lever is named as weaker, never as an equivalent.
+        assert "'apt-mark hold' is the weaker lever" in scrollback
+
+    async def test_giving_the_package_back_to_apt_prints_no_pin_guidance(self) -> None:
+        """G200 — the entry is about to be deleted, so there is nothing left to be asked about
+        and a pin file in front of the user would be advice against their own answer."""
+        _call, scrollback, _outcome = await self._screen("apply")
+
+        assert "preferences.d" not in scrollback
+
+    async def test_each_package_is_answered_right_after_its_snippet_is_shown(self) -> None:
+        """G201 — one screen per package, for the reason every screen that prints a body is:
+        a batch would print three or four and then ask about all of them at once."""
+        second = ReviewEntry(item_id=UNOWNED_PATH_ID, label="other (2.0)", action_label="drop the snippet")
+        group = ReviewGroup(
+            manager="manual_deb",
+            action=SNIPPET_OWNERSHIP_REVIEW_ACTION,
+            title="atlas has install snippets for packages apt can install too",
+            item_noun="manual deb",
+            entries=(*_ownership_group().entries, second),
+            recorded_bodies={PACKAGE_BACKED_ID: SnippetBodies(install_body=RECORDED_BODY)},
+        )
+        console = _interactive_console()
+        screen = _fake_prompt(ask_side_effect=[{PACKAGE_BACKED_ID: "apply"}, {UNOWNED_PATH_ID: "skip_once"}])
+
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen) as decision_list,
+        ):
+            outcome = await review_items([group], console=console, ui=MagicMock(), **HOSTS)
+
+        assert [len(call.kwargs["rows"]) for call in decision_list.call_args_list] == [1, 1]
+        assert outcome.decisions == {PACKAGE_BACKED_ID: Decision.APPLY, UNOWNED_PATH_ID: Decision.SKIP_ONCE}
 
 
 @pytest.mark.asyncio
