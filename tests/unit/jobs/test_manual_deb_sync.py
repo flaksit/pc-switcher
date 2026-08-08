@@ -25,6 +25,7 @@ from tests.unit.jobs.unreproducible_harness import (
     POLICY_AUTO_DEP,
     POLICY_HAND_DEB,
     POLICY_NEWER_THAN_REPO,
+    POLICY_PHASED_UPDATE_LAGGARD,
     POLICY_PINNED_NO_CANDIDATE,
     POLICY_REPO_INSTALLED,
     STATUS_QUERY,
@@ -90,10 +91,11 @@ class TestNoCandidateDetection:
         assert self._unreproducible_ids(plan) == set()
 
     @pytest.mark.asyncio
-    async def test_negatively_pinned_package_is_not_unreproducible(self) -> None:
-        """G3 — `docker.io` reports `Candidate: (none)` only because a local pin holds every
-        version below zero. It is fully repo-available, so reproducing it needs no
-        snippet — the item the `Candidate:` test used to invent.
+    async def test_a_package_apt_will_take_from_no_repository_is_unreproducible(self) -> None:
+        """G3 — every repository version of `docker.io` is pinned below zero, so apt answers
+        `Candidate: (none)`: there is no repository it will install the package from, and
+        nothing but a snippet can put it on the other machine. The pin itself is never read
+        (`PKG-FR-PIN-NOT-INVENTORY`) — apt's own conclusion is.
         """
         context, _source, _target = make_context(
             source_responses={
@@ -105,7 +107,7 @@ class TestNoCandidateDetection:
 
         plan = await job.plan()
 
-        assert self._unreproducible_ids(plan) == set()
+        assert self._unreproducible_ids(plan) == {"unreproducible:apt-no-candidate:docker.io"}
 
     @pytest.mark.asyncio
     async def test_package_installed_from_a_repo_as_an_automatic_dependency_is_not_unreproducible(self) -> None:
@@ -119,6 +121,24 @@ class TestNoCandidateDetection:
         job = ManualDebSyncJob(context)
 
         plan = await job.plan()
+
+        assert self._unreproducible_ids(plan) == set()
+
+    @pytest.mark.asyncio
+    async def test_a_package_whose_installed_version_the_archive_superseded_is_not_unreproducible(self) -> None:
+        """G195 — the source sits on `1:8.2.2+ds-0ubuntu1.17` while the archive has moved to
+        `.18`, which is what an Ubuntu phased update looks like from the machine it has not
+        reached yet. Apt still has a repository for the name, so the package is apt's and no
+        snippet is invented for it (#285).
+        """
+        context, _source, _target = make_context(
+            source_responses={
+                STATUS_QUERY: installed_on("qemu-guest-agent"),
+                "apt-cache policy": CommandResult(0, POLICY_PHASED_UPDATE_LAGGARD, ""),
+            }
+        )
+
+        plan = await ManualDebSyncJob(context).plan()
 
         assert self._unreproducible_ids(plan) == set()
 
@@ -163,7 +183,8 @@ class TestNoCandidateDetection:
     @pytest.mark.asyncio
     async def test_one_batched_scan_separates_the_hand_deb_from_the_repo_installed(self) -> None:
         """G7 — the whole manual set goes through a SINGLE `apt-cache policy` (never one
-        call per package), and only the hand-installed `.deb` comes back unreproducible."""
+        call per package), and only the names apt will install from no repository come back
+        unreproducible."""
         policy = POLICY_HAND_DEB + POLICY_REPO_INSTALLED + POLICY_PINNED_NO_CANDIDATE + POLICY_AUTO_DEP
         context, source, _target = make_context(
             source_responses={
@@ -175,7 +196,10 @@ class TestNoCandidateDetection:
 
         plan = await job.plan()
 
-        assert self._unreproducible_ids(plan) == {"unreproducible:apt-no-candidate:code"}
+        assert self._unreproducible_ids(plan) == {
+            "unreproducible:apt-no-candidate:code",
+            "unreproducible:apt-no-candidate:docker.io",
+        }
         policy_calls = [cmd for cmd in all_calls(source) if "apt-cache policy" in cmd]
         assert len(policy_calls) == 1
         for name in ("code", "gh", "docker.io", "7zip"):

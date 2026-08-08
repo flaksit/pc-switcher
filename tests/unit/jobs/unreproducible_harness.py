@@ -26,6 +26,8 @@ __all__ = [
     "POLICY_AUTO_DEP",
     "POLICY_HAND_DEB",
     "POLICY_NEWER_THAN_REPO",
+    "POLICY_PHASED_UPDATE_APPLIED",
+    "POLICY_PHASED_UPDATE_LAGGARD",
     "POLICY_PINNED_NO_CANDIDATE",
     "POLICY_REPO_INSTALLED",
     "STATUS_QUERY",
@@ -51,11 +53,11 @@ __all__ = [
 
 # -- Real `apt-cache policy` output, verbatim ------------------------------------------
 #
-# Measured on a live Ubuntu 24.04 machine. The four shapes the detector has to tell apart:
+# Measured on a live Ubuntu 24.04 machine. The five shapes the detector has to tell apart:
 # a hand-installed `.deb`, a repo-installed package, a package every version of which is
-# pinned below zero, and a repo-installed automatic dependency. Only the first is
-# unreproducible, and all four report a `Candidate:` — three of them a real version, and
-# the pinned one `(none)` despite being fully repo-available.
+# pinned below zero, a repo-installed automatic dependency, and a package whose installed
+# version the archive has superseded. Apt will install the first from no repository and the
+# third from none either — those two are unreproducible; the other three it can install.
 
 
 def hand_deb_policy(name: str, version: str = "1.0") -> str:
@@ -120,6 +122,33 @@ POLICY_NEWER_THAN_REPO = """mytool:
         100 /var/lib/dpkg/status
      2.1.0 500
         500 http://ftp.belnet.be/ubuntu noble/universe amd64 Packages
+"""
+
+# `qemu-guest-agent` on a machine a phased update has not reached: the installed `.17` is in
+# no repository any more, while apt's candidate is the `.18` the archive moved to. The block
+# from #285, with the mirror URIs it elided written as the machine above prints them.
+POLICY_PHASED_UPDATE_LAGGARD = """qemu-guest-agent:
+  Installed: 1:8.2.2+ds-0ubuntu1.17
+  Candidate: 1:8.2.2+ds-0ubuntu1.18
+  Version table:
+     1:8.2.2+ds-0ubuntu1.18 500
+        500 http://ftp.belnet.be/ubuntu noble-updates/universe amd64 Packages
+ *** 1:8.2.2+ds-0ubuntu1.17 100
+        100 /var/lib/dpkg/status
+     1:8.2.2+ds-0ubuntu1.16 500
+        500 http://security.ubuntu.com/ubuntu noble-security/universe amd64 Packages
+"""
+
+# The same package on the machine the rollout HAS reached: `.18` installed and offered.
+POLICY_PHASED_UPDATE_APPLIED = """qemu-guest-agent:
+  Installed: 1:8.2.2+ds-0ubuntu1.18
+  Candidate: 1:8.2.2+ds-0ubuntu1.18
+  Version table:
+ *** 1:8.2.2+ds-0ubuntu1.18 500
+        500 http://ftp.belnet.be/ubuntu noble-updates/universe amd64 Packages
+        100 /var/lib/dpkg/status
+     1:8.2.2+ds-0ubuntu1.16 500
+        500 http://security.ubuntu.com/ubuntu noble-security/universe amd64 Packages
 """
 
 # `7zip`, pulled in from a repository as an automatic dependency.

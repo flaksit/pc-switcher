@@ -50,6 +50,8 @@ from tests.unit.jobs.test_apt_policy import (
 from tests.unit.jobs.unreproducible_harness import (
     POLICY_AUTO_DEP,
     POLICY_HAND_DEB,
+    POLICY_PHASED_UPDATE_APPLIED,
+    POLICY_PHASED_UPDATE_LAGGARD,
     POLICY_PINNED_NO_CANDIDATE,
     POLICY_REPO_INSTALLED,
     hand_deb_policy,
@@ -71,7 +73,7 @@ class TestCapture:
         )
         probe = AptProbe(context.source, context.target, MACHINES)
 
-        items, _origins = await probe.capture_source_items()
+        items, _origins, _no_repository = await probe.capture_source_items()
 
         assert [item.name for item in items] == ["pkg-a", "pkg-b", "pkg-c"]
         assert [item.version for item in items] == ["1.0", "2.0", "3.0"]
@@ -342,7 +344,8 @@ class TestBareDebPackagesAreNotAptSyncsBusiness:
     @pytest.mark.asyncio
     async def test_one_source_policy_call_covers_the_whole_manual_set(self) -> None:
         """A10 — one batched call over a hand `.deb`, a vendor package, a pinned one and an
-        auto dependency: only the hand `.deb` is dropped."""
+        auto dependency: the two apt will install from no repository are withheld, the two it
+        can install stay."""
         policy = POLICY_HAND_DEB + POLICY_REPO_INSTALLED + POLICY_PINNED_NO_CANDIDATE + POLICY_AUTO_DEP
         context, source, _target = make_context(
             source_responses={
@@ -360,13 +363,11 @@ class TestBareDebPackagesAreNotAptSyncsBusiness:
         assert len(policy_calls) == 1
         for name in ("code", "gh", "docker.io", "7zip"):
             assert name in policy_calls[0]
-        # Only `code` is hand-installed; the negatively-pinned and auto-dependency packages
-        # both have repository origins and stay apt_sync's to install.
-        assert {d.item_id for d in plan.diffs} == {
-            "apt:package:gh",
-            "apt:package:docker.io",
-            "apt:package:7zip",
-        }
+        # `code` came from a hand `.deb` and `docker.io` is pinned below zero on every
+        # repository version, so apt will install neither from anywhere and both are
+        # `manual_deb_sync`'s. The auto dependency and the vendor package have a repository
+        # candidate and stay apt_sync's to install.
+        assert {d.item_id for d in plan.diffs} == {"apt:package:gh", "apt:package:7zip"}
 
     @pytest.mark.asyncio
     async def test_excluded_package_reaches_neither_the_simulation_nor_the_availability_probe(self) -> None:
@@ -559,10 +560,67 @@ class TestBareDebPackagesAreNotAptSyncsBusiness:
         assert not any("apt-get remove" in cmd for cmd in all_calls(target))
 
     @pytest.mark.asyncio
-    async def test_a_repository_package_is_still_installed_over_the_targets_hand_deb(self) -> None:
-        """A77 — the two copies are not the same software: identity is name AND origin, so
-        the source's repository `gh` is an ordinary install and the target's hand-`.deb` copy
-        is `manual_installs_sync`'s. No removal, no version report about the two.
+    async def test_a_hand_deb_on_the_source_withholds_the_targets_repository_copy_too(self) -> None:
+        """A78 — the source's `code` came from a hand `.deb` while the target's came from a
+        repository. The source's verdict decides the name for BOTH manifests, so the target's
+        copy is withheld with it: two verdicts for one name would leave `code` in the target's
+        manifest alone and diff it as a removal of software the source still has.
+        """
+        context, _source, target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "code\n", ""),
+                "dpkg-query": CommandResult(0, "code\t1.129.1-1784303641\n", ""),
+                "apt-cache policy": CommandResult(0, POLICY_HAND_DEB, ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "code\n", ""),
+                # A different version as well, so a manifest that kept the name would diff
+                # loudly rather than by accident matching the source's.
+                "dpkg-query": CommandResult(0, "code\t1.0\n", ""),
+                "apt-cache policy": CommandResult(0, _policy_block("code", _BASELINE_ARCHIVE), ""),
+            },
+        )
+
+        plan = await AptSyncJob(context).plan()
+
+        assert list(plan.diffs) == []
+        assert not any("apt-get remove" in cmd for cmd in all_calls(target))
+
+    @pytest.mark.asyncio
+    async def test_a_phased_update_skew_is_one_version_report_and_no_removal(self) -> None:
+        """A79 — `qemu-guest-agent` is an ordinary apt package on both machines; the source
+        simply has not been offered the `.18` the archive moved to. Apt can install the name
+        on both, so neither manifest loses it and the pair is the version difference
+        `PKG-FR-APT-VERSION-DIFF` reports — no removal, and nothing dropped for
+        `manual_deb_sync` (#285).
+        """
+        context, _source, target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "qemu-guest-agent\n", ""),
+                "dpkg-query": CommandResult(0, "qemu-guest-agent\t1:8.2.2+ds-0ubuntu1.17\n", ""),
+                "apt-cache policy": CommandResult(0, POLICY_PHASED_UPDATE_LAGGARD, ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "qemu-guest-agent\n", ""),
+                "dpkg-query": CommandResult(0, "qemu-guest-agent\t1:8.2.2+ds-0ubuntu1.18\n", ""),
+                "apt-cache policy": CommandResult(0, POLICY_PHASED_UPDATE_APPLIED, ""),
+            },
+        )
+
+        plan = await AptSyncJob(context).plan()
+
+        assert [(d.item_id, d.diff_class, d.action) for d in plan.diffs] == [
+            ("apt:package:qemu-guest-agent", DiffClass.VERSION_MISMATCH, DiffAction.REPORT_ONLY)
+        ]
+        assert not any("apt-get remove" in cmd for cmd in all_calls(target))
+
+    @pytest.mark.asyncio
+    async def test_a_repository_package_the_target_holds_by_hand_is_reported_not_removed(self) -> None:
+        """A77 — the source's `gh` comes from its vendor repository, so the NAME is apt's on
+        both machines: one verdict per name leaves the target's hand-installed copy in the
+        target manifest instead of asking the target's apt for a second verdict. Both
+        machines have it, so the pair is the version difference `PKG-FR-APT-VERSION-DIFF`
+        reports — never a removal.
         """
         context, _source, _target = make_context(
             source_responses={
@@ -581,7 +639,7 @@ class TestBareDebPackagesAreNotAptSyncsBusiness:
         plan = await AptSyncJob(context).plan()
 
         assert [(d.item_id, d.diff_class, d.action) for d in plan.diffs] == [
-            ("apt:package:gh", DiffClass.MISSING_ON_TARGET, DiffAction.INSTALL)
+            ("apt:package:gh", DiffClass.VERSION_MISMATCH, DiffAction.REPORT_ONLY)
         ]
 
     @pytest.mark.asyncio

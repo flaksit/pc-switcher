@@ -35,12 +35,15 @@ all is a different thing and gets a different answer: `commands.require_apt_answ
 run once, naming the command, rather than blaming N packages' origins for a transient
 network, an apt lock or an interrupted dpkg.
 
-Bare-`.deb` packages are NOT in scope and are dropped at capture
-(`probe.AptProbe.capture_source_items`). A package whose installed version comes from no
-configured repository was put there with `dpkg --install`; apt cannot install it on the
-target, and `manual_deb_sync` offers it as an install snippet in the same run (`PKG-FR-MANUAL-SCOPE`).
-Both jobs compute the predicate from the shared `packages/apt_policy.py` parser — the same
-test, never a result passed between them, since `PKG-FR-JOB-INDEPENDENCE` keep the package jobs independent.
+A package apt has no repository to install from is NOT in scope. It was put there with
+`dpkg --install`, or apt has been left unwilling to take the name from any repository; apt
+cannot install it on the target either, and `manual_deb_sync` offers it as an install
+snippet in the same run (`PKG-FR-MANUAL-SCOPE`). The verdict is reached ONCE per name and
+withholds that name from BOTH manifests (`job.plan`): the source's own answer decides for
+every name the source has, the target's for a name only the target has. Two verdicts for one
+name is what turned a phased-update laggard into a proposed removal (#285). Both jobs compute
+the predicate from the shared `packages/apt_policy.py` parser — the same test, never a result
+passed between them, since `PKG-FR-JOB-INDEPENDENCE` keep the package jobs independent.
 
 The ownership split has a consequence this job may not paper over: `manual_deb_sync`
 has its own enable flag, and reading another job's flag is exactly the coupling `PKG-FR-JOB-INDEPENDENCE`

@@ -2,20 +2,21 @@
 on a machine and no repository can put on the other one (`PKG-FR-JOB-INDEPENDENCE`, `PKG-FR-MANUAL-SCOPE`,
 `PKG-FR-DEB-OWNERSHIP`).
 
-Detection is one question asked of the whole INSTALLED set: which packages' INSTALLED
-version comes from no repository the SOURCE has configured. Not the `apt-mark showmanual`
-set — apt's manual/automatic mark says how a package got there, not whether any repository
-can supply it, so a `.deb` pulled in to satisfy another one is outside that set and is
-still software no package manager can put on the other machine.
+Detection is one question asked of the whole INSTALLED set: which packages the SOURCE's apt
+has no repository it could install from, whatever version the machine holds. Not the
+`apt-mark showmanual` set — apt's manual/automatic mark says how a package got there, not
+whether any repository can supply it, so a `.deb` pulled in to satisfy another one is
+outside that set and is still software no package manager can put on the other machine.
 
 The target is read twice over, from one `dpkg-query`: every name it reports installed is
 software that is there, whatever origin put it there, so the source's copy of that name is
 never offered for install — and among the names the source does NOT have installed at all,
 the same no-repository question is asked of the target's own apt, so a hand-installed `.deb`
 the source has since dropped becomes a removal (`PKG-FR-MANUAL-REMOVE`). Narrowing that
-second question to the names the source lacks is what keeps it affordable: the full
-`apt-cache policy` over an installed set costs about three seconds and 700KB, and every
-name the source still has is answered by the source's own read already.
+second question to the names the source lacks is what keeps it affordable AND what keeps
+one name to one verdict: the full `apt-cache policy` over an installed set costs about three
+seconds and 700KB, and every name the source still has is answered by the source's own read
+already.
 
 Its own job, on its own enable flag, for the reason `PKG-FR-JOB-INDEPENDENCE` gives every package job one: an
 independent failure surface, an independent review and an independent switch. It sits
@@ -24,9 +25,9 @@ beside `manual_installs_sync`, which owns the OTHER thing no package manager can
 subclass `UnreproducibleSyncJob` and share one install-snippet registry; neither imports
 the other, and neither imports `apt_sync` (`PKG-FR-MANUAL-SCOPE`).
 
-The apt handoff is capture-time exclusion, not a message: `apt_sync` drops the same
-packages from both its manifests using the shared `packages/apt_policy.py` predicate, and
-this job independently re-runs it. Two jobs, one predicate, no result passed between them
+The apt handoff is a withheld name, not a message: `apt_sync` keeps the same packages out of
+both its manifests using the shared `packages/apt_policy.py` predicate, and this job
+independently re-runs it. Two jobs, one predicate, no result passed between them
 (`PKG-FR-JOB-INDEPENDENCE`). The consequence the user must know: this job's enable flag is its own, so
 enabling `apt_sync` while disabling this one leaves hand-installed `.deb` packages
 replicated by nobody.
@@ -40,7 +41,7 @@ from typing import Any, ClassVar, override
 
 from pcswitcher.executor import Executor
 from pcswitcher.jobs.context import JobContext
-from pcswitcher.jobs.packages.apt_policy import installed_origins_by_package, packages_installed_from_no_repository
+from pcswitcher.jobs.packages.apt_policy import installed_origins_by_package, packages_no_repository_can_install
 from pcswitcher.jobs.packages.probes import require_answer
 from pcswitcher.jobs.packages.state import DecisionEntry
 from pcswitcher.jobs.packages.unreproducible import UnreproducibleItem, UnreproducibleSyncJob, lines_of
@@ -103,21 +104,22 @@ class ManualDebSyncJob(UnreproducibleSyncJob):
     async def _scan_no_candidate_apt_packages(
         self, installed_names: Sequence[str], executor: Executor, machine: str
     ) -> frozenset[str]:
-        """`PKG-FR-MANUAL-SCOPE`: of `installed_names`, those whose INSTALLED version comes from no repository
-        `machine` has configured — put there by `dpkg --install` of a bare `.deb`.
+        """`PKG-FR-MANUAL-SCOPE`: of `installed_names`, those `machine`'s apt has no repository to install
+        from — put there by `dpkg --install` of a bare `.deb`, or left with no repository apt
+        will take the name from at all.
 
         Over the whole INSTALLED set, not `apt-mark showmanual`. `PKG-FR-MANUAL-SCOPE` draws
-        the boundary at "every installed version no configured repository supplies", and
-        apt's manual/automatic mark is a different fact: a `.deb` installed to satisfy
-        another one, or one the user ran `apt-mark auto` over, is outside the manual set and
-        is still software no package manager can put on the other machine. Narrowing to the
-        manual set left it invisible to this job and — being automatic — invisible to
-        `apt_sync` as well, so nothing named it anywhere.
+        the boundary at "every package no configured repository can install", and apt's
+        manual/automatic mark is a different fact: a `.deb` installed to satisfy another one,
+        or one the user ran `apt-mark auto` over, is outside the manual set and is still
+        software no package manager can put on the other machine. Narrowing to the manual set
+        left it invisible to this job and — being automatic — invisible to `apt_sync` as
+        well, so nothing named it anywhere.
 
         One batched `apt-cache policy` over that set (never one call per package), read
-        through `packages_installed_from_no_repository`: a package's own `Candidate:` line
-        cannot answer this, because dpkg's status entry makes apt report a hand-installed
-        package's installed version as its candidate. Measured on the development machine
+        through `packages_no_repository_can_install`, which reads apt's own `Candidate:`
+        answer rather than the installed version's origins — the installed version being
+        superseded in the archive is a phased update, not a hand `.deb`. Measured on the development machine
         (Ubuntu 24.04, apt 2.8.3): 2282 installed against 153 manual, 3.1s against 0.4s and
         718KB of output against 96KB — one command either way, and the wider set is what the
         article asks for.
@@ -126,17 +128,18 @@ class ManualDebSyncJob(UnreproducibleSyncJob):
         `apt_sync._source_policy` puts on its own copy of this command: same host, same
         probe, so the same strictness. Its silence indicts nothing on its own — an
         unanswered probe reports no unreproducible packages, which proposes nothing — but
-        it does not stay harmless in a whole run: `apt_sync.capture_source_items` DROPS the
-        same bare-`.deb` packages from its own manifest off its own copy of this probe, so
-        one probe answering and the other not makes a package vanish from the run with
-        nothing said about it anywhere. Every name here is installed on this machine, so apt
-        owes a block for each and no block at all is apt not answering rather than a machine
-        with unusual packages.
+        it does not stay harmless in a whole run: `apt_sync` withholds the same packages from
+        its own manifests off its own copy of this probe, so one probe answering and the other
+        not makes a package vanish from the run with nothing said about it anywhere. Every
+        name here is installed on this machine, so apt owes a block for each and no block at
+        all is apt not answering rather than a machine with unusual packages.
 
         Run on the TARGET too, over the names the source does not have installed, so a `.deb`
-        the source has dropped can become a removal (`PKG-FR-MANUAL-REMOVE`). The same guard
-        holds there for the same reason: every name handed to it is installed on the machine
-        being asked.
+        the source has dropped can become a removal (`PKG-FR-MANUAL-REMOVE`). Narrowing the
+        target's read to the names the source lacks is also what gives this job one verdict
+        per name: a name both machines have is answered by the source's read alone, never by
+        two reads that can disagree. The guard holds there for the same reason: every name
+        handed to it is installed on the machine being asked.
         """
         if not installed_names:
             return frozenset()
@@ -153,7 +156,7 @@ class ManualDebSyncJob(UnreproducibleSyncJob):
             answers=len(installed_origins_by_package(result.stdout)),
             answer_noun="package block",
         )
-        return frozenset(packages_installed_from_no_repository(result.stdout, installed_names))
+        return frozenset(packages_no_repository_can_install(result.stdout, installed_names))
 
     async def _installed(self, executor: Executor, machine: str) -> dict[str, str]:
         """`name -> installed version` for everything dpkg reports as INSTALLED on `machine`.

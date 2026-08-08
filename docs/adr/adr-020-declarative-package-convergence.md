@@ -68,6 +68,10 @@ apt collateral affecting the target's own manually-installed set becomes its own
 
 The unit of replication for apt is (name, origin). After the `/etc/apt` group's single `apt-get update` and before the first install, one batched `apt-cache policy` re-reads target candidate origins; an install whose candidates do not intersect the source's fails as its own item. Distribution origins are per-machine exempt.
 
+### ADR-020-D-DEB-OWNERSHIP — One verdict per name, from apt's candidate
+
+A package belongs to `manual_deb_sync` rather than `apt_sync` when apt has no repository it can install that name from — read off apt's own `Candidate:` row, whose origins are empty exactly when apt would install nothing from a repository. Version is not part of it. The verdict is reached once per name and withholds that name from both machines' apt manifests: the source's answer decides for a name the source has, the target's own for a name only the target has.
+
 ### ADR-020-D-PINS-ALWAYS-SYNC — Pins always-sync
 
 `preferences.d` pin adds and updates sync silently. A pin naming an absent origin is inert.
@@ -110,6 +114,8 @@ One store per device, name→publisher pinned by canonical-signed `snap-declarat
 - **Withholding the two ESM files silently** — Rejected: pins travel regardless, so pins land over a repository set neither machine has.
 - **Refusing the whole run when an approved origin cannot be replicated** — Rejected: contradicts `PKG-FR-OUTCOME-FAILED`'s continue-and-report model.
 - **Protecting the union of both machines' manual sets from collateral** — Rejected: the union protects on the wrong machine's bookkeeping.
+- **Reading ownership off the INSTALLED version's origins** — Rejected: a phased update leaves an installed version no repository carries any more, which would read every laggard as a hand `.deb`.
+- **Unioning the two machines' exclusion sets** — Rejected: it hides the symptom of two verdicts for one name while leaving the package misclassified on the machine that produced the wrong one.
 - **A recursive folder diff or payload hash for an install under an unowned path** — Rejected: its version body replaces both.
 - **Comparing snippet body before version** — Rejected: a cosmetic edit to a comment or mirror URL would raise a false review item.
 - **Letting the higher version decide sync direction** — Rejected: sync goes source-to-target, always.

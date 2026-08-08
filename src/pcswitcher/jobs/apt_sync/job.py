@@ -366,13 +366,20 @@ class AptSyncJob(PackageSyncJob):
         # unmatched — an install of a package the target already has, or a removal of one
         # the source still has.
         marked = marks_on_either(source_decisions, target_decisions)
-        captured, source_origins = await self._probe.capture_source_items()
-        source_items = await filter_inert(captured, marked)
-        # Both manifests drop the hand-`.deb` installs `manual_installs_sync` owns before
-        # anything is diffed (`PKG-FR-DEB-OWNERSHIP`), and the target's exclusion rides in
-        # the same batched policy call that answers this run's origin questions.
+        captured, source_origins, source_no_repository = await self._probe.capture_source_items()
+        # ONE verdict per NAME, applied to BOTH manifests (`PKG-FR-DEB-OWNERSHIP`): the
+        # source's answer decides for every name the source HAS, and only a name the source
+        # does not have is decided by the target's own. Asking each machine separately gives
+        # one name two verdicts, and a name withheld from one manifest while the other keeps
+        # it is exactly a removal — which is what an installed version the archive had
+        # superseded produced on whichever machine lagged a phased update (#285).
+        source_names = {item.name for item in captured}
+        source_items = [item for item in await filter_inert(captured, marked) if item.name not in source_no_repository]
+        # The target is asked about the surviving source names only: a name already withheld
+        # must reach no downstream target read, the policy probe included.
         target_captured, policy = await self._probe.capture_target_items([item.name for item in source_items])
-        target_items = await filter_inert(target_captured, marked)
+        withheld = source_no_repository | {n for n in policy.no_repository_can_install if n not in source_names}
+        target_items = [item for item in await filter_inert(target_captured, marked) if item.name not in withheld]
         source_hold_names, target_hold_names = await self._probe.collect_hold_sets()
         await self._refuse_holds_without_their_package(source_hold_names, target_hold_names)
         origin_plan = origins.classify(source_items, target_items, policy, source_origins)

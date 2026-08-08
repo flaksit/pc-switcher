@@ -15,7 +15,7 @@ The flag is the config key; the second column is the name the run shows you on s
 | `apt_sync` | Apt packages | Manually-installed apt packages, plus the `/etc/apt` state they depend on: repositories, pins, keys, apt config, holds |
 | `snap_sync` | Snaps | Store snaps, converged to the source's exact revision and channel |
 | `flatpak_sync` | Flatpaks | Flatpak refs (per user/system scope), the remotes they need, and mask patterns |
-| `manual_deb_sync` | Manual debs | apt packages installed by hand from a downloaded `.deb` |
+| `manual_deb_sync` | Manual debs | apt packages your apt cannot install from any repository |
 | `manual_snap_sync` | Sideloaded snaps | Sideloaded snaps installed from a local `.snap` file |
 | `manual_flatpak_sync` | Manual flatpaks | Flatpak apps installed from a local bundle or a since-deleted remote |
 | `manual_installs_sync` | Manually installed apps | Unowned software under `/usr/local` and `/opt` |
@@ -37,11 +37,11 @@ Enabling one authorises pc-switcher to install and remove software on the target
 
 ## The three-way ownership split
 
-Three jobs handle software the store or archive can supply: `apt_sync`, `snap_sync`, `flatpak_sync`. Three others handle software of the same shape that no store or archive can supply: `manual_deb_sync`, `manual_snap_sync`, `manual_flatpak_sync`. **The two never overlap.** For every ecosystem, one detection rule assigns each package to exactly one job:
+Three jobs handle software the store or archive can supply: `apt_sync`, `snap_sync`, `flatpak_sync`. Three others handle software of the same shape that no store or archive can supply: `manual_deb_sync`, `manual_snap_sync`, `manual_flatpak_sync`. **The two never overlap.** For every ecosystem, one detection rule assigns each package to exactly one job, and it is applied once per package for the pair of machines rather than once per machine: your source machine's answer decides, except for a package only the target has, which is decided there.
 
 | If you disable | Then software of this kind is synced by nobody |
 | --- | --- |
-| `manual_deb_sync` | Every apt package installed from a downloaded `.deb` |
+| `manual_deb_sync` | Every apt package apt cannot install from a repository — one installed from a downloaded `.deb`, or one pinned out of every repository that carries it |
 | `manual_snap_sync` | Every sideloaded snap |
 | `manual_flatpak_sync` | Every flatpak app from a local bundle or since-deleted remote |
 
