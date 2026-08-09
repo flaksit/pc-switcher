@@ -77,7 +77,7 @@ from pcswitcher.jobs.packages.sync_core import (
     PackagePlan,
     PackageSyncJob,
 )
-from pcswitcher.models import CommandResult, FirstSyncScope, Host, LogLevel, ValidationError
+from pcswitcher.models import CommandResult, FirstSyncScope, Host, LogLevel, RunPause, ValidationError
 from pcswitcher.sudoers import passwordless_sudo_hint
 
 if TYPE_CHECKING:
@@ -367,7 +367,10 @@ class SnapSyncJob(PackageSyncJob):
     """
 
     name: ClassVar[str] = "snap_sync"
+    display_name: ClassVar[str] = "Snaps"
     manager_id: ClassVar[str] = "snap"
+    item_noun: ClassVar[str] = "snap"
+    item_noun_plural: ClassVar[str] = "snaps"
 
     # No configurable properties: mirrors AptSyncJob's empty schema — only the enable
     # flag in sync_jobs is needed for this slice.
@@ -679,15 +682,15 @@ class SnapSyncJob(PackageSyncJob):
 
     @override
     async def validate(self) -> list[ValidationError]:
-        """`snap version` on both ends, passwordless `sudo --non-interactive true` on BOTH ends, and a
-        read-only informational hold check on both ends (never acted on — module docstring).
+        """`snap version` on both ends, passwordless `sudo --non-interactive true` on the TARGET,
+        and a read-only informational hold check on both ends (never acted on — module docstring).
         Sequential checks appending to `errors`, matching `AptSyncJob.validate()`'s shape.
 
-        Passwordless sudo is now required on the SOURCE too, not just the target: the
-        orchestrator pauses snapd auto-refresh across the sync window by writing
-        `refresh.hold` via `sudo snap set system` on both hosts (decision 4), so the source
-        needs the same `sudo --non-interactive` grant for `/usr/bin/snap` that the target already needed
-        for install/refresh/remove.
+        The target's grant is this job's own: `snap install/refresh/remove` is what converges an
+        item. The SOURCE's grant belongs to the auto-refresh pause, which is the orchestrator's
+        command on both machines rather than this job's, and is established once for the run
+        from the declaration below (`declare_run_pauses`) — so it holds for a `folder_sync`-only
+        run too, which this job's `validate()` never sees.
         """
         errors: list[ValidationError] = []
 
@@ -698,17 +701,6 @@ class SnapSyncJob(PackageSyncJob):
         target_check = await self.target.run_command("snap version", login_shell=False)
         if not target_check.success:
             errors.append(self._validation_error(Host.TARGET, "snap is not available on target"))
-
-        source_sudo_check = await self.source.run_command("sudo --non-interactive true")
-        if not source_sudo_check.success:
-            errors.append(
-                self._validation_error(
-                    Host.SOURCE,
-                    "passwordless sudo is not available on source "
-                    "(required to pause snapd auto-refresh for the sync window).\n"
-                    + passwordless_sudo_hint(_TARGET_SUDO_COMMANDS),
-                )
-            )
 
         sudo_check = await self.target.run_command("sudo --non-interactive true", login_shell=False)
         if not sudo_check.success:
@@ -729,9 +721,9 @@ class SnapSyncJob(PackageSyncJob):
         # configuration`, `auth_admin_keep`), so unprivileged this does not report "no hold",
         # it fails with "access denied" and the line below would say `(none)` unconditionally.
         source_hold = await self.source.run_command("sudo snap get system refresh.hold")
-        self._log(Host.SOURCE, LogLevel.FULL, f"snap refresh.hold: {source_hold.stdout.strip() or '(none)'}")
+        self._log(LogLevel.FULL, f"snap refresh.hold: {source_hold.stdout.strip() or '(none)'}", host=Host.SOURCE)
         target_hold = await self.target.run_command("sudo snap get system refresh.hold", login_shell=False)
-        self._log(Host.TARGET, LogLevel.FULL, f"snap refresh.hold: {target_hold.stdout.strip() or '(none)'}")
+        self._log(LogLevel.FULL, f"snap refresh.hold: {target_hold.stdout.strip() or '(none)'}", host=Host.TARGET)
 
         return errors
 
@@ -741,6 +733,18 @@ class SnapSyncJob(PackageSyncJob):
         """Name this job's destructive first-sync scope (ADR-015): installed snaps."""
         return FirstSyncScope(
             job_name=cls.name,
+            job_display_name=cls.display_name,
             scope_items=["installed snaps (name, channel, revision)"],
             mechanism="snap install/refresh/remove per item, after review",
         )
+
+    @classmethod
+    @override
+    def declare_run_pauses(cls) -> frozenset[RunPause]:
+        """The store's auto-refresh must stand still while this job converges revisions.
+
+        snapd auto-refreshes ~4x/day even for closed apps, and this job's whole subject is
+        which revision each snap is on: a refresh landing between the plan and the apply
+        moves the target off the revision just converged to.
+        """
+        return frozenset({RunPause.SNAPD_AUTOREFRESH})

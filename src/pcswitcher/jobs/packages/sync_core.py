@@ -49,7 +49,7 @@ from abc import abstractmethod
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from pcswitcher.jobs.base import SyncJob
 from pcswitcher.jobs.context import JobContext
@@ -63,6 +63,7 @@ from pcswitcher.jobs.packages.review import (
     ReviewOutcome,
     ReviewPolicy,
     asks_for_a_decision,
+    change_title,
     policy_answers_any,
 )
 from pcswitcher.jobs.packages.state import DecisionEntry, DecisionFile
@@ -78,6 +79,7 @@ __all__ = [
     "PackageItemFailures",
     "PackagePlan",
     "PackageSyncJob",
+    "counted",
 ]
 
 # The `ReviewGroup.action` a snap's revision/channel convergence carries
@@ -91,6 +93,25 @@ __all__ = [
 # Not in `review`'s removal set either, so the rows still start applied: converging a
 # revision the user asked for overwrites nothing they authored (`PKG-FR-HARMLESS-DEFAULT`).
 SNAP_CHANGE_REVIEW_ACTION = "snap_change"
+
+# The phases a package job passes through before it has anything countable to report
+# (#288). Each pulses the job's bar with what the job is doing, so the bar never sits at a
+# fake 0% through a minute of probing, and the user's first question arrives with the job
+# on screen saying it is waiting for them. The wording never repeats the job — the bar is
+# already labelled with the display name ("Apt packages: checking both machines").
+_PHASE_PROBING = ProgressUpdate(heartbeat=True, item="checking both machines")
+_PHASE_ASKING = ProgressUpdate(heartbeat=True, item="waiting for your answers")
+_PHASE_APPLYING = ProgressUpdate(heartbeat=True, item="applying your answers")
+
+
+def counted(count: int, noun: str, noun_plural: str) -> str:
+    """`1 apt package` / `3 apt packages` — a count and the word that agrees with it.
+
+    Every count a user reads goes through this rather than an `item(s)` suffix: these lines
+    carry the same nouns the review titles do (#276), and a job that says "1 snaps" reads
+    as a defect in the tool.
+    """
+    return f"{count} {noun if count == 1 else noun_plural}"
 
 
 class ConvergeItemFailed(RuntimeError):
@@ -129,11 +150,10 @@ class PackageItemFailures(RuntimeError):
     crashed" (abort the whole run, today's existing behavior for every other exception).
     """
 
-    def __init__(self, manager: str, failures: Sequence[tuple[ItemDiff, str]]) -> None:
-        self.manager = manager
+    def __init__(self, item_noun: str, item_noun_plural: str, failures: Sequence[tuple[ItemDiff, str]]) -> None:
         self.failures = tuple(failures)
         names = ", ".join(diff.label for diff, _stderr in failures)
-        super().__init__(f"{len(failures)} {manager} item(s) failed to converge: {names}")
+        super().__init__(f"{counted(len(failures), item_noun, item_noun_plural)} failed to converge: {names}")
 
 
 @dataclass(frozen=True)
@@ -190,28 +210,25 @@ _ACTION_VOCABULARY: dict[tuple[ItemClass, DiffAction], str] = {
 }
 
 # What a group's title calls the things it lists, when the ACTION changes the noun too.
-# `_ITEM_CLASS_NOUN` cannot say this: the same class's install and removal groups ARE about
-# the packages, and only the change group is about their versions.
+# `PackageSyncJob.item_noun_plural` cannot say this: the same job's install and removal
+# groups ARE about the snaps, and only the change group is about their versions.
 _ACTION_CLASS_NOUN: dict[tuple[ItemClass, DiffAction], str] = {
-    (ItemClass.SNAP, DiffAction.CHANGE): "snap package versions",
+    (ItemClass.SNAP, DiffAction.CHANGE): "snap versions",
 }
 
-# What a group's title calls the things it lists, when they are not packages. A verb alone
-# cannot make an apt-config title true: the title reads "<verb> <manager> packages", so
-# every `/etc/apt/apt.conf.d` group would still end in "apt packages".
+# What a group's title calls the things it lists, when they are not the job's own software.
+# A verb alone cannot make an apt-config title true: the title would otherwise read
+# "<verb> apt packages" over a screenful of `/etc/apt/apt.conf.d` files.
 _ITEM_CLASS_NOUN: dict[ItemClass, str] = {
     ItemClass.APT_CONFIG: "apt configuration files",
 }
 
-# What a manager calls the software it syncs, where "packages" is not that word. flatpak
-# syncs applications (the narrative's own term) and apt and snap sync packages, so only
-# flatpak is listed. Keyed on the manager rather than the item class so one entry covers
-# every flatpak group — refs and masks alike.
-_MANAGER_NOUN: dict[str, str] = {"flatpak": "applications"}
-
-# What a manager calls the place software comes from, for the `ORIGIN_MISMATCH` title.
-# Never "vendor" (the user's ruling): apt has repositories, flatpak has remotes.
-_MANAGER_ORIGIN_NOUN: dict[str, str] = {"flatpak": "remotes"}
+# The same noun in the singular, for the screens that head each ENTRY with what it is
+# ("apt configuration file 99-pcsw-uat", #277). Spelled out rather than derived from the
+# plural for `RemovalVocabulary`'s reason: an English plural does not reverse by rule.
+_ITEM_CLASS_NOUN_SINGULAR: dict[ItemClass, str] = {
+    ItemClass.APT_CONFIG: "apt configuration file",
+}
 
 # The `ReviewGroup.action` a given (item_class, action) pair asks under, where the raw
 # `DiffAction` value would offer the wrong set of answers. One entry today.
@@ -229,9 +246,9 @@ _ACTION_ORDER: tuple[DiffAction, ...] = (
     DiffAction.REPORT_ONLY,
 )
 
-# What a report group is called, per cause. `{origins}` is the manager's own word for where
-# software comes from (`_MANAGER_ORIGIN_NOUN`), so a flatpak group says "remotes" where an
-# apt one says "repositories".
+# What a report group is called, per cause. `{origins}` is the job's own word for where
+# software comes from (`PackageSyncJob.origin_noun_plural`), so a flatpak group says
+# "remotes" where an apt one says "repositories".
 _REPORT_TITLES: dict[DiffClass, str] = {
     DiffClass.VERSION_MISMATCH: "Version differences",
     DiffClass.ORIGIN_MISMATCH: "Installed from different {origins}",
@@ -292,6 +309,35 @@ class PackageSyncJob(SyncJob):
     """
 
     manager_id: ClassVar[str]
+
+    # What the user calls the things this job syncs, singular and plural. Beside
+    # `display_name` so one class body holds every word a user reads about this job, and
+    # declared rather than defaulted: the fallback these replace built the noun out of
+    # `manager_id` and so put `manual_deb` on the screen (#276). Declared with no value, so
+    # a job that omits them is rejected at import (`__init_subclass__`) rather than silently
+    # naming itself after its identifier again.
+    item_noun: ClassVar[str]
+    item_noun_plural: ClassVar[str]
+
+    # What this job calls the place software comes from, for the `ORIGIN_MISMATCH` report
+    # title. Never "vendor" (the user's ruling): apt has repositories, flatpak has remotes.
+    # Defaulted, unlike the nouns above, because it names a thing most jobs never report on
+    # and "repositories" is not an identifier if it does leak.
+    origin_noun_plural: ClassVar[str] = "repositories"
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        """Refuse a discoverable package job that does not say what its items are called.
+
+        Only classes declaring their own `name` are checked: `UnreproducibleSyncJob` and
+        `PackageSyncJob` itself are abstract, invisible to job discovery and have no items
+        of their own to name.
+        """
+        super().__init_subclass__(**kwargs)
+        if "name" not in cls.__dict__:
+            return
+        missing = sorted(attr for attr in ("item_noun", "item_noun_plural") if not getattr(cls, attr, ""))
+        if missing:
+            raise TypeError(f"{cls.__name__} must declare {' and '.join(missing)}: every review title needs them")
 
     def __init__(self, context: JobContext) -> None:
         super().__init__(context)
@@ -387,10 +433,10 @@ class PackageSyncJob(SyncJob):
             absent = await self.observe_absent_marks(entries, on_source=on_source)
         except ProbeFailed as exc:
             self._log(
-                Host.SOURCE if on_source else Host.TARGET,
                 LogLevel.FULL,
-                f"could not check whether the {self.manager_id} marked items are still here ({exc}); "
+                f"could not check whether the marked {self.item_noun_plural} are still here ({exc}); "
                 "every mark is left as it is",
+                host=Host.SOURCE if on_source else Host.TARGET,
             )
             return frozenset()
         return absent & frozenset(entries)
@@ -447,10 +493,10 @@ class PackageSyncJob(SyncJob):
             absent = await self._absent_marks(entries, on_source=on_source)
             for item_id in sorted(absent):
                 self._log(
-                    Host.SOURCE if on_source else Host.TARGET,
                     LogLevel.INFO,
                     f"dropped the machine-specific mark on {entries[item_id].label}: "
                     "the item is no longer on this machine",
+                    host=Host.SOURCE if on_source else Host.TARGET,
                 )
             await decision_file.drop(absent)
 
@@ -562,10 +608,15 @@ class PackageSyncJob(SyncJob):
         `(manager, action)` for the reviewer's removal-direction test (`PKG-FR-BATCHED`) so removals
         never share a group with installs. The title's verb and every entry's
         `action_label` come from `_ACTION_VOCABULARY`, keyed by the group's own item class.
-        `_ITEM_CLASS_NOUN` does the same for the title's OBJECT, so the one reviewed class
-        that is not a package — `/etc/apt/apt.conf.d` — is not announced as one, and
-        `_ACTION_CLASS_NOUN` overrides it where one action's group is about something
-        narrower than the class itself (a snap CHANGE moves versions, not packages). Grouping by
+        The title's OBJECT is this job's `item_noun_plural`, overridden by `_ITEM_CLASS_NOUN`
+        so the one reviewed class that is not the job's own software — `/etc/apt/apt.conf.d`
+        — is not announced as it, and by `_ACTION_CLASS_NOUN` where one action's group is
+        about something narrower than the class itself (a snap CHANGE moves versions, not
+        snaps). `item_noun` is the same noun in the singular, which the screens that head
+        each entry with what it is print above the evidence.
+        `change_title` puts the target machine in every one of them
+        (`PKG-FR-NAME-THE-MACHINES`); a report-only group names no machine and asks nothing,
+        so it keeps its own shape. Grouping by
         item class as well as action is what keeps that verb correct when one action mixes
         item classes; the group's `action` value is normally the raw `DiffAction`, so
         add-direction stays default-checked and remove-direction lands in its own unticked
@@ -610,14 +661,15 @@ class PackageSyncJob(SyncJob):
                 # `action.value`, unchanged.
                 default_verb = "report" if action == DiffAction.REPORT_ONLY else action.value
                 verb = _ACTION_VOCABULARY.get((item_class, action), default_verb)
-                default_noun = f"{self.manager_id} {_MANAGER_NOUN.get(self.manager_id, 'packages')}"
-                noun = _ACTION_CLASS_NOUN.get((item_class, action)) or _ITEM_CLASS_NOUN.get(item_class, default_noun)
-                title = f"{verb.capitalize()} {noun}"
+                noun = _ACTION_CLASS_NOUN.get((item_class, action)) or _ITEM_CLASS_NOUN.get(
+                    item_class, self.item_noun_plural
+                )
+                title = change_title(verb, noun, self.machines.target)
                 note = None
                 if cause is not None:
                     cause_title = _REPORT_TITLES.get(cause, "Reported").format(
                         target=self.machines.target,
-                        origins=_MANAGER_ORIGIN_NOUN.get(self.manager_id, "repositories"),
+                        origins=self.origin_noun_plural,
                     )
                     title = f"{cause_title} ({noun})"
                     # A manager with no upgrade command of its own gets no note rather than
@@ -638,18 +690,33 @@ class PackageSyncJob(SyncJob):
                         # A snap moved to another revision or channel does not: converging
                         # software the user asked for overwrites nothing they authored.
                         overwrites_authored_content=item_class is ItemClass.APT_CONFIG and action is DiffAction.CHANGE,
+                        item_noun=_ITEM_CLASS_NOUN_SINGULAR.get(item_class, self.item_noun),
                         entries=tuple(
                             ReviewEntry(
                                 item_id=diff.item_id,
                                 label=diff.label,
                                 action_label=verb,
                                 detail=diff.detail,
+                                versions=self._entry_versions(diff),
                             )
                             for diff in entries
                         ),
                     )
                 )
         return tuple(groups)
+
+    def _entry_versions(self, diff: ItemDiff) -> tuple[str, str] | None:
+        """The two whole bodies a row's question is about — the target's first — or `None`
+        for an item whose difference is not a file both machines hold (`PKG-FR-APTCONF`).
+
+        A hook rather than a field on `ItemDiff`: a body shown for a decision deliberately
+        never travels through the diff shape, whose strings are the one-line kind
+        (`ItemDiff` docstring), and only the job that read the files knows where they are
+        kept. `apt_sync` overrides it for the `apt.conf.d` files both machines have with
+        different content; every other manager has nothing of the kind, so the base answers
+        `None` and their screens are unchanged.
+        """
+        return None
 
     # -- plan() / accept_review() / apply() / execute() -------------------------------
 
@@ -743,6 +810,11 @@ class PackageSyncJob(SyncJob):
         were unreproducible items never has any INSTALL/CHANGE/REMOVE work to do, and
         must still fail if one of them ended up unresolved.
 
+        One failure, one record. The per-item line is the only place a failure's own text is
+        written; `PackageItemFailures` carries the count and every failed item's NAME, which
+        is what the orchestrator prints as this job's ending. The counts above say how many
+        changes landed, not which failed (#293).
+
         `ConvergeItemDeclined` is the third outcome: the item is neither applied nor
         failed, because the user withdrew it after the review (`PKG-FR-ASK-AGAIN`). It is
         named in its own summary line so the run says what happened to it, and it never
@@ -794,10 +866,14 @@ class PackageSyncJob(SyncJob):
         total = len(apply_diffs)
 
         if total == 0:
-            self._log(Host.TARGET, LogLevel.INFO, f"{prefix}No {self.manager_id} changes to apply")
+            self._log(LogLevel.INFO, f"{prefix}No {self.item_noun_plural} to change", host=Host.TARGET)
             self._report_progress(ProgressUpdate(percent=100))
         else:
-            self._log(Host.TARGET, LogLevel.INFO, f"{prefix}Applying {total} {self.manager_id} change(s)")
+            self._log(
+                LogLevel.INFO,
+                f"{prefix}Applying {counted(total, 'change', 'changes')} to {self.item_noun_plural}",
+                host=Host.TARGET,
+            )
 
             for index, diff in enumerate(apply_diffs):
                 self._report_progress(ProgressUpdate(percent=int(index / total * 100), item=diff.label))
@@ -807,25 +883,28 @@ class PackageSyncJob(SyncJob):
                     # the whole report. Without it the preview says strictly less about
                     # an item than the interactive review does.
                     detail = f" — {diff.detail}" if diff.detail else ""
-                    self._log(Host.TARGET, LogLevel.FULL, f"{prefix}Would {diff.action.value} {diff.label}{detail}")
+                    self._log(
+                        LogLevel.FULL, f"{prefix}Would {diff.action.value} {diff.label}{detail}", host=Host.TARGET
+                    )
                 else:
                     await self._converge_one(diff, failures, declined)
             self._report_progress(ProgressUpdate(percent=100))
 
             succeeded = total - len(failures) - len(declined)
             self._log(
-                Host.TARGET,
                 LogLevel.INFO,
-                f"{prefix}{succeeded}/{total} {self.manager_id} change(s) applied",
+                f"{prefix}{succeeded}/{total} changes applied to {self.item_noun_plural}",
+                host=Host.TARGET,
             )
 
         # Outside the branch above: a run whose every converge declined still has to say so.
         if declined:
             summary = "; ".join(f"{diff.label}: {reason}" for diff, reason in declined)
             self._log(
-                Host.TARGET,
                 LogLevel.INFO,
-                f"{len(declined)} {self.manager_id} change(s) not applied, by the user's answer: {summary}",
+                f"{counted(len(declined), 'change', 'changes')} to {self.item_noun_plural} "
+                f"not applied, by the user's answer: {summary}",
+                host=Host.TARGET,
             )
 
         # After the converge loop, so a mark this run's own changes emptied out is gone by
@@ -835,13 +914,13 @@ class PackageSyncJob(SyncJob):
 
         all_failures = [*failures, *self._unresolved_as_failures(plan, outcome)]
         if all_failures:
-            summary = "; ".join(f"{diff.label}: {stderr.strip()}" for diff, stderr in all_failures)
-            self._log(
-                Host.TARGET,
-                LogLevel.INFO,
-                f"{len(all_failures)} {self.manager_id} item(s) failed: {summary}",
-            )
-            raise PackageItemFailures(self.manager_id, all_failures)
+            # No summary line of the failures' own text here. Each one is already a record of
+            # its own above (`_converge_one`), naming the item and carrying the machine's
+            # words, and `PackageItemFailures` — raised on the next line and rendered by the
+            # orchestrator as this job's ending — is the count that names every one of them
+            # (`PKG-FR-OUTCOME-FAILED`). A line between the two re-rendered the same stderr a
+            # second time (#293).
+            raise PackageItemFailures(self.item_noun, self.item_noun_plural, all_failures)
 
     def _log_decisions(self, plan: PackagePlan, decisions: Mapping[str, Decision]) -> None:
         """One FULL line per item this job presented, naming the decision it received
@@ -867,9 +946,9 @@ class PackageSyncJob(SyncJob):
                 continue
             decision = decisions.get(diff.item_id, Decision.SKIP_ONCE)
             self._log(
-                Host.TARGET,
                 LogLevel.FULL,
                 f"reviewed {diff.label} ({diff.action.value}): {_DECISION_WORDS[decision]}",
+                host=Host.TARGET,
             )
 
     def _unresolved_as_failures(self, plan: PackagePlan, outcome: ReviewOutcome) -> list[tuple[ItemDiff, str]]:
@@ -974,26 +1053,26 @@ class PackageSyncJob(SyncJob):
             # (`PKG-FR-ASK-AGAIN`). Per-item detail at FULL like every other converge line,
             # never ERROR; the INFO summary after the loop names it and its reason.
             declined.append((diff, str(exc)))
-            self._log(Host.TARGET, LogLevel.FULL, f"{diff.label} not applied: {exc}")
+            self._log(LogLevel.FULL, f"{diff.label} not applied: {exc}", host=Host.TARGET)
             return
         except ConvergeItemFailed as exc:
             failures.append((diff, str(exc)))
-            self._log(Host.TARGET, LogLevel.ERROR, f"{diff.label} failed: {exc}", stderr=str(exc))
+            self._log(LogLevel.ERROR, f"{diff.label} failed: {exc}", stderr=str(exc), host=Host.TARGET)
             return
 
         if result.success:
             self._log(
-                Host.TARGET,
                 LogLevel.FULL,
-                f"{self.manager_id}: {diff.action.value} {diff.label} on {self.machines.target}",
+                f"{diff.action.value} {diff.label} on {self.machines.target}",
+                host=Host.TARGET,
             )
         else:
             failures.append((diff, result.stderr))
             self._log(
-                Host.TARGET,
                 LogLevel.ERROR,
                 f"{diff.label} failed: {result.stderr.strip()}",
                 stderr=result.stderr,
+                host=Host.TARGET,
             )
 
     async def execute(self) -> None:
@@ -1010,6 +1089,10 @@ class PackageSyncJob(SyncJob):
         Both rounds run here rather than inside a job, so the plan/review/apply order has one
         definition: every question precedes every change, and the second round's own groups
         are reviewed through the same injected reviewer as the first's.
+
+        Each step reports its phase (`_PHASE_*`) before entering it, because the first
+        countable progress this job has is `apply()`'s per-item percentage — minutes and a
+        whole review after the job started.
 
         A `plan()` failure propagates unchanged, so the orchestrator's per-job exception
         handling attributes it to this job's own `JobResult`.
@@ -1051,20 +1134,25 @@ class PackageSyncJob(SyncJob):
             "through JobContext.reviewer before execute()."
         )
         policy = self.context.review_policy if self.context.review_policy is not None else ReviewPolicy()
+        self._report_progress(_PHASE_PROBING)
         plan = await self.plan()
+        self._report_progress(_PHASE_ASKING)
         outcome = await self.context.reviewer.review(plan.groups)
+        self._report_progress(_PHASE_PROBING)
         second = await self.plan_second_round(plan, outcome)
         groups = (*plan.groups, *second.groups)
         answered_by_policy = policy_answers_any(groups, policy)
         if any(asks_for_a_decision(group) for group in groups) and not (outcome.was_interactive or answered_by_policy):
             raise JobSkipped(
                 self.name,
-                f"non-interactive run left every {self.manager_id} review item undecided",
+                f"non-interactive run left every {self.item_noun} review item undecided",
             )
         if second.groups:
+            self._report_progress(_PHASE_ASKING)
             outcome = _merge_rounds(outcome, await self.context.reviewer.review(second.groups))
         plan = PackagePlan(manager=plan.manager, diffs=second.diffs, groups=groups)
         self.accept_review(plan, outcome)
+        self._report_progress(_PHASE_APPLYING)
         if outcome.was_interactive or answered_by_policy:
             await self.after_review()
         await self.apply()

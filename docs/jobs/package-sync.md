@@ -8,15 +8,17 @@ For what package sync is for, read [package-sync-user-requirements.md](../planni
 
 Seven independent jobs share one review model. Each has its own enable flag, its own review, and its own failure isolation.
 
-| Flag | Covers |
-| --- | --- |
-| `apt_sync` | Manually-installed apt packages, plus the `/etc/apt` state they depend on: repositories, pins, keys, apt config, holds |
-| `snap_sync` | Store snaps, converged to the source's exact revision and channel |
-| `flatpak_sync` | Flatpak refs (per user/system scope), the remotes they need, and mask patterns |
-| `manual_deb_sync` | apt packages installed by hand from a downloaded `.deb` |
-| `manual_snap_sync` | Sideloaded snaps installed from a local `.snap` file |
-| `manual_flatpak_sync` | Flatpak apps installed from a local bundle or a since-deleted remote |
-| `manual_installs_sync` | Unowned software under `/usr/local` and `/opt` |
+The flag is the config key; the second column is the name the run shows you on screen.
+
+| Flag | Shown as | Covers |
+| --- | --- | --- |
+| `apt_sync` | Apt packages | Manually-installed apt packages, plus the `/etc/apt` state they depend on: repositories, pins, keys, apt config, holds |
+| `snap_sync` | Snaps | Store snaps, converged to the source's exact revision and channel |
+| `flatpak_sync` | Flatpaks | Flatpak refs (per user/system scope), the remotes they need, and mask patterns |
+| `manual_deb_sync` | Manual debs | apt packages your apt cannot install from any repository |
+| `manual_snap_sync` | Sideloaded snaps | Sideloaded snaps installed from a local `.snap` file |
+| `manual_flatpak_sync` | Manual flatpaks | Flatpak apps installed from a local bundle or a since-deleted remote |
+| `manual_installs_sync` | Manually installed apps | Unowned software under `/usr/local` and `/opt` |
 
 All seven ship **disabled**. Enable them individually:
 
@@ -35,11 +37,11 @@ Enabling one authorises pc-switcher to install and remove software on the target
 
 ## The three-way ownership split
 
-Three jobs handle software the store or archive can supply: `apt_sync`, `snap_sync`, `flatpak_sync`. Three others handle software of the same shape that no store or archive can supply: `manual_deb_sync`, `manual_snap_sync`, `manual_flatpak_sync`. **The two never overlap.** For every ecosystem, one detection rule assigns each package to exactly one job:
+Three jobs handle software the store or archive can supply: `apt_sync`, `snap_sync`, `flatpak_sync`. Three others handle software of the same shape that no store or archive can supply: `manual_deb_sync`, `manual_snap_sync`, `manual_flatpak_sync`. **The two never overlap.** For every ecosystem, one detection rule assigns each package to exactly one job, and it is applied once per package for the pair of machines rather than once per machine: your source machine's answer decides, except for a package only the target has, which is decided there.
 
 | If you disable | Then software of this kind is synced by nobody |
 | --- | --- |
-| `manual_deb_sync` | Every apt package installed from a downloaded `.deb` |
+| `manual_deb_sync` | Every apt package apt cannot install from a repository — one installed from a downloaded `.deb`, or one pinned out of every repository that carries it |
 | `manual_snap_sync` | Every sideloaded snap |
 | `manual_flatpak_sync` | Every flatpak app from a local bundle or since-deleted remote |
 
@@ -54,6 +56,10 @@ All seven package jobs **must** be listed before `folder_sync` in your `sync_job
 ## Batched review
 
 Each enabled job shows you a review before it changes anything. Every screen names the two machines by hostname (`atlas`, `nomad`) — never "source" and "target".
+
+A job's questions come in one order: what arrives, then what moves, then what goes away, then what is only reported. A snippet job asks its two snippet screens first — the items it cannot reproduce yet, then the version differences — and its ordinary install, change and removal screens after them.
+
+Every question is titled `<Verb> <what> on nomad?`, or `from nomad?` where the change takes something off it: `Install apt packages on nomad?`, `Remove sideloaded snaps from nomad?`, `Align snap versions on nomad?`. A one-item screen names the item too — `Install manual deb pcsw-uat-deb on nomad?`. The reported-only groups are the exception: they ask nothing, so they are titled by the condition instead (`Version differences (apt packages)`).
 
 Most items take three answers:
 
@@ -73,15 +79,19 @@ A snap's revision/channel change also takes two answers: nobody keeps a revision
 
 **Removal groups start at skip-now.** A bulk confirm can never silently delete something. So do groups that would overwrite an `apt.conf.d` file the target already holds.
 
-Some questions come one-per-screen because they have to show you something first: a file body, a collateral package, an unreproducible item.
+Some questions come one-per-screen because they have to show you something first: a file body, a collateral package, an unreproducible item. Every one of those screens is built the same way — a heading naming what it is about, then the thing itself, then the question — and every question in the review has a blank line in front of it, whatever came before. Where both machines hold the file and their copies differ — an `apt.conf.d` file, a repository file — the screen opens on a heading naming that one file, then the source's copy whole, then the target's saying what the answer would do to it: updated for a configuration file, overwritten for a repository conflict. The question names the file too, not the group above it.
 
 Some findings are only reported, not asked about: version differences, origin divergences, repositories the source cannot reproduce. Neither answering nor declining would change anything, so there is nothing to answer.
+
+A question freezes the live display above itself, so you can see where the run is while you answer, and the display comes back a blank line below your answer rather than against it. A job that asks nothing — an empty review, or one holding only reported findings — does not freeze anything: it prints what it found and the display keeps running. With seven package jobs enabled, only the ones that ask leave a frame behind.
 
 ## Machine-specific items
 
 Choosing `x` marks the item as belonging to *this specific machine*. The mark is written on the **holding machine** (the one whose copy the answer keeps) and never synced.
 
-Where both machines have the item and their copies differ, you get one follow-up screen asking whose own version this is — one machine, the other, or both. Naming both records one on each, so the answer survives either machine losing its copy.
+Where both machines have the item and their copies differ, a follow-up screen asks whose own version this is — one machine, the other, or both — straight after you answer that item, while its two versions are still on screen above. The keys number the machines as the screen lists them — `1` for the first hostname, `2` for the second, `b` for both — and the column shows the two hostnames. Naming both records one on each, so the answer survives either machine losing its copy.
+
+It is the one screen that starts on no answer at all. `<enter>` does nothing until its row has a key, and says so — neither machine is the holder by right, and the record it writes is permanent.
 
 The mark lasts as long as the software is on the holding machine. Once it is gone, the mark is dropped and the run says so.
 
@@ -91,11 +101,11 @@ Marks live under `~/.config/pc-switcher/<manager>.decisions.yaml`. To un-mark, d
 
 The four `manual_*` jobs share one snippet registry at `~/.config/pc-switcher/package-snippets.yaml`. When one of these jobs finds an item, you have three choices:
 
-- `y` — Write an install snippet. Two editors open: an install-or-update body, then an installed-version body.
+- `y` — Write an install snippet. One editor opens for the install-or-update body; `manual_installs_sync` opens a second for an installed-version body. Each editor's prompt says what to type; when it closes, the body you wrote stays in the scrollback under a title naming which snippet it is.
 - `s` — Skip now.
 - `x` — Never install here.
 
-The **installed-version snippet** runs on both machines every sync to detect drift. It must be read-only — pc-switcher cannot check that. Example: `/opt/foo/bin/foo --version`.
+The **installed-version snippet** belongs to `manual_installs_sync` alone: nothing else can say which version of an unowned path is installed, while the other three jobs ask `dpkg-query`, `snap list` and `flatpak list`. It runs on both machines every sync to detect drift, and must be read-only — pc-switcher cannot check that. Example: `/opt/foo/bin/foo --version`.
 
 The **install-or-update snippet** runs on the target to install or update. Runs as the target user with no wrapping sudo — put `sudo` inside the snippet if you need it. Example:
 
@@ -104,15 +114,36 @@ sudo DEBIAN_FRONTEND=noninteractive dpkg --install /path/to/package.deb || \
 sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes --fix-broken
 ```
 
-Both bodies are stored verbatim and mandatory. An empty body is refused.
+Every body an entry takes is stored verbatim and mandatory. An empty body is refused. What you write is printed back under the editor, full width, so the scrollback keeps the record of it.
 
-Convergence means the target reading back the source's version, not the snippet exiting zero. Where a replay leaves the version unchanged, you are asked again — this time to write a new snippet or leave it for this run. There is no purge-and-retry option: if your installer will not overwrite, `rm -rf … &&` goes into your own new snippet.
+Where both machines have an item at different versions you are asked about that item on its own, with the recorded install snippet printed above the answers: `y` replays it, `w` rewrites it first and then replays it, `s` leaves the target's version alone this run.
+
+Convergence means the target reading back the source's version, not the snippet exiting zero. Where a replay leaves the version unchanged, you are asked again — this time to write a new snippet or leave it for this run, again with the body that did not work printed above. There is no purge-and-retry option: if your installer will not overwrite, `rm -rf … &&` goes into your own new snippet.
 
 The registry syncs between machines with each snippet job's push. A transfer that would lose or change an entry the target holds asks you to confirm; declining aborts the run so you can consolidate the two registries by hand.
 
+### When apt can install a package you have a snippet for
+
+apt is the one ecosystem where your snippet and the package manager can both account for the same package, and nothing on either machine says which of you installed it. When the registry has a snippet for an apt package your source machine has installed **and** apt there can install that name from a repository, `manual_deb_sync` shows you the snippet, the repository apt would install from, and two answers:
+
+- `y` — apt installed it. The snippet is deleted from both machines' registries, and the package is apt's from then on.
+- `k` — you installed it. The snippet stays.
+
+Nothing is recorded either way, so you are asked again on every sync while the state lasts. To end it, make apt stop offering the package — write `/etc/apt/preferences.d/keep-<package>` on the source machine:
+
+```plain
+Package: <package>
+Pin: release *
+Pin-Priority: -1
+```
+
+apt then reports `Candidate: (none)` for it, pc-switcher reads the package as yours, and the question stops. The negative pin also makes the repository copy ineligible for an explicit `apt install`; `apt-mark hold` is weaker — it defers apt's automatic action only, and an explicit `apt install` overrides it. Neither takes the repository rows out of `apt-cache policy`'s version table, and either way that package's security updates become yours to apply.
+
+snap and flatpak never ask this: a sideloaded snap's `x`-prefixed revision and a flatpak app's recorded remote already say how the software got there.
+
 ## Ubuntu Pro and ESM
 
-If your source uses Ubuntu Pro's ESM repositories and your target is not attached, `apt_sync` asks before writing anything. Two answers: attach the target (pc-switcher gives you the `sudo pro attach <token>` and `sudo pro enable esm-apps esm-infra` commands to run there, plus a link to [Ubuntu's tutorial](https://documentation.ubuntu.com/pro/attach-tutorial/)) or skip `apt_sync` for this run. Every other job still runs.
+If your source uses Ubuntu Pro's ESM repositories and your target is not attached, `apt_sync` asks before writing anything. Two answers: attach the target (pc-switcher gives you the `sudo pro attach <token>` and `sudo pro enable esm-apps esm-infra` commands to run there, plus a link to [Ubuntu's tutorial](https://documentation.ubuntu.com/pro/attach-tutorial/)) or skip Apt packages for this run. Every other job still runs.
 
 Skipping costs the whole apt job, not just the two ESM files: pins always-sync, so the source's ESM pins would reach a target without the sources they name, leaving a candidate selection matching neither machine.
 
@@ -125,7 +156,7 @@ Each enabled job needs passwordless sudo where it writes:
 | Job | Source | Target |
 | --- | --- | --- |
 | `apt_sync` | required | required |
-| `snap_sync` | required | required |
+| `snap_sync` | none | required |
 | `flatpak_sync` | none | required only when a system-scope item is in play on either machine |
 | `manual_deb_sync` | none | none |
 | `manual_snap_sync` | none | none |
@@ -134,7 +165,9 @@ Each enabled job needs passwordless sudo where it writes:
 
 The `manual_*` jobs pre-validate no sudo: detection only reads. An approved removal on any of the first three needs root on the target and fails as its own item if that is not available. Snippet privilege is the author's — put `sudo` inside the snippet if needed.
 
-`apt_sync` and `snap_sync` also pause each machine's auto-update timers (apt) and auto-refresh (snapd) for the sync window, and restore them afterwards. The pauses expire on their own if the run dies.
+A run also pauses each machine's automatic updaters for the sync window and restores them afterwards, so nothing moves package state under a job mid-convergence. Each pause is held only where a job that is enabled needs it: snapd's auto-refresh for `snap_sync` and `folder_sync`, the apt update timers for `apt_sync`, `manual_deb_sync` and `manual_installs_sync`. The pauses expire on their own if the run dies.
+
+The pauses are pc-switcher's own commands, on both machines, so they need passwordless sudo on both — `/usr/bin/snap` for the snapd pause, `/usr/bin/systemctl` and `/usr/bin/systemd-run` for the apt one. Whichever of them your enabled jobs ask for is checked before the run starts, and a machine that cannot run them refuses the sync with the sudoers line to add. That is why a run of nothing but `manual_deb_sync` still asks both machines for sudo, though the job itself needs none.
 
 ## Auditing every command
 
@@ -170,7 +203,9 @@ Neither flag records a machine-specific mark, and neither writes a snippet.
 
 ## When something goes wrong
 
-Every approved item is attempted. Failures are collected and reported together, each naming its item. One failed item does not block the rest of its job; one failed job does not stop the others.
+Every approved item is attempted. Failures are collected and reported together, each naming its item, once. One failed item does not block the rest of its job; one failed job does not stop the others.
+
+A snippet the other machine refuses is the one failure you are asked about rather than told about. The body you wrote is shown under a title saying it failed there, with what the machine said beside it, and the item's own question comes again: correct the snippet and it is replayed, or skip it and the entry is dropped so the next sync asks you to write it afresh. A skipped item is neither applied nor failed, so the job still reports success. With nobody at the terminal one attempt is made and the item is left alone with a warning. A snippet that disappeared between the review and the replay has nothing to correct and fails as its own item.
 
 A read that does not answer — snapd unreachable, apt lock held on the source, a network drop — fails the job once, naming the command and the tool's own stderr. It never proposes removing everything on the other machine because one read returned nothing.
 

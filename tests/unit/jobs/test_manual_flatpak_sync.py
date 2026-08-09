@@ -148,6 +148,22 @@ class TestNoRemoteDetection:
         ]
 
     @pytest.mark.asyncio
+    async def test_a_ref_both_machines_hold_from_one_configured_remote_is_neither_machines_finding(self) -> None:
+        """G211 — #285's shape cannot arise here, and this is why: the evidence is the remote
+        NAME recorded on the ref at install, which stays resolvable while the remote exists
+        whatever commits that remote still serves. Both machines answer the same question the
+        same way, so no copy is claimed on one side and left on the other.
+        """
+        context, _source, _target = make_context(
+            source_responses=source_with(apps=ref_line(FLATHUB_REF, "flathub")),
+            target_responses=source_with(apps=ref_line(FLATHUB_REF, "flathub")),
+        )
+
+        plan = await ManualFlatpakSyncJob(context).plan()
+
+        assert plan.diffs == ()
+
+    @pytest.mark.asyncio
     async def test_a_runtime_is_never_an_item(self) -> None:
         """G155 — apps only, matching what `flatpak_sync` replicates: a runtime arrives with
         the app that needs it and is never installed on its own, so the detection listing is

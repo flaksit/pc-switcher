@@ -9,7 +9,15 @@ from typing import TYPE_CHECKING, Any, ClassVar
 import jsonschema
 
 from pcswitcher.events import ProgressEvent
-from pcswitcher.models import ConfigError, FirstSyncScope, Host, LogLevel, ProgressUpdate, ValidationError
+from pcswitcher.models import (
+    ConfigError,
+    FirstSyncScope,
+    Host,
+    LogLevel,
+    ProgressUpdate,
+    RunPause,
+    ValidationError,
+)
 
 from .context import JobContext
 
@@ -30,8 +38,26 @@ class Job(ABC):
     """
 
     name: ClassVar[str]
+    display_name: ClassVar[str]
     required: ClassVar[bool] = False
     CONFIG_SCHEMA: ClassVar[dict[str, Any]] = {}
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        """Default `display_name` to `name` for any job that does not declare one.
+
+        `name` is an identifier and cannot be prettified: it is the `sync_jobs` config
+        key, the module a job is imported from (`CORE-FR-JOB-LOAD`), the `job` field of
+        every log record (`LOG-FR-JSON`) and what `PKG-FR-JOB-ORDER`'s config error
+        names. `display_name` is the same job worded for a human and is read ONLY where
+        a human reads it — status line, progress bars, `Job outcomes:` block, review and
+        gate prose. Anything a machine matches on keeps `name`.
+
+        Defaulted here rather than at each read site so a job that has no better wording
+        (test fixtures) still answers `display_name`.
+        """
+        super().__init_subclass__(**kwargs)
+        if "display_name" not in cls.__dict__ and "name" in cls.__dict__:
+            cls.display_name = cls.name
 
     def __init__(self, context: JobContext) -> None:
         """Initialize job with context.
@@ -124,23 +150,30 @@ class Job(ABC):
 
     def _log(
         self,
-        host: Host,
         level: LogLevel,
         message: str,
+        *,
+        host: Host | None = None,
         **extra: Any,
     ) -> None:
         """Log a message through stdlib logging.
 
+        The side is optional because not every record is about one machine: a record
+        describing both hosts at once has no side to name, and naming one is worse than
+        naming none (#291). The whole pipeline already travels without it — all three
+        formatters omit the field when the call did not supply it (`LOG-FR-JSON`), as
+        startup and shutdown records have always done.
+
         Args:
-            host: Which machine this log relates to (SOURCE or TARGET)
             level: Log level
             message: Human-readable message
+            host: The machine this record is about, when it is about one
             **extra: Additional structured context
         """
         logger.log(
             level.value,
             message,
-            extra={"job": self.name, "host": host.value, **extra},
+            extra={"job": self.name, **({"host": host.value} if host is not None else {}), **extra},
         )
 
     def _report_progress(
@@ -155,6 +188,7 @@ class Job(ABC):
         self.context.event_bus.publish(
             ProgressEvent(
                 job=self.name,
+                display_name=self.display_name,
                 update=update,
             )
         )
@@ -213,6 +247,35 @@ class SyncJob(Job):
             default) or has nothing in scope for the given config.
         """
         return None
+
+    @classmethod
+    def declare_run_pauses(cls) -> frozenset[RunPause]:
+        """Declare the machine-wide automatic updaters this job needs held for the run.
+
+        The orchestrator unions the declarations of the ENABLED jobs and holds exactly
+        that set, on the same principle as `describe_first_sync_scope`: it composes from
+        job self-descriptions rather than reaching into specific jobs' names or config, so
+        a job added later cannot silently miss a pause it depends on. The union is what
+        makes each declaration independent — two jobs naming the same pause hold it once,
+        and one of them being switched off does not lift it for the other.
+
+        Called as a classmethod before job instances exist: the pauses are applied before
+        the job window opens. Takes no config, unlike `describe_first_sync_scope`, because
+        a job's exposure to a background updater is a property of what the job does at all,
+        not of how it is configured.
+
+        A declaration also carries its own privilege: each pause names the binaries it runs
+        under sudo (`RunPause.sudo_commands`), and the orchestrator establishes the grant for
+        the whole union on both machines in the validation step, before any job runs. So a job
+        declaring a pause needs to say nothing about sudo in its own `validate()` — but it
+        cannot decline the check either, which is the point: the declaration and the grant
+        cannot drift apart.
+
+        Returns:
+            The pauses this job depends on; empty (the default) for a job that does not
+            care whether either updater runs during the sync.
+        """
+        return frozenset()
 
 
 class BackgroundJob(Job):

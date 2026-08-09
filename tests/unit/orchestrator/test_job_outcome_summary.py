@@ -19,9 +19,16 @@ from tests.unit.console_capture import PlainBuffer, captured_console
 from tests.unit.jobs.test_package_sync_core import make_context
 
 
-def _result(job_name: str, status: JobStatus, reason: str | None = None) -> JobResult:
+def _result(job_name: str, status: JobStatus, reason: str | None = None, display_name: str | None = None) -> JobResult:
     now = datetime.now(UTC)
-    return JobResult(job_name=job_name, status=status, started_at=now, ended_at=now, error_message=reason)
+    return JobResult(
+        job_name=job_name,
+        job_display_name=display_name or job_name,
+        status=status,
+        started_at=now,
+        ended_at=now,
+        error_message=reason,
+    )
 
 
 def _capture(orchestrator: Orchestrator) -> PlainBuffer:

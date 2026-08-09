@@ -107,7 +107,7 @@ async def test_core_us_install_as2_shared_install_logic(pc1_executor: BashLoginR
     Runs on pc1 rather than the pc2 clean-target fixtures because it has to remove
     uv itself, which no fixture does, and restore it afterwards.
 
-    Reference: docs/system/spec.md - CORE-US-INSTALL, Acceptance Scenario 2
+    Reference: docs/system/core.md - CORE-US-INSTALL-AS2
     """
     # Save current uv installation state
     uv_check = await pc1_executor.run_command("command -v uv")

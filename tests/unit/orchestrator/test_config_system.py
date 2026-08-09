@@ -15,8 +15,9 @@ Test Coverage:
 - CORE-US-CONFIG-AS1: Load, validate, apply defaults
 - CORE-US-CONFIG-AS2: Independent file and CLI log levels
 - CORE-US-CONFIG-AS3: Enable/disable jobs via sync_jobs
-- CORE-US-CONFIG-AS4: Abort on missing required param
+- CORE-US-CONFIG-AS4: Abort on an unknown key, at the top level or under sync_jobs
 - CORE-US-CONFIG-AS5: YAML syntax error handling
+- CORE-US-CONFIG-AS6: Abort on missing required param
 - Edge: Unknown job in config
 """
 
@@ -193,8 +194,31 @@ btrfs_snapshots:
         assert error.errors[0].path
         assert error.errors[0].message
 
-    def test_core_us_config_as4(self, tmp_path: Path) -> None:
-        """CORE-US-CONFIG-AS4: Abort on missing required parameter.
+    def test_core_us_config_as4_unknown_top_level_key(self, tmp_path: Path) -> None:
+        """CORE-US-CONFIG-AS4: a key the root schema does not declare is rejected.
+
+        The `sync_jobs` half of the scenario is covered by
+        `TestJobEnableDisable.test_core_edge_unknown_job_in_config`; this is the outer half,
+        where the root's own `additionalProperties: false` is what refuses the key. A typo in
+        a section name would otherwise be silently ignored rather than reported.
+        """
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            """
+btrfs_snapshot:  # Typo: the section is `btrfs_snapshots`
+  subvolumes: ["@"]
+"""
+        )
+
+        with pytest.raises(ConfigurationError) as exc_info:
+            Configuration.from_yaml(config_file)
+
+        error = exc_info.value
+        assert [e.path for e in error.errors] == ["root"]
+        assert "btrfs_snapshot" in error.errors[0].message
+
+    def test_core_us_config_as6(self, tmp_path: Path) -> None:
+        """CORE-US-CONFIG-AS6: Abort on missing required parameter.
 
         Verifies that when a job declares required config parameters
         and they are missing (with no defaults), the system refuses to run.
@@ -468,10 +492,11 @@ sync_jobs:
         assert "flatpak_sync" not in config.sync_jobs
 
     def test_core_edge_unknown_job_in_config(self, tmp_path: Path) -> None:
-        """K13 — Edge case: Unknown job name in sync_jobs is rejected.
+        """K13 — Unknown job name in sync_jobs is rejected.
 
-        Verifies that the schema's additionalProperties: false for sync_jobs
-        prevents unknown job names from being accepted.
+        The `sync_jobs` half of CORE-US-CONFIG-AS4: the schema's additionalProperties: false
+        for sync_jobs prevents unknown job names from being accepted. The top-level half is
+        covered by `TestConfigValidation.test_core_us_config_as4_unknown_top_level_key`.
         """
         config_file = tmp_path / "config.yaml"
         config_file.write_text(
@@ -1105,7 +1130,9 @@ class TestJobDiscoveryFollowsTheConfig:
         jobs, _ = await wired_orchestrator._discover_and_validate_jobs()  # pyright: ignore[reportPrivateUsage]
         await wired_orchestrator._execute_jobs(jobs)  # pyright: ignore[reportPrivateUsage]
 
-        assert resolved == ["snap_sync"]
+        # Which NAMES are resolved is the property; a name is resolved once to build the job
+        # and once to read the pauses it declares, both by class and neither of them a job.
+        assert set(resolved) == {"snap_sync"}
         assert [job.name for job in jobs] == ["snap_sync"]
         assert journal == ["validate:snap_sync", "execute:snap_sync"]
 

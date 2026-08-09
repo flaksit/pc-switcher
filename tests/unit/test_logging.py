@@ -1,6 +1,6 @@
 """Unit tests for logging infrastructure.
 
-Tests cover LOG-SC-FILE-DEBUG, LOG-SC-EXT-FILTER, LOG-SC-NO-REGRESS, LOG-SC-INVALID-FAIL.
+Tests cover LOG-SC-CONFIG, LOG-SC-FILE-DEBUG, LOG-SC-EXT-FILTER, LOG-SC-INVALID-FAIL.
 """
 
 from __future__ import annotations
@@ -278,7 +278,7 @@ class TestRichFormatter:
 
 
 class TestSetupLogging:
-    """Test logging infrastructure setup (LOG-SC-NO-REGRESS, LOG-SC-INVALID-FAIL)."""
+    """Test logging infrastructure setup (LOG-SC-CONFIG, LOG-SC-INVALID-FAIL)."""
 
     def test_creates_queue_listener(self) -> None:
         """setup_logging should return a QueueListener."""
@@ -461,6 +461,29 @@ def _make_record(level: int, msg: str, *, job: str | None = None, host: str | No
     return record
 
 
+class TestAJobRecordWithoutASide:
+    """#291 — a record about a job rather than about one machine carries a `job` and no
+    `host`, and every destination has to render that shape. The formatters already dropped a
+    record missing BOTH fields (startup and shutdown); this is the mixed shape `Job._log` now
+    emits, which nothing produced before.
+    """
+
+    def test_the_json_line_keeps_the_job_and_omits_the_host(self) -> None:
+        data = json.loads(JsonFormatter().format(_make_record(logging.INFO, "Job Apt packages started", job="apt")))
+        assert data["job"] == "apt"
+        assert "host" not in data
+
+    def test_the_rich_line_keeps_the_job_and_omits_the_host(self) -> None:
+        output = RichFormatter().format(_make_record(logging.INFO, "Job Apt packages started", job="apt"))
+        assert "[apt]" in output
+        assert "(source)" not in output and "(target)" not in output
+
+    def test_the_plain_line_keeps_the_job_and_omits_the_host(self) -> None:
+        line = format_log_line(_make_record(logging.INFO, "Job Apt packages started", job="apt"))
+        assert "[apt]" in line
+        assert "(" not in line
+
+
 class TestWarningCapture:
     """Warnings that scroll past in the rolling log must be resurfaced.
 
@@ -594,7 +617,7 @@ class TestAcceptanceScenarios:
     """
 
     def test_log_us_config_scenario2_external_warning_filters_asyncssh_info(self) -> None:
-        """LOG-US-CONFIG Scenario 2: external=WARNING filters asyncssh INFO from both outputs.
+        """LOG-US-CONFIG-AS2: external=WARNING filters asyncssh INFO from both outputs.
 
         Given external: WARNING,
         When asyncssh logs an INFO message,
@@ -642,7 +665,7 @@ class TestAcceptanceScenarios:
                     listener.stop()
 
     def test_log_us_config_scenario3_pcswitcher_debug_in_file_not_tui(self) -> None:
-        """LOG-US-CONFIG Scenario 3: pcswitcher DEBUG appears in file but NOT in TUI.
+        """LOG-US-CONFIG-AS3: pcswitcher DEBUG appears in file but NOT in TUI.
 
         Given file: DEBUG, tui: INFO, external: WARNING,
         When pcswitcher logs a DEBUG message,
@@ -688,7 +711,7 @@ class TestAcceptanceScenarios:
                     listener.stop()
 
     def test_log_us_external_scenario3_asyncssh_info_in_file_not_tui(self) -> None:
-        """LOG-US-EXTERNAL Scenario 3: asyncssh INFO appears in file but NOT in TUI.
+        """LOG-US-EXTERNAL-AS3: asyncssh INFO appears in file but NOT in TUI.
 
         Given external: INFO, file: DEBUG, tui: WARNING,
         When asyncssh emits an INFO,

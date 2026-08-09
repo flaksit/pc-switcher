@@ -2,7 +2,9 @@
 
 Status: design contract for implementation. Every question this document once carried is answered; nothing in it is open. It supersedes the "derived repos" section of `.planning/phases/02-package-management-sync/02-HANDOVER-package-review.md` (§2), and is the implementation contract behind ADR-020's apt decisions (§8).
 
-This document is what implementation is briefed from. It reconciles the user's rulings with the code as it stands on `gsd/phase-02-package-management-sync` at `9c25d101`. Every claim about the code carries a `path:line`. Anything not verified is labelled as a hypothesis (§11 collects them).
+This document is what implementation is briefed from. It reconciles the user's rulings with the code as it stands on `gsd/phase-02-package-management-sync` at `9c25d101`. Every claim about the code carries a reference; anything not verified is labelled as a hypothesis (§11 collects them).
+
+The `path:line` references in §0-§8 and §10 are pinned to `9c25d101` and locate evidence in that commit, not in the current tree: `apt_sync.py` has since become the `apt_sync/` package, `tests/unit/jobs/test_apt_sync.py` the `tests/unit/jobs/apt/` package, and `02-SCENARIO-COVERAGE.md` is now `docs/dev/package-sync-scenario-coverage.md` with a renumbered matrix. §9's S8a — the one stage still open — cites current symbols instead.
 
 ## 0. Settled premises
 
@@ -200,7 +202,7 @@ What goes is only the per-package echo item reporting that a pin exists. **Pins 
 
 What that deletion simplifies, concretely: `_rereview_repo_invalidated_packages` (`apt_sync.py:1881-1971`), `_replanned_package_diffs` (`1973-1995`), `_merge_replanned_diffs` (`1997-2017`), `_rereview_groups` (`2019-2026`), `_repository_work_approved` (`1872-1879`), the `self._plan_source_items` cache (`1044`), the `apply()` override's re-review half (`1867-1869`), the `_RecordingReviewer` fixture (`tests/unit/jobs/test_apt_sync.py:3990`) and eight tests. It also removes the untested-by-construction hazard the handover flags first (`02-HANDOVER-package-review.md:31`): a `questionary` prompt firing mid-`execute()` with the Rich Live display paused at a point nothing has ever exercised. After this change **every apt prompt happens before the first mutating command**, which is what ADR-020 D-24 wanted in the first place.
 
-Residual staleness after the deletion: none that a review could answer. The dry-run preview still shows a plan-time classification, but under this model that classification no longer depends on anything the run would change — it depends on the source's origins, which the run never mutates. That is a genuine improvement over the note at `02-SCENARIO-COVERAGE.md:370`.
+Residual staleness after the deletion: none that a review could answer. The dry-run preview still shows a plan-time classification, but under this model that classification no longer depends on anything the run would change — it depends on the source's origins, which the run never mutates. That is a genuine improvement over the note in the scenario matrix.
 
 ## 4. The machine-specific follow-up (ruling 3)
 
@@ -328,7 +330,7 @@ Placement: in `plan()`, immediately after `await self._capture_origin_state()`, 
 
 As shipped, `_capture_origin_state` also owns the `sources.list.d` digest capture and the `/etc/apt/sources.list` file digest. They were `_plan_repo_diffs`'s, which runs after `_plan_packages` — so the trigger was unreadable at the placement above until they moved. Same commands, same count, one position earlier; `_plan_repo_diffs` reads the cached values.
 
-Not `validate()`: every `ValidationError` is fatal. `orchestrator.py:1019-1025` collects them across all jobs and raises `RuntimeError`; `ValidationError` (`models.py:103`) has no severity field, so there is no non-fatal form and no way to express "the user answered, carry on".
+Not `validate()`: every `ValidationError` is fatal. `Orchestrator._discover_and_validate_jobs` collects them across all jobs and raises `RuntimeError`; `ValidationError` (`models.ValidationError`) has no severity field, so there is no non-fatal form and no way to express "the user answered, carry on".
 
 #### 5.3.3 The probe
 
@@ -493,7 +495,7 @@ Ruling 8 (no backwards compatibility): nothing reads a legacy `apt:source:` or `
 | 219 | `test_declined_source_install_is_recorded_on_source_and_never_re_offered` | die — a source install is no longer offered, so it cannot be declined or recorded |
 | 242 | `test_a_signing_key_is_never_offered_and_so_can_never_be_recorded` | keep; extend to assert that no `apt:source:` or `apt:pin:` id can reach a decision file in **any** direction. `apt:config:` must NOT be added to that assertion — it is recorded in all three directions (ruling 11), which is what `TestAptRepoItemDecisions` (C27) keeps covering |
 
-`tests/unit/jobs/test_package_review.py`: add coverage for the two new sentinels; `test_install_group_defaults_checked_removal_group_defaults_unchecked` and the permanence tests (`TestPermanentSkipPromotion`, per `02-SCENARIO-COVERAGE.md:230`) must be extended to assert that a `repo_removal` group is unticked **and** never offered permanence.
+`tests/unit/jobs/test_package_review.py`: add coverage for the two new sentinels; `test_install_group_defaults_checked_removal_group_defaults_unchecked` and the permanence tests (`TestPermanentSkipPromotion`, per the scenario matrix) must be extended to assert that a `repo_removal` group is unticked **and** never offered permanence.
 
 `tests/unit/jobs/test_package_sync_core.py`: `_ACTION_VOCABULARY` fallback tests (`test_every_pair_without_a_vocabulary_entry_still_produces_a_usable_group`) still pass; add the two new vocabulary entries to whatever asserts the table.
 
@@ -512,7 +514,7 @@ No `pytest.skip` may appear in this module (`02-HANDOVER-package-review.md:77`).
 
 ### 7.3 Scenario matrix rows invalidated
 
-`.planning/phases/02-package-management-sync/02-SCENARIO-COVERAGE.md`:
+`docs/dev/package-sync-scenario-coverage.md` (then `.planning/phases/02-package-management-sync/02-SCENARIO-COVERAGE.md`, whose rows these IDs name):
 
 - **A2** — `REPO_UNAVAILABLE` no longer means "no candidate"; restate as §2.3 class 4.
 - **A7, A7a, A9** — the pin echo and the `Package:`-stanza parse are gone. Delete; A7a's multi-name/wildcard concern has no consumer left.
@@ -584,29 +586,29 @@ Every stage ends with `uv run ruff check . && uv run ruff format .`, `uv run bas
 
 **S7 — delete the pin echo and the second review.** The whole §6 deletion list for `HoldPinFact`, the pinned branch, and `_rereview_*`. Depends on S2 (the classification must already be origin-driven before the echo goes) and S3.
 
-**S8a — honest job outcomes.** Depends on nothing; touches no apt logic; may land first. Audited this session: `JobStatus.SKIPPED` (`models.py:263`) is constructed nowhere, and several jobs already stop early or do nothing while the run records `SUCCESS` (`orchestrator.py:1230-1237`). This stage builds the mechanism the ESM gate needs and corrects those call sites in the same change, so `SKIPPED` means one thing everywhere.
+**S8a — honest job outcomes.** Depends on nothing; touches no apt logic; may land first. Audited this session: `JobStatus.SKIPPED` (`models.JobStatus`) is constructed nowhere, and several jobs already stop early or do nothing while the run records `SUCCESS` (`Orchestrator._execute_jobs`). This stage builds the mechanism the ESM gate needs and corrects those call sites in the same change, so `SKIPPED` means one thing everywhere.
 
-The exception, beside `SyncAbortedByUser` (`models.py:131`):
+The exception, beside `SyncAbortedByUser` (`models.SyncAbortedByUser`):
 
 ```python
 class JobSkipped(Exception):
     def __init__(self, job_name: str, reason: str) -> None: ...
 ```
 
-The orchestrator gains an `except JobSkipped` arm in the job loop, beside the `PackageItemFailures` one (`orchestrator.py:1252`): record `JobResult(status=JobStatus.SKIPPED, ..., error_message=reason)`, log once at WARNING, and **do not re-raise**, so the loop moves to the next job exactly as the item-failure arm does. `_summarize_job_outcomes` (`orchestrator.py:202-216`) already treats `SKIPPED` as a non-failure, so a skipped job leaves the session `COMPLETED` and the exit code unchanged — no change needed there. `JobSkipped` may only be raised **before** the job's first mutating command; raised later, the partial state it left behind goes unreported.
+The orchestrator gains an `except JobSkipped` arm in the job loop, beside the `PackageItemFailures` one (`Orchestrator._execute_jobs`, whose isolated-failure test is `_is_isolated_failure`): record `JobResult(status=JobStatus.SKIPPED, ..., error_message=reason)`, log once at WARNING, and **do not re-raise**, so the loop moves to the next job exactly as the item-failure arm does. `_summarize_job_outcomes` (`orchestrator.py`) already treats `SKIPPED` as a non-failure, so a skipped job leaves the session `COMPLETED` and the exit code unchanged — no change needed there. `JobSkipped` may only be raised **before** the job's first mutating command; raised later, the partial state it left behind goes unreported.
 
 Call sites that adopt it, each currently `SUCCESS`:
 
 | Site | Condition | What it does today |
 | --- | --- | --- |
-| `PackageSyncJob.execute` (`packages/sync_core.py:493-497`) | the review came back non-interactive (`ReviewOutcome.was_interactive` False, `review.py:476-487`) **and** `plan.groups` is non-empty | every item is forced `SKIP_ONCE`, `apply()` logs "No … changes to apply" (`sync_core.py:357-359`) and returns; all four package jobs report SUCCESS having converged nothing. Raise `JobSkipped` after the review returns, before `after_review()` — so `manual_installs_sync` does not push its registry either. An **empty** plan on the same path stays SUCCESS: the target already matches. |
-| `VSCodeStateSyncJob.execute` (`vscode_state_sync.py:298-302`) | no handled state DB exists on the source | logs "nothing to sync" and returns SUCCESS. Not applicable ≠ synced. |
-| `FolderSyncJob.execute` (`folder_sync.py:874`) | `_active_folders()` (`folder_sync.py:256-266`) is empty — the schema requires `minItems: 1` (`folder_sync.py:201`) but every entry may be `enabled: false` | the loop body never runs and the job reports SUCCESS. |
-| `Orchestrator._discover_and_validate_jobs` (`orchestrator.py:996-998`) | an enabled job name resolves to no `SyncJob` class (`_resolve_sync_job_class` returns None, `orchestrator.py:698-703`, `715-721`) | a WARNING is logged and the job produces **no `JobResult` at all** — worse than a wrong status. No exception is involved here: the orchestrator constructs the `SKIPPED` result directly, at discovery time, and appends it to the run's results. |
+| `PackageSyncJob.execute` (`packages/sync_core.py`) | the review came back non-interactive (`ReviewOutcome.was_interactive` False, `packages/review.py`) **and** `plan.groups` is non-empty | every item is forced `SKIP_ONCE`, `apply()` logs "No `<item_noun_plural>` to change" (`PackageSyncJob.apply`) and returns; all four package jobs report SUCCESS having converged nothing. Raise `JobSkipped` after the review returns, before `after_review()` — so `manual_installs_sync` does not push its registry either. An **empty** plan on the same path stays SUCCESS: the target already matches. |
+| `VSCodeStateSyncJob.execute` (`vscode_state_sync.py`) | no handled state DB exists on the source | logs "nothing to sync" and returns SUCCESS. Not applicable ≠ synced. |
+| `FolderSyncJob.execute` (`folder_sync.py`) | `_active_folders()` is empty — the schema requires `minItems: 1` (`FolderSyncJob.CONFIG_SCHEMA`) but every entry may be `enabled: false` | the loop body never runs and the job reports SUCCESS. |
+| `Orchestrator._discover_and_validate_jobs` (`orchestrator.py`) | an enabled job name resolves to no `SyncJob` class (`_resolve_sync_job_class` returns None) | a WARNING is logged and the job produces **no `JobResult` at all** — worse than a wrong status. No exception is involved here: the orchestrator constructs the `SKIPPED` result directly, at discovery time, and appends it to the run's results. |
 
-Deliberately **not** converted, so the boundary stays legible: a package job whose plan is empty (the target already matches — that is the goal, met); a `folder_sync` pass that transfers nothing because filters excluded everything (the mirror is correct); dry-run (`tests/unit/test_dry_run.py:6` states SUCCESS/FAILED-not-SKIPPED as an existing decision, and a rehearsal that completes did succeed); per-item exclusions inside an otherwise-working job (sideloaded snaps, `snap_sync.py:492-507`; `REPORT_ONLY` diffs, `sync_core.py:348-352`) — a job-level status cannot express those, and the review and the warnings already do; a job that raised `SyncAbortedByUser` (`orchestrator.py:1244-1251`, no result recorded) — the run stops there, so a per-job record is moot.
+Deliberately **not** converted, so the boundary stays legible: a package job whose plan is empty (the target already matches — that is the goal, met); a `folder_sync` pass that transfers nothing because filters excluded everything (the mirror is correct); dry-run (`tests/unit/test_dry_run.py:6` states SUCCESS/FAILED-not-SKIPPED as an existing decision, and a rehearsal that completes did succeed); per-item exclusions inside an otherwise-working job (sideloaded snaps, `snap_sync.plan()`; `REPORT_ONLY` diffs, `PackageSyncJob.apply`) — a job-level status cannot express those, and the review and the warnings already do; a job that raised `SyncAbortedByUser` (the `except SyncAborted` arm of `Orchestrator._execute_jobs`, no result recorded) — the run stops there, so a per-job record is moot.
 
-Note for scope: `JobResult` is currently read only by `_summarize_job_outcomes` and the CLI's exit code (`cli.py:387`) — nothing renders per-job outcomes, so `CORE-FR-SUMMARY` (`docs/system/core.md:540`, which names SUCCESS/SKIPPED/FAILED explicitly) is unimplemented. S8a makes the status honest; rendering it is a separate piece of work and is **not** in this stage.
+Note for scope: `JobResult` is currently read only by `_summarize_job_outcomes` and the CLI's exit code (`cli._async_run_sync`) — nothing renders per-job outcomes, so `CORE-FR-SUMMARY` (`docs/system/core.md`, which names SUCCESS/SKIPPED/FAILED explicitly) is unimplemented. S8a makes the status honest; rendering it is a separate piece of work and is **not** in this stage.
 
 **S8 — ESM and Pro. SHIPPED.** The attachment probe (`_target_pro_attached`), the two-answer gate in `plan()` (`_gate_esm_writes`) with its unbounded re-check, `review.ask_gate` and its `Reviewer` method. Depended on S4 — the always-sync write set is what the gate guards — and on S8a for `JobSkipped`. Its blocking VM check was **DONE**: measured in a stock `ubuntu:24.04` container, `apt-get update` exits 0 with the ESM sources and no credentials, one failing source never aborts the others, and the real failure is `apt-get install` exiting 100 on a 401 for the `.deb` (§5.3.1).
 

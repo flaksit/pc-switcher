@@ -209,6 +209,7 @@ from pcswitcher.jobs.packages.review import (
     ReviewEntry,
     ReviewGroup,
     ReviewOutcome,
+    change_title,
 )
 from pcswitcher.jobs.packages.state import DecisionEntry, filter_inert, marks_on_either
 from pcswitcher.jobs.packages.sync_core import (
@@ -1353,7 +1354,11 @@ class FlatpakSyncJob(PackageSyncJob):
     """
 
     name: ClassVar[str] = "flatpak_sync"
+    display_name: ClassVar[str] = "Flatpaks"
     manager_id: ClassVar[str] = "flatpak"
+    item_noun: ClassVar[str] = "flatpak"
+    item_noun_plural: ClassVar[str] = "flatpaks"
+    origin_noun_plural: ClassVar[str] = "remotes"
 
     # No configurable properties: mirrors AptSyncJob/SnapSyncJob's empty schema — only
     # the enable flag in sync_jobs is needed for this slice.
@@ -1914,7 +1919,7 @@ class FlatpakSyncJob(PackageSyncJob):
             ReviewGroup(
                 manager=self.manager_id,
                 action=REPO_CONFLICT_REVIEW_ACTION,
-                title=f"Resolve {self.manager_id} remote conflicts",
+                title=change_title("resolve", "flatpak remote conflicts", self.machines.target),
                 entries=tuple(
                     ReviewEntry(
                         item_id=_conflict_id(remote_id),
@@ -2029,10 +2034,10 @@ class FlatpakSyncJob(PackageSyncJob):
             self._warn_about_trust(derived)
             if self.context.dry_run:
                 self._log(
-                    Host.TARGET,
                     LogLevel.FULL,
                     f"[dry-run] Would provision {derived.scope} flatpak remote {derived.name} "
                     f"({_DERIVED_REASON_WORDS[derived.reason]})",
+                    host=Host.TARGET,
                 )
                 continue
             await self._write_derived_remote(derived)
@@ -2046,7 +2051,7 @@ class FlatpakSyncJob(PackageSyncJob):
             failures = list(exc.failures)
         await self._delete_unused_remotes()
         if failures:
-            raise PackageItemFailures(self.manager_id, failures)
+            raise PackageItemFailures(self.item_noun, self.item_noun_plural, failures)
 
     def _warn_about_trust(self, derived: _DerivedRemote) -> None:
         """One WARNING per derived remote whose trust a successful provisioning leaves
@@ -2074,20 +2079,20 @@ class FlatpakSyncJob(PackageSyncJob):
             return
         if not source_item.gpg_verify:
             self._log(
-                Host.TARGET,
                 LogLevel.WARNING,
                 f"The {derived.scope} flatpak remote {derived.name} does not verify signatures on "
                 f"{self.machines.source}, so it is provisioned on {self.machines.target} with gpg verification "
                 f"disabled: nothing checks what {derived.name} serves there either.",
+                host=Host.TARGET,
             )
         elif source_item.key_digest is None and not source_item.key_paths and not self._source_trust_anchors:
             self._log(
-                Host.TARGET,
                 LogLevel.WARNING,
                 f"The {derived.scope} flatpak remote {derived.name} verifies signatures on {self.machines.source} "
                 f"but has no signing key there — neither its own keyring, nor a {_GPGKEYPATH_OPTION} of its own, "
                 f"nor anything under {_OSTREE_TRUSTED_ANCHOR_DIR} — so there is none to sync and installs from it "
                 f"will fail the signature check on {self.machines.target} as they do on {self.machines.source}.",
+                host=Host.TARGET,
             )
 
     async def _write_derived_remote(self, derived: _DerivedRemote) -> None:
@@ -2145,7 +2150,7 @@ class FlatpakSyncJob(PackageSyncJob):
                 phrase = f"repoint {derived.scope} flatpak remote {derived.name} at {source_item.url}"
                 # A derived write leaves no review line, so this is the only place the run
                 # says which facets of the remote were actually out of step.
-                self._log(Host.TARGET, LogLevel.FULL, _remote_change_detail(source_item, target_item))
+                self._log(LogLevel.FULL, _remote_change_detail(source_item, target_item), host=Host.TARGET)
             result = await self.target.run_command(
                 cmd,
                 login_shell=False,
@@ -2155,7 +2160,7 @@ class FlatpakSyncJob(PackageSyncJob):
             if result.success:
                 # The only trace a derived write leaves in the run's own log: it has no
                 # review line and no per-item converge entry to appear in.
-                self._log(Host.TARGET, LogLevel.FULL, f"provision {derived.scope} flatpak remote {derived.name}")
+                self._log(LogLevel.FULL, f"provision {derived.scope} flatpak remote {derived.name}", host=Host.TARGET)
             else:
                 self._failed_derived_remotes[derived.remote_id] = result.stderr.strip() or f"`{cmd}` failed"
         finally:
@@ -2218,10 +2223,10 @@ class FlatpakSyncJob(PackageSyncJob):
         """
         if self.context.dry_run:
             self._log(
-                Host.TARGET,
                 LogLevel.FULL,
                 f"[dry-run] Would copy the ref filter {path} and apply it to the {derived.scope} "
                 f"flatpak remote {derived.name} before installing from it",
+                host=Host.TARGET,
             )
             return
         reason = await self._replicate_remote_filter(derived, path)
@@ -2229,16 +2234,16 @@ class FlatpakSyncJob(PackageSyncJob):
             # A filter has no item of its own, so this is the only line the run leaves about
             # it — the same reason `_write_derived_remote` logs its own success.
             self._log(
-                Host.TARGET,
                 LogLevel.FULL,
                 f"apply the ref filter {path} to the {derived.scope} flatpak remote {derived.name}",
+                host=Host.TARGET,
             )
             return
         self._log(
-            Host.TARGET,
             LogLevel.WARNING,
             f"The ref filter {path} of the {derived.scope} flatpak remote {derived.name} could not be replicated "
             f"to {self.machines.target}: {reason}",
+            host=Host.TARGET,
         )
         self._failed_remote_filters[derived.remote_id] = (
             f"the ref filter of the {derived.scope} remote {derived.name!r} could not be replicated to {path}: "
@@ -2255,10 +2260,10 @@ class FlatpakSyncJob(PackageSyncJob):
         path = target_item.filter_path
         if self.context.dry_run:
             self._log(
-                Host.TARGET,
                 LogLevel.FULL,
                 f"[dry-run] Would take the ref filter {path} off the {derived.scope} flatpak remote {derived.name}, "
                 f"which {self.machines.source} does not restrict",
+                host=Host.TARGET,
             )
             return
         result = await self.target.run_command(
@@ -2273,17 +2278,17 @@ class FlatpakSyncJob(PackageSyncJob):
         self._target_remotes_now_by_id = None
         if result.success:
             self._log(
-                Host.TARGET,
                 LogLevel.FULL,
                 f"take the ref filter {path} off the {derived.scope} flatpak remote {derived.name}",
+                host=Host.TARGET,
             )
             return
         reason = result.stderr.strip() or "flatpak refused --no-filter"
         self._log(
-            Host.TARGET,
             LogLevel.WARNING,
             f"The ref filter {path} of the {derived.scope} flatpak remote {derived.name} could not be taken off "
             f"{self.machines.target}: {reason}",
+            host=Host.TARGET,
         )
         self._failed_remote_filters[derived.remote_id] = (
             f"the ref filter {path} of the {derived.scope} remote {derived.name!r} could not be taken off "
@@ -2382,18 +2387,18 @@ class FlatpakSyncJob(PackageSyncJob):
             still_used = users.get(remote_id)
             if still_used:
                 self._log(
-                    Host.TARGET,
                     LogLevel.FULL,
                     f"keeping {item.scope} flatpak remote {item.name}: {self.machines.target} still installs "
                     f"{', '.join(sorted(still_used))} from it",
+                    host=Host.TARGET,
                 )
                 continue
             if self.context.dry_run:
                 self._log(
-                    Host.TARGET,
                     LogLevel.FULL,
                     f"[dry-run] Would delete {item.scope} flatpak remote {item.name}, which nothing on "
                     f"{self.machines.target} installs from",
+                    host=Host.TARGET,
                 )
                 continue
             # Takes the remote's per-remote keyring with it (verified live): trust is not
@@ -2408,14 +2413,14 @@ class FlatpakSyncJob(PackageSyncJob):
             )
             self._target_remotes_now_by_id = None
             if result.success:
-                self._log(Host.TARGET, LogLevel.FULL, f"delete {item.scope} flatpak remote {item.name}")
+                self._log(LogLevel.FULL, f"delete {item.scope} flatpak remote {item.name}", host=Host.TARGET)
             else:
                 self._log(
-                    Host.TARGET,
                     LogLevel.WARNING,
                     f"The {item.scope} flatpak remote {item.name} is unused on {self.machines.target} and "
                     f"{self.machines.source} does not have it, but it could not be deleted: "
                     f"{result.stderr.strip()}",
+                    host=Host.TARGET,
                 )
 
     def _approved_ref_removal_ids(self) -> frozenset[str]:
@@ -2875,6 +2880,7 @@ class FlatpakSyncJob(PackageSyncJob):
         """Name this job's destructive first-sync scope (ADR-015): flatpak refs, remotes and masks."""
         return FirstSyncScope(
             job_name=cls.name,
+            job_display_name=cls.display_name,
             scope_items=[
                 "installed flatpak refs (per user/system scope)",
                 "flatpak mask patterns (per scope)",

@@ -14,6 +14,10 @@ The "Golden Copy" of the system specification: what pc-switcher does **today**. 
 - [Testing Framework](testing.md): testing framework, infrastructure, and strategy.
 - [Logging](logging.md): logging infrastructure and configuration.
 
+## Identifiers
+
+Every article carries its own id in the text: a requirement (`CORE-FR-LOCK`), a success criterion, an acceptance scenario (`CORE-US-TUI-AS2`). Code and tests cite those ids, so a number is allocated append-only and is never renumbered — a new scenario takes the next unused number for its story wherever it is inserted, and a deleted scenario's number is retired rather than reused. Renumbering for tidiness leaves every citation resolving to someone else's article, which no test can see.
+
 ## Workflow
 
 - **Small changes:** update these files with the code, in the same commit.

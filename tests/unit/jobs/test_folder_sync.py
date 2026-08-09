@@ -1113,7 +1113,7 @@ class TestStreamRsync:
         log_calls: list[tuple[object, object, str]] = []
         progress_calls: list[object] = []
 
-        def fake_log(host: object, level: object, message: str, **kw: object) -> None:
+        def fake_log(level: object, message: str, *, host: object = None, **kw: object) -> None:
             log_calls.append((host, level, message))
 
         def fake_progress(update: object) -> None:

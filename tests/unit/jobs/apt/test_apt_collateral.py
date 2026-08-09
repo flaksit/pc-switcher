@@ -350,7 +350,7 @@ class TestCollateralFlow:
 
         messages = [record.message for record in caplog.records]
         assert "reviewed pkg-a (1.0) (install): skipped this run" in messages
-        assert "No apt changes to apply" in messages
+        assert "No apt packages to change" in messages
         assert not any(record.levelno >= LogLevel.ERROR.value for record in caplog.records)
 
 

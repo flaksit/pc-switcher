@@ -51,6 +51,8 @@ class _CrashingPackageJob(PackageSyncJob):
 
     name: ClassVar[str] = "stub_crashing_package"
     manager_id: ClassVar[str] = "stub-crashing"
+    item_noun: ClassVar[str] = "stub item"
+    item_noun_plural: ClassVar[str] = "stub items"
 
     async def validate(self) -> list[ValidationError]:
         return []

@@ -70,7 +70,7 @@ class DummySuccessJob(SyncJob):
             self._report_progress(ProgressUpdate(percent=100))
 
         except asyncio.CancelledError:
-            self._log(Host.SOURCE, LogLevel.WARNING, "Dummy job termination requested")
+            self._log(LogLevel.WARNING, "Dummy job termination requested", host=Host.SOURCE)
             raise
 
     async def _run_source_phase(self) -> None:
@@ -81,14 +81,14 @@ class DummySuccessJob(SyncJob):
         for tick in range(iterations):
             elapsed = (tick + 1) * 2
             self._log(
-                Host.SOURCE,
                 LogLevel.INFO,
                 f"Source phase: {elapsed}s elapsed",
+                host=Host.SOURCE,
             )
 
             # WARNING at 6s
             if elapsed == 6:
-                self._log(Host.SOURCE, LogLevel.WARNING, "Test warning at 6s")
+                self._log(LogLevel.WARNING, "Test warning at 6s", host=Host.SOURCE)
 
             # Progress: 25% at halfway through source phase
             if elapsed == halfway * 2:
@@ -120,14 +120,14 @@ class DummySuccessJob(SyncJob):
             elapsed = tick * 2
 
             self._log(
-                Host.TARGET,
                 LogLevel.INFO,
                 f"Target phase: {elapsed}s elapsed (remote: {line})",
+                host=Host.TARGET,
             )
 
             # ERROR at 8s
             if elapsed == 8:
-                self._log(Host.TARGET, LogLevel.ERROR, "Test error at 8s")
+                self._log(LogLevel.ERROR, "Test error at 8s", host=Host.TARGET)
 
             # Progress: 75% at halfway through target phase
             if tick == halfway:

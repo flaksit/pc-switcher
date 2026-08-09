@@ -32,6 +32,7 @@ from pcswitcher.orchestrator import _summarize_job_outcomes
 def _job_result(job_name: str, status: JobStatus, error_message: str | None = None) -> JobResult:
     return JobResult(
         job_name=job_name,
+        job_display_name=job_name,
         status=status,
         started_at=datetime(2025, 1, 15, 10, 0, 0, tzinfo=UTC),
         ended_at=datetime(2025, 1, 15, 10, 1, 0, tzinfo=UTC),
@@ -114,7 +115,7 @@ class TestTheOutcomeMessageNamesWhatFailed:
                 _job_result(
                     "apt_sync",
                     JobStatus.FAILED,
-                    "2 apt item(s) failed to converge: ripgrep 14.1.0-1, fd-find 9.0.0-1",
+                    "2 apt packages failed to converge: ripgrep 14.1.0-1, fd-find 9.0.0-1",
                 ),
                 _job_result("snap_sync", JobStatus.FAILED, "probe did not answer — `snap list --all` exited 1"),
             ]
@@ -130,8 +131,8 @@ class TestTheOutcomeMessageNamesWhatFailed:
         names = ", ".join(f"pkg-{n}" for n in range(40))
         _status, error_message = _summarize_job_outcomes(
             [
-                _job_result("apt_sync", JobStatus.FAILED, f"40 apt item(s) failed to converge: {names}"),
-                _job_result("flatpak_sync", JobStatus.FAILED, "1 flatpak item(s) failed to converge: org.gimp.GIMP"),
+                _job_result("apt_sync", JobStatus.FAILED, f"40 apt packages failed to converge: {names}"),
+                _job_result("flatpak_sync", JobStatus.FAILED, "1 flatpak failed to converge: org.gimp.GIMP"),
             ]
         )
 
@@ -152,7 +153,7 @@ class TestCliExitCodeFromSessionStatus:
     @pytest.mark.asyncio
     async def test_failed_session_exits_non_zero(self) -> None:
         """J32 — a FAILED session must not exit 0, or a broken sync reads as a success."""
-        session = _session(SessionStatus.FAILED, error_message="snap_sync — 1 snap item(s) failed to converge: bw")
+        session = _session(SessionStatus.FAILED, error_message="snap_sync — 1 snap failed to converge: bw")
 
         with patch("pcswitcher.cli.Orchestrator") as orchestrator_cls:
             orchestrator_cls.return_value.run = AsyncMock(return_value=session)

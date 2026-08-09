@@ -22,9 +22,11 @@ import pytest
 from pcswitcher.events import ProgressEvent
 from pcswitcher.jobs import JobContext
 from pcswitcher.jobs.base import SyncJob
+from pcswitcher.jobs.install_on_target import INSTALL_ON_TARGET_SKIP_ENV
 from pcswitcher.models import (
     Host,
     JobResult,
+    JobSkipped,
     JobStatus,
     ProgressUpdate,
     SyncAbortedByUser,
@@ -32,10 +34,12 @@ from pcswitcher.models import (
     ValidationError,
 )
 from pcswitcher.orchestrator import (
+    Orchestrator,
     _failure_already_logged,
     _mark_failure_logged,
     _unwrap_taskgroup_error,
 )
+from tests.unit.jobs.test_package_sync_core import make_context
 
 
 class MockSyncJob(SyncJob):
@@ -142,6 +146,7 @@ class TestFR044OrchestratorForwardsProgress:
             """Job that reports progress during execution."""
 
             name = "progress_job"
+            display_name = "Progress job"
 
             async def validate(self) -> list[ValidationError]:
                 return []
@@ -163,6 +168,7 @@ class TestFR044OrchestratorForwardsProgress:
         first_event = first_call[0][0]
         assert isinstance(first_event, ProgressEvent)
         assert first_event.job == "progress_job"
+        assert first_event.display_name == "Progress job"
         assert first_event.update.percent == 50
         assert first_event.update.item == "Processing file.txt"
 
@@ -171,8 +177,76 @@ class TestFR044OrchestratorForwardsProgress:
         second_event = second_call[0][0]
         assert isinstance(second_event, ProgressEvent)
         assert second_event.job == "progress_job"
+        assert second_event.display_name == "Progress job"
         assert second_event.update.percent == 100
         assert second_event.update.item == "Complete"
+
+
+class _UiWatchingJob(SyncJob):
+    """Records what the orchestrator told the UI before this job's own body ran — the state
+    the screen is in when the job puts its first question.
+    """
+
+    name = "ui_watching_job"
+    display_name = "UI watching job"
+
+    def __init__(self, context: JobContext, ui: MagicMock, skip: bool = False) -> None:
+        super().__init__(context)
+        self._ui = ui
+        self._skip = skip
+        self.ui_calls_before_body: list[str] = []
+
+    async def validate(self) -> list[ValidationError]:
+        return []
+
+    async def execute(self) -> None:
+        self.ui_calls_before_body = [name for name, _args, _kwargs in self._ui.mock_calls]
+        if self._skip:
+            raise JobSkipped(self.name, "nothing to do")
+
+
+class TestABarExistsFromJobStart:
+    """#288: the job loop opens the bar, so the progress list can never contradict the
+    status line — and closes it, so nothing is left pulsing after the job ended.
+    """
+
+    @pytest.mark.asyncio
+    async def test_the_bar_is_opened_before_the_job_can_ask_anything(self, wired_orchestrator: Orchestrator) -> None:
+        ui = cast(MagicMock, wired_orchestrator._ui)  # pyright: ignore[reportPrivateUsage]
+        job = _UiWatchingJob(make_context(), ui)
+
+        await wired_orchestrator._execute_jobs([job])  # pyright: ignore[reportPrivateUsage]
+
+        assert "open_job_bar" in job.ui_calls_before_body
+        ui.open_job_bar.assert_called_once_with("ui_watching_job", "UI watching job")
+
+    @pytest.mark.asyncio
+    async def test_a_skipped_job_says_so_on_its_bar_instead_of_pulsing_on(
+        self, wired_orchestrator: Orchestrator
+    ) -> None:
+        ui = cast(MagicMock, wired_orchestrator._ui)  # pyright: ignore[reportPrivateUsage]
+        job = _UiWatchingJob(make_context(), ui, skip=True)
+
+        await wired_orchestrator._execute_jobs([job])  # pyright: ignore[reportPrivateUsage]
+
+        ui.close_job_bar.assert_called_once_with("ui_watching_job", "UI watching job", "skipped")
+
+    @pytest.mark.asyncio
+    async def test_a_job_that_reports_no_progress_gets_no_bar(
+        self, wired_orchestrator: Orchestrator, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`CORE-FR-PROGRESS-EMIT`: the bar belongs to a job that reports progress. The two
+        steps the orchestrator runs outside the loop — install-on-target here, btrfs
+        snapshots likewise — emit none, so an empty bar for them says only that the
+        orchestrator reached the step, which the status line already says.
+        """
+        monkeypatch.setenv(INSTALL_ON_TARGET_SKIP_ENV, "1")
+        ui = cast(MagicMock, wired_orchestrator._ui)  # pyright: ignore[reportPrivateUsage]
+
+        await wired_orchestrator._install_on_target_job()  # pyright: ignore[reportPrivateUsage]
+
+        ui.open_job_bar.assert_not_called()
+        ui.close_job_bar.assert_not_called()
 
 
 class TestFR048LogSyncSummary:
@@ -189,12 +263,14 @@ class TestFR048LogSyncSummary:
         job_results: list[JobResult] = [
             JobResult(
                 job_name="job1",
+                job_display_name="Job one",
                 status=JobStatus.SUCCESS,
                 started_at=datetime(2025, 1, 15, 10, 0, 0, tzinfo=UTC),
                 ended_at=datetime(2025, 1, 15, 10, 1, 0, tzinfo=UTC),
             ),
             JobResult(
                 job_name="job2",
+                job_display_name="Job two",
                 status=JobStatus.SUCCESS,
                 started_at=datetime(2025, 1, 15, 10, 1, 0, tzinfo=UTC),
                 ended_at=datetime(2025, 1, 15, 10, 2, 30, tzinfo=UTC),
@@ -338,6 +414,7 @@ class TestEdgeCases:
         results.append(
             JobResult(
                 job_name=job1.name,
+                job_display_name=job1.display_name,
                 status=JobStatus.SUCCESS,
                 started_at=started_at,
                 ended_at=ended_at,
@@ -357,6 +434,7 @@ class TestEdgeCases:
             results.append(
                 JobResult(
                     job_name=job2.name,
+                    job_display_name=job2.display_name,
                     status=JobStatus.FAILED,
                     started_at=started_at,
                     ended_at=ended_at,

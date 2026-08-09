@@ -52,6 +52,8 @@ logging:
 
 Enables or disables optional sync jobs. Only job names listed here are discovered and run; unknown names fail validation. This flag is the only configuration the package jobs take; what each job does lives in its own document under [`jobs/`](jobs/).
 
+The key is the job's identifier — it names the module the job is loaded from and the `job` field of every log record, so it never changes. On screen the run calls the same job something a person would say (`manual_deb_sync` runs as `Manual debs`); each job's document gives both names.
+
 ```yaml
 sync_jobs:
   dummy_success: false         # test job that completes successfully

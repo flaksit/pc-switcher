@@ -411,10 +411,10 @@ class Collateral:
         trigger = ", ".join(sorted(candidates))
         for effect in auto:
             self._log(
-                Host.TARGET,
                 LogLevel.FULL,
                 f"{verb} {trigger} on {self._machines.target} would {effect.phrase} "
                 f"({effect.package} is installed automatically on {self._machines.target}; not asked)",
+                host=Host.TARGET,
             )
 
     def _reason(self, package: str) -> str:
@@ -758,7 +758,7 @@ class LateCollateral:
                 # `PKG-FR-LOG-DECISIONS`: this question is not in the plan, so the base
                 # `_log_decisions` pass cannot name it. The words are the answer's own.
                 word = item.act_word if item.item_id in approved else SKIP_NOW_WORD
-                self._log(Host.TARGET, LogLevel.FULL, f"reviewed {item.label} (collateral): {word}")
+                self._log(LogLevel.FULL, f"reviewed {item.label} (collateral): {word}", host=Host.TARGET)
             if item.item_id in approved:
                 continue
             finding = (item.detail or "").split("\n")[0]
@@ -788,9 +788,9 @@ class LateCollateral:
                 continue
             self._reported_stranded.add(left.dest)
             self._log(
-                Host.TARGET,
                 LogLevel.INFO,
                 build_stranded_repository_line(left.dest, left.uris, left.packages, self._machines),
+                host=Host.TARGET,
             )
 
     async def _ask(self, found: Sequence[ItemDiff]) -> ReviewOutcome:

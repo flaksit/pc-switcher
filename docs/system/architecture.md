@@ -328,7 +328,7 @@ sequenceDiagram
     Orchestrator->>Connection: 8 Install/upgrade pc-switcher on target
     Orchestrator->>Connection: 9 Sync config.yaml to target
 
-    Orchestrator->>Orchestrator: Pause snapd auto-refresh (if snap_sync enabled)
+    Orchestrator->>Orchestrator: Pause the updaters the enabled jobs declare (snapd auto-refresh, apt timers)
     loop 10 For each enabled sync job
         Orchestrator->>Jobs: execute() under active_job(name)
         Jobs->>EventBus: ProgressEvent
@@ -350,7 +350,7 @@ sequenceDiagram
 2. **CONNECT** — establish the asyncssh connection, create both executors, and resolve the target's own hostname over SSH.
 3. **TARGET_LOCK** — take the target's unified lock over SSH, held by a persistent remote `flock` process for the whole session. Fail-fast if the target is busy.
 4. **OUT_OF_ORDER_CHECK** — read the target's sync-history (now that the lock is held) and run the first-sync gate (bypass: `--allow-first-sync`) and the out-of-order gate (bypass: `--allow-out-of-order`) per ADR-015. `--dry-run` rehearses both without aborting (ADR-014).
-5. **DISCOVER_JOBS** — import the enabled jobs, validate their config sections, enforce the package-jobs-before-`folder_sync` ordering rule, then run every job's `validate()`.
+5. **DISCOVER_JOBS** — import the enabled jobs, validate their config sections, enforce the package-jobs-before-`folder_sync` ordering rule, then run every job's `validate()` and the run's own check of the sudo the pauses those jobs declared will need.
 6. **DISK_CHECK** — verify free space on `/` on both machines against `preflight_minimum`.
 7. **PRE_SNAPSHOT** — btrfs pre-snapshots on both machines (the rollback point).
 8. **INSTALL_ON_TARGET** — install the matching pc-switcher version on the target, after the snapshots so a bad install is recoverable.
@@ -395,7 +395,7 @@ A job raising `PackageItemFailures` or `ProbeFailed` records a FAILED result and
 
 1. **Schema validation** — `Configuration.from_yaml` checks YAML syntax, rejects duplicate keys, and validates the document against `schemas/config-schema.yaml`. Runs in the CLI, before the orchestrator exists.
 2. **Job config validation** — `Job.validate_config()` validates the job's own section against its `CONFIG_SCHEMA` (SyncStep 5).
-3. **System state validation** — `Job.validate()` checks system readiness on both machines: binaries, passwordless sudo, subvolumes, reachable paths (SyncStep 5).
+3. **System state validation** — `Job.validate()` checks system readiness on both machines: binaries, passwordless sudo, subvolumes, reachable paths. The orchestrator adds the run's own: the sudo each machine-wide pause the enabled jobs declared needs, on both machines (SyncStep 5).
 
 All three run before any state modification.
 

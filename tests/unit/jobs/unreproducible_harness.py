@@ -26,8 +26,12 @@ __all__ = [
     "POLICY_AUTO_DEP",
     "POLICY_HAND_DEB",
     "POLICY_NEWER_THAN_REPO",
+    "POLICY_PHASED_UPDATE_APPLIED",
+    "POLICY_PHASED_UPDATE_LAGGARD",
     "POLICY_PINNED_NO_CANDIDATE",
     "POLICY_REPO_INSTALLED",
+    "QEMU_REGISTRY_YAML",
+    "REGISTRY_QUERY",
     "STATUS_QUERY",
     "TARGET_HOLDS_NOTHING_OF_INTEREST",
     "Answer",
@@ -51,11 +55,11 @@ __all__ = [
 
 # -- Real `apt-cache policy` output, verbatim ------------------------------------------
 #
-# Measured on a live Ubuntu 24.04 machine. The four shapes the detector has to tell apart:
+# Measured on a live Ubuntu 24.04 machine. The five shapes the detector has to tell apart:
 # a hand-installed `.deb`, a repo-installed package, a package every version of which is
-# pinned below zero, and a repo-installed automatic dependency. Only the first is
-# unreproducible, and all four report a `Candidate:` — three of them a real version, and
-# the pinned one `(none)` despite being fully repo-available.
+# pinned below zero, a repo-installed automatic dependency, and a package whose installed
+# version the archive has superseded. Apt will install the first from no repository and the
+# third from none either — those two are unreproducible; the other three it can install.
 
 
 def hand_deb_policy(name: str, version: str = "1.0") -> str:
@@ -122,6 +126,33 @@ POLICY_NEWER_THAN_REPO = """mytool:
         500 http://ftp.belnet.be/ubuntu noble/universe amd64 Packages
 """
 
+# `qemu-guest-agent` on a machine a phased update has not reached: the installed `.17` is in
+# no repository any more, while apt's candidate is the `.18` the archive moved to. The block
+# from #285, with the mirror URIs it elided written as the machine above prints them.
+POLICY_PHASED_UPDATE_LAGGARD = """qemu-guest-agent:
+  Installed: 1:8.2.2+ds-0ubuntu1.17
+  Candidate: 1:8.2.2+ds-0ubuntu1.18
+  Version table:
+     1:8.2.2+ds-0ubuntu1.18 500
+        500 http://ftp.belnet.be/ubuntu noble-updates/universe amd64 Packages
+ *** 1:8.2.2+ds-0ubuntu1.17 100
+        100 /var/lib/dpkg/status
+     1:8.2.2+ds-0ubuntu1.16 500
+        500 http://security.ubuntu.com/ubuntu noble-security/universe amd64 Packages
+"""
+
+# The same package on the machine the rollout HAS reached: `.18` installed and offered.
+POLICY_PHASED_UPDATE_APPLIED = """qemu-guest-agent:
+  Installed: 1:8.2.2+ds-0ubuntu1.18
+  Candidate: 1:8.2.2+ds-0ubuntu1.18
+  Version table:
+ *** 1:8.2.2+ds-0ubuntu1.18 500
+        500 http://ftp.belnet.be/ubuntu noble-updates/universe amd64 Packages
+        100 /var/lib/dpkg/status
+     1:8.2.2+ds-0ubuntu1.16 500
+        500 http://security.ubuntu.com/ubuntu noble-security/universe amd64 Packages
+"""
+
 # `7zip`, pulled in from a repository as an automatic dependency.
 POLICY_AUTO_DEP = """7zip:
   Installed: 23.01+dfsg-11ubuntu0.1~esm1
@@ -140,16 +171,32 @@ POLICY_AUTO_DEP = """7zip:
 DPKG_WITNESS_LINE = "dpkg: /usr/bin/dpkg\n"
 
 # A `package-snippets.yaml` registry holding one entry for the brscan3 no-candidate item.
-# Both bodies, because both are mandatory (`PKG-FR-VERSION-SNIPPET`) and an entry missing either ends the run.
+# One body: dpkg answers the version question for this kind (`PKG-FR-VERSION-SNIPPET`), so an
+# entry carrying a version body would end the run as malformed.
 BRSCAN3_REGISTRY_YAML = (
     "snippets:\n"
     "  unreproducible:apt-no-candidate:brscan3:\n"
     "    label: brscan3 (no apt candidate)\n"
     "    install_body: sudo dpkg --install /tmp/brscan3.deb\n"
-    "    version_body: dpkg-query --show --showformat='${Version}' brscan3\n"
     "    authored_at: '2026-01-01T00:00:00+00:00'\n"
     "    authored_on: laptop\n"
 )
+
+# The registry half of `PKG-FR-DEB-AMBIGUITY`'s state: a snippet on record for a package
+# apt can install too. Paired with `POLICY_PHASED_UPDATE_LAGGARD`, whose candidate origins
+# are a real repository, that is the pair nothing on either machine can tell apart.
+QEMU_REGISTRY_YAML = (
+    "snippets:\n"
+    "  unreproducible:apt-no-candidate:qemu-guest-agent:\n"
+    "    label: qemu-guest-agent (1:8.2.2+ds-0ubuntu1.17)\n"
+    "    install_body: sudo dpkg --install /tmp/qemu-guest-agent.deb\n"
+    "    authored_at: '2026-01-01T00:00:00+00:00'\n"
+    "    authored_on: laptop\n"
+)
+
+# The `cat` both registries answer, keyed on the path so a write of the same file never
+# matches it.
+REGISTRY_QUERY = "cat ~/.config/pc-switcher/package-snippets.yaml"
 
 
 # The `dpkg-query` that names a machine's installed set, matched by its one distinctive

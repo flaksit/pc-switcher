@@ -161,7 +161,7 @@ class TestConsecutiveSyncWarning:
 
         # Step 3: Second sync WITHOUT --allow-out-of-order — W3 (consecutive push) gate fires
         # because pc1 is pushing to pc2 again without a back-sync.  Non-interactive mode
-        # cannot confirm, so it aborts (title: "Consecutive Sync — No Back-Sync Received").
+        # cannot confirm, so it aborts (title: "Consecutive sync — no back-sync received").
         second_sync = await pc1_executor.run_command(
             f"{SKIP_INSTALL_ON_TARGET} pc-switcher sync pc2 --yes",
             timeout=60.0,
@@ -172,7 +172,7 @@ class TestConsecutiveSyncWarning:
             f"Exit code: {second_sync.exit_code}\nStdout: {second_sync.stdout}"
         )
         output = second_sync.stdout + second_sync.stderr
-        # "consecutive" from "Consecutive Sync — No Back-Sync Received" (W3 warning title);
+        # "consecutive" from "Consecutive sync — no back-sync received" (W3 warning title);
         # "abort" from "Sync aborted at the out-of-order / target-state check" (RuntimeError).
         assert "consecutive" in output.lower() and "abort" in output.lower(), (
             f"Output should mention consecutive-push warning and abort.\nOutput: {output}"

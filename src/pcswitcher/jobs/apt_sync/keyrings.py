@@ -277,11 +277,11 @@ class Keyrings:
                 await self._files.stage_and_promote(local, dest, staging_dir, staged_name_for(dest))
             except ConvergeItemFailed as exc:
                 self._log(
-                    Host.TARGET, LogLevel.ERROR, f"failed to provision signing key {dest}: {exc}", stderr=str(exc)
+                    LogLevel.ERROR, f"failed to provision signing key {dest}: {exc}", stderr=str(exc), host=Host.TARGET
                 )
                 continue
             self._provisioned.add(dest)
-            self._log(Host.TARGET, LogLevel.FULL, f"wrote signing key {dest} from {self._machines.source}")
+            self._log(LogLevel.FULL, f"wrote signing key {dest} from {self._machines.source}", host=Host.TARGET)
 
     async def remove_unused(self, backup_dir: str, existed_before: dict[str, bool]) -> None:
         """Delete every `/etc/apt/keyrings` file on the target that no surviving source
@@ -319,9 +319,9 @@ class Keyrings:
                 existed = await self._files.backup(dest, backup_dir)
             except ConvergeItemFailed as exc:
                 self._log(
-                    Host.TARGET,
                     LogLevel.WARNING,
                     f"keeping unused signing key {dest}: it could not be backed up first ({exc})",
+                    host=Host.TARGET,
                 )
                 continue
             if not existed:
@@ -332,10 +332,10 @@ class Keyrings:
             )
             if not result.success:
                 self._log(
-                    Host.TARGET,
                     LogLevel.WARNING,
                     f"could not delete unused signing key {dest}: {result.stderr.strip()}",
                     stderr=result.stderr,
+                    host=Host.TARGET,
                 )
                 continue
-            self._log(Host.TARGET, LogLevel.FULL, f"deleted signing key {dest}, which no repository references")
+            self._log(LogLevel.FULL, f"deleted signing key {dest}, which no repository references", host=Host.TARGET)

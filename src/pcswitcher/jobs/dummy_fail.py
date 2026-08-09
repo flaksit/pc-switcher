@@ -71,7 +71,7 @@ class DummyFailJob(SyncJob):
 
         try:
             self._report_progress(ProgressUpdate(percent=0))
-            self._log(Host.SOURCE, LogLevel.INFO, f"Dummy fail job will fail at {self.fail_at}s")
+            self._log(LogLevel.INFO, f"Dummy fail job will fail at {self.fail_at}s", host=Host.SOURCE)
 
             # Source phase (raises if fail_at <= source_duration)
             await self._run_source_phase(total_duration)
@@ -80,7 +80,7 @@ class DummyFailJob(SyncJob):
             await self._run_target_phase(total_duration)
 
         except asyncio.CancelledError:
-            self._log(Host.SOURCE, LogLevel.WARNING, "Dummy fail job cancelled")
+            self._log(LogLevel.WARNING, "Dummy fail job cancelled", host=Host.SOURCE)
             raise
 
     async def _run_source_phase(self, total_duration: int) -> None:
@@ -96,14 +96,14 @@ class DummyFailJob(SyncJob):
             percent = int((elapsed / total_duration) * 100)
 
             self._log(
-                Host.SOURCE,
                 LogLevel.INFO,
                 f"Source phase: {elapsed}s elapsed",
+                host=Host.SOURCE,
             )
             self._report_progress(ProgressUpdate(percent=percent))
 
             if elapsed >= self.fail_at:
-                self._log(Host.SOURCE, LogLevel.CRITICAL, f"Simulated failure at {elapsed}s")
+                self._log(LogLevel.CRITICAL, f"Simulated failure at {elapsed}s", host=Host.SOURCE)
                 raise RuntimeError(f"Dummy job failed at {elapsed}s")
 
             await asyncio.sleep(2)
@@ -129,15 +129,15 @@ class DummyFailJob(SyncJob):
             percent = int((elapsed / total_duration) * 100)
 
             self._log(
-                Host.TARGET,
                 LogLevel.INFO,
                 f"Target phase: {elapsed}s elapsed (remote: {line})",
+                host=Host.TARGET,
             )
             self._report_progress(ProgressUpdate(percent=percent))
 
             if elapsed >= self.fail_at:
                 await process.terminate()
-                self._log(Host.TARGET, LogLevel.CRITICAL, f"Simulated failure at {elapsed}s")
+                self._log(LogLevel.CRITICAL, f"Simulated failure at {elapsed}s", host=Host.TARGET)
                 raise RuntimeError(f"Dummy job failed at {elapsed}s")
 
         # Wait for process to complete

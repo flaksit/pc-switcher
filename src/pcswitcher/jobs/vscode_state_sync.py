@@ -236,6 +236,7 @@ class VscodeStateSyncJob(SyncJob):
     """
 
     name: ClassVar[str] = "vscode_state_sync"
+    display_name: ClassVar[str] = "VS Code state"
 
     @classmethod
     @override
@@ -248,6 +249,7 @@ class VscodeStateSyncJob(SyncJob):
         """
         return FirstSyncScope(
             job_name=cls.name,
+            job_display_name=cls.display_name,
             scope_items=list(VSCODE_STATE_DB_RELPATHS),
             mechanism="sqlite merge + atomic mv",
         )
@@ -298,6 +300,9 @@ class VscodeStateSyncJob(SyncJob):
         prefix = "[dry-run] " if self.context.dry_run else ""
         globs = PRESERVE_KEY_GLOBS
 
+        # The bar's first real state: until a DB is found there is nothing to count, and a
+        # job that finds none never reports anything but the 100% of a skip (#288).
+        self._report_progress(ProgressUpdate(heartbeat=True, item="looking for editor state"))
         present = [rel for rel in VSCODE_STATE_HANDLED_RELPATHS if (home / rel).exists()]
         if not present:
             # Not applicable is not synced: no state DB exists to merge, so the job did
@@ -306,7 +311,7 @@ class VscodeStateSyncJob(SyncJob):
             raise JobSkipped(self.name, f"no VS Code state DBs found on {self.context.source_hostname}")
 
         total = len(present)
-        self._log(Host.SOURCE, LogLevel.INFO, f"{prefix}Syncing VS Code state DBs")
+        self._log(LogLevel.INFO, f"{prefix}Syncing VS Code state DBs", host=Host.SOURCE)
 
         for index, relpath in enumerate(present):
             source_db = home / relpath
@@ -320,9 +325,9 @@ class VscodeStateSyncJob(SyncJob):
 
             if self.context.dry_run:
                 self._log(
-                    Host.TARGET,
                     LogLevel.FULL,
                     f"{prefix}Would sync {label} ({mode}); preserving keys matching {globs}",
+                    host=Host.TARGET,
                 )
                 self._report_progress(ProgressUpdate(percent=int((index + 1) / total * 100)))
                 continue
@@ -330,7 +335,7 @@ class VscodeStateSyncJob(SyncJob):
             await self._sync_editor(source_db, target_db, target_exists, globs, label)
             self._report_progress(ProgressUpdate(percent=int((index + 1) / total * 100)))
 
-        self._log(Host.TARGET, LogLevel.INFO, f"{prefix}{total} VS Code state DB file(s) synced")
+        self._log(LogLevel.INFO, f"{prefix}{total} VS Code state DB file(s) synced", host=Host.TARGET)
         self._report_progress(ProgressUpdate(percent=100))
 
     async def _sync_editor(
@@ -396,9 +401,9 @@ class VscodeStateSyncJob(SyncJob):
                 self._raise(Host.TARGET, label, "atomic mv", move.stderr)
 
             self._log(
-                Host.TARGET,
                 LogLevel.FULL,
                 f"Synced {label} ({'merge' if target_exists else 'first-sync'})",
+                host=Host.TARGET,
             )
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -406,5 +411,5 @@ class VscodeStateSyncJob(SyncJob):
     def _raise(self, host: Host, label: str, step: str, stderr: str) -> None:
         """Log CRITICAL and raise; any exception halts the sync (orchestrator contract)."""
         message = f"{label} {step} failed: {stderr.strip()}"
-        self._log(host, LogLevel.CRITICAL, message)
+        self._log(LogLevel.CRITICAL, message, host=host)
         raise RuntimeError(message)

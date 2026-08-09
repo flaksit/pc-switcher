@@ -9,10 +9,12 @@ stdlib-based logging are in tests/unit/test_logging.py and
 tests/contract/test_logging_contract.py.
 
 References:
-- docs/system/core.md - User Story 4 (Logging System)
+- docs/system/logging.md - LOG-US-SYSTEM (Comprehensive Logging System)
 - specs/004-python-logging - Standard Python Logging Integration
-- LOG-FR-LEVELS: Six log levels with correct ordering
+- LOG-FR-HIERARCHY: Six log levels with correct ordering
 - LOG-FR-FILE-PATH: Timestamped log files
+- LOG-FR-TUI-FORMAT: Interactive records go to the UI's log panel
+- LOG-FR-CONTEXT: Structured context (job, host) preserved on each record
 """
 
 from __future__ import annotations
@@ -27,17 +29,18 @@ import pytest
 from pcswitcher.config import Configuration
 from pcswitcher.jobs.base import SyncJob
 from pcswitcher.jobs.context import JobContext
+from pcswitcher.jobs.install_on_target import INSTALL_ON_TARGET_SKIP_ENV
 from pcswitcher.logger import generate_log_filename
-from pcswitcher.models import LogLevel, SyncAborted, ValidationError
+from pcswitcher.models import JobSkipped, LogLevel, SyncAborted, ValidationError
 from pcswitcher.orchestrator import Orchestrator
 from tests.unit.jobs.test_package_sync_core import make_context
 
 
 class TestLogLevelOrdering:
-    """Test LOG-FR-LEVELS: Six log levels with correct ordering."""
+    """Test LOG-FR-HIERARCHY: Six log levels with correct ordering."""
 
-    def test_log_fr_levels(self) -> None:
-        """LOG-FR-LEVELS: Six log levels with correct ordering.
+    def test_log_fr_hierarchy(self) -> None:
+        """LOG-FR-HIERARCHY: Six log levels with correct ordering.
 
         Verifies that LogLevel enum has exactly six levels with the ordering:
         DEBUG > FULL > INFO > WARNING > ERROR > CRITICAL
@@ -172,25 +175,25 @@ class TestOrchestratorCreatesUiBeforeLogging:
 
 
 class _StartLogRecordingJob(SyncJob):
-    """Captures the orchestrator's INFO calls made before its own execute() ran."""
+    """Captures the orchestrator's logging calls made before its own execute() ran."""
 
     name: ClassVar[str] = "stub_start_log"
 
     def __init__(self, context: JobContext, logger: MagicMock) -> None:
         super().__init__(context)
         self._logger = logger
-        self.info_calls_before_execute: list[Any] = []
+        self.calls_before_execute: list[Any] = []
 
     async def validate(self) -> list[ValidationError]:
         return []
 
     async def execute(self) -> None:
-        self.info_calls_before_execute = list(self._logger.info.call_args_list)
+        self.calls_before_execute = list(self._logger.log.call_args_list)
 
 
 class TestJobStartIsLogged:
-    """#243 — every job announces its start at INFO, so the log shows where a job's
-    output begins instead of only where it ended."""
+    """#243 — every job announces its start, so the log shows where a job's output begins
+    instead of only where it ended."""
 
     @pytest.mark.asyncio
     async def test_the_start_is_logged_before_the_job_runs(self, wired_orchestrator: Orchestrator) -> None:
@@ -199,15 +202,127 @@ class TestJobStartIsLogged:
 
         await wired_orchestrator._execute_jobs([job])  # pyright: ignore[reportPrivateUsage]
 
-        assert [call.args for call in job.info_calls_before_execute] == [("Job %s started", "stub_start_log")]
+        assert [call.args[1:] for call in job.calls_before_execute] == [("Job %s started", "stub_start_log")]
 
     @pytest.mark.asyncio
-    async def test_the_start_line_is_tagged_with_the_job_and_the_source(
-        self, wired_orchestrator: Orchestrator
-    ) -> None:
+    async def test_the_start_line_is_tagged_with_the_job_and_no_side(self, wired_orchestrator: Orchestrator) -> None:
         logger = cast(MagicMock, wired_orchestrator._logger)  # pyright: ignore[reportPrivateUsage]
         job = _StartLogRecordingJob(make_context(), logger)
 
         await wired_orchestrator._execute_jobs([job])  # pyright: ignore[reportPrivateUsage]
 
-        assert logger.info.call_args_list[0].kwargs["extra"] == {"job": "stub_start_log", "host": "source"}
+        assert logger.log.call_args_list[0].kwargs["extra"] == {"job": "stub_start_log"}
+
+
+class _EndingJob(SyncJob):
+    """A job that ends the way the test asks it to, to pin the tag on its closing line."""
+
+    name: ClassVar[str] = "stub_ending"
+    display_name: ClassVar[str] = "Ending job"
+
+    def __init__(self, context: JobContext, ending: Exception | None = None) -> None:
+        super().__init__(context)
+        self._ending = ending
+
+    async def validate(self) -> list[ValidationError]:
+        return []
+
+    async def execute(self) -> None:
+        if self._ending is not None:
+            raise self._ending
+
+
+def _tag_of(calls: list[Any], needle: str) -> dict[str, str]:
+    """The `extra` of the one logged call whose format string contains `needle`.
+
+    The template is the first argument of a level-named call and the second of `Logger.log`,
+    which takes the level first.
+    """
+    matching = [call for call in calls if needle in (call.args[0] if isinstance(call.args[0], str) else call.args[1])]
+    assert len(matching) == 1
+    return matching[0].kwargs["extra"]
+
+
+class TestJobLifecycleLinesAreTaggedWithTheJob:
+    """#289 — the `job` field says which job a record is ABOUT, so scanning the Recent Logs
+    column for one job must give its end as well as its start and its work. The orchestrator
+    being the code that emits the closing line is an implementation detail.
+    """
+
+    @pytest.mark.asyncio
+    async def test_the_completed_line_carries_the_job(self, wired_orchestrator: Orchestrator) -> None:
+        logger = cast(MagicMock, wired_orchestrator._logger)  # pyright: ignore[reportPrivateUsage]
+
+        await wired_orchestrator._execute_jobs([_EndingJob(make_context())])  # pyright: ignore[reportPrivateUsage]
+
+        assert _tag_of(logger.log.call_args_list, "completed successfully") == {"job": "stub_ending"}
+
+    @pytest.mark.asyncio
+    async def test_the_skipped_line_carries_the_job(self, wired_orchestrator: Orchestrator) -> None:
+        logger = cast(MagicMock, wired_orchestrator._logger)  # pyright: ignore[reportPrivateUsage]
+        job = _EndingJob(make_context(), JobSkipped("stub_ending", "nothing to do"))
+
+        await wired_orchestrator._execute_jobs([job])  # pyright: ignore[reportPrivateUsage]
+
+        assert _tag_of(logger.warning.call_args_list, "skipped") == {"job": "stub_ending"}
+
+    @pytest.mark.asyncio
+    async def test_the_failed_line_carries_the_job(self, wired_orchestrator: Orchestrator) -> None:
+        logger = cast(MagicMock, wired_orchestrator._logger)  # pyright: ignore[reportPrivateUsage]
+        job = _EndingJob(make_context(), RuntimeError("boom"))
+
+        with pytest.raises(RuntimeError, match="boom"):
+            await wired_orchestrator._execute_jobs([job])  # pyright: ignore[reportPrivateUsage]
+
+        assert _tag_of(logger.critical.call_args_list, "failed") == {"job": "stub_ending"}
+
+    @pytest.mark.asyncio
+    async def test_the_install_on_target_skip_carries_the_job(
+        self, wired_orchestrator: Orchestrator, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The step outside the job loop is tagged the same way."""
+        monkeypatch.setenv(INSTALL_ON_TARGET_SKIP_ENV, "1")
+        logger = cast(MagicMock, wired_orchestrator._logger)  # pyright: ignore[reportPrivateUsage]
+
+        await wired_orchestrator._install_on_target_job()  # pyright: ignore[reportPrivateUsage]
+
+        assert _tag_of(logger.warning.call_args_list, "skipped") == {"job": "install_on_target"}
+
+
+class TestTheRoutineLifecyclePairIsFull:
+    """#289 — the bar the loop opens says a job started, how far it is and that it finished,
+    and the outcome block says how it ended, so the pair repeating it at INFO cost two lines
+    of a ten-line panel per job. It drops to FULL, which is in the log file and under the
+    TUI's floor. A skip or a failure is not routine and keeps its level.
+    """
+
+    @pytest.mark.asyncio
+    async def test_both_ends_of_a_successful_job_are_full(self, wired_orchestrator: Orchestrator) -> None:
+        logger = cast(MagicMock, wired_orchestrator._logger)  # pyright: ignore[reportPrivateUsage]
+
+        await wired_orchestrator._execute_jobs([_EndingJob(make_context())])  # pyright: ignore[reportPrivateUsage]
+
+        assert [(call.args[0], call.args[1]) for call in logger.log.call_args_list] == [
+            (LogLevel.FULL, "Job %s started"),
+            (LogLevel.FULL, "Job %s completed successfully"),
+        ]
+        assert not [call for call in logger.info.call_args_list if "Job %s" in call.args[0]]
+
+    @pytest.mark.asyncio
+    async def test_a_skip_keeps_its_warning(self, wired_orchestrator: Orchestrator) -> None:
+        logger = cast(MagicMock, wired_orchestrator._logger)  # pyright: ignore[reportPrivateUsage]
+        job = _EndingJob(make_context(), JobSkipped("stub_ending", "nothing to do"))
+
+        await wired_orchestrator._execute_jobs([job])  # pyright: ignore[reportPrivateUsage]
+
+        assert [call.args[0] for call in logger.warning.call_args_list] == ["Job %s skipped: %s"]
+
+    @pytest.mark.asyncio
+    async def test_a_failure_keeps_its_critical(self, wired_orchestrator: Orchestrator) -> None:
+        logger = cast(MagicMock, wired_orchestrator._logger)  # pyright: ignore[reportPrivateUsage]
+        job = _EndingJob(make_context(), RuntimeError("boom"))
+
+        with pytest.raises(RuntimeError, match="boom"):
+            await wired_orchestrator._execute_jobs([job])  # pyright: ignore[reportPrivateUsage]
+
+        assert [call.args[0] for call in logger.critical.call_args_list] == ["Job %s failed: %s"]

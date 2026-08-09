@@ -54,7 +54,7 @@ Four buckets: derived from approved packages (repository files, keyrings, confli
 
 ### ADR-020-D-UNREPRODUCIBLE-ITEMS — Unreproducible items
 
-Each item has two mandatory bodies: `install_body` (replayed on the target) and `version_body` (prints the installed version on whichever machine runs it). Version comparison drives convergence; there is no folder diff and no payload hash. `version_body` runs on both machines during `plan()`, ungated by `--confirm-each-command`. Replay loops until versions match or the user skips. No purge-and-retry answer; no uninstall snippets.
+Every item carries an install-or-update body, replayed on the target; it is mandatory for every kind. A second body, printing the version installed on whichever machine runs it, exists only where the kind has no version source of its own — an install under a path no package manager owns. For a hand-installed package, a sideloaded snap and a bundle-installed flatpak the manager itself answers the version question, so those items have no version body at all. Version comparison drives convergence; there is no folder diff and no payload hash. A version body runs on both machines during `plan()`, ungated by `--confirm-each-command`. Replay loops until versions match or the user skips. No purge-and-retry answer; no uninstall snippets.
 
 ### ADR-020-D-BATCHED-REVIEW — Batched review, rounds when correctness needs them
 
@@ -67,6 +67,12 @@ apt collateral affecting the target's own manually-installed set becomes its own
 ### ADR-020-D-ORIGIN-VERIFY — (name, origin) enforced at the target's real state
 
 The unit of replication for apt is (name, origin). After the `/etc/apt` group's single `apt-get update` and before the first install, one batched `apt-cache policy` re-reads target candidate origins; an install whose candidates do not intersect the source's fails as its own item. Distribution origins are per-machine exempt.
+
+### ADR-020-D-DEB-OWNERSHIP — One verdict per name, from apt's candidate
+
+A package belongs to `manual_deb_sync` rather than `apt_sync` when apt has no repository it can install that name from — read off apt's own `Candidate:` row, whose origins are empty exactly when apt would install nothing from a repository. Version is not part of it. The verdict is reached once per name and withholds that name from both machines' apt manifests: the source's answer decides for a name the source has, the target's own for a name only the target has.
+
+One state that predicate cannot resolve: a snippet on record for a name apt CAN install. The user is asked, on the source's verdict, every run while the state holds; nothing about the question or its answer is recorded. Answering that apt installed it deletes the entry from both machines' registries, which removes the ambiguity by construction; answering that they installed it keeps the entry and shows the negative pin (`Pin-Priority: -1`) that makes apt report `Candidate: (none)` and so ends the question. apt only: snapd's `x<N>` revision and a flatpak ref's recorded remote already say how the software got there, so no snippet can contradict them.
 
 ### ADR-020-D-PINS-ALWAYS-SYNC — Pins always-sync
 
@@ -110,12 +116,17 @@ One store per device, name→publisher pinned by canonical-signed `snap-declarat
 - **Withholding the two ESM files silently** — Rejected: pins travel regardless, so pins land over a repository set neither machine has.
 - **Refusing the whole run when an approved origin cannot be replicated** — Rejected: contradicts `PKG-FR-OUTCOME-FAILED`'s continue-and-report model.
 - **Protecting the union of both machines' manual sets from collateral** — Rejected: the union protects on the wrong machine's bookkeeping.
-- **A recursive folder diff or payload hash for a manual install** — Rejected: version body replaces both.
+- **Reading ownership off the INSTALLED version's origins** — Rejected: a phased update leaves an installed version no repository carries any more, which would read every laggard as a hand `.deb`.
+- **Unioning the two machines' exclusion sets** — Rejected: it hides the symptom of two verdicts for one name while leaving the package misclassified on the machine that produced the wrong one.
+- **Deciding the snippet-plus-installable-name case without asking** — Rejected: both readings fit the same evidence, and each guess is expensive — deleting the user's own snippet, or replaying one over software apt already maintains.
+- **Recording the answer to that question** — Rejected: "I installed it" leaves the state that raised the question exactly as it was, so a marker would suppress a live question and no later reader could tell a settled entry from a stale one.
+- **A recursive folder diff or payload hash for an install under an unowned path** — Rejected: its version body replaces both.
 - **Comparing snippet body before version** — Rejected: a cosmetic edit to a comment or mirror URL would raise a false review item.
 - **Letting the higher version decide sync direction** — Rejected: sync goes source-to-target, always.
-- **A purge-and-replace answer beside retry** — Rejected: with no folder diff, purging cannot change what the version body reports.
+- **A purge-and-replace answer beside retry** — Rejected: with no folder diff, purging cannot change the version the machine reports.
 - **Uninstall snippets** — Rejected: ecosystem's own removal covers three jobs, `rm -rf` the fourth.
-- **A backwards-compatible registry defaulting the missing version body** — Rejected: every such entry would silently converge on presence again.
+- **Defaulting the missing version body of an unowned-path entry** — Rejected: nothing else can answer that item's version question, so every such entry would silently converge on presence again.
+- **A version body on every kind, for one uniform registry shape** — Rejected: three kinds never run it, so the user writes a command that never runs and an entry complete for its kind reads as malformed.
 - **Gating `version_body` behind `--confirm-each-command`** — Rejected: it runs before the run has proposed anything, so the confirm would arrive before the user had seen a single change.
 - **Pre-validating target sudo for the four unreproducible jobs** — Rejected: only approved removals need it.
 - **Source-cache reuse for offline installs** — Deferred.

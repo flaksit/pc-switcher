@@ -39,6 +39,7 @@ class InstallOnTargetJob(SystemJob):
     """
 
     name: ClassVar[str] = "install_on_target"
+    display_name: ClassVar[str] = "Install on target"
 
     def __init__(self, context: JobContext) -> None:
         """Initialize install job with context.
@@ -111,21 +112,21 @@ class InstallOnTargetJob(SystemJob):
         if self.target_version:
             if self.target_version == self.source_version:
                 self._log(
-                    Host.TARGET,
                     LogLevel.INFO,
                     f"Target pc-switcher version matches source: {self.source_version}, no install needed",
+                    host=Host.TARGET,
                 )
                 return
             self._log(
-                Host.TARGET,
                 LogLevel.INFO,
                 f"Upgrading pc-switcher on target from {self.target_version} to {self.source_version}",
+                host=Host.TARGET,
             )
         else:
             self._log(
-                Host.TARGET,
                 LogLevel.INFO,
                 f"Installing pc-switcher {self.source_version} on target",
+                host=Host.TARGET,
             )
 
         # In dry-run mode, skip actual installation
@@ -151,10 +152,10 @@ class InstallOnTargetJob(SystemJob):
             # normal, not an error — log at DEBUG (file only). A genuine failure surfaces
             # via the RuntimeError below when the fallback itself fails.
             self._log(
-                Host.TARGET,
                 LogLevel.DEBUG,
                 f"Exact-version install (v{self.source_version}) not available as a tag; "
                 f"installing via release {source_release.tag}",
+                host=Host.TARGET,
             )
             result = await self._run_install(source_release)
             if not result.success:
@@ -173,7 +174,7 @@ class InstallOnTargetJob(SystemJob):
             )
 
         self._log(
-            Host.TARGET,
             LogLevel.INFO,
             f"Target pc-switcher installed/upgraded to {installed_version_str}",
+            host=Host.TARGET,
         )

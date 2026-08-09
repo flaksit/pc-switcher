@@ -157,7 +157,7 @@ class TestTheESMAttachmentGate:
 
         call = reviewer.gate_calls[0]
         assert call["proceed_label"] == "I have attached target-host — check again and continue"
-        assert call["stop_label"] == "Skip apt_sync this run (every other job still runs)"
+        assert call["stop_label"] == "Skip Apt packages this run (every other job still runs)"
         assert call["title"] == "target-host needs an Ubuntu Pro attachment"
 
     @pytest.mark.asyncio
@@ -353,7 +353,7 @@ class TestTheESMAttachmentGate:
         assert len(warnings) == 1
         assert _ESM_APPS in warnings[0]
         assert _ESM_INFRA in warnings[0]
-        assert "skip apt_sync entirely" in warnings[0]
+        assert "skip Apt packages entirely" in warnings[0]
         assert _ESM_APPS not in "".join(
             r.getMessage() for r in caplog.records if "[dry-run] Would write" in r.getMessage()
         )

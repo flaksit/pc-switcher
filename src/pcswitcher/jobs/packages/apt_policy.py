@@ -4,8 +4,8 @@ Two jobs ask apt three different questions off the same command, and all three n
 same version-table walk to answer them: `apt_sync` asks what repository an INSTALLED
 package came from (C26's source-removal impact, and `PKG-FR-APT-IDENTITY`'s provenance comparison)
 and what repository the version the TARGET would install comes from (`PKG-FR-APT-IDENTITY`'s origin
-classification); `manual_deb_sync` asks whether a package on the SOURCE came from any
-repository at all (`PKG-FR-MANUAL-SCOPE`).
+classification); `manual_deb_sync` asks whether apt has any repository it could install a
+package from at all (`PKG-FR-MANUAL-SCOPE`).
 
 The installed and the candidate row are DIFFERENT rows and answer different questions —
 apt happily offers a package from one vendor while a second vendor's copy is the one
@@ -31,7 +31,7 @@ __all__ = [
     "candidate_origins_by_package",
     "installed_origins_by_package",
     "normalise_repo_uri",
-    "packages_installed_from_no_repository",
+    "packages_no_repository_can_install",
 ]
 
 # dpkg's own record of an installed package. It appears as an origin row on every
@@ -65,7 +65,7 @@ def installed_origins_by_package(policy_output: str) -> dict[str, frozenset[str]
     reaches an empty origin set while a name apt has never heard of reaches no key at all,
     and the difference is the difference between "apt says no repository supplies this" and
     "apt said nothing" — including the case where the whole command failed and produced no
-    output. `packages_installed_from_no_repository` may only indict the first.
+    output. Nothing may indict a name on the second.
     """
     return _origins_by_package(policy_output, of_candidate=False)
 
@@ -133,24 +133,37 @@ def _origins_by_package(policy_output: str, *, of_candidate: bool) -> dict[str, 
     return {name: frozenset(uris) for name, uris in origins.items()}
 
 
-def packages_installed_from_no_repository(policy_output: str, queried_names: Sequence[str]) -> frozenset[str]:
-    """The `queried_names` whose INSTALLED version comes from no configured repository —
-    a bare `.deb` put on the machine with `dpkg --install` (`PKG-FR-MANUAL-SCOPE`).
+def packages_no_repository_can_install(policy_output: str, queried_names: Sequence[str]) -> frozenset[str]:
+    """The `queried_names` apt has no repository it can install from, whatever version each
+    machine happens to hold — the software `manual_deb_sync` owns and `apt_sync` leaves
+    alone (`PKG-FR-MANUAL-SCOPE`, `PKG-FR-DEB-OWNERSHIP`).
 
-    Callers MUST pass only names known to be installed (`apt-mark showmanual` on the
-    machine `policy_output` came from). A name that is not installed is indistinguishable
-    from a dpkg-only one here: neither has a repository origin for an installed version,
-    because neither has an installed version.
+    Read off the CANDIDATE row's origins, because that row IS apt's own answer to "what
+    would I install for this name". With dpkg's status pseudo-origin filtered out, an empty
+    set means apt's answer names no repository at all, in each of the shapes that produces:
+    a `.deb` put on the machine with `dpkg --install`, whose only supplier is dpkg's own
+    record; a hand-installed version newer than anything a repository offers, where apt
+    would still hand back the copy already on disk; and a name whose every repository
+    version a pin holds below zero, which apt reports as `Candidate: (none)`. A non-empty
+    set means apt can install the package, and it is apt's business.
+
+    The INSTALLED version's origins answer a different question and must not be substituted
+    for this one. An installed version the archive has since superseded carries no
+    repository origin of its own while apt is offering a newer one from a repository —
+    Ubuntu's phased updates put machines in that state continuously — so keying on it reads
+    an ordinary apt package as a hand `.deb`, drops it out of `apt_sync`'s manifest on the
+    machine that lags, and leaves it in on the machine that does not (#285).
+
+    Callers MUST pass only names known to be installed on the machine `policy_output` came
+    from. This is a question about software the machine HAS: for a name it does not have,
+    an empty answer means only that apt would install nothing, which is not a finding about
+    anything.
 
     A name apt printed NO block for is never flagged. Absence is not evidence: apt prints a
     block for every installed package (verified against a live `apt-mark showmanual` set),
     so no block means the question was not answered — an unknown name, or an `apt-cache
     policy` that failed outright and returned nothing. Indicting on absence would let one
     failed command declare a machine's entire manual set unreproducible.
-
-    A package hand-installed at a version NEWER than the repository's is flagged, which is
-    correct rather than a false positive: replicating *this machine's* installed version
-    needs the `.deb`, and the repository cannot supply it.
     """
-    origins = installed_origins_by_package(policy_output)
+    origins = candidate_origins_by_package(policy_output)
     return frozenset(name for name in queried_names if name in origins and not origins[name])

@@ -41,6 +41,7 @@ from pcswitcher.jobs.packages.state import (
     DecisionFile,
     Snippet,
     SnippetRegistry,
+    VersionedSnippet,
     filter_inert,
 )
 from pcswitcher.jobs.packages.sync_core import PackagePlan
@@ -954,21 +955,30 @@ class TestSnippetRegistry:
 
     @pytest.mark.asyncio
     async def test_every_malformed_entry_in_one_registry_is_named_at_once(self) -> None:
-        """G115, G181 — the repair is a hand edit of one file, so the ending names every entry that
-        edit has to cover: stopping at the first would have the user fix it, start a new
-        sync, and only then be shown the next.
+        """G115, G181, G190 — the repair is a hand edit of one file, so the ending names every
+        entry that edit has to cover: stopping at the first would have the user fix it, start
+        a new sync, and only then be shown the next. Every way an entry can be malformed
+        counts, including both ways the wrong set of bodies does.
         """
         raw = (
             "snippets:\n"
-            "  apt:package:one:\n"
+            "  unreproducible:apt-no-candidate:one:\n"
             "    label: One\n"
-            "  apt:package:two: not-a-mapping\n"
-            "  apt:package:three:\n"
+            "  unreproducible:apt-no-candidate:two: not-a-mapping\n"
+            "  unreproducible:apt-no-candidate:three:\n"
             "    label: Three\n"
-            "    install_body: |\n"
-            "      echo three\n"
-            "    version_body: |\n"
-            "      echo v\n"
+            "    install_body: echo three\n"
+            "    version_body: echo v\n"
+            "    authored_at: '2026-01-01T00:00:00+00:00'\n"
+            "    authored_on: atlas\n"
+            "  unreproducible:unowned-path:/opt/four:\n"
+            "    label: Four\n"
+            "    install_body: echo four\n"
+            "    authored_at: '2026-01-01T00:00:00+00:00'\n"
+            "    authored_on: atlas\n"
+            "  unreproducible:apt-no-candidate:five:\n"
+            "    label: Five\n"
+            "    install_body: echo five\n"
             "    authored_at: '2026-01-01T00:00:00+00:00'\n"
             "    authored_on: atlas\n"
         )
@@ -979,31 +989,42 @@ class TestSnippetRegistry:
             await SnippetRegistry(executor, "nomad").load()
 
         message = str(exc_info.value)
-        assert "apt:package:one (missing field 'install_body')" in message
-        assert "apt:package:two (" in message
+        assert "unreproducible:apt-no-candidate:one (missing field 'install_body')" in message
+        assert "unreproducible:apt-no-candidate:two (" in message
+        # A version body on a kind whose package manager reports the version.
+        assert "unreproducible:apt-no-candidate:three (has a version_body" in message
+        # And an unowned path without the one body only it can answer with.
+        assert "unreproducible:unowned-path:/opt/four (missing field 'version_body')" in message
         # The one entry that parses is never named as a problem.
-        assert "apt:package:three" not in message
+        assert "unreproducible:apt-no-candidate:five" not in message
 
     @pytest.mark.asyncio
     async def test_add_then_get_round_trips_body_verbatim_including_whitespace(self) -> None:
         """G56 — a body written with leading indentation and blank lines between commands
-        is stored and read back byte for byte."""
+        is stored and read back byte for byte, for both entry types."""
         shell = FakeShellExecutor()
-        snippet = Snippet(
+        package_backed = Snippet(
             item_id="unreproducible:apt-no-candidate:brscan3",
             label="brscan3 (no apt candidate)",
             install_body="  sudo dpkg --install /tmp/brscan3.deb\n\nsudo apt-get install --fix-broken --assume-yes\n",
-            version_body="  dpkg-query --show --showformat='${Version}' brscan3\n",
+            authored_at="2026-07-23T09:00:00+00:00",
+            authored_on="laptop",
+        )
+        unowned_path = VersionedSnippet(
+            item_id="unreproducible:unowned-path:/opt/az",
+            label="az (unowned in /opt)",
+            install_body="  sudo /opt/az/install.sh\n\nsudo ln --symbolic /opt/az/bin/az /usr/local/bin/az\n",
+            version_body="  /opt/az/bin/az --version\n",
             authored_at="2026-07-23T09:00:00+00:00",
             authored_on="laptop",
         )
 
-        await SnippetRegistry(shell).add(snippet)
-        reloaded = await SnippetRegistry(shell).get(snippet.item_id)
+        registry = SnippetRegistry(shell)
+        await registry.add(package_backed)
+        await registry.add(unowned_path)
 
-        assert reloaded is not None
-        assert reloaded.install_body == snippet.install_body
-        assert reloaded.version_body == snippet.version_body
+        assert await registry.get(package_backed.item_id) == package_backed
+        assert await registry.get(unowned_path.item_id) == unowned_path
 
     @pytest.mark.asyncio
     async def test_a_body_of_shell_metacharacters_is_stored_and_replayed_uninterpreted(self) -> None:
@@ -1012,7 +1033,7 @@ class TestSnippetRegistry:
         target as one quoted argument, with nothing expanded on the way."""
         shell = FakeShellExecutor()
         body = "sudo /opt/[bold]tool/install.sh --note=\"$(date)\" --tag=`hostname` --path='/opt/a b'"
-        snippet = Snippet(
+        snippet = VersionedSnippet(
             item_id="unreproducible:unowned-path:/opt/tool",
             label="tool [red]v2 (unowned in /opt)",
             install_body=body,
@@ -1048,11 +1069,7 @@ class TestSnippetRegistry:
         executor.run_command = AsyncMock(return_value=CommandResult(0, "", ""))
         registry = SnippetRegistry(executor)
 
-        await registry.add(
-            Snippet(
-                item_id="x", label="x", install_body="echo hi", version_body="echo v", authored_at="t", authored_on="h"
-            )
-        )
+        await registry.add(Snippet(item_id="x", label="x", install_body="echo hi", authored_at="t", authored_on="h"))
 
         cmd = executor.run_command.call_args.args[0]
         assert "mkdir --parents" in cmd
@@ -1064,12 +1081,8 @@ class TestSnippetRegistry:
     async def test_add_preserves_an_unrelated_pre_existing_entry(self) -> None:
         """G62 — a second snippet for a different item accumulates rather than replacing."""
         shell = FakeShellExecutor()
-        first = Snippet(
-            item_id="a", label="a", install_body="echo a", version_body="echo v", authored_at="t", authored_on="h"
-        )
-        second = Snippet(
-            item_id="b", label="b", install_body="echo b", version_body="echo v", authored_at="t", authored_on="h"
-        )
+        first = Snippet(item_id="a", label="a", install_body="echo a", authored_at="t", authored_on="h")
+        second = Snippet(item_id="b", label="b", install_body="echo b", authored_at="t", authored_on="h")
 
         await SnippetRegistry(shell).add(first)
         await SnippetRegistry(shell).add(second)
@@ -1087,7 +1100,6 @@ class TestSnippetRegistry:
             item_id="x",
             label="x",
             install_body="echo hello world",
-            version_body="echo v",
             authored_at="t",
             authored_on="h",
         )
@@ -1118,9 +1130,7 @@ class TestSnippetRegistry:
     async def test_replay_exit_code_alone_decides_success(self) -> None:
         """G59 — a snippet that exits non-zero while printing nothing recognisable failed."""
         shell = FakeShellExecutor()
-        snippet = Snippet(
-            item_id="x", label="x", install_body="false", version_body="echo v", authored_at="t", authored_on="h"
-        )
+        snippet = Snippet(item_id="x", label="x", install_body="false", authored_at="t", authored_on="h")
         await SnippetRegistry(shell).add(snippet)
 
         target = MagicMock()

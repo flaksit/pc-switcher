@@ -232,11 +232,13 @@ class _StubDockerLikeSyncJob(SyncJob):
     """A hermetic stub SyncJob standing in for a future non-rsync job (e.g. packages/docker)."""
 
     name = "stub_containers"
+    display_name = "Containers"
 
     @classmethod
     def describe_first_sync_scope(cls, config: dict[str, Any]) -> FirstSyncScope | None:
         return FirstSyncScope(
             job_name=cls.name,
+            job_display_name=cls.display_name,
             scope_items=["my-app-container", "my-db-container"],
             mechanism="docker volume overwrite",
         )
@@ -266,4 +268,6 @@ class TestFirstSyncScopesExtensibility:
         assert "my-app-container" in message
         assert "my-db-container" in message
         assert "docker volume overwrite" in message
-        assert "stub_containers" in message
+        # The warning is prose, so it names the job the way the user knows it.
+        assert "Containers" in message
+        assert "stub_containers" not in message

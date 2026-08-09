@@ -83,6 +83,14 @@ _NOT_A_PROBE: dict[str, str] = {
     "sudoers.py::passwordless_sudo_hint": "the verification command the hint tells the user to run",
 }
 
+# Probes that a run DOES issue in the validation step, but from outside a job's `validate()`:
+# the machine-wide pauses are the orchestrator's own commands on both machines, so their grant
+# is the run's to establish and no job's `validate()` can carry it. The module-level key is
+# where the command sits — `_PASSWORDLESS_SUDO_PROBE`, issued by `_probe_passwordless_sudo`.
+_RUN_LEVEL_VALIDATION: dict[str, str] = {
+    "orchestrator.py::": "the grant the pauses the enabled jobs declared need, checked before any job runs",
+}
+
 # The modules that must each keep at least one probe, so the audit cannot pass by
 # matching nothing after a rename or a move.
 _MODULES_WITH_PROBES = frozenset(
@@ -90,6 +98,7 @@ _MODULES_WITH_PROBES = frozenset(
         "jobs/apt_sync/job.py",
         "jobs/flatpak_sync.py",
         "jobs/snap_sync.py",
+        "orchestrator.py",
     }
 )
 
@@ -151,15 +160,18 @@ class TestEnvironmentPreconditionsStayInValidate:
         assert found >= _MODULES_WITH_PROBES, f"probes missing from {sorted(_MODULES_WITH_PROBES - found)}"
 
     def test_no_environment_probe_sits_outside_a_validate_body(self) -> None:
-        """The requirement: every sudo and dpkg-lock probe is inside a `validate()`."""
+        """The requirement: every sudo and dpkg-lock probe is inside a validation body — a
+        job's `validate()`, or the run-level check listed in `_RUN_LEVEL_VALIDATION`.
+        """
+        allowed = _NOT_A_PROBE.keys() | _RUN_LEVEL_VALIDATION.keys()
         misplaced = [
             f"    {site.relpath}:{site.lineno}  ({site.qualname})  {site.text}"
             for site in _collect_probe_sites()
-            if site.qualname.rpartition(".")[2] != "validate" and site.key not in _NOT_A_PROBE
+            if site.qualname.rpartition(".")[2] != "validate" and site.key not in allowed
         ]
 
         assert not misplaced, (
-            "environment probes outside validate():\n"
+            "environment probes outside a validation body:\n"
             + "\n".join(misplaced)
             + "\n    Move the check into the job's validate(), so the run refuses before it "
             "changes anything, or record it in _NOT_A_PROBE if it issues no probe."

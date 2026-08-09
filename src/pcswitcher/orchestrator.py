@@ -55,6 +55,8 @@ from pcswitcher.models import (
     JobResult,
     JobSkipped,
     JobStatus,
+    LogLevel,
+    RunPause,
     SessionStatus,
     SnapshotPhase,
     SyncAborted,
@@ -64,6 +66,7 @@ from pcswitcher.models import (
     ValidationError,
 )
 from pcswitcher.step_gate import StepGate, TerminalUIStepGate
+from pcswitcher.sudoers import passwordless_sudo_hint
 from pcswitcher.sync_history import (
     HISTORY_PATH,
     SyncRole,
@@ -144,6 +147,11 @@ _APT_TIMER_RESTORE_UNIT = "pc-switcher-apt-timers"
 # running, and `UnitFileState` is the enablement the machine would return to — recorded so a
 # host's prior policy is captured in full rather than inferred from whether it was running.
 _APT_TIMER_PROPERTIES = ("Id", "LoadState", "ActiveState", "UnitFileState")
+
+# Both pauses above are `sudo` on both machines, and the grant for them is established while
+# validating (`_validate_run_pause_grants`). The same probe every job's `validate()` issues, so
+# a machine reads the same answer wherever it is asked.
+_PASSWORDLESS_SUDO_PROBE = "sudo --non-interactive true"
 
 
 def _parse_systemctl_show(output: str) -> dict[str, dict[str, str]]:
@@ -344,7 +352,7 @@ def _summarize_job_outcomes(job_results: list[JobResult]) -> tuple[SessionStatus
     failures = [r for r in job_results if r.status is JobStatus.FAILED]
     if not failures:
         return SessionStatus.COMPLETED, None
-    lines = [f"{r.job_name} — {r.error_message or 'no reason recorded'}" for r in failures]
+    lines = [f"{r.job_display_name} — {r.error_message or 'no reason recorded'}" for r in failures]
     return SessionStatus.FAILED, "\n".join(lines)
 
 
@@ -509,10 +517,10 @@ class Orchestrator:
             self._logger.warning(
                 "Sync finished with job failures: %s",
                 session.error_message,
-                extra={"job": "orchestrator", "host": "source"},
+                extra={"job": "orchestrator"},
             )
         else:
-            self._logger.info("Sync completed successfully", extra={"job": "orchestrator", "host": "source"})
+            self._logger.info("Sync completed successfully", extra={"job": "orchestrator"})
 
     async def run(self) -> SyncSession:  # noqa: PLR0915
         """Execute the complete sync workflow.
@@ -614,7 +622,7 @@ class Orchestrator:
         if self._dry_run:
             self._logger.info(
                 "[DRY-RUN] Preview mode - no changes will be made",
-                extra={"job": "orchestrator", "host": "source"},
+                extra={"job": "orchestrator"},
             )
 
         try:
@@ -645,7 +653,7 @@ class Orchestrator:
             self._ui.set_current_step(SyncStep.OUT_OF_ORDER_CHECK, "Out-of-order check")
 
             # SyncStep 5: Discover and validate jobs
-            self._logger.info("Discovering and validating jobs", extra={"job": "orchestrator", "host": "source"})
+            self._logger.info("Discovering and validating jobs", extra={"job": "orchestrator"})
             jobs, unresolved_job_results = await self._discover_and_validate_jobs()
             self._ui.set_current_step(SyncStep.DISCOVER_JOBS, "Discover jobs")
 
@@ -654,7 +662,7 @@ class Orchestrator:
             self._ui.set_current_step(SyncStep.DISK_CHECK, "Disk check")
 
             # SyncStep 7: Pre-sync snapshots
-            self._logger.info("Creating pre-sync snapshots", extra={"job": "orchestrator", "host": "source"})
+            self._logger.info("Creating pre-sync snapshots", extra={"job": "orchestrator"})
             await self._create_snapshots(SnapshotPhase.PRE)
             self._ui.set_current_step(SyncStep.PRE_SNAPSHOT, "Pre-sync snapshots")
 
@@ -672,7 +680,7 @@ class Orchestrator:
             self._ui.set_current_step(SyncStep.SYNC_CONFIG, "Sync config")
 
             # SyncStep 10: Run sync jobs — _execute_jobs sets the 10a/10b sub-steps per job
-            self._logger.info("Starting sync operations", extra={"job": "orchestrator", "host": "source"})
+            self._logger.info("Starting sync operations", extra={"job": "orchestrator"})
             # Pause snapd auto-refresh on both hosts across the whole RUN_JOBS window
             # (snap convergence → folder_sync); released in _cleanup (decision 4).
             await self._hold_snap_autorefresh()
@@ -683,7 +691,7 @@ class Orchestrator:
             session.job_results = job_results
 
             # SyncStep 11: Post-sync snapshots
-            self._logger.info("Creating post-sync snapshots", extra={"job": "orchestrator", "host": "source"})
+            self._logger.info("Creating post-sync snapshots", extra={"job": "orchestrator"})
             await self._create_snapshots(SnapshotPhase.POST)
             self._ui.set_current_step(SyncStep.POST_SNAPSHOT, "Post-sync snapshots")
 
@@ -707,7 +715,7 @@ class Orchestrator:
             session.status = SessionStatus.INTERRUPTED
             session.ended_at = datetime.now(UTC)
             session.error_message = "Sync interrupted by user (SIGINT)"
-            self._logger.warning("Sync interrupted by user", extra={"job": "orchestrator", "host": "source"})
+            self._logger.warning("Sync interrupted by user", extra={"job": "orchestrator"})
             raise
 
         except SyncAborted as e:
@@ -721,7 +729,7 @@ class Orchestrator:
             session.ended_at = datetime.now(UTC)
             session.error_message = str(e)
             what = "Sync aborted by user" if isinstance(e, SyncAbortedByUser) else "Sync aborted"
-            self._logger.warning("%s: %s", what, e, extra={"job": "orchestrator", "host": "source"})
+            self._logger.warning("%s: %s", what, e, extra={"job": "orchestrator"})
             raise
 
         except SyncLockedError as e:
@@ -731,7 +739,7 @@ class Orchestrator:
             session.status = SessionStatus.ABORTED
             session.ended_at = datetime.now(UTC)
             session.error_message = str(e)
-            self._logger.warning("Sync blocked: %s", e, extra={"job": "orchestrator", "host": "source"})
+            self._logger.warning("Sync blocked: %s", e, extra={"job": "orchestrator"})
             raise
 
         except Exception as e:
@@ -743,7 +751,7 @@ class Orchestrator:
             # phase, and — once jobs run in parallel — job failures that bypass
             # the sequential per-job handler), so the same cause isn't doubled.
             if not _failure_already_logged(e):
-                self._logger.critical("Sync failed: %s", e, extra={"job": "orchestrator", "host": "source"})
+                self._logger.critical("Sync failed: %s", e, extra={"job": "orchestrator"})
             raise
 
         finally:
@@ -868,22 +876,27 @@ class Orchestrator:
             self._job_results.append(
                 JobResult(
                     job_name=install_job.name,
+                    job_display_name=install_job.display_name,
                     status=JobStatus.SKIPPED,
                     started_at=started_at,
                     ended_at=datetime.now(UTC),
                     error_message=e.reason,
                 )
             )
+            # Tagged with the job, and with no side, for the same reasons as the job loop's
+            # own lifecycle lines: the `job` field says which job the record is about, and a
+            # job's life is not about one machine.
             self._logger.warning(
                 "Job %s skipped: %s",
-                e.job_name,
+                install_job.display_name,
                 e.reason,
-                extra={"job": "orchestrator", "host": "target"},
+                extra={"job": install_job.name},
             )
         else:
             self._job_results.append(
                 JobResult(
                     job_name=install_job.name,
+                    job_display_name=install_job.display_name,
                     status=JobStatus.SUCCESS,
                     started_at=started_at,
                     ended_at=datetime.now(UTC),
@@ -947,7 +960,7 @@ class Orchestrator:
             self._logger.warning(
                 "Job module pcswitcher.jobs.%s not found",
                 job_name,
-                extra={"job": "orchestrator", "host": "source"},
+                extra={"job": "orchestrator"},
             )
             return None
 
@@ -965,7 +978,7 @@ class Orchestrator:
             "No SyncJob with name=%s found in module pcswitcher.jobs.%s",
             job_name,
             job_name,
-            extra={"job": "orchestrator", "host": "source"},
+            extra={"job": "orchestrator"},
         )
         return None
 
@@ -989,6 +1002,88 @@ class Orchestrator:
             if scope is not None:
                 scopes.append(scope)
         return scopes
+
+    def _required_run_pauses(self) -> frozenset[RunPause]:
+        """Union the machine-wide pauses every ENABLED sync job declares it needs (#292).
+
+        Resolved exactly as `_first_sync_scopes` does — by class, before job discovery,
+        because both pauses are applied before the job window opens. The orchestrator asks
+        the jobs rather than naming them, so which mechanism a job depends on is stated by
+        that job and a job added later cannot silently miss one (`SyncJob.declare_run_pauses`).
+
+        The union is the whole rule: a pause is held when ANY enabled job asks for it. That
+        is what a hard-coded gate on one job's flag got wrong — `folder_sync` depends on snap
+        revisions standing still whether or not `snap_sync` is enabled, and the three jobs
+        that replay `dpkg`/`apt-get` contend for the frontend lock whether or not `apt_sync`
+        is.
+        """
+        pauses: set[RunPause] = set()
+        for job_name, enabled in self._config.sync_jobs.items():
+            if not enabled:
+                continue
+            job_class = self._resolve_sync_job_class(job_name)
+            if job_class is None:
+                continue
+            pauses |= job_class.declare_run_pauses()
+        return frozenset(pauses)
+
+    async def _probe_passwordless_sudo(self, host: Host) -> bool:
+        """Whether `host` grants passwordless sudo, by the probe every job's `validate()` uses.
+
+        Read-only, so no `mutates`: `true` changes nothing, and running it under sudo does not
+        make it a write. Same executor shell contract as `_run_snap_hold_command` — the local
+        executor on the source, `login_shell=False` on the target.
+        """
+        if host is Host.SOURCE:
+            assert self._local_executor is not None
+            result = await self._local_executor.run_command(_PASSWORDLESS_SUDO_PROBE)
+        else:
+            assert self._remote_executor is not None
+            result = await self._remote_executor.run_command(_PASSWORDLESS_SUDO_PROBE, login_shell=False)
+        return result.success
+
+    async def _validate_run_pause_grants(self) -> list[ValidationError]:
+        """Check the sudo the declared pauses need, on both machines, before any job runs.
+
+        The run-level half of `PKG-FR-SUDO-PRECONDITION`: the pauses are the orchestrator's own
+        commands, so no job's `validate()` covers them, and declaring a pause is what puts its
+        grant here (`RunPause.sudo_commands`). Without this a `folder_sync`-only or
+        `manual_deb_sync`-only run reached a `sudo snap set` or `sudo systemctl` on both
+        machines with nothing having established the grant, and the user met the refusal
+        mid-run — where the pause degrades to a warning and the assumption is never stated —
+        instead of up front with the remediation.
+
+        One probe per machine for the whole union, never one per declaring job: two jobs asking
+        for the same pause ask for one grant, and it is reported once. The message names the
+        binaries of every declared pause together, since one sudoers line covers them.
+
+        Not skipped in dry-run, unlike the pauses themselves: validation says whether the
+        machines are ready for a sync, and a dry run that passed here and failed in the real
+        run would be exactly the surprise this check exists to remove.
+        """
+        pauses = sorted(self._required_run_pauses())
+        if not pauses:
+            return []
+        commands = sorted({command for pause in pauses for command in pause.sudo_commands})
+        purposes = " and ".join(pause.purpose for pause in pauses)
+
+        errors: list[ValidationError] = []
+        for host in (Host.SOURCE, Host.TARGET):
+            if await self._probe_passwordless_sudo(host):
+                continue
+            username = self._connection.username if host is Host.TARGET and self._connection is not None else None
+            errors.append(
+                ValidationError(
+                    job="orchestrator",
+                    host=host,
+                    message=(
+                        f"passwordless sudo is not available on {self._machine_name(host)} "
+                        f"(required to {purposes} on both machines).\n"
+                        + passwordless_sudo_hint(commands, user=username)
+                    ),
+                )
+            )
+        return errors
 
     @staticmethod
     def _dry_run_preview_hint(tgt: str) -> str:
@@ -1028,12 +1123,15 @@ class Orchestrator:
         scopes = self._first_sync_scopes()
         if scopes:
             scope_line = "\n\n".join(
-                f"  {scope.job_name} ({scope.mechanism}):\n" + "\n".join(f"    {item}" for item in scope.scope_items)
+                f"  {scope.job_display_name} ({scope.mechanism}):\n"
+                + "\n".join(f"    {item}" for item in scope.scope_items)
                 for scope in scopes
             )
         else:
             scope_line = "  (all data configured for sync)"
-        warn_title = f"First Sync — {tgt} Will Be Overwritten"
+        # Sentence case, like every other title this tool puts on screen. The three
+        # confirmation warnings were the only Title Cased strings in the product.
+        warn_title = f"First sync — {tgt} will be overwritten"
         warning = (
             f"[bold]{tgt}[/bold] has never been synced by pc-switcher (no sync history).\n\n"
             f"This first-ever sync will overwrite everything on {tgt} that is in scope of "
@@ -1123,7 +1221,7 @@ class Orchestrator:
         if target_peer is not None and not hostnames_equal(target_peer, src):
             # W2: machine-C — target last synced with a third machine
             direction = "received a sync from" if target_role == SyncRole.TARGET else "sent a sync to"
-            warn_title = f"{tgt} Last Synced with a Different Machine"
+            warn_title = f"{tgt} last synced with a different machine"
             warning = (
                 f"[bold]{tgt}[/bold] most recently {direction} [bold]{target_peer}[/bold], "
                 f"not this machine ([bold]{src}[/bold]).\n\n"
@@ -1133,7 +1231,7 @@ class Orchestrator:
             )
         else:
             # W3: consecutive push — target looks clean but this source is pushing again
-            warn_title = "Consecutive Sync — No Back-Sync Received"
+            warn_title = "Consecutive sync — no back-sync received"
             warning = (
                 f"You are syncing from [bold]{src}[/bold] to [bold]{tgt}[/bold] again "
                 "without receiving a sync back first.\n\n"
@@ -1243,7 +1341,7 @@ class Orchestrator:
                 self._logger.debug(
                     "Job %s is disabled in config",
                     job_name,
-                    extra={"job": "orchestrator", "host": "source"},
+                    extra={"job": "orchestrator"},
                 )
                 continue
 
@@ -1254,6 +1352,9 @@ class Orchestrator:
                 unresolved.append(
                     JobResult(
                         job_name=job_name,
+                        # No class resolved, so no `display_name` to ask for: the config
+                        # key is all this run knows the job by.
+                        job_display_name=job_name,
                         status=JobStatus.SKIPPED,
                         started_at=now,
                         ended_at=now,
@@ -1284,6 +1385,10 @@ class Orchestrator:
             errors = await job.validate()
             if errors:
                 validation_errors.extend(errors)
+
+        # And the run's own: the machine-wide pauses the enabled jobs declared are the
+        # orchestrator's commands, so no job's validate() covers their grant.
+        validation_errors.extend(await self._validate_run_pause_grants())
 
         if validation_errors:
             error_msgs = [f"  - {e.job} ({e.host.value}): {e.message}" for e in validation_errors]
@@ -1347,7 +1452,7 @@ class Orchestrator:
         assert self._local_executor is not None
         assert self._remote_executor is not None
 
-        self._logger.info("Checking disk space on both hosts", extra={"job": "orchestrator", "host": "source"})
+        self._logger.info("Checking disk space on both hosts", extra={"job": "orchestrator"})
 
         # Parse threshold once (same for both hosts)
         threshold_type, threshold_value = parse_threshold(self._config.disk.preflight_minimum)
@@ -1500,19 +1605,53 @@ class Orchestrator:
                 for job_index, job in enumerate(jobs):
                     # Jobs are sub-steps of SyncStep.RUN_JOBS, sub-labelled 10a, 10b, …
                     # (letters suffice for any realistic job count; fall back to a
-                    # numeric suffix past 'z'), labelled with the job name so the TUI
-                    # shows what is running.
+                    # numeric suffix past 'z'), labelled with the job's display name so
+                    # the TUI shows what is running as the user knows it.
                     substep = chr(ord("a") + job_index) if job_index < 26 else str(job_index + 1)
-                    self._ui.set_current_step(SyncStep.RUN_JOBS, job.name, substep=substep)
+                    self._ui.set_current_step(SyncStep.RUN_JOBS, job.display_name, substep=substep)
+                    # Opened here rather than left to each job so no job type can be
+                    # missed: the status line and the progress list must agree from the
+                    # first instant of the job, whatever that job goes on to report.
+                    # Sound because every job this loop runs does report progress — a job
+                    # that reports none must not be given a bar (`CORE-FR-PROGRESS-EMIT`),
+                    # so a bar-less job would have to be kept out of the loop, not
+                    # special-cased here.
+                    self._ui.open_job_bar(job.name, job.display_name)
                     started_at = datetime.now(UTC)
                     try:
-                        # Tagged with the job's own name, not "orchestrator": this line opens
-                        # the run of log lines the job itself emits, so it reads as the first
-                        # of them rather than as a separate orchestrator remark.
-                        self._logger.info(
+                        # These four lifecycle lines are read in the Recent Logs panel, so
+                        # their message names the job the way the user knows it; the
+                        # structured `job` field stays the identifier a log filter matches.
+                        #
+                        # All four are tagged with the job, not "orchestrator": the field says
+                        # which job the record is ABOUT (`LOG-FR-JSON` — context the call
+                        # supplies), and the orchestrator being the code that emits a job's
+                        # start and end is an implementation detail. Tagged otherwise, filtering
+                        # the column for one job gave its start and its work but not its end.
+                        #
+                        # None of the four carries a side: a job's life is the job's, and most
+                        # jobs read one machine to change the other, so a side here could only
+                        # be picked rather than observed (#291). The job's own records name the
+                        # machine each of them is about.
+                        #
+                        # The routine pair is FULL, so it reaches the log file for a
+                        # post-mortem and leaves the ten-line Recent Logs panel to what only
+                        # it can say (#289). What makes that safe is the bar opened three
+                        # lines above: it says the job started, how far it is and that it
+                        # finished, and the end-of-run outcome block says how it ended. Every
+                        # job THIS LOOP runs has one, which is why the demotion belongs here
+                        # and not behind a list of job names — a bar-less job cannot be in
+                        # the loop (`CORE-FR-PROGRESS-EMIT`), and the steps outside it
+                        # (snapshots, install-on-target) keep their own INFO trace because
+                        # nothing else shows them progressing.
+                        #
+                        # The skipped and failed endings below stay where they are: a job
+                        # that did not do its work is not routine, and no bar says why.
+                        self._logger.log(
+                            LogLevel.FULL,
                             "Job %s started",
-                            job.name,
-                            extra={"job": job.name, "host": "source"},
+                            job.display_name,
+                            extra={"job": job.name},
                         )
                         # Labels this job's executor traffic in the debug trace (#210) and
                         # in the --confirm-each-command prompt. Set per job rather than per
@@ -1523,16 +1662,19 @@ class Orchestrator:
                         results.append(
                             JobResult(
                                 job_name=job.name,
+                                job_display_name=job.display_name,
                                 status=JobStatus.SUCCESS,
                                 started_at=started_at,
                                 ended_at=ended_at,
                             )
                         )
-                        self._logger.info(
+                        self._logger.log(
+                            LogLevel.FULL,
                             "Job %s completed successfully",
-                            job.name,
-                            extra={"job": "orchestrator", "host": "source"},
+                            job.display_name,
+                            extra={"job": job.name},
                         )
+                        self._ui.close_job_bar(job.name, job.display_name)
 
                     except SyncAborted:
                         # A job-level declined confirmation (e.g. FolderSyncJob's
@@ -1551,6 +1693,7 @@ class Orchestrator:
                         results.append(
                             JobResult(
                                 job_name=job.name,
+                                job_display_name=job.display_name,
                                 status=JobStatus.SKIPPED,
                                 started_at=started_at,
                                 ended_at=ended_at,
@@ -1559,15 +1702,17 @@ class Orchestrator:
                         )
                         self._logger.warning(
                             "Job %s skipped: %s",
-                            job.name,
+                            job.display_name,
                             e.reason,
-                            extra={"job": "orchestrator", "host": "source"},
+                            extra={"job": job.name},
                         )
+                        self._ui.close_job_bar(job.name, job.display_name, "skipped")
                     except Exception as e:
                         ended_at = datetime.now(UTC)
                         results.append(
                             JobResult(
                                 job_name=job.name,
+                                job_display_name=job.display_name,
                                 status=JobStatus.FAILED,
                                 started_at=started_at,
                                 ended_at=ended_at,
@@ -1576,10 +1721,11 @@ class Orchestrator:
                         )
                         self._logger.critical(
                             "Job %s failed: %s",
-                            job.name,
+                            job.display_name,
                             e,
-                            extra={"job": "orchestrator", "host": "source"},
+                            extra={"job": job.name},
                         )
+                        self._ui.close_job_bar(job.name, job.display_name, "failed")
                         if _failure_stays_in_its_job(job, e):
                             continue
                         # Already reported with the job name; stop run()'s top-level
@@ -1709,7 +1855,8 @@ class Orchestrator:
     async def _hold_snap_autorefresh(self) -> None:
         """Pause snapd AUTOMATIC refreshes on both hosts for the sync window (decision 4).
 
-        Gated on `sync_jobs.snap_sync` being enabled and skipped in dry-run (writing
+        Held when any enabled job declares `RunPause.SNAPD_AUTOREFRESH`
+        (`_required_run_pauses`) and skipped in dry-run (writing
         `refresh.hold` is a system mutation; ADR-014). Captures each host's prior
         `refresh.hold` first so `_cleanup` can restore it exactly, marks the hold engaged,
         then applies a timed hold on each host WHOSE PRIOR POLICY IT COULD READ. Only touches
@@ -1723,22 +1870,13 @@ class Orchestrator:
         cost is running unpaused on that host, which risks a mid-run auto-refresh; that trade
         is the criterion's, and it is the same one `_restore_snap_hold` makes on the way out.
         """
-        if self._dry_run or not self._config.sync_jobs.get("snap_sync", False):
+        if self._dry_run or RunPause.SNAPD_AUTOREFRESH not in self._required_run_pauses():
             return
 
         self._snap_hold_prior_source, self._snap_hold_readable_source = await self._capture_snap_hold(Host.SOURCE)
         self._snap_hold_prior_target, self._snap_hold_readable_target = await self._capture_snap_hold(Host.TARGET)
         # Engage BEFORE applying so a partially-applied hold is still restored in _cleanup.
         self._snap_hold_engaged = True
-        # Announced once, not per host: every log line already carries the machine it
-        # happened on. The line states its owner and its span (#233), because the pause
-        # fires before the first job and otherwise reads as an unexplained stop.
-        self._logger.info(
-            "Pausing snapd auto-refresh on both hosts for the whole run — held by the orchestrator, not by "
-            "snap_sync alone, because snap_sync converges each snap's revision and folder_sync then mirrors "
-            "that revision's data directory; a refresh between the two drops it from the mirror",
-            extra={"job": "orchestrator", "host": "source"},
-        )
         for host, prior, readable in (
             (Host.SOURCE, self._snap_hold_prior_source, self._snap_hold_readable_source),
             (Host.TARGET, self._snap_hold_prior_target, self._snap_hold_readable_target),
@@ -1751,6 +1889,15 @@ class Orchestrator:
                     extra={"job": "orchestrator", "host": host.value},
                 )
                 continue
+            # One record per machine, inside the loop, so only a machine actually being
+            # paused announces one and the record carries the side it happened on (#292).
+            # Why the pause exists, and why the orchestrator owns it rather than snap_sync,
+            # is the module comment on `_SNAP_AUTOREFRESH_HOLD_DURATION` — not the
+            # operator's screen every run.
+            self._logger.info(
+                "Pausing snapd auto-refresh",
+                extra={"job": "orchestrator", "host": host.value},
+            )
             await self._apply_snap_hold(host, prior)
 
     async def _restore_snap_hold(self, host: Host, prior: str | None, *, readable: bool) -> None:
@@ -1789,6 +1936,14 @@ class Orchestrator:
         else:
             cmd = 'sudo snap set system refresh.hold=""'
             description = "clear the snapd refresh.hold this run set"
+        # Reached only on a machine whose policy this run could read, and so could pause: the
+        # unreadable branch above returns. Announced because a user told their update policy
+        # was changed wants to be told it was put back (#292); the value being written back
+        # is `--confirm-each-command`'s business, not this line's.
+        self._logger.info(
+            "Restoring the snapd auto-refresh policy",
+            extra={"job": "orchestrator", "host": host.value},
+        )
         try:
             result = await self._run_snap_hold_command(host, cmd, mutates=description)
             if not result.success:
@@ -2070,7 +2225,8 @@ class Orchestrator:
     async def _suspend_apt_timers(self) -> None:
         """Stop Ubuntu's own apt update timers on both hosts for the sync window (#248).
 
-        Gated on `sync_jobs.apt_sync` being enabled and skipped in dry-run (stopping a system
+        Held when any enabled job declares `RunPause.APT_UPDATE_TIMERS`
+        (`_required_run_pauses`) and skipped in dry-run (stopping a system
         timer is a system mutation; ADR-014). Defers any restore a dead run left pending
         first (`_defer_pending_apt_timer_restore`), then captures each host's timer state so
         `_cleanup` can put back exactly what was taken away, then suspends each host WHOSE
@@ -2086,7 +2242,7 @@ class Orchestrator:
         running unguarded on that host; the alternative is disabling a machine's security
         updates with no record of what it had.
         """
-        if self._dry_run or not self._config.sync_jobs.get("apt_sync", False):
+        if self._dry_run or RunPause.APT_UPDATE_TIMERS not in self._required_run_pauses():
             return
 
         # Push a dead run's pending restore past this sync, so it cannot fire inside it. The
@@ -2098,17 +2254,6 @@ class Orchestrator:
         target_state = await self._capture_apt_timer_state(Host.TARGET)
         # Engage BEFORE applying so a partially-applied suspension is still restored in _cleanup.
         self._apt_timers_engaged = True
-        # Announced once, not per host: every log line already carries the machine it happened
-        # on. The line states its owner and its span, because the pause fires before the first
-        # job and otherwise reads as an unexplained stop.
-        self._logger.info(
-            "Pausing the system apt update timers (%s) on both hosts for the whole run — held by the "
-            "orchestrator, because Ubuntu's automatic updater takes the same dpkg lock apt_sync converges "
-            "under; each machine's timers restart by themselves within %s even if this run never finishes",
-            ", ".join(_APT_TIMERS),
-            _APT_TIMER_SUSPENSION,
-            extra={"job": "orchestrator", "host": "source"},
-        )
         for host, state in ((Host.SOURCE, source_state), (Host.TARGET, target_state)):
             if state is None:
                 self._logger.warning(
@@ -2122,6 +2267,19 @@ class Orchestrator:
             timers = _running_apt_timers(state)
             if not timers:
                 continue
+            # One record per machine, inside the loop, so only a machine that actually has
+            # timers to stop announces one and the record carries the side (#292). Which
+            # timers those are is DEBUG: a reader chasing a specific unit turns it on, and
+            # the reason the pause exists at all is the `_APT_TIMERS` module comment.
+            self._logger.info(
+                "Pausing the system apt update timers",
+                extra={"job": "orchestrator", "host": host.value},
+            )
+            self._logger.debug(
+                "Stopping %s",
+                ", ".join(timers),
+                extra={"job": "orchestrator", "host": host.value},
+            )
             await self._apply_apt_timer_suspension(host, timers)
 
     async def _restore_apt_timers_on(self, host: Host, timers: tuple[str, ...]) -> None:
@@ -2139,6 +2297,17 @@ class Orchestrator:
         """
         if not timers:
             return
+        # Only a machine this run actually stopped timers on reaches here, so nothing claims
+        # a restart it never owed (#292). Names at DEBUG, as at the pause.
+        self._logger.info(
+            "Restarting the system apt update timers",
+            extra={"job": "orchestrator", "host": host.value},
+        )
+        self._logger.debug(
+            "Starting %s",
+            ", ".join(timers),
+            extra={"job": "orchestrator", "host": host.value},
+        )
         try:
             started = await self._run_apt_timer_command(
                 host,
@@ -2320,7 +2489,7 @@ class Orchestrator:
             reason = result.error_message if result.status is not JobStatus.SUCCESS else None
             grid.add_row(
                 Text(f"  {glyph}", style=style),
-                Text(result.job_name),
+                Text(result.job_display_name),
                 Text(result.status.value, style=style),
                 Text(reason, style="dim") if reason else "",
             )

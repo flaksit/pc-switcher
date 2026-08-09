@@ -756,6 +756,23 @@ class TestRefOriginMismatch:
         assert [d.diff_class for d in plan.diffs] == [DiffClass.ORIGIN_MISMATCH]
 
     @pytest.mark.asyncio
+    async def test_two_versions_from_one_still_configured_remote_produce_no_removal(self) -> None:
+        """F160 — flatpak's answer to #285's shape. The two machines hold the same ref at
+        different versions from a remote both still configure, which is what a staggered
+        update leaves behind. The origin is the remote NAME recorded at install and stays
+        resolvable while the remote exists, so neither copy becomes unreproducible and
+        neither manifest loses the ref: one version report, no removal, no install.
+        """
+        context, _source, _target = origin_pair_context(source_version="128.0", target_version="129.0")
+        job = FlatpakSyncJob(context)
+
+        plan = await job.plan()
+
+        assert [(d.item_id, d.diff_class, d.action) for d in plan.diffs] == [
+            (_FIREFOX_ID, DiffClass.VERSION_MISMATCH, DiffAction.REPORT_ONLY)
+        ]
+
+    @pytest.mark.asyncio
     async def test_a_side_with_no_url_says_so_rather_than_printing_a_bare_name(self) -> None:
         """F92 — Both sides name `flathub`, so a detail that printed the names alone would report a
         divergence and show two identical strings. The missing URL is the finding.
@@ -2886,8 +2903,8 @@ class TestMasksReachNoReviewGroup:
         ref_install = self._group_holding(plan, "flatpak:ref:user:org.example.SourceOnly/x86_64/stable")
         ref_remove = self._group_holding(plan, "flatpak:ref:user:org.example.TargetOnly/x86_64/stable")
 
-        assert ref_install.title == "Install flatpak applications"
-        assert ref_remove.title == "Remove flatpak applications"
+        assert ref_install.title == "Install flatpaks on target-host?"
+        assert ref_remove.title == "Remove flatpaks from target-host?"
         # Refs have no vocabulary entry of their own, so they fall back to the bare
         # DiffAction verb — which is exactly the verb a mask must NOT inherit.
         assert {e.action_label for e in ref_install.entries} == {"install"}

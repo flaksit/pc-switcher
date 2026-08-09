@@ -32,7 +32,7 @@ class ExampleTestJob(SyncJob):
         return []
 
     async def execute(self) -> None:
-        self._log(Host.SOURCE, LogLevel.INFO, "Test execution")
+        self._log(LogLevel.INFO, "Test execution", host=Host.SOURCE)
         self._report_progress(ProgressUpdate(percent=100))
 
 
@@ -124,10 +124,25 @@ class TestJobContract:
         """_log() should log via stdlib logging."""
         job = ExampleTestJob(mock_job_context)
         with caplog.at_level(logging.DEBUG, logger="pcswitcher.jobs.base"):
-            job._log(Host.SOURCE, LogLevel.INFO, "Test message")  # pyright: ignore[reportPrivateUsage]
+            job._log(LogLevel.INFO, "Test message", host=Host.SOURCE)  # pyright: ignore[reportPrivateUsage]
         assert len(caplog.records) == 1
         assert caplog.records[0].message == "Test message"
         assert caplog.records[0].levelno == LogLevel.INFO
+        assert caplog.records[0].host == "source"  # pyright: ignore[reportAttributeAccessIssue]
+
+    @pytest.mark.asyncio
+    async def test_a_record_about_no_one_machine_carries_no_side(
+        self, mock_job_context: JobContext, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """#291 — the side is what the record is ABOUT, so a job may leave it off entirely
+        rather than pick one. The field is then absent, not empty: the formatters omit what
+        the call did not supply (`LOG-FR-JSON`).
+        """
+        job = ExampleTestJob(mock_job_context)
+        with caplog.at_level(logging.DEBUG, logger="pcswitcher.jobs.base"):
+            job._log(LogLevel.INFO, "Creating pre-sync snapshots")  # pyright: ignore[reportPrivateUsage]
+        assert not hasattr(caplog.records[0], "host")
+        assert caplog.records[0].job == "example_test"  # pyright: ignore[reportAttributeAccessIssue]
 
     @pytest.mark.asyncio
     async def test_progress_helper_publishes_event(self, mock_job_context: JobContext) -> None:
@@ -211,7 +226,7 @@ class TestJobContract:
                 LogLevel.ERROR,
                 LogLevel.CRITICAL,
             ]:
-                job._log(Host.SOURCE, level, f"Test message at {level.name}")  # pyright: ignore[reportPrivateUsage]
+                job._log(level, f"Test message at {level.name}", host=Host.SOURCE)  # pyright: ignore[reportPrivateUsage]
 
         # Verify all 6 log records were created
         assert len(caplog.records) == 6

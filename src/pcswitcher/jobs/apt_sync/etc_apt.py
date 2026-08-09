@@ -195,11 +195,11 @@ class EtcApt:
         # leaving them to guess.
         recovery = await self._rollback(existed_before, backup_dir)
         self._log(
-            Host.TARGET,
             LogLevel.ERROR,
             f"apt-get update failed after repository group writes; rolled back ({recovery}): "
             f"{update_result.stderr.strip()}",
             stderr=update_result.stderr,
+            host=Host.TARGET,
         )
 
         # Every group item is recorded as a failure (`PKG-FR-OUTCOME-FAILED`) — even ones whose own write
@@ -233,10 +233,10 @@ class EtcApt:
             if not result.success:
                 rollback_failures.append(f"could not {action}: {result.stderr.strip()}")
                 self._log(
-                    Host.TARGET,
                     LogLevel.WARNING,
                     f"Rollback step failed — could not {action}: {result.stderr.strip()}",
                     stderr=result.stderr,
+                    host=Host.TARGET,
                 )
 
         if rollback_failures:
@@ -245,11 +245,11 @@ class EtcApt:
             # would destroy exactly what manual recovery depends on. Name the path — the
             # user has to finish this by hand.
             self._log(
-                Host.TARGET,
                 LogLevel.WARNING,
                 f"Repository-group rollback incomplete; the backup is kept at {backup_dir} on "
                 f"{self._machines.target} so the affected file(s) can be restored by hand: "
                 f"{'; '.join(rollback_failures)}",
+                host=Host.TARGET,
             )
         else:
             await self._files.discard_backup(
@@ -343,15 +343,15 @@ class EtcApt:
         gap = self._keyrings.gap(dest)
         if gap is not None:
             self._derived.record_failure(dest, gap)
-            self._log(Host.TARGET, LogLevel.ERROR, f"not writing {dest}: {gap}", stderr=gap)
+            self._log(LogLevel.ERROR, f"not writing {dest}: {gap}", stderr=gap, host=Host.TARGET)
             return
         try:
             await self._files.stage_and_promote(dest, dest, staging_dir, staged_name_for(dest))
         except ConvergeItemFailed as exc:
             self._derived.record_failure(dest, str(exc))
-            self._log(Host.TARGET, LogLevel.ERROR, f"failed to write {dest}: {exc}", stderr=str(exc))
+            self._log(LogLevel.ERROR, f"failed to write {dest}: {exc}", stderr=str(exc), host=Host.TARGET)
             return
-        self._log(Host.TARGET, LogLevel.FULL, f"wrote {dest} from {self._machines.source}")
+        self._log(LogLevel.FULL, f"wrote {dest} from {self._machines.source}", host=Host.TARGET)
 
     async def _write_or_remove(self, diff: ItemDiff, staging_dir: str) -> None:
         """Converge one REVIEWED repository-group diff: `sudo rm --force` for a REMOVE, or

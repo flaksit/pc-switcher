@@ -16,13 +16,13 @@ As a pc-switcher developer, I can run unit tests locally to verify my changes be
 
 **Acceptance Scenarios**:
 
-1. **Given** I have cloned the repository, **When** I run `uv run pytest tests/unit tests/contract`, **Then** all unit tests execute within 30 seconds without requiring any external services or configuration
+- **TST-US-UNIT-AS1**: **Given** I have cloned the repository, **When** I run `uv run pytest tests/unit tests/contract`, **Then** all unit tests execute within 30 seconds without requiring any external services or configuration
 
-2. **Given** I modify business logic code, **When** I run unit tests, **Then** any logic errors are detected through failing assertions before code is pushed
+- **TST-US-UNIT-AS2**: **Given** I modify business logic code, **When** I run unit tests, **Then** any logic errors are detected through failing assertions before code is pushed
 
-3. **Given** unit tests do not depend on external systems, **When** tests execute, **Then** they produce deterministic results regardless of the host environment
+- **TST-US-UNIT-AS3**: **Given** unit tests do not depend on external systems, **When** tests execute, **Then** they produce deterministic results regardless of the host environment
 
-4. **Given** unit tests exist for a module, **When** I run them, **Then** both success paths and failure paths (error handling, edge cases) are tested
+- **TST-US-UNIT-AS4**: **Given** unit tests exist for a module, **When** I run them, **Then** both success paths and failure paths (error handling, edge cases) are tested
 
 ### Integration Test Suite with VM Isolation (TST-US-INTEGRATION)
 
@@ -36,13 +36,13 @@ As a pc-switcher developer, I can run integration tests that exercise real syste
 
 **Acceptance Scenarios**:
 
-1. **Given** I want to run integration tests, **When** I execute the integration test command, **Then** test VMs are automatically provisioned if not already available (including OS installation with btrfs filesystem), and tests execute real system operations on the VMs
+- **TST-US-INTEGRATION-AS1**: **Given** I want to run integration tests, **When** I execute the integration test command, **Then** test VMs are automatically provisioned if not already available (including OS installation with btrfs filesystem), and tests execute real system operations on the VMs
 
-2. **Given** I start an integration test session, **When** the test framework initializes, **Then** all test VMs are reset to a clean baseline state, removing any artifacts from previous sessions; if baseline snapshots are missing or invalid, the reset fails with an actionable error message
+- **TST-US-INTEGRATION-AS2**: **Given** I start an integration test session, **When** the test framework initializes, **Then** all test VMs are reset to a clean baseline state, removing any artifacts from previous sessions; if baseline snapshots are missing or invalid, the reset fails with an actionable error message
 
-3. **Given** I start integration tests while another run is in progress, **When** I attempt to run, **Then** the framework fails immediately with a message naming the current holder — it never waits
+- **TST-US-INTEGRATION-AS3**: **Given** I start integration tests while another run is in progress, **When** I attempt to run, **Then** the framework fails immediately with a message naming the current holder — it never waits
 
-4. **Given** integration tests exist for a feature, **When** I run them, **Then** both success paths and failure paths (error handling, edge cases) are tested
+- **TST-US-INTEGRATION-AS4**: **Given** integration tests exist for a feature, **When** I run them, **Then** both success paths and failure paths (error handling, edge cases) are tested
 
 ### CI/CD Integration (TST-US-CI)
 
@@ -56,13 +56,13 @@ As a pc-switcher developer, I can rely on CI to automatically run tests on my co
 
 **Acceptance Scenarios**:
 
-1. **Given** I push code to any branch, **When** CI triggers, **Then** type checks, lint checks, spell checks and unit tests run automatically; a push touching only documentation reports green without running them
+- **TST-US-CI-AS1**: **Given** I push code to any branch, **When** CI triggers, **Then** type checks, lint checks, spell checks and unit tests run automatically; a push touching only documentation reports green without running them
 
-2. **Given** I mark a PR targeting main ready for review, **When** CI triggers, **Then** unit tests run, and integration tests run once the unit tests pass — scoped to the areas the diff touches
+- **TST-US-CI-AS2**: **Given** I mark a PR targeting main ready for review, **When** CI triggers, **Then** unit tests run, and integration tests run once the unit tests pass — scoped to the areas the diff touches
 
-3. **Given** I'm working on a feature branch that requires integration testing, **When** I manually trigger the integration test workflow, **Then** integration tests run against my feature branch
+- **TST-US-CI-AS3**: **Given** I'm working on a feature branch that requires integration testing, **When** I manually trigger the integration test workflow, **Then** integration tests run against my feature branch
 
-4. **Given** multiple integration test runs could occur simultaneously, **When** concurrency is detected, **Then** the framework ensures only one integration test run executes at a time
+- **TST-US-CI-AS4**: **Given** multiple integration test runs could occur simultaneously, **When** concurrency is detected, **Then** the framework ensures only one integration test run executes at a time
 
 ### Manual Testing Playbook (TST-US-PLAYBOOK)
 
@@ -76,11 +76,11 @@ As a pc-switcher developer, I have a documented playbook that serves two purpose
 
 **Acceptance Scenarios**:
 
-1. **Given** I follow the manual playbook, **When** I run the specified commands, **Then** I can verify progress bar appearance, color-coded log levels, and rich console formatting
+- **TST-US-PLAYBOOK-AS1**: **Given** I follow the manual playbook, **When** I run the specified commands, **Then** I can verify progress bar appearance, color-coded log levels, and rich console formatting
 
-2. **Given** I am new to pc-switcher or preparing a release, **When** I follow the playbook, **Then** I experience a guided tour of all major features with explanations of expected behavior
+- **TST-US-PLAYBOOK-AS2**: **Given** I am new to pc-switcher or preparing a release, **When** I follow the playbook, **Then** I experience a guided tour of all major features with explanations of expected behavior
 
-3. **Given** the playbook is documented, **When** preparing for a release, **Then** I can systematically verify all visual elements and feature behaviors without missing any major cases
+- **TST-US-PLAYBOOK-AS3**: **Given** the playbook is documented, **When** preparing for a release, **Then** I can systematically verify all visual elements and feature behaviors without missing any major cases
 
 ### Developer Guide for Integration Testing (TST-US-DEV-GUIDE)
 
@@ -94,13 +94,13 @@ As a pc-switcher developer writing tests, I have comprehensive documentation tha
 
 **Acceptance Scenarios**:
 
-1. **Given** I want to write an integration test, **When** I read the developer guide, **Then** I find step-by-step instructions for creating a new test file, using VM fixtures, and asserting outcomes
+- **TST-US-DEV-GUIDE-AS1**: **Given** I want to write an integration test, **When** I read the developer guide, **Then** I find step-by-step instructions for creating a new test file, using VM fixtures, and asserting outcomes
 
-2. **Given** I need to understand VM interaction patterns, **When** I consult the guide, **Then** I find documented patterns for SSH execution, file transfers, btrfs operations, and snapshot management on test VMs
+- **TST-US-DEV-GUIDE-AS2**: **Given** I need to understand VM interaction patterns, **When** I consult the guide, **Then** I find documented patterns for SSH execution, file transfers, btrfs operations, and snapshot management on test VMs
 
-3. **Given** I want to understand test organization, **When** I read the guide, **Then** I find clear explanations of the test directory structure, naming conventions, and pytest markers
+- **TST-US-DEV-GUIDE-AS3**: **Given** I want to understand test organization, **When** I read the guide, **Then** I find clear explanations of the test directory structure, naming conventions, and pytest markers
 
-4. **Given** I need to debug a failing integration test, **When** I consult the troubleshooting section, **Then** I find guidance on common failure modes, how to inspect VM state, and how to manually reproduce issues
+- **TST-US-DEV-GUIDE-AS4**: **Given** I need to debug a failing integration test, **When** I consult the troubleshooting section, **Then** I find guidance on common failure modes, how to inspect VM state, and how to manually reproduce issues
 
 ### Operational Guide for Test Infrastructure (TST-US-OPS-GUIDE)
 
@@ -114,15 +114,15 @@ As a sysadmin/maintainer/devops engineer, I have comprehensive documentation for
 
 **Acceptance Scenarios**:
 
-1. **Given** I need to configure CI secrets, **When** I read the operational guide, **Then** I find a complete list of required secrets, their purposes, and where to obtain/generate them
+- **TST-US-OPS-GUIDE-AS1**: **Given** I need to configure CI secrets, **When** I read the operational guide, **Then** I find a complete list of required secrets, their purposes, and where to obtain/generate them
 
-2. **Given** I need to set up test VM infrastructure, **When** I follow the guide, **Then** I find step-by-step provisioning instructions including cloud provider configuration, network setup, and SSH key management
+- **TST-US-OPS-GUIDE-AS2**: **Given** I need to set up test VM infrastructure, **When** I follow the guide, **Then** I find step-by-step provisioning instructions including cloud provider configuration, network setup, and SSH key management
 
-3. **Given** I need to understand environment variables, **When** I consult the guide, **Then** I find documentation of all environment variables, their defaults, and their effects on test behavior
+- **TST-US-OPS-GUIDE-AS3**: **Given** I need to understand environment variables, **When** I consult the guide, **Then** I find documentation of all environment variables, their defaults, and their effects on test behavior
 
-4. **Given** I need to monitor infrastructure costs, **When** I read the guide, **Then** I find instructions for tracking VM costs and procedures for destroying/reprovisioning infrastructure
+- **TST-US-OPS-GUIDE-AS4**: **Given** I need to monitor infrastructure costs, **When** I read the guide, **Then** I find instructions for tracking VM costs and procedures for destroying/reprovisioning infrastructure
 
-5. **Given** test infrastructure fails, **When** I consult the troubleshooting section, **Then** I find runbooks for common failure scenarios (VM unreachable, provisioning failures, lock stuck)
+- **TST-US-OPS-GUIDE-AS5**: **Given** test infrastructure fails, **When** I consult the troubleshooting section, **Then** I find runbooks for common failure scenarios (VM unreachable, provisioning failures, lock stuck)
 
 ### Architecture Documentation (TST-US-ARCH-DOC)
 
@@ -136,13 +136,13 @@ As a pc-switcher developer or maintainer, I have architecture documentation that
 
 **Acceptance Scenarios**:
 
-1. **Given** I want to understand the testing architecture, **When** I read the architecture documentation, **Then** I find diagrams and descriptions of the three-tier test structure and how components interact
+- **TST-US-ARCH-DOC-AS1**: **Given** I want to understand the testing architecture, **When** I read the architecture documentation, **Then** I find diagrams and descriptions of the three-tier test structure and how components interact
 
-2. **Given** I want to understand design decisions, **When** I consult the documentation, **Then** I find rationale for key choices (VM isolation, locking mechanism, baseline reset strategy)
+- **TST-US-ARCH-DOC-AS2**: **Given** I want to understand design decisions, **When** I consult the documentation, **Then** I find rationale for key choices (VM isolation, locking mechanism, baseline reset strategy)
 
-3. **Given** I want to extend the testing framework, **When** I read the documentation, **Then** I find guidance on extension points and architectural constraints to respect
+- **TST-US-ARCH-DOC-AS3**: **Given** I want to extend the testing framework, **When** I read the documentation, **Then** I find guidance on extension points and architectural constraints to respect
 
-4. **Given** the testing framework references ADR-006, **When** I navigate from architecture docs, **Then** I find clear links to the ADR and related decision records
+- **TST-US-ARCH-DOC-AS4**: **Given** the testing framework references ADR-006, **When** I navigate from architecture docs, **Then** I find clear links to the ADR and related decision records
 
 ## Requirements
 

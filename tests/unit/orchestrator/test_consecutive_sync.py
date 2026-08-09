@@ -723,7 +723,7 @@ class TestCheckOutOfOrderDryRun:
 class TestCheckOutOfOrderHostnameCasing:
     """A clean back-sync must be recognised regardless of hostname casing.
 
-    Regression for the spurious "Target Last Synced with a Different Machine"
+    Regression for the spurious "<target> last synced with a different machine"
     warning: the target recorded this machine's peer under a differently-cased
     name (e.g. the user typed `sync nomad` on the target, so it stored `nomad`,
     while this machine's own hostname is `Nomad`). The topology comparison is

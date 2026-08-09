@@ -181,7 +181,7 @@ async def test_core_us_btrfs_as7_cleanup_snapshots_with_retention(
 ) -> None:
     """Test CORE-US-BTRFS-AS7: Cleanup snapshots with retention policy.
 
-    Spec: docs/system/spec.md - CORE-US-BTRFS, Acceptance Scenario 7
+    Spec: docs/system/core.md - CORE-US-BTRFS-AS7
     Verifies that cleanup_snapshots respects retention policies:
     - Keeps the most recent N sessions regardless of age
     - Deletes snapshots older than max_age_days (if specified)

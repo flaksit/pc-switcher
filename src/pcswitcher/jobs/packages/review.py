@@ -41,16 +41,19 @@ treat the item as specific to one machine, which makes it inert here in both rol
 Those are the decisions; what each screen CALLS them is `_options_for` and the hints beside
 them, which say the act, the machine it happens to, and how long the answer lasts.
 
-One follow-up question comes after the batch, and only there: an item BOTH machines have
-with different content has no holding machine the run's own direction can name, so "keep for
-good" on one of those leaves open whose copy the answer is about (`PKG-FR-MARK-SIDE`). Every
-such item answered that way goes onto one further screen — a row each, three answers naming
-the two machines and both — and the chosen `MarkSide` comes back in
-`ReviewOutcome.mark_sides` for `PackageSyncJob._record_permanent_skips` to write on. It is
-one batched screen because the widget takes any number of answers per row, and it is a
-follow-up rather than a fourth answer on the batch because the question only exists for the
-rows that were answered permanently. A run that reaches no such answer never sees it, and a
-run with nobody to ask never gets that far.
+One follow-up question comes per item, immediately after the answer that raises it: an item
+BOTH machines have with different content has no holding machine the run's own direction can
+name, so "keep for good" on one of those leaves open whose copy the answer is about
+(`PKG-FR-MARK-SIDE`). Each such item gets its own further screen — one row, three answers
+naming the two machines and both — and the chosen `MarkSide` comes back in
+`ReviewOutcome.mark_sides` for `PackageSyncJob._record_permanent_skips` to write on. It goes
+directly under the item's own screen because that is where the two versions it has to be
+read off are; collected into one screen at the end it arrived once every one of them had
+scrolled away. It is a follow-up rather than a fourth answer on the item's screen because
+the question only exists where the answer was permanent. A run that reaches no such answer
+never sees it, and a run with nobody to ask never gets that far. It is also the one screen
+that starts on no answer at all and refuses `<enter>` until its row has one: neither machine
+is the holder by right, so there is nothing harmless to default to.
 A `REPORT_ONLY` group is not answerable at all: nothing converges either way and no machine
 holds an informational item, so `_print_report_group` prints it and the review moves on.
 
@@ -68,6 +71,11 @@ entry is resolved one at a time with a three-way choice — write the commands t
 it, mark it as belonging to the source machine alone, or skip for now — because "should this
 apply" is not the question for an item no package manager can reproduce; "how does the other
 machine get this" is.
+The two screens that replay a snippet already on record — the version difference and the
+retry after one that moved no version — print that install body above their answers, the way
+a deletion screen prints a pin file whole: "is the recorded snippet still right" is the
+question, and it cannot be answered from the item's name. A body the user WRITES is printed
+too, under the editor and full width, so the scrollback keeps what was authored.
 `ReviewOutcome.snippets` carries that group's authored snippets back to the caller
 (`PackageSyncJob.apply()`), which persists them. An interactive review always resolves
 every entry (decision 10): an empty snippet capture re-prompts rather than falling through
@@ -84,13 +92,20 @@ unreachable for it and nothing about it is ever recorded. That is why `_REMOVAL_
 entry carrying `ReviewEntry.content` prints that whole file first: a pin file's name says
 nothing about what it does, and its name is all a decision row can show.
 
-A `ReviewGroup` whose `action` is `REPO_CONFLICT_REVIEW_ACTION` is the same two-answer screen
-(`PKG-FR-REPO-CONFLICT`) preceded by its own content: something that differs on the two machines and
-feeds an item the target recorded machine-specific — a repository file for `apt_sync`, a
-remote for `flatpak_sync` — is printed as both versions, never a unified diff, before the one
-screen that answers overwrite or skip-once for all of them. Nothing is recorded either way,
-and it starts at skip-once: an overwrite moves software the target explicitly marked
-machine-specific, so it is chosen, never defaulted.
+A `ReviewGroup` whose entries carry `ReviewEntry.versions` is resolved one entry at a time,
+each headed by what the entry is and then by both machines' whole versions of it — the
+source's first, since that is the copy the screen proposes — and never a unified diff. The
+question names the entry, not the group: one row is on screen. Two groups take
+that shape. `REPO_CONFLICT_REVIEW_ACTION` (`PKG-FR-REPO-CONFLICT`) is the two-answer one:
+something that differs on the two machines and feeds an item the target recorded
+machine-specific — a repository file for `apt_sync`, a remote for `flatpak_sync` — answered
+overwrite or skip-once, recorded neither way, starting at skip-once because an overwrite moves
+software the target explicitly marked machine-specific. The ordinary CHANGE group for
+`/etc/apt/apt.conf.d` (`PKG-FR-APTCONF`) is the three-answer one, and it is here for the same
+reason: replacing a file the target's own user wrote is a question nobody can answer from a
+filename, and it can be answered for good. Its two bodies are what the row used to carry as
+two SHA-256 digests (#277). The answers still come from the group itself, so which screen
+offers permanence is decided where every other group's answers are.
 
 A `ReviewGroup` whose `action` is `SNAP_CHANGE_REVIEW_ACTION` (defined in `sync_core`, where
 the snap job builds it) is the ordinary decision screen with the third answer missing: it is
@@ -126,13 +141,13 @@ import logging
 import os
 import re
 from collections import Counter
-from collections.abc import Mapping, Sequence
+from collections.abc import Generator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 import questionary
-from prompt_toolkit.filters import is_done
 from prompt_toolkit.key_binding import KeyBindings, KeyPressEvent
 from prompt_toolkit.keys import Keys
 from prompt_toolkit.styles import Style
@@ -141,8 +156,9 @@ from rich.panel import Panel
 from rich.text import Text
 
 from pcswitcher.jobs.packages import prompt_navigation
-from pcswitcher.jobs.packages.decision_list import DecisionOption, DecisionRow, decision_list
-from pcswitcher.jobs.packages.state import SnippetBodies
+from pcswitcher.jobs.packages.decision_list import UNANSWERED, DecisionOption, DecisionRow, decision_list
+from pcswitcher.jobs.packages.items import carries_version_body
+from pcswitcher.jobs.packages.state import SnippetBodies, VersionedSnippetBodies
 from pcswitcher.models import SyncAbortedByUser
 from pcswitcher.redaction import redact_credentials
 from pcswitcher.terminal import is_interactive
@@ -152,6 +168,8 @@ __all__ = [
     "PACKAGE_REVIEW_AUTOMATION_ENV",
     "REPO_CONFLICT_REVIEW_ACTION",
     "REPO_REMOVAL_REVIEW_ACTION",
+    "SNIPPET_OWNERSHIP_REVIEW_ACTION",
+    "UNREPRODUCIBLE_FAILED_REVIEW_ACTION",
     "UNREPRODUCIBLE_RETRY_REVIEW_ACTION",
     "UNREPRODUCIBLE_REVIEW_ACTION",
     "UNREPRODUCIBLE_UPDATE_REVIEW_ACTION",
@@ -239,10 +257,20 @@ UNREPRODUCIBLE_UPDATE_REVIEW_ACTION = "unreproducible_update"
 # again is the same no-op, and offering it would invite a loop the user cannot win.
 UNREPRODUCIBLE_RETRY_REVIEW_ACTION = "unreproducible_retry"
 
-# The three actions whose answer is an authored shell body rather than a decision. Together
+# The menu the converge loop puts after a replay that EXITED NON-ZERO
+# (`PKG-FR-MANUAL-FAIL-ITEM`): the item's own question again, with its three answers
+# reworded for a body that has already run and failed. Distinct from the retry sentinel
+# above because the two describe different facts — a body that ran and moved nothing is not
+# a body the target refused — and because this one keeps the permanent answer: the failure
+# is as good a moment as any to decide the software is the source's own.
+UNREPRODUCIBLE_FAILED_REVIEW_ACTION = "unreproducible_failed"
+
+# The actions whose answer is an authored shell body rather than a decision. Together
 # they are what `policy_decision` refuses to answer from the command line and what a run
 # with no terminal reports as unresolved — an editor is not something a flag can drive.
-_AUTHORING_ACTIONS = frozenset({UNREPRODUCIBLE_REVIEW_ACTION, UNREPRODUCIBLE_RETRY_REVIEW_ACTION})
+_AUTHORING_ACTIONS = frozenset(
+    {UNREPRODUCIBLE_REVIEW_ACTION, UNREPRODUCIBLE_RETRY_REVIEW_ACTION, UNREPRODUCIBLE_FAILED_REVIEW_ACTION}
+)
 
 # Sentinel `ReviewGroup.action` a caller (today, only `AptSyncJob`) uses to mark a group
 # of manual-collateral items (`PKG-FR-COLLATERAL-MANUAL`) as needing the three-way per-entry resolution flow
@@ -269,6 +297,18 @@ COLLATERAL_REVIEW_ACTION = "collateral"
 # carries both file contents, printed as two panels rather than a unified diff.
 REPO_CONFLICT_REVIEW_ACTION = "repo_conflict"
 
+# Sentinel `ReviewGroup.action` for the one question the registry itself raises
+# (`PKG-FR-DEB-AMBIGUITY`): a snippet is on record for an apt package the source's own apt
+# can install from a repository. Either the user installed it by hand and apt happens to
+# carry the name too, or it is an ordinary apt package with a snippet left over — and
+# nothing on either machine tells the two apart, so the user does.
+#
+# Its own sentinel rather than an ordinary screen because it decides nothing about software:
+# no diff exists for it, no converge follows it, and neither answer may be recorded anywhere
+# (which is what makes the question come back while the state does). One item per screen, so
+# the recorded snippet can be printed above the question that is about it.
+SNIPPET_OWNERSHIP_REVIEW_ACTION = "snippet_ownership"
+
 
 class PausableUI(Protocol):
     """The subset of `TerminalUI` the review needs to pause/resume the live display."""
@@ -276,6 +316,52 @@ class PausableUI(Protocol):
     def pause(self) -> None: ...
 
     def resume(self) -> None: ...
+
+
+@contextmanager
+def _display_handed_over(ui: PausableUI, *, for_a_question: bool) -> Generator[None]:
+    """Hand the live display over for the blocking prompts inside, and take it back however
+    the block ends — only where a question is actually going to be put.
+
+    `ui.pause` stops the Live non-transiently on purpose, so its last frame (status line,
+    every progress bar, the whole Recent Logs panel) stays in the scrollback as the context
+    the question is answered in. That frame is worth one repeat of the run's own display
+    per question, and nothing at all for a step that asks none: seven package jobs and one
+    question between them left seven frames (#279).
+
+    A body that only PRINTS needs no handover. Rich places console output above a running
+    Live's region and leaves it in the scrollback, which is where a report belongs when
+    nothing blocks on input.
+    """
+    if not for_a_question:
+        yield
+        return
+    ui.pause()
+    try:
+        yield
+    finally:
+        ui.resume()
+
+
+async def _ask(prompt: questionary.Question, *, console: Console) -> Any:
+    """Put one question and return whatever its widget answers.
+
+    Every question in this module goes through here, which is what makes the blank line in
+    FRONT of a question a property of asking rather than of each screen remembering to print
+    one (#287). It used to come from a bare `console.print()` at whichever sites happened to
+    have one, so two questions of the same job ran together — the install editor and the
+    version editor for one item, printed with nothing between them.
+
+    Nothing else in this module prints a bare blank line before a question, so the
+    separation cannot double: a screen's own heading owns the blank in front of ITSELF, and
+    the evidence between that heading and the question keeps the two apart.
+
+    The blocking widget runs off the event loop (ADR-005) exactly as it did at each site.
+    `Any` because that is what `questionary.Question.ask` returns and what the four widget
+    kinds here disagree about; every caller annotates its own result.
+    """
+    console.print()
+    return await asyncio.to_thread(prompt.ask)
 
 
 @dataclass(frozen=True)
@@ -327,6 +413,43 @@ class ReviewEntry:
             object.__setattr__(self, "answer_hints", tuple(redact_credentials(hint) for hint in self.answer_hints))
 
 
+# The verbs that take software OFF a machine. Their titles read "from {target}"; every
+# other verb puts something there and reads "on {target}".
+_TAKES_FROM: frozenset[str] = frozenset({"remove", "delete"})
+
+
+def change_title(verb: str, noun: str, target: str) -> str:
+    """`{Verb} {noun} on|from {target}?` — the shape every title that asks about a change
+    takes, group and single item alike (`PKG-FR-NAME-THE-MACHINES`).
+
+    One builder rather than an f-string per site because the rule the sites kept getting
+    wrong is which machine a title names: some named the source, some named nobody, and a
+    user reading a screenful of them cannot tell which of those means "on this machine".
+    A per-item title passes `f"{singular noun} {label}"` as the noun.
+
+    Report-only groups do not come through here: they announce a condition rather than ask
+    about a change, so they take no machine and no question mark. That is the rule for every
+    title in the package review, wherever it is built — a title asking the user to decide
+    about a change ends in `?` (here), and so does a genuine wh-question ("Who put X on
+    atlas?"); a title stating a finding or a condition does not, however question-shaped the
+    sentence looks.
+    """
+    return f"{verb.capitalize()} {noun} {'from' if verb in _TAKES_FROM else 'on'} {target}?"
+
+
+def version_mismatch_title(label: str, source: str, target: str) -> str:
+    """The per-item title for one thing both machines have at different versions.
+
+    Names both machines rather than the target alone: which version wins is the whole
+    question, and "pc2 has a different version" left the user to work out what it would be
+    changed to.
+
+    No noun: the heading above the recorded snippet names what the item is, and a title
+    repeating it said the same word twice on one screen.
+    """
+    return f"{source} and {target} have different versions of {label} — update it on {target}?"
+
+
 @dataclass(frozen=True)
 class ReviewGroup:
     """One screen's worth of same-manager, same-direction entries.
@@ -350,6 +473,16 @@ class ReviewGroup:
     answer that rewrites a snippet opens its editors on that content instead of on nothing
     (`PKG-FR-VERSION-SNIPPET`). Only the two groups whose items HAVE a recorded snippet supply it; this module
     never reads a registry itself, exactly as it never reads a repository file.
+
+    `evidence_title` heads the recorded-snippet block, for the two screens the converge loop
+    puts after that body has already RUN: what it did is the fact the answer turns on, and
+    only the caller knows it. Absent everywhere else, where the block keeps its
+    forward-looking default (`_print_recorded_snippet`).
+
+    `item_noun` is the SINGULAR word for one of these entries ("manual deb"), carried only
+    by the groups this module titles per item — the whole-group screens are titled once, by
+    the caller. It travels on the group because the noun belongs to the job and the sentence
+    belongs here.
     """
 
     manager: str
@@ -359,6 +492,8 @@ class ReviewGroup:
     note: str | None = None
     overwrites_authored_content: bool = False
     recorded_bodies: Mapping[str, SnippetBodies] | None = None
+    evidence_title: str | None = None
+    item_noun: str = ""
 
 
 class Decision(StrEnum):
@@ -398,9 +533,9 @@ class MarkSide(StrEnum):
 class ReviewOutcome:
     """The result of a review: every entry's decision, plus how it was reached.
 
-    `snippets` (item_id -> both bodies, `PKG-FR-SNIPPET-VERBATIM`/`PKG-FR-VERSION-SNIPPET`) is populated by any of the
-    three per-entry
-    snippet groups' resolutions. `unresolved` (item ids, `PKG-FR-MANUAL-RESOLUTION`) is populated ONLY on a
+    `snippets` (item_id -> the bodies its kind takes,
+    `PKG-FR-SNIPPET-VERBATIM`/`PKG-FR-VERSION-SNIPPET`) is populated by any of the three
+    per-entry snippet groups' resolutions. `unresolved` (item ids, `PKG-FR-MANUAL-RESOLUTION`) is populated ONLY on a
     non-interactive run, listing the unreproducible items no one was present to resolve
     (`PKG-FR-NO-TERMINAL` reporting); an interactive review always resolves every entry (decision 10), so
     it leaves `unresolved` empty. Every other group leaves both at their empty defaults, so
@@ -457,6 +592,21 @@ def _is_collateral_group(action: str) -> bool:
 
 def _is_repo_conflict_group(action: str) -> bool:
     return action == REPO_CONFLICT_REVIEW_ACTION
+
+
+def _is_snippet_ownership_group(action: str) -> bool:
+    return action == SNIPPET_OWNERSHIP_REVIEW_ACTION
+
+
+def _shows_both_versions(group: ReviewGroup) -> bool:
+    """Whether this group's screen prints two whole file bodies per entry.
+
+    Asked of the ENTRIES rather than of the action, so a group qualifies by carrying the
+    evidence rather than by being on a list: `apt_sync`'s `apt.conf.d` change group is an
+    ordinary CHANGE group with its bodies attached, and the conflict groups reach the same
+    screen through their own sentinel below.
+    """
+    return any(entry.versions is not None for entry in group.entries)
 
 
 def _is_repo_removal_group(action: str) -> bool:
@@ -581,9 +731,15 @@ def policy_decision(group: ReviewGroup, policy: ReviewPolicy) -> Decision | None
       holds, which states how the user's own apt behaves on that machine;
     - a repository conflict (`PKG-FR-REPO-CONFLICT`), which moves where software the target recorded
       machine-specific comes from;
-    - an unreproducible item still to be resolved (`PKG-FR-MANUAL-RESOLUTION`), and the narrowed menu the converge
-      loop puts after a body that changed no version (`PKG-FR-VERSION-SNIPPET`): the only answers either offers
-      are an authored shell body and a skip, and no flag can write one.
+    - an unreproducible item still to be resolved (`PKG-FR-MANUAL-RESOLUTION`), and the two
+      menus the converge loop puts after a body that changed no version
+      (`PKG-FR-VERSION-SNIPPET`) or that the target refused (`PKG-FR-MANUAL-FAIL-ITEM`): the
+      only answers any of them offers are an authored shell body and a skip, and no flag can
+      write one;
+    - which of apt and the user put a package on the source (`PKG-FR-DEB-AMBIGUITY`), which
+      is a fact about the past that the source's current state is precisely unable to
+      settle — it is why the question exists — and whose act deletes a registry entry rather
+      than adding or removing software, so neither direction flag speaks for it.
 
     A version difference whose body the source already holds is NOT in that list: replaying
     a recorded body is an install-direction act needing nothing authored, so
@@ -600,7 +756,11 @@ def policy_decision(group: ReviewGroup, policy: ReviewPolicy) -> Decision | None
         return None
     if group.overwrites_authored_content:
         return None
-    if _is_repo_conflict_group(group.action) or _asks_for_an_authored_body(group.action):
+    if (
+        _is_repo_conflict_group(group.action)
+        or _asks_for_an_authored_body(group.action)
+        or _is_snippet_ownership_group(group.action)
+    ):
         return None
     if _is_removal_direction(group.action) or _is_collateral_group(group.action):
         return Decision.APPLY if policy.apply_removals else None
@@ -812,32 +972,14 @@ def _version_authoring_note(source_hostname: str, target_hostname: str) -> str:
 _SNIPPET_FINISH_HINT = "(Ctrl-D to finish)\n>"
 
 
-class _SnippetInstruction(str):
-    """The snippet editor's header — the authoring note and the finish key — which is on
-    screen while the editor is open and gone from the scrollback once it is answered.
+def _snippet_instruction(note: str) -> str:
+    """The editor header for one body: its own note, then the finish key.
 
-    Every other review screen collapses to its title and the answer (`decision_list` drops
-    its legend on `answered`). This one could not: `questionary.text` appends `instruction`
-    on EVERY render, the final one included, with no `is_done` check of its own, and the
-    note printed above the editor was ordinary console scrollback nothing could take back
-    (#236).
-
-    A `str` subclass because that is what questionary's signature takes and what its
-    truthiness test reads; the override is on `__format__`, which is what
-    `"{}".format(instruction)` calls once per render — so prompt_toolkit's own final,
-    `is_done` render is where the header drops out. Nothing about the Ctrl-D binding or the
-    multiline buffer changes.
+    On screen while the editor is open and gone from the scrollback once it is answered —
+    the editor is erased whole on submit (`_capture_body`), so neither the note nor
+    questionary's `(Ctrl-D to finish)` marker survives the answer (#236).
     """
-
-    __slots__ = ()
-
-    def __format__(self, _spec: str, /) -> str:
-        return "" if is_done() else str(self)
-
-
-def _snippet_instruction(note: str) -> _SnippetInstruction:
-    """The editor header for one body: its own note, then the finish key."""
-    return _SnippetInstruction(f"\n{note}\n{_SNIPPET_FINISH_HINT}")
+    return f"\n{note}\n{_SNIPPET_FINISH_HINT}"
 
 
 def _snippet_submit_bindings() -> KeyBindings:
@@ -865,6 +1007,24 @@ _SNIPPET_SUBMIT_BINDINGS = _snippet_submit_bindings()
 _SNIPPET_STYLE = Style([("answer", "noinherit")])
 
 
+def _snippet_record(title: str, body: str) -> Panel:
+    """One body as the scrollback keeps it, once its editor has closed.
+
+    Full width and uncut. questionary echoes an answer in the column to the RIGHT of the
+    prompt's own text, which for a shell body — long lines by nature, under a title naming
+    the item — is a gutter that wraps mid-token (#281). This is a panel of the review's own
+    instead, printed under the question, so the width available to it is the terminal's.
+
+    Uncut, unlike `_file_body`: that caps a body being printed so a question can be answered
+    from it, and a body long enough to scroll its own question away is unanswerable. This one
+    IS the record of what the user just wrote, and a record with lines missing is not one.
+
+    `Text`, never a bare `str` — a shell body is full of `[...]` shapes Rich would read as
+    console markup (T-02-02).
+    """
+    return Panel(Text(body), title=Text(title), border_style="cyan")
+
+
 def _bare_item_name(label: str) -> str:
     """A review label with its trailing `(...)` parenthetical dropped.
 
@@ -874,6 +1034,85 @@ def _bare_item_name(label: str) -> str:
     `label()` in the codebase shares, and a label that has none is returned untouched.
     """
     return _TRAILING_PARENTHETICAL.sub("", label)
+
+
+# How many lines of one file body a decision screen prints. Generous for what these files
+# actually are — an `apt.conf.d` fragment, a pin, a repository definition are a handful of
+# lines each — and a cap at all because the body is whatever the machine turned out to hold:
+# a file long enough to scroll its own question off the terminal is as unanswerable as the
+# digest this printing replaced.
+_MAX_BODY_LINES = 60
+
+
+def _file_body(body: str) -> Text:
+    """One file's content as a decision screen prints it — never a bare `str`, so a
+    bracketed line inside a configuration file cannot reach Rich as markup (T-02-02).
+
+    Says in words when there is nothing to print. An empty panel reads as "this file is
+    empty", and that is a claim about the machine which a blank box should not be making on
+    its own. A read that FAILED never gets this far — the probe fails the job on a non-zero
+    exit (ADR-022) — so an empty body here is only ever a file that really is empty.
+
+    The body's own trailing newline is dropped: inside a panel border it renders as an empty
+    last line. A body past `_MAX_BODY_LINES` is cut, and the cut says how much is missing so
+    what is on screen is never taken for the whole file.
+    """
+    stripped = body.rstrip("\n")
+    if not stripped.strip():
+        return Text("(this file has no content)", style="dim italic")
+    lines = stripped.split("\n")
+    if len(lines) <= _MAX_BODY_LINES:
+        return Text(stripped)
+    shown = Text("\n".join(lines[:_MAX_BODY_LINES]))
+    shown.append(f"\n… {len(lines) - _MAX_BODY_LINES} more lines not shown", style="dim")
+    return shown
+
+
+def _print_subject(console: Console, *, noun: str, label: str) -> None:
+    """The heading a screen with evidence opens on: what this screen is about, before the
+    thing itself and before the question (`PKG-FR-SUBJECT-FIRST`, #287).
+
+    A panel arriving first left the user reading a file body with no idea yet why it was on
+    screen. The noun is the group's own singular word for one of its entries, so the heading
+    reads "apt configuration file 99-pcsw-uat" rather than a bare filename; a group that
+    carries none — one whose labels already say what they are — prints the label alone.
+    """
+    console.print()
+    console.print(Text(f"{noun} {label}" if noun else label, style="bold"))
+
+
+def _print_both_versions(
+    entry: ReviewEntry, *, console: Console, source_hostname: str, target_hostname: str, replacement: str
+) -> None:
+    """Print one entry's two whole versions, the SOURCE's first, under the heading naming it.
+
+    Source first because it is the one the screen proposes: the question is whether that
+    version travels, and the target's panel is what the answer would spend. `replacement`
+    is what an approval would do to the target's copy, said on the target's own panel — the
+    screen's own act, since "would be updated by" and "would be overwritten by" are two
+    different offers (`_replacement_phrase`). That is what makes the row's skip-once start
+    legible rather than arbitrary (`_default_decision`, `PKG-FR-HARMLESS-DEFAULT`).
+    """
+    if entry.versions is None:
+        return
+    target_version, source_version = entry.versions
+    target_title = f"On {target_hostname} now, {replacement}"
+    console.print(Panel(_file_body(source_version), title=Text(f"On {source_hostname}"), border_style="cyan"))
+    console.print(Panel(_file_body(target_version), title=Text(target_title), border_style="yellow"))
+
+
+def _replacement_phrase(group: ReviewGroup, source_hostname: str) -> str:
+    """What the target's panel says the screen's act would do to the copy it holds.
+
+    Two groups reach the two-panel screen and they offer different things. The ordinary
+    `apt.conf.d` CHANGE converges the file, which is an update, and its answers are update /
+    skip now / never update. The repository and remote conflicts
+    (`PKG-FR-REPO-CONFLICT`/`PKG-FR-FLATPAK-REPOINT`) ask consent to displace something the
+    target marked machine-specific, and their two answers are overwrite / skip now — so the
+    panel says overwrite, matching the word the user is about to press a key for.
+    """
+    verb = "overwritten" if _is_repo_conflict_group(group.action) else "updated"
+    return f"would be {verb} by {source_hostname} version above"
 
 
 def _render_group_panel(group: ReviewGroup) -> Panel:
@@ -998,6 +1237,10 @@ def _update_options(target_hostname: str) -> tuple[DecisionOption, ...]:
             key=_NEW_SNIPPET_KEY,
             word="new snippet",
             glyph=_ADD_SNIPPET_GLYPH,
+            # An act, exactly as it is on the retry screen: the rewritten body is RUN on the
+            # target, so this changes the machine every bit as much as replaying the
+            # recorded one does. Unmarked, it rendered in the skip colour.
+            is_act=True,
             hint=f"rewrite the snippet first, then run it on {target_hostname}",
         ),
         DecisionOption(
@@ -1035,9 +1278,56 @@ def _retry_options(target_hostname: str) -> tuple[DecisionOption, ...]:
     )
 
 
+def _failed_options(source_hostname: str, target_hostname: str, verb: str) -> tuple[DecisionOption, ...]:
+    """The item's own three answers, reworded for a body the target REFUSED
+    (`PKG-FR-MANUAL-FAIL-ITEM`).
+
+    The same three the item was first offered, in the same order and on the same keys: a
+    snippet that exits non-zero is a typo in the user's own text, not a new question, so the
+    screen must not read as one. What changes is what each answer now costs — the act
+    CORRECTS a body that exists rather than writing the first one, and either skip discards
+    it, which is why both say so. Without that, "will be asked again next sync" would be a
+    half-truth: the entry would still be on record and the next run would replay the same
+    broken bytes rather than asking anything.
+
+    The permanent answer survives here, unlike on the retry screen after a body that moved no
+    version (`_retry_options`): that one is about a version, which nobody holds as a standing
+    preference, while this one is about the software, which is exactly what a machine-specific
+    mark is for.
+    """
+    return (
+        DecisionOption(
+            value=_ADD_SNIPPET_VALUE,
+            key=_APPLY_KEY,
+            word=verb,
+            glyph=_ADD_SNIPPET_GLYPH,
+            is_act=True,
+            hint=f"correct the snippet that {verb}s it; {target_hostname} runs it",
+        ),
+        DecisionOption(
+            value=Decision.SKIP_ONCE,
+            key=_SKIP_NOW_KEY,
+            word=SKIP_NOW_WORD,
+            glyph=_SKIP_ONCE_GLYPH,
+            hint=f"do not {verb} on {target_hostname} for now; will be asked again next sync; "
+            "the body that failed is dropped",
+        ),
+        DecisionOption(
+            value=Decision.SKIP_ALWAYS,
+            key=_SKIP_ALWAYS_KEY,
+            word=f"never {verb}",
+            glyph=_SKIP_ALWAYS_GLYPH,
+            is_permanent=True,
+            hint=f"do not {verb} on {target_hostname} for good; it is {source_hostname}'s own; "
+            "the body that failed is dropped",
+        ),
+    )
+
+
 async def _ask_about_one_item(  # noqa: PLR0913 - one decision screen's content; all but the entry keyword-only
     entry: ReviewEntry,
     *,
+    console: Console,
     title: str,
     options: Sequence[DecisionOption],
     default: str,
@@ -1073,18 +1363,31 @@ async def _ask_about_one_item(  # noqa: PLR0913 - one decision screen's content;
         options=options,
         explanation=explanation,
     )
-    answered: Mapping[str, str] | None = await asyncio.to_thread(prompt.ask)
+    answered: Mapping[str, str] | None = await _ask(prompt, console=console)
     if answered is None:
         raise SyncAbortedByUser(f"package review aborted at {entry.label!r} (Ctrl-C)")
     return answered[entry.item_id]
 
 
-async def _capture_body(prompt_title: str, note: str, existing: str) -> str:
-    """Open one editor and return what it captured, stripped.
+async def _capture_body(prompt_text: str, *, record_title: str, note: str, existing: str, console: Console) -> str:
+    """Open one editor, print what it captured, and return it stripped.
 
-    The authoring note rides on the prompt rather than being printed above it: printed, it
-    stayed in the scrollback beside the body the user wrote, which no other screen does
-    (#236).
+    `prompt_text` INSTRUCTS — it is the line the user reads with an empty buffer in front of
+    them, and it has to say what to type (#287). `record_title` LABELS the block left in the
+    scrollback afterwards, where an instruction would be a leftover imperative over a body
+    that is already written.
+
+    The editor is erased whole when it closes (`erase_when_done`) and this reprints the
+    result as the review's own block: the label, then the body full width under it. Two
+    findings meet in that one flag. The authoring note and the finish marker are questionary's
+    to draw and were the review's only screen that left its own instructions in the scrollback
+    (#236); the body was echoed in the narrow column to the right of the title, wrapping shell
+    lines mid-token (#281). Erasing settles both, and what stays behind is only what was
+    written — so the scrollback keeps the record `PKG-FR-SNIPPET-VERBATIM` makes the registry
+    keep.
+
+    Nothing is printed for an empty capture: the caller re-prompts, and a panel saying the
+    user wrote nothing is not a record of anything.
 
     `existing` prefills the buffer, which is what makes rewriting a recorded body an edit
     rather than a retype (`PKG-FR-VERSION-SNIPPET`): the body that did not converge is usually nearly right, and
@@ -1098,47 +1401,118 @@ async def _capture_body(prompt_title: str, note: str, existing: str) -> str:
     user typed as part of the command, and they change nothing about what `bash -c` runs.
     """
     prompt = questionary.text(
-        prompt_title,
+        prompt_text,
         multiline=True,
         default=existing,
         instruction=_snippet_instruction(note),
         key_bindings=_SNIPPET_SUBMIT_BINDINGS,
         style=_SNIPPET_STYLE,
+        erase_when_done=True,
     )
-    captured: str | None = await asyncio.to_thread(prompt.ask)
-    return captured.strip() if captured else ""
+    captured: str | None = await _ask(prompt, console=console)
+    body = captured.strip() if captured else ""
+    if body:
+        console.print(_snippet_record(record_title, body))
+    return body
+
+
+def _empty_snippet_refusal(item_id: str) -> str:
+    """What the review says when an authoring editor came back empty — worded for however
+    many editors that item opens (`PKG-FR-SNIPPET-VERBATIM`).
+    """
+    if carries_version_body(item_id):
+        return "Neither snippet can be empty — enter both, or choose a skip."
+    return "The snippet cannot be empty — enter one, or choose a skip."
 
 
 async def _capture_bodies(
-    entry: ReviewEntry, *, source_hostname: str, target_hostname: str, recorded: SnippetBodies | None
+    entry: ReviewEntry,
+    *,
+    console: Console,
+    source_hostname: str,
+    target_hostname: str,
+    recorded: SnippetBodies | None,
 ) -> SnippetBodies | None:
-    """Both bodies for one item, or `None` where either editor came back empty (`PKG-FR-VERSION-SNIPPET`).
+    """The bodies this item's registry entry takes, or `None` where an editor came back empty
+    (`PKG-FR-VERSION-SNIPPET`).
 
-    Two editors, always, and never one: an entry carrying only an install body is one the
-    registry itself refuses to parse back, so authoring the pair is what authoring means.
-    The second opens on whatever version body the item already had, which is how a rewrite
-    that only needs the install half costs one keystroke.
+    One editor for a package-backed item and two for an unowned path, decided by
+    `carries_version_body` — the same predicate the registry parse applies, so what is
+    authored here is what parses back. Asking for an installed-version body where dpkg, snap
+    or flatpak answers that question would have the user write a command nothing ever runs.
 
-    `None` for an empty capture of EITHER body, which the caller turns into a re-prompt
-    rather than a resolution (`PKG-FR-SNIPPET-VERBATIM`: an empty snippet is not an answer).
-    A body of only spaces and newlines lands here as empty for the same reason it would
-    replay as nothing at all.
+    Each editor opens on whatever the item already had, which is how a rewrite that only
+    needs the install half costs one keystroke.
+
+    `None` for an empty capture of ANY body it asked for, which the caller turns into a
+    re-prompt rather than a resolution (`PKG-FR-SNIPPET-VERBATIM`: an empty snippet is not an
+    answer). A body of only spaces and newlines lands here as empty for the same reason it
+    would replay as nothing at all.
     """
     install_body = await _capture_body(
-        f"Install-or-update snippet for {entry.label}:",
-        _snippet_authoring_note(target_hostname),
-        recorded.install_body if recorded else "",
+        f"Enter the commands that install or update {entry.label} on {target_hostname}:",
+        record_title=f"Install-or-update snippet for {entry.label}",
+        note=_snippet_authoring_note(target_hostname),
+        existing=recorded.install_body if recorded else "",
+        console=console,
     )
     if not install_body:
         return None
+    if not carries_version_body(entry.item_id):
+        return SnippetBodies(install_body=install_body)
     version_body = await _capture_body(
-        f"Installed-version snippet for {entry.label}:",
-        _version_authoring_note(source_hostname, target_hostname),
-        recorded.version_body if recorded else "",
+        # INSTALLED in capitals, which is how every other line the editor screens carry
+        # emphasises a word (`_snippet_authoring_note`'s OLDER, `_version_authoring_note`'s
+        # AND): a questionary prompt is a plain string and renders no markup. The emphasis
+        # is on the distinction that matters — the version on the machine, not the version
+        # the install body would produce, which the note below the prompt then spells out.
+        f"Enter the commands that print the version of the INSTALLED {entry.label}",
+        record_title=f"Installed-version snippet for {entry.label}",
+        note=_version_authoring_note(source_hostname, target_hostname),
+        existing=recorded.version_body if isinstance(recorded, VersionedSnippetBodies) else "",
+        console=console,
     )
     if not version_body:
         return None
-    return SnippetBodies(install_body=install_body, version_body=version_body)
+    return VersionedSnippetBodies(install_body=install_body, version_body=version_body)
+
+
+def _print_recorded_snippet(recorded: SnippetBodies | None, *, console: Console, title: str) -> None:
+    """Print the install body already on record for this item, above the question about it.
+
+    The answer is whether that body is still the right one — replay it, rewrite it first, or
+    leave the version alone — and the screen used to ask it without ever showing the body
+    (#281). Same shape as the pin file a deletion screen prints whole: the thing first, then
+    the decision about the thing.
+
+    Printed per attempt rather than once per entry, so a re-prompt after an empty capture
+    puts the body back above the question rather than leaving it further up the scrollback.
+
+    Nothing is printed where nothing is recorded — the resolve group, whose items have no
+    snippet by definition. Only the install body: the version body is not what an update
+    replays, and this is the block the question is about.
+
+    Cut at `_file_body`'s cap, unlike the record `_snippet_record` keeps. A body long enough
+    to scroll its own question off the terminal cannot be the ground for answering it.
+
+    No blank line of its own: the heading naming the item prints one and stands directly
+    above this, and the question below gets its own from `_ask`.
+
+    `title` is the caller's, because the same block appears before three different questions
+    and the tense is not the same on all three. A screen asking whether to run this body says
+    it WOULD run; the two the converge loop puts after it has already run say what it did —
+    that it moved no version, or that the machine refused it. One shared forward-looking title
+    stated the wrong tense and the wrong fact on both of the latter.
+    """
+    if recorded is None:
+        return
+    console.print(Panel(_file_body(recorded.install_body), title=Text(title), border_style="cyan"))
+
+
+def _would_run_title(target_hostname: str) -> str:
+    """The recorded-snippet block's title before the body has run: the default every screen
+    but the converge loop's two takes."""
+    return f"Recorded snippet — would run on {target_hostname}"
 
 
 async def _review_snippet_group(  # noqa: PLR0913 - screen content plus the two dicts it fills; all but the group keyword-only
@@ -1162,42 +1536,60 @@ async def _review_snippet_group(  # noqa: PLR0913 - screen content plus the two 
       leave the version alone this run. No permanent answer.
     - `UNREPRODUCIBLE_RETRY_REVIEW_ACTION`: the same two minus the act, put by the converge
       loop after a body that moved no version.
+    - `UNREPRODUCIBLE_FAILED_REVIEW_ACTION`: the item's ORIGINAL three answers, put by the
+      converge loop after a body the target refused (`PKG-FR-MANUAL-FAIL-ITEM`). The act
+      corrects the body that failed rather than writing a first one, so the editor opens on
+      it exactly as a rewrite does.
 
-    Two exits are shared by all three:
+    Two exits are shared by all four:
 
     - Ctrl-C at the screen means the user wants to stop, so `_ask_about_one_item` aborts the
       ENTIRE sync with `SyncAbortedByUser` — never a per-item skip-and-mark-unresolved.
-    - Choosing to write a snippet and then submitting an empty body, for either half, is NOT
-      accepted and does NOT fall through: the choice is re-prompted so the user must supply
-      real bodies or pick an explicit skip.
+    - Choosing to write a snippet and then submitting an empty body, for any editor the item
+      opens, is NOT accepted and does NOT fall through: the choice is re-prompted so the user
+      must supply real bodies or pick an explicit skip.
 
     `ReviewGroup.recorded_bodies` carries what the registry already holds, so a rewrite opens
     on it; it is absent for the resolve group, whose items have nothing recorded by
     definition.
     """
     recorded = group.recorded_bodies or {}
+    evidence_title = group.evidence_title or _would_run_title(target_hostname)
     is_update = group.action == UNREPRODUCIBLE_UPDATE_REVIEW_ACTION
     is_retry = group.action == UNREPRODUCIBLE_RETRY_REVIEW_ACTION
+    is_failed = group.action == UNREPRODUCIBLE_FAILED_REVIEW_ACTION
     for entry in group.entries:
         verb = entry.action_label
         if is_update:
             options = _update_options(target_hostname)
-            title = f"{target_hostname} has a different version of {entry.label} — update it?"
+            title = version_mismatch_title(entry.label, source_hostname, target_hostname)
             default = Decision.APPLY.value
         elif is_retry:
             options = _retry_options(target_hostname)
             title = group.title
             default = _ADD_SNIPPET_VALUE
+        elif is_failed:
+            # The item's own question again, worded by the job that first put it — the
+            # answers are what the failure changes, not what is being asked.
+            options = _failed_options(source_hostname, target_hostname, verb)
+            title = group.title
+            default = _ADD_SNIPPET_VALUE
         else:
             options = _unreproducible_options(source_hostname, target_hostname, verb)
-            title = f"{verb.capitalize()} {entry.label} on {target_hostname}?"
+            title = change_title(verb, f"{group.item_noun} {entry.label}", target_hostname)
             default = _ADD_SNIPPET_VALUE
 
         # Re-prompt until the entry is resolved by real bodies or an explicit answer. An
         # empty capture loops back here rather than manufacturing an unresolved item
         # (decision 10); a cancelled screen breaks out by aborting the whole sync.
         while True:
-            selected = await _ask_about_one_item(entry, title=title, options=options, default=default)
+            # The heading only where there is something to head. An entry with nothing on
+            # record shows no evidence, so its own question is the whole screen and a line
+            # naming the item above it would say the title's subject twice.
+            if entry.item_id in recorded:
+                _print_subject(console, noun=group.item_noun, label=entry.label)
+            _print_recorded_snippet(recorded.get(entry.item_id), console=console, title=evidence_title)
+            selected = await _ask_about_one_item(entry, console=console, title=title, options=options, default=default)
 
             if selected in (Decision.SKIP_ALWAYS, Decision.SKIP_ONCE, Decision.APPLY):
                 # Every one of these is a real decision (`PKG-FR-MANUAL-RESOLUTION`): the item is resolved, this
@@ -1207,6 +1599,7 @@ async def _review_snippet_group(  # noqa: PLR0913 - screen content plus the two 
 
             bodies = await _capture_bodies(
                 entry,
+                console=console,
                 source_hostname=source_hostname,
                 target_hostname=target_hostname,
                 recorded=recorded.get(entry.item_id),
@@ -1215,7 +1608,129 @@ async def _review_snippet_group(  # noqa: PLR0913 - screen content plus the two 
                 snippets[entry.item_id] = bodies
                 break
 
-            console.print(Text("Neither snippet can be empty — enter both, or choose a skip.", style="yellow"))
+            console.print(Text(_empty_snippet_refusal(entry.item_id), style="yellow"))
+
+
+# The key for "I installed it myself" on the ownership screen. `k` for keep, not `s`: `s` is
+# `skip now` on every other screen and this answer is not a skip — it settles the question
+# for this run by keeping the snippet, and the run goes on to say how to end the question for
+# good.
+_KEEP_SNIPPET_KEY = "k"
+
+
+def _snippet_ownership_options(source_hostname: str, target_hostname: str) -> tuple[DecisionOption, ...]:
+    """The two answers to "who put this package here" (`PKG-FR-DEB-AMBIGUITY`).
+
+    No permanent answer, and neither of these is recorded anywhere: the question is about a
+    fact on the source, and while that fact holds it is asked again every sync. Answering
+    "apt did" removes the snippet, which is what ends the question by construction — nothing
+    is left to contradict apt. Answering "I did" leaves both machines exactly as they were,
+    so the screen that follows it says how to make apt stop offering the package.
+    """
+    return (
+        DecisionOption(
+            value=Decision.APPLY,
+            key=_APPLY_KEY,
+            word="apt did",
+            glyph=_APPLY_GLYPH,
+            is_act=True,
+            hint=f"drop the snippet on {source_hostname} and {target_hostname}; the package is apt's on both",
+        ),
+        DecisionOption(
+            value=Decision.SKIP_ONCE,
+            key=_KEEP_SNIPPET_KEY,
+            word="I did",
+            glyph=_SKIP_ONCE_GLYPH,
+            hint=f"keep the snippet; asked again every sync while apt on {source_hostname} still offers the package",
+        ),
+    )
+
+
+def _pin_guidance(package: str, source_hostname: str) -> Text:
+    """How to make apt stop offering `package`, printed after the "I installed it" answer.
+
+    The answer keeps a snippet for a package apt can still install, which is exactly the
+    state the question is raised on — so without this the user has answered and learnt
+    nothing about why they will be asked again next sync.
+
+    Every claim here is one apt actually makes. A negative pin is what produces
+    `Candidate: (none)`, which is the answer pc-switcher reads; it also makes the repository
+    copy ineligible for an explicit `apt install`, which `apt-mark hold` does not — a hold
+    defers apt's own automatic action and an explicit install overrides it. Neither takes the
+    repository rows out of the version table, and the pin makes the package's security
+    updates the user's to apply.
+    """
+    body = Text()
+    body.append(f"apt on {source_hostname} still offers {package}, so this question comes back every sync.\n\n")
+    body.append(f"To end it, write /etc/apt/preferences.d/keep-{package} on {source_hostname}:\n\n")
+    body.append(f"    Package: {package}\n    Pin: release *\n    Pin-Priority: -1\n\n", style="bold")
+    body.append(
+        f"apt then answers 'Candidate: (none)' for {package}, pc-switcher reads the package as yours, and the "
+        "question stops. That negative pin also makes the repository copy ineligible for an explicit "
+        "'apt install'; 'apt-mark hold' is the weaker lever, deferring apt's automatic action only, and an "
+        "explicit 'apt install' overrides it. Neither takes the repository rows out of 'apt-cache policy'. "
+        f"Security updates for {package} become yours to apply."
+    )
+    return body
+
+
+async def _review_snippet_ownership_group(
+    group: ReviewGroup,
+    *,
+    console: Console,
+    source_hostname: str,
+    target_hostname: str,
+    decisions: dict[str, Decision],
+) -> None:
+    """Ask, one package at a time, whether a recorded snippet or apt is what put it on the
+    source (`PKG-FR-DEB-AMBIGUITY`).
+
+    One item per screen for the reason the deletion screens are: the recorded snippet is
+    printed whole above the question, and it is the evidence the question is answered on. A
+    batch would print three or four bodies and then ask about all of them at once, by which
+    point the first is off the top of the terminal.
+
+    The two answers map onto `Decision` values so this screen needs no outcome field of its
+    own and so the automation hook can drive it: `APPLY` is "apt did", the act that deletes
+    the entry, and `SKIP_ONCE` is "I did", which changes nothing. `SKIP_ONCE` is also what an
+    unanswered run leaves behind everywhere else, so the answer nobody gave is the one that
+    keeps the snippet.
+
+    The guidance is printed under the answer rather than above the question: it is what to do
+    NEXT about a state the user has just confirmed, and printing it in front of the question
+    would put a pin file in front of someone who is about to say the package is apt's.
+
+    `entry.detail` (apt's own answer, composed by the job) and `entry.label` are untrusted
+    package-manager text and reach the console only inside `Text` (T-02-02).
+    """
+    recorded = group.recorded_bodies or {}
+    options = _snippet_ownership_options(source_hostname, target_hostname)
+    for entry in group.entries:
+        package = _bare_item_name(entry.label)
+        _print_subject(console, noun=group.item_noun, label=entry.label)
+        _print_recorded_snippet(recorded.get(entry.item_id), console=console, title=_would_run_title(target_hostname))
+        selected = await _ask_about_one_item(
+            entry,
+            console=console,
+            title=f"Who put {package} on {source_hostname}?",
+            explanation=(
+                f"{source_hostname} has an install snippet on record for it, and apt on {source_hostname} can "
+                "install the package from a repository. Which of the two put it there is not something "
+                "pc-switcher can tell."
+            ),
+            options=options,
+            default=Decision.SKIP_ONCE,
+        )
+        decisions[entry.item_id] = Decision(selected)
+        if Decision(selected) is Decision.SKIP_ONCE:
+            console.print()
+            console.print(
+                Panel(
+                    _pin_guidance(package, source_hostname),
+                    title=Text(f"Keeping the snippet for {package}"),
+                    border_style="cyan",
+                )
+            )
 
 
 def _print_report_group(group: ReviewGroup, *, console: Console, target_hostname: str) -> None:
@@ -1232,12 +1747,14 @@ def _print_report_group(group: ReviewGroup, *, console: Console, target_hostname
         console.print(Text(group.note, style="dim"))
 
 
-async def _review_decision_group(
+async def _review_decision_group(  # noqa: PLR0913 - one screen's content plus the two dicts it fills; all but the group keyword-only
     group: ReviewGroup,
     *,
+    console: Console,
     source_hostname: str,
     target_hostname: str,
     decisions: dict[str, Decision],
+    mark_sides: dict[str, MarkSide],
 ) -> None:
     """Present one actionable group as a single screen and record every row's answer.
 
@@ -1260,7 +1777,7 @@ async def _review_decision_group(
         options=_options_for(group, source_hostname=source_hostname, target_hostname=target_hostname),
         explanation=group.note,
     )
-    answered: Mapping[str, str] | None = await asyncio.to_thread(prompt.ask)
+    answered: Mapping[str, str] | None = await _ask(prompt, console=console)
 
     if answered is None:
         raise SyncAbortedByUser(f"package review aborted at {group.title!r} (Ctrl-C)")
@@ -1268,14 +1785,32 @@ async def _review_decision_group(
     for entry in group.entries:
         decisions[entry.item_id] = Decision(answered[entry.item_id])
 
+    # Every row was answered by the one confirm, so each entry's machine-specific follow-up
+    # is put here — in row order, each after the answer that raises it, and only for the
+    # rows that carry the permanent answer (`PKG-FR-MARK-SIDE`).
+    for entry in group.entries:
+        await _mark_side_if_permanent(
+            group,
+            entry,
+            console=console,
+            source_hostname=source_hostname,
+            target_hostname=target_hostname,
+            decisions=decisions,
+            mark_sides=mark_sides,
+        )
 
-# The keys of the follow-up screen's three answers. Letters rather than the hostnames' own
-# initials: two machines can share one, an initial can be `a` (Abort's letter, which
-# `decision_list` rejects) or not a lowercase letter at all. `h` and `o` are here and other
-# — the review runs on the machine the sync was launched from, which is the source — and
-# neither word appears on the screen, where the answers are the hostnames themselves.
-_MARK_HERE_KEY = "h"
-_MARK_OTHER_KEY = "o"
+
+# The keys of the follow-up screen's three answers. The two machines are numbered in the
+# order the screen lists them, so `<1>` is the first hostname on the block and `<2>` the
+# second — which reads the same for any pair of hostnames. Neither an initial (two machines
+# can share one, and one can be `a`, Abort's letter, which `decision_list` rejects) nor a
+# role letter: `s` is `skip now` everywhere else, and one keystroke a line above its own
+# question must not mean two things. `b` for `both`, the answer that names no machine.
+#
+# A digit is its own uppercase, so `decision_list` binds it to the focused row alone and
+# leaves the bulk gesture off this screen's legend.
+_MARK_SOURCE_KEY = "1"
+_MARK_TARGET_KEY = "2"
 _MARK_BOTH_KEY = "b"
 
 # Left half / right half / whole. Which side of the pair the answer keeps is the whole
@@ -1305,7 +1840,7 @@ def _mark_side_options(source_hostname: str, target_hostname: str) -> tuple[Deci
     return (
         DecisionOption(
             value=MarkSide.SOURCE,
-            key=_MARK_HERE_KEY,
+            key=_MARK_SOURCE_KEY,
             word=source_hostname,
             glyph=_MARK_SOURCE_GLYPH,
             is_permanent=True,
@@ -1313,7 +1848,7 @@ def _mark_side_options(source_hostname: str, target_hostname: str) -> tuple[Deci
         ),
         DecisionOption(
             value=MarkSide.TARGET,
-            key=_MARK_OTHER_KEY,
+            key=_MARK_TARGET_KEY,
             word=target_hostname,
             glyph=_MARK_TARGET_GLYPH,
             is_permanent=True,
@@ -1331,70 +1866,80 @@ def _mark_side_options(source_hostname: str, target_hostname: str) -> tuple[Deci
     )
 
 
-def _conflicting_permanent_entries(
-    groups: Sequence[ReviewGroup], decisions: Mapping[str, Decision]
-) -> tuple[ReviewEntry, ...]:
-    """The entries the follow-up is about: conflicting items answered `SKIP_ALWAYS`."""
-    return tuple(
-        entry
-        for group in groups
-        if _is_conflicting_group(group.action)
-        for entry in group.entries
-        if decisions.get(entry.item_id) is Decision.SKIP_ALWAYS
-    )
-
-
-async def _ask_mark_sides(
-    groups: Sequence[ReviewGroup],
+async def _ask_mark_side(
+    entry: ReviewEntry,
     *,
+    console: Console,
     source_hostname: str,
     target_hostname: str,
-    decisions: Mapping[str, Decision],
-) -> dict[str, MarkSide]:
-    """Ask, once and for all of them, whose own copy each permanently-kept conflicting item
-    is (`PKG-FR-MARK-SIDE`).
+) -> MarkSide:
+    """Ask whose own copy ONE permanently-kept conflicting item is (`PKG-FR-MARK-SIDE`).
 
-    One screen, a row per item, three answers per row — the batch `PKG-FR-BATCHED` asks for, and what
-    `decision_list` already supports: it takes any number of options with any values, so
-    nothing about the question forces a screen per item. The two other reasons a package
-    question is asked one at a time do not apply: no answer here opens an editor, and there
-    is nothing to READ before answering that the row's own detail cannot carry.
+    Put immediately after the answer that raises it, on the screen that answer was given
+    on: the item's name and both machines' whole versions of it are directly above, which
+    is what "whose copy is this one" has to be read off — nobody can answer it from a
+    filename. Collected into one screen at the end of the review instead, it arrived once
+    every body it is about had scrolled away, and had to reprint them all to be answerable
+    at all.
 
-    A follow-up rather than a fourth answer on the batch screen, because the question exists
-    only for the rows answered permanently. Folding it in would have put five answers on
+    A follow-up rather than a fourth answer on the item's own screen, because the question
+    exists only where the answer was permanent. Folding it in would have put five answers on
     every conflict row — three of them the same decision under three names — and asked about
     a side on rows that will never have a mark.
 
-    The default is `TARGET`: an unread screen then records what the permanent answer on the
-    batch already said in its own words ("do not change on <target> for good; it is
-    <target>'s own"), so confirming without choosing changes nothing about how the tool has
-    always behaved.
+    The row does NOT start answered (`decision_list.UNANSWERED`), and `<enter>` is refused
+    until it carries a key, naming it while it does not. This question exists precisely
+    because neither machine is the holder by right, so any default would pick one of the two
+    real answers on the user's behalf — and the answer is permanent, deciding which machine
+    keeps its copy and how long the mark survives. A confirmed-unread screen must not be
+    indistinguishable from a decision. It is the one screen with no harmless answer to start
+    on, which is why `PKG-FR-HARMLESS-DEFAULT` names it rather than being contradicted by
+    it.
 
-    Ctrl-C aborts the whole sync like every other screen in the review. The rows carry each
-    item's own detail — normally "<atlas> has X, <nomad> has Y" — because that difference is
-    what the question is about and the batch screen is already off the top of the terminal.
+    Ctrl-C aborts the whole sync like every other screen in the review.
     """
-    entries = _conflicting_permanent_entries(groups, decisions)
-    if not entries:
-        return {}
-
     prompt = decision_list(
         "Kept for good — whose own version is it?",
-        rows=[
-            DecisionRow(row_id=entry.item_id, label=entry.label, default=MarkSide.TARGET, detail=entry.detail)
-            for entry in entries
-        ],
+        rows=[DecisionRow(row_id=entry.item_id, label=entry.label, default=UNANSWERED, detail=entry.detail)],
         explanation=(
-            f"{source_hostname} and {target_hostname} both have these, with different content, so neither "
+            f"{source_hostname} and {target_hostname} both have this, with different content, so neither "
             "version travels from now on. Naming a machine says whose copy the answer is about, and the "
             "answer lasts as long as that machine still has the item."
         ),
         options=_mark_side_options(source_hostname, target_hostname),
     )
-    answered: Mapping[str, str] | None = await asyncio.to_thread(prompt.ask)
+    answered: Mapping[str, str] | None = await _ask(prompt, console=console)
     if answered is None:
-        raise SyncAbortedByUser("package review aborted at the machine-specific follow-up (Ctrl-C)")
-    return {entry.item_id: MarkSide(answered[entry.item_id]) for entry in entries}
+        raise SyncAbortedByUser(
+            f"package review aborted at the machine-specific follow-up for {entry.label!r} (Ctrl-C)"
+        )
+    return MarkSide(answered[entry.item_id])
+
+
+async def _mark_side_if_permanent(  # noqa: PLR0913 - one entry's follow-up plus both machine names; all but the group keyword-only
+    group: ReviewGroup,
+    entry: ReviewEntry,
+    *,
+    console: Console,
+    source_hostname: str,
+    target_hostname: str,
+    decisions: Mapping[str, Decision],
+    mark_sides: dict[str, MarkSide],
+) -> None:
+    """Put the machine-specific question for `entry`, where its own answer raised it.
+
+    The two conditions are read here so every screen that can raise the question asks it the
+    same way: the group is one whose items are on both machines with differing copies
+    (`_is_conflicting_group`), and this entry's own decision is the permanent one. Both are
+    known as soon as the entry is answered — on a per-entry screen at its own prompt, and on
+    a batch screen at the confirm that answers every row — so nothing has to wait for the
+    rest of the review.
+    """
+    if not _is_conflicting_group(group.action) or decisions.get(entry.item_id) is not Decision.SKIP_ALWAYS:
+        return
+    mark_sides[entry.item_id] = await _ask_mark_side(
+        entry, console=console, source_hostname=source_hostname, target_hostname=target_hostname
+    )
 
 
 # The collateral screen's third answer. Not a decision about the item — it ends the run —
@@ -1490,6 +2035,7 @@ async def _review_collateral_group(
         finding, _, ground = (entry.detail or "").partition("\n")
         selected = await _ask_about_one_item(
             entry,
+            console=console,
             title=finding or group.title,
             explanation=ground or None,
             detail="",
@@ -1530,78 +2076,91 @@ async def _review_removal_group(
     An entry with no `content` (a repository file, whose URLs are in its detail line) prints
     nothing extra; its row's detail carries the finding as on any other screen.
 
-    The body's own trailing newline is dropped: inside a panel border it renders as an empty
-    last line. Wrapped in `Text` like every other untrusted string (T-02-02).
+    The body is rendered by `_file_body`, which is where the trailing newline, the cap and
+    the empty-file wording live, and which wraps it in `Text` like every other untrusted
+    string (T-02-02).
     """
     options = _options_for(group, source_hostname=source_hostname, target_hostname=target_hostname)
     for entry in group.entries:
-        console.print()
-        console.print(Text(entry.label, style="bold"))
+        _print_subject(console, noun=group.item_noun, label=entry.label)
         if entry.content is not None:
-            console.print(
-                Panel(Text(entry.content.rstrip("\n")), title=Text(f"On {target_hostname}"), border_style="yellow")
-            )
+            console.print(Panel(_file_body(entry.content), title=Text(f"On {target_hostname}"), border_style="yellow"))
         decisions[entry.item_id] = Decision(
-            await _ask_about_one_item(entry, title=group.title, options=options, default=_default_decision(group))
+            await _ask_about_one_item(
+                entry, console=console, title=group.title, options=options, default=_default_decision(group)
+            )
         )
 
 
-async def _review_repo_conflict_group(
+async def _review_two_version_group(  # noqa: PLR0913 - one screen's content plus the two dicts it fills; all but the group keyword-only
     group: ReviewGroup,
     *,
     console: Console,
     source_hostname: str,
     target_hostname: str,
     decisions: dict[str, Decision],
+    mark_sides: dict[str, MarkSide],
 ) -> None:
-    """Resolve one `REPO_CONFLICT_REVIEW_ACTION` group with the two-way choice `PKG-FR-REPO-CONFLICT`
-    requires: overwrite the target's version with the source's, or skip for now.
+    """Resolve one group whose items are on BOTH machines with different content: each
+    entry's two whole versions, then the question about that entry.
 
-    Both versions are printed, the target's first, never a unified diff — the user's own
-    position is that a diff of two repository definitions is not readable, and the question
-    is which of two configurations the machine should have, not what changed between them.
-    One file at a time, also ruled by the user: two whole file bodies are long enough that a
-    batched screen asked about definitions that had already scrolled away.
+    Both versions are printed, the SOURCE's first (`_print_both_versions`), never a unified
+    diff — the user's own position is that a diff of two configurations is not readable, and
+    the question is which of the two the machine should have, not what changed between them.
+    One entry at a time,
+    also ruled by the user: two whole file bodies are long enough that a batched screen
+    asked about definitions that had already scrolled away.
 
-    Ecosystem-neutral wording throughout, because two managers raise this screen about two
-    different subjects: `apt_sync` about a repository file, whose versions are the two whole
-    file bodies, and `flatpak_sync` about a remote, whose versions are its differing fields.
-    The entry's own `detail` is where the subject is named.
+    Ecosystem-neutral wording throughout, because three subjects reach this screen: a
+    repository file (`apt_sync`) and a remote (`flatpak_sync`) that feed something the
+    target recorded machine-specific (`PKG-FR-REPO-CONFLICT`), and an `/etc/apt/apt.conf.d`
+    file the target's own user wrote (`PKG-FR-APTCONF`). The entry's own `detail`, where it
+    has one, is what names the subject.
 
-    Two answers, not three. Skip-always is deliberately absent: a permanent mark on a
-    repository file would permanently change where the packages it feeds come from, and the
-    remedy for two machines whose definitions have drifted is consolidating them.
+    The ANSWERS come from the group, not from this screen: the conflict has two
+    (`PKG-FR-REPO-CONFLICT` forbids recording the answer, since a permanent mark on a
+    repository would permanently change where the packages it feeds come from), and the apt
+    configuration file has the ordinary three. Both start at skip-once
+    (`_default_decision`): one displaces software the target marked machine-specific, the
+    other replaces content that machine's user authored.
 
-    `Decision.APPLY` puts the file in the write set; `Decision.SKIP_ONCE` keeps it out AND
-    fails every approved package whose origin depended on it (the caller's job) — a skipped
-    conflict is not the same as no conflict, because the package the user approved cannot be
-    delivered from the origin they were promised. Skip-once is also where each row STARTS
-    (`_default_decision`), because an overwrite displaces software the target explicitly
-    marked machine-specific.
+    The title names the ENTRY, not the group: one row is on screen, and "Update apt
+    configuration files on nomad?" over it reads as an offer to answer for all of them at
+    once (#277). The heading above the panels carries the noun, so the title carries the
+    file and the verb alone.
 
     Every untrusted string — the filename, the detail, and both file bodies — is wrapped in
-    `Text` before it reaches the console, so a bracketed line inside a repository definition
-    cannot trigger the Rich markup crash (T-02-02). A file body's own trailing newline is
-    dropped for display: inside a panel border it renders as an empty last line.
+    `Text` before it reaches the console, so a bracketed line inside a configuration file
+    cannot trigger the Rich markup crash (T-02-02).
     """
     options = _options_for(group, source_hostname=source_hostname, target_hostname=target_hostname)
+    replacement = _replacement_phrase(group, source_hostname)
     for entry in group.entries:
-        console.print()
-        console.print(Text(entry.label, style="bold"))
-        if entry.versions is not None:
-            target_version, source_version = entry.versions
-            console.print(
-                Panel(
-                    Text(target_version.rstrip("\n")),
-                    title=Text(f"On {target_hostname} now"),
-                    border_style="yellow",
-                )
-            )
-            console.print(
-                Panel(Text(source_version.rstrip("\n")), title=Text(f"On {source_hostname}"), border_style="cyan")
-            )
+        _print_subject(console, noun=group.item_noun, label=entry.label)
+        _print_both_versions(
+            entry,
+            console=console,
+            source_hostname=source_hostname,
+            target_hostname=target_hostname,
+            replacement=replacement,
+        )
         decisions[entry.item_id] = Decision(
-            await _ask_about_one_item(entry, title=group.title, options=options, default=_default_decision(group))
+            await _ask_about_one_item(
+                entry,
+                console=console,
+                title=change_title(entry.action_label, entry.label, target_hostname),
+                options=options,
+                default=_default_decision(group),
+            )
+        )
+        await _mark_side_if_permanent(
+            group,
+            entry,
+            console=console,
+            source_hostname=source_hostname,
+            target_hostname=target_hostname,
+            decisions=decisions,
+            mark_sides=mark_sides,
         )
 
 
@@ -1665,15 +2224,21 @@ async def review_items(  # noqa: PLR0913 - review surface plus both machine name
     item comes back `SKIP_ONCE`, nothing is recorded permanently, one warning NAMES each
     item nobody could be asked about (`_warn_every_item_unasked`), and the group panels are
     printed as the report (`PKG-FR-NO-TERMINAL`).
-    Interactive runs pause `ui` around each group's blocking prompt (dispatched via
-    `asyncio.to_thread`) and resume it in a `finally`, so the live display is always handed
-    back even if the prompt raises. They print no group panel: the screen lists the items
-    itself, and its answered form stays in the scrollback as the record.
+    Interactive runs hand `ui`'s live display over around the blocking prompts (dispatched
+    via `asyncio.to_thread`) and take it back however the block ends, so the display is
+    always returned even if a prompt raises. They print no group panel: the screen lists
+    the items itself, and its answered form stays in the scrollback as the record.
 
-    One further screen can follow the groups on an interactive run: `_ask_mark_sides`, for
-    the conflicting items answered permanently (`PKG-FR-MARK-SIDE`). Both paths that return
-    early — no TTY, and the automation environment — leave `mark_sides` empty, which is what
-    keeps a permanent answer nobody gave from also choosing a machine.
+    The handover happens only where a question is actually going to be PUT
+    (`asks_for_a_decision` over the groups, `_display_handed_over`). A review holding
+    nothing, or nothing but report-only groups, answers nothing; its groups still print,
+    through the running display.
+
+    One further screen can follow an item's own answer on an interactive run:
+    `_mark_side_if_permanent`, for a conflicting item answered permanently
+    (`PKG-FR-MARK-SIDE`). Both paths that return early — no TTY, and the automation
+    environment — leave `mark_sides` empty, which is what keeps a permanent answer nobody
+    gave from also choosing a machine.
     """
     log = logger if logger is not None else _logger
 
@@ -1681,8 +2246,8 @@ async def review_items(  # noqa: PLR0913 - review surface plus both machine name
 
     # Whatever the flags left over goes through unchanged, the empty set included: a review
     # the flags answered whole reaches the branches below with no groups, which is what an
-    # empty plan already does (a terminal still gets its pause/resume, and `was_interactive`
-    # still says only whether there was one).
+    # empty plan already does — nothing left to ask, so nothing is paused for, and
+    # `was_interactive` still says only whether there was a terminal.
     automation_raw = os.environ.get(PACKAGE_REVIEW_AUTOMATION_ENV)
     if automation_raw is not None:
         return ReviewOutcome(
@@ -1704,13 +2269,13 @@ async def review_items(  # noqa: PLR0913 - review surface plus both machine name
         )
         return ReviewOutcome(decisions=decisions, was_interactive=False, unresolved=non_interactive_unresolved)
 
-    ui.pause()
     decisions: dict[str, Decision] = dict(by_policy)
     snippets: dict[str, SnippetBodies] = {}
-    try:
+    # `_mark_side_if_permanent` needs no test of its own here: it can only follow a permanent
+    # answer on a decision group, so a review that puts no question cannot reach it either.
+    mark_sides: dict[str, MarkSide] = {}
+    with _display_handed_over(ui, for_a_question=any(asks_for_a_decision(group) for group in groups)):
         for group in groups:
-            console.print()
-
             if group.action == _REPORT_ACTION:
                 # Nothing to answer (ruled by the user): a reported condition converges in
                 # neither direction and records nothing, so both answers it used to offer
@@ -1738,13 +2303,24 @@ async def review_items(  # noqa: PLR0913 - review surface plus both machine name
                 )
                 continue
 
-            if _is_repo_conflict_group(group.action):
-                await _review_repo_conflict_group(
+            if _is_snippet_ownership_group(group.action):
+                await _review_snippet_ownership_group(
                     group,
                     console=console,
                     source_hostname=source_hostname,
                     target_hostname=target_hostname,
                     decisions=decisions,
+                )
+                continue
+
+            if _is_repo_conflict_group(group.action) or _shows_both_versions(group):
+                await _review_two_version_group(
+                    group,
+                    console=console,
+                    source_hostname=source_hostname,
+                    target_hostname=target_hostname,
+                    decisions=decisions,
+                    mark_sides=mark_sides,
                 )
                 continue
 
@@ -1759,21 +2335,13 @@ async def review_items(  # noqa: PLR0913 - review surface plus both machine name
                 continue
 
             await _review_decision_group(
-                group, source_hostname=source_hostname, target_hostname=target_hostname, decisions=decisions
+                group,
+                console=console,
+                source_hostname=source_hostname,
+                target_hostname=target_hostname,
+                decisions=decisions,
+                mark_sides=mark_sides,
             )
-
-        # After the batch, never inside it: the question is only about the rows that were
-        # answered permanently, and which those are is not known until the screen is
-        # confirmed (`PKG-FR-MARK-SIDE`). Still one round with nothing done between the
-        # questions, which is what `PKG-FR-BATCHED` constrains.
-        mark_sides = await _ask_mark_sides(
-            groups,
-            source_hostname=source_hostname,
-            target_hostname=target_hostname,
-            decisions=decisions,
-        )
-    finally:
-        ui.resume()
 
     # An interactive review can no longer leave anything unresolved (decision 10): the
     # unreproducible flow re-prompts or aborts, and a decision screen's abort raises above —
@@ -1831,7 +2399,7 @@ async def ask_gate(  # noqa: PLR0913 - one two-answer screen's content; all keyw
                 questionary.Choice(title=stop_label, value=False),
             ],
         )
-        selected = await asyncio.to_thread(prompt.ask)
+        selected = await _ask(prompt, console=console)
     finally:
         ui.resume()
 

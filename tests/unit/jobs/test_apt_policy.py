@@ -14,7 +14,9 @@ from pcswitcher.jobs.packages.apt_policy import (
     candidate_origins_by_package,
     installed_origins_by_package,
     normalise_repo_uri,
+    packages_no_repository_can_install,
 )
+from tests.unit.jobs.unreproducible_harness import POLICY_PHASED_UPDATE_LAGGARD
 
 # `firefox`, not installed: the archive's only candidate carries epoch 1, which is the fact
 # `PKG-FR-PIN-ALWAYS` rests on. Verbatim.
@@ -172,6 +174,36 @@ class TestCandidateOrigins:
         assert result["git"] == frozenset({"https://ppa.launchpadcontent.net/git-core/ppa/ubuntu"})
         assert result["firefox"] == frozenset({"http://ftp.belnet.be/ubuntu"})
         assert result["docker.io"] == frozenset()
+
+
+class TestPackagesNoRepositoryCanInstall:
+    """The predicate both package jobs decide ownership with: has apt a repository it can
+    install this name from, whatever version either machine holds.
+    """
+
+    def test_an_installed_version_the_archive_superseded_is_apts_business(self) -> None:
+        """The #285 shape. `.17` is in no repository any more, but apt's candidate is the
+        `.18` the archive moved to — a phased update in progress, not a hand `.deb`.
+        """
+        assert packages_no_repository_can_install(POLICY_PHASED_UPDATE_LAGGARD, ["qemu-guest-agent"]) == frozenset()
+
+    def test_a_package_no_repository_carries_is_flagged(self) -> None:
+        """The hand `.deb`: apt's candidate is dpkg's own record of what is installed, which
+        is not a repository.
+        """
+        assert packages_no_repository_can_install(POLICY_HAND_DEB, ["code"]) == frozenset({"code"})
+
+    def test_a_name_pinned_out_of_every_repository_is_flagged(self) -> None:
+        """`Candidate: (none)`: apt has repository versions and will install none of them, so
+        no repository can put this package on the other machine either.
+        """
+        assert packages_no_repository_can_install(POLICY_NO_CANDIDATE, ["docker.io"]) == frozenset({"docker.io"})
+
+    def test_a_name_apt_printed_no_block_for_is_never_flagged(self) -> None:
+        """Absence is not evidence: one failed command must not declare a whole machine's
+        packages unreproducible.
+        """
+        assert packages_no_repository_can_install(POLICY_HAND_DEB, ["code", "gh"]) == frozenset({"code"})
 
 
 class TestInstalledOriginsUnderTheSharedWalk:

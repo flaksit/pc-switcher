@@ -47,9 +47,15 @@ class LogEvent:
 
 @dataclass(frozen=True)
 class ProgressEvent:
-    """Event published to EventBus for progress updates."""
+    """Event published to EventBus for progress updates.
+
+    Carries both spellings of the job: `job` is the identifier the UI keys its bars on
+    (stable across runs, unlike wording), `display_name` is what the bar is labelled
+    with.
+    """
 
     job: str
+    display_name: str
     update: ProgressUpdate
     timestamp: datetime = field(default_factory=datetime.now)
 

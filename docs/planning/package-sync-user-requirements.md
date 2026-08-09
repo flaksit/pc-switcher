@@ -67,7 +67,7 @@ flowchart TD
 
 The three-way decision — apply, skip once, always skip — carries different weight. "Always skip" writes a mark that outlives the run, on the machine whose copy the mark keeps. Marks are per-manager and per-machine and are deliberately never synced.
 
-Where a markable item is on both machines with copies that differ, either copy can be the one worth keeping. The user is asked whose own version this is — one machine, the other, or each machine's own. Naming both records one on each.
+Where a markable item is on both machines with copies that differ, either copy can be the one worth keeping. The user is asked whose own version this is — one machine, the other, or each machine's own. Naming both records one on each. Nothing on that question is pre-answered: neither machine is the holder by right, so there is no harmless answer to start on and confirming it unread would be indistinguishable from deciding.
 
 A mark lasts as long as the software it protects. Once the holding machine no longer has that software, the mark is dropped: leaving it would refuse to install that software there ever again.
 

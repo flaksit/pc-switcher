@@ -190,7 +190,7 @@ def build_stranded_repository_line(dest: str, uris: Sequence[str], packages: Seq
     )
 
 
-def build_esm_gate_message(esm_files: Sequence[str], machines: Machines, job_name: str) -> str:
+def build_esm_gate_message(esm_files: Sequence[str], machines: Machines, job_display_name: str) -> str:
     """The ESM gate's question (`PKG-FR-DISTRO-FILES`): the fact, how to fix it, what skipping costs.
 
     No account of the failure it prevents. Why an unattached machine still refreshes cleanly
@@ -214,7 +214,7 @@ def build_esm_gate_message(esm_files: Sequence[str], machines: Machines, job_nam
         "    sudo pro attach <token from https://ubuntu.com/pro/dashboard>\n"
         "    sudo pro enable esm-apps esm-infra\n"
         "Full instructions: https://documentation.ubuntu.com/pro/attach-tutorial/\n\n"
-        f"Skipping means {job_name} does nothing at all this run. Every other job still runs."
+        f"Skipping means {job_display_name} does nothing at all this run. Every other job still runs."
     )
 
 

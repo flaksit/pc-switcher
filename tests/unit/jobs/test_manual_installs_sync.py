@@ -718,7 +718,7 @@ class TestRemovingAPathTheSourceDropped:
         assert issued.kwargs["mutates"]
         (group,) = [g for g in plan.groups if g.action == DiffAction.REMOVE.value]
         assert group.note is not None
-        assert "outside these directories" in group.note
+        assert "outside these folders. Remove them manually." in group.note
 
 
 class TestTheInstalledVersionSnippet:

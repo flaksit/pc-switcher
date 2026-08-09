@@ -28,6 +28,7 @@ from prompt_toolkit.output.plain_text import PlainTextOutput
 
 from pcswitcher.jobs.packages.decision_list import (
     PREFIX_WIDTH,
+    UNANSWERED,
     DecisionOption,
     DecisionRow,
     decision_list,
@@ -55,6 +56,14 @@ _SKIP_ALWAYS = DecisionOption(
 THREE_ANSWERS = (_ACT, _SKIP_ONCE, _SKIP_ALWAYS)
 TWO_ANSWERS = (_ACT, _SKIP_ONCE)
 
+# The mark-side screen's shape: the two machines numbered as the block lists them, `b` for
+# both. A digit is its own uppercase, which is what the bulk-answer guard is about.
+DIGIT_ANSWERS = (
+    DecisionOption(value="source", key="1", word="atlas", glyph="◐", is_permanent=True, hint="atlas keeps its own"),
+    DecisionOption(value="target", key="2", word="nomad", glyph="◑", is_permanent=True, hint="nomad keeps its own"),
+    DecisionOption(value="both", key="b", word="both", glyph="●", is_permanent=True, hint="each keeps its own"),
+)
+
 # Terminal escape sequences for the arrow keys, as a pipe input delivers them.
 _DOWN = "\x1b[B"
 _UP = "\x1b[A"
@@ -64,6 +73,16 @@ _CTRL_C = "\x03"
 
 def _row(row_id: str, label: str = "pkg", **kwargs: Any) -> DecisionRow:
     return DecisionRow(row_id=row_id, label=label, default="apply", **kwargs)
+
+
+def _digit_row(row_id: str, label: str = "pkg") -> DecisionRow:
+    """A row on a `DIGIT_ANSWERS` screen, started on the one answer no key under test sets."""
+    return DecisionRow(row_id=row_id, label=label, default="both")
+
+
+def _open_row(row_id: str, label: str = "pkg") -> DecisionRow:
+    """A row on the screen that must not pre-answer anything (`UNANSWERED`)."""
+    return DecisionRow(row_id=row_id, label=label, default=UNANSWERED)
 
 
 def _plain(tokens: list[tuple[str, str]]) -> str:
@@ -320,6 +339,14 @@ class TestLegend:
         """Deliberate negative control: questionary's `<i> to invert` was not useful here."""
         assert "invert" not in legend(THREE_ANSWERS)
 
+    def test_a_screen_with_a_digit_key_does_not_promise_the_bulk_gesture(self) -> None:
+        """A digit has no shifted form that sets every row, so listing "shift+key" beside
+        three answers only one of which has one advertises a gesture the screen lacks."""
+        text = legend(DIGIT_ANSWERS)
+
+        assert "sets every row" not in text
+        assert "<space> cycles" in text and "<enter> confirm" in text
+
 
 class TestCursor:
     def test_no_control_draws_the_terminal_cursor(self) -> None:
@@ -346,6 +373,17 @@ class TestConstruction:
         clash = DecisionOption(value="skip_always", key="y", word="always skip", glyph="⊘")
         with pytest.raises(ValueError, match="unique"):
             decision_list("t", rows=[_row("a")], options=(_ACT, clash))
+
+    def test_a_key_may_be_a_digit(self) -> None:
+        """The mark-side screen numbers its two machines, so a digit is a valid key."""
+        with create_pipe_input() as pipe, create_app_session(input=pipe, output=DummyOutput()):
+            decision_list("t", rows=[_digit_row("a")], options=DIGIT_ANSWERS)
+
+    def test_a_key_may_not_be_an_uppercase_letter(self) -> None:
+        """An uppercase key would be indistinguishable from another answer's bulk form."""
+        options = (_ACT, DecisionOption(value="skip_always", key="X", word="always skip", glyph="⊘"))
+        with pytest.raises(ValueError, match="lowercase letters or digits"):
+            decision_list("t", rows=[_row("a")], options=options)
 
     def test_a_screen_needs_at_least_one_row(self) -> None:
         with pytest.raises(ValueError, match="at least one row"):
@@ -393,6 +431,24 @@ class TestKeyHandling:
     def test_a_two_answer_screen_cycles_between_its_two_answers_only(self) -> None:
         assert _drive(f"  {_ENTER}", rows=[_row("a")], options=TWO_ANSWERS) == {"a": "apply"}
 
+    def test_a_digit_key_answers_the_focused_row_only(self) -> None:
+        """H267 — the guard: `"1".upper() == "1"`, so registering the shifted form too would bind the
+        same keystroke twice and the bulk handler would take it — pressing `1` would answer
+        every row instead of the focused one."""
+        rows = [_digit_row("a"), _digit_row("b"), _digit_row("c")]
+
+        assert _drive(f"{_DOWN}1{_ENTER}", rows=rows, options=DIGIT_ANSWERS) == {
+            "a": "both",
+            "b": "source",
+            "c": "both",
+        }
+
+    def test_a_letter_key_still_sets_every_row_when_shifted(self) -> None:
+        """The guard touches only keys that are their own uppercase; `b` keeps its bulk form."""
+        rows = [_digit_row("a"), _digit_row("b")]
+
+        assert _drive(f"2{_DOWN}B{_ENTER}", rows=rows, options=DIGIT_ANSWERS) == {"a": "both", "b": "both"}
+
     def test_a_stray_letter_changes_nothing(self) -> None:
         assert _drive(f"qwz{_ENTER}", rows=[_row("a")]) == {"a": "apply"}
 
@@ -435,6 +491,93 @@ class TestTheAnsweredFrame:
 
         assert "up/down move" not in frame
         assert "<enter> confirm" not in frame
+
+
+class TestAScreenThatPreAnswersNothing:
+    """`UNANSWERED` (#278) — the opt-in for a screen where no answer is harmless enough to
+    start on. It is opt-in per ROW default, so every other screen keeps the harmless start
+    `PKG-FR-HARMLESS-DEFAULT` requires and none of them changes behaviour.
+    """
+
+    @staticmethod
+    def _run(keys: str, rows: list[DecisionRow]) -> tuple[str, Any]:
+        """The rendered screen, plus what `.ask()` finally answered.
+
+        Keys arrive as one batch, so prompt_toolkit paints once at the end rather than per
+        keystroke: a refusal is asserted on a run whose LAST key leaves it standing.
+        """
+        buffer = io.StringIO()
+        with create_pipe_input() as pipe:
+            pipe.send_text(keys)
+            with create_app_session(input=pipe, output=PlainTextOutput(buffer)):
+                answered = decision_list("Whose own version is it?", rows=rows, options=THREE_ANSWERS).ask()
+        return buffer.getvalue(), answered
+
+    def test_an_unanswered_row_says_so_instead_of_showing_an_answer(self) -> None:
+        tokens = render_rows(
+            [_open_row("a", "sl")], THREE_ANSWERS, decisions={"a": UNANSWERED}, focused=0, total_width=80
+        )
+
+        assert "not answered" in _plain(tokens)
+        assert not any(option.word in _plain(tokens) for option in THREE_ANSWERS)
+
+    def test_the_decision_column_does_not_move_as_rows_are_answered(self) -> None:
+        """H258 — the width is reserved from the DEFAULTS, so a table whose column shifts under the
+        user's own keystrokes is impossible."""
+        rows = [_open_row("a", "sl")]
+        _, column = layout_widths(rows, THREE_ANSWERS, total_width=80)
+
+        assert column == layout_widths([_row("a", "sl")], THREE_ANSWERS, total_width=80)[1]
+
+    def test_the_legend_says_up_front_that_enter_needs_every_row(self) -> None:
+        assert "<enter> confirm, once every row is answered" in legend(THREE_ANSWERS, every_row_required=True)
+        assert "<enter> confirm\n" in f"{legend(THREE_ANSWERS)}\n"
+
+    def test_a_refused_enter_names_every_row_still_unanswered(self) -> None:
+        """H258 — "answer everything first" on a list longer than the screen is not an
+        instruction anyone can act on without hunting for the rows it means."""
+        rendered, answered = self._run(f"{_ENTER}{_CTRL_C}", [_open_row("a", "sl"), _open_row("b", "cmatrix")])
+
+        assert answered is None, "the refused <enter> left the screen up; only Ctrl-C ended it"
+        assert "Not answered yet: sl, cmatrix." in rendered
+
+    def test_the_refusal_stops_naming_a_row_the_user_has_since_answered(self) -> None:
+        rendered, _ = self._run(f"{_ENTER}y{_ENTER}{_CTRL_C}", [_open_row("a", "sl"), _open_row("b", "cmatrix")])
+
+        assert "Not answered yet: cmatrix." in rendered
+        assert "Not answered yet: sl, cmatrix." not in rendered
+
+    def test_enter_is_accepted_once_every_row_carries_an_answer(self) -> None:
+        """H258 — the leading `<enter>` is refused, so what comes back is the answers given
+        after it, never the unanswered value a screen that confirmed early would return."""
+        _, answered = self._run(f"{_ENTER}y{_DOWN}s{_ENTER}", [_open_row("a", "sl"), _open_row("b", "cmatrix")])
+
+        assert answered == {"a": "apply", "b": "skip_once"}
+
+    def test_a_screen_whose_rows_all_start_answered_still_confirms_on_a_bare_enter(self) -> None:
+        """H259 — the unanswered start is opt-in per screen, so no other screen changes."""
+        rendered, answered = self._run(_ENTER, [_row("a", "sl")])
+
+        assert "Not answered yet" not in rendered
+        assert answered == {"a": "apply"}
+
+    def test_space_on_an_unanswered_row_steps_to_the_first_answer(self) -> None:
+        """Unanswered is not one of the states being cycled: cycling back into it would let
+        the user leave a row on a value `<enter>` refuses."""
+        assert _drive(f" {_ENTER}", rows=[_open_row("a")]) == {"a": "apply"}
+
+    def test_no_answer_may_take_the_value_that_means_nobody_answered(self) -> None:
+        stolen = DecisionOption(value=UNANSWERED, key="u", word="unanswered", glyph="?")
+
+        with pytest.raises(ValueError, match="cannot be an answer"):
+            decision_list("t", rows=[_row("a")], options=(*THREE_ANSWERS, stolen))
+
+    def test_a_row_may_not_start_on_an_answer_the_screen_does_not_offer(self) -> None:
+        """Otherwise it is a KeyError deep in the token stream — including the one a
+        misspelt sentinel would cause."""
+        with pytest.raises(ValueError, match="must be an offered answer"):
+            misspelt = DecisionRow(row_id="a", label="sl", default="__unanswerd__")
+            decision_list("t", rows=[misspelt], options=TWO_ANSWERS)
 
 
 class TestTheExplanation:

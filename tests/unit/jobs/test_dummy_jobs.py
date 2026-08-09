@@ -7,8 +7,8 @@ Tests verify:
 - CORE-FR-DUMMY-TERM: dummy jobs handle termination
 - CORE-FR-PROGRESS-EMIT: jobs emit progress updates
 - CORE-US-DUMMY-AS1: dummy_success completes with logs/progress
-- CORE-US-DUMMY-AS3: dummy_fail raises exception at configured time
-- CORE-US-DUMMY-AS4: dummy job handles termination request
+- CORE-US-DUMMY-AS2: dummy_fail raises exception at configured time
+- CORE-US-DUMMY-AS3: dummy job handles termination request
 """
 
 from __future__ import annotations
@@ -192,7 +192,7 @@ class TestDummySuccessBehavior:
 
 
 class TestDummyFailBehavior:
-    """Test CORE-FR-DUMMY-EXCEPTION, CORE-US-DUMMY-AS3: dummy_fail job behavior."""
+    """Test CORE-FR-DUMMY-EXCEPTION, CORE-US-DUMMY-AS2: dummy_fail job behavior."""
 
     @pytest.mark.asyncio
     async def test_core_fr_dummy_exception(
@@ -245,8 +245,8 @@ class TestDummyFailBehavior:
         assert any("Simulated failure at 12s" in r.message for r in critical_logs)
 
     @pytest.mark.asyncio
-    async def test_core_us_dummy_as3(self, mock_job_context_factory: JobContextFactory) -> None:
-        """CORE-US-DUMMY-AS3: dummy_fail raises exception at configured time to test error handling.
+    async def test_core_us_dummy_as2(self, mock_job_context_factory: JobContextFactory) -> None:
+        """CORE-US-DUMMY-AS2: dummy_fail raises exception at configured time to test error handling.
 
         Given: dummy_fail job is enabled with defaults (fail_at=12s)
         When: sync runs and job reaches 12s elapsed
@@ -292,7 +292,7 @@ class TestDummyFailBehavior:
 
 
 class TestDummyJobsTermination:
-    """Test CORE-FR-DUMMY-TERM, CORE-US-DUMMY-AS4: dummy jobs handle termination."""
+    """Test CORE-FR-DUMMY-TERM, CORE-US-DUMMY-AS3: dummy jobs handle termination."""
 
     @pytest.mark.asyncio
     async def test_core_fr_dummy_term(
@@ -333,10 +333,10 @@ class TestDummyJobsTermination:
         assert len(termination_logs) >= 1
 
     @pytest.mark.asyncio
-    async def test_core_us_dummy_as4(
+    async def test_core_us_dummy_as3(
         self, mock_job_context_factory: JobContextFactory, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """CORE-US-DUMMY-AS4: Dummy job handles termination request gracefully.
+        """CORE-US-DUMMY-AS3: Dummy job handles termination request gracefully.
 
         Given: any dummy job is running
         When: user presses Ctrl+C (termination request)

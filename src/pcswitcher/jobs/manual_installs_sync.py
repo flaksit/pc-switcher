@@ -35,7 +35,7 @@ from pcswitcher.executor import Executor
 from pcswitcher.jobs.packages.probes import ProbeFailed, require_answer
 from pcswitcher.jobs.packages.state import DecisionEntry, SnippetRegistry
 from pcswitcher.jobs.packages.unreproducible import UnreproducibleItem, UnreproducibleSyncJob, lines_of
-from pcswitcher.models import FirstSyncScope, Host, ValidationError
+from pcswitcher.models import FirstSyncScope, Host, RunPause, ValidationError
 
 __all__ = ["ManualInstallsSyncJob"]
 
@@ -164,7 +164,10 @@ class ManualInstallsSyncJob(UnreproducibleSyncJob):
     """
 
     name: ClassVar[str] = "manual_installs_sync"
+    display_name: ClassVar[str] = "Manually installed apps"
     manager_id: ClassVar[str] = "manual"
+    item_noun: ClassVar[str] = "manually installed app"
+    item_noun_plural: ClassVar[str] = "manually installed apps"
 
     # No configurable properties: mirrors AptSyncJob's empty schema — only the enable flag
     # in sync_jobs is needed. A job earns a config SECTION only when it has a real key, so there
@@ -443,12 +446,13 @@ class ManualInstallsSyncJob(UnreproducibleSyncJob):
         The scan names a path; the snippet that created it will usually also have dropped a
         `.desktop` file, a symlink in `/usr/local/bin` or a systemd unit somewhere this scan
         never looks. Deleting the path leaves those behind, and the user is the only one who
-        can know where they are — pc-switcher records nothing about what a snippet put where.
+        can know where they are — pc-switcher records nothing about what a snippet put where,
+        so the warning ends in what to do rather than in what the tool cannot see.
         """
         return (
-            f"Only the path itself is deleted on {self.machines.target}. Whatever installed it may also have "
-            "left a launcher, a symlink or a service unit outside these directories, and nothing here knows "
-            "where; those stay."
+            f"Only the path itself is deleted from {self.machines.target}. There may be config or files in "
+            "other folders, like a launcher, a symlink or a service unit outside these folders. Remove them "
+            "manually."
         )
 
     @override
@@ -507,6 +511,10 @@ class ManualInstallsSyncJob(UnreproducibleSyncJob):
         reported like any other. An approved `rm --recursive --force` under `/opt` needs it
         too and is treated the same way: a run that approves no removal needs no privilege at
         all, and demanding it up front would refuse the job to every user who only installs.
+        The apt-timer pause this job declares (`declare_run_pauses`) is the exception, and not
+        this job's to check: its commands are the orchestrator's, known in advance and run on
+        both machines whatever the review decides, so its grant is established once for the run
+        from the declaration.
 
         Sequential checks appending to `errors`, never raising mid-validate (matches
         `AptSyncJob.validate()`'s shape).
@@ -539,9 +547,18 @@ class ManualInstallsSyncJob(UnreproducibleSyncJob):
         the source has dropped."""
         return FirstSyncScope(
             job_name=cls.name,
+            job_display_name=cls.display_name,
             scope_items=[
                 "unowned installs under /usr/local and /opt (via recorded install snippets)",
                 "unowned paths under /usr/local and /opt the source no longer has (rm --recursive --force)",
             ],
             mechanism="replay install snippet or delete the path, per item, after review",
         )
+
+    @classmethod
+    @override
+    def declare_run_pauses(cls) -> frozenset[RunPause]:
+        """A hand-authored install snippet is free to call `apt-get` or `dpkg` — the
+        authoring screen suggests exactly that — so it contends for the dpkg frontend lock
+        Ubuntu's own updater takes, whether or not `apt_sync` is enabled."""
+        return frozenset({RunPause.APT_UPDATE_TIMERS})

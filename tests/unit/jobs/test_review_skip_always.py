@@ -69,8 +69,15 @@ def _fake_prompt(*, ask_return: object = None, ask_side_effect: object = None) -
     return prompt
 
 
-def _group(action: str, entries: Sequence[ReviewEntry], *, manager: str = "apt", title: str = "Install packages"):
-    return ReviewGroup(manager=manager, action=action, title=title, entries=tuple(entries))
+def _group(
+    action: str,
+    entries: Sequence[ReviewEntry],
+    *,
+    manager: str = "apt",
+    title: str = "Install apt packages on nomad?",
+    item_noun: str = "apt package",
+):
+    return ReviewGroup(manager=manager, action=action, title=title, entries=tuple(entries), item_noun=item_noun)
 
 
 def _words(call: Any) -> list[str]:
@@ -213,7 +220,9 @@ class TestGroupsNeverOfferedPermanence:
         group = _group(
             UNREPRODUCIBLE_REVIEW_ACTION,
             [_entry("u1", label="brscan3")],
-            title="Resolve apt items with no reproducible install",
+            manager="manual_deb",
+            title="atlas has manual debs that no package manager can put on nomad",
+            item_noun="manual deb",
         )
         screen = _fake_prompt(ask_return={"u1": "skip_once"})
 
@@ -270,13 +279,16 @@ class TestGroupsNeverOfferedPermanence:
 def _change_group(entries: Sequence[ReviewEntry]) -> ReviewGroup:
     """A group of items BOTH machines have with different content — the only kind whose
     permanent answer leaves a machine still to be named."""
-    return ReviewGroup(manager="apt", action="change", title="Change apt configuration files", entries=tuple(entries))
+    return ReviewGroup(
+        manager="apt", action="change", title="Update apt configuration files on nomad?", entries=tuple(entries)
+    )
 
 
 @pytest.mark.asyncio
 class TestWhichMachineKeepsItsCopy:
-    """The follow-up after the batch (`PKG-FR-MARK-SIDE`): an item both machines have with
-    different content has no holder the run's direction can name, so the user names it.
+    """The follow-up to one item's own answer (`PKG-FR-MARK-SIDE`): an item both machines
+    have with different content has no holder the run's direction can name, so the user
+    names it.
     """
 
     async def test_a_conflicting_item_kept_for_good_is_asked_about_on_one_further_screen(self) -> None:
@@ -318,15 +330,18 @@ class TestWhichMachineKeepsItsCopy:
 
         assert outcome.mark_sides == {"c1": side}
 
-    async def test_every_conflicting_item_is_on_that_one_screen(self) -> None:
-        """H249 — batched: a row each, never a screen each."""
+    async def test_each_conflicting_item_gets_its_own_follow_up_in_row_order(self) -> None:
+        """H249 — one screen per item, each after the answer that raises it. A batch screen
+        at the end asked about files that had all scrolled away by then (#277)."""
         console = _interactive_console()
         ui = MagicMock()
         group = _change_group([_entry(name, label=name, action_label="change") for name in ("c1", "c2", "c3")])
         screen = _fake_prompt(
             ask_side_effect=[
                 {"c1": "skip_always", "c2": "skip_always", "c3": "skip_always"},
-                {"c1": "source", "c2": "target", "c3": "both"},
+                {"c1": "source"},
+                {"c2": "target"},
+                {"c3": "both"},
             ]
         )
 
@@ -336,13 +351,17 @@ class TestWhichMachineKeepsItsCopy:
         ):
             outcome = await review_items([group], console=console, ui=ui, **HOSTS)
 
-        assert decision_list.call_count == 2
-        assert [row.row_id for row in decision_list.call_args_list[1].kwargs["rows"]] == ["c1", "c2", "c3"]
+        assert decision_list.call_count == 4
+        assert [[row.row_id for row in call.kwargs["rows"]] for call in decision_list.call_args_list[1:]] == [
+            ["c1"],
+            ["c2"],
+            ["c3"],
+        ]
         assert outcome.mark_sides == {"c1": MarkSide.SOURCE, "c2": MarkSide.TARGET, "c3": MarkSide.BOTH}
 
-    async def test_only_the_items_kept_for_good_are_on_it(self) -> None:
+    async def test_only_the_items_kept_for_good_are_asked_about(self) -> None:
         """H254 — the question exists for the rows answered permanently and no others, which
-        is why it can only be asked once the batch is confirmed."""
+        on a batch screen is known at its confirm."""
         console = _interactive_console()
         ui = MagicMock()
         group = _change_group([_entry(name, label=name, action_label="change") for name in ("c1", "c2", "c3")])
@@ -399,7 +418,11 @@ class TestWhichMachineKeepsItsCopy:
         """
         console = _interactive_console()
         ui = MagicMock()
-        group = _group(SNAP_CHANGE_REVIEW_ACTION, [_entry("snap:vlc", action_label="change")], title="Change snaps")
+        group = _group(
+            SNAP_CHANGE_REVIEW_ACTION,
+            [_entry("snap:vlc", action_label="change")],
+            title="Align snap versions on nomad?",
+        )
         screen = _fake_prompt(ask_return={"snap:vlc": "skip_always"})
 
         with (
@@ -477,13 +500,13 @@ class TestAbortAndTeardown:
         console = _interactive_console()
         ui = MagicMock()
         first_group = _group("install", [_entry("a")])
-        later_group = _group("install", [_entry("b")], manager="snap", title="Install snaps")
+        later_group = _group("install", [_entry("b")], manager="snap", title="Install snaps on nomad?")
         screen = _fake_prompt(ask_side_effect=[None, {"b": "apply"}])
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
             patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen) as decision_list,
-            pytest.raises(SyncAbortedByUser, match="Install packages"),
+            pytest.raises(SyncAbortedByUser, match="Install apt packages"),
         ):
             await review_items([first_group, later_group], console=console, ui=ui, **HOSTS)
 

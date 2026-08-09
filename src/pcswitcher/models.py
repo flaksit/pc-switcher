@@ -202,11 +202,61 @@ class FirstSyncScope:
     names what it will destructively replace on the target (scope_items) and
     how (mechanism), instead of the orchestrator hardcoding one job's config
     shape and transport wording.
+
+    `job_name` is the job's identifier, `job_display_name` its `display_name` ClassVar:
+    the warning this feeds is read by a human, so it prints the latter.
     """
 
     job_name: str
+    job_display_name: str
     scope_items: list[str]
     mechanism: str
+
+
+class RunPause(StrEnum):
+    """A machine-wide automatic updater a job needs held still for the whole run.
+
+    Both are the same shape of problem: a background updater on either machine can move
+    package state under a job that is mid-convergence, and neither job can stop one that
+    starts after its own validation. The orchestrator holds them across the job window and
+    puts them back, but only where something enabled this run actually needs it — jobs
+    declare their own need via `SyncJob.declare_run_pauses()`.
+
+    Each value carries the privilege its own pause needs, because the orchestrator is what
+    runs those commands — on BOTH machines, for both pauses. A job that declares a pause
+    therefore gets its grant validated before the run starts without stating anything about
+    sudo itself (`Orchestrator._validate_run_pause_grants`), and a job added later inherits
+    that check from its declaration. Holding the commands on the job instead is what let the
+    two drift: a pause could be declared by a job whose `validate()` checked nothing.
+    """
+
+    SNAPD_AUTOREFRESH = "snapd_autorefresh"
+    APT_UPDATE_TIMERS = "apt_update_timers"
+
+    @property
+    def sudo_commands(self) -> tuple[str, ...]:
+        """The binaries the orchestrator runs under sudo to apply this pause and undo it.
+
+        A lower bound on what must be permitted, not an exact scope (ADR-013): a machine may
+        already grant the user more, and the jobs need their own binaries besides.
+        """
+        match self:
+            case RunPause.SNAPD_AUTOREFRESH:
+                # `sudo snap get/set system refresh.hold` — the read is admin-gated too.
+                return ("/usr/bin/snap",)
+            case RunPause.APT_UPDATE_TIMERS:
+                # `systemctl show/stop/start` for the timers, `systemd-run` for the transient
+                # unit that restarts them if this run dies.
+                return ("/usr/bin/systemctl", "/usr/bin/systemd-run")
+
+    @property
+    def purpose(self) -> str:
+        """What the pause does, phrased to sit inside a validation message."""
+        match self:
+            case RunPause.SNAPD_AUTOREFRESH:
+                return "pause snapd auto-refresh for the sync window"
+            case RunPause.APT_UPDATE_TIMERS:
+                return "pause the system apt update timers for the sync window"
 
 
 class SnapshotPhase(StrEnum):
@@ -310,9 +360,16 @@ class JobStatus(StrEnum):
 
 @dataclass(frozen=True)
 class JobResult:
-    """Result of executing a single job."""
+    """Result of executing a single job.
+
+    Carries the job under both spellings, because a result is read both ways: `job_name`
+    is the identifier the config key and log records use, `job_display_name` its
+    `display_name` ClassVar, printed in the `Job outcomes:` block and in the session's
+    failure reason. Both are stored so neither reader has to look the other up.
+    """
 
     job_name: str
+    job_display_name: str
     status: JobStatus
     started_at: datetime  # UTC timezone
     ended_at: datetime  # UTC timezone

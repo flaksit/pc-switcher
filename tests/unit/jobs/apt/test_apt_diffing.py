@@ -43,7 +43,7 @@ class TestDiff:
         )
         probe = AptProbe(context.source, context.target, MACHINES)
 
-        source_items, _origins = await probe.capture_source_items()
+        source_items, _origins, _no_repository = await probe.capture_source_items()
         target_items = await probe.query_target_items()
         diffs = diff_apt_packages(source_items, target_items, {}, MACHINES)
 

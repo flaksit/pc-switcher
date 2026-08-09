@@ -471,7 +471,6 @@ def _snippet() -> Snippet:
             "curl --fail --silent --show-error --location https://example.invalid/zoom.deb --output /tmp/z.deb"
             " && sudo apt-get install --assume-yes /tmp/z.deb"
         ),
-        version_body="dpkg-query --show --showformat='${Version}' zoom",
         authored_at="2026-01-01T00:00:00Z",
         authored_on="laptop",
     )

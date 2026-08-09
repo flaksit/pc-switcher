@@ -7,6 +7,7 @@ Reference: docs/system/core.md (User Story CORE-US-BTRFS - Safety Infrastructure
 from __future__ import annotations
 
 import inspect
+import logging
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -155,6 +156,31 @@ class TestBtrfsSnapshotJobCreation:
         )
         job = BtrfsSnapshotJob(context)
         assert job is not None
+
+    async def test_a_job_with_no_bar_keeps_its_info_trace(
+        self,
+        mock_job_context_factory: type,
+        mock_local_executor: MagicMock,
+        mock_remote_executor: MagicMock,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """#289 — the job loop's lifecycle pair dropped to FULL because the bar it opens
+        already shows the job running. This job runs outside that loop and has no bar, so the
+        pair opening and closing it stays at INFO: nothing else would show it at all.
+        """
+        context = mock_job_context_factory(
+            config={"phase": "pre", "subvolumes": ["@"], "session_folder": "20251129T143022-abc12345"}
+        )
+        mock_local_executor.run_command = AsyncMock(return_value=CommandResult(exit_code=0, stdout="", stderr=""))
+        mock_remote_executor.run_command = AsyncMock(return_value=CommandResult(exit_code=0, stdout="", stderr=""))
+
+        with caplog.at_level(logging.DEBUG, logger="pcswitcher.jobs.base"):
+            await BtrfsSnapshotJob(context).execute()
+
+        assert [record.message for record in caplog.records if record.levelno == logging.INFO] == [
+            "Creating pre-sync snapshots",
+            "Completed pre-sync snapshots",
+        ]
 
 
 @pytest.mark.asyncio
