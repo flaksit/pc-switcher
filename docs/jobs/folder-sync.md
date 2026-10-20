@@ -91,6 +91,30 @@ Pick one of two approaches:
 
 Note that `/root` has its own `~/.ssh/authorized_keys` (`/root/.ssh/authorized_keys`) — but the SSH session is the normal user's, not root's, so only the **user's** `authorized_keys` gates the connection. Apply the same reasoning to `root.filter` only if you have a workflow that logs into the fleet as root directly.
 
+## Other sync clients (Dropbox, Koofr, Google Drive, OneDrive, Nextcloud, …)
+
+Exclude the content folder **and** the client's state directory of any cloud-sync client; do not mirror them. Two sync mechanisms writing the same files conflict:
+
+- **Client state** (host id, file database, link/account tokens, selective-sync settings) is per machine. Copying it makes the target look like the same install: the client unlinks, re-indexes everything, or reports conflicts.
+- **Content** mirrored onto a machine whose client is running (or starts afterwards) is seen by that client as local changes it did not make: double uploads, "conflicted copy" files, or deletions pushed back to the cloud when `--delete` removes files the target's client already synced.
+
+Instead, log in to the client once on each machine and let it manage its own content. The client's binaries can still be mirrored (for example when the client has no package-manager install, so a mirror is the only way it reaches the target).
+
+Typical paths to exclude, relative to the synced home (verify against your client; names vary by version):
+
+```text
+- /Dropbox
+- /.dropbox
+- /Koofr
+- /.koofr
+- /Nextcloud
+- /OneDrive
+- /.config/Nextcloud
+- /.config/onedrive
+```
+
+Google Drive has no official Linux client; FUSE mounts (`rclone mount`, `google-drive-ocamlfuse`) keep their mount point and token under `~/.config/rclone/` or `~/.gdfuse/`, which are likewise per machine. A mount point is a live view of the cloud, not local data: mirroring through it uploads to, or deletes from, the cloud.
+
 ## Coming from .gitignore
 
 The syntax resembles `.gitignore`, with three differences worth knowing:
