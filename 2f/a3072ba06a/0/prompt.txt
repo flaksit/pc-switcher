@@ -1,0 +1,5 @@
+when doing "pc-switcher sync fleksi --dry-run" here on this machine, "firefox" appears in the manual_deb_sync. However, I'm pretty sure that firefox is installed through an apt repo (probably mozilla). Verify the latter. And find out if that is a bug in pc-switcher. Don't fix.
+
+---
+
+file a gh issue for this
