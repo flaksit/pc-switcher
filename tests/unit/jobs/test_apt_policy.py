@@ -16,6 +16,7 @@ from pcswitcher.jobs.packages.apt_policy import (
     normalise_repo_uri,
     packages_installed_from_no_repository,
 )
+from tests.unit.jobs.unreproducible_harness import POLICY_NEWER_THAN_REPO, POLICY_OLDER_THAN_REPO
 
 # `firefox`, not installed: the archive's only candidate carries epoch 1, which is the fact
 # `PKG-FR-PIN-ALWAYS` rests on. Verbatim.
@@ -202,6 +203,19 @@ class TestInstalledOriginsUnderTheSharedWalk:
 
     def test_an_uninstalled_package_reaches_an_empty_installed_set(self) -> None:
         assert installed_origins_by_package(POLICY_ARCHIVE_CANDIDATE_UNINSTALLED)["firefox"] == frozenset()
+
+    def test_an_installed_version_the_repository_dropped_falls_back_to_the_candidates_origins(self) -> None:
+        """G190 — Google's repository keeps only its latest build, so the installed row names
+        only dpkg; the package is still tracked from that repository."""
+        assert installed_origins_by_package(POLICY_OLDER_THAN_REPO)["google-chrome-stable"] == frozenset(
+            {"https://dl.google.com/linux/chrome-stable/deb"}
+        )
+        assert packages_installed_from_no_repository(POLICY_OLDER_THAN_REPO, ["google-chrome-stable"]) == frozenset()
+
+    def test_a_hand_deb_is_its_own_candidate_so_the_fallback_finds_no_repository(self) -> None:
+        """A hand-installed `.deb`, and one newer than the repository: each is its own candidate."""
+        assert installed_origins_by_package(POLICY_HAND_DEB)["code"] == frozenset()
+        assert packages_installed_from_no_repository(POLICY_NEWER_THAN_REPO, ["mytool"]) == frozenset({"mytool"})
 
     def test_a_pinned_out_package_still_reports_its_installed_origins(self) -> None:
         """`Candidate: (none)` says nothing about where the installed copy came from."""
