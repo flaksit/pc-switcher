@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "6f836bfcc572",
+  "strategy": "manual-commit",
+  "branch": "fix/manual-installs-sudo-and-apt-config-diffs",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "src/pcswitcher/jobs/packages/apt_policy.py",
+    "tests/unit/jobs/apt/test_apt_origins.py",
+    "tests/unit/jobs/test_apt_policy.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/6f/836bfcc572/0/metadata.json",
+      "transcript": "/6f/836bfcc572/0/full.jsonl",
+      "compact_transcript": "/6f/836bfcc572/0/transcript.jsonl",
+      "content_hash": "/6f/836bfcc572/0/content_hash.txt",
+      "prompt": "/6f/836bfcc572/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 30,
+    "cache_creation_tokens": 17906,
+    "cache_read_tokens": 4178792,
+    "output_tokens": 7706,
+    "api_call_count": 15
+  }
+}
