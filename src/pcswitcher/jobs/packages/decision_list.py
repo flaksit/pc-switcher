@@ -38,6 +38,7 @@ from dataclasses import dataclass
 
 import questionary
 from prompt_toolkit.application import Application, get_app
+from prompt_toolkit.formatted_text import ANSI, StyleAndTextTuples, to_formatted_text
 from prompt_toolkit.key_binding import KeyBindings, KeyPressEvent
 from prompt_toolkit.keys import Keys
 from prompt_toolkit.layout import FormattedTextControl, HSplit, Layout, Window
@@ -375,12 +376,13 @@ def _hang(text: str, width: int) -> str:
     return "\n".join(f"{_LEGEND_INDENT}{line}" for line in lines)
 
 
-def decision_list(
+def decision_list(  # noqa: PLR0913 - one screen's content; all but the message keyword-only
     message: str,
     *,
     rows: Sequence[DecisionRow],
     options: Sequence[DecisionOption],
     explanation: str | None = None,
+    body: str | None = None,
     style: Style | None = None,
 ) -> questionary.Question:
     """Build the one-screen-per-group decision prompt.
@@ -394,16 +396,24 @@ def decision_list(
     read as an annotation on an answer the user had not made yet. It survives the answer,
     unlike the legend — the ground the decision was taken on is part of what the scrollback
     records.
+
+    `body` is what the question is about when a row cannot carry it — a file, a diff —
+    already rendered as ANSI text (Rich renders it; the review owns the layout). It follows
+    the question and any explanation, before the legend, so the screen reads question, then
+    subject, then answers; and like the explanation it survives the answer.
     """
     _validate(rows, options)
     control = _DecisionListControl(rows, options, _screen_width)
     answered = False
 
-    def header_tokens() -> list[tuple[str, str]]:
-        tokens = [("class:qmark", "?"), ("class:question", f" {message}")]
+    body_tokens = to_formatted_text(ANSI(f"\n{body.rstrip(chr(10))}")) if body else []
+
+    def header_tokens() -> StyleAndTextTuples:
+        tokens: StyleAndTextTuples = [("class:qmark", "?"), ("class:question", f" {message}")]
         width = _screen_width() - len(_LEGEND_INDENT)
         if explanation:
             tokens.append(("class:detail", f"\n{_hang(explanation, width)}"))
+        tokens.extend(body_tokens)
         if not answered:
             # Already wrapped by `legend`, whose continuation lines carry their own hanging
             # indent — so this only prepends the block indent, never re-wraps.

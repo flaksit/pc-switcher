@@ -73,7 +73,7 @@ A snap's revision/channel change also takes two answers: nobody keeps a revision
 
 **Removal groups start at skip-now.** A bulk confirm can never silently delete something. So do groups that would overwrite an `apt.conf.d` file the target already holds.
 
-Some questions come one-per-screen because they have to show you something first: a file body, a collateral package, an unreproducible item.
+Some questions come one-per-screen because they have to show you something first: a file body, a collateral package, an unreproducible item. An `apt.conf.d` file being added or deleted is shown whole; one both machines have with different content is shown as a side-by-side diff (target left, source right), or a unified diff on a terminal narrower than 100 columns.
 
 Some findings are only reported, not asked about: version differences, origin divergences, repositories the source cannot reproduce. Neither answering nor declining would change anything, so there is nothing to answer.
 

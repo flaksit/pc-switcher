@@ -16,6 +16,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from pcswitcher.jobs.apt_sync.items import (
+    APT_CONF_DIR,
     APT_PREFERENCES_DIR,
     APT_SOURCES_DIR,
     DISTRO_SOURCE_FILENAMES,
@@ -320,24 +321,53 @@ async def diff_apt_pins(
     return diffs, contents
 
 
-def diff_apt_configs(
-    source_digests: Mapping[str, str], target_digests: Mapping[str, str], machines: Machines
-) -> list[ItemDiff]:
-    """Config-file diffs — opaque, digest-only, filename identity."""
+@dataclass(frozen=True)
+class FileBodies:
+    """The two machines' versions of one file a diff implicates; `None` where that machine
+    does not have it."""
+
+    target: str | None
+    source: str | None
+
+
+async def diff_apt_configs(
+    source_run: Run,
+    target_run: Run,
+    source_digests: Mapping[str, str],
+    target_digests: Mapping[str, str],
+    machines: Machines,
+) -> tuple[list[ItemDiff], dict[str, FileBodies]]:
+    """Config-file diffs by filename identity, plus each implicated file's bodies keyed by
+    filename (`PKG-FR-APTCONF`).
+
+    Identity and change detection stay digest-only; the bodies are read for the review, and
+    only for a file a diff implicates — one `sudo cat` per file per machine holding it. A
+    digest pair tells the user nothing about how their apt would behave differently, so the
+    screen shows the file being added or deleted whole and a changed file as a diff.
+    """
     names = diff_filenames(source_digests, target_digests)
     diffs: list[ItemDiff] = []
+    bodies: dict[str, FileBodies] = {}
+
+    async def read(run: Run, filename: str, machine: str) -> str:
+        return await read_file_content(run, f"{APT_CONF_DIR}/{filename}", machine)
 
     for filename in sorted(names.missing):
         item = AptConfigItem(filename=filename, digest=source_digests[filename])
         diffs.append(file_diff(item, DiffClass.MISSING_ON_TARGET, DiffAction.INSTALL))
+        bodies[filename] = FileBodies(target=None, source=await read(source_run, filename, machines.source))
     for filename in sorted(names.extra):
         item = AptConfigItem(filename=filename, digest=target_digests[filename])
         diffs.append(file_diff(item, DiffClass.EXTRA_ON_TARGET, DiffAction.REMOVE))
+        bodies[filename] = FileBodies(target=await read(target_run, filename, machines.target), source=None)
     for filename in sorted(names.changed):
         item = AptConfigItem(filename=filename, digest=source_digests[filename])
-        detail = build_version_mismatch_detail(source_digests[filename], target_digests[filename], machines)
-        diffs.append(file_diff(item, DiffClass.VERSION_MISMATCH, DiffAction.CHANGE, detail=detail))
-    return diffs
+        diffs.append(file_diff(item, DiffClass.VERSION_MISMATCH, DiffAction.CHANGE))
+        bodies[filename] = FileBodies(
+            target=await read(target_run, filename, machines.target),
+            source=await read(source_run, filename, machines.source),
+        )
+    return diffs, bodies
 
 
 async def diff_apt_sources(

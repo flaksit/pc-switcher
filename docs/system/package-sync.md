@@ -299,7 +299,7 @@ Decomposes [apt / Repositories, keys and pins](../planning/package-sync-user-req
   Impl: `read_file_content` guarded per ADR-022
 - **PKG-FR-PIN-NOT-INVENTORY**: A pin MUST NOT be read as a statement about the packages it names.  
   Lineage: 002-package-sync
-- **PKG-FR-APTCONF**: apt's own behavioural configuration — the settings that govern how apt behaves rather than where packages come from — MUST be reviewed whether it is being added, changed or removed, with the ordinary decision and the permanent machine-specific mark.  
+- **PKG-FR-APTCONF**: apt's own behavioural configuration — the settings that govern how apt behaves rather than where packages come from — MUST be reviewed whether it is being added, changed or removed, with the ordinary decision and the permanent machine-specific mark. Each file MUST be asked about on its own, shown on its question screen between the question and the answers: a change as a diff of the two machines' versions, side by side where the terminal is wide enough; an addition or deletion as the whole file.  
   Lineage: 002-package-sync
 
 ### Ubuntu Pro and ESM

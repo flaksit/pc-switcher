@@ -13,7 +13,7 @@ them, replaced wholesale by `plan()` rather than mutated in place.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
 from typing import Any, ClassVar, override
@@ -22,6 +22,7 @@ from pcswitcher.jobs.apt_sync.collateral import Collateral, LateCollateral
 from pcswitcher.jobs.apt_sync.commands import SOURCE_SUDO_COMMANDS, TARGET_SUDO_COMMANDS
 from pcswitcher.jobs.apt_sync.derived import DerivedWrites
 from pcswitcher.jobs.apt_sync.diffing import (
+    FileBodies,
     diff_apt_configs,
     diff_apt_packages,
     diff_apt_pins,
@@ -134,6 +135,10 @@ class AptSyncJob(PackageSyncJob):
         # `diff_apt_pins` and shown whole on that screen — a pin filename alone gives the
         # user nothing to decide from.
         self._pin_contents: dict[str, str] = {}
+        # `{filename: both machines' bodies}` for every `/etc/apt/apt.conf.d` file this run
+        # proposes to add, change or delete (`PKG-FR-APTCONF`), read by `diff_apt_configs`:
+        # the screen shows an added or deleted file whole and a changed one as a diff.
+        self._config_bodies: dict[str, FileBodies] = {}
         # `{package name: the version the SOURCE holds it at}` for the packages this run
         # proposes to install and the source holds (`PKG-FR-APT-HOLD-VERSION`).
         self._held_versions: dict[str, str] = {}
@@ -655,8 +660,30 @@ class AptSyncJob(PackageSyncJob):
             self._probe.target_run, source_repo.pin_digests, target_repo.pin_digests, self.machines
         )
         diffs.extend(pin_diffs)
-        diffs.extend(diff_apt_configs(source_repo.conf_digests, target_repo.conf_digests, self.machines))
+        config_diffs, self._config_bodies = await diff_apt_configs(
+            self._probe.source_run,
+            self._probe.target_run,
+            source_repo.conf_digests,
+            target_repo.conf_digests,
+            self.machines,
+        )
+        diffs.extend(config_diffs)
         return diffs
+
+    @override
+    def _review_entry(self, diff: ItemDiff, verb: str) -> ReviewEntry:
+        """An apt config row carries the file itself (`PKG-FR-APTCONF`): both bodies for a
+        change, which the screen shows as a diff, and the one body there is for an add or a
+        delete."""
+        entry = super()._review_entry(diff, verb)
+        if diff.item_class is not ItemClass.APT_CONFIG:
+            return entry
+        bodies = self._config_bodies.get(diff.item_id.removeprefix(APT_CONFIG_ID_PREFIX))
+        if bodies is None:
+            return entry
+        if bodies.target is not None and bodies.source is not None:
+            return replace(entry, versions=(bodies.target, bodies.source))
+        return replace(entry, content=bodies.source if bodies.source is not None else bodies.target)
 
     @override
     def _build_review_groups(self, diffs: Sequence[ItemDiff]) -> tuple[ReviewGroup, ...]:

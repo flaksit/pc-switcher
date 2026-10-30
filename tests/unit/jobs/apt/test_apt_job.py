@@ -1370,6 +1370,58 @@ class TestAptConfigVocabulary:
         assert len(config_groups) == 3
         assert not any("packages" in group.title for group in config_groups)
 
+    @pytest.mark.asyncio
+    async def test_each_row_carries_the_file_not_its_digest(self) -> None:
+        """C183 — `PKG-FR-APTCONF`: an update carries both machines' bodies (target first) for
+        the diff, an add the source's body, a delete the target's; no row's detail is a digest."""
+        context, _source, _target = make_context(
+            source_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/apt.conf.d": CommandResult(
+                    0, sha256_line("a1", "10add") + sha256_line("u-new", "20update"), ""
+                ),
+                "cat /etc/apt/apt.conf.d/10add": CommandResult(0, "added on source\n", ""),
+                "cat /etc/apt/apt.conf.d/20update": CommandResult(0, "new on source\n", ""),
+            },
+            target_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/apt.conf.d": CommandResult(
+                    0, sha256_line("u-old", "20update") + sha256_line("d1", "30delete"), ""
+                ),
+                "cat /etc/apt/apt.conf.d/20update": CommandResult(0, "old on target\n", ""),
+                "cat /etc/apt/apt.conf.d/30delete": CommandResult(0, "only on target\n", ""),
+            },
+        )
+
+        plan = await AptSyncJob(context).plan()
+
+        entries = {
+            entry.item_id: entry
+            for group in plan.groups
+            for entry in group.entries
+            if entry.item_id.startswith("apt:config")
+        }
+        assert entries["apt:config:20update"].versions == ("old on target\n", "new on source\n")
+        assert entries["apt:config:10add"].content == "added on source\n"
+        assert entries["apt:config:30delete"].content == "only on target\n"
+        assert all(entry.detail is None for entry in entries.values())
+
+    @pytest.mark.asyncio
+    async def test_a_body_that_cannot_be_read_fails_the_plan(self) -> None:
+        """C184 — an empty pane would be a diff nobody could read, approved as if read
+        (ADR-022)."""
+        context, _source, _target = make_context(
+            source_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/apt.conf.d": CommandResult(0, sha256_line("a1", "10add"), ""),
+                "cat /etc/apt/apt.conf.d/10add": CommandResult(1, "", "cat: Permission denied"),
+            },
+            target_responses={**_NO_PACKAGES, "find /etc/apt/apt.conf.d": CommandResult(0, "", "")},
+        )
+
+        with pytest.raises(ProbeFailed, match="Permission denied"):
+            await AptSyncJob(context).plan()
+
 
 class TestRepositoryConflicts:
     """Ruling 6: a repository file present on both machines with different content is
