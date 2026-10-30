@@ -28,6 +28,13 @@ DPKG_QUERY_3 = "pkg-a\t1.0\npkg-b\t2.0\npkg-c\t3.0\n"
 _NO_PACKAGES = {"apt-mark showmanual": CommandResult(0, "", "")}
 
 
+# `install_args`' command lines as the fake executors key them: the rehearsal, then the real install.
+DRY_RUN_INSTALL = "apt-get --dry-run install --assume-yes --allow-downgrades --no-install-recommends"
+REAL_INSTALL = (
+    "sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes --allow-downgrades --no-install-recommends"
+)
+
+
 def sha256_line(digest: str, filename: str) -> str:
     """One `sha256sum`-shaped line: `<digest>  <filename>\\n`."""
     return f"{digest}  {filename}\n"

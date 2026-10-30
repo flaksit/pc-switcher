@@ -617,6 +617,7 @@ Flowchart edges are named in the Scenario column as `A→B`, `B→C`, etc.
 | D40 | The real removal's transaction drifts and would remove a manually-installed package nobody saw | Same three-way question, before the removal runs | U | apt/packages:`TestRemovalGuard::test_a_drifted_manual_reverse_dep_removal_is_asked_about` |
 | D41 | The real transaction would downgrade a manually-installed package nobody saw | Same three-way question, before the transaction runs | U | apt/packages:`TestTheDriftedTransactionIsAskedAbout::test_a_drifted_downgrade_is_asked_about_too` |
 | D71 | The real transaction would UPGRADE a manually-installed package nobody saw at plan time | Same three-way question, before the transaction runs — an unasked-for upgrade is the imposition a downgrade is | U | apt/packages:`TestTheDriftedTransactionIsAskedAbout::test_a_drifted_upgrade_is_asked_about_too` |
+| D73 | The transaction contains a downgrade at all — Nomad's pinned candidate sits below its installed version, as Ubuntu's epoch-`1:` transitional `firefox` does under Mozilla's 1000 pin | The rehearsal of the real install's own arguments prints and parses the downgrade, so the guard can classify it; apt's `--assume-yes` downgrade refusal never fails the item first | V | `test_package_sync:TestTheRehearsalSeesADowngrade::test_a_downgrade_is_rehearsed_and_parsed_not_refused` |
 
 ### D.3 The collateral package is marked machine-specific (articles: PKG-FR-COLLATERAL-MARKED)
 

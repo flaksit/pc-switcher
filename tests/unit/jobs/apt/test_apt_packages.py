@@ -23,6 +23,8 @@ from pcswitcher.jobs.packages.sync_core import ConvergeItemFailed, PackageItemFa
 from pcswitcher.models import CommandResult, LogLevel
 from tests.unit.jobs.apt.helpers import (
     _APPROVE_PKG_A,
+    DRY_RUN_INSTALL,
+    REAL_INSTALL,
     CountingReviewer,
     _policy_block,
     _repo_context,
@@ -58,12 +60,8 @@ class TestConverge:
             target_responses={
                 "apt-mark showmanual": CommandResult(0, "", ""),
                 "dpkg-query": CommandResult(0, "", ""),
-                "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": CommandResult(
-                    0, "Inst pkg-a (1.0)\n", ""
-                ),
-                "sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes --no-install-recommends pkg-a": (
-                    CommandResult(0, "", "")
-                ),
+                f"{DRY_RUN_INSTALL} pkg-a": CommandResult(0, "Inst pkg-a (1.0)\n", ""),
+                f"{REAL_INSTALL} pkg-a": (CommandResult(0, "", "")),
             },
         )
         job = AptSyncJob(context)
@@ -74,9 +72,7 @@ class TestConverge:
         # pkg-b legitimately appears in the plan-time BATCHED simulation command
         # (both pkg-a and pkg-b are missing-on-target candidates before any decision
         # exists) — the guarantee under test is that no REAL install command names it.
-        assert real_installs(target) == [
-            "sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes --no-install-recommends pkg-a"
-        ]
+        assert real_installs(target) == [f"{REAL_INSTALL} pkg-a"]
 
 
 def _drifted_install_context(
@@ -89,7 +85,7 @@ def _drifted_install_context(
     saw it and nothing in the plan could have: the second simulation is the first statement
     of the fact.
     """
-    sim_cmd = "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a"
+    sim_cmd = f"{DRY_RUN_INSTALL} pkg-a"
     state = {"sim": 0}
     static = {
         "apt-mark showmanual": CommandResult(0, "manual-x\n", ""),
@@ -222,12 +218,8 @@ class TestTransactionGuard:
             target_responses={
                 "apt-mark showmanual": CommandResult(0, "", ""),
                 "apt-cache policy": CommandResult(0, target_offers("pkg-a"), ""),
-                "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": CommandResult(
-                    0, "Inst pkg-a (1.0)\nRemv auto-dep [1.0]\n", ""
-                ),
-                "sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes --no-install-recommends pkg-a": (
-                    CommandResult(0, "", "")
-                ),
+                f"{DRY_RUN_INSTALL} pkg-a": CommandResult(0, "Inst pkg-a (1.0)\nRemv auto-dep [1.0]\n", ""),
+                f"{REAL_INSTALL} pkg-a": (CommandResult(0, "", "")),
             },
         )
         job = AptSyncJob(context)
@@ -247,12 +239,8 @@ class TestTransactionGuard:
             },
             target_responses={
                 "apt-mark showmanual": CommandResult(0, "", ""),
-                "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": CommandResult(
-                    0, "Inst pkg-a (1.0)\n", ""
-                ),
-                "sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes --no-install-recommends pkg-a": (
-                    CommandResult(0, "", "")
-                ),
+                f"{DRY_RUN_INSTALL} pkg-a": CommandResult(0, "Inst pkg-a (1.0)\n", ""),
+                f"{REAL_INSTALL} pkg-a": (CommandResult(0, "", "")),
             },
         )
         job = AptSyncJob(context)
@@ -277,7 +265,7 @@ class TestTransactionGuard:
 
         with pytest.raises(ConvergeItemFailed, match="dpkg was interrupted"):
             await simulate_apt_transaction(
-                target, "install --assume-yes --no-install-recommends pkg-a", login_shell=False
+                target, "install --assume-yes --allow-downgrades --no-install-recommends pkg-a", login_shell=False
             )
 
     @pytest.mark.asyncio
@@ -287,7 +275,7 @@ class TestTransactionGuard:
         the normal per-item path rather than the real `apt-get install` running
         against an untrustworthy preview.
         """
-        install_cmd = "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a"
+        install_cmd = f"{DRY_RUN_INSTALL} pkg-a"
         state = {"calls": 0}
 
         def target_side_effect(cmd: str, **_: object) -> CommandResult:
@@ -502,12 +490,8 @@ class TestInstallBeforeHoldOrdering:
             target_responses={
                 "apt-mark showmanual": CommandResult(0, "", ""),
                 "apt-mark showhold": CommandResult(0, "", ""),
-                "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": CommandResult(
-                    0, "Inst pkg-a (1.0)\n", ""
-                ),
-                "sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes --no-install-recommends pkg-a": (
-                    CommandResult(0, "", "")
-                ),
+                f"{DRY_RUN_INSTALL} pkg-a": CommandResult(0, "Inst pkg-a (1.0)\n", ""),
+                f"{REAL_INSTALL} pkg-a": (CommandResult(0, "", "")),
                 "sudo apt-mark hold pkg-a": CommandResult(0, "pkg-a set on hold.\n", ""),
                 "sudo apt-get update": CommandResult(0, "", ""),
             },
@@ -571,12 +555,8 @@ class TestAFailedHoldCommand:
                 "apt-mark showmanual": CommandResult(0, "frozen\n", ""),
                 "dpkg-query": CommandResult(0, "frozen\t1.0\n", ""),
                 "apt-mark showhold": CommandResult(0, "", ""),
-                "apt-get --dry-run install --assume-yes --no-install-recommends pkg-good": CommandResult(
-                    0, "Inst pkg-good (1.0)\n", ""
-                ),
-                "sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes --no-install-recommends pkg-good": (
-                    CommandResult(0, "", "")
-                ),
+                f"{DRY_RUN_INSTALL} pkg-good": CommandResult(0, "Inst pkg-good (1.0)\n", ""),
+                f"{REAL_INSTALL} pkg-good": (CommandResult(0, "", "")),
                 "sudo apt-mark hold frozen": CommandResult(1, "", "E: dpkg selection could not be written"),
                 "sudo apt-get update": CommandResult(0, "", ""),
             },
@@ -600,8 +580,8 @@ _HELD_SOURCE = {
     "dpkg-query": CommandResult(0, "pkg-a\t1.0\n", ""),
     "apt-mark showhold": CommandResult(0, "pkg-a\n", ""),
 }
-_PINNED_SIMULATION = "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a=1.0"
-_PINNED_INSTALL = "sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes --no-install-recommends pkg-a=1.0"
+_PINNED_SIMULATION = f"{DRY_RUN_INSTALL} pkg-a=1.0"
+_PINNED_INSTALL = f"{REAL_INSTALL} pkg-a=1.0"
 
 
 def _target_offering(candidate: str) -> str:
@@ -965,9 +945,7 @@ class TestAHoldNeedsItsPackage:
                 "dpkg-query": CommandResult(0, "other-manual\t1.0\n", ""),
                 "apt-mark showhold": CommandResult(0, "", ""),
                 "apt-cache policy": CommandResult(0, target_offers("pkg-a"), ""),
-                "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": CommandResult(
-                    0, "Inst pkg-a (1.0)\nRemv other-manual [1.0]\n", ""
-                ),
+                f"{DRY_RUN_INSTALL} pkg-a": CommandResult(0, "Inst pkg-a (1.0)\nRemv other-manual [1.0]\n", ""),
             },
         )
         job = AptSyncJob(context)
@@ -1264,12 +1242,8 @@ class TestDowngradeGuard:
             target_responses={
                 "apt-mark showmanual": CommandResult(0, "", ""),
                 "apt-cache policy": CommandResult(0, target_offers("pkg-a"), ""),
-                "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": CommandResult(
-                    0, "Inst pkg-a (1.0)\nInst auto-dg [2.0] (1.0)\n", ""
-                ),
-                "sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes --no-install-recommends pkg-a": (
-                    CommandResult(0, "", "")
-                ),
+                f"{DRY_RUN_INSTALL} pkg-a": CommandResult(0, "Inst pkg-a (1.0)\nInst auto-dg [2.0] (1.0)\n", ""),
+                f"{REAL_INSTALL} pkg-a": (CommandResult(0, "", "")),
             },
         )
         job = AptSyncJob(context)
@@ -1299,18 +1273,10 @@ class TestMetadataRefreshBeforeInstall:
             },
             target_responses={
                 "apt-mark showmanual": CommandResult(0, "", ""),
-                "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": CommandResult(
-                    0, "Inst pkg-a (1.0)\n", ""
-                ),
-                "apt-get --dry-run install --assume-yes --no-install-recommends pkg-b": CommandResult(
-                    0, "Inst pkg-b (2.0)\n", ""
-                ),
-                "sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes --no-install-recommends pkg-a": (
-                    CommandResult(0, "", "")
-                ),
-                "sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes --no-install-recommends pkg-b": (
-                    CommandResult(0, "", "")
-                ),
+                f"{DRY_RUN_INSTALL} pkg-a": CommandResult(0, "Inst pkg-a (1.0)\n", ""),
+                f"{DRY_RUN_INSTALL} pkg-b": CommandResult(0, "Inst pkg-b (2.0)\n", ""),
+                f"{REAL_INSTALL} pkg-a": (CommandResult(0, "", "")),
+                f"{REAL_INSTALL} pkg-b": (CommandResult(0, "", "")),
                 "sudo apt-get update": CommandResult(0, "", ""),
             },
         )
@@ -1335,12 +1301,8 @@ class TestMetadataRefreshBeforeInstall:
             },
             target_responses={
                 "apt-mark showmanual": CommandResult(0, "", ""),
-                "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": CommandResult(
-                    0, "Inst pkg-a (1.0)\n", ""
-                ),
-                "apt-get --dry-run install --assume-yes --no-install-recommends pkg-b": CommandResult(
-                    0, "Inst pkg-b (2.0)\n", ""
-                ),
+                f"{DRY_RUN_INSTALL} pkg-a": CommandResult(0, "Inst pkg-a (1.0)\n", ""),
+                f"{DRY_RUN_INSTALL} pkg-b": CommandResult(0, "Inst pkg-b (2.0)\n", ""),
                 "sudo apt-get update": CommandResult(1, "", "Could not resolve host archive.ubuntu.com"),
             },
         )
@@ -1373,12 +1335,8 @@ class TestMetadataRefreshBeforeInstall:
             target_responses={
                 "apt-mark showmanual": CommandResult(0, "", ""),
                 "test -f /etc/apt/keyrings/foo.gpg": CommandResult(1, "", ""),
-                "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": CommandResult(
-                    0, "Inst pkg-a (1.0)\n", ""
-                ),
-                "sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes --no-install-recommends pkg-a": (
-                    CommandResult(0, "", "")
-                ),
+                f"{DRY_RUN_INSTALL} pkg-a": CommandResult(0, "Inst pkg-a (1.0)\n", ""),
+                f"{REAL_INSTALL} pkg-a": (CommandResult(0, "", "")),
                 "sudo apt-get update": CommandResult(0, "", ""),
             },
         )

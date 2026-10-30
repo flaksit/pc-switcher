@@ -30,6 +30,7 @@ from tests.unit.jobs.apt.helpers import (
     _UBUNTU_SOURCES_BELNET,
     _VENDOR_LIST,
     DPKG_QUERY_3,
+    DRY_RUN_INSTALL,
     SHOWMANUAL_3,
     _policy_block,
     _scan_line,
@@ -172,9 +173,7 @@ class TestAPackageTheTargetCannotResolveYet:
                         _policy_block("pkg-b", _BASELINE_ARCHIVE) + _policy_block("other-manual", _BASELINE_ARCHIVE),
                         "",
                     ),
-                    "apt-get --dry-run install --assume-yes --no-install-recommends pkg-b": CommandResult(
-                        0, "Inst pkg-b (1.0)\nRemv other-manual [1.0]\n", ""
-                    ),
+                    f"{DRY_RUN_INSTALL} pkg-b": CommandResult(0, "Inst pkg-b (1.0)\nRemv other-manual [1.0]\n", ""),
                 },
                 cannot_locate=["gh"],
             ),
@@ -183,7 +182,7 @@ class TestAPackageTheTargetCannotResolveYet:
         plan = await AptSyncJob(context).plan()
 
         simulations = [cmd for cmd in all_calls(target) if "apt-get --dry-run" in cmd]
-        assert simulations == ["apt-get --dry-run install --assume-yes --no-install-recommends pkg-b"]
+        assert simulations == [f"{DRY_RUN_INSTALL} pkg-b"]
         assert "apt:collateral:install:remove:other-manual" in {d.item_id for d in plan.diffs}
         assert {d.item_id for d in plan.diffs if d.action == DiffAction.INSTALL} == {
             "apt:package:gh",

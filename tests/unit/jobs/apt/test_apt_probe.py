@@ -29,6 +29,7 @@ from tests.unit.jobs.apt.helpers import (
     _SOURCE_SCAN_CMD,
     _VENDOR_LIST,
     DPKG_QUERY_3,
+    DRY_RUN_INSTALL,
     MACHINES,
     SHOWMANUAL_3,
     _policy_block,
@@ -501,9 +502,7 @@ class TestBareDebPackagesAreNotAptSyncsBusiness:
             },
             target_responses={
                 "apt-mark showmanual": CommandResult(0, "", ""),
-                "apt-get --dry-run install --assume-yes --no-install-recommends gh": CommandResult(
-                    0, "Inst gh (2.96.0)\nRemv code [1.0]\n", ""
-                ),
+                f"{DRY_RUN_INSTALL} gh": CommandResult(0, "Inst gh (2.96.0)\nRemv code [1.0]\n", ""),
             },
         )
 

@@ -130,8 +130,19 @@ def install_args(names: Sequence[str]) -> str:
     installed automatically. The one case that needed it — a name the target held without
     having it installed, which apt refuses the whole batch over — cannot reach a rehearsal
     any more: `PKG-FR-HOLD-WITHOUT-PACKAGE` ends the run over such a hold while planning.
+
+    `--allow-downgrades` is what lets the rehearsal see a downgrade at all: under
+    `--assume-yes` without it, apt aborts any transaction containing one with `E: Packages
+    were downgraded and -y was used without --allow-downgrades`, before printing a single
+    `Inst` line — so collateral classification never sees the downgrade, and the item fails
+    on apt's error instead of being asked about (`PKG-FR-COLLATERAL-MANUAL`). Measured on a
+    target switching Ubuntu's snap-transitional `firefox` (`1:1snap1-0ubuntu5`) to Mozilla's
+    pinned `159.0~build1`: the epoch makes apt read the switch as a downgrade. The real
+    command needs it too, or every downgrade the rehearsal let through fails there; nothing
+    is downgraded unguarded, because the rehearsal of these same arguments is what decides.
     """
-    return f"install --assume-yes --no-install-recommends {' '.join(shlex.quote(name) for name in names)}"
+    quoted = " ".join(shlex.quote(name) for name in names)
+    return f"install --assume-yes --allow-downgrades --no-install-recommends {quoted}"
 
 
 def remove_args(names: Sequence[str]) -> str:

@@ -1893,7 +1893,7 @@ async def install_from_the_vendor_repository(executor: BashLoginRemoteExecutor) 
     assert updated.success, f"apt-get update failed after adding {VENDOR_REPO_URI}: {updated.stderr}"
 
     installed = await executor.run_command(
-        f"sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes --no-install-recommends "
+        f"sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes --allow-downgrades --no-install-recommends "
         f"{shlex.quote(VENDOR_PACKAGE)}",
         login_shell=False,
         timeout=300.0,
@@ -1995,6 +1995,49 @@ async def remove_the_rival_candidate(
         login_shell=False,
         timeout=60.0,
     )
+
+
+async def publish_a_pinned_lower_version(executor: BashLoginRemoteExecutor, name: str) -> tuple[str, str, str]:
+    """On `executor`: publish `name` at `SYNTHETIC_PACKAGE_VERSION` in a flat `file:`
+    repository and pin that version at 1000, so apt's candidate sits BELOW the version
+    `install_local_deb` put there and installing `name` is a downgrade. Returns
+    `(repo_dir, list_filename, pin_filename)`, undone by `remove_the_rival_candidate`.
+
+    The shape of a target switching Ubuntu's snap-transitional `firefox` (epoch `1:`) to
+    Mozilla's pinned build. A 1000 pin is the only priority that makes apt's candidate a
+    lower version than the installed one.
+    """
+    uniq = uuid4().hex[:12]
+    repo_dir = f"/opt/pcswitcher-it-lower-{uniq}"
+    list_filename = f"pcswitcher-it-lower-{uniq}.list"
+    pin_filename = f"pcswitcher-it-lower-{uniq}"
+    control = synthetic_control(name)
+    pin_body = f"Package: {name}\nPin: version {SYNTHETIC_PACKAGE_VERSION}\nPin-Priority: 1000\n"
+
+    build = "\n".join(
+        (
+            "set -euo pipefail",
+            "work=$(mktemp --directory)",
+            f'mkdir --parents "$work/{name}/DEBIAN"',
+            f'printf %s {shlex.quote(control)} > "$work/{name}/DEBIAN/control"',
+            f'dpkg-deb --build "$work/{name}" "$work/{name}.deb" > /dev/null',
+            f"sudo mkdir --parents {shlex.quote(repo_dir)}",
+            f'sudo cp "$work/{name}.deb" {shlex.quote(repo_dir)}/',
+            "{",
+            *packages_index_stanza(name, control),
+            f"}} | sudo tee {shlex.quote(f'{repo_dir}/Packages')} > /dev/null",
+            f"printf '%s\\n' {shlex.quote(f'deb [trusted=yes] file:{repo_dir} ./')}"
+            f" | sudo tee {shlex.quote(f'{APT_SOURCES_DIR}/{list_filename}')} > /dev/null",
+            f"printf %s {shlex.quote(pin_body)}"
+            f" | sudo tee {shlex.quote(f'{APT_PREFERENCES_DIR}/{pin_filename}')} > /dev/null",
+        )
+    )
+    built = await executor.run_command(build, login_shell=False, timeout=60.0)
+    assert built.success, f"Failed to publish the pinned lower version of {name}: {built.stderr}"
+
+    updated = await apt_get_update_for(executor, f"{APT_SOURCES_DIR}/{list_filename}")
+    assert updated.success, f"apt-get update failed after adding {repo_dir}: {updated.stderr}"
+    return repo_dir, list_filename, pin_filename
 
 
 # The two files `PKG-FR-DISTRO-FILES` gates on the target's Ubuntu Pro attachment, with the real

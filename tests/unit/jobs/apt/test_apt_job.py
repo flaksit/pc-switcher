@@ -39,6 +39,8 @@ from tests.unit.jobs.apt.helpers import (
     _STATUS_QUERY,
     _VENDOR_LIST,
     DPKG_QUERY_3,
+    DRY_RUN_INSTALL,
+    REAL_INSTALL,
     SHOWMANUAL_3,
     CountingReviewer,
     _policy_block,
@@ -145,18 +147,12 @@ class TestContinueOnFailure:
                 "apt-mark showmanual": CommandResult(0, "", ""),
                 "dpkg-query": CommandResult(0, "", ""),
                 "apt-cache policy": CommandResult(0, target_offers("pkg-a", "pkg-b", "pkg-c"), ""),
-                "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": clean_preview,
-                "apt-get --dry-run install --assume-yes --no-install-recommends pkg-b": clean_preview,
-                "apt-get --dry-run install --assume-yes --no-install-recommends pkg-c": clean_preview,
-                "sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes --no-install-recommends pkg-a": (
-                    CommandResult(0, "", "")
-                ),
-                "sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes --no-install-recommends pkg-b": (
-                    CommandResult(1, "", "dpkg error for pkg-b")
-                ),
-                "sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes --no-install-recommends pkg-c": (
-                    CommandResult(0, "", "")
-                ),
+                f"{DRY_RUN_INSTALL} pkg-a": clean_preview,
+                f"{DRY_RUN_INSTALL} pkg-b": clean_preview,
+                f"{DRY_RUN_INSTALL} pkg-c": clean_preview,
+                f"{REAL_INSTALL} pkg-a": (CommandResult(0, "", "")),
+                f"{REAL_INSTALL} pkg-b": (CommandResult(1, "", "dpkg error for pkg-b")),
+                f"{REAL_INSTALL} pkg-c": (CommandResult(0, "", "")),
             },
         )
         job = AptSyncJob(context)
