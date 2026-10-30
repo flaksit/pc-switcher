@@ -130,8 +130,19 @@ def install_args(names: Sequence[str]) -> str:
     installed automatically. The one case that needed it — a name the target held without
     having it installed, which apt refuses the whole batch over — cannot reach a rehearsal
     any more: `PKG-FR-HOLD-WITHOUT-PACKAGE` ends the run over such a hold while planning.
+
+    `--allow-downgrades` is what lets the rehearsal see a downgrade at all: under
+    `--assume-yes` without it, apt aborts any transaction containing one with `E: Packages
+    were downgraded and -y was used without --allow-downgrades`, before printing a single
+    `Inst` line — so collateral classification never sees the downgrade, and the item fails
+    on apt's error instead of being asked about (`PKG-FR-COLLATERAL-MANUAL`). Measured on a
+    target switching Ubuntu's snap-transitional `firefox` (`1:1snap1-0ubuntu5`) to Mozilla's
+    pinned `159.0~build1`: the epoch makes apt read the switch as a downgrade. The real
+    command needs it too, or every downgrade the rehearsal let through fails there; nothing
+    is downgraded unguarded, because the rehearsal of these same arguments is what decides.
     """
-    return f"install --assume-yes --no-install-recommends {' '.join(shlex.quote(name) for name in names)}"
+    quoted = " ".join(shlex.quote(name) for name in names)
+    return f"install --assume-yes --allow-downgrades --no-install-recommends {quoted}"
 
 
 def remove_args(names: Sequence[str]) -> str:
@@ -217,13 +228,42 @@ class AptTransactionPreview:
     install_versions: Mapping[str, tuple[str | None, str]] = field(default_factory=dict)
 
 
+# One dependency in apt's "The following packages have unmet dependencies:" block: either the
+# first line ` <pkg> : Depends: <dep> but it is not installable` or a continuation line
+# `          Depends: <dep> (>= 1) but 2 is to be installed`. Only the first alternative of a
+# `a | b` dependency is captured, and the `:any`/`:amd64` qualifier is dropped.
+_UNMET_DEPENDENCY_RE = re.compile(r"^\s*(?:\S+ : )?(?:Pre-?)?Depends: (?P<dep>[^\s:(|]+)")
+
+
+class AptRehearsalFailed(ConvergeItemFailed):
+    """`apt-get --dry-run` refused the transaction. `unmet_dependencies` are the packages apt
+    named as the dependencies it could not satisfy, so the caller can say WHY when one of them
+    is an item this run itself refused — apt's own wording ("you have held broken packages")
+    names neither the dependency nor a reason, and nothing need be held at all.
+    """
+
+    def __init__(self, message: str, unmet_dependencies: tuple[str, ...]) -> None:
+        super().__init__(message)
+        self.unmet_dependencies = unmet_dependencies
+
+
+def unmet_dependencies(stdout: str) -> tuple[str, ...]:
+    """The dependency names in a failed rehearsal's unmet-dependencies block, in apt's order."""
+    found: dict[str, None] = {}
+    for line in stdout.splitlines():
+        match = _UNMET_DEPENDENCY_RE.match(line)
+        if match is not None:
+            found[match.group("dep")] = None
+    return tuple(found)
+
+
 async def simulate_apt_transaction(
     executor: RemoteExecutor, apt_args: str, *, login_shell: bool | None = False
 ) -> AptTransactionPreview:
     """Run `apt-get --dry-run <apt_args>` on `executor` and parse its Inst/Remv action lines.
 
-    No `sudo` is needed: simulation is read-only. Raises `ConvergeItemFailed` if the
-    simulation itself fails: a failed `apt-get --dry-run` typically prints no Inst/Remv
+    No `sudo` is needed: simulation is read-only. Raises `AptRehearsalFailed` (a
+    `ConvergeItemFailed`) if the simulation itself fails: a failed `apt-get --dry-run` typically prints no Inst/Remv
     lines, which would otherwise parse as an indistinguishable-from-clean empty preview and
     let both call sites proceed with a real command whose simulation was never actually
     trustworthy (WR-01) — refuse rather than silently degrade.
@@ -244,7 +284,9 @@ async def simulate_apt_transaction(
     """
     result = await executor.run_command(f"apt-get --dry-run {apt_args}", login_shell=login_shell)
     if not result.success:
-        raise ConvergeItemFailed(f"apt-get --dry-run {apt_args} failed: {result.stderr.strip()}")
+        raise AptRehearsalFailed(
+            f"apt-get --dry-run {apt_args} failed: {result.stderr.strip()}", unmet_dependencies(result.stdout)
+        )
     installs: list[str] = []
     removals: list[str] = []
     install_versions: dict[str, tuple[str | None, str]] = {}

@@ -28,6 +28,8 @@ from pcswitcher.models import CommandResult, LogLevel, SyncAbortedByUser
 from tests.unit.jobs.apt.helpers import (
     _APPROVE_PKG_A,
     _STATUS_QUERY,
+    DRY_RUN_INSTALL,
+    REAL_INSTALL,
     CountingReviewer,
     _policy_block,
     _repo_context,
@@ -75,9 +77,7 @@ class TestPlanTimeCollateral:
                 "apt-mark showmanual": CommandResult(0, "other-manual\n", ""),
                 "dpkg-query": CommandResult(0, "other-manual\t1.0\n", ""),
                 "apt-cache policy": CommandResult(0, target_offers("pkg-a"), ""),
-                "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": CommandResult(
-                    0, "Inst pkg-a (1.0)\nRemv other-manual [1.0]\n", ""
-                ),
+                f"{DRY_RUN_INSTALL} pkg-a": CommandResult(0, "Inst pkg-a (1.0)\nRemv other-manual [1.0]\n", ""),
             },
         )
         job = AptSyncJob(context)
@@ -111,9 +111,7 @@ class TestPlanTimeCollateral:
             target_responses={
                 "apt-mark showmanual": CommandResult(0, "", ""),
                 "apt-cache policy": CommandResult(0, target_offers("pkg-a"), ""),
-                "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": CommandResult(
-                    0, "Inst pkg-a (1.0)\nRemv auto-dep [1.0]\n", ""
-                ),
+                f"{DRY_RUN_INSTALL} pkg-a": CommandResult(0, "Inst pkg-a (1.0)\nRemv auto-dep [1.0]\n", ""),
             },
         )
         job = AptSyncJob(context)
@@ -139,7 +137,7 @@ class TestPlanTimeCollateral:
                 "apt-mark showmanual": CommandResult(0, "manual-dg\n", ""),
                 "dpkg-query": CommandResult(0, "manual-dg\t2.0\n", ""),
                 "apt-cache policy": CommandResult(0, target_offers("pkg-a"), ""),
-                "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": CommandResult(
+                f"{DRY_RUN_INSTALL} pkg-a": CommandResult(
                     0, "Inst pkg-a (1.0)\nInst manual-dg [2.0] (1.0)\nInst auto-dg [2.0] (1.0)\n", ""
                 ),
                 "dpkg --compare-versions 1.0 lt 2.0": CommandResult(0, "", ""),
@@ -169,9 +167,7 @@ class TestPlanTimeCollateral:
                 "apt-mark showmanual": CommandResult(0, "manual-x\n", ""),
                 "dpkg-query": CommandResult(0, "manual-x\t1.0\n", ""),
                 "apt-cache policy": CommandResult(0, target_offers("pkg-a"), ""),
-                "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": CommandResult(
-                    0, "Inst pkg-a (1.0)\nInst manual-x [1.0] (1.0-0)\n", ""
-                ),
+                f"{DRY_RUN_INSTALL} pkg-a": CommandResult(0, "Inst pkg-a (1.0)\nInst manual-x [1.0] (1.0-0)\n", ""),
                 "dpkg --compare-versions 1.0-0 lt 1.0": CommandResult(1, "", ""),
                 "dpkg --compare-versions 1.0-0 gt 1.0": CommandResult(1, "", ""),
             },
@@ -195,9 +191,7 @@ class TestPlanTimeCollateral:
             target_responses={
                 "apt-mark showmanual": CommandResult(0, "", ""),
                 "apt-cache policy": CommandResult(0, target_offers("pkg-a"), ""),
-                "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": CommandResult(
-                    0, "Inst pkg-a (1.0)\n", ""
-                ),
+                f"{DRY_RUN_INSTALL} pkg-a": CommandResult(0, "Inst pkg-a (1.0)\n", ""),
             },
         )
         job = AptSyncJob(context)
@@ -250,12 +244,8 @@ def _manual_collateral_context() -> tuple[JobContext, MagicMock, MagicMock]:
             "apt-mark showmanual": CommandResult(0, "other-manual\n", ""),
             "dpkg-query": CommandResult(0, "other-manual\t1.0\n", ""),
             "apt-cache policy": CommandResult(0, target_offers("pkg-a"), ""),
-            "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": CommandResult(
-                0, "Inst pkg-a (1.0)\nRemv other-manual [1.0]\n", ""
-            ),
-            "sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes --no-install-recommends pkg-a": (
-                CommandResult(0, "", "")
-            ),
+            f"{DRY_RUN_INSTALL} pkg-a": CommandResult(0, "Inst pkg-a (1.0)\nRemv other-manual [1.0]\n", ""),
+            f"{REAL_INSTALL} pkg-a": (CommandResult(0, "", "")),
         },
     )
 
@@ -785,9 +775,7 @@ class TestSourceOnlyCollateral:
             },
             target_responses={
                 "apt-mark showmanual": CommandResult(0, "", ""),
-                "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": CommandResult(
-                    0, "Inst pkg-a (1.0)\nRemv src-only [1.0]\n", ""
-                ),
+                f"{DRY_RUN_INSTALL} pkg-a": CommandResult(0, "Inst pkg-a (1.0)\nRemv src-only [1.0]\n", ""),
             },
         )
         job = AptSyncJob(context)
@@ -805,7 +793,7 @@ class TestSourceOnlyCollateral:
         transaction that would remove a package manual on the SOURCE only proceeds.
         `src-only` is skip-recorded on the source so it is not a reviewed candidate.
         """
-        sim_cmd = "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a"
+        sim_cmd = f"{DRY_RUN_INSTALL} pkg-a"
         state = {"sim": 0}
 
         def target_side_effect(cmd: str, **_: object) -> CommandResult:
@@ -855,9 +843,7 @@ class TestRemovalCandidateKeepsItsProtection:
                 "apt-mark showmanual": CommandResult(0, "old-tool\n", ""),
                 "dpkg-query": CommandResult(0, "old-tool\t1.0\n", ""),
                 "apt-cache policy": CommandResult(0, target_offers("pkg-a"), ""),
-                "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": CommandResult(
-                    0, "Inst pkg-a (1.0)\nRemv old-tool [1.0]\n", ""
-                ),
+                f"{DRY_RUN_INSTALL} pkg-a": CommandResult(0, "Inst pkg-a (1.0)\nRemv old-tool [1.0]\n", ""),
                 "apt-get --dry-run remove --assume-yes old-tool": CommandResult(0, "Remv old-tool [1.0]\n", ""),
             },
         )
@@ -934,9 +920,7 @@ class TestTheReasonNamesTheGroundThatApplies:
                 "dpkg-query": CommandResult(0, "vendor-tool\t1.0\n", ""),
                 "apt.decisions.yaml": CommandResult(0, decision_file("apt:package:vendor-tool"), ""),
                 "apt-cache policy": CommandResult(0, target_offers("pkg-a"), ""),
-                "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": CommandResult(
-                    0, "Inst pkg-a (1.0)\nRemv vendor-tool [1.0]\n", ""
-                ),
+                f"{DRY_RUN_INSTALL} pkg-a": CommandResult(0, "Inst pkg-a (1.0)\nRemv vendor-tool [1.0]\n", ""),
             },
         )
 
@@ -1018,9 +1002,7 @@ class TestCollateralUpgrade:
                 "apt-mark showmanual": CommandResult(0, "manual-up\n", ""),
                 "dpkg-query": CommandResult(0, "manual-up\t1.0\n", ""),
                 "apt-cache policy": CommandResult(0, target_offers("pkg-a"), ""),
-                "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": CommandResult(
-                    0, "Inst pkg-a (1.0)\nInst manual-up [1.0] (2.0)\n", ""
-                ),
+                f"{DRY_RUN_INSTALL} pkg-a": CommandResult(0, "Inst pkg-a (1.0)\nInst manual-up [1.0] (2.0)\n", ""),
                 "dpkg --compare-versions 2.0 lt 1.0": CommandResult(1, "", ""),
                 "dpkg --compare-versions 2.0 gt 1.0": CommandResult(0, "", ""),
             },
@@ -1049,9 +1031,7 @@ class TestAutoCollateralIsLogged:
             target_responses={
                 "apt-mark showmanual": CommandResult(0, "", ""),
                 "apt-cache policy": CommandResult(0, target_offers("pkg-a"), ""),
-                "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": CommandResult(
-                    0, "Inst pkg-a (1.0)\nRemv auto-dep [1.0]\n", ""
-                ),
+                f"{DRY_RUN_INSTALL} pkg-a": CommandResult(0, "Inst pkg-a (1.0)\nRemv auto-dep [1.0]\n", ""),
             },
         )
         job = AptSyncJob(context)
@@ -1107,9 +1087,7 @@ class TestAutoCollateralIsLogged:
             target_responses={
                 "apt-mark showmanual": CommandResult(0, "", ""),
                 "apt-cache policy": CommandResult(0, target_offers("pkg-a"), ""),
-                "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": CommandResult(
-                    0, "Inst pkg-a (1.0)\nInst auto-dep [1.0] (2.0)\n", ""
-                ),
+                f"{DRY_RUN_INSTALL} pkg-a": CommandResult(0, "Inst pkg-a (1.0)\nInst auto-dep [1.0] (2.0)\n", ""),
             },
         )
         job = AptSyncJob(context)
@@ -1133,7 +1111,7 @@ class TestAutoCollateralIsLoggedFromTheTransactionThatHappens:
     ) -> None:
         """D9 — the plan-time rehearsal is clean and the real transaction takes `auto-dep`:
         the only line naming it comes from the transaction that happened."""
-        sim = "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a"
+        sim = f"{DRY_RUN_INSTALL} pkg-a"
         state = {"sim": 0}
 
         def target_side_effect(cmd: str, **_: object) -> CommandResult:
@@ -1222,9 +1200,7 @@ class TestOnePackageTwoConsequences:
                 "apt-mark showmanual": CommandResult(0, "going\nvictim\n", ""),
                 "dpkg-query": CommandResult(0, "going\t1.0\nvictim\t1.0\n", ""),
                 "apt-cache policy": CommandResult(0, target_offers("pkg-a"), ""),
-                "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": CommandResult(
-                    0, "Inst pkg-a (1.0)\nRemv victim [1.0]\n", ""
-                ),
+                f"{DRY_RUN_INSTALL} pkg-a": CommandResult(0, "Inst pkg-a (1.0)\nRemv victim [1.0]\n", ""),
                 "apt-get --dry-run remove --assume-yes going": CommandResult(
                     0, "Remv going [1.0]\nRemv victim [1.0]\n", ""
                 ),
@@ -1293,9 +1269,7 @@ class TestOnePackageTwoConsequences:
                     "apt-mark showmanual": CommandResult(0, "going\nvictim\n", ""),
                     "dpkg-query": CommandResult(0, "going\t1.0\nvictim\t1.0\n", ""),
                     "apt-cache policy": CommandResult(0, target_offers("pkg-a"), ""),
-                    "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": CommandResult(
-                        0, "Inst pkg-a (1.0)\nRemv victim [1.0]\n", ""
-                    ),
+                    f"{DRY_RUN_INSTALL} pkg-a": CommandResult(0, "Inst pkg-a (1.0)\nRemv victim [1.0]\n", ""),
                 }
             )(cmd)
 

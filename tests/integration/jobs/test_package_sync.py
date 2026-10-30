@@ -93,6 +93,7 @@ from uuid import uuid4
 import pytest
 
 from pcswitcher.executor import BashLoginRemoteExecutor
+from pcswitcher.jobs.apt_sync.commands import install_args, simulate_apt_transaction
 from pcswitcher.jobs.apt_sync.items import AptPackageItem
 from pcswitcher.jobs.flatpak_sync import FlatpakItem
 from pcswitcher.jobs.packages.review import Decision
@@ -195,6 +196,7 @@ from tests.integration.jobs.package_sync_scenario import (
     path_exists,
     pending_apt_timer_restore,
     publish_a_cascading_pair,
+    publish_a_pinned_lower_version,
     publish_a_rival_candidate,
     purge_local_deb,
     put_paths_back,
@@ -403,6 +405,34 @@ class TestTheAptOriginModelOnRealRepositories:
                     await undeclare_the_vendor_repository(pc2_executor, source_filename, key_filename)
 
             await cleanup_in_parallel(clean_the_source(), clean_the_target())
+
+
+class TestTheRehearsalSeesADowngrade:
+    """`install_args` against apt's own refusal of downgrades under `--assume-yes`.
+
+    The unit tier feeds `Collateral.classify` `Inst <name> [<old>] (<new>)` lines written by
+    hand. Only real apt shows whether such a line is ever printed: without
+    `--allow-downgrades`, apt aborts a transaction containing a downgrade before printing any.
+    """
+
+    async def test_a_downgrade_is_rehearsed_and_parsed_not_refused(
+        self, pc2_executor: BashLoginRemoteExecutor
+    ) -> None:
+        """D73 — a target whose pinned candidate is below the installed version: the rehearsal of the
+        exact arguments the real install uses succeeds and names both versions."""
+        name = f"pcswitcher-it-dg-{uuid4().hex[:12]}"
+        repo_dir = list_filename = pin_filename = ""
+        try:
+            await install_local_deb(pc2_executor, name, version="2.0")
+            repo_dir, list_filename, pin_filename = await publish_a_pinned_lower_version(pc2_executor, name)
+
+            preview = await simulate_apt_transaction(pc2_executor, install_args([name]))
+
+            assert preview.install_versions.get(name) == ("2.0", "1.0"), preview.raw
+        finally:
+            if repo_dir:
+                await remove_the_rival_candidate(pc2_executor, repo_dir, list_filename, pin_filename)
+            await purge_local_deb(pc2_executor, name)
 
 
 class TestARunWithNobodyToAsk:
@@ -616,7 +646,7 @@ class TestARunWithNobodyToAsk:
             # The precondition, asserted rather than assumed: without it the run below proves
             # nothing, because a target that CAN resolve the name never had the defect.
             refused = await pc2_executor.run_command(
-                f"apt-get --dry-run install --assume-yes --no-install-recommends {shlex.quote(unlocatable)}",
+                f"apt-get --dry-run {install_args([unlocatable])}",
                 login_shell=False,
                 timeout=60.0,
             )
