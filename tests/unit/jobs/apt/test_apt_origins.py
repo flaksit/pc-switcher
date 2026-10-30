@@ -242,7 +242,7 @@ class TestOriginClassification:
         context, _source, _target = make_context(
             source_responses={
                 "apt-mark showmanual": CommandResult(0, "firefox\n", ""),
-                "dpkg-query": CommandResult(0, "firefox\t145.0\n", ""),
+                "dpkg-query": CommandResult(0, "firefox\t159.0~build1\n", ""),
                 "apt-cache policy": CommandResult(0, POLICY_MOZILLA_FIREFOX_INSTALLED, ""),
                 _SOURCE_SCAN_CMD: CommandResult(0, _scan_line("mozilla.sources", _MOZILLA_SOURCES), ""),
                 "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "packages.mozilla.org.asc"), ""),
@@ -565,7 +565,7 @@ def _mozilla_source_responses() -> dict[str, CommandResult]:
     declares it and the key that file names."""
     return {
         "apt-mark showmanual": CommandResult(0, "firefox\n", ""),
-        "dpkg-query": CommandResult(0, "firefox\t145.0\n", ""),
+        "dpkg-query": CommandResult(0, "firefox\t159.0~build1\n", ""),
         "apt-cache policy": CommandResult(0, POLICY_MOZILLA_FIREFOX_INSTALLED, ""),
         _SOURCE_SCAN_CMD: CommandResult(0, _scan_line("mozilla.sources", _MOZILLA_SOURCES), ""),
         "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "packages.mozilla.org.asc"), ""),

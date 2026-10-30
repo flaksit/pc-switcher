@@ -14,6 +14,7 @@ from pcswitcher.jobs.packages.apt_policy import (
     candidate_origins_by_package,
     installed_origins_by_package,
     normalise_repo_uri,
+    packages_installed_from_no_repository,
 )
 
 # `firefox`, not installed: the archive's only candidate carries epoch 1, which is the fact
@@ -77,20 +78,34 @@ POLICY_NO_CANDIDATE = """docker.io:
         500 http://ftp.belnet.be/ubuntu noble/universe amd64 Packages
 """
 
-# COMPOSED, not measured: the development machine does not have Mozilla's repository, so
-# this is `firefox`'s real archive row (above, verbatim) with a vendor row added in the shape
-# `git`'s PPA row has, at the priority Mozilla's documented `preferences.d` pin gives it. It
-# is the source-side half of the defect `PKG-FR-APT-IDENTITY` closes: the vendor's copy is installed
-# here, and the archive's epoch-1 copy is what the target would install.
+# `firefox` from Mozilla's repository, pinned at 1000 by Mozilla's documented
+# `preferences.d` file. Verbatim, trimmed to the first three version rows. The four-character
+# priority is right-aligned one column further left than a three-character one, which a
+# fixed-indent reading took for a version row (#302). The source-side half of the defect
+# `PKG-FR-APT-IDENTITY` closes: the vendor's copy is installed here, and the archive's epoch-1
+# copy is what a target without the repository would install.
 POLICY_MOZILLA_FIREFOX_INSTALLED = """firefox:
-  Installed: 145.0
-  Candidate: 145.0
+  Installed: 159.0~build1
+  Candidate: 159.0~build1
   Version table:
- *** 145.0 1000
-        1000 https://packages.mozilla.org/apt mozilla/main amd64 Packages
-        100 /var/lib/dpkg/status
-     1:1snap1-0ubuntu5 500
+     1:1snap1-0ubuntu5 -1
         500 http://ftp.belnet.be/ubuntu noble/main amd64 Packages
+ *** 159.0~build1 1000
+       1000 https://packages.mozilla.org/apt mozilla/main amd64 Packages
+        100 /var/lib/dpkg/status
+     158.0.1~build1 1000
+       1000 https://packages.mozilla.org/apt mozilla/main amd64 Packages
+"""
+
+# COMPOSED, not measured: `git`'s verbatim PPA block with the PPA row's priority set to
+# -100, the other four-character priority shape. No machine here pins an origin below zero.
+POLICY_NEGATIVE_FOUR_CHARACTER_PRIORITY = """git:
+  Installed: 1:2.54.0-0ppa1~ubuntu24.04.1
+  Candidate: 1:2.54.0-0ppa1~ubuntu24.04.1
+  Version table:
+ *** 1:2.54.0-0ppa1~ubuntu24.04.1 500
+       -100 https://ppa.launchpadcontent.net/git-core/ppa/ubuntu noble/main amd64 Packages
+        100 /var/lib/dpkg/status
 """
 
 # `code`, installed from a downloaded `.deb`: dpkg's own status entry supplies the
@@ -196,6 +211,30 @@ class TestInstalledOriginsUnderTheSharedWalk:
                 "http://ftp.belnet.be/ubuntu",
                 "http://security.ubuntu.com/ubuntu",
             }
+        )
+
+
+class TestFourCharacterPriorities:
+    """#302: apt right-aligns an origin row's priority, so `1000` and `-100` are indented one
+    column less than `500`. The row is still an origin row."""
+
+    def test_a_1000_pinned_vendor_is_the_installed_origin(self) -> None:
+        assert installed_origins_by_package(POLICY_MOZILLA_FIREFOX_INSTALLED)["firefox"] == frozenset(
+            {"https://packages.mozilla.org/apt"}
+        )
+
+    def test_a_1000_pinned_vendor_is_the_candidate_origin(self) -> None:
+        assert candidate_origins_by_package(POLICY_MOZILLA_FIREFOX_INSTALLED)["firefox"] == frozenset(
+            {"https://packages.mozilla.org/apt"}
+        )
+
+    def test_a_1000_pinned_vendor_package_is_not_a_hand_installed_deb(self) -> None:
+        """The reported symptom: `manual_deb_sync` listed Mozilla's `firefox`."""
+        assert packages_installed_from_no_repository(POLICY_MOZILLA_FIREFOX_INSTALLED, ["firefox"]) == frozenset()
+
+    def test_a_negative_four_character_priority_is_still_an_origin(self) -> None:
+        assert installed_origins_by_package(POLICY_NEGATIVE_FOUR_CHARACTER_PRIORITY)["git"] == frozenset(
+            {"https://ppa.launchpadcontent.net/git-core/ppa/ubuntu"}
         )
 
 

@@ -18,7 +18,7 @@ per kind of finding"): this module defines no class and sits in no job's MRO, so
 managers inherit nothing from it. `manual_deb_sync`'s own rule — it never imports `apt_sync`
 (`PKG-FR-MANUAL-SCOPE`) — also still holds, since both jobs import a third module instead. What is NOT
 worth duplicating is a stateful indentation walker with three separate subtle rules
-(installed-block tracking, eight-space origin rows, the `/var/lib/dpkg/status` pseudo
+(installed-block tracking, origin rows told apart by shape, the `/var/lib/dpkg/status` pseudo
 -origin); `apt_sync._parse_pin_file`'s docstring records what one earlier duplicated
 parser of this size already cost this project.
 """
@@ -53,7 +53,7 @@ def installed_origins_by_package(policy_output: str) -> dict[str, frozenset[str]
     its INSTALLED version}` (C26).
 
     `apt-cache policy`'s version table marks the installed version with a leading `***`
-    and indents each of that version's origins by eight spaces as
+    and lists each of that version's origins below it as
     `<priority> <uri> <suite>/<component> <arch> Packages`. Only the installed version's
     origins count: another version row may list a repository that merely *offers* the
     package (Ubuntu's archive offers `gh` too), which is not the repository the machine is
@@ -96,9 +96,14 @@ def _origins_by_package(policy_output: str, *, of_candidate: bool) -> dict[str, 
     `of_candidate` picks the row — the one whose version equals the block's `Candidate:`,
     or the `***`-marked installed one. Everything else is identical, and duplicating the
     walk to vary that one predicate is what `_parse_pin_file`'s docstring records the cost
-    of. `apt-cache policy` indents each version's origins by eight spaces as
+    of. `apt-cache policy` lists each version's origins below it as
     `<priority> <uri> <suite>/<component> <arch> Packages`; a block starts with an
     unindented `<name>:` header.
+
+    An origin row is recognised by its shape (`_is_origin_row`), never by its indent: apt
+    right-aligns the priority, so a four-character one (`1000`, `-100`) sits one column to
+    the left of a three-character one. Reading by a fixed eight-space indent took Mozilla's
+    `1000` row for a new version row and left the installed `firefox` with no origin (#302).
     """
     origins: dict[str, set[str]] = {}
     current: str | None = None
@@ -120,9 +125,9 @@ def _origins_by_package(policy_output: str, *, of_candidate: bool) -> dict[str, 
             # with an empty set, which is not the same answer as no key at all.
             candidate = None if value == "(none)" else value
             continue
-        if line.startswith("        "):
-            parts = stripped.split()
-            if collecting and len(parts) >= 2 and parts[1] != _DPKG_STATUS:
+        parts = stripped.split()
+        if _is_origin_row(parts):
+            if collecting and parts[1] != _DPKG_STATUS:
                 origins[current].add(normalise_repo_uri(parts[1]))
             continue
         # Any other row at version-table depth opens the next version. `Installed:` and
@@ -131,6 +136,19 @@ def _origins_by_package(policy_output: str, *, of_candidate: bool) -> dict[str, 
         version = stripped.removeprefix("***").split()
         collecting = (bool(version) and version[0] == candidate) if of_candidate else stripped.startswith("***")
     return {name: frozenset(uris) for name, uris in origins.items()}
+
+
+def _is_origin_row(parts: Sequence[str]) -> bool:
+    """`<priority> <uri-or-path> ...`: an integer, then something apt locates packages at —
+    a URI (`http://`, `file:/`, `cdrom:[...]/`) or an absolute path (`/var/lib/dpkg/status`).
+
+    A version row is `<version> <priority>`, so its second field is a bare integer and never
+    matches, even when the version itself is all digits.
+    """
+    if len(parts) < 2:
+        return False
+    priority, location = parts[0], parts[1]
+    return priority.lstrip("-").isdigit() and (location.startswith("/") or ":" in location)
 
 
 def packages_installed_from_no_repository(policy_output: str, queried_names: Sequence[str]) -> frozenset[str]:
