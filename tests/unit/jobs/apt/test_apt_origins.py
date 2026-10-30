@@ -42,6 +42,7 @@ from tests.unit.jobs.apt.helpers import (
     respond_to,
     respond_with_policy_sequence,
     sha256_line,
+    target_offers,
 )
 from tests.unit.jobs.test_apt_policy import (
     POLICY_ARCHIVE_CANDIDATE_UNINSTALLED,
@@ -601,6 +602,53 @@ class TestOriginEnforcement:
         assert "packages.mozilla.org/apt" in reasons[0]
         assert "ftp.belnet.be/ubuntu" in reasons[0]
         assert not any("firefox" in cmd for cmd in real_installs(target))
+
+    @pytest.mark.asyncio
+    async def test_a_dependent_of_a_refused_install_names_that_refusal(self) -> None:
+        """A78 — `python3-pip` needing the PPA's `python3-wheel`, which the target would take from
+        ESM instead: apt answers the dependent with `you have held broken packages`, naming
+        neither the dependency nor a reason. The dependent's failure names `pkg-b` and why it
+        was refused — although `pkg-a` converges first, before `pkg-b`'s own failure exists.
+        """
+        vendor = "https://vendor.example.com/apt"
+        unmet = "The following packages have unmet dependencies:\n pkg-a : Depends: pkg-b but it is not installable\n"
+        context, _source, target = make_context(
+            source_responses={
+                "apt-mark showmanual": CommandResult(0, "pkg-a\npkg-b\n", ""),
+                "dpkg-query": CommandResult(0, "pkg-a\t1.0\npkg-b\t1.0\n", ""),
+                "apt-cache policy": CommandResult(
+                    0, _policy_block("pkg-a", _BASELINE_ARCHIVE) + _policy_block("pkg-b", vendor), ""
+                ),
+                _SOURCE_SCAN_CMD: CommandResult(
+                    0,
+                    _scan_line("ubuntu.sources", _UBUNTU_SOURCES_BELNET) + _scan_line("vendor.list", _VENDOR_LIST),
+                    "",
+                ),
+                "find /etc/apt/keyrings": CommandResult(0, sha256_line("k1", "vendor.gpg"), ""),
+            },
+            target_responses={
+                "apt-mark showmanual": CommandResult(0, "", ""),
+                "apt-cache policy": CommandResult(
+                    0, target_offers("pkg-a") + _policy_block("pkg-b", "https://rival.example.com/apt"), ""
+                ),
+                # Substring-matched, first match wins: the plan-time batch before pkg-a's own rehearsal.
+                f"{DRY_RUN_INSTALL} pkg-a pkg-b": CommandResult(0, "Inst pkg-a (1.0)\nInst pkg-b (1.0)\n", ""),
+                f"{DRY_RUN_INSTALL} pkg-a": CommandResult(
+                    100, unmet, "E: Unable to correct problems, you have held broken packages.\n"
+                ),
+            },
+        )
+        job = AptSyncJob(context)
+        install_reviewer(job, {"apt:package:pkg-a": Decision.APPLY, "apt:package:pkg-b": Decision.APPLY})
+
+        with pytest.raises(PackageItemFailures) as excinfo:
+            await job.execute()
+
+        failures = {diff.item_id: reason for diff, reason in excinfo.value.failures}
+        assert "it depends on pkg-b" in failures["apt:package:pkg-a"]
+        assert "rival.example.com" in failures["apt:package:pkg-a"]
+        assert "held broken packages" not in failures["apt:package:pkg-a"]
+        assert real_installs(target) == []
 
     @pytest.mark.asyncio
     async def test_an_origin_the_converged_target_now_offers_lets_the_install_through(self) -> None:
