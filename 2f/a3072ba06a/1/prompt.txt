@@ -1,0 +1,13 @@
+See log of last trial (a few minutes ago) of "pc-switcher --dry-run fleksi". There is a CRITICAL error in manual_installs_sync!
+
+---
+
+shouldn't that find run as root instead?
+
+---
+
+Are all other actions for manual installs running with sudo and preserving owner and perms?
+
+---
+
+y

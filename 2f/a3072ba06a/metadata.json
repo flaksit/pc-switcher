@@ -3,7 +3,7 @@
   "checkpoint_id": "2fa3072ba06a",
   "strategy": "manual-commit",
   "branch": "fix/manual-installs-sudo-and-apt-config-diffs",
-  "checkpoints_count": 2,
+  "checkpoints_count": 6,
   "files_touched": [
     "docs/dev/package-sync-scenario-coverage.md",
     "docs/jobs/package-sync.md",
@@ -20,13 +20,20 @@
       "compact_transcript": "/2f/a3072ba06a/0/transcript.jsonl",
       "content_hash": "/2f/a3072ba06a/0/content_hash.txt",
       "prompt": "/2f/a3072ba06a/0/prompt.txt"
+    },
+    {
+      "metadata": "/2f/a3072ba06a/1/metadata.json",
+      "transcript": "/2f/a3072ba06a/1/full.jsonl",
+      "compact_transcript": "/2f/a3072ba06a/1/transcript.jsonl",
+      "content_hash": "/2f/a3072ba06a/1/content_hash.txt",
+      "prompt": "/2f/a3072ba06a/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 18,
-    "cache_creation_tokens": 32827,
-    "cache_read_tokens": 493692,
-    "output_tokens": 3824,
-    "api_call_count": 9
+    "input_tokens": 134,
+    "cache_creation_tokens": 142689,
+    "cache_read_tokens": 6128182,
+    "output_tokens": 35416,
+    "api_call_count": 67
   }
 }
