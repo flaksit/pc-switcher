@@ -36,6 +36,7 @@ from pcswitcher.jobs.packages.probes import ProbeFailed, require_answer
 from pcswitcher.jobs.packages.state import DecisionEntry, SnippetRegistry
 from pcswitcher.jobs.packages.unreproducible import UnreproducibleItem, UnreproducibleSyncJob, lines_of
 from pcswitcher.models import FirstSyncScope, Host, ValidationError
+from pcswitcher.sudoers import passwordless_sudo_hint
 
 __all__ = ["ManualInstallsSyncJob"]
 
@@ -43,6 +44,13 @@ __all__ = ["ManualInstallsSyncJob"]
 # that belongs to it. Named once: detection and the mark reconciliation key on the same
 # string, and the file this job shares with nobody still holds another job's ids.
 _ORIGIN = "unowned-path"
+
+# Every filesystem read this job composes goes through sudo, on both machines: an install
+# script may leave a root-only directory (containerd's `/opt/containerd` is
+# `drwx--x--x root`) that an unprivileged `find` cannot list and under which an
+# unprivileged `test -e` cannot see. Only the binary itself is elevated — the loops around
+# it stay in the user's shell, so the grant stays scoped to these binaries, not to a shell.
+_SUDO_COMMANDS = ("/usr/bin/find", "/usr/bin/test")
 
 # The bounded unowned-install scan (`PKG-FR-MANUAL-SCOPE`): `/opt`, every entry directly
 # under `/usr/local`, and the entries of the five `/usr/local` subdirectories software
@@ -55,6 +63,7 @@ _ORIGIN = "unowned-path"
 # there arrives with an application this scan finds elsewhere, so scanning them would raise
 # a second finding for software already named once — and `man` is a symlink to `share/man`,
 # which a scan that followed it would walk twice.
+
 _UNOWNED_SCAN_ROOTS = (
     "/opt",
     "/usr/local",
@@ -248,7 +257,7 @@ class ManualInstallsSyncJob(UnreproducibleSyncJob):
         # trace and the `--confirm-each-command` gate.
         command = (
             f'for root in {quoted_roots}; do [ -d "$root" ] || continue; '
-            "find \"$root\" -mindepth 1 -maxdepth 1 -printf '%y\\t%p\\n' || exit 1; done"
+            "sudo find \"$root\" -mindepth 1 -maxdepth 1 -printf '%y\\t%p\\n' || exit 1; done"
         )
         listing = await executor.run_command(command)
         require_answer(command, listing, machine)
@@ -291,7 +300,7 @@ class ManualInstallsSyncJob(UnreproducibleSyncJob):
             return dict(unowned)
 
         quoted = " ".join(shlex.quote(path) for path in opt_directories)
-        command = f"find {quoted} -mindepth 1 -maxdepth 1 -printf '%y\\t%p\\n'"
+        command = f"sudo find {quoted} -mindepth 1 -maxdepth 1 -printf '%y\\t%p\\n'"
         listing = await executor.run_command(command)
         # No `answers=` guard: every one of these directories may legitimately be empty, and
         # an empty answer is ordinary data (ADR-022).
@@ -377,7 +386,7 @@ class ManualInstallsSyncJob(UnreproducibleSyncJob):
         # directory's outcome is on stdout, and a shell that could not run at all still
         # fails the command itself, which is what `require_answer` reads.
         command = (
-            f'for dir in {quoted}; do if found=$(find "$dir" ! -type d -print -quit); '
+            f'for dir in {quoted}; do if found=$(sudo find "$dir" ! -type d -print -quit); '
             'then [ -n "$found" ] && echo "$dir"; else echo "$dir"; fi; done; exit 0'
         )
         result = await executor.run_command(command)
@@ -489,9 +498,16 @@ class ManualInstallsSyncJob(UnreproducibleSyncJob):
         about the shell rather than about the paths, and `require_answer` can guard it. That
         matters here: silence read as data would say every marked path is gone and drop every
         mark this job holds.
+
+        `sudo test -e` (`_SUDO_COMMANDS`) exits 1 both for a missing path and for a sudo that
+        refused, so `sudo test -d /` runs first as a witness: `/` exists on every machine,
+        and its failing exits the whole command instead of reading as "every path is gone".
         """
         listing = " ".join(shlex.quote(path) for path in sorted(paths))
-        command = f'for p in {listing}; do if test -e "$p"; then printf "%s\\n" "$p"; fi; done'
+        command = (
+            f"sudo test -d / || exit 1; "
+            f'for p in {listing}; do if sudo test -e "$p"; then printf "%s\\n" "$p"; fi; done'
+        )
         result = await executor.run_command(command)
         require_answer(command, result, machine)
         return frozenset(lines_of(result.stdout))
@@ -500,13 +516,12 @@ class ManualInstallsSyncJob(UnreproducibleSyncJob):
     async def validate(self) -> list[ValidationError]:
         """The commands this job's own detection runs: `dpkg` on the source, and `dpkg` on
         the target, which is read too for what it already holds and for the paths the source
-        has dropped (`PKG-FR-MANUAL-DIFF`, `PKG-FR-MANUAL-REMOVE`). Both machines are only
-        ever read for detection, so no sudo is needed for it. A snippet's own sudo needs are
-        unpredictable (an opaque blob, `PKG-FR-SNIPPET-VERBATIM`), so this job does NOT pre-validate target sudo;
-        a snippet that needs it and lacks it fails as a per-item converge failure (`PKG-FR-OUTCOME-FAILED`),
-        reported like any other. An approved `rm --recursive --force` under `/opt` needs it
-        too and is treated the same way: a run that approves no removal needs no privilege at
-        all, and demanding it up front would refuse the job to every user who only installs.
+        has dropped (`PKG-FR-MANUAL-DIFF`, `PKG-FR-MANUAL-REMOVE`); and passwordless sudo on
+        both, because every filesystem read runs under sudo (`_SUDO_COMMANDS`).
+        Without it every listing fails mid-run instead of here. A snippet's own sudo needs are
+        unpredictable (an opaque blob, `PKG-FR-SNIPPET-VERBATIM`) and are not checked: a
+        snippet that lacks a grant fails as a per-item converge failure (`PKG-FR-OUTCOME-FAILED`),
+        reported like any other, as does an approved `rm --recursive --force` under `/opt`.
 
         Sequential checks appending to `errors`, never raising mid-validate (matches
         `AptSyncJob.validate()`'s shape).
@@ -526,6 +541,28 @@ class ManualInstallsSyncJob(UnreproducibleSyncJob):
             errors.append(
                 self._validation_error(
                     Host.TARGET, "dpkg is not available on target (required to tell what it already has)"
+                )
+            )
+
+        source_sudo_check = await self.source.run_command("sudo --non-interactive true")
+        if not source_sudo_check.success:
+            errors.append(
+                self._validation_error(
+                    Host.SOURCE,
+                    "passwordless sudo is not available on source "
+                    "(required to read /opt and /usr/local, including root-only directories).\n"
+                    + passwordless_sudo_hint(_SUDO_COMMANDS),
+                )
+            )
+
+        target_sudo_check = await self.target.run_command("sudo --non-interactive true")
+        if not target_sudo_check.success:
+            errors.append(
+                self._validation_error(
+                    Host.TARGET,
+                    "passwordless sudo is not available on target "
+                    "(required to read /opt and /usr/local, including root-only directories).\n"
+                    + passwordless_sudo_hint(_SUDO_COMMANDS, user=self.context.target_username),
                 )
             )
 

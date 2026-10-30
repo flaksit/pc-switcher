@@ -130,9 +130,9 @@ Each enabled job needs passwordless sudo where it writes:
 | `manual_deb_sync` | none | none |
 | `manual_snap_sync` | none | none |
 | `manual_flatpak_sync` | none | none |
-| `manual_installs_sync` | none | none |
+| `manual_installs_sync` | required (`/usr/bin/find`, `/usr/bin/test`) | required (`/usr/bin/find`, `/usr/bin/test`) |
 
-The `manual_*` jobs pre-validate no sudo: detection only reads. An approved removal on any of the first three needs root on the target and fails as its own item if that is not available. Snippet privilege is the author's — put `sudo` inside the snippet if needed.
+The other `manual_*` jobs pre-validate no sudo: their detection reads unprivileged. `manual_installs_sync` reads `/opt` and `/usr/local` with `sudo find` and `sudo test`, since an install script may leave a root-only directory there. An approved removal on any of the first three needs root on the target and fails as its own item if that is not available. Snippet privilege is the author's — put `sudo` inside the snippet if needed.
 
 `apt_sync` and `snap_sync` also pause each machine's auto-update timers (apt) and auto-refresh (snapd) for the sync window, and restore them afterwards. The pauses expire on their own if the run dies.
 

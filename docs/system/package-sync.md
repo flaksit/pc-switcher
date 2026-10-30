@@ -168,7 +168,7 @@ Decomposes the validation and review paragraphs of [What happens during a sync](
   | `manual_deb_sync` | none | none |
   | `manual_snap_sync` | none | none |
   | `manual_flatpak_sync` | none | none |
-  | `manual_installs_sync` | none | none |
+  | `manual_installs_sync` | required | required |
 
   Lineage: 002-package-sync  
   Impl: each job's `validate()`
