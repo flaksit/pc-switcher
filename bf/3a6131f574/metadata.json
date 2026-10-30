@@ -1,0 +1,36 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "bf3a6131f574",
+  "strategy": "manual-commit",
+  "branch": "fix/manual-installs-sudo-and-apt-config-diffs",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "docs/dev/package-sync-scenario-coverage.md",
+    "docs/jobs/package-sync.md",
+    "docs/system/package-sync.md",
+    "src/pcswitcher/jobs/apt_sync/diffing.py",
+    "src/pcswitcher/jobs/apt_sync/job.py",
+    "src/pcswitcher/jobs/packages/decision_list.py",
+    "src/pcswitcher/jobs/packages/review.py",
+    "src/pcswitcher/jobs/packages/sync_core.py",
+    "tests/unit/jobs/apt/test_apt_job.py",
+    "tests/unit/jobs/test_decision_list.py",
+    "tests/unit/jobs/test_package_review.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/bf/3a6131f574/0/metadata.json",
+      "transcript": "/bf/3a6131f574/0/full.jsonl",
+      "compact_transcript": "/bf/3a6131f574/0/transcript.jsonl",
+      "content_hash": "/bf/3a6131f574/0/content_hash.txt",
+      "prompt": "/bf/3a6131f574/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 18,
+    "cache_creation_tokens": 32827,
+    "cache_read_tokens": 493692,
+    "output_tokens": 3824,
+    "api_call_count": 9
+  }
+}
