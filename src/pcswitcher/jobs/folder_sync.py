@@ -16,7 +16,7 @@ import getpass
 import os
 import re
 import shlex
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, ClassVar, override
@@ -28,6 +28,7 @@ from pcswitcher.jobs.packages.state import DECISION_FILE_GLOB_RELPATH, SNIPPET_R
 from pcswitcher.jobs.snap_sync import snap_sync_exclude_paths, target_snap_revisions
 from pcswitcher.jobs.vscode_state_sync import vscode_state_exclude_paths
 from pcswitcher.models import (
+    CommandResult,
     ConfigError,
     FirstSyncScope,
     Host,
@@ -66,6 +67,16 @@ from pcswitcher.sudoers import passwordless_sudo_hint
 # percentage derived from it may reach the bar.  `--no-inc-recursive` (see
 # `_build_rsync_cmd`) means ir-chk should never appear at all; `_stream_rsync` keeps a
 # degraded scanned-count path for it regardless.
+# rsync's exit code for "some files vanished before they could be transferred", and the two
+# stderr lines it writes for it: one per file, then a summary (`_vanished_files_only`).
+_RSYNC_EXIT_VANISHED = 24
+_RSYNC_VANISHED_RE = re.compile(r'^file has vanished: "(?P<path>.*)"$')
+_RSYNC_VANISHED_SUMMARY_RE = re.compile(
+    r"^rsync warning: some files vanished before they could be transferred \(code 24\)"
+)
+# How many vanished files the WARNING names; every one is logged at FULL.
+_VANISHED_NAMED = 5
+
 _PROGRESS2_RE = re.compile(r"(\d+[\d,.]*[KMGT]?)\s+(\d+)%\s+\S+\s+\S+\s+\(xfr#(\d+),\s*(ir|to)-chk=(\d+)/(\d+)\)")
 
 # How a folder's rsync work is split (see `execute`).  In the steady state one pass
@@ -889,6 +900,21 @@ class FolderSyncJob(SyncJob):
 
         return files_xfr, bytes_xfr, files_deleted
 
+    def _log_vanished(self, folder: FolderEntry, vanished: Sequence[str]) -> None:
+        """A WARNING for files deleted on the source while the pass ran, naming a few, and a
+        FULL line per file: the pass is otherwise complete, and the next sync settles them
+        either way — a file that is still gone is deleted on the target then."""
+        shown = ", ".join(vanished[:_VANISHED_NAMED])
+        more = f" and {len(vanished) - _VANISHED_NAMED:,} more" if len(vanished) > _VANISHED_NAMED else ""
+        self._log(
+            Host.SOURCE,
+            LogLevel.WARNING,
+            f"{folder.path}: {len(vanished):,} file(s) disappeared while being synced and were skipped "
+            f"(something deleted them during the sync): {shown}{more}. The next sync settles them.",
+        )
+        for path in vanished:
+            self._log(Host.SOURCE, LogLevel.FULL, f"{folder.path}: vanished during sync: {path}")
+
     def _pass_mutates(self, folder: FolderEntry, label: str) -> str | None:
         """What this pass changes, for `--confirm-each-command`.  None in dry-run: a
         `--dry-run` pass writes on neither machine, so there is nothing to confirm.
@@ -916,7 +942,10 @@ class FolderSyncJob(SyncJob):
             proc.read_stdout_chunks(), folder, label
         )
         result = await proc.wait_result()
-        if result.exit_code != 0:
+        vanished = _vanished_files_only(result) if result.exit_code == _RSYNC_EXIT_VANISHED else None
+        if vanished is not None:
+            self._log_vanished(folder, vanished)
+        elif result.exit_code != 0:
             self._log(
                 Host.SOURCE,
                 LogLevel.CRITICAL,
@@ -1028,3 +1057,23 @@ class FolderSyncJob(SyncJob):
         # No job-level completion update: every pass already closes its own bar at 100%
         # (`_run_rsync_pass`), and an unlabelled one here would only strip the folder
         # and pass name off the finished bar.
+
+
+def _vanished_files_only(result: CommandResult) -> list[str] | None:
+    """The files rsync reported as vanished, when that is ALL its stderr says; otherwise None.
+
+    Exit 24 means "some source files vanished before they could be transferred" — deleted
+    on the source between the file list and the transfer, which is not a failure of the
+    sync. Any other stderr line still fails the pass: it is a problem of its own, whatever
+    exit code rsync chose to report.
+    """
+    vanished: list[str] = []
+    for line in result.stderr.splitlines():
+        stripped = line.strip()
+        if not stripped or _RSYNC_VANISHED_SUMMARY_RE.match(stripped):
+            continue
+        match = _RSYNC_VANISHED_RE.match(stripped)
+        if match is None:
+            return None
+        vanished.append(match.group("path"))
+    return vanished

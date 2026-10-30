@@ -1459,6 +1459,40 @@ class TestExecuteNormalMode:
         # A CRITICAL-level record must have been emitted
         assert any(r.levelno == LogLevel.CRITICAL for r in caplog.records)
 
+    async def test_exit_24_with_only_vanished_files_is_a_warning_naming_them(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Files deleted on the source mid-sync (exit 24) do not fail the pass when rsync
+        complains about nothing else: a WARNING names them, each is logged at FULL."""
+        stderr = (
+            'file has vanished: "/home/u/dev/repo/.claude/worktrees/gone/a.py"\n'
+            'file has vanished: "/home/u/dev/repo/.claude/worktrees/gone/b.py"\n'
+            "rsync warning: some files vanished before they could be transferred (code 24) "
+            "at main.c(1338) [sender=3.2.7]\n"
+        )
+        ctx = make_context()
+        ctx.source.start_process = AsyncMock(return_value=make_fake_process(exit_code=24, stderr=stderr))
+
+        with caplog.at_level(logging.DEBUG, logger="pcswitcher.jobs.base"):
+            await FolderSyncJob(ctx).execute()
+
+        warnings = [r.getMessage() for r in caplog.records if r.levelno == LogLevel.WARNING]
+        assert any("2 file(s) disappeared" in m and "gone/a.py" in m for m in warnings), warnings
+        assert not [r for r in caplog.records if r.levelno >= LogLevel.ERROR]
+        full = [r.getMessage() for r in caplog.records if r.levelno == LogLevel.FULL]
+        assert sum("vanished during sync" in m for m in full) == 2
+
+    async def test_exit_24_with_any_other_complaint_still_fails(self) -> None:
+        stderr = (
+            'file has vanished: "/home/u/a.py"\n'
+            'rsync: [sender] send_files failed to open "/home/u/b.py": Permission denied (13)\n'
+        )
+        ctx = make_context()
+        ctx.source.start_process = AsyncMock(return_value=make_fake_process(exit_code=24, stderr=stderr))
+
+        with pytest.raises(RuntimeError):
+            await FolderSyncJob(ctx).execute()
+
     async def test_copy_pass_runs_before_the_mirror_when_filters_differ(self) -> None:
         """When a source per-dir filter isn't yet on the target, a no-delete copy pass precedes the mirror.
 

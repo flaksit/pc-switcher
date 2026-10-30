@@ -8,6 +8,8 @@ Each folder is mirrored to the target, minus the paths its filter rules exclude.
 
 Disabling *every* configured folder leaves the job with nothing to mirror; it then reports **SKIPPED** rather than a successful mirror of nothing, and the run continues with the remaining jobs. A pass that transfers no files because the filters excluded everything is a different case — the mirror is correct, so that is SUCCESS.
 
+Files deleted on the source while a pass runs (rsync: "file has vanished") are skipped with a WARNING naming them, and the job still succeeds; the next sync settles them. If rsync reports any other problem in the same pass, the job fails as usual. Keep the source idle during a sync all the same: a file changed mid-transfer is copied in whatever state rsync read it.
+
 ## Confirming each pass
 
 `pc-switcher sync <hostname> --confirm-each-command` asks before each rsync pass, showing the exact command and the target's hostname — rsync runs on the source, but the target is the machine that receives the files and loses the ones the source does not have. Answer **p** to run that pass or **a** to abort the whole sync.

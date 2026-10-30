@@ -248,6 +248,8 @@ class LocalProcess:
 
     def __init__(self, proc: asyncio.subprocess.Process) -> None:
         self._proc = proc
+        # Started by `read_stdout_chunks`, collected by `wait_result` (see there).
+        self._stderr_drain: asyncio.Task[bytes] | None = None
 
     async def stdout(self) -> AsyncIterator[str]:
         """Iterate over stdout lines as they arrive."""
@@ -262,6 +264,9 @@ class LocalProcess:
             return
         async for line in self._proc.stderr:
             yield line.decode()
+
+    async def _read_all_stderr(self) -> bytes:
+        return await self._proc.stderr.read() if self._proc.stderr is not None else b""
 
     async def wait(self) -> CommandResult:
         """Wait for process to complete and return result."""
@@ -284,7 +289,14 @@ class LocalProcess:
 
         Yields:
             Raw bytes chunks as they arrive; stops at EOF.
+
+        Starts draining stderr in the background at the same time. Read only after stdout's
+        EOF, a process that writes more than a pipe's worth of stderr (64 KiB) blocks in
+        that write and never closes stdout, so both sides wait forever: rsync did exactly
+        that with 329 `file has vanished` lines when a directory was deleted mid-sync.
         """
+        if self._stderr_drain is None:
+            self._stderr_drain = asyncio.create_task(self._read_all_stderr())
         if self._proc.stdout is None:
             return
         while True:
@@ -302,11 +314,11 @@ class LocalProcess:
 
         Use this after draining stdout via `read_stdout_chunks` to obtain the
         exit code and any error output without calling `communicate()` (which
-        would attempt to read stdout a second time).
+        would attempt to read stdout a second time). The stderr read is the one
+        `read_stdout_chunks` started, when it ran.
         """
-        stderr_bytes = b""
-        if self._proc.stderr is not None:
-            stderr_bytes = await self._proc.stderr.read()
+        drain = self._stderr_drain
+        stderr_bytes = await drain if drain is not None else await self._read_all_stderr()
         await self._proc.wait()
         return CommandResult(
             exit_code=self._proc.returncode or 0,
@@ -318,6 +330,8 @@ class LocalProcess:
         """Terminate the process."""
         self._proc.terminate()
         await self._proc.wait()
+        if self._stderr_drain is not None:
+            self._stderr_drain.cancel()
 
 
 class LocalExecutor(_GatedExecutorMixin):
