@@ -122,6 +122,20 @@ POLICY_NEWER_THAN_REPO = """mytool:
         500 http://ftp.belnet.be/ubuntu noble/universe amd64 Packages
 """
 
+# `google-chrome-stable`, installed from Google's repository at a version OLDER than the one
+# it now offers: that repository keeps only its latest build, so the installed `***` row has
+# dpkg's status file as its only origin. The candidate row still names the repository.
+# Verbatim from a live Ubuntu 24.04 machine.
+POLICY_OLDER_THAN_REPO = """google-chrome-stable:
+  Installed: 156.0.8078.73-1
+  Candidate: 156.0.8078.79-1
+  Version table:
+     156.0.8078.79-1 500
+        500 https://dl.google.com/linux/chrome-stable/deb stable/main amd64 Packages
+ *** 156.0.8078.73-1 100
+        100 /var/lib/dpkg/status
+"""
+
 # `7zip`, pulled in from a repository as an automatic dependency.
 POLICY_AUTO_DEP = """7zip:
   Installed: 23.01+dfsg-11ubuntu0.1~esm1

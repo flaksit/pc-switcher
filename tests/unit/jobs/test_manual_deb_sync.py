@@ -25,6 +25,7 @@ from tests.unit.jobs.unreproducible_harness import (
     POLICY_AUTO_DEP,
     POLICY_HAND_DEB,
     POLICY_NEWER_THAN_REPO,
+    POLICY_OLDER_THAN_REPO,
     POLICY_PINNED_NO_CANDIDATE,
     POLICY_REPO_INSTALLED,
     STATUS_QUERY,
@@ -159,6 +160,22 @@ class TestNoCandidateDetection:
         plan = await ManualDebSyncJob(context).plan()
 
         assert self._unreproducible_ids(plan) == {"unreproducible:apt-no-candidate:mytool"}
+
+    @pytest.mark.asyncio
+    async def test_a_version_older_than_the_repository_offers_is_not_unreproducible(self) -> None:
+        """G190 — the repository dropped the installed build from its index after an update,
+        so the `***` row names only dpkg. The candidate row still names the repository: it
+        supplies the package, so it belongs to `apt_sync`."""
+        context, _source, _target = make_context(
+            source_responses={
+                STATUS_QUERY: installed_on("google-chrome-stable"),
+                "apt-cache policy": CommandResult(0, POLICY_OLDER_THAN_REPO, ""),
+            }
+        )
+
+        plan = await ManualDebSyncJob(context).plan()
+
+        assert self._unreproducible_ids(plan) == set()
 
     @pytest.mark.asyncio
     async def test_one_batched_scan_separates_the_hand_deb_from_the_repo_installed(self) -> None:
