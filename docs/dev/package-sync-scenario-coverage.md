@@ -1869,7 +1869,7 @@ Five exits, then the `userinfo` grammar boundary.
 | J146 | Source write 1: a "always skip" answer about an item Atlas holds | A mark is recorded on Atlas and nowhere else | U | `test_package_state:TestPipelineWiring::test_skip_always_on_install_writes_to_source_not_target` |
 | J147 | Source write 2: a snippet authored during the review | Written to Atlas's registry, not Nomad's | U | `test_package_sync_core:TestFinalizeUnreproducible::test_authored_snippet_is_written_to_the_source_registry_not_target` |
 | J148 | Source write 3: the snap refresh pause | Applied on Atlas as well as Nomad, and restored afterwards | U | `test_snap_autorefresh_hold:TestConfirmEachCommandGate::test_apply_and_restore_declare_mutations_on_both_hosts` |
-| J149 | No fifth source write exists | Every ungated executor call site in the codebase is accounted for as a read or a tracked gap; a new write fails the audit | U | `test_mutates_audit:TestSourceWrites::test_the_audit_sees_the_gated_call_sites`, `test_mutates_audit:TestSourceWrites::test_no_write_that_can_reach_the_source_is_unaccounted_for`, `test_mutates_audit:TestSourceWrites::test_a_package_sync_writes_exactly_four_things_on_the_source` |
+| J149 | No sixth source write exists | Every ungated executor call site in the codebase is accounted for as a read or a tracked gap; a new write fails the audit | U | `test_mutates_audit:TestSourceWrites::test_the_audit_sees_the_gated_call_sites`, `test_mutates_audit:TestSourceWrites::test_no_write_that_can_reach_the_source_is_unaccounted_for`, `test_mutates_audit:TestSourceWrites::test_a_package_sync_writes_exactly_five_things_on_the_source` |
 | J150 | No package manager's database, store or unpacked files travel between the machines | Only decisions plus the configuration a manager needs travel; the only file transfers a package job makes are repository/pin/config files, signing keys, remote filters and the snippet registry | U | `test_mutates_audit:TestFileTransfers::test_a_package_job_transfers_only_the_three_files_it_is_allowed_to`, `test_mutates_audit:TestFileTransfers::test_nothing_is_ever_fetched_off_the_target` |
 
 ### J.11 The per-command confirmation (article: PKG-FR-CONFIRM-EACH)
@@ -2022,6 +2022,15 @@ The criteria's sudo table, job by job × two machines. `apt_sync` and `snap_sync
 | K71 | The lock is held | The run neither waits nor retries: the refusal is immediate and states the reason | U | `test_apt_job:TestValidate::test_a_held_lock_is_probed_once_and_never_waited_on` (exactly one `fuser` probe, no sleep of any kind) |
 | K72 | A dry run while the lock is held | Still refuses to start — validation is not skipped for a dry run | U | `test_apt_job:TestValidate::test_a_dry_run_still_refuses_to_start_while_the_lock_is_held` |
 | K120 | The lock is held, by the user's own `apt install` or by the system's automatic updates | The refusal names both possibilities, asserts neither, and says to wait for it to finish and run the sync again | U | `test_apt_job:TestValidate::test_the_lock_message_names_both_holders_asserts_neither_and_gives_the_remedy` |
+
+### K.6a Repository health (articles: PKG-FR-APT-REPO-HEALTH)
+
+| # | Scenario | Expected | Cov | Test |
+| --- | --- | --- | --- | --- |
+| K133 | `apt_sync` enabled; one of Atlas's repositories fails verification (its vendor rotated the signing key, so a fresh `apt-get update` says `NO_PUBKEY`) | Validation fails for Atlas, quoting apt's own lines and giving the remedy; the run does not start, a dry run included | U | `test_apt_job:TestValidate::test_a_repository_apt_cannot_verify_refuses_the_run_naming_the_machine` |
+| K134 | Same, on Nomad | Validation fails for Nomad | U | same test |
+| K135 | The check itself | apt's own `apt-get update` into a throwaway lists and cache directory, update hooks cleared, the directory removed; declared, so `--confirm-each-command` gates it | U | `test_apt_job:TestValidate::test_the_repository_check_leaves_the_machines_own_apt_state_alone` |
+| K136 | A machine whose sudo check failed | The repository check is not run there: the sudo error is the one to fix first | U | `test_apt_job:TestValidate::test_no_repository_check_where_sudo_is_missing` |
 
 ### K.7 The boundary with `folder_sync` (articles: PKG-FR-DATA-BOUNDARY, PKG-FR-SNAP-DATA-BOUNDARY, PKG-FR-MACHINE-SPECIFIC)
 

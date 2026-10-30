@@ -134,6 +134,8 @@ Each enabled job needs passwordless sudo where it writes:
 
 The other `manual_*` jobs pre-validate no sudo: their detection reads unprivileged. `manual_installs_sync` reads `/opt` and `/usr/local` with `sudo find` and `sudo test`, since an install script may leave a root-only directory there. An approved removal on any of the first three needs root on the target and fails as its own item if that is not available. Snippet privilege is the author's — put `sudo` inside the snippet if needed.
 
+`apt_sync` refuses to start while apt cannot fetch and verify every repository configured on either machine — a vendor that rotated its signing key is the usual cause. Your own `apt-get update` only warns about that and keeps the old index, but on a machine that never had the repository it is an error that blocks every install. pc-switcher checks with a throwaway `apt-get update` that leaves your package lists alone, quotes apt's errors, and tells you to fix or remove the repository and confirm with `sudo apt-get update`.
+
 `apt_sync` and `snap_sync` also pause each machine's auto-update timers (apt) and auto-refresh (snapd) for the sync window, and restore them afterwards. The pauses expire on their own if the run dies.
 
 ## Auditing every command

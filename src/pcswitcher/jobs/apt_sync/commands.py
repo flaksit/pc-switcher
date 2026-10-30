@@ -24,8 +24,10 @@ from pcswitcher.models import CommandResult
 # The source's package state is never changed, so it needs just the /etc/apt digest capture
 # and the conflict-review `cat` of a file the two machines disagree about — plus `systemctl`
 # and `systemd-run`, which BOTH machines need: the orchestrator pauses each host's own apt
-# update timers for the sync window and schedules the transient unit that restarts them.
+# update timers for the sync window and schedules the transient unit that restarts them —
+# and `apt-get`, for the throwaway repository check (`REPOSITORY_CHECK_CMD`).
 SOURCE_SUDO_COMMANDS = (
+    "/usr/bin/apt-get",
     "/usr/bin/find",
     "/usr/bin/sha256sum",
     "/usr/bin/test",
@@ -47,6 +49,39 @@ TARGET_SUDO_COMMANDS = (
     "/usr/bin/systemctl",
     "/usr/bin/systemd-run",
 )
+
+# Whether apt can fetch and verify every repository a machine has configured, asked of apt
+# itself: a full `apt-get update` into a throwaway lists and cache directory, so the
+# machine's own package lists, its package cache and its update hooks are all left alone —
+# which is what lets validation, and a dry run, issue it. The machine's own `apt-get update`
+# cannot answer this: with a cached index it only warns and keeps the stale copy, which is
+# how a repository whose vendor rotated its signing key goes unnoticed on the source until
+# the sync copies it to a machine with no cached index, where the same failure is an error
+# that rolls back every repository write and refuses every install.
+#
+# The `#clear` lines can only be given in a config file (`-o` cannot clear a list), so one
+# is written into the throwaway directory. `APT::Sandbox::User=root`: apt otherwise drops to
+# `_apt` for downloads, which cannot enter a directory `mktemp` made private. The directory
+# and everything in it are owned by the connecting user, so the final `rm` needs no sudo.
+# One line: the command is echoed verbatim into the trace and the confirm gate.
+REPOSITORY_CHECK_CMD = (
+    "check_dir=$(mktemp --directory) "
+    '&& mkdir --parents "$check_dir/lists/partial" "$check_dir/cache/archives/partial" '
+    "&& printf '%s\\n' '#clear APT::Update::Pre-Invoke;' '#clear APT::Update::Post-Invoke;' "
+    "'#clear APT::Update::Post-Invoke-Success;' > \"$check_dir/no-hooks.conf\" "
+    '&& sudo apt-get update --config-file="$check_dir/no-hooks.conf" -o Dir::State::Lists="$check_dir/lists" '
+    '-o Dir::Cache="$check_dir/cache" -o APT::Sandbox::User=root; '
+    'status=$?; rm --recursive --force -- "$check_dir"; exit $status'
+)
+
+
+def repository_check_problems(result: CommandResult) -> list[str]:
+    """apt's own `W:`/`E:` lines from a failed `REPOSITORY_CHECK_CMD`, or every stderr
+    line when it printed none (the check could not run at all)."""
+    lines = [line.strip() for line in f"{result.stdout}\n{result.stderr}".splitlines()]
+    flagged = [line for line in lines if line.startswith(("W:", "E:"))]
+    return flagged or [line for line in result.stderr.splitlines() if line.strip()]
+
 
 # Matches one `apt-get --dry-run` transaction line: `Inst <name> [<old>] (<new> ...)` for an
 # install/upgrade (the `[<old>]` bracket only appears when a version is already

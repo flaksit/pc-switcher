@@ -330,6 +330,67 @@ class TestValidate:
         assert errors == []
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("host", [Host.SOURCE, Host.TARGET])
+    async def test_a_repository_apt_cannot_verify_refuses_the_run_naming_the_machine(self, host: Host) -> None:
+        """K133, K134 — a fresh `apt-get update` that cannot verify a repository is a refusal on
+        the machine that has it, quoting apt and giving the remedy."""
+        broken = {
+            "Dir::State::Lists": CommandResult(
+                100,
+                "Hit:1 http://archive.ubuntu.com/ubuntu noble InRelease\n",
+                "W: GPG error: https://apt.releases.hashicorp.com noble InRelease: The following signatures "
+                "couldn't be verified because the public key is not available: NO_PUBKEY FC9CA96ACA026560\n"
+                "E: The repository 'https://apt.releases.hashicorp.com noble InRelease' is not signed.\n",
+            )
+        }
+        lock_free = {"fuser /var/lib/dpkg/lock-frontend": CommandResult(1, "", "")}
+        context, _source, _target = make_context(
+            source_responses=broken if host is Host.SOURCE else None,
+            target_responses={**lock_free, **(broken if host is Host.TARGET else {})},
+            dry_run=True,
+        )
+
+        errors = await AptSyncJob(context).validate()
+
+        assert [error.host for error in errors] == [host]
+        assert "NO_PUBKEY FC9CA96ACA026560" in errors[0].message
+        assert "is not signed" in errors[0].message
+        assert "Hit:1" not in errors[0].message
+        assert "sudo apt-get update" in errors[0].message
+
+    @pytest.mark.asyncio
+    async def test_the_repository_check_leaves_the_machines_own_apt_state_alone(self) -> None:
+        """K135 — apt's own update, into a throwaway directory, with the update hooks cleared,
+        declared for `--confirm-each-command`, and one line."""
+        context, source, target = make_context(
+            target_responses={"fuser /var/lib/dpkg/lock-frontend": CommandResult(1, "", "")}
+        )
+
+        await AptSyncJob(context).validate()
+
+        for machine in (source, target):
+            (call,) = [c for c in machine.run_command.call_args_list if "apt-get update" in c.args[0]]
+            command = call.args[0]
+            assert '-o Dir::State::Lists="$check_dir/lists"' in command
+            assert '-o Dir::Cache="$check_dir/cache"' in command
+            assert "#clear APT::Update::Post-Invoke-Success;" in command
+            assert 'rm --recursive --force -- "$check_dir"' in command
+            assert "\n" not in command
+            assert call.kwargs["mutates"]
+
+    @pytest.mark.asyncio
+    async def test_no_repository_check_where_sudo_is_missing(self) -> None:
+        """K136."""
+        context, source, _target = make_context(
+            source_responses={"sudo --non-interactive true": CommandResult(1, "", "a password is required")},
+            target_responses={"fuser /var/lib/dpkg/lock-frontend": CommandResult(1, "", "")},
+        )
+
+        await AptSyncJob(context).validate()
+
+        assert not [c for c in source.run_command.call_args_list if "apt-get update" in c.args[0]]
+
+    @pytest.mark.asyncio
     async def test_apt_mark_unavailable_yields_validation_error(self) -> None:
         """K44."""
         context, _source, _target = make_context(
