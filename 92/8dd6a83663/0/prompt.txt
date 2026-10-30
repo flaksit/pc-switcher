@@ -1,0 +1,17 @@
+Looks good (at least in dry run). No time to do the entire PR-and-integration-tests cycle. I need to run this asap, even if not 100% perfect. So we skip PR and just merge to main?
+
+---
+
+but what happens when I want to sync back afterwards? Which version is/will be installed on fleksi?
+
+---
+
+If we run p17>fleksi now and it succeeds, we can PR+CI+merge+release afterwards (when I'm back) and then just run "pc-switcher self update" on fleksi, no?
+
+---
+
+Lots of errors during apt install phase. See log. Fix.
+
+---
+
+refuse to start with a clear message
