@@ -1,0 +1,21 @@
+how to dry-run to fleksi with current code?
+
+---
+
+"Install apt packages" lists a lot of packages that I definitely did not install manually. How come they are listed anyway? E.g. linux-headers, linux-hwe, linux-image, ...
+
+---
+
+cleanup p17
+
+---
+
+"Update apt config files" shows a hash for each file. This is totally not useful. I asked to see the diff (side-by-side if possible)
+
+---
+
+the diff shows above the question. That is weird
+
+---
+
+y
