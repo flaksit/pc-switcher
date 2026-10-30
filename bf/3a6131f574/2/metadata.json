@@ -1,0 +1,50 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "bf3a6131f574",
+  "session_id": "3ecbd823-9f9f-4c28-a138-ee4d0fc8fa6d",
+  "strategy": "manual-commit",
+  "created_at": "2026-10-30T22:36:05.147274138Z",
+  "branch": "fix/manual-installs-sudo-and-apt-config-diffs",
+  "checkpoints_count": 6,
+  "files_touched": [
+    "docs/dev/package-sync-scenario-coverage.md",
+    "docs/jobs/package-sync.md",
+    "docs/system/package-sync.md",
+    "src/pcswitcher/jobs/apt_sync/diffing.py",
+    "src/pcswitcher/jobs/apt_sync/job.py",
+    "src/pcswitcher/jobs/packages/decision_list.py",
+    "src/pcswitcher/jobs/packages/review.py",
+    "src/pcswitcher/jobs/packages/sync_core.py",
+    "tests/unit/jobs/apt/test_apt_job.py",
+    "tests/unit/jobs/test_decision_list.py",
+    "tests/unit/jobs/test_package_review.py"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "ac727616bd8a",
+  "checkpoint_transcript_start": 983,
+  "transcript_lines_at_start": 983,
+  "compact_transcript_start": 160,
+  "token_usage": {
+    "input_tokens": 2,
+    "cache_creation_tokens": 896,
+    "cache_read_tokens": 268076,
+    "output_tokens": 634,
+    "api_call_count": 1
+  },
+  "session_metrics": {
+    "turn_count": 6
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-10-30T22:36:05.052023572Z",
+    "agent_lines": 527,
+    "agent_removed": 72,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 527,
+    "total_lines_changed": 599,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
