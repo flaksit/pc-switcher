@@ -47,3 +47,7 @@ So even the post-rehearsal fails, but the actual execution would work because at
 ---
 
 fix 1, not 2
+
+---
+
+y
