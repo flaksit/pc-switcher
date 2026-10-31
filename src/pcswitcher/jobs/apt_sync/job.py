@@ -13,15 +13,21 @@ them, replaced wholesale by `plan()` rather than mutated in place.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
 from typing import Any, ClassVar, override
 
 from pcswitcher.jobs.apt_sync.collateral import Collateral, LateCollateral
-from pcswitcher.jobs.apt_sync.commands import SOURCE_SUDO_COMMANDS, TARGET_SUDO_COMMANDS
+from pcswitcher.jobs.apt_sync.commands import (
+    REPOSITORY_CHECK_CMD,
+    SOURCE_SUDO_COMMANDS,
+    TARGET_SUDO_COMMANDS,
+    repository_check_problems,
+)
 from pcswitcher.jobs.apt_sync.derived import DerivedWrites
 from pcswitcher.jobs.apt_sync.diffing import (
+    FileBodies,
     diff_apt_configs,
     diff_apt_packages,
     diff_apt_pins,
@@ -134,6 +140,10 @@ class AptSyncJob(PackageSyncJob):
         # `diff_apt_pins` and shown whole on that screen — a pin filename alone gives the
         # user nothing to decide from.
         self._pin_contents: dict[str, str] = {}
+        # `{filename: both machines' bodies}` for every `/etc/apt/apt.conf.d` file this run
+        # proposes to add, change or delete (`PKG-FR-APTCONF`), read by `diff_apt_configs`:
+        # the screen shows an added or deleted file whole and a changed one as a diff.
+        self._config_bodies: dict[str, FileBodies] = {}
         # `{package name: the version the SOURCE holds it at}` for the packages this run
         # proposes to install and the source holds (`PKG-FR-APT-HOLD-VERSION`).
         self._held_versions: dict[str, str] = {}
@@ -655,8 +665,30 @@ class AptSyncJob(PackageSyncJob):
             self._probe.target_run, source_repo.pin_digests, target_repo.pin_digests, self.machines
         )
         diffs.extend(pin_diffs)
-        diffs.extend(diff_apt_configs(source_repo.conf_digests, target_repo.conf_digests, self.machines))
+        config_diffs, self._config_bodies = await diff_apt_configs(
+            self._probe.source_run,
+            self._probe.target_run,
+            source_repo.conf_digests,
+            target_repo.conf_digests,
+            self.machines,
+        )
+        diffs.extend(config_diffs)
         return diffs
+
+    @override
+    def _review_entry(self, diff: ItemDiff, verb: str) -> ReviewEntry:
+        """An apt config row carries the file itself (`PKG-FR-APTCONF`): both bodies for a
+        change, which the screen shows as a diff, and the one body there is for an add or a
+        delete."""
+        entry = super()._review_entry(diff, verb)
+        if diff.item_class is not ItemClass.APT_CONFIG:
+            return entry
+        bodies = self._config_bodies.get(diff.item_id.removeprefix(APT_CONFIG_ID_PREFIX))
+        if bodies is None:
+            return entry
+        if bodies.target is not None and bodies.source is not None:
+            return replace(entry, versions=(bodies.target, bodies.source))
+        return replace(entry, content=bodies.source if bodies.source is not None else bodies.target)
 
     @override
     def _build_review_groups(self, diffs: Sequence[ItemDiff]) -> tuple[ReviewGroup, ...]:
@@ -1100,7 +1132,15 @@ class AptSyncJob(PackageSyncJob):
 
     @override
     async def validate(self) -> list[ValidationError]:
-        """apt-mark availability on both ends, sudo on both ends, dpkg lock free on target.
+        """apt-mark availability on both ends, sudo on both ends, every configured repository
+        fetchable and verifiable on both ends (`PKG-FR-APT-REPO-HEALTH`), dpkg lock free on
+        target.
+
+        A repository apt cannot verify refuses the run rather than being worked around: on
+        the source it would be copied to the target, and on either machine it fails the
+        sync's `apt-get update` on the target, which rolls back every repository write and
+        refuses every install that needed one. The check needs sudo, so it is skipped on a
+        machine whose sudo check already failed — that error is the one to fix first.
 
         Sequential checks appending to `errors`, never raising mid-validate (matches
         `folder_sync.validate()`'s shape).
@@ -1144,6 +1184,28 @@ class AptSyncJob(PackageSyncJob):
                 )
             )
 
+        if source_sudo_check.success:
+            source_repos = await self.source.run_command(REPOSITORY_CHECK_CMD, mutates=_REPOSITORY_CHECK_MUTATES)
+            if not source_repos.success:
+                errors.append(
+                    self._validation_error(
+                        Host.SOURCE,
+                        _repository_check_message(
+                            source_repos, consequence="The sync would copy it to the other machine, where"
+                        ),
+                    )
+                )
+        if sudo_check.success:
+            target_repos = await self.target.run_command(
+                REPOSITORY_CHECK_CMD, login_shell=False, mutates=_REPOSITORY_CHECK_MUTATES
+            )
+            if not target_repos.success:
+                errors.append(
+                    self._validation_error(
+                        Host.TARGET, _repository_check_message(target_repos, consequence="During the sync")
+                    )
+                )
+
         # fuser exits 0 when the file IS held by at least one process, non-zero when
         # free (man fuser EXIT CODES) — read-only probe, no lock is acquired or released.
         #
@@ -1174,3 +1236,27 @@ class AptSyncJob(PackageSyncJob):
             scope_items=["apt packages (manually-installed set)"],
             mechanism="apt-get install/remove per item, after review",
         )
+
+
+# Declared, although the machine's own apt state is untouched: the check writes package
+# indexes into a temporary directory before removing it, and only a call that can change no
+# state at all may go undeclared. Still issued in a dry run — declaring only adds the
+# `--confirm-each-command` prompt.
+_REPOSITORY_CHECK_MUTATES = "download fresh apt indexes into a temporary directory, removed afterwards"
+
+
+def _repository_check_message(result: CommandResult, *, consequence: str) -> str:
+    """The refusal for a machine whose repositories apt cannot all fetch and verify: apt's
+    own lines, what they would do to the sync, and the remedy."""
+    problems = "\n".join(f"    {line}" for line in repository_check_problems(result))
+    return (
+        "apt cannot fetch or verify every repository configured here "
+        "(checked with a throwaway apt-get update; this machine's own package lists were not touched):\n"
+        f"{problems}\n"
+        f"{consequence} apt-get update fails, which rolls back every repository change and refuses every "
+        "package install that needs one.\n"
+        "Fix the repository on this machine — for a signature or NO_PUBKEY error, re-download its signing "
+        "key as the vendor documents; or remove the repository if you no longer use it — then confirm "
+        "`sudo apt-get update` prints no W: or E: line for it, and sync again. "
+        "A network or server outage shows up here too: retry once it has passed."
+    )

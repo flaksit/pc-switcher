@@ -13,10 +13,14 @@ These tests use mocked executors and don't require VM infrastructure.
 
 from __future__ import annotations
 
+import asyncio
+import shlex
+import sys
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from pcswitcher.executor import LocalExecutor
 from pcswitcher.models import CommandResult
 
 
@@ -151,3 +155,27 @@ class TestExecutorEnvironment:
         parts = output.split(":")
         assert len(parts[0]) > 0  # USER should be set
         assert len(parts[1]) > 0  # HOME should be set
+
+
+class TestChunkedStdoutWithHeavyStderr:
+    """`LocalProcess.read_stdout_chunks` with `wait_result`, against a real process that
+    writes more stderr than a pipe holds before closing stdout — rsync with hundreds of
+    `file has vanished` lines. Reading stderr only after stdout's EOF deadlocks both sides."""
+
+    @pytest.mark.asyncio
+    async def test_a_full_stderr_pipe_does_not_block_stdout(self) -> None:
+        # 256 KiB of stderr — four times a default pipe — then one stdout line.
+        script = (
+            "import sys\nfor _ in range(256): sys.stderr.write('e' * 1023 + '\\n')\nsys.stderr.flush()\nprint('done')"
+        )
+        process = await LocalExecutor().start_process(f"{sys.executable} -c {shlex.quote(script)}")
+
+        async def run() -> tuple[bytes, CommandResult]:
+            stdout = b"".join([chunk async for chunk in process.read_stdout_chunks()])
+            return stdout, await process.wait_result()
+
+        stdout, result = await asyncio.wait_for(run(), timeout=10)
+
+        assert stdout == b"done\n"
+        assert result.exit_code == 0
+        assert len(result.stderr) == 256 * 1024

@@ -100,7 +100,7 @@ class TestUnownedScan:
         assert find_calls[0] == (
             "for root in /opt /usr/local /usr/local/bin /usr/local/sbin /usr/local/lib /usr/local/games "
             '/usr/local/src; do [ -d "$root" ] || continue; '
-            "find \"$root\" -mindepth 1 -maxdepth 1 -printf '%y\\t%p\\n' || exit 1; done"
+            "sudo find \"$root\" -mindepth 1 -maxdepth 1 -printf '%y\\t%p\\n' || exit 1; done"
         )
         assert "\n" not in find_calls[0], "a multi-line command is mangled in the trace and the confirm gate"
 
@@ -527,6 +527,50 @@ class TestUnownedValidate:
         assert any(e.host is Host.TARGET and "dpkg" in e.message for e in errors)
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("host", [Host.SOURCE, Host.TARGET])
+    async def test_no_passwordless_sudo_yields_validation_error_naming_find(self, host: Host) -> None:
+        """K130 — detection lists the scan roots with `sudo find` on both machines, so a
+        missing grant is refused before the run starts, with the grant to add."""
+        no_sudo: dict[str, Answer] = {
+            "sudo --non-interactive true": CommandResult(1, "", "sudo: a password is required")
+        }
+        context, _source, _target = make_context(
+            source_responses=no_sudo if host is Host.SOURCE else None,
+            target_responses=no_sudo if host is Host.TARGET else None,
+        )
+        job = ManualInstallsSyncJob(context)
+
+        errors = await job.validate()
+
+        assert [e.host for e in errors] == [host]
+        assert "/usr/bin/find" in errors[0].message
+        assert "/usr/bin/test" in errors[0].message
+
+    @pytest.mark.asyncio
+    async def test_every_detection_find_runs_as_root(self) -> None:
+        """K131 — a root-only directory such as `/opt/containerd` (`drwx--x--x root`) cannot
+        be listed by an unprivileged `find`, which would fail the job; every `find` the scan
+        runs is elevated."""
+        context, source, _target = make_context(
+            source_responses={
+                "for root in": scan_finds("/opt/containerd/"),
+                "dpkg --search": CommandResult(1, DPKG_WITNESS_LINE, ""),
+                "find /opt/containerd": scan_finds("/opt/containerd/bin/", "/opt/containerd/lib/"),
+                "for dir in": every_directory_holds_a_file,
+            },
+            reviewer=FakeGate(answer=True),
+        )
+        job = ManualInstallsSyncJob(context)
+
+        await job._scan_unowned_installs(  # pyright: ignore[reportPrivateUsage]
+            job.source, job.machines.source, ask_when_ambiguous=True
+        )
+
+        finds = [cmd for cmd in all_calls(source) if "find " in cmd]
+        assert len(finds) == 3
+        assert all(cmd.count("find ") == cmd.count("sudo find ") for cmd in finds), finds
+
+    @pytest.mark.asyncio
     async def test_valid_environment_yields_no_errors_and_asks_nothing_of_apt(self) -> None:
         """G121, K62 — with dpkg present on both machines nothing fails, and no apt tool is probed
         for at all: what apt can or cannot supply is another job's question."""
@@ -641,6 +685,26 @@ class TestMarksFollowWhatTheMachineHolds:
         )
 
         assert not [cmd for cmd in all_calls(source) if "mv --force" in cmd]
+
+    @pytest.mark.asyncio
+    async def test_existence_is_checked_as_root_behind_a_witness(self) -> None:
+        """K132 — a marked path under a root-only directory is invisible to an unprivileged
+        `test -e`, so every test runs under sudo; and since `sudo test -e` exits 1 for a
+        refused sudo as for a missing path, a `sudo test -d /` witness fails the whole check
+        first rather than letting a refusal read as every marked path gone."""
+        context, source, _target = make_context(
+            source_responses={"for p in": CommandResult(1, "", "sudo: a password is required")}
+        )
+        job = ManualInstallsSyncJob(context)
+
+        with pytest.raises(ProbeFailed):
+            await job._paths_that_exist(  # pyright: ignore[reportPrivateUsage]
+                frozenset({"/opt/vendor/app"}), job.source, job.machines.source
+            )
+
+        command = all_calls(source)[0]
+        assert command.startswith("sudo test -d / || exit 1; ")
+        assert command.count("test ") == command.count("sudo test ")
 
     @pytest.mark.asyncio
     async def test_the_machine_being_synced_to_has_its_own_file_reconciled(self) -> None:

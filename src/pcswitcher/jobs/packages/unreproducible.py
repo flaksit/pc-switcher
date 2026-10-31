@@ -725,10 +725,10 @@ class UnreproducibleSyncJob(PackageSyncJob):
         """Run this job's own removal command for one approved REMOVE.
 
         No privilege is pre-validated for it, for the reason a snippet's is not (`PKG-FR-SNIPPET-VERBATIM`,
-        `PKG-FR-OUTCOME-FAILED`): this job's validation has never required sudo on the target, an install-only
-        run still does not need it, and demanding it up front would fail validation for
-        every user who never approves a removal. A removal that lacks the privilege fails as
-        its own item, named, like any other.
+        `PKG-FR-OUTCOME-FAILED`): an install-only run does not need it, and demanding it up
+        front would fail validation for every user who never approves a removal. (Where a
+        job's own detection needs sudo, its `validate()` checks that, not this.) A removal
+        that lacks the privilege fails as its own item, named, like any other.
         """
         item = self._removable.get(diff.item_id)
         if item is None:

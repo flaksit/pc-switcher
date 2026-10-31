@@ -39,6 +39,8 @@ from tests.unit.jobs.apt.helpers import (
     _STATUS_QUERY,
     _VENDOR_LIST,
     DPKG_QUERY_3,
+    DRY_RUN_INSTALL,
+    REAL_INSTALL,
     SHOWMANUAL_3,
     CountingReviewer,
     _policy_block,
@@ -145,18 +147,12 @@ class TestContinueOnFailure:
                 "apt-mark showmanual": CommandResult(0, "", ""),
                 "dpkg-query": CommandResult(0, "", ""),
                 "apt-cache policy": CommandResult(0, target_offers("pkg-a", "pkg-b", "pkg-c"), ""),
-                "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": clean_preview,
-                "apt-get --dry-run install --assume-yes --no-install-recommends pkg-b": clean_preview,
-                "apt-get --dry-run install --assume-yes --no-install-recommends pkg-c": clean_preview,
-                "sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes --no-install-recommends pkg-a": (
-                    CommandResult(0, "", "")
-                ),
-                "sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes --no-install-recommends pkg-b": (
-                    CommandResult(1, "", "dpkg error for pkg-b")
-                ),
-                "sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes --no-install-recommends pkg-c": (
-                    CommandResult(0, "", "")
-                ),
+                f"{DRY_RUN_INSTALL} pkg-a": clean_preview,
+                f"{DRY_RUN_INSTALL} pkg-b": clean_preview,
+                f"{DRY_RUN_INSTALL} pkg-c": clean_preview,
+                f"{REAL_INSTALL} pkg-a": (CommandResult(0, "", "")),
+                f"{REAL_INSTALL} pkg-b": (CommandResult(1, "", "dpkg error for pkg-b")),
+                f"{REAL_INSTALL} pkg-c": (CommandResult(0, "", "")),
             },
         )
         job = AptSyncJob(context)
@@ -328,6 +324,67 @@ class TestValidate:
         errors = await job.validate()
 
         assert errors == []
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("host", [Host.SOURCE, Host.TARGET])
+    async def test_a_repository_apt_cannot_verify_refuses_the_run_naming_the_machine(self, host: Host) -> None:
+        """K133, K134 — a fresh `apt-get update` that cannot verify a repository is a refusal on
+        the machine that has it, quoting apt and giving the remedy."""
+        broken = {
+            "Dir::State::Lists": CommandResult(
+                100,
+                "Hit:1 http://archive.ubuntu.com/ubuntu noble InRelease\n",
+                "W: GPG error: https://apt.releases.hashicorp.com noble InRelease: The following signatures "
+                "couldn't be verified because the public key is not available: NO_PUBKEY FC9CA96ACA026560\n"
+                "E: The repository 'https://apt.releases.hashicorp.com noble InRelease' is not signed.\n",
+            )
+        }
+        lock_free = {"fuser /var/lib/dpkg/lock-frontend": CommandResult(1, "", "")}
+        context, _source, _target = make_context(
+            source_responses=broken if host is Host.SOURCE else None,
+            target_responses={**lock_free, **(broken if host is Host.TARGET else {})},
+            dry_run=True,
+        )
+
+        errors = await AptSyncJob(context).validate()
+
+        assert [error.host for error in errors] == [host]
+        assert "NO_PUBKEY FC9CA96ACA026560" in errors[0].message
+        assert "is not signed" in errors[0].message
+        assert "Hit:1" not in errors[0].message
+        assert "sudo apt-get update" in errors[0].message
+
+    @pytest.mark.asyncio
+    async def test_the_repository_check_leaves_the_machines_own_apt_state_alone(self) -> None:
+        """K135 — apt's own update, into a throwaway directory, with the update hooks cleared,
+        declared for `--confirm-each-command`, and one line."""
+        context, source, target = make_context(
+            target_responses={"fuser /var/lib/dpkg/lock-frontend": CommandResult(1, "", "")}
+        )
+
+        await AptSyncJob(context).validate()
+
+        for machine in (source, target):
+            (call,) = [c for c in machine.run_command.call_args_list if "apt-get update" in c.args[0]]
+            command = call.args[0]
+            assert '-o Dir::State::Lists="$check_dir/lists"' in command
+            assert '-o Dir::Cache="$check_dir/cache"' in command
+            assert "#clear APT::Update::Post-Invoke-Success;" in command
+            assert 'rm --recursive --force -- "$check_dir"' in command
+            assert "\n" not in command
+            assert call.kwargs["mutates"]
+
+    @pytest.mark.asyncio
+    async def test_no_repository_check_where_sudo_is_missing(self) -> None:
+        """K136."""
+        context, source, _target = make_context(
+            source_responses={"sudo --non-interactive true": CommandResult(1, "", "a password is required")},
+            target_responses={"fuser /var/lib/dpkg/lock-frontend": CommandResult(1, "", "")},
+        )
+
+        await AptSyncJob(context).validate()
+
+        assert not [c for c in source.run_command.call_args_list if "apt-get update" in c.args[0]]
 
     @pytest.mark.asyncio
     async def test_apt_mark_unavailable_yields_validation_error(self) -> None:
@@ -1369,6 +1426,58 @@ class TestAptConfigVocabulary:
         config_groups = [group for group in plan.groups if group.entries[0].item_id.startswith("apt:config")]
         assert len(config_groups) == 3
         assert not any("packages" in group.title for group in config_groups)
+
+    @pytest.mark.asyncio
+    async def test_each_row_carries_the_file_not_its_digest(self) -> None:
+        """C183 — `PKG-FR-APTCONF`: an update carries both machines' bodies (target first) for
+        the diff, an add the source's body, a delete the target's; no row's detail is a digest."""
+        context, _source, _target = make_context(
+            source_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/apt.conf.d": CommandResult(
+                    0, sha256_line("a1", "10add") + sha256_line("u-new", "20update"), ""
+                ),
+                "cat /etc/apt/apt.conf.d/10add": CommandResult(0, "added on source\n", ""),
+                "cat /etc/apt/apt.conf.d/20update": CommandResult(0, "new on source\n", ""),
+            },
+            target_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/apt.conf.d": CommandResult(
+                    0, sha256_line("u-old", "20update") + sha256_line("d1", "30delete"), ""
+                ),
+                "cat /etc/apt/apt.conf.d/20update": CommandResult(0, "old on target\n", ""),
+                "cat /etc/apt/apt.conf.d/30delete": CommandResult(0, "only on target\n", ""),
+            },
+        )
+
+        plan = await AptSyncJob(context).plan()
+
+        entries = {
+            entry.item_id: entry
+            for group in plan.groups
+            for entry in group.entries
+            if entry.item_id.startswith("apt:config")
+        }
+        assert entries["apt:config:20update"].versions == ("old on target\n", "new on source\n")
+        assert entries["apt:config:10add"].content == "added on source\n"
+        assert entries["apt:config:30delete"].content == "only on target\n"
+        assert all(entry.detail is None for entry in entries.values())
+
+    @pytest.mark.asyncio
+    async def test_a_body_that_cannot_be_read_fails_the_plan(self) -> None:
+        """C184 — an empty pane would be a diff nobody could read, approved as if read
+        (ADR-022)."""
+        context, _source, _target = make_context(
+            source_responses={
+                **_NO_PACKAGES,
+                "find /etc/apt/apt.conf.d": CommandResult(0, sha256_line("a1", "10add"), ""),
+                "cat /etc/apt/apt.conf.d/10add": CommandResult(1, "", "cat: Permission denied"),
+            },
+            target_responses={**_NO_PACKAGES, "find /etc/apt/apt.conf.d": CommandResult(0, "", "")},
+        )
+
+        with pytest.raises(ProbeFailed, match="Permission denied"):
+            await AptSyncJob(context).plan()
 
 
 class TestRepositoryConflicts:

@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from pcswitcher.executor import LocalExecutor
-from pcswitcher.jobs.apt_sync.commands import candidate_version, compare_deb_versions
+from pcswitcher.jobs.apt_sync.commands import candidate_version, compare_deb_versions, unmet_dependencies
 from pcswitcher.models import CommandResult
 
 _TWO_BLOCKS = (
@@ -19,6 +19,26 @@ _TWO_BLOCKS = (
     "     2.0 500\n        500 http://example.com stable/main amd64 Packages\n"
     "pkg-b:\n  Installed: 1.0\n  Candidate: (none)\n  Version table:\n *** 1.0 100\n"
 )
+
+
+class TestUnmetDependencies:
+    """The dependency names apt's failed rehearsal blames, read from its unmet-dependencies block."""
+
+    def test_the_first_line_and_its_continuations_are_both_read(self) -> None:
+        """A78 — apt's own output from a real target (python3-pip under ESM), plus a continuation
+        line in the shape apt prints for a second unmet dependency of the same package."""
+        stdout = (
+            "Some packages could not be installed. This may mean that you have\n"
+            "The following packages have unmet dependencies:\n"
+            " python3-pip : Depends: python3-wheel but it is not installable\n"
+            "               PreDepends: python3:any (>= 3.12) but 3.11 is to be installed\n"
+            "               Depends: libfoo1 | libfoo2 but it is not going to be installed\n"
+        )
+        assert unmet_dependencies(stdout) == ("python3-wheel", "python3", "libfoo1")
+
+    def test_a_clean_transaction_blames_nothing(self) -> None:
+        """A78 — nothing outside that block is read as a dependency."""
+        assert unmet_dependencies("Inst pkg-a (1.0)\nConf pkg-a (1.0)\n") == ()
 
 
 class TestCandidateVersion:

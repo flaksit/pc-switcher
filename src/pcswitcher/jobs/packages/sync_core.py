@@ -638,18 +638,18 @@ class PackageSyncJob(SyncJob):
                         # A snap moved to another revision or channel does not: converging
                         # software the user asked for overwrites nothing they authored.
                         overwrites_authored_content=item_class is ItemClass.APT_CONFIG and action is DiffAction.CHANGE,
-                        entries=tuple(
-                            ReviewEntry(
-                                item_id=diff.item_id,
-                                label=diff.label,
-                                action_label=verb,
-                                detail=diff.detail,
-                            )
-                            for diff in entries
-                        ),
+                        entries=tuple(self._review_entry(diff, verb) for diff in entries),
                     )
                 )
         return tuple(groups)
+
+    def _review_entry(self, diff: ItemDiff, verb: str) -> ReviewEntry:
+        """The row one diff becomes on its ordinary decision screen. A manager overrides it
+        to attach what a row alone cannot show — a file's bodies (`ReviewEntry.versions`,
+        `ReviewEntry.content`), which also makes the reviewer ask about that group one entry
+        at a time.
+        """
+        return ReviewEntry(item_id=diff.item_id, label=diff.label, action_label=verb, detail=diff.detail)
 
     # -- plan() / accept_review() / apply() / execute() -------------------------------
 

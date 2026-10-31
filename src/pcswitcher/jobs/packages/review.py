@@ -81,14 +81,21 @@ fewer answer (`PKG-FR-SKIP-ONCE`): delete, or leave it for now. It starts at ski
 other removal direction and is never offered permanence, so `Decision.SKIP_ALWAYS` is
 unreachable for it and nothing about it is ever recorded. That is why `_REMOVAL_ACTIONS` and
 `_PROMOTABLE_ACTIONS` are two independent sets rather than one derived from the other. An
-entry carrying `ReviewEntry.content` prints that whole file first: a pin file's name says
-nothing about what it does, and its name is all a decision row can show.
+entry carrying `ReviewEntry.content` shows that whole file on its question screen: a pin
+file's name says nothing about what it does, and its name is all a decision row can show.
+
+Any other group whose entries carry a file — `ReviewEntry.versions` or `ReviewEntry.content`,
+which `apt_sync` attaches to its `/etc/apt/apt.conf.d` rows (`PKG-FR-APTCONF`) — keeps its
+ordinary answers and default but is asked about one file at a time, the file shown inside
+the question screen between the question and the answers: an added or deleted file whole, a
+changed one as a side-by-side diff (`_print_file_change`). A filename and two digests are
+nothing anyone can decide from.
 
 A `ReviewGroup` whose `action` is `REPO_CONFLICT_REVIEW_ACTION` is the same two-answer screen
-(`PKG-FR-REPO-CONFLICT`) preceded by its own content: something that differs on the two machines and
+(`PKG-FR-REPO-CONFLICT`) carrying its own content: something that differs on the two machines and
 feeds an item the target recorded machine-specific — a repository file for `apt_sync`, a
-remote for `flatpak_sync` — is printed as both versions, never a unified diff, before the one
-screen that answers overwrite or skip-once for all of them. Nothing is recorded either way,
+remote for `flatpak_sync` — is shown as both versions, never a unified diff, on its own
+question screen answering overwrite or skip-once. Nothing is recorded either way,
 and it starts at skip-once: an overwrite moves software the target explicitly marked
 machine-specific, so it is chosen, never defaulted.
 
@@ -121,6 +128,7 @@ docstrings and logs, which is where they belong.
 from __future__ import annotations
 
 import asyncio
+import difflib
 import json
 import logging
 import os
@@ -129,6 +137,8 @@ from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
+from io import StringIO
+from itertools import zip_longest
 from typing import Protocol, runtime_checkable
 
 import questionary
@@ -136,8 +146,10 @@ from prompt_toolkit.filters import is_done
 from prompt_toolkit.key_binding import KeyBindings, KeyPressEvent
 from prompt_toolkit.keys import Keys
 from prompt_toolkit.styles import Style
+from rich import box
 from rich.console import Console
 from rich.panel import Panel
+from rich.table import Table
 from rich.text import Text
 
 from pcswitcher.jobs.packages import prompt_navigation
@@ -461,6 +473,10 @@ def _is_repo_conflict_group(action: str) -> bool:
 
 def _is_repo_removal_group(action: str) -> bool:
     return action == REPO_REMOVAL_REVIEW_ACTION
+
+
+def _carries_file_bodies(group: ReviewGroup) -> bool:
+    return any(entry.versions is not None or entry.content is not None for entry in group.entries)
 
 
 def _is_promotable_group(action: str) -> bool:
@@ -1043,6 +1059,7 @@ async def _ask_about_one_item(  # noqa: PLR0913 - one decision screen's content;
     default: str,
     explanation: str | None = None,
     detail: str | None = None,
+    body: str | None = None,
 ) -> str:
     """Put ONE item on a decision screen and return the answer's value.
 
@@ -1055,7 +1072,8 @@ async def _ask_about_one_item(  # noqa: PLR0913 - one decision screen's content;
     `explanation` sits between the title and the key legend, for a screen whose title states
     the concrete case and whose ground is a sentence rather than a row annotation. `detail`
     overrides the row's own line; the empty string suppresses it, which is what a screen
-    whose title and explanation already carry `entry.detail` passes.
+    whose title and explanation already carry `entry.detail` passes. `body` is pre-rendered
+    ANSI text shown between the question and the answers (`decision_list`).
 
     Ctrl-C (`ask` returns `None`) is the caller's to interpret: what stopping means differs
     between an item that can be left undecided and one that cannot.
@@ -1072,6 +1090,7 @@ async def _ask_about_one_item(  # noqa: PLR0913 - one decision screen's content;
         ],
         options=options,
         explanation=explanation,
+        body=body,
     )
     answered: Mapping[str, str] | None = await asyncio.to_thread(prompt.ask)
     if answered is None:
@@ -1510,6 +1529,22 @@ async def _review_collateral_group(
             decisions[entry.item_id] = Decision.SKIP_ONCE
 
 
+def _canvas(console: Console) -> tuple[Console, StringIO]:
+    """A console rendering into a buffer at `console`'s width and colours, for a question
+    screen's body: what a question is about is drawn inside its `decision_list` screen,
+    between the question and the answers, never printed above the question (ruled by the
+    user)."""
+    rendered = StringIO()
+    canvas = Console(
+        file=rendered,
+        width=console.width,
+        force_terminal=console.is_terminal,
+        color_system=console.color_system,  # pyright: ignore[reportArgumentType] - same names Console accepts
+        highlight=False,
+    )
+    return canvas, rendered
+
+
 async def _review_removal_group(
     group: ReviewGroup,
     *,
@@ -1518,31 +1553,141 @@ async def _review_removal_group(
     target_hostname: str,
     decisions: dict[str, Decision],
 ) -> None:
-    """The two-answer deletion screen (`REPO_REMOVAL_REVIEW_ACTION`), one file at a time:
-    the file's own content, then the question about that file.
+    """The two-answer deletion screen (`REPO_REMOVAL_REVIEW_ACTION`), one file at a time,
+    the file's own content on that file's question screen (`_canvas`).
 
     Ruled by the user, and the reason is the printing. A pin file's name says nothing about
-    what it does, so the file being offered for deletion is printed whole — and a batch
+    what it does, so the file being offered for deletion is shown whole — and a batch
     printed three or four bodies in a row and then asked about all of them at once, by which
-    point the first file was off the screen and the row said only its name. The decision now
-    follows the thing it is about.
+    point the first file was off the screen and the row said only its name.
 
-    An entry with no `content` (a repository file, whose URLs are in its detail line) prints
-    nothing extra; its row's detail carries the finding as on any other screen.
+    An entry with no `content` (a repository file, whose URLs are in its detail line) gets
+    no body; its row's detail carries the finding as on any other screen.
 
     The body's own trailing newline is dropped: inside a panel border it renders as an empty
     last line. Wrapped in `Text` like every other untrusted string (T-02-02).
     """
     options = _options_for(group, source_hostname=source_hostname, target_hostname=target_hostname)
     for entry in group.entries:
-        console.print()
-        console.print(Text(entry.label, style="bold"))
+        canvas, rendered = _canvas(console)
         if entry.content is not None:
-            console.print(
+            canvas.print(
                 Panel(Text(entry.content.rstrip("\n")), title=Text(f"On {target_hostname}"), border_style="yellow")
             )
+        console.print()
         decisions[entry.item_id] = Decision(
-            await _ask_about_one_item(entry, title=group.title, options=options, default=_default_decision(group))
+            await _ask_about_one_item(
+                entry,
+                title=f"{group.title}: {entry.label}",
+                options=options,
+                default=_default_decision(group),
+                body=rendered.getvalue() or None,
+            )
+        )
+
+
+# Below this many columns two side-by-side halves are too narrow to read a config line in,
+# so a changed file is shown as a unified diff instead.
+_SIDE_BY_SIDE_MIN_WIDTH = 100
+
+_REMOVED_STYLE = "red"
+_ADDED_STYLE = "green"
+
+
+def _print_file_change(
+    console: Console, target_body: str, source_body: str, *, target_hostname: str, source_hostname: str
+) -> None:
+    """Print how a file differs between the two machines: the target's version on the left,
+    the source's on the right, aligned line by line with removed lines marked `-` in red and
+    added ones `+` in green. Every line is shown, not a context window: a config file is
+    short, and a changed line read without its neighbours is how a setting gets misread.
+
+    On a terminal narrower than `_SIDE_BY_SIDE_MIN_WIDTH`, a unified diff instead — two
+    halves of a narrow screen fold every line into fragments.
+
+    Every body line is wrapped in `Text`, never parsed as markup (T-02-02).
+    """
+    target_lines = target_body.splitlines()
+    source_lines = source_body.splitlines()
+    target_title = f"On {target_hostname} now"
+    source_title = f"On {source_hostname}"
+
+    if target_lines == source_lines:
+        # Same lines, different digest: the difference is invisible line by line.
+        console.print(Text("The two versions differ only in line endings or a trailing newline.", style="dim"))
+        return
+
+    if console.width < _SIDE_BY_SIDE_MIN_WIDTH:
+        context = max(len(target_lines), len(source_lines))
+        for line in difflib.unified_diff(
+            target_lines, source_lines, fromfile=target_title, tofile=source_title, n=context, lineterm=""
+        ):
+            style = None
+            if line.startswith("-"):
+                style = _REMOVED_STYLE
+            elif line.startswith("+"):
+                style = _ADDED_STYLE
+            elif line.startswith("@@"):
+                style = "cyan"
+            console.print(Text(line, style=style or ""))
+        return
+
+    table = Table(box=box.SQUARE, expand=True, show_lines=False, padding=(0, 1))
+    table.add_column(Text(target_title), ratio=1, overflow="fold")
+    table.add_column(Text(source_title), ratio=1, overflow="fold")
+    matcher = difflib.SequenceMatcher(a=target_lines, b=source_lines, autojunk=False)
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == "equal":
+            for left, right in zip(target_lines[i1:i2], source_lines[j1:j2], strict=True):
+                table.add_row(Text(f" {left}"), Text(f" {right}"))
+            continue
+        for left, right in zip_longest(target_lines[i1:i2], source_lines[j1:j2]):
+            table.add_row(
+                Text(f"-{left}", style=_REMOVED_STYLE) if left is not None else Text(""),
+                Text(f"+{right}", style=_ADDED_STYLE) if right is not None else Text(""),
+            )
+    console.print(table)
+
+
+async def _review_file_group(
+    group: ReviewGroup,
+    *,
+    console: Console,
+    source_hostname: str,
+    target_hostname: str,
+    decisions: dict[str, Decision],
+) -> None:
+    """An ordinary decision group whose rows carry files, asked about one file at a time
+    (ruled by the user, as for the pin-deletion screen). Same answers and starting point as
+    the batched screen would have had.
+
+    The file is part of the question screen, not printed above it (ruled by the user): the
+    question, then the file, then the answer row. A changed file (`versions`) is shown as a
+    diff; a file only one machine has (`content`) whole, titled with the machine holding it
+    — the source's for an add, the target's for a delete. A row with neither gets no body.
+
+    The question names the file, since the body sits above the row that does.
+    """
+    options = _options_for(group, source_hostname=source_hostname, target_hostname=target_hostname)
+    holder = target_hostname if _is_removal_direction(group.action) else source_hostname
+    for entry in group.entries:
+        canvas, rendered = _canvas(console)
+        if entry.versions is not None:
+            target_body, source_body = entry.versions
+            _print_file_change(
+                canvas, target_body, source_body, target_hostname=target_hostname, source_hostname=source_hostname
+            )
+        elif entry.content is not None:
+            canvas.print(Panel(Text(entry.content.rstrip("\n")), title=Text(f"On {holder}"), border_style="cyan"))
+        console.print()
+        decisions[entry.item_id] = Decision(
+            await _ask_about_one_item(
+                entry,
+                title=f"{group.title}: {entry.label}",
+                options=options,
+                default=_default_decision(group),
+                body=rendered.getvalue() or None,
+            )
         )
 
 
@@ -1557,9 +1702,10 @@ async def _review_repo_conflict_group(
     """Resolve one `REPO_CONFLICT_REVIEW_ACTION` group with the two-way choice `PKG-FR-REPO-CONFLICT`
     requires: overwrite the target's version with the source's, or skip for now.
 
-    Both versions are printed, the target's first, never a unified diff — the user's own
-    position is that a diff of two repository definitions is not readable, and the question
-    is which of two configurations the machine should have, not what changed between them.
+    Both versions are shown on the question screen (`_canvas`), the target's first, never a
+    unified diff — the user's own position is that a diff of two repository definitions is
+    not readable, and the question is which of two configurations the machine should have,
+    not what changed between them.
     One file at a time, also ruled by the user: two whole file bodies are long enough that a
     batched screen asked about definitions that had already scrolled away.
 
@@ -1586,22 +1732,28 @@ async def _review_repo_conflict_group(
     """
     options = _options_for(group, source_hostname=source_hostname, target_hostname=target_hostname)
     for entry in group.entries:
-        console.print()
-        console.print(Text(entry.label, style="bold"))
+        canvas, rendered = _canvas(console)
         if entry.versions is not None:
             target_version, source_version = entry.versions
-            console.print(
+            canvas.print(
                 Panel(
                     Text(target_version.rstrip("\n")),
                     title=Text(f"On {target_hostname} now"),
                     border_style="yellow",
                 )
             )
-            console.print(
+            canvas.print(
                 Panel(Text(source_version.rstrip("\n")), title=Text(f"On {source_hostname}"), border_style="cyan")
             )
+        console.print()
         decisions[entry.item_id] = Decision(
-            await _ask_about_one_item(entry, title=group.title, options=options, default=_default_decision(group))
+            await _ask_about_one_item(
+                entry,
+                title=f"{group.title}: {entry.label}",
+                options=options,
+                default=_default_decision(group),
+                body=rendered.getvalue() or None,
+            )
         )
 
 
@@ -1750,6 +1902,16 @@ async def review_items(  # noqa: PLR0913 - review surface plus both machine name
 
             if _is_repo_removal_group(group.action):
                 await _review_removal_group(
+                    group,
+                    console=console,
+                    source_hostname=source_hostname,
+                    target_hostname=target_hostname,
+                    decisions=decisions,
+                )
+                continue
+
+            if _carries_file_bodies(group):
+                await _review_file_group(
                     group,
                     console=console,
                     source_hostname=source_hostname,

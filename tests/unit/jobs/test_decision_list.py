@@ -473,3 +473,38 @@ class TestTheExplanation:
         lines = [line.strip() for line in self._frames(None)[0].split("\n") if line.strip()]
 
         assert lines[0].startswith(f"<{_ACT.key}>")
+
+
+class TestTheBody:
+    """C185 — what a one-item screen is about, when a row cannot carry it (a file, a diff):
+    after the question, before the keys and the row, and kept after the answer."""
+
+    _TITLE = "Update apt configuration files: 95-local.conf"
+    # ANSI-coloured, as Rich renders it: the colour codes are styling, not text.
+    _BODY = '\x1b[31m-APT::Install-Recommends "1";\x1b[0m\n\x1b[32m+APT::Install-Recommends "0";\x1b[0m\n'
+
+    @classmethod
+    def _frames(cls) -> list[str]:
+        buffer = io.StringIO()
+        with create_pipe_input() as pipe:
+            pipe.send_text(f"s{_ENTER}")
+            with create_app_session(input=pipe, output=PlainTextOutput(buffer)):
+                decision_list(cls._TITLE, rows=[_row("a", "95-local.conf")], options=TWO_ANSWERS, body=cls._BODY).ask()
+        return buffer.getvalue().split(f"? {cls._TITLE}")[1:]
+
+    def test_it_sits_between_the_question_and_the_answers(self) -> None:
+        """C185 — the question, then the file, then the keys and the row."""
+        frame = self._frames()[0]
+        lines = [line.strip() for line in frame.split("\n") if line.strip()]
+
+        assert lines[0] == '-APT::Install-Recommends "1";'
+        assert lines[1] == '+APT::Install-Recommends "0";'
+        assert lines[2].startswith(f"<{_ACT.key}>")
+        assert frame.index("+APT::Install") < frame.index("95-local.conf")
+        assert "\x1b" not in frame
+
+    def test_it_survives_the_answer(self) -> None:
+        answered = self._frames()[-1]
+
+        assert '+APT::Install-Recommends "0";' in answered
+        assert "<enter> confirm" not in answered

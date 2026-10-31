@@ -67,6 +67,12 @@ class _Hosts(TypedDict):
 HOSTS: _Hosts = {"source_hostname": "atlas", "target_hostname": "nomad"}
 
 
+def _screens(decision_list: MagicMock) -> str:
+    """Every question screen `decision_list` was asked to draw — title, then body — in order.
+    A file a question is about is drawn on its screen, not printed to the console above it."""
+    return "\n".join(f"{c.args[0]}\n{c.kwargs.get('body') or ''}" for c in decision_list.call_args_list)
+
+
 def _mock_isatty(interactive: bool) -> MagicMock:
     mock_stdin = MagicMock()
     mock_stdin.isatty.return_value = interactive
@@ -1708,7 +1714,7 @@ class TestRepoConflictGroupResolution:
         """C29, H94 — The user's own words: a diff of two repository definitions is not readable. The
         target's current file comes first, then the source's, each whole.
         """
-        console, out = captured_console(terminal=True)
+        console, _out = captured_console(terminal=True)
         ui = MagicMock()
         entry = _conflict_entry(
             target_version="deb https://old.example.com stable main\n",
@@ -1718,11 +1724,11 @@ class TestRepoConflictGroupResolution:
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
-            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen) as decision_list,
         ):
             await review_items([_conflict_group([entry])], console=console, ui=ui, **HOSTS)
 
-        printed = out.getvalue()
+        printed = _screens(decision_list)
         assert "old.example.com" in printed
         assert "new.example.com" in printed
         assert printed.index("old.example.com") < printed.index("new.example.com")
@@ -1733,17 +1739,17 @@ class TestRepoConflictGroupResolution:
         two machines' own names, and the target's says "now" because it is the one an
         overwrite would replace.
         """
-        console, out = captured_console(terminal=True)
+        console, _out = captured_console(terminal=True)
         ui = MagicMock()
         screen = _fake_prompt(ask_return={"apt:conflict:vendor.list": "skip_once"})
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
-            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen) as decision_list,
         ):
             await review_items([_conflict_group([_conflict_entry()])], console=console, ui=ui, **HOSTS)
 
-        printed = out.getvalue()
+        printed = _screens(decision_list)
         assert "On nomad now" in printed
         assert "On atlas" in printed
         assert "the target" not in printed
@@ -1753,18 +1759,18 @@ class TestRepoConflictGroupResolution:
         """A file body's own trailing newline renders as an empty last line inside the
         panel border — every other panel in the review had the same trailing gap.
         """
-        console, out = captured_console(terminal=True, width=60)
+        console, _out = captured_console(terminal=True, width=60)
         ui = MagicMock()
         entry = _conflict_entry(target_version="deb https://old.example.com stable main\n", source_version="x\n")
         screen = _fake_prompt(ask_return={"apt:conflict:vendor.list": "skip_once"})
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
-            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen) as decision_list,
         ):
             await review_items([_conflict_group([entry])], console=console, ui=ui, **HOSTS)
 
-        lines = [line.rstrip() for line in out.getvalue().splitlines()]
+        lines = [line.rstrip() for line in _screens(decision_list).splitlines()]
         content = next(index for index, line in enumerate(lines) if "old.example.com" in line)
         assert lines[content + 1].startswith("╰"), lines[content : content + 3]
 
@@ -2068,12 +2074,12 @@ class TestRemovalGroupContent:
             action_label="delete pin file",
             content="Package: *\nPin: origin vendor.example.com\nPin-Priority: 900\n",
         )
-        isatty, screen, console, out = self._run(_pin_removal_group([entry]))
+        isatty, screen, console, _out = self._run(_pin_removal_group([entry]))
 
-        with isatty, screen:
+        with isatty, screen as decision_list:
             await review_items([_pin_removal_group([entry])], console=console, ui=MagicMock(), **HOSTS)
 
-        printed = out.getvalue()
+        printed = _screens(decision_list)
         assert "Pin-Priority: 900" in printed
         assert "origin vendor.example.com" in printed
         assert "On nomad" in printed
@@ -2084,14 +2090,14 @@ class TestRemovalGroupContent:
         with the pin files must not grow an empty block for it."""
         entry = ReviewEntry(item_id="apt:source:vendor.list", label="vendor.list (list)", action_label="delete")
         group = _pin_removal_group([entry])
-        isatty, screen, console, out = self._run(group)
+        isatty, screen, console, _out = self._run(group)
 
-        with isatty, screen:
+        with isatty, screen as decision_list:
             await review_items([group], console=console, ui=MagicMock(), **HOSTS)
 
         # Its name, and nothing else: no panel where there is no file body to show.
-        assert "vendor.list (list)" in out.getvalue()
-        assert "╭" not in out.getvalue()
+        assert "vendor.list (list)" in _screens(decision_list)
+        assert "╭" not in _screens(decision_list)
 
     async def test_a_bracketed_pin_body_renders_without_markup_error(self) -> None:
         entry = ReviewEntry(
@@ -2101,19 +2107,19 @@ class TestRemovalGroupContent:
             content="Package: [bold red]not-markup[/]\n",
         )
         group = _pin_removal_group([entry])
-        isatty, screen, console, out = self._run(group)
+        isatty, screen, console, _out = self._run(group)
 
-        with isatty, screen:
+        with isatty, screen as decision_list:
             await review_items([group], console=console, ui=MagicMock(), **HOSTS)
 
-        assert "[bold red]not-markup[/]" in out.getvalue()
+        assert "[bold red]not-markup[/]" in _screens(decision_list)
 
     async def test_ctrl_c_at_a_deletion_screen_aborts_the_whole_sync(self) -> None:
         """H152 — a deletion screen goes through the same `_ask_about_one_item` as the
         collateral one, so Ctrl-C here must end the sync and name the file rather than be
         read as declining this one deletion and moving on to the next file.
         """
-        console, out = captured_console(terminal=True)
+        console, _out = captured_console(terminal=True)
         group = _pin_removal_group(
             [
                 ReviewEntry(
@@ -2137,8 +2143,134 @@ class TestRemovalGroupContent:
 
         # The second file is never reached, and neither deletion is answered.
         assert decision_list.call_count == 1
-        assert "98-other.pref" not in out.getvalue()
+        assert "98-other.pref" not in _screens(decision_list)
         ui.resume.assert_called_once()
+
+
+def _config_group(action: str, entries: Sequence[ReviewEntry]) -> ReviewGroup:
+    return ReviewGroup(
+        manager="apt",
+        action=action,
+        title=f"{action.capitalize()} apt configuration files",
+        overwrites_authored_content=action == "change",
+        entries=tuple(entries),
+    )
+
+
+_TARGET_CONF = 'Acquire::http::Proxy "none";\nAPT::Install-Recommends "1";\n'
+_SOURCE_CONF = 'Acquire::http::Proxy "none";\nAPT::Install-Recommends "0";\nAPT::Get::Show-Versions "1";\n'
+
+
+@pytest.mark.asyncio
+class TestConfigFileScreens:
+    """`PKG-FR-APTCONF`: an apt config file is shown, not named by digest — a change as a
+    side-by-side diff, an add or delete whole — and asked about one file at a time."""
+
+    @staticmethod
+    async def _printed(group: ReviewGroup, *, width: int = 200) -> tuple[str, MagicMock]:
+        """Every question screen's title and body, in order. The file belongs to the question
+        screen (ruled by the user), so nothing about it may reach the console above it."""
+        console, out = captured_console(width=width, terminal=True)
+        screen = _fake_prompt(ask_return={entry.item_id: "skip_once" for entry in group.entries})
+        with (
+            patch.object(sys, "stdin", _mock_isatty(True)),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen) as decision_list,
+        ):
+            await review_items([group], console=console, ui=MagicMock(), **HOSTS)
+        assert not out.getvalue().strip(), out.getvalue()
+        screens = [f"{c.args[0]}\n{c.kwargs.get('body') or ''}" for c in decision_list.call_args_list]
+        return "\n".join(screens), decision_list
+
+    async def test_a_changed_file_is_a_side_by_side_diff_with_the_target_on_the_left(self) -> None:
+        """C179 — both machines' lines, aligned: the unchanged line on both sides, the
+        changed one as `-` beside `+`, the source-only line as `+` opposite nothing."""
+        entry = ReviewEntry(
+            item_id="apt:config:95-local.conf",
+            label="95-local.conf",
+            action_label="update",
+            versions=(_TARGET_CONF, _SOURCE_CONF),
+        )
+
+        printed, _ = await self._printed(_config_group("change", [entry]))
+
+        lines = printed.splitlines()
+        header = next(line for line in lines if "On nomad now" in line)
+        assert header.index("On nomad now") < header.index("On atlas")
+        changed = next(line for line in lines if '-APT::Install-Recommends "1";' in line)
+        assert changed.index("-APT::Install") < changed.index('+APT::Install-Recommends "0";')
+        assert any('+APT::Get::Show-Versions "1";' in line for line in lines)
+        assert sum('Acquire::http::Proxy "none";' in line for line in lines) == 1
+        assert "sha256" not in printed
+
+    async def test_a_narrow_terminal_gets_a_unified_diff(self) -> None:
+        """C180 — two halves of a narrow screen fold every line, so it is one column."""
+        entry = ReviewEntry(
+            item_id="apt:config:95-local.conf",
+            label="95-local.conf",
+            action_label="update",
+            versions=(_TARGET_CONF, _SOURCE_CONF),
+        )
+
+        printed, _ = await self._printed(_config_group("change", [entry]), width=80)
+
+        assert "--- On nomad now" in printed
+        assert "+++ On atlas" in printed
+        assert '-APT::Install-Recommends "1";' in printed
+        assert '+APT::Install-Recommends "0";' in printed
+
+    async def test_versions_differing_only_in_a_trailing_newline_say_so(self) -> None:
+        entry = ReviewEntry(
+            item_id="apt:config:95-local.conf",
+            label="95-local.conf",
+            action_label="update",
+            versions=(_TARGET_CONF, _TARGET_CONF.rstrip("\n")),
+        )
+
+        printed, _ = await self._printed(_config_group("change", [entry]))
+
+        assert "differ only in line endings or a trailing newline" in printed
+
+    @pytest.mark.parametrize(("action", "holder"), [("install", "atlas"), ("remove", "nomad")])
+    async def test_an_added_or_deleted_file_is_printed_whole_under_the_machine_holding_it(
+        self, action: str, holder: str
+    ) -> None:
+        """C181 — an add shows the source's file, a delete the target's."""
+        entry = ReviewEntry(
+            item_id="apt:config:95-local.conf", label="95-local.conf", action_label=action, content=_SOURCE_CONF
+        )
+
+        printed, _ = await self._printed(_config_group(action, [entry]))
+
+        assert 'APT::Get::Show-Versions "1";' in printed
+        assert f"On {holder}" in printed
+
+    async def test_each_file_is_asked_about_right_after_it_is_shown(self) -> None:
+        """C182 — one question per file, not one screen for all of them."""
+        entries = [
+            ReviewEntry(
+                item_id=f"apt:config:{name}", label=name, action_label="update", versions=(_TARGET_CONF, _SOURCE_CONF)
+            )
+            for name in ("95-local.conf", "96-other.conf")
+        ]
+
+        printed, decision_list = await self._printed(_config_group("change", entries))
+
+        assert decision_list.call_count == 2
+        assert "Change apt configuration files: 95-local.conf" in printed
+        assert "Change apt configuration files: 96-other.conf" in printed
+
+    async def test_a_bracketed_line_renders_without_markup_error(self) -> None:
+        entry = ReviewEntry(
+            item_id="apt:config:95-local.conf",
+            label="95-local.conf",
+            action_label="update",
+            versions=("[bold red]old[/]\n", "[bold red]new[/]\n"),
+        )
+
+        printed, _ = await self._printed(_config_group("change", [entry]))
+
+        assert "[bold red]old[/]" in printed
+        assert "[bold red]new[/]" in printed
 
 
 _SECRET_URL = "https://bearer:s3cr3t-token@packages.example.com/apt"
@@ -2156,15 +2288,15 @@ class TestCredentialsInPrintedFileBodies:
 
     @staticmethod
     async def _printed(group: ReviewGroup) -> str:
-        console, out = captured_console(terminal=True)
+        console, _out = captured_console(terminal=True)
         screen = _fake_prompt(ask_return={entry.item_id: "skip_once" for entry in group.entries})
 
         with (
             patch.object(sys, "stdin", _mock_isatty(True)),
-            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen),
+            patch("pcswitcher.jobs.packages.review.decision_list", return_value=screen) as decision_list,
         ):
             await review_items([group], console=console, ui=MagicMock(), **HOSTS)
-        return out.getvalue()
+        return _screens(decision_list)
 
     async def test_neither_version_of_a_conflicting_repository_shows_the_credential(self) -> None:
         """C37, J123."""

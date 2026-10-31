@@ -254,7 +254,7 @@ _READ_ONLY_CALLS: dict[str, int] = {
     "jobs/manual_installs_sync.py::ManualInstallsSyncJob._directories_holding_a_file::run_command": 1,
     # One batched `test -e` loop, for the marked paths a machine may no longer have.
     "jobs/manual_installs_sync.py::ManualInstallsSyncJob._paths_that_exist::run_command": 1,
-    "jobs/manual_installs_sync.py::ManualInstallsSyncJob.validate::run_command": 2,
+    "jobs/manual_installs_sync.py::ManualInstallsSyncJob.validate::run_command": 4,
     # The shared unreproducible half: the target's $HOME, read to place the pushed registry.
     "jobs/packages/unreproducible.py::UnreproducibleSyncJob._push_snippet_registry::run_command": 1,
     # The decision file and snippet registry are read with `cat`; their writes are gated.
@@ -486,7 +486,7 @@ _PACKAGE_SYNC_MODULES = frozenset(
     }
 )
 
-# `PKG-FR-SOURCE-INTENT`: the writes a sync makes on the source are exactly four, each
+# `PKG-FR-SOURCE-INTENT`: the writes a sync makes on the source are exactly five, each
 # required by an article of its own. The value is that article and why the write exists.
 _SOURCE_WRITES: dict[str, str] = {
     # Written through whichever machine holds the item, which is the source whenever the
@@ -509,6 +509,11 @@ _SOURCE_WRITES: dict[str, str] = {
     # restart is scheduled, the timers are stopped, and both are undone at cleanup.
     "orchestrator.py::Orchestrator._run_apt_timer_command::run_command": (
         "PKG-FR-APT-TIMER-PAUSE — the apt update-timer pause and its restart, which both machines take"
+    ),
+    # Indexes downloaded into a temporary directory and removed again; the machine's own apt
+    # state is untouched. Declared because writing anything at all is not read-only.
+    "jobs/apt_sync/job.py::AptSyncJob.validate::run_command": (
+        "PKG-FR-APT-REPO-HEALTH — the throwaway repository check, which both machines take"
     ),
 }
 
@@ -656,15 +661,17 @@ class TestSourceWrites:
 
         assert not problems, "source-write audit failed:\n\n" + "\n\n".join(problems)
 
-    def test_a_package_sync_writes_exactly_four_things_on_the_source(self) -> None:
+    def test_a_package_sync_writes_exactly_five_things_on_the_source(self) -> None:
         """J149 — the requirement itself, spelled out here as well as in the table so that neither
-        can be changed alone: the mark, the snippet, the refresh pause, the apt-timer pause.
+        can be changed alone: the mark, the snippet, the refresh pause, the apt-timer pause, the
+        throwaway repository check.
         """
         assert set(_SOURCE_WRITES) == {
             "jobs/packages/state.py::DecisionFile._write::run_command",
             "jobs/packages/state.py::SnippetRegistry.add::run_command",
             "orchestrator.py::Orchestrator._run_snap_hold_command::run_command",
             "orchestrator.py::Orchestrator._run_apt_timer_command::run_command",
+            "jobs/apt_sync/job.py::AptSyncJob.validate::run_command",
         }
 
 
@@ -1136,6 +1143,8 @@ _PRECONDITION_PROBE_SITES: dict[str, int] = {
     "jobs/snap_sync.py::SnapSyncJob.validate": 2,
     # The target only, and only when a system-scope ref, remote or mask is actually in play.
     "jobs/flatpak_sync.py::FlatpakSyncJob.validate": 1,
+    # Passwordless sudo on both machines: detection lists the scan roots with `sudo find`.
+    "jobs/manual_installs_sync.py::ManualInstallsSyncJob.validate": 2,
 }
 
 

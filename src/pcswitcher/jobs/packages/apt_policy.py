@@ -18,7 +18,7 @@ per kind of finding"): this module defines no class and sits in no job's MRO, so
 managers inherit nothing from it. `manual_deb_sync`'s own rule — it never imports `apt_sync`
 (`PKG-FR-MANUAL-SCOPE`) — also still holds, since both jobs import a third module instead. What is NOT
 worth duplicating is a stateful indentation walker with three separate subtle rules
-(installed-block tracking, eight-space origin rows, the `/var/lib/dpkg/status` pseudo
+(installed-block tracking, origin rows told apart by shape, the `/var/lib/dpkg/status` pseudo
 -origin); `apt_sync._parse_pin_file`'s docstring records what one earlier duplicated
 parser of this size already cost this project.
 """
@@ -26,6 +26,7 @@ parser of this size already cost this project.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 __all__ = [
     "candidate_origins_by_package",
@@ -53,12 +54,21 @@ def installed_origins_by_package(policy_output: str) -> dict[str, frozenset[str]
     its INSTALLED version}` (C26).
 
     `apt-cache policy`'s version table marks the installed version with a leading `***`
-    and indents each of that version's origins by eight spaces as
+    and lists each of that version's origins below it as
     `<priority> <uri> <suite>/<component> <arch> Packages`. Only the installed version's
     origins count: another version row may list a repository that merely *offers* the
     package (Ubuntu's archive offers `gh` too), which is not the repository the machine is
     actually tracking. `/var/lib/dpkg/status` is dpkg's own record of the installed
     package, not a repository, and is skipped — every installed package lists it.
+
+    An installed row naming no repository falls back to the CANDIDATE row's origins. A
+    repository that keeps only its latest build (Google's Chrome repository does) drops the
+    installed version from its index as soon as an update lands, leaving a repo-tracked
+    package with dpkg's record as its only origin until the next upgrade. The candidate row
+    tells that apart from a hand-installed `.deb`: dpkg's status entry makes the `.deb` its
+    own candidate, so its fallback is empty too, while a stale repository package's
+    candidate is the repository's newer build. A package with no installed row gets no
+    fallback — nothing is feeding a package that is not installed.
 
     A key MEANS apt printed a block for that name; the value means what apt said about it.
     The two are deliberately separable, because a package installed from a local `.deb`
@@ -67,7 +77,10 @@ def installed_origins_by_package(policy_output: str) -> dict[str, frozenset[str]
     "apt said nothing" — including the case where the whole command failed and produced no
     output. `packages_installed_from_no_repository` may only indict the first.
     """
-    return _origins_by_package(policy_output, of_candidate=False)
+    return {
+        name: frozenset() if block.installed is None else block.installed or block.candidate
+        for name, block in _policy_blocks(policy_output).items()
+    }
 
 
 def candidate_origins_by_package(policy_output: str) -> dict[str, frozenset[str]]:
@@ -87,27 +100,41 @@ def candidate_origins_by_package(policy_output: str) -> dict[str, frozenset[str]
     is what separates "the target has a candidate from the wrong place" from "the target
     has no candidate at all".
     """
-    return _origins_by_package(policy_output, of_candidate=True)
+    return {name: block.candidate for name, block in _policy_blocks(policy_output).items()}
 
 
-def _origins_by_package(policy_output: str, *, of_candidate: bool) -> dict[str, frozenset[str]]:
-    """The shared version-table walk: `{package: origin URIs of one of its version rows}`.
+@dataclass(frozen=True)
+class _PolicyBlock:
+    installed: frozenset[str] | None
+    """Origins of the `***` row; `None` when the table has none (not installed)."""
 
-    `of_candidate` picks the row — the one whose version equals the block's `Candidate:`,
-    or the `***`-marked installed one. Everything else is identical, and duplicating the
-    walk to vary that one predicate is what `_parse_pin_file`'s docstring records the cost
-    of. `apt-cache policy` indents each version's origins by eight spaces as
+    candidate: frozenset[str]
+    """Origins of the row matching `Candidate:`; empty for `Candidate: (none)`."""
+
+
+def _policy_blocks(policy_output: str) -> dict[str, _PolicyBlock]:
+    """The shared version-table walk: one `_PolicyBlock` per `<name>:` block apt printed.
+
+    One walk reads both rows — the installed answer falls back on the candidate one, and
+    duplicating the walk is what `_parse_pin_file`'s docstring records the cost of.
+    `apt-cache policy` lists each version's origins below it as
     `<priority> <uri> <suite>/<component> <arch> Packages`; a block starts with an
     unindented `<name>:` header.
+
+    An origin row is recognised by its shape (`_is_origin_row`), never by its indent: apt
+    right-aligns the priority, so a four-character one (`1000`, `-100`) sits one column to
+    the left of a three-character one. Reading by a fixed eight-space indent took Mozilla's
+    `1000` row for a new version row and left the installed `firefox` with no origin (#302).
     """
-    origins: dict[str, set[str]] = {}
+    installed: dict[str, set[str]] = {}
+    candidates: dict[str, set[str]] = {}
     current: str | None = None
     candidate: str | None = None
-    collecting = False
+    in_installed = in_candidate = False
     for line in policy_output.splitlines():
         if line and not line[0].isspace() and line.endswith(":"):
-            current, candidate, collecting = line[:-1], None, False
-            origins.setdefault(current, set())
+            current, candidate, in_installed, in_candidate = line[:-1], None, False, False
+            candidates.setdefault(current, set())
             continue
         if current is None:
             continue
@@ -120,17 +147,42 @@ def _origins_by_package(policy_output: str, *, of_candidate: bool) -> dict[str, 
             # with an empty set, which is not the same answer as no key at all.
             candidate = None if value == "(none)" else value
             continue
-        if line.startswith("        "):
-            parts = stripped.split()
-            if collecting and len(parts) >= 2 and parts[1] != _DPKG_STATUS:
-                origins[current].add(normalise_repo_uri(parts[1]))
+        parts = stripped.split()
+        if _is_origin_row(parts):
+            if parts[1] != _DPKG_STATUS:
+                uri = normalise_repo_uri(parts[1])
+                if in_installed:
+                    installed[current].add(uri)
+                if in_candidate:
+                    candidates[current].add(uri)
             continue
         # Any other row at version-table depth opens the next version. `Installed:` and
         # `Version table:` land here too and match neither predicate, which closes the
         # previous row exactly as a real version row would.
         version = stripped.removeprefix("***").split()
-        collecting = (bool(version) and version[0] == candidate) if of_candidate else stripped.startswith("***")
-    return {name: frozenset(uris) for name, uris in origins.items()}
+        in_candidate = bool(version) and version[0] == candidate
+        in_installed = stripped.startswith("***")
+        if in_installed:
+            installed.setdefault(current, set())
+    return {
+        name: _PolicyBlock(
+            installed=frozenset(installed[name]) if name in installed else None, candidate=frozenset(uris)
+        )
+        for name, uris in candidates.items()
+    }
+
+
+def _is_origin_row(parts: Sequence[str]) -> bool:
+    """`<priority> <uri-or-path> ...`: an integer, then something apt locates packages at —
+    a URI (`http://`, `file:/`, `cdrom:[...]/`) or an absolute path (`/var/lib/dpkg/status`).
+
+    A version row is `<version> <priority>`, so its second field is a bare integer and never
+    matches, even when the version itself is all digits.
+    """
+    if len(parts) < 2:
+        return False
+    priority, location = parts[0], parts[1]
+    return priority.lstrip("-").isdigit() and (location.startswith("/") or ":" in location)
 
 
 def packages_installed_from_no_repository(policy_output: str, queried_names: Sequence[str]) -> frozenset[str]:
@@ -150,7 +202,9 @@ def packages_installed_from_no_repository(policy_output: str, queried_names: Seq
 
     A package hand-installed at a version NEWER than the repository's is flagged, which is
     correct rather than a false positive: replicating *this machine's* installed version
-    needs the `.deb`, and the repository cannot supply it.
+    needs the `.deb`, and the repository cannot supply it. One installed at a version OLDER
+    than the repository's is not: the repository supplies the package, at the version
+    `PKG-FR-VERSION-FLOAT` accepts anyway (see `installed_origins_by_package`'s fallback).
     """
     origins = installed_origins_by_package(policy_output)
     return frozenset(name for name in queried_names if name in origins and not origins[name])

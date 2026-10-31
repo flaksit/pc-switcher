@@ -73,7 +73,7 @@ A snap's revision/channel change also takes two answers: nobody keeps a revision
 
 **Removal groups start at skip-now.** A bulk confirm can never silently delete something. So do groups that would overwrite an `apt.conf.d` file the target already holds.
 
-Some questions come one-per-screen because they have to show you something first: a file body, a collateral package, an unreproducible item.
+Some questions come one-per-screen because they have to show you something first: a file body, a collateral package, an unreproducible item. An `apt.conf.d` file being added or deleted is shown whole; one both machines have with different content is shown as a side-by-side diff (target left, source right), or a unified diff on a terminal narrower than 100 columns.
 
 Some findings are only reported, not asked about: version differences, origin divergences, repositories the source cannot reproduce. Neither answering nor declining would change anything, so there is nothing to answer.
 
@@ -130,9 +130,11 @@ Each enabled job needs passwordless sudo where it writes:
 | `manual_deb_sync` | none | none |
 | `manual_snap_sync` | none | none |
 | `manual_flatpak_sync` | none | none |
-| `manual_installs_sync` | none | none |
+| `manual_installs_sync` | required (`/usr/bin/find`, `/usr/bin/test`) | required (`/usr/bin/find`, `/usr/bin/test`) |
 
-The `manual_*` jobs pre-validate no sudo: detection only reads. An approved removal on any of the first three needs root on the target and fails as its own item if that is not available. Snippet privilege is the author's — put `sudo` inside the snippet if needed.
+The other `manual_*` jobs pre-validate no sudo: their detection reads unprivileged. `manual_installs_sync` reads `/opt` and `/usr/local` with `sudo find` and `sudo test`, since an install script may leave a root-only directory there. An approved removal on any of the first three needs root on the target and fails as its own item if that is not available. Snippet privilege is the author's — put `sudo` inside the snippet if needed.
+
+`apt_sync` refuses to start while apt cannot fetch and verify every repository configured on either machine — a vendor that rotated its signing key is the usual cause. Your own `apt-get update` only warns about that and keeps the old index, but on a machine that never had the repository it is an error that blocks every install. pc-switcher checks with a throwaway `apt-get update` that leaves your package lists alone, quotes apt's errors, and tells you to fix or remove the repository and confirm with `sudo apt-get update`.
 
 `apt_sync` and `snap_sync` also pause each machine's auto-update timers (apt) and auto-refresh (snapd) for the sync window, and restore them afterwards. The pauses expire on their own if the run dies.
 

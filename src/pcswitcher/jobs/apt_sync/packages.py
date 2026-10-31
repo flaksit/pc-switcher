@@ -18,6 +18,7 @@ from collections.abc import Mapping, Sequence
 from pcswitcher.executor import RemoteExecutor
 from pcswitcher.jobs.apt_sync.collateral import Collateral, CollateralEffect, LateCollateral
 from pcswitcher.jobs.apt_sync.commands import (
+    AptRehearsalFailed,
     candidate_version,
     install_args,
     policy_command,
@@ -210,10 +211,13 @@ class PackageConverger:
         args = install_args([name if held is None else f"{name}={held}"])
         try:
             preview = await simulate_apt_transaction(self._target, args, login_shell=False)
-        except ConvergeItemFailed as exc:
-            if held is None:
+        except AptRehearsalFailed as exc:
+            if held is not None:
+                raise ConvergeItemFailed(await self._held_version_refusal(name, held, exc)) from exc
+            cause = await self._refused_dependency(name, exc, diffs, decisions)
+            if cause is None:
                 raise
-            raise ConvergeItemFailed(await self._held_version_refusal(name, held, exc)) from exc
+            raise ConvergeItemFailed(cause) from exc
 
         refused = await self._collateral.unapproved(preview, exempt=frozenset(), verb="Installing", subject=name)
         if refused:
@@ -232,6 +236,31 @@ class PackageConverger:
         return await self._target.run_command(
             real_cmd, login_shell=False, mutates=f"install apt package {name} on {self._machines.target}"
         )
+
+    async def _refused_dependency(
+        self, name: str, exc: AptRehearsalFailed, diffs: Sequence[ItemDiff], decisions: Mapping[str, Decision]
+    ) -> str | None:
+        """Why `name`'s rehearsal failed, where apt's unmet dependency is an approved install this
+        run itself refuses (`PKG-FR-FAIL-NAMED`), or `None` when no such dependency explains it.
+
+        apt reports that case as `you have held broken packages`, naming no dependency and no
+        reason, and nothing need be held. Asks the same guards `_install` runs, not the
+        dependency's recorded outcome: items converge in name order, so a dependent
+        (`python3-pip`) is usually rehearsed before the dependency (`python3-wheel`) it needs.
+        """
+        for dependency in exc.unmet_dependencies:
+            reason = (
+                self._derived.install_refusal(f"{APT_PACKAGE_ID_PREFIX}{dependency}", dependency)
+                or await self._origins.refusal(dependency, diffs=diffs, decisions=decisions, target=self._target)
+                or self._install_outcome.get(dependency)
+            )
+            if reason is None and dependency in self._declined_installs:
+                reason = f"{dependency} was not installed because its install was withdrawn"
+            if reason is not None:
+                return (
+                    f"install of {name} refused: it depends on {dependency}, which this run does not install. {reason}"
+                )
+        return None
 
     async def _settle_drift(self, refused: Sequence[CollateralEffect], *, verb: str, name: str, refusal: str) -> None:
         """Put the drifted transaction's collateral to the user, and return only where they

@@ -34,6 +34,7 @@ from typing import NamedTuple
 
 from pcswitcher.executor import RemoteExecutor
 from pcswitcher.jobs.apt_sync.commands import (
+    AptRehearsalFailed,
     AptTransactionPreview,
     compare_deb_versions,
     install_args,
@@ -138,6 +139,10 @@ class Collateral:
         # and at apply time by the converge guards, which must agree.
         self._target_manual_set = target_manual_set
         self._origins = origins
+        # Install candidates the plan-time rehearsal could not resolve on the target as it
+        # stands before this run's `/etc/apt` writes (`plan_time`); `LateCollateral` asks
+        # about them once those writes and `apt-get update` have landed.
+        self._deferred: frozenset[str] = frozenset()
         # The item id of every manual-collateral consequence the user approved, computed
         # from the collateral group's decisions — the id and not the package name, because
         # one package can be collateral of two transactions and an approval answers one of
@@ -225,8 +230,9 @@ class Collateral:
         # The install candidates need no exemption at all: a package this run installs is
         # absent from the target, so it is outside `protected()` and cannot be collateral.
         collateral: list[ItemDiff] = []
+        self._deferred = frozenset()
         if rehearsed:
-            collateral.extend(await self.for_direction(rehearsed, frozenset(), install_args, verb="Installing"))
+            collateral.extend(await self._install_collateral(rehearsed))
         if remove_names:
             # A removal candidate is by definition installed on the target, so apt can
             # always resolve it and that set is never narrowed.
@@ -234,6 +240,55 @@ class Collateral:
                 await self.for_direction(remove_names, frozenset(remove_names), remove_args, verb="Removing")
             )
         return collateral
+
+    @property
+    def deferred(self) -> frozenset[str]:
+        """Install candidates whose collateral question waits for this run's `/etc/apt` writes."""
+        return self._deferred
+
+    async def _install_collateral(self, candidates: Sequence[str]) -> list[ItemDiff]:
+        """The install direction's plan-time collateral, deferring what the target cannot
+        resolve until this run's `/etc/apt` writes land.
+
+        The rehearsal runs against the target BEFORE the source's pins and repositories are
+        written, and those can decide how a package's dependencies resolve. Measured: without
+        the source's pin excluding ESM's `python3-wheel`, the target resolved `python3-pip`'s
+        dependency to ESM's copy, which the PPA's `python3-setuptools` Breaks — and the
+        refused batch aborted the whole job, although both install cleanly once the pin is
+        there. So when apt's resolver refuses the batch, each candidate is rehearsed alone:
+        one refused alone is deferred to `LateCollateral`, whose rehearsal runs after the
+        writes and `apt-get update`; the rest are classified now. A refusal that is not the
+        resolver's (a lock, a broken apt) still aborts the plan, as does a batch whose every
+        candidate passes alone: that conflict exists only between them, and the writes cannot
+        be shown to settle it.
+        """
+        try:
+            return await self.for_direction(candidates, frozenset(), install_args, verb="Installing")
+        except AptRehearsalFailed as batch:
+            if not batch.resolver_refused:
+                raise
+            refused: list[str] = []
+            for candidate in candidates:
+                try:
+                    await simulate_apt_transaction(self._target, install_args([candidate]), login_shell=False)
+                except AptRehearsalFailed as alone:
+                    if not alone.resolver_refused:
+                        raise
+                    refused.append(candidate)
+            if not refused:
+                raise
+        self._deferred = frozenset(refused)
+        if self._log is not None:
+            self._log(
+                Host.TARGET,
+                LogLevel.FULL,
+                f"apt cannot resolve {', '.join(refused)} before this run's /etc/apt writes; "
+                "their collateral is checked after those writes and apt-get update",
+            )
+        resolvable = [candidate for candidate in candidates if candidate not in self._deferred]
+        if not resolvable:
+            return []
+        return await self.for_direction(resolvable, frozenset(), install_args, verb="Installing")
 
     async def for_direction(
         self,
@@ -701,7 +756,10 @@ class LateCollateral:
             if diff.item_class is ItemClass.APT_PACKAGE
             and diff.action is DiffAction.INSTALL
             and decisions.get(diff.item_id) == Decision.APPLY
-            and not self._origins.target_resolvable(diff.item_id)
+            and (
+                not self._origins.target_resolvable(diff.item_id)
+                or package_name(diff.item_id) in self._collateral.deferred
+            )
         ]
         if not names:
             return

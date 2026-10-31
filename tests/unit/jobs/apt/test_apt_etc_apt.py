@@ -31,6 +31,8 @@ from tests.unit.jobs.apt.helpers import (
     _NO_PACKAGES,
     _POLICY_NO_CANDIDATE,
     _SOURCE_SCAN_CMD,
+    DRY_RUN_INSTALL,
+    REAL_INSTALL,
     CountingReviewer,
     _policy_block,
     _repo_context,
@@ -642,11 +644,7 @@ class TestOneRepositoryServingTwoPackages:
         and no derived destination is recorded as failed.
         """
         context, _source, target = _two_packages_one_repository_context(
-            **{
-                "sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes --no-install-recommends pkg-a": (
-                    CommandResult(1, "", "dpkg error for pkg-a")
-                )
-            }
+            **{f"{REAL_INSTALL} pkg-a": (CommandResult(1, "", "dpkg error for pkg-a"))}
         )
         job = AptSyncJob(context)
         install_reviewer(job, {"apt:package:pkg-a": Decision.APPLY, "apt:package:pkg-b": Decision.APPLY})
@@ -809,12 +807,8 @@ class TestRepoGroupTransaction:
                     "echo $HOME": CommandResult(0, "/home/target-user", ""),
                     "apt-mark showmanual": CommandResult(0, "", ""),
                     "test -f /etc/apt/apt.conf.d/99conf": CommandResult(1, "", ""),
-                    "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": CommandResult(
-                        0, "Inst pkg-a (1.0)\n", ""
-                    ),
-                    "sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes --no-install-recommends pkg-a": (
-                        CommandResult(0, "", "")
-                    ),
+                    f"{DRY_RUN_INSTALL} pkg-a": CommandResult(0, "Inst pkg-a (1.0)\n", ""),
+                    f"{REAL_INSTALL} pkg-a": (CommandResult(0, "", "")),
                 },
                 update_results=[CommandResult(1, "", "update failed"), CommandResult(0, "", "")],
             ),
@@ -850,12 +844,8 @@ class TestRepoGroupTransaction:
                     "echo $HOME": CommandResult(0, "/home/target-user", ""),
                     "apt-mark showmanual": CommandResult(0, "", ""),
                     "test -f /etc/apt/apt.conf.d/99conf": CommandResult(1, "", ""),
-                    "apt-get --dry-run install --assume-yes --no-install-recommends pkg-a": CommandResult(
-                        0, "Inst pkg-a (1.0)\n", ""
-                    ),
-                    "sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes --no-install-recommends pkg-a": (
-                        CommandResult(0, "", "")
-                    ),
+                    f"{DRY_RUN_INSTALL} pkg-a": CommandResult(0, "Inst pkg-a (1.0)\n", ""),
+                    f"{REAL_INSTALL} pkg-a": (CommandResult(0, "", "")),
                 },
                 update_results=[CommandResult(1, "", "update failed"), CommandResult(0, "", "")],
             ),
