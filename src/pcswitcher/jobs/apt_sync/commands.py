@@ -232,6 +232,10 @@ class AptTransactionPreview:
 # first line ` <pkg> : Depends: <dep> but it is not installable` or a continuation line
 # `          Depends: <dep> (>= 1) but 2 is to be installed`. Only the first alternative of a
 # `a | b` dependency is captured, and the `:any`/`:amd64` qualifier is dropped.
+# apt's header for the resolver's refusal, printed only when it answered and found the request
+# unsatisfiable (`AptRehearsalFailed.resolver_refused`).
+_UNMET_BLOCK = "The following packages have unmet dependencies:"
+
 _UNMET_DEPENDENCY_RE = re.compile(r"^\s*(?:\S+ : )?(?:Pre-?)?Depends: (?P<dep>[^\s:(|]+)")
 
 
@@ -242,9 +246,13 @@ class AptRehearsalFailed(ConvergeItemFailed):
     names neither the dependency nor a reason, and nothing need be held at all.
     """
 
-    def __init__(self, message: str, unmet_dependencies: tuple[str, ...]) -> None:
+    def __init__(self, message: str, unmet_dependencies: tuple[str, ...], *, resolver_refused: bool = False) -> None:
         super().__init__(message)
         self.unmet_dependencies = unmet_dependencies
+        # apt's resolver answered and could not satisfy the request — it printed its
+        # unmet-dependencies block. A lock, a broken apt or an unknown name print none, so
+        # this separates "apt says no to these packages" from "apt did not answer".
+        self.resolver_refused = resolver_refused
 
 
 def unmet_dependencies(stdout: str) -> tuple[str, ...]:
@@ -278,14 +286,18 @@ async def simulate_apt_transaction(
     about that request (`PKG-FR-OUTCOME-FAILED`). Plan time removes the ambiguity from its ARGUMENTS
     instead: it rehearses only names the target's `apt-cache policy` gave a candidate for
     (`origins.OriginClassifier.target_resolvable`), so "unable to locate" is not among the
-    failures it can meet. What remains there — a lock, a broken apt, an unresolvable
-    candidate set — has no per-item loop to be reported against, so it aborts the plan, which
-    is correct: a rehearsal that did not happen must not read as a clean one.
+    failures it can meet. A refusal by apt's resolver is narrowed there and the refused
+    candidates deferred until this run's `/etc/apt` writes land (`Collateral._install_collateral`).
+    What remains — a lock, a broken apt — has no per-item loop to be reported against, so it
+    aborts the plan, which is correct: a rehearsal that did not happen must not read as a
+    clean one.
     """
     result = await executor.run_command(f"apt-get --dry-run {apt_args}", login_shell=login_shell)
     if not result.success:
         raise AptRehearsalFailed(
-            f"apt-get --dry-run {apt_args} failed: {result.stderr.strip()}", unmet_dependencies(result.stdout)
+            f"apt-get --dry-run {apt_args} failed: {result.stderr.strip()}",
+            unmet_dependencies(result.stdout),
+            resolver_refused=_UNMET_BLOCK in result.stdout,
         )
     installs: list[str] = []
     removals: list[str] = []
