@@ -1,0 +1,49 @@
+Looks good (at least in dry run). No time to do the entire PR-and-integration-tests cycle. I need to run this asap, even if not 100% perfect. So we skip PR and just merge to main?
+
+---
+
+but what happens when I want to sync back afterwards? Which version is/will be installed on fleksi?
+
+---
+
+If we run p17>fleksi now and it succeeds, we can PR+CI+merge+release afterwards (when I'm back) and then just run "pc-switcher self update" on fleksi, no?
+
+---
+
+Lots of errors during apt install phase. See log. Fix.
+
+---
+
+refuse to start with a clear message
+
+---
+
+Running. It seems folder_sync stuck at 95%. Check what is happening. Don't fix yet.
+
+---
+
+Fix. Exit 24 should be warning, if that is the only type of problem rsync complains about in 24.
+
+---
+
+I Ctrl-C it a few minutes ago. Verify if still blocked. If so, Ctrl-C is not working well, not closing all processes.
+
+---
+
+Was syncing and I aborted during snap_sync. However, I see there was a critical error in apt_sync. Find and fix that error
+
+---
+
+"when fleksi's candidate comes from wrong origin..." don't install that version. I think better to bail out (with clear message) instead of cover up. Or do I misunderstand?
+
+---
+
+About 2: how possible it even fails after repo is there?
+
+---
+
+So even the post-rehearsal fails, but the actual execution would work because at that time, pins/priorities are updated and equal between p17 and fleksi?
+
+---
+
+fix 1, not 2
